@@ -430,25 +430,50 @@ struct ACPSessionQueueAPITests {
         #expect(!s.consumeInterruptedTurns(resume: true))
     }
 
-    @Test("resuming does not resend a prompt the live transcript shows answered after hydration")
-    func resumeUsesLiveDeliveryEvidence() {
+    @Test("recovery drops prompts answered after hydration with auto-continue on or off",
+          arguments: [false, true], UncertainOrigin.allCases)
+    func recoveryUsesLiveDeliveryEvidence(resume: Bool, origin: UncertainOrigin) {
         let s = mkSession()
-        let generation = ACPBrokerGeneration(rawValue: 7)
-        let head = QueuedPrompt(
+        s.continuesInterruptedTurns = { resume }
+        let generation: ACPBrokerGeneration? = origin == .legacyRestore ? nil : ACPBrokerGeneration(rawValue: 7)
+        var head = QueuedPrompt(
             blocks: [.text("first")], status: .sending, transcriptRecorded: true,
+            dispatchCount: 1,
             dispatchedBrokerGeneration: generation)
+        if origin == .earlierReconnect {
+            head.status = .pending
+            head.markDeliveryUncertain()
+        }
         // Hydration saw no agent output, so its snapshot does not cover the head.
-        s.restoreQueue([head], markLegacySendingUncertain: true)
         #expect(s.deliveredQueuedPromptIDs.isEmpty)
         s.transcript.messages = [
             .user(id: UUID(), text: "first", attachments: []),
             .agent(id: UUID(), StreamingText("started the migration")),
         ]
-        s.markQueuedPromptsUncertain(afterBrokerGeneration: ACPBrokerGeneration(rawValue: 8))
+        s.restoreQueue([head], markLegacySendingUncertain: true, useLiveTranscript: true)
+        if origin == .brokerGenerationChange {
+            s.markQueuedPromptsUncertain(afterBrokerGeneration: ACPBrokerGeneration(rawValue: 8))
+        }
+        s.consumeInterruptedTurns(resume: resume)
 
-        #expect(s.consumeInterruptedTurns(resume: true))
+        #expect(s.queue.map(\.blocks) == (resume ? [[.text(ACPSession.interruptedTurnContinueText)]] : []))
+    }
 
-        #expect(s.queue.map(\.blocks) == [[.text(ACPSession.interruptedTurnContinueText)]])
+    @Test("restoring a new queue does not use an older transcript's repeated prompt")
+    func restoredQueueIgnoresPreviousTranscript() {
+        let s = mkSession()
+        s.transcript.messages = [
+            .user(id: UUID(), text: "first", attachments: []),
+            .agent(id: UUID(), StreamingText("answered the earlier prompt")),
+        ]
+        let newPrompt = QueuedPrompt(
+            blocks: [.text("first")], status: .sending,
+            transcriptRecorded: true, dispatchCount: 1)
+
+        s.restoreQueue([newPrompt], markLegacySendingUncertain: true)
+
+        #expect(s.queue.map(\.id) == [newPrompt.id])
+        #expect(s.queue.first?.deliveryUncertain == true)
     }
 
     @Test("an interruption an attach never consumed is still resumed on the next launch")

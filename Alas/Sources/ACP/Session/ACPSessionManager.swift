@@ -5550,6 +5550,7 @@ extension ACPSessionManager {
         syncMirrorSessionMetadata(result.row, to: session, recentRows: result.recent)
         // Always sync the queue — it can change (drain/clear) with no new
         // transcript rows, so this must run before any early-return below.
+        session.deliveredQueuedPromptIDs = result.deliveredQueuedPromptIDs
         session.restoreQueue(
             result.queue,
             markLegacySendingUncertain: true,
@@ -7782,7 +7783,9 @@ extension ACPSessionManager {
             let completedRecovery = session.completeConnectionRecovery()
             scheduledReconnectTasks.removeValue(forKey: sessionId)?.task.cancel()
             if session.queue.contains(where: { $0.status == .sending }) {
-                session.restoreQueue(session.queue, markLegacySendingUncertain: true)
+                if session.restoreQueue(session.queue, markLegacySendingUncertain: true, useLiveTranscript: true) {
+                    persistQueue(for: session)
+                }
             }
             let consumedDirectTurn = session.directTurnInFlight
             if session.consumeInterruptedTurns(resume: continueInterruptedSessions()) {
@@ -8014,10 +8017,11 @@ extension ACPSessionManager {
         endMirroring(sessionId: sessionId)
         session.agentState = .idle
         session.transcript.streamingState = .idle
-        session.restoreQueue(
+        let queueChangedAtRestore = session.restoreQueue(
             session.queue,
             markLegacySendingUncertain: true,
-            knownUnsentDispatches: unhandedQueueDispatches
+            knownUnsentDispatches: unhandedQueueDispatches,
+            useLiveTranscript: true
         )
         session.lastError = nil
         session.setupState = .checking
@@ -8029,11 +8033,11 @@ extension ACPSessionManager {
                   isCurrentAttachment(sessionId: sessionId, attempt: replacementAttempt, session: session)
             else { return }
         }
-        if !unhandedQueueDispatches.isEmpty {
+        if queueChangedAtRestore || !unhandedQueueDispatches.isEmpty {
             // The old runner may have persisted its provisional generation
             // marker before the restart invalidated its transport handoff.
-            // Re-persist the normalized queue under the still-owned session
-            // lease so a later restore cannot resurrect that stale marker.
+            // Persist normalized provenance and answered-prompt removal under
+            // the still-owned lease before a later restore can reload them.
             persistQueue(for: session)
             _ = await runBounded(timeout: restartTeardownTimeout) {
                 await self.flushPersistence()
@@ -9650,6 +9654,7 @@ extension ACPSessionManager {
         // `.ready` at that point, its post-`userCancel` liveness
         // check passes and it dispatches `sendNow` against a connection
         // being torn down. Flipping the state here closes that window.
+        var queueChangedAtRestore = false
         if let session {
             // .idle (user-initiated teardown), not .disconnected — the latter
             // is reserved for the runner's unexpected stream-end branch.
@@ -9664,10 +9669,11 @@ extension ACPSessionManager {
             // cached object (skipping `restoreQueue`), the post-attach
             // flush sees `.sending`, and the queue stays stuck until a
             // full app restart reloads from SQLite.
-            session.restoreQueue(
+            queueChangedAtRestore = session.restoreQueue(
                 session.queue,
                 markLegacySendingUncertain: true,
-                knownUnsentDispatches: unhandedQueueDispatches
+                knownUnsentDispatches: unhandedQueueDispatches,
+                useLiveTranscript: true
             )
         }
         var closeError: (any Error)?
@@ -9700,10 +9706,10 @@ extension ACPSessionManager {
             runner.invalidateActivePrompt()
             runner.stop()
             await runner.flushPersistence()
-            if !unhandedQueueDispatches.isEmpty, let session {
-                // Persist the cleared provisional provenance before releasing
-                // this lease; a cold reopen must not mistake known-unsent work
-                // for a prompt that may have reached the old broker.
+            if queueChangedAtRestore || !unhandedQueueDispatches.isEmpty, let session {
+                // Flush recovery changes before releasing the writer lease.
+                // A cold reopen must retain the drop or continuation as well
+                // as the cleared provenance for known-unsent work.
                 persistQueue(for: session)
                 await flushPersistence()
             }
@@ -9799,6 +9805,10 @@ extension ACPSessionManager {
             } catch {
                 closeError = error
             }
+        }
+        if runner == nil, queueChangedAtRestore, let session {
+            persistQueue(for: session)
+            await flushPersistence()
         }
         let primaryConnection = runner?.connection ?? attaching?.connection ?? attemptConnection
         if let retiringConnection, retiringConnection !== primaryConnection {

@@ -2952,13 +2952,16 @@ final class ACPSession: ObservableObject, Identifiable {
     /// store. `.sending` items get flipped to `.pending` here so the
     /// flusher re-attempts on next idle.
     ///
+    /// Set `useLiveTranscript` only when restoring this session's cached queue;
+    /// a queue loaded from storage can belong to a newer transcript snapshot.
     /// Returns whether an uncertain item was dropped as already delivered,
     /// so the caller can persist the shorter queue.
     @discardableResult
     func restoreQueue(
         _ items: [QueuedPrompt],
         markLegacySendingUncertain: Bool = false,
-        knownUnsentDispatches: Set<UUID> = []
+        knownUnsentDispatches: Set<UUID> = [],
+        useLiveTranscript: Bool = false
     ) -> Bool {
         forceSendAfterSendingHeadId = nil
         var newlyUncertain: Set<UUID> = []
@@ -2972,7 +2975,8 @@ final class ACPSession: ObservableObject, Identifiable {
             restored.dispatchedBrokerGeneration = nil
             return restored
         }
-        let dropped = dropDeliveredQueuedPrompts(newlyUncertain: newlyUncertain)
+        let dropped = dropDeliveredQueuedPrompts(
+            newlyUncertain: newlyUncertain, useLiveTranscript: useLiveTranscript)
         if usageLimit == nil {
             usageLimit = usageLimitResumeItem?.usageLimit
         }
@@ -3011,16 +3015,25 @@ final class ACPSession: ObservableObject, Identifiable {
     /// can be persisted before then, and a failed attach would otherwise lose
     /// the only record that the turn needs continuing. Returns whether the
     /// queue changed.
-    private func dropDeliveredQueuedPrompts(newlyUncertain: Set<UUID>) -> Bool {
+    private func dropDeliveredQueuedPrompts(
+        newlyUncertain: Set<UUID>, useLiveTranscript: Bool = true
+    ) -> Bool {
         for index in queue.indices where newlyUncertain.contains(queue[index].id) {
             queue[index].awaitingInterruptionResume = true
         }
-        guard !deliveredQueuedPromptIDs.isEmpty else { return false }
+        guard queue.contains(where: \.deliveryUncertain) else { return false }
+        // Only cached-queue recovery shares the live transcript's snapshot.
+        // A queue loaded from storage may precede its transcript refresh.
+        let liveDelivered = useLiveTranscript
+            ? QueuedPrompt.deliveredRecordedPromptIDs(in: queue, liveTranscript: transcript.messages)
+            : []
+        let delivered = deliveredQueuedPromptIDs.union(liveDelivered)
+        guard !delivered.isEmpty else { return false }
         let count = queue.count
         queue.removeAll { item in
             item.deliveryUncertain
                 && item.lastError == QueuedPrompt.deliveryUncertaintyMessage
-                && deliveredQueuedPromptIDs.contains(item.id)
+                && delivered.contains(item.id)
                 && (newlyUncertain.contains(item.id) || item.dispatchedBrokerGeneration != nil)
         }
         guard queue.count != count else { return false }

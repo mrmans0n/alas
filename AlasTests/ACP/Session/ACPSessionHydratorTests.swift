@@ -9,6 +9,46 @@ struct ACPSessionHydratorTests {
             .appendingPathComponent("hydrator-\(UUID()).sqlite").path
     }
 
+    @Test("recovery reads transcript and queue from one snapshot", arguments: [false, true])
+    func recoverySnapshotExcludesConcurrentQueueWrite(mirror: Bool) async throws {
+        let path = tmpStorePath()
+        let store = try ACPSessionStore(path: path)
+        try store.upsertSession(.init(
+            id: "s", agentId: "claude", title: "demo", currentModel: nil,
+            currentMode: nil, autoRun: false, createdAt: 1, updatedAt: 1,
+            lastOpenedAt: 1, archived: false))
+        let payloads: [(String, Data)] = try await MainActor.run {
+            let user: ACPMessage = .user(id: UUID(), text: "repeat", attachments: [])
+            let agent: ACPMessage = .agent(id: UUID(), StreamingText("old reply"))
+            return try [user, agent, user].map { ($0.kind, try ACPMessageCodec.encode($0)) }
+        }
+        for i in 0..<2 {
+            try store.appendMessage(sessionId: "s", id: "m\(i)", kind: payloads[i].0,
+                                    seq: Int64(i), payload: payloads[i].1, createdAt: 1)
+        }
+        let queued = QueuedPrompt(blocks: [.text("repeat")], status: .sending,
+                                  transcriptRecorded: true, dispatchCount: 1)
+        let hydrator = try ACPSessionHydrator(path: path)
+        await hydrator.setAfterMessagesLoadedForTesting {
+            let writer = try ACPSessionStore(path: path)
+            try writer.db.transaction {
+                try writer.appendMessage(sessionId: "s", id: "m2", kind: payloads[2].0,
+                                         seq: 2, payload: payloads[2].1, createdAt: 2)
+                try writer.upsertQueue(sessionId: "s", items: [queued])
+            }
+        }
+
+        let result = try await (mirror ? hydrator.mirrorSnapshot(sessionId: "s") : hydrator.hydrate(sessionId: "s"))
+        #expect(result.wireMessages.count == 2)
+        #expect(result.queue.isEmpty)
+        #expect(result.deliveredQueuedPromptIDs.isEmpty)
+        await hydrator.setAfterMessagesLoadedForTesting(nil)
+        let next = try await hydrator.mirrorSnapshot(sessionId: "s")
+        #expect(next.wireMessages.count == 3)
+        #expect(next.queue.map(\.id) == [queued.id])
+        #expect(next.deliveredQueuedPromptIDs.isEmpty)
+    }
+
     @Test("hydrates row, messages, queue, draft")
     func happyPath() async throws {
         let path = tmpStorePath()
