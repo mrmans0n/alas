@@ -621,7 +621,7 @@ struct RemoteWebAssetTests {
         #expect(js.contains("function renderQueue()"))
         #expect(js.contains(#"el("div", "queued-bubble")"#))
         #expect(js.contains("function setQueuedOpen(id)"))
-        #expect(js.contains("function queueAction(type, itemId)"))
+        #expect(js.contains("function queueAction(type, itemId, extra)"))
         #expect(css.contains("#queued"))
         #expect(css.contains(".queued-bubble"))
         #expect(css.contains(".queued-actions"))
@@ -635,7 +635,52 @@ struct RemoteWebAssetTests {
         #expect(js.contains(#""queueRetry""#))
         #expect(js.contains(#""queueEdit""#))
         #expect(js.contains(#""queueClear""#))
+        #expect(js.contains(#""queueMove""#))
+        #expect(js.contains(#""queuePromote""#))
         #expect(js.contains(#"case "queueEditRestored""#))
+    }
+
+    /// Same queue and expectations as the native peer composer's test.
+    @Test func queuedBubblesMoveByTheNativeRowRules() throws {
+        let targets = try javascriptFunction("queueMoveTargets").call(withArguments: [[
+            ["id": "head", "status": "sending"],
+            ["id": "a", "status": "pending"],
+            ["id": "b", "status": "pending"],
+            ["id": "later", "status": "pending", "scheduledAt": 1_800_000_000_000],
+        ]])
+        func target(_ id: String, _ direction: String) -> String? {
+            let value = targets?.objectForKeyedSubscript(id)?.objectForKeyedSubscript(direction)
+            return value?.isString == true ? value?.toString() : nil
+        }
+        #expect(target("a", "up") == nil)
+        #expect(target("a", "down") == "b")
+        #expect(target("b", "up") == "a")
+        #expect(target("b", "down") == nil)
+        #expect(target("later", "up") == nil)
+        #expect(targets?.objectForKeyedSubscript("head")?.isUndefined == true)
+    }
+
+    @Test(arguments: [
+        ("/rev", 4, 0, "rev"), ("fix it /$skill", 14, 7, "$skill"), ("abc/rev", 7, nil, nil), ("/rev iew", 8, nil, nil),
+    ] as [(String, Int, Int?, String?)])
+    func slashPickerOpensOnTheSameTokenAsTheNativeComposer(text: String, caret: Int, start: Int?, query: String?) throws {
+        let token = try javascriptFunction("slashToken").call(withArguments: [text, caret])
+        if let start, let query {
+            #expect(token?.objectForKeyedSubscript("start")?.toInt32() == Int32(start))
+            #expect(token?.objectForKeyedSubscript("query")?.toString() == query)
+        } else {
+            #expect(token?.isNull == true)
+        }
+    }
+
+    @MainActor
+    @Test func slashPickerRanksLikeTheNativePicker() throws {
+        let commands = ["/review", "/init", "/init", "/compact", "/inspect"].map { ["command": $0] }
+        let ranked = try javascriptFunction("filterSlashCommands").call(withArguments: [commands, "in"])
+        let names = (ranked?.toArray() as? [[String: Any]])?.compactMap { $0["command"] as? String }
+        let model = ACPSlashPickerModel(suggestions: commands.map { ACPPromptSuggestion(command: $0["command"]!, description: nil) })
+        model.setQuery("in")
+        #expect(names == model.filtered.map(\.command))
     }
 
     @Test(arguments: [(0, 0, nil, true), (0, 0, true, true), (0, 0, false, false),

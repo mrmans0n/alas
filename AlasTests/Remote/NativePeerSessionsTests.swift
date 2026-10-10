@@ -977,6 +977,75 @@ struct NativePeerSessionsTests {
         #expect(NativePeerComposerState.canClear([queued(canRemove: false), queued(canRemove: nil)]))
     }
 
+    /// The smallest bytes that sniff as a PNG.
+    private let png = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+
+    @Test(arguments: ["look at this", ""])
+    func attachedImagesRideThePromptAndClearOnceTheHostEchoesThem(text: String) {
+        let (links, client) = drivenClient(canDrive: true)
+        client.draft = text
+        #expect(client.addAttachment(png, name: "shot.png") == nil)
+        client.sendPrompt()
+        let wire = RemoteAttachment(name: "shot.png", mimeType: "image/png", dataBase64: png.base64EncodedString())
+        #expect(links.sent(to: "B").contains(.sendPrompt(sessionId: "s", text: text, attachments: [wire], intent: "auto")))
+        #expect(client.attachments.count == 1)
+
+        // The host labels each image on the user row it records.
+        let rowText = text.isEmpty ? "🖼 shot.png" : text + "\n\n🖼 shot.png"
+        links.receive(.transcriptDelta(sessionId: "s", streamingState: "streaming", canDrive: true, upserts: [
+            .init(stableId: "m0", kind: "user", text: rowText, json: nil, index: 0),
+        ], epoch: 1, revision: 1), from: "B")
+        #expect(!client.isPromptPending)
+        #expect(client.draft.isEmpty)
+        #expect(client.attachments.isEmpty)
+    }
+
+    @Test func attachmentsTheHostWouldRefuseAreNeverStaged() {
+        let (_, client) = drivenClient(canDrive: true)
+        #expect(client.addAttachment(Data("not an image".utf8), name: "notes.txt") != nil)
+        for _ in 0..<RemoteSessionGateway.maxAttachmentCount { client.addAttachment(png, name: nil) }
+        #expect(client.addAttachment(png, name: nil) != nil)
+        #expect(client.attachments.count == RemoteSessionGateway.maxAttachmentCount)
+    }
+
+    @Test(arguments: [
+        ("/re", 0, 3, "/review ", 8),
+        ("please /re now", 7, 10, "please /review  now", 15),
+        ("🙂 /", 3, 4, "🙂 /review ", 11),
+    ])
+    func pickingASlashCommandReplacesTheTypedToken(
+        text: String, start: Int, caret: Int, expected: String, expectedCaret: Int
+    ) {
+        let completed = NativePeerComposerState.completingSlashCommand(
+            "/review", in: text, tokenStart: start, caret: caret)
+        #expect(completed.text == expected)
+        #expect(completed.caret == expectedCaret)
+    }
+
+    @Test func queueRowsMoveByTheLocalRulesAndRouteMoveAndPromote() {
+        func item(_ id: UUID, status: String = "pending", scheduled: Bool = false) -> RemoteQueuedPrompt {
+            RemoteQueuedPrompt(id: id.uuidString, text: "t", imageCount: 0, resourceCount: 0, status: status,
+                               lastError: nil, scheduledAt: scheduled ? 1_800_000_000_000 : nil)
+        }
+        let (head, a, b, later) = (UUID(), UUID(), UUID(), UUID())
+        let targets = NativePeerComposerState.moveTargets([
+            item(head, status: "sending"), item(a), item(b), item(later, scheduled: true),
+        ])
+        // Nothing passes the in-flight head; scheduled items neither move nor get passed.
+        #expect(targets[a.uuidString] == .init(up: nil, down: b.uuidString))
+        #expect(targets[b.uuidString] == .init(up: a.uuidString, down: nil))
+        #expect(targets[later.uuidString] == .init(up: nil, down: nil))
+        #expect(targets[head.uuidString] == nil)
+
+        let (links, client) = drivenClient(canDrive: true)
+        client.queueMove(b.uuidString, to: a.uuidString)
+        client.queuePromote(b.uuidString)
+        #expect(links.sent(to: "B").suffix(2) == [
+            .queueMove(sessionId: "s", itemId: b.uuidString, targetItemId: a.uuidString),
+            .queuePromote(sessionId: "s", itemId: b.uuidString),
+        ])
+    }
+
     @Test(arguments: [
         ("hello", 0, 0, "hello"),
         ("", 2, 0, "🖼 ×2"),

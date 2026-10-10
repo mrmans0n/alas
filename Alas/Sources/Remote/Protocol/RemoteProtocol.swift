@@ -52,6 +52,41 @@ struct RemoteSessionConfig: Codable, Equatable, Sendable {
     let acceptsImages: Bool
     var chips: RemoteChipState? = nil
     var supportsSteering: Bool? = nil
+    /// The agent's slash commands, for the viewer's picker. Nil on older hosts.
+    var availableCommands: [RemoteSlashCommand]? = nil
+    /// Context window and token usage for the composer's ring. Nil until the
+    /// agent reports any, and on older hosts.
+    var usage: RemoteUsage? = nil
+    /// Set by hosts that serve `queueMove` and `queuePromote`. Older hosts
+    /// drop unknown verbs, so viewers hide reordering without it.
+    var supportsQueueReorder: Bool? = nil
+}
+
+struct RemoteSlashCommand: Codable, Equatable, Sendable {
+    var command: String
+    var description: String?
+    var hint: String?
+}
+
+struct RemoteUsage: Codable, Equatable, Sendable {
+    var modelName: String?
+    var context: RemoteContextWindow?
+    /// Per-model totals for the last turn and for the session so far, each
+    /// already reduced to the one number the popover shows.
+    var lastTurn: [RemoteTokenUsage]
+    var cumulative: [RemoteTokenUsage]
+}
+
+struct RemoteContextWindow: Codable, Equatable, Sendable {
+    var used: Int
+    var size: Int
+    var costAmount: Double?
+    var costCurrency: String?
+}
+
+struct RemoteTokenUsage: Codable, Equatable, Sendable {
+    var label: String
+    var tokens: Int
 }
 
 struct RemoteChipState: Codable, Equatable, Sendable {
@@ -141,6 +176,11 @@ enum RemoteClientMessage: Equatable, Sendable {
     case queueRetry(sessionId: String, itemId: String)
     case queueEdit(sessionId: String, itemId: String)
     case queueClear(sessionId: String)
+    /// Moves `itemId` into `targetItemId`'s slot, as dropping one queue row
+    /// on another does locally. Served when `supportsQueueReorder` is set.
+    case queueMove(sessionId: String, itemId: String, targetItemId: String)
+    /// Moves `itemId` to the front without interrupting a running turn.
+    case queuePromote(sessionId: String, itemId: String)
     case listChanges(
         sessionId: String,
         comparisonMode: AppConfig.Changes.ChangesComparisonMode? = nil
@@ -169,7 +209,7 @@ enum RemoteClientMessage: Equatable, Sendable {
 }
 
 extension RemoteClientMessage: Codable {
-    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, action, reason, content, text, attachments, modelId, effortId, modeId, enabled, configId, value, title, worktreeId, agentId, beforeIndex, limit, itemId, intent, projectId, base, branch, path, stage, comparisonMode, protocolVersion, challenge, sha, visualId, selectedOptionIds, note, console }
+    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, action, reason, content, text, attachments, modelId, effortId, modeId, enabled, configId, value, title, worktreeId, agentId, beforeIndex, limit, itemId, targetItemId, intent, projectId, base, branch, path, stage, comparisonMode, protocolVersion, challenge, sha, visualId, selectedOptionIds, note, console }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -289,6 +329,15 @@ extension RemoteClientMessage: Codable {
                 itemId: try c.decode(String.self, forKey: .itemId))
         case "queueClear":
             self = .queueClear(sessionId: try c.decode(String.self, forKey: .sessionId))
+        case "queueMove":
+            self = .queueMove(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                itemId: try c.decode(String.self, forKey: .itemId),
+                targetItemId: try c.decode(String.self, forKey: .targetItemId))
+        case "queuePromote":
+            self = .queuePromote(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                itemId: try c.decode(String.self, forKey: .itemId))
         case "listChanges":
             self = .listChanges(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
@@ -462,6 +511,15 @@ extension RemoteClientMessage: Codable {
         case .queueClear(let s):
             try c.encode("queueClear", forKey: .type)
             try c.encode(s, forKey: .sessionId)
+        case .queueMove(let s, let itemId, let targetItemId):
+            try c.encode("queueMove", forKey: .type)
+            try c.encode(s, forKey: .sessionId)
+            try c.encode(itemId, forKey: .itemId)
+            try c.encode(targetItemId, forKey: .targetItemId)
+        case .queuePromote(let s, let itemId):
+            try c.encode("queuePromote", forKey: .type)
+            try c.encode(s, forKey: .sessionId)
+            try c.encode(itemId, forKey: .itemId)
         case .listChanges(let s, let comparisonMode):
             try c.encode("listChanges", forKey: .type)
             try c.encode(s, forKey: .sessionId)
@@ -566,7 +624,7 @@ extension RemoteClientMessage {
             return action == "answer"
         case .sendPrompt, .takeOver,
              .queueForceSend, .queueRemove, .queueRetry, .queueEdit,
-             .queueClear:
+             .queueClear, .queueMove, .queuePromote:
             return true
         default: return false
         }
@@ -667,7 +725,7 @@ extension RemoteServerMessage: Codable {
         case type, sessions, sessionId, projectId, streamingState, canDrive, messages, upserts, payload, requestId, message
         case hasCancellableBackgroundWork
         case worktrees, agents, session, projects, branches, preferredBase, stage, worktreeId
-        case chips, supportsSteering
+        case chips, supportsSteering, availableCommands, usage, supportsQueueReorder
         case models, modes, currentModel, currentMode, autoRunEnabled, acceptsImages, title
         case firstIndex, totalCount, epoch, revision
         case items, itemId, text
@@ -812,6 +870,9 @@ extension RemoteServerMessage: Codable {
             // degrades to the legacy model/mode UI instead of dropping the frame.
             config.chips = try? c.decodeIfPresent(RemoteChipState.self, forKey: .chips) ?? nil
             config.supportsSteering = try c.decodeIfPresent(Bool.self, forKey: .supportsSteering)
+            config.availableCommands = try? c.decodeIfPresent([RemoteSlashCommand].self, forKey: .availableCommands) ?? nil
+            config.usage = try? c.decodeIfPresent(RemoteUsage.self, forKey: .usage) ?? nil
+            config.supportsQueueReorder = try? c.decodeIfPresent(Bool.self, forKey: .supportsQueueReorder) ?? nil
             self = .sessionConfig(config)
         case "sessionRenamed":
             self = .sessionRenamed(
@@ -1056,6 +1117,9 @@ extension RemoteServerMessage: Codable {
             try c.encode(cfg.acceptsImages, forKey: .acceptsImages)
             try c.encodeIfPresent(cfg.chips, forKey: .chips)
             try c.encodeIfPresent(cfg.supportsSteering, forKey: .supportsSteering)
+            try c.encodeIfPresent(cfg.availableCommands, forKey: .availableCommands)
+            try c.encodeIfPresent(cfg.usage, forKey: .usage)
+            try c.encodeIfPresent(cfg.supportsQueueReorder, forKey: .supportsQueueReorder)
         case .sessionRenamed(let id, let title):
             try c.encode("sessionRenamed", forKey: .type)
             try c.encode(id, forKey: .sessionId)

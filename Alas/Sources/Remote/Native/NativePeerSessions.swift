@@ -13,10 +13,26 @@ final class NativePeerSessions {
     @ObservationIgnored private var downstream: FederatedDownstream?
     @ObservationIgnored private var pendingPromptExpectedIndex: Int?
     private(set) var isFetchingOlderMessages = false
-    private(set) var pendingPrompt: String?
-    /// Queue items with the pending prompt's text at send time, so only a new
+    private(set) var pendingPrompt: PendingPrompt?
+    /// Queue items matching the pending prompt at send time, so only a new
     /// item (not a re-pushed older duplicate) confirms the send.
     @ObservationIgnored private var pendingPromptPriorQueueIds: Set<String> = []
+
+    /// A sent prompt awaiting the host's confirmation, as the host will
+    /// echo it back in a queue item or a transcript user row.
+    struct PendingPrompt: Equatable {
+        let text: String
+        let attachments: [NativePeerAttachment]
+
+        func matches(_ item: RemoteQueuedPrompt) -> Bool {
+            item.text == text && item.imageCount == attachments.count
+        }
+
+        func matches(_ row: RemoteWireMessage) -> Bool {
+            row.kind == "user" && row.text == RemoteSessionGateway.userRowText(
+                text: text, attachmentNames: attachments.map(\.name))
+        }
+    }
 
     private(set) var snapshot = NativePeerSidebarSnapshot(groups: [], attentionRows: []) {
         didSet { if hasGroups != !snapshot.groups.isEmpty { hasGroups.toggle() } }
@@ -37,6 +53,9 @@ final class NativePeerSessions {
     private(set) var selectedSessionId: String?
     private(set) var transcript: NativePeerTranscript?
     var draft = ""
+    /// Images staged for the next prompt. Kept, like the draft, until the
+    /// host confirms the send.
+    private(set) var attachments: [NativePeerAttachment] = []
     /// Queue Edit text the host restored after the user left that session,
     /// put back into the draft when the session is selected again.
     @ObservationIgnored private var restoredDrafts: [String: String] = [:]
@@ -279,6 +298,7 @@ final class NativePeerSessions {
         transcript = nil
         snapshot = .init(groups: [], attentionRows: [])
         draft = ""
+        attachments = []
         restoredDrafts = [:]
         pendingPrompt = nil
         pendingPromptExpectedIndex = nil
@@ -365,6 +385,7 @@ final class NativePeerSessions {
         noteSelected(.session(sessionId), serverId: peer.serverId)
         selectedSessionId = sessionId
         draft = restoredDrafts.removeValue(forKey: sessionId) ?? ""
+        attachments = []
         transcript = NativePeerTranscript(sessionId: sessionId)
         _ = federation.route(.subscribe(sessionId: sessionId), from: downstream)
         reloadWorkspace()
@@ -391,6 +412,7 @@ final class NativePeerSessions {
         pendingSessionId = nil
         transcript = nil
         draft = ""
+        attachments = []
         pendingPrompt = nil
         pendingPromptExpectedIndex = nil
         isFetchingOlderMessages = false
@@ -409,12 +431,14 @@ final class NativePeerSessions {
     func sendPrompt(intent: ACPSubmitIntent = .auto) {
         guard pendingPrompt == nil else { return }
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        pendingPrompt = text
+        guard !text.isEmpty || !attachments.isEmpty else { return }
+        let pending = PendingPrompt(text: text, attachments: attachments)
+        pendingPrompt = pending
         pendingPromptExpectedIndex = transcript?.totalCount ?? 0
-        pendingPromptPriorQueueIds = Set((transcript?.queue ?? []).filter { $0.text == text }.map(\.id))
+        pendingPromptPriorQueueIds = Set((transcript?.queue ?? []).filter(pending.matches).map(\.id))
         let wireIntent = intent == .steer ? "steer" : "auto"
-        if drive({ .sendPrompt(sessionId: $0, text: text, attachments: [], intent: wireIntent) }) {
+        let wireAttachments = attachments.map(\.wire)
+        if drive({ .sendPrompt(sessionId: $0, text: text, attachments: wireAttachments, intent: wireIntent) }) {
             deliveryError = nil
         } else {
             pendingPrompt = nil
@@ -481,6 +505,26 @@ final class NativePeerSessions {
     func queueRetry(_ itemId: String) { drive { .queueRetry(sessionId: $0, itemId: itemId) } }
     func queueEdit(_ itemId: String) { drive { .queueEdit(sessionId: $0, itemId: itemId) } }
     func queueClear() { drive { .queueClear(sessionId: $0) } }
+    func queueMove(_ itemId: String, to targetItemId: String) {
+        drive { .queueMove(sessionId: $0, itemId: itemId, targetItemId: targetItemId) }
+    }
+    func queuePromote(_ itemId: String) { drive { .queuePromote(sessionId: $0, itemId: itemId) } }
+
+    /// Stages an image for the next prompt. Returns why it was refused, or
+    /// nil once it is staged.
+    @discardableResult
+    func addAttachment(_ data: Data, name: String?) -> String? {
+        if let refusal = NativePeerComposerState.attachmentRefusal(data, staged: attachments.map(\.data)) {
+            return refusal
+        }
+        guard let mimeType = ACPImageStaging.sniffMIME(data) else { return nil }
+        attachments.append(NativePeerAttachment(name: name, mimeType: mimeType, data: data))
+        return nil
+    }
+
+    func removeAttachment(_ id: UUID) {
+        attachments.removeAll { $0.id == id }
+    }
 
     func stopSelected() { routeWhileOnline { .stop(sessionId: $0) } }
     func takeOver() { routeWhileOnline { .takeOver(sessionId: $0) } }
@@ -937,19 +981,34 @@ final class NativePeerSessions {
             promptConfirmationRows = []
         }
         if case .queueState(_, let items) = message, let pendingPrompt,
-           items.contains(where: { $0.text == pendingPrompt && !pendingPromptPriorQueueIds.contains($0.id) }) {
-            if draft.trimmingCharacters(in: .whitespacesAndNewlines) == pendingPrompt { draft = "" }
-            self.pendingPrompt = nil
-            pendingPromptExpectedIndex = nil
+           items.contains(where: { pendingPrompt.matches($0) && !pendingPromptPriorQueueIds.contains($0.id) }) {
+            confirm(pendingPrompt)
             return
         }
         if let pendingPrompt, let expectedIndex = pendingPromptExpectedIndex,
-           promptConfirmationRows.contains(where: {
-               $0.kind == "user" && $0.text == pendingPrompt && $0.index >= expectedIndex
-           }) {
-            if draft.trimmingCharacters(in: .whitespacesAndNewlines) == pendingPrompt { draft = "" }
-            self.pendingPrompt = nil
-            pendingPromptExpectedIndex = nil
+           promptConfirmationRows.contains(where: { pendingPrompt.matches($0) && $0.index >= expectedIndex }) {
+            confirm(pendingPrompt)
         }
+    }
+
+    /// Clears what was sent from the composer, leaving anything the user
+    /// changed since.
+    private func confirm(_ sent: PendingPrompt) {
+        if draft.trimmingCharacters(in: .whitespacesAndNewlines) == sent.text { draft = "" }
+        if attachments == sent.attachments { attachments = [] }
+        pendingPrompt = nil
+        pendingPromptExpectedIndex = nil
+    }
+}
+
+/// An image staged in the peer composer.
+struct NativePeerAttachment: Identifiable, Equatable {
+    let id = UUID()
+    let name: String?
+    let mimeType: String
+    let data: Data
+
+    var wire: RemoteAttachment {
+        RemoteAttachment(name: name, mimeType: mimeType, dataBase64: data.base64EncodedString())
     }
 }

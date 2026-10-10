@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Read and drive the selected peer through forwarded gateway frames only.
 /// Rows and pending requests render with the same cards the local ACP
@@ -72,13 +73,16 @@ struct NativePeerSessionView: View {
 
     private struct QueueRowToken: Equatable {
         let item: QueuedPrompt
+        let position: Int
         let canRemove: Bool
         let canEdit: Bool
         let online: Bool
+        let reorder: Bool
+        let targets: NativePeerComposerState.MoveTargets?
     }
 
-    /// "Up next" rows mirror the host queue. The host owns ordering, so the
-    /// rows offer no reordering; removal follows the host's `canRemove`.
+    /// "Up next" rows mirror the host queue. Hosts that serve reordering get
+    /// the local row's move, promote and drag; removal follows `canRemove`.
     private func queueRows(_ transcript: NativePeerTranscript, contentMaxWidth: CGFloat) -> [NativePeerTranscriptExtraRow] {
         let client = client
         let online = online
@@ -90,6 +94,8 @@ struct NativePeerSessionView: View {
             transcript.queue.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let canClear = online
             && NativePeerComposerState.canClear(items.compactMap { wireById[$0.id.uuidString] })
+        let reorder = transcript.config?.supportsQueueReorder == true
+        let moveTargets = reorder ? NativePeerComposerState.moveTargets(transcript.queue) : [:]
         var rows: [NativePeerTranscriptExtraRow] = [NativePeerTranscriptExtraRow(
             id: "__peer_queue_header__",
             token: ACPRowEqualityToken([items.count, canClear ? 1 : 0]),
@@ -101,18 +107,32 @@ struct NativePeerSessionView: View {
             let wire = wireById[id]
             let canRemove = wire?.canRemove ?? true
             let canEdit = wire.map(NativePeerComposerState.canEdit) ?? true
+            let targets = moveTargets[id]
             rows.append(NativePeerTranscriptExtraRow(
                 id: "__peer_queue_\(id)",
-                token: ACPRowEqualityToken(QueueRowToken(item: item, canRemove: canRemove, canEdit: canEdit, online: online)),
+                token: ACPRowEqualityToken(QueueRowToken(
+                    item: item, position: index + 1, canRemove: canRemove, canEdit: canEdit,
+                    online: online, reorder: reorder, targets: targets)),
                 content: {
                     AnyView(ACPQueueItemRow(
                         item: item, position: index + 1, contentMaxWidth: contentMaxWidth,
-                        typography: typography, canMoveUp: false, canMoveDown: false,
+                        typography: typography,
+                        canMoveUp: targets?.up != nil, canMoveDown: targets?.down != nil,
                         isHeldByUsageLimit: false,
-                        allowsReordering: false, canRemove: canRemove, canEdit: canEdit,
-                        onPromote: {}, onSendNow: { client.queueForceSend(id) },
+                        allowsReordering: reorder, canRemove: canRemove, canEdit: canEdit,
+                        onPromote: { client.queuePromote(id) }, onSendNow: { client.queueForceSend(id) },
                         onEdit: { client.queueEdit(id) }, onRemove: { client.queueRemove(id) },
-                        onRetry: { client.queueRetry(id) }, onMoveUp: {}, onMoveDown: {})
+                        onRetry: { client.queueRetry(id) },
+                        onMoveUp: { targets?.up.map { client.queueMove(id, to: $0) } },
+                        onMoveDown: { targets?.down.map { client.queueMove(id, to: $0) } })
+                    .dropDestination(for: String.self) { dropped, _ in
+                        // Only queue rows drag queue ids; the host refuses
+                        // any move the local queue would.
+                        guard reorder, let source = dropped.first, source != id,
+                              moveTargets[source] != nil else { return false }
+                        client.queueMove(source, to: id)
+                        return true
+                    }
                     .disabled(!online))
                 }))
         }
@@ -314,18 +334,26 @@ private struct NativePeerComposer: View {
     let contentMaxWidth: CGFloat
     @Environment(\.theme) private var theme
     @FocusState private var composerFocused: Bool
+    @State private var selection: TextSelection?
+    @StateObject private var slashPicker = ACPSlashPickerModel(suggestions: [])
+    /// UTF-16 offset of the `/` the open picker completes; nil when closed.
+    @State private var slashTokenStart: Int?
+    @State private var notice: String?
 
     private var online: Bool { client.selectedPeer?.state.carriesSessions == true }
     private var canDrive: Bool { online && transcript.canDrive }
     private var config: RemoteSessionConfig? { transcript.config }
     private var chipState: ACPChipState? { config.map(NativePeerComposerState.chipState(from:)) }
     private var sessionOpen: Bool { online && transcript.epoch != nil && !transcript.isClosed }
-    private var hasText: Bool { !client.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    private var acceptsImages: Bool { config?.acceptsImages == true }
+    private var hasContent: Bool {
+        !client.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !client.attachments.isEmpty
+    }
     private var queueCount: Int { RemoteQueueProjection.visibleCount(transcript.queue) }
     private var action: ComposerAction {
         composerAction(
             streamingState: NativePeerComposerState.streamingState(transcript.streamingState),
-            hasText: hasText, agentState: .ready,
+            hasText: hasContent, agentState: .ready,
             hasCancellableBackgroundWork: transcript.hasCancellableBackgroundWork)
     }
 
@@ -334,7 +362,11 @@ private struct NativePeerComposer: View {
             Spacer(minLength: 0)
             HStack {
                 Spacer(minLength: 0)
-                composerPill.frame(maxWidth: contentMaxWidth)
+                VStack(spacing: 6) {
+                    if slashTokenStart != nil { slashPickerList }
+                    composerPill
+                }
+                .frame(maxWidth: contentMaxWidth)
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 24)
@@ -353,16 +385,20 @@ private struct NativePeerComposer: View {
             )
             .allowsHitTesting(false)
         )
+        .onChange(of: client.draft) { _, _ in reconcileSlashPicker() }
+        .onChange(of: selection) { _, _ in reconcileSlashPicker() }
+        .onChange(of: config?.availableCommands) { _, _ in reconcileSlashPicker() }
     }
 
     private var composerPill: some View {
         VStack(spacing: 6) {
-            if let error = client.deliveryError {
+            if let error = client.deliveryError ?? notice {
                 Text(error)
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(theme.color("del"))
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+            if !client.attachments.isEmpty { attachmentStrip }
             ZStack(alignment: .topLeading) {
                 if client.draft.isEmpty {
                     Text(sessionOpen ? "Message the peer session" : "Peer session unavailable")
@@ -372,7 +408,7 @@ private struct NativePeerComposer: View {
                         .padding(.vertical, 6)
                         .allowsHitTesting(false)
                 }
-                TextEditor(text: $client.draft)
+                TextEditor(text: $client.draft, selection: $selection)
                     .font(typography.swiftUIFont(size: typography.paragraphSize))
                     .foregroundStyle(theme.color("fg"))
                     .scrollContentBackground(.hidden)
@@ -381,6 +417,9 @@ private struct NativePeerComposer: View {
                     .focused($composerFocused)
                     .disabled(!sessionOpen)
                     .accessibilityLabel("Message peer session")
+                    .onKeyPress(keys: [.upArrow, .downArrow, .return, .tab, .escape]) { press in
+                        handleSlashKey(press)
+                    }
             }
             .frame(minHeight: 44, maxHeight: 140)
 
@@ -392,6 +431,8 @@ private struct NativePeerComposer: View {
                     shortcutHint
                 }
                 Spacer(minLength: 0)
+                if let usage = config?.usage { contextUsageButton(usage) }
+                if acceptsImages { attachButton }
                 if let chipState, let config {
                     chipRow(chipState: chipState, config: config)
                 }
@@ -443,6 +484,153 @@ private struct NativePeerComposer: View {
         }
         .padding(.horizontal, 12).padding(.vertical, 10)
         .acpComposerPill(focused: composerFocused)
+        .dropDestination(for: URL.self) { urls, _ in
+            guard acceptsImages, sessionOpen else { return false }
+            attachImages(at: urls)
+            return true
+        }
+    }
+
+    // MARK: - Slash commands
+
+    private var slashPickerList: some View {
+        ACPSlashPickerView(model: slashPicker) { pick($0) }
+            .frame(height: min(CGFloat(slashPicker.filtered.count) * 26 + 8, 220))
+            .padding(4)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(theme.color("line"), lineWidth: 0.5))
+    }
+
+    /// The caret's UTF-16 offset while it is a plain insertion point.
+    private var caret: Int? {
+        guard case .selection(let range)? = selection?.indices, range.isEmpty,
+              range.upperBound <= client.draft.endIndex else { return nil }
+        return range.upperBound.utf16Offset(in: client.draft)
+    }
+
+    /// Opens, filters or closes the picker for the `/` token at the caret,
+    /// the way the local composer's text view does.
+    private func reconcileSlashPicker() {
+        let suggestions = NativePeerComposerState.slashSuggestions(from: config)
+        guard sessionOpen, !suggestions.isEmpty, let caret,
+              let token = ACPSlashCommand.activeToken(in: client.draft as NSString, caret: caret)
+        else {
+            slashTokenStart = nil
+            return
+        }
+        if slashTokenStart == nil || slashPicker.allSuggestions != suggestions {
+            slashPicker.updateSuggestions(suggestions)
+        }
+        slashPicker.setQuery(token.query)
+        slashTokenStart = slashPicker.filtered.isEmpty ? nil : token.start
+    }
+
+    private func handleSlashKey(_ press: KeyPress) -> KeyPress.Result {
+        guard slashTokenStart != nil else { return .ignored }
+        switch press.key {
+        case .upArrow: slashPicker.moveUp()
+        case .downArrow: slashPicker.moveDown()
+        case .escape: slashTokenStart = nil
+        default:
+            // Cmd+Return sends, even with the picker open.
+            guard !press.modifiers.contains(.command), let suggestion = slashPicker.selected() else { return .ignored }
+            pick(suggestion)
+        }
+        return .handled
+    }
+
+    private func pick(_ suggestion: ACPPromptSuggestion) {
+        guard let start = slashTokenStart, let caret else { return }
+        let completed = NativePeerComposerState.completingSlashCommand(
+            suggestion.command, in: client.draft, tokenStart: start, caret: caret)
+        slashTokenStart = nil
+        client.draft = completed.text
+        selection = TextSelection(insertionPoint: String.Index(utf16Offset: completed.caret, in: completed.text))
+    }
+
+    // MARK: - Attachments
+
+    private var attachButton: some View {
+        Button(action: presentImagePicker) {
+            Image(systemName: "photo")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(theme.color("fg-muted"))
+                .frame(width: 28, height: 24)
+                .background(RoundedRectangle(cornerRadius: 6).fill(theme.color("bg-3").opacity(0.7)))
+                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.75))
+        }
+        .buttonStyle(.plain)
+        .disabled(!sessionOpen)
+        .accessibilityLabel("Attach image")
+        .help("Attach an image")
+    }
+
+    private var attachmentStrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(client.attachments) { attachment in
+                    ZStack(alignment: .topTrailing) {
+                        Group {
+                            if let image = NSImage(data: attachment.data) {
+                                Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
+                            } else {
+                                Image(systemName: "photo").foregroundStyle(theme.color("fg-muted"))
+                            }
+                        }
+                        .frame(width: 44, height: 44)
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .help(attachment.name ?? "Image")
+                        Button { client.removeAttachment(attachment.id) } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 12))
+                                .foregroundStyle(theme.color("fg"), theme.color("bg-3"))
+                        }
+                        .buttonStyle(.plain)
+                        .offset(x: 4, y: -4)
+                        .accessibilityLabel("Remove attachment")
+                    }
+                }
+            }
+            .padding(.top, 4)
+            .padding(.horizontal, 4)
+        }
+    }
+
+    private func presentImagePicker() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.allowedContentTypes = [.png, .jpeg, .gif, .webP]
+        panel.begin { response in
+            guard response == .OK else { return }
+            attachImages(at: panel.urls)
+        }
+    }
+
+    private func attachImages(at urls: [URL]) {
+        var refusal: String?
+        for url in urls where url.isFileURL {
+            guard let data = try? Data(contentsOf: url) else { continue }
+            refusal = client.addAttachment(data, name: url.lastPathComponent) ?? refusal
+        }
+        showNotice(refusal)
+    }
+
+    private func showNotice(_ message: String?) {
+        notice = message
+        guard let message else { return }
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(4))
+            if notice == message { notice = nil }
+        }
+    }
+
+    // MARK: - Toolbar
+
+    private func contextUsageButton(_ usage: RemoteUsage) -> some View {
+        let local = NativePeerComposerState.contextUsage(from: usage)
+        return ACPContextUsageButton(usage: local.usage, modelName: usage.modelName,
+                                     lastTurnQuota: local.lastTurn, sessionQuotaTotal: local.cumulative)
     }
 
     @ViewBuilder

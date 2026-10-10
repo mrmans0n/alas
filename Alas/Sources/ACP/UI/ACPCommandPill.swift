@@ -141,6 +141,31 @@ enum ACPSlashCommand {
         return (suggestion, rest)
     }
 
+    /// The `/<word>` token the caret is typing, which opens the picker.
+    /// Active means: the `/` starts the buffer or follows whitespace, and
+    /// everything between it and the caret is command-shaped (letters,
+    /// digits, `-`, `_`, `:`, `$`, the last for skills some agents list as
+    /// `/$name`). `start` is the `/`'s UTF-16 offset; `query` omits it.
+    static func activeToken(in string: NSString, caret: Int) -> (start: Int, query: String)? {
+        guard caret <= string.length else { return nil }
+        let allowed: Set<Character> = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_:$")
+        var i = caret
+        while i > 0 {
+            let ch = string.substring(with: NSRange(location: i - 1, length: 1))
+            if ch == "/" {
+                let prevIsBoundary = i - 1 == 0 || {
+                    let pc = string.substring(with: NSRange(location: i - 2, length: 1))
+                    return pc == " " || pc == "\n" || pc == "\t"
+                }()
+                guard prevIsBoundary else { return nil }
+                return (i - 1, string.substring(with: NSRange(location: i, length: caret - i)))
+            }
+            guard let c = ch.first, allowed.contains(c) else { return nil }
+            i -= 1
+        }
+        return nil
+    }
+
     /// Whether inserting a single whitespace character at `range` would
     /// complete a known command still typed as plain text — the hand-typed
     /// counterpart to picking one from the `/` menu. Intended to

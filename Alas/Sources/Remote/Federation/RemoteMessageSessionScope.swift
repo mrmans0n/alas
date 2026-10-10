@@ -21,6 +21,7 @@ extension RemoteClientMessage {
              .elicitationResponse(let id, _, _, _), .sendPrompt(let id, _, _, _), .setModel(let id, _),
              .setMode(let id, _), .setAutoRun(let id, _), .setConfigOption(let id, _, _), .renameSession(let id, _), .fetchOlder(let id, _, _),
              .queueForceSend(let id, _), .queueRemove(let id, _), .queueRetry(let id, _), .queueEdit(let id, _),
+             .queueMove(let id, _, _), .queuePromote(let id, _),
              .listCommitFiles(let id, _), .commitFileDiff(let id, _, _), .listChanges(let id, _), .fileDiff(let id, _, _, _), .listFiles(let id, _, _), .readFile(let id, _),
              .visualAidResponse(let id, _, _, _, _, _):
             return id
@@ -62,6 +63,9 @@ extension RemoteClientMessage {
         case .queueRetry(_, let itemId): return .queueRetry(sessionId: new, itemId: itemId)
         case .queueEdit(_, let itemId): return .queueEdit(sessionId: new, itemId: itemId)
         case .queueClear: return .queueClear(sessionId: new)
+        case .queueMove(_, let itemId, let targetItemId):
+            return .queueMove(sessionId: new, itemId: itemId, targetItemId: targetItemId)
+        case .queuePromote(_, let itemId): return .queuePromote(sessionId: new, itemId: itemId)
         case .listChanges(_, let comparisonMode):
             return .listChanges(sessionId: new, comparisonMode: comparisonMode)
         case .fileDiff(_, let path, let stage, let comparisonMode):

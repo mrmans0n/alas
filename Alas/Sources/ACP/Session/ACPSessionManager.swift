@@ -664,6 +664,29 @@ final class ACPSessionManager: ObservableObject {
         onQueueChanged?(id, retainedCleanupHasActivePromptWork(for: id))
     }
 
+    /// Remote twin of the "Up next" row's move up/down and drop: `itemId`
+    /// takes `targetItemId`'s slot, under the same rules as the local row.
+    func queueMove(for id: ACPSession.ID, itemId: UUID, targetItemId: UUID) async {
+        guard await confirmedWriterLease(for: id), let session = sessions[id] else { return }
+        guard let src = session.queue.firstIndex(where: { $0.id == itemId }),
+              let dst = session.queue.firstIndex(where: { $0.id == targetItemId }),
+              ACPTranscriptQueuePolicy.canMoveQueueItem(from: src, to: dst, queue: session.queue)
+        else { return }
+        session.moveInQueue(from: src, to: dst)
+        persistQueue(for: session)
+        runners[id]?.flushQueueIfIdle()
+        onQueueChanged?(id, retainedCleanupHasActivePromptWork(for: id))
+    }
+
+    /// Remote twin of the "Up next" row's "Move to front".
+    func queuePromote(for id: ACPSession.ID, itemId: UUID) async {
+        guard await confirmedWriterLease(for: id), let session = sessions[id] else { return }
+        guard session.forceQueueItem(id: itemId) else { return }
+        persistQueue(for: session)
+        runners[id]?.flushQueueIfIdle()
+        onQueueChanged?(id, retainedCleanupHasActivePromptWork(for: id))
+    }
+
     /// Steer from the remote client: same route the composer's ⌥⏎ takes.
     /// `ACPSubmitRoute.resolve` handles the degenerate idle+empty case by
     /// falling back to a plain send.

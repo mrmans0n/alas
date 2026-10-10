@@ -78,6 +78,83 @@ enum NativePeerComposerState {
         items.contains { $0.canRemove != false }
     }
 
+    static func slashSuggestions(from config: RemoteSessionConfig?) -> [ACPPromptSuggestion] {
+        (config?.availableCommands ?? []).map {
+            ACPPromptSuggestion(command: $0.command, description: $0.description, hint: $0.hint)
+        }
+    }
+
+    /// Replaces the `/` token being typed with the picked command and a
+    /// trailing space, as the local picker does. Offsets are UTF-16, the
+    /// unit `ACPSlashCommand.activeToken` and text selections share.
+    static func completingSlashCommand(
+        _ command: String, in text: String, tokenStart: Int, caret: Int
+    ) -> (text: String, caret: Int) {
+        let string = text as NSString
+        let replacement = command + " "
+        let range = NSRange(location: tokenStart, length: max(0, caret - tokenStart))
+        return (string.replacingCharacters(in: range, with: replacement),
+                tokenStart + (replacement as NSString).length)
+    }
+
+    /// The local context ring's inputs, rebuilt from the host's reduced
+    /// rows. Each row becomes a "model" whose total is the row's tokens,
+    /// which is all the popover reads.
+    static func contextUsage(from usage: RemoteUsage)
+        -> (usage: ACPUsageInfo?, lastTurn: ACPPromptQuota?, cumulative: ACPPromptQuota?)
+    {
+        func quota(_ rows: [RemoteTokenUsage]) -> ACPPromptQuota? {
+            guard !rows.isEmpty else { return nil }
+            return ACPPromptQuota(tokenCount: nil, modelUsage: rows.map {
+                ACPModelUsage(model: $0.label, tokenCount: ACPTokenCount(
+                    totalTokens: $0.tokens, inputTokens: 0, cachedInputTokens: 0,
+                    cachedWriteTokens: 0, outputTokens: 0, reasoningOutputTokens: 0))
+            })
+        }
+        let context = usage.context.map { window in
+            ACPUsageInfo(used: window.used, size: window.size, cost: window.costAmount.flatMap { amount in
+                window.costCurrency.map { ACPUsageInfo.Cost(amount: amount, currency: $0) }
+            })
+        }
+        return (context, quota(usage.lastTurn), quota(usage.cumulative))
+    }
+
+    struct MoveTargets: Equatable {
+        var up: String?
+        var down: String?
+    }
+
+    /// The queue item each row's Move up / Move down would swap with, by the
+    /// local row's rules. The host re-checks against its full queue.
+    static func moveTargets(_ items: [RemoteQueuedPrompt]) -> [String: MoveTargets] {
+        let queue = items.compactMap(queuedPrompt)
+        func target(from index: Int, step: Int) -> String? {
+            guard let neighbour = ACPTranscriptQueuePolicy.adjacentRenderedIndex(from: index, step: step, queue: queue),
+                  ACPTranscriptQueuePolicy.canMoveQueueItem(from: index, to: neighbour, queue: queue)
+            else { return nil }
+            return queue[neighbour].id.uuidString
+        }
+        var targets: [String: MoveTargets] = [:]
+        for index in queue.indices where ACPTranscriptQueuePolicy.shouldRenderQueueBubble(queue[index]) {
+            targets[queue[index].id.uuidString] = MoveTargets(up: target(from: index, step: -1),
+                                                              down: target(from: index, step: 1))
+        }
+        return targets
+    }
+
+    /// Why an image can't join the staged attachments, or nil when it can.
+    /// Mirrors the host's checks so a send is never refused for them.
+    static func attachmentRefusal(_ data: Data, staged: [Data]) -> String? {
+        guard ACPImageStaging.sniffMIME(data) != nil else { return "Only PNG, JPEG, GIF and WebP images can be attached." }
+        guard staged.count < RemoteSessionGateway.maxAttachmentCount else {
+            return "A message can carry at most \(RemoteSessionGateway.maxAttachmentCount) images."
+        }
+        guard staged.reduce(data.count, { $0 + $1.count }) <= RemoteSessionGateway.maxAttachmentsBytes else {
+            return "Attachments can total at most 10 MB."
+        }
+        return nil
+    }
+
     private static func spec(_ chip: RemoteChip) -> ChipSpec? {
         let source: ChipSpec.Source
         switch chip.source {

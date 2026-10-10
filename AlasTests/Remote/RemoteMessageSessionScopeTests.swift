@@ -21,6 +21,7 @@ struct RemoteMessageSessionScopeTests {
             .queueForceSend(sessionId: "a", itemId: "i"), .queueRemove(sessionId: "a", itemId: "i"),
             .queueRetry(sessionId: "a", itemId: "i"), .queueEdit(sessionId: "a", itemId: "i"),
             .queueClear(sessionId: "a"),
+            .queueMove(sessionId: "a", itemId: "i", targetItemId: "j"), .queuePromote(sessionId: "a", itemId: "i"),
             .visualAidResponse(sessionId: "a", visualId: "V", action: "answer", selectedOptionIds: ["x"], note: "n", requestId: "r"),
             .listChanges(sessionId: "a"), .fileDiff(sessionId: "a", path: "p", stage: nil),
             .listFiles(sessionId: "a", path: nil), .readFile(sessionId: "a", path: "p"),

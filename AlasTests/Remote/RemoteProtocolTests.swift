@@ -846,6 +846,11 @@ struct RemoteProtocolTests {
             booleans: [.init(id: "web", name: "Web search", value: true)],
             autoRun: "supported")
         config.supportsSteering = true
+        config.availableCommands = [.init(command: "/review", description: "Review the diff", hint: "branch")]
+        config.usage = RemoteUsage(
+            modelName: "Opus", context: .init(used: 1_000, size: 200_000, costAmount: 0.25, costCurrency: "USD"),
+            lastTurn: [.init(label: "opus", tokens: 900)], cumulative: [.init(label: "Total", tokens: 4_000)])
+        config.supportsQueueReorder = true
         let message = RemoteServerMessage.sessionConfig(config)
         #expect(try roundTrip(message) == message)
     }
@@ -859,12 +864,24 @@ struct RemoteProtocolTests {
         #expect(config.supportsSteering == nil)
     }
 
-    @Test func sessionConfigWithMalformedChipsStillDecodesWithoutChips() throws {
-        let json = #"{"type":"sessionConfig","sessionId":"s1","models":[],"modes":[],"autoRunEnabled":false,"acceptsImages":false,"chips":{"model":"nonsense"}}"#
+    /// A future-shaped optional field degrades to nil instead of dropping
+    /// the whole frame, which would take the chips down with it.
+    @Test(arguments: [
+        #""chips":{"model":"nonsense"}"#,
+        #""availableCommands":"nonsense""#,
+        #""usage":{"context":"nonsense"}"#,
+        #""supportsQueueReorder":"yes""#,
+    ])
+    func sessionConfigWithAMalformedOptionalFieldStillDecodes(field: String) throws {
+        let json = #"{"type":"sessionConfig","sessionId":"s1","models":[],"modes":[],"autoRunEnabled":false,"acceptsImages":false,"#
+            + field + "}"
         guard case .sessionConfig(let config) = try JSONDecoder().decode(RemoteServerMessage.self, from: Data(json.utf8))
         else { Issue.record("not a sessionConfig")
         return }
         #expect(config.chips == nil)
+        #expect(config.availableCommands == nil)
+        #expect(config.usage == nil)
+        #expect(config.supportsQueueReorder == nil)
     }
 
     @Test(arguments: [("\"high\"", ACPConfigValue.string("high")), ("false", .boolean(false))])
@@ -1009,39 +1026,21 @@ struct RemoteProtocolTests {
         #expect(!RemoteClientMessage.fetchOlder(sessionId: "s", beforeIndex: 0, limit: 1).isControl)
     }
 
-    @Test func clientMessageDecodesQueueVerbs() throws {
-        let force = #"{"type":"queueForceSend","sessionId":"s1","itemId":"i1"}"#.data(using: .utf8)!
-        #expect(try JSONDecoder().decode(RemoteClientMessage.self, from: force)
-            == .queueForceSend(sessionId: "s1", itemId: "i1"))
-
-        let remove = #"{"type":"queueRemove","sessionId":"s1","itemId":"i2"}"#.data(using: .utf8)!
-        #expect(try JSONDecoder().decode(RemoteClientMessage.self, from: remove)
-            == .queueRemove(sessionId: "s1", itemId: "i2"))
-
-        let retry = #"{"type":"queueRetry","sessionId":"s1","itemId":"i3"}"#.data(using: .utf8)!
-        #expect(try JSONDecoder().decode(RemoteClientMessage.self, from: retry)
-            == .queueRetry(sessionId: "s1", itemId: "i3"))
-
-        let edit = #"{"type":"queueEdit","sessionId":"s1","itemId":"i4"}"#.data(using: .utf8)!
-        #expect(try JSONDecoder().decode(RemoteClientMessage.self, from: edit)
-            == .queueEdit(sessionId: "s1", itemId: "i4"))
-
-        let clear = #"{"type":"queueClear","sessionId":"s1"}"#.data(using: .utf8)!
-        #expect(try JSONDecoder().decode(RemoteClientMessage.self, from: clear)
-            == .queueClear(sessionId: "s1"))
-    }
-
-    @Test func queueVerbsRoundTrip() throws {
-        let messages: [RemoteClientMessage] = [
-            .queueForceSend(sessionId: "s1", itemId: "i1"),
-            .queueRemove(sessionId: "s1", itemId: "i2"),
-            .queueRetry(sessionId: "s1", itemId: "i3"),
-            .queueEdit(sessionId: "s1", itemId: "i4"),
-            .queueClear(sessionId: "s1"),
-        ]
-        for message in messages {
-            #expect(try roundTrip(message) == message)
-        }
+    @Test(arguments: [
+        (RemoteClientMessage.queueForceSend(sessionId: "s1", itemId: "i1"),
+         #"{"type":"queueForceSend","sessionId":"s1","itemId":"i1"}"#),
+        (.queueRemove(sessionId: "s1", itemId: "i2"), #"{"type":"queueRemove","sessionId":"s1","itemId":"i2"}"#),
+        (.queueRetry(sessionId: "s1", itemId: "i3"), #"{"type":"queueRetry","sessionId":"s1","itemId":"i3"}"#),
+        (.queueEdit(sessionId: "s1", itemId: "i4"), #"{"type":"queueEdit","sessionId":"s1","itemId":"i4"}"#),
+        (.queueClear(sessionId: "s1"), #"{"type":"queueClear","sessionId":"s1"}"#),
+        (.queueMove(sessionId: "s1", itemId: "i5", targetItemId: "i6"),
+         #"{"type":"queueMove","sessionId":"s1","itemId":"i5","targetItemId":"i6"}"#),
+        (.queuePromote(sessionId: "s1", itemId: "i7"), #"{"type":"queuePromote","sessionId":"s1","itemId":"i7"}"#),
+    ])
+    func queueVerbsDecodeRoundTripAndAreDriveOrdering(message: RemoteClientMessage, json: String) throws {
+        #expect(try JSONDecoder().decode(RemoteClientMessage.self, from: Data(json.utf8)) == message)
+        #expect(try roundTrip(message) == message)
+        #expect(message.isDriveOrdering)
     }
 
     @Test func sendPromptWithoutIntentDecodesAsAuto() throws {
@@ -1070,15 +1069,6 @@ struct RemoteProtocolTests {
     @Test func queueEditRestoredRoundTrips() throws {
         let restored = RemoteServerMessage.queueEditRestored(sessionId: "s1", itemId: "i1", text: "edit me")
         #expect(try roundTrip(restored) == restored)
-    }
-
-    @Test func queueVerbsAreDriveOrdering() {
-        #expect(RemoteClientMessage.queueForceSend(sessionId: "s1", itemId: "i1").isDriveOrdering)
-        #expect(RemoteClientMessage.queueRemove(sessionId: "s1", itemId: "i1").isDriveOrdering)
-        #expect(RemoteClientMessage.queueRetry(sessionId: "s1", itemId: "i1").isDriveOrdering)
-        #expect(RemoteClientMessage.queueEdit(sessionId: "s1", itemId: "i1").isDriveOrdering)
-        #expect(RemoteClientMessage.queueClear(sessionId: "s1").isDriveOrdering)
-        #expect(!RemoteClientMessage.listSessions.isDriveOrdering)
     }
 
     @Test func onlySendPromptAndTakeOverAreDriveOrdering() {

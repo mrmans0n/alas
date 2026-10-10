@@ -37,4 +37,24 @@ struct RemoteSessionConfigProjectionTests {
         #expect(chips.model?.configId == nil)
         #expect(chips.mode?.source == "mode")
     }
+
+    /// Host quota becomes the rows the popover lists (per model, or one
+    /// total), and the viewer rebuilds inputs that render those same rows.
+    @Test func usageReachesTheViewerAsThePopoverRowsAndIsNilWhenEmpty() throws {
+        #expect(RemoteSessionConfigProjection.usage(context: nil, modelName: "Opus", lastTurn: nil, cumulative: nil) == nil)
+        // No top-level total, so the popover sums the parts.
+        let parts = ACPTokenCount(totalTokens: 0, inputTokens: 10, cachedInputTokens: 0, cachedWriteTokens: 0,
+                                  outputTokens: 5, reasoningOutputTokens: 0)
+        let usage = try #require(RemoteSessionConfigProjection.usage(
+            context: ACPUsageInfo(used: 50, size: 100, cost: .init(amount: 0.5, currency: "USD")), modelName: "Opus",
+            lastTurn: ACPPromptQuota(tokenCount: parts, modelUsage: []),
+            cumulative: ACPPromptQuota(tokenCount: nil, modelUsage: [ACPModelUsage(model: "opus", tokenCount: parts)])))
+        #expect(usage.lastTurn == [RemoteTokenUsage(label: "Total", tokens: 15)])
+        #expect(usage.cumulative == [RemoteTokenUsage(label: "opus", tokens: 15)])
+
+        let viewer = NativePeerComposerState.contextUsage(from: usage)
+        #expect(viewer.usage == ACPUsageInfo(used: 50, size: 100, cost: .init(amount: 0.5, currency: "USD")))
+        #expect(viewer.lastTurn?.modelUsage.map { [$0.model: $0.tokenCount.displayTotal] } == [["Total": 15]])
+        #expect(viewer.cumulative?.modelUsage.map { [$0.model: $0.tokenCount.displayTotal] } == [["opus": 15]])
+    }
 }
