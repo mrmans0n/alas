@@ -16277,6 +16277,12 @@ extension AppState: RemoteSessionsProvider {
         case .found(let w):
             worktree = w
         }
+        // A folder has no git and so no changes; answer empty rather than fail.
+        if isFolderWorktree(worktree) {
+            return .success(
+                comparisonRef: nil, metricsAvailable: false,
+                files: [], staged: [], unstaged: [], commits: [], truncated: false)
+        }
         let git = GitService()
         do {
             let commits = try await git.commitsAhead(
