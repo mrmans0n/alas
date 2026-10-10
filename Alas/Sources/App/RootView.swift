@@ -1221,7 +1221,7 @@ private struct RootBaseHandlers: ViewModifier {
             }
         let q = p
             .onReceive(NotificationCenter.default.publisher(for: .alasOpenReviewPalette)) { _ in
-                guard !state.projects.isEmpty else { return }
+                guard state.canOpenReviewPalette else { return }
                 state.openReviewPaletteOverlay()
             }
         let r = q

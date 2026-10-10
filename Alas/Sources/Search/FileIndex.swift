@@ -76,7 +76,7 @@ actor FileIndex {
         let pruned = MentionFuzzy.skippedDirectoryNames.sorted()
             .map { "-name \(SSHCommand.shellQuote($0))" }
             .joined(separator: " -o ")
-        return "find . \\( -name '.*' ! -name . -o \(pruned) \\) -prune -o -type f -print | head -n \(folderFileLimit)"
+        return "find . \\( -name '.*' ! -name . -o -type d \\( \(pruned) \\) \\) -prune -o -type f -print | head -n \(folderFileLimit)"
     }()
 
     private func folderFilePaths(_ worktree: URL, remoteHost: String?) async throws -> [String] {

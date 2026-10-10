@@ -701,7 +701,7 @@ enum MentionFuzzy {
         for case let url as URL in it {
             if out.count >= limit { break }
             let name = url.lastPathComponent
-            if skipDirs.contains(name) {
+            if skipDirs.contains(name), url.hasDirectoryPath {
                 it.skipDescendants()
                 continue
             }

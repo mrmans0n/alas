@@ -401,7 +401,7 @@ struct AlasApp: App {
                 NotificationCenter.default.post(name: .alasOpenReviewPalette, object: nil)
             }
             .keyboardShortcut(state.shortcut(for: .openReviewPalette))
-            .disabled(state.projects.isEmpty)
+            .disabled(!state.canOpenReviewPalette)
             Button("Run Script…") {
                 NotificationCenter.default.post(name: .alasOpenRunScriptPalette, object: nil)
             }

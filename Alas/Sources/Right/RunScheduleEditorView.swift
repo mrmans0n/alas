@@ -345,7 +345,7 @@ struct RunScheduleEditorView: View {
         let worktrees = draft.projectID.map { state.projectsManager.visibleWorktrees(projectId: $0) } ?? []
         let selected = worktrees.first { $0.id == draft.worktreeID }
         return ScheduleChipMenu(
-            title: selected?.branch ?? "Choose a worktree",
+            title: selected?.title ?? "Choose a worktree",
             monospaced: true,
             grows: true
         ) {
@@ -354,7 +354,7 @@ struct RunScheduleEditorView: View {
                 set: { draft.worktreeID = $0 }
             )) {
                 ForEach(worktrees) { worktree in
-                    Text(worktree.branch).tag(worktree.id)
+                    Text(worktree.title).tag(worktree.id)
                 }
             }
             .pickerStyle(.inline)

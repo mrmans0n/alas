@@ -152,9 +152,11 @@ final class ProjectsManager {
         }
         // Worktree ids are paths, so a folder and a git project at one path
         // would share row ids that selection, tabs, and sessions key on.
-        if let existing = projects.first(where: {
-            canonical(URL(fileURLWithPath: $0.path)) == canonical(URL(fileURLWithPath: storedPath))
-                && (kind == .folder || $0.isFolder)
+        let storedID = canonical(URL(fileURLWithPath: storedPath))
+        if let existing = projects.first(where: { project in
+            (canonical(URL(fileURLWithPath: project.path)) == storedID && (kind == .folder || project.isFolder))
+                // A folder also may not sit on a known linked worktree.
+                || (kind == .folder && worktreesByProject[project.id, default: []].contains { $0.id == storedID })
         }) {
             throw NSError(domain: "ProjectsManager", code: 5,
                           userInfo: [NSLocalizedDescriptionKey: "\(path.path) is already added as \"\(existing.name)\"."])
