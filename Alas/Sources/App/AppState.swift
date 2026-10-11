@@ -2226,11 +2226,28 @@ final class AppState {
             saveSpaces()
         }
         let selectedWasRemoved = selectedWorktreeId.map(disappeared.contains) ?? false
-        if let current = selectedWorktreeId, !afterIds.contains(current) {
+        let selectionMovedOutOfActiveSpace = applyOwnershipChanges()
+        if let current = selectedWorktreeId, !afterIds.contains(current) || selectionMovedOutOfActiveSpace {
             selectWorktree(id: resolvedSelectionForActiveSpace())
         }
         for projectId in landingProjectsToMigrate {
             migrateGGLanding(projectId: projectId, selectHost: selectedWasRemoved)
+        }
+    }
+
+    /// Returns whether the selected row moved to a project outside the active
+    /// space while its id stayed live, so the selection must be re-resolved.
+    private func applyOwnershipChanges() -> Bool {
+        let changed = projectsManager.takeOwnershipChangedIds()
+        guard let selected = selectedWorktreeId, changed.contains(selected) else { return false }
+        return !activeSpaceProjects.contains { projectsManager.worktrees(projectId: $0.id).contains { $0.id == selected } }
+    }
+
+    /// Reselects when directory ownership moved the selected row out of the
+    /// active space, which startup arbitration can do.
+    func reconcileSelectionAfterOwnershipChange() {
+        if applyOwnershipChanges() {
+            selectWorktree(id: resolvedSelectionForActiveSpace())
         }
     }
 
@@ -5730,7 +5747,9 @@ final class AppState {
         }
         stopProjectGitWatcher(projectId: id)
         unpersistedGGWorktreeModes.removeValue(forKey: id)
-        projectsManager.removeProject(id: id)
+        // A directory this project owned goes straight back to a project that
+        // lost it, so its id stays live and its tabs and sessions survive.
+        let restoredProjectIds = projectsManager.removeProject(id: id)
         spacesManager.removeProjectEverywhere(id)
         runScheduler.pruneSchedules(missingProjectIDs: [id])
         saveProjects()
@@ -5741,6 +5760,9 @@ final class AppState {
         for worktreeId in removedIds {
             try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId))
             try? FileManager.default.removeItem(at: Paths.buffersDir(forWorktreeId: worktreeId))
+        }
+        for projectId in restoredProjectIds {
+            Task { await refreshProjectTopology(projectId: projectId) }
         }
         return true
     }
@@ -5778,7 +5800,9 @@ final class AppState {
                 continue
             }
 
-            if projectsManager.worktrees(projectId: project.id).isEmpty {
+            // A project whose rows all sit under another project is not empty.
+            if projectsManager.worktrees(projectId: project.id).isEmpty,
+               projectsManager.worktreeIdConflicts[project.id] == nil {
                 staleProjectIds.append(project.id)
             }
         }
@@ -6521,6 +6545,9 @@ final class AppState {
             saveProjects()
             rightPaneStore.reevaluateGGGates()
         }
+        // Every direct refresh can move a directory to another project, so
+        // reselect here rather than in each caller.
+        reconcileSelectionAfterOwnershipChange()
         restartProjectGitWatchers(previousPaths: previousPaths)
         rescanWorktreeStatuses()
         await refreshMainWorktreeUpstreamStatuses(projectId: projectId)
@@ -6628,6 +6655,7 @@ final class AppState {
         let previousPaths = Dictionary(uniqueKeysWithValues: projectsManager.projects.map { ($0.id, $0.path) })
         let previousOperationStates = projectsManager.operationStatesSnapshot()
         let changed = await projectsManager.refreshAll()
+        reconcileSelectionAfterOwnershipChange()
         var completedCreateFailure = false
         for projectId in previousPaths.keys {
             completedCreateFailure = await completeReconciledCreateFailures(
@@ -9986,6 +10014,8 @@ final class AppState {
         return branch.isEmpty ? "Terminal" : branch
     }
 
+    /// A first match is unambiguous: `ProjectsManager` lets one local
+    /// directory belong to only one project, and remote ids carry their host.
     func worktree(withId id: String) -> Worktree? {
         if let focused = workspaceSelectedWorktree(matching: id) {
             return focused.worktree
@@ -12545,6 +12575,9 @@ final class AppState {
     /// pairs cannot collide with them or with each other.
     @ObservationIgnored
     private var acpManagers: [SessionOwnerID: ACPSessionManager] = [:]
+    /// The project each worktree manager was built for, to notice a directory
+    /// that later moved to another project.
+    private var acpManagerProjectIds: [SessionOwnerID: String] = [:]
 
     @ObservationIgnored
     private let acpOrchestrationPersistence = ACPOrchestrationPersistence()
@@ -13040,7 +13073,15 @@ final class AppState {
     /// Store opening and migration happen lazily on the persistence actor.
     func acpManager(for worktree: Worktree) -> ACPSessionManager? {
         let owner = SessionOwnerID.worktree(worktree.id)
-        if let existing = acpManagers[owner] { return existing }
+        if let existing = acpManagers[owner] {
+            // The manager's providers captured the project that owned the
+            // directory when it was built. When ownership has moved, replace it
+            // once it is idle; one with running sessions stays until then.
+            guard let builtFor = acpManagerProjectIds[owner], builtFor != worktree.projectId,
+                  existing.runners.isEmpty
+            else { return existing }
+            disposeACPManager(owner: owner)
+        }
         let dbURL = Paths.acpSessionsDB(forWorktreeId: worktree.id)
         let persistence = ACPSessionPersistence(path: dbURL.path)
         let mgr = ACPSessionManager(
@@ -13436,6 +13477,7 @@ final class AppState {
             mgr.upstreamReferences.environment = .noRemotes
         }
         acpManagers[owner] = mgr
+        acpManagerProjectIds[owner] = worktree.projectId
         observeNextPromptSessions(mgr, owner: owner)
         acpHarnessBridge.attach(manager: mgr)
         Task { await mgr.purgeOrphanedEphemeralSessions() }
@@ -13901,6 +13943,7 @@ final class AppState {
 
     private func disposeACPManager(owner: SessionOwnerID) {
         guard let manager = acpManagers.removeValue(forKey: owner) else { return }
+        acpManagerProjectIds.removeValue(forKey: owner)
         prepareACPManagerForDisposal(manager, owner: owner)
         Task { @MainActor in
             await self.finishDisposingACPManager(manager)
@@ -13909,6 +13952,7 @@ final class AppState {
 
     private func disposeACPManagerAndWait(owner: SessionOwnerID) async {
         guard let manager = acpManagers.removeValue(forKey: owner) else { return }
+        acpManagerProjectIds.removeValue(forKey: owner)
         prepareACPManagerForDisposal(manager, owner: owner)
         await finishDisposingACPManager(manager)
     }

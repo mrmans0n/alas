@@ -144,6 +144,7 @@ struct RootView: View {
                     _ = await state.refreshAllProjectTopologies()
                 } else {
                     state.projectsManager.populateConfiguredProjectWorktreesForRecovery()
+                    state.reconcileSelectionAfterOwnershipChange()
                 }
                 guard !Task.isCancelled else { return }
                 // Recovery launch avoids replaying the failed refresh, but still

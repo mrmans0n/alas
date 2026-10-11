@@ -85,6 +85,7 @@ struct SidebarView: View {
                                                 else { collapsedProjects.remove(project.id) }
                                             }
                                         ),
+                                        alsoInNotes: state.projectsManager.alsoInNotes(projectId: project.id),
                                         selectedWorktreeId: state.selectedWorktreeId,
                                         isMain: { wt in state.projectsManager.isMain(wt, in: project) },
                                         upstreamStatus: { wt in state.worktreeUpstreamStatusStore.status(for: wt.id) },

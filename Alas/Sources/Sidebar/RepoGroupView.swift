@@ -54,6 +54,8 @@ struct RepoGroupView: View {
     let icon: (ProjectConfig) -> ProjectIcon
     let worktrees: [Worktree]
     @Binding var collapsed: Bool
+    /// Directories this project lists that another project owns.
+    var alsoInNotes: [String] = []
     let selectedWorktreeId: String?
     let isMain: (Worktree) -> Bool
     let upstreamStatus: (Worktree) -> WorktreeUpstreamStatus?
@@ -135,6 +137,20 @@ struct RepoGroupView: View {
                     .padding(.trailing, 6)
                     // Scroll target for the sidebar filter's highlight.
                     .id(wt.id)
+            }
+            if !isFiltering {
+                ForEach(alsoInNotes, id: \.self) { note in
+                    Text(note)
+                        .font(.system(size: 11))
+                        .foregroundColor(theme.color("fg-faint"))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 3)
+                        .padding(.leading, Self.worktreeIndent + 8)
+                        .padding(.trailing, 6)
+                        .help("This directory belongs to one project at a time.")
+                }
             }
         }
     }
