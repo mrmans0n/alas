@@ -22,15 +22,19 @@ struct RemoteAdvertisedAddress: Codable, Equatable, Identifiable, Sendable {
     let url: String
     let isRecommended: Bool
 
-    init(kind: Kind, interfaceName: String?, host: String, port: UInt16, isRecommended: Bool) {
+    /// `secure` addresses are HTTPS on the default port, fronted by a proxy
+    /// such as Tailscale Serve, so `port` is 443 rather than the bound port.
+    init(kind: Kind, interfaceName: String?, host: String, port: UInt16, isRecommended: Bool, secure: Bool = false) {
         self.kind = kind
         self.interfaceName = interfaceName
         self.host = host
-        self.port = port
-        self.url = "http://\(Self.urlHost(host)):\(port)"
-        self.id = "\(kind.rawValue):\(host):\(port)"
+        self.port = secure ? 443 : port
+        self.url = secure ? "https://\(Self.urlHost(host))" : "http://\(Self.urlHost(host)):\(port)"
+        self.id = "\(kind.rawValue):\(host):\(self.port)"
         self.isRecommended = isRecommended
     }
+
+    var isSecure: Bool { url.hasPrefix("https://") }
 
     private static func urlHost(_ host: String) -> String {
         host.contains(":") && !host.hasPrefix("[") ? "[\(host)]" : host
@@ -98,9 +102,19 @@ enum RemoteNetwork {
         interfaces: [RemoteNetworkInterface] = interfaces(),
         allowedHosts: [String],
         preferredHost: String?,
-        machineHostName: String? = machineHostName()
+        machineHostName: String? = machineHostName(),
+        tailnetHTTPSHost: String? = nil,
+        tailnetHTTPSOnly: Bool = false
     ) -> [RemoteAdvertisedAddress] {
         var candidates: [(RemoteAdvertisedAddress.Kind, String?, String)] = []
+        // Only the HTTPS address and localhost reach a loopback-only listener.
+        let interfaces = tailnetHTTPSOnly ? [] : interfaces
+        let allowedHosts = tailnetHTTPSOnly ? [] : allowedHosts
+        let machineHostName = tailnetHTTPSOnly ? nil : machineHostName
+
+        if let tailnetHTTPSHost {
+            candidates.append((.tailnet, nil, tailnetHTTPSHost))
+        }
 
         for iface in interfaces where !iface.isLoopback && classification(for: iface.host) == .tailnet {
             candidates.append((.tailnet, iface.name, iface.host))
@@ -145,7 +159,8 @@ enum RemoteNetwork {
                 interfaceName: item.1,
                 host: item.2,
                 port: port,
-                isRecommended: index == 0
+                isRecommended: index == 0,
+                secure: tailnetHTTPSHost.map(normalizedHost) == normalizedHost(item.2)
             )
         }
     }
@@ -153,9 +168,16 @@ enum RemoteNetwork {
     static func allowedHostCandidates(
         interfaces: [RemoteNetworkInterface] = interfaces(),
         allowedHosts: [String],
-        machineHostName: String? = machineHostName()
+        machineHostName: String? = machineHostName(),
+        tailnetDNSName: String? = nil
     ) -> Set<String> {
         var hosts: Set<String> = ["localhost", "127.0.0.1", "::1"]
+        // Tailscale Serve preserves the MagicDNS Host; the short name is what
+        // MagicDNS resolves for bare `http://<machine>:<port>` on the tailnet.
+        if let name = tailnetDNSName.map(normalizedHost), !name.isEmpty {
+            hosts.insert(name)
+            if let label = name.split(separator: ".").first { hosts.insert(String(label)) }
+        }
         for iface in interfaces {
             if iface.isLoopback || classification(for: iface.host) != nil || isLinkLocal(iface.host) {
                 // A link-local address's zone (`%en0`) names an interface on

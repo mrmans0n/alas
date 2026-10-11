@@ -299,4 +299,42 @@ struct RemoteNetworkTests {
         #expect(addresses.filter { $0.host == "localhost" }.count == 1)
         #expect(!addresses.contains { $0.kind == .custom })
     }
+
+    @Test(arguments: [false, true])
+    func tailnetHTTPSHostLeadsAndHTTPSOnlyDropsDirectAddresses(httpsOnly: Bool) {
+        let interfaces = [
+            RemoteNetworkInterface(name: "en0", host: "192.168.1.23", isLoopback: false),
+            RemoteNetworkInterface(name: "utun4", host: "100.88.1.20", isLoopback: false),
+        ]
+
+        let addresses = RemoteNetwork.advertisedAddresses(
+            port: 8765,
+            interfaces: interfaces,
+            allowedHosts: ["custom.example"],
+            preferredHost: nil,
+            machineHostName: "nacho-mbp",
+            tailnetHTTPSHost: "mac.tail1.ts.net",
+            tailnetHTTPSOnly: httpsOnly
+        )
+
+        #expect(addresses.first?.url == "https://mac.tail1.ts.net")
+        #expect(addresses.first?.kind == .tailnet)
+        #expect(addresses.first?.isRecommended == true)
+        let rest = addresses.dropFirst().map(\.host)
+        #expect(rest == (httpsOnly
+            ? ["localhost"]
+            : ["100.88.1.20", "192.168.1.23", "localhost", "nacho-mbp.local", "custom.example"]))
+        #expect(addresses.dropFirst().allSatisfy { !$0.isSecure })
+    }
+
+    @Test func allowedHostCandidatesTrustMagicDNSNameAndShortName() {
+        let hosts = RemoteNetwork.allowedHostCandidates(
+            interfaces: [],
+            allowedHosts: [],
+            machineHostName: nil,
+            tailnetDNSName: "Mac.tail1.ts.net"
+        )
+
+        #expect(hosts.isSuperset(of: ["mac.tail1.ts.net", "mac"]))
+    }
 }

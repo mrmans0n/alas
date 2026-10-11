@@ -62,7 +62,8 @@ extension RemoteBonjourAdvertisement {
     /// discoverable. Discovery is gated by the remote server being on AND the
     /// discoverable toggle: turning off either one withdraws the record.
     static func forSettings(_ remote: AppConfig.Remote, displayName: String, model: String?) -> RemoteBonjourAdvertisement? {
-        guard remote.enabled, remote.discoverable else { return nil }
+        // A loopback-only listener can't be reached by LAN peers.
+        guard remote.enabled, remote.discoverable, !remote.listensOnLoopbackOnly else { return nil }
         return RemoteBonjourAdvertisement(
             displayName: displayName,
             txt: RemoteBonjourTXT(serverId: remote.serverId, model: model))
