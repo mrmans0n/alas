@@ -245,21 +245,21 @@ struct ZmxPassiveClientIntegrationTests {
 
         var viewer = try PassiveViewer(path: session.socketPath)
         try await viewer.awaitSnapshot()
-        try await viewer.awaitSize("40 120")
+        try await viewer.awaitSize("40 120", stage: "initial host attachment")
         let shellPID = try await viewer.query("$$")
 
         let direct = try ProbeTerminalClient(path: session.socketPath, rows: 55, cols: 123, sendInit: false)
         defer { direct.close() }
         direct.sendResize()
-        try await viewer.awaitSize("40 120")
+        try await viewer.awaitSize("40 120", stage: "nonleader resize")
         #expect(direct.dimensionRequests == 0)
 
         direct.claimWithInput()
-        try await viewer.awaitSize("55 123")
+        try await viewer.awaitSize("55 123", stage: "direct client control")
         #expect(direct.dimensionRequests == 1)
 
         host.claimWithInput()
-        try await viewer.awaitSize("40 120")
+        try await viewer.awaitSize("40 120", stage: "host reclaim")
         #expect(host.dimensionRequests == 2)
 
         direct.close()
@@ -267,13 +267,13 @@ struct ZmxPassiveClientIntegrationTests {
         viewer = try PassiveViewer(path: session.socketPath)
         try await viewer.awaitSnapshot()
         #expect(try await viewer.query("$$") == shellPID)
-        try await viewer.awaitSize("40 120")
+        try await viewer.awaitSize("40 120", stage: "viewer reconnect")
         #expect(host.dimensionRequests == 2)
         viewer.close()
     }
 }
 
-/// An isolated zmx session running `/bin/sh`, killed on tear-down.
+/// An isolated zmx Bash session without line editing, killed on tear-down.
 private struct ZmxProbeSession {
     let client: ZmxClient
     let directory: URL
@@ -291,17 +291,22 @@ private struct ZmxProbeSession {
 
         let process = Process()
         process.executableURL = binary
-        process.arguments = ["run", Self.name, "-d", "true"]
+        // `run` starts Bash regardless of SHELL. Readline's prompt setup
+        // reads then writes the PTY size, which can overwrite a concurrent
+        // leader resize with the old size. Disable it and wait for the task
+        // to finish before attaching clients so only zmx owns test geometry.
+        process.arguments = ["run", Self.name, "set", "+o", "emacs", "+o", "vi"]
         var environment = ProcessInfo.processInfo.environment
         environment.removeValue(forKey: "ZMX_SESSION")
         environment["ZMX_DIR"] = dir
-        environment["SHELL"] = "/bin/sh"
         process.environment = environment
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         try process.run()
         process.waitUntilExit()
+        if process.terminationStatus != 0 { tearDown() }
+        try #require(process.terminationStatus == 0, "probe shell setup failed")
         guard FileManager.default.fileExists(atPath: socketPath) else {
             tearDown()
             throw POSIXError(.ENOENT)
@@ -354,14 +359,14 @@ private struct PassiveViewer {
     /// Polls `stty size` until the PTY reports `expected` rows and columns.
     /// A deadline, not a poll count: a resize is a round trip through the
     /// client's reader thread, which a loaded CI runner can stall.
-    func awaitSize(_ expected: String) async throws {
+    func awaitSize(_ expected: String, stage: String) async throws {
         let deadline = ContinuousClock.now + .seconds(10)
         var size = ""
         while ContinuousClock.now < deadline {
             size = try await query("$(stty size)")
             if size == expected { return }
         }
-        try #require(size == expected, "PTY size stayed \(size), never became \(expected)")
+        try #require(size == expected, "\(stage): PTY size stayed \(size), never became \(expected)")
     }
 
     func close() { client.close() }

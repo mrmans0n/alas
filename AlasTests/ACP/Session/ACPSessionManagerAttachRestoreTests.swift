@@ -1627,7 +1627,9 @@ struct ACPSessionManagerAttachRestoreTests {
         let bootstrapped = await manager.bootstrapScheduledQueueSessions()
         try await waitUntilAsync {
             client.sent.contains { $0.method == "session/prompt" }
+                && manager.sessions[seededSession.id]?.queue.isEmpty == true
         }
+        await manager.flushAllPersistence()
 
         #expect(bootstrapped == [seededSession.id])
         #expect(try store.loadQueue(sessionId: seededSession.id).isEmpty)

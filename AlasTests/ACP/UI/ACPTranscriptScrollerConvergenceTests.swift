@@ -246,12 +246,24 @@ struct ACPTranscriptScrollerConvergenceTests {
     /// A deadline, not a poll count: retired views release on later main-actor
     /// turns, which a loaded CI runner can push past a second.
     private func waitForRetiredViews(_ tracked: ConvergenceWeakViews, fixture: ConvergenceScrollerFixture) async throws {
+        func withinRetainedViewBounds() -> Bool {
+            let parkedCount = fixture.pool.parkedIdsForTesting.count
+            let retainedCount = fixture.pool.mountedIds.count + parkedCount
+            return tracked.detachedLiveCount(in: fixture.scroller.flippedDocumentView) <= parkedCount * 14
+                && tracked.liveHostCount <= retainedCount
+                && tracked.liveTextViewCount <= retainedCount * 13
+        }
         let deadline = ContinuousClock.now + .seconds(10)
         while ContinuousClock.now < deadline {
-            if tracked.detachedLiveCount(in: fixture.scroller.flippedDocumentView) <= fixture.pool.parkedIdsForTesting.count * 14 { return }
+            // The detached allowance includes parked rows that the weak tracker
+            // may never have observed. It can pass before retired text views
+            // release, so wait for every bound asserted by the caller.
+            if withinRetainedViewBounds() { return }
             try await Task.sleep(for: .milliseconds(25))
             autoreleasepool { fixture.window.layoutIfNeeded() }
         }
+        try #require(withinRetainedViewBounds(),
+                     "retired views did not release: mounted=\(fixture.pool.mountedIds.count), parked=\(fixture.pool.parkedIdsForTesting.count), detached=\(tracked.detachedLiveCount(in: fixture.scroller.flippedDocumentView)), hosts=\(tracked.liveHostCount), textViews=\(tracked.liveTextViewCount)")
     }
 
     private func settle(_ window: NSWindow) async throws {

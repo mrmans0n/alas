@@ -3227,7 +3227,7 @@ struct ACPSessionRunnerTests {
             sessionId: sid,
             worktreePath: FileManager.default.temporaryDirectory.path,
             streamingPersistDebounceNanos: 5_000_000_000,
-            incomingUpdateCoalesceNanos: 500_000_000,
+            incomingUpdateCoalesceNanos: 60_000_000_000,
             ownerInstanceId: "ME"
         )
         runner.start()
@@ -3241,13 +3241,15 @@ struct ACPSessionRunnerTests {
         }
 
         await mock.waitForChunks()
+        // The producer's yield is not delivery to the runner. Hold the coalescer
+        // until takeover and wait for both chunks to reach its pending buffer.
+        try #require(await awaitCondition { runner.pendingIncomingUpdateCountForTesting == 2 })
         let rowsBeforeCompletion = try store.loadMessages(sessionId: sid)
         #expect(!rowsBeforeCompletion.contains { $0.kind == "agent" })
 
         await mock.finishPrompt()
         #expect(await completed.value)
         try store.seizeLease(sessionId: sid, instanceId: "OTHER", pid: Int64(getpid()), now: now)
-        try await Task.sleep(nanoseconds: 250_000_000)
         runner.stop()
         await runner.flushPersistence()
 
