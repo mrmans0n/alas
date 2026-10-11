@@ -1,0 +1,201 @@
+import Foundation
+import os
+
+public struct ZmxSessionInfo: Equatable, Sendable {
+    public let name: String
+    /// Initial directory from zmx 0.6, or tracked current directory from zmx 0.8.
+    public let startDir: String?
+    public var pid: Int?
+    public var clients: Int?
+    public var created: Int?
+    public var cmd: String?
+
+    public init(name: String, startDir: String?, pid: Int? = nil, clients: Int? = nil, created: Int? = nil, cmd: String? = nil) {
+        self.name = name
+        self.startDir = startDir
+        self.pid = pid
+        self.clients = clients
+        self.created = created
+        self.cmd = cmd
+    }
+}
+
+/// Thin Swift wrapper around the bundled `zmx` CLI. Exposes the three
+/// operations Alas needs (`wrap` for launch, `killSession` for explicit
+/// close, `listSessions` for cleanup walks) and falls back to a no-op
+/// posture when zmx is unavailable so callers can stay oblivious.
+///
+/// Not isolated to any actor: all state is set at init and immutable
+/// afterwards, so callers from any context can invoke its methods. Methods
+/// that wait on a subprocess (`killSession`, `listSessions`) block the
+/// calling thread for up to ~5s in the worst case — async callers should
+/// run them through `BlockingWork`, which keeps them off both the MainActor
+/// and the cooperative pool. `wrap` is pure and safe to call inline.
+public final class ZmxClient: Sendable {
+    public let env: ZmxEnv
+    private let runner: SubprocessRunner
+    private let logger: Logger
+
+    public init(
+        env: ZmxEnv,
+        runner: SubprocessRunner = .system,
+        logger: Logger = Logger(subsystem: "io.nlopez.alas", category: "zmx")
+    ) {
+        self.env = env
+        self.runner = runner
+        self.logger = logger
+        if !env.isAvailable {
+            // Logged at construction (once) rather than from `wrap`, so the
+            // class can drop its mutable `loggedUnavailable` flag and stay
+            // trivially Sendable.
+            logger.warning("zmx not bundled or no usable ZMX_DIR — terminal panes will not persist across app quit")
+        }
+    }
+
+    public var isAvailable: Bool { env.isAvailable }
+
+    /// Wrap `plan` in `zmx attach <sessionName> <inner>`. When zmx is not
+    /// available, returns `plan` unchanged so the pane still launches as a
+    /// plain shell (cross-launch persistence is silently disabled).
+    ///
+    /// zmx's `attach` subcommand takes everything after the session name as
+    /// the command to run — there is no `--` flag-terminator (it would be
+    /// treated literally as the program name).
+    public func wrap(sessionName: String, plan: StartupScriptInstaller.Plan) -> StartupScriptInstaller.Plan {
+        // Require BOTH binary AND a safely-resolved zmxDir. If zmxDir is
+        // nil (security fallback refused — see ZmxEnv.secureFallback), we
+        // intentionally launch a plain shell instead of `zmx attach` with
+        // an unpinned ZMX_DIR (which would let zmx default to its own
+        // temp dir, re-introducing the unvalidated-path risk we just
+        // refused).
+        guard env.isAvailable, let binary = env.binaryURL else { return plan }
+        return StartupScriptInstaller.Plan(
+            executable: binary.path,
+            args: ["attach", sessionName, plan.executable] + plan.args,
+            envOverrides: plan.envOverrides
+        )
+    }
+
+    /// Socket path of a session, named the way zmx names it: the
+    /// `ZMX_SESSION_PREFIX` from the environment, then the bare name.
+    public func socketPath(forSession name: String) -> String? {
+        guard env.isAvailable, let dir = env.zmxDir else { return nil }
+        let prefix = ProcessInfo.processInfo.environment["ZMX_SESSION_PREFIX"] ?? ""
+        return dir.appendingPathComponent(prefix + name).path
+    }
+
+    /// Best-effort `zmx kill <name>`. Never throws; logs and swallows
+    /// failures so a hung daemon never blocks the close path. Blocks the
+    /// caller for up to ~5s (the SubprocessRunner timeout); async callers
+    /// should dispatch via `BlockingWork`.
+    public func killSession(name: String) {
+        _ = killSessionResult(name: name)
+    }
+
+    public func killSessionResult(name: String) -> Bool {
+        guard env.isAvailable, let binary = env.binaryURL else { return true }
+        let result = runner.run(binary, ["kill", name], zmxEnv(), 5.0)
+        switch result.exitCode {
+        case 0?:
+            return true
+        case let code?:
+            logger.warning("zmx kill \(name, privacy: .public) exited \(code, privacy: .public): \(result.stderr, privacy: .public)")
+        case nil:
+            logger.warning("zmx kill \(name, privacy: .public) timed out")
+        }
+        return false
+    }
+
+    /// Parse `zmx ls --short` into session names. Returns `[]` on any error
+    /// or when zmx is unavailable. Same blocking-up-to-5s caveat as
+    /// `killSession`.
+    ///
+    /// `--short` is required: the default `zmx ls` output is tab-separated
+    /// key=value fields (`  name=alas-X\tpid=123\t…`), not bare names, so
+    /// orphan-sweep callers would otherwise miss every `alas-*` session.
+    public func listSessions() -> [String] {
+        guard env.isAvailable, let binary = env.binaryURL else { return [] }
+        let result = runner.run(binary, ["ls", "--short"], zmxEnv(), 5.0)
+        guard result.exitCode == 0 else {
+            if let code = result.exitCode {
+                logger.warning("zmx ls exited \(code, privacy: .public): \(result.stderr, privacy: .public)")
+            } else {
+                logger.warning("zmx ls timed out")
+            }
+            return []
+        }
+        return result.stdout
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
+    /// Parse full `zmx ls` key-value rows. Used for legacy session migration,
+    /// where the reported directory lets us avoid attaching an old unscoped
+    /// session from a different worktree.
+    public func listSessionInfos() -> [ZmxSessionInfo] {
+        guard env.isAvailable, let binary = env.binaryURL else { return [] }
+        let result = runner.run(binary, ["ls"], zmxEnv(), 5.0)
+        guard result.exitCode == 0 else {
+            if let code = result.exitCode {
+                logger.warning("zmx ls exited \(code, privacy: .public): \(result.stderr, privacy: .public)")
+            } else {
+                logger.warning("zmx ls timed out")
+            }
+            return []
+        }
+        return Self.parseSessionInfos(result.stdout)
+    }
+
+    public static func parseSessionInfos(_ stdout: String) -> [ZmxSessionInfo] {
+        stdout
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .compactMap { parseSessionInfoLine(String($0)) }
+    }
+
+    /// Environment passed to every zmx invocation. Pins `ZMX_DIR` so the
+    /// CLI talks to the same daemon/socket dir Alas-spawned shells will use.
+    ///
+    /// Strips `ZMX_SESSION` for the same reason `EnvBuilder` strips it from
+    /// spawned pane shells: if Alas itself was launched from a zmx-attached
+    /// terminal, the parent's session name leaks into
+    /// `ProcessInfo.environment` and trips zmx's `switchSesh` path on
+    /// `attach`. `ZMX_SESSION_PREFIX` is intentionally left intact — it's a
+    /// legitimate user-configured knob, and as long as both shell-side
+    /// (`EnvBuilder`) and CLI-side (here) see the same prefix, kill/ls/wrap
+    /// agree on the resolved name.
+    private func zmxEnv() -> [String: String] {
+        var inherited = ProcessInfo.processInfo.environment
+        inherited.removeValue(forKey: "ZMX_SESSION")
+        if let dir = env.zmxDir { inherited["ZMX_DIR"] = dir.path }
+        return inherited
+    }
+
+    private static func parseSessionInfoLine(_ line: String) -> ZmxSessionInfo? {
+        let fields = line
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(separator: "\t", omittingEmptySubsequences: true)
+        var name: String?
+        var startDir: String?
+        var pid: Int?
+        var clients: Int?
+        var created: Int?
+        var cmd: String?
+        for field in fields {
+            let parts = field.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+            guard parts.count == 2 else { continue }
+            let value = String(parts[1])
+            switch parts[0] {
+            case "name": name = value
+            case "start_dir", "cwd": startDir = value
+            case "pid": pid = Int(value)
+            case "clients": clients = Int(value)
+            case "created": created = Int(value)
+            case "cmd": cmd = value
+            default: break
+            }
+        }
+        guard let name else { return nil }
+        return ZmxSessionInfo(name: name, startDir: startDir, pid: pid, clients: clients, created: created, cmd: cmd)
+    }
+}

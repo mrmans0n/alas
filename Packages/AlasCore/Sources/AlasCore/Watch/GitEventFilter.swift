@@ -14,7 +14,7 @@ public enum GitEventCategory: Equatable, Sendable {
     case other                    // unrelated event, caller decides
 }
 
-public enum GitEventFilter {
+public enum GitEventFilter: Sendable {
     /// Classify a single FSEvents path against `gitDir` (an absolute path to
     /// the repo's `.git` directory). For linked worktrees the worktree root
     /// is resolved by reading `.git/worktrees/<name>/gitdir`, which contains

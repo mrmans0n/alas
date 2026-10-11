@@ -6,7 +6,7 @@ import Foundation
 /// The Swift concurrency cooperative pool has one thread per core, and
 /// `Task.detached` runs there too. Work that blocks a pool thread for long
 /// starves unrelated tasks, and a few such jobs can take the whole pool.
-public enum BlockingWork {
+public enum BlockingWork: Sendable {
     public static func run<T: Sendable>(_ body: @escaping @Sendable () -> T) async -> T {
         await withCheckedContinuation { continuation in
             // A detached thread has no autorelease pool of its own.
