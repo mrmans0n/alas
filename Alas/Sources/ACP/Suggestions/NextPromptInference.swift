@@ -23,7 +23,7 @@ enum NextPromptInferenceState: Equatable, Sendable {
 
 actor NextPromptInference: NextPromptRuntime {
     typealias Evaluation = @Sendable (LocalTextGenerationRequest) async throws -> String?
-    typealias Clock = LocalTextInferenceEngine.Clock
+    typealias Clock = LocalTextClock
     typealias CancellationScheduler = @Sendable (@escaping @Sendable () async -> Void) -> Void
 
     private(set) var state: NextPromptInferenceState = .ready
@@ -37,19 +37,6 @@ actor NextPromptInference: NextPromptRuntime {
     private var failures = 0
     private var observers: [UUID: AsyncStream<NextPromptInferenceState>.Continuation] = [:]
 
-    nonisolated static func isSupported() -> Bool { LocalTextInferenceEngine.isSupported() }
-
-    init(store: LocalTextModelStore) {
-        engine = LocalTextInferenceEngine(store: store)
-        supported = LocalTextInferenceEngine.isSupported
-        verifyAvailability = {
-            let lease = try await store.acquireVerifiedLease()
-            lease.close()
-        }
-        clock = Clock()
-        scheduleCancellation = { action in _ = Task { await action() } }
-    }
-
     init(engine: any LocalTextGenerating,
          supported: @escaping @Sendable () -> Bool = { true },
          verifyAvailability: @escaping @Sendable () async throws -> Void,
@@ -58,31 +45,6 @@ actor NextPromptInference: NextPromptRuntime {
         self.engine = engine
         self.supported = supported
         self.verifyAvailability = verifyAvailability
-        self.clock = clock
-        self.scheduleCancellation = scheduleCancellation
-    }
-
-    init(acquireLease: @escaping @Sendable () async throws -> LocalTextModelLease,
-         load: @escaping @Sendable (URL) async throws -> Evaluation,
-         supported: @escaping @Sendable () -> Bool = { true }, clock: Clock = Clock(),
-         scheduleCancellation: @escaping CancellationScheduler = { action in _ = Task { await action() } }) {
-        engine = LocalTextInferenceEngine(
-            acquireLease: acquireLease,
-            load: { directory in
-                let evaluation = try await load(directory)
-                return { request in
-                    return .init(text: try await evaluation(request) ?? "", selectedCandidateIndex: 0)
-                }
-            },
-            supported: supported,
-            clock: clock,
-            observeMemoryPressure: false
-        )
-        self.supported = supported
-        verifyAvailability = {
-            let lease = try await acquireLease()
-            lease.close()
-        }
         self.clock = clock
         self.scheduleCancellation = scheduleCancellation
     }

@@ -17,12 +17,7 @@ actor LocalTextInferenceEngine: LocalTextGenerating {
         [[LocalTextMessage]], Int, GenerateParameters
     ) async throws -> LocalTextGenerationResult
 
-    struct Clock: Sendable {
-        var now: @Sendable () -> ContinuousClock.Instant = { .now }
-        var sleep: @Sendable (ContinuousClock.Instant) async throws -> Void = {
-            try await ContinuousClock().sleep(until: $0)
-        }
-    }
+    typealias Clock = LocalTextClock
 
     private struct LoadedModel: Sendable {
         let tokenCount: @Sendable ([LocalTextMessage]) async throws -> Int

@@ -1,6 +1,5 @@
 import Foundation
 import SwiftTreeSitter
-import TreeSitterPack
 
 /// Maps a file extension to a `SwiftTreeSitter.Language` and the matching
 /// `highlights.scm` `Query`. `Language` and `Query` are immutable after
@@ -161,7 +160,7 @@ enum LanguageRegistry {
         defer { cacheLock.unlock() }
         if let cached = languageCache[key] { return cached }
         guard let id = languageIDsByExtension[key],
-              let pointer = id.withCString({ alas_ts_language($0) }) else {
+              let pointer = grammarPack.language(id) else {
             return nil
         }
         let lang = Language(OpaquePointer(pointer))
@@ -261,11 +260,7 @@ enum LanguageRegistry {
     /// The pack returns static UTF-8 bytes that are not NUL-terminated, so the
     /// length is read back through `out_len` rather than inferred.
     private static func queryText(id: String) -> String? {
-        var length = 0
-        guard let bytes = id.withCString({ alas_ts_query($0, &length) }), length > 0 else {
-            return nil
-        }
-        return String(decoding: UnsafeBufferPointer(start: bytes, count: length), as: UTF8.self)
+        grammarPack.highlightQuery(id)
     }
 
     static func phpOnlyQueryText(from queryText: String) -> String {
