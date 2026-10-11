@@ -288,7 +288,42 @@ import Foundation
         #expect(session.pendingMCPPreamble == pending)
     }
 
-    private func remoteWriter(in folder: URL, nativeSubagentsDisabled: Bool? = nil) async throws -> (
+    @Test("remote agent-history deletion stays busy through the deletion RPC")
+    func remoteHistoryDeletionBlocksProjectRebinding() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let client = ACPMockClient()
+        let (manager, session, _, coordinator, _, _) = try await remoteWriter(in: folder, client: client)
+        defer { manager.shutdownBackgroundTasks()
+        coordinator.shutdown() }
+        client.script(method: "initialize") { _ in
+            try JSONEncoder().encode(ACPInitializeResult(protocolVersion: 1,
+                agentCapabilities: .init(sessionCapabilities: .init(delete: .init())), authMethods: []))
+        }
+        let started = AsyncStream<Void>.makeStream()
+        let release = AsyncStream<Void>.makeStream()
+        client.scriptAsync(method: "session/delete") { _ in
+            started.continuation.yield()
+            for await _ in release.stream { break }
+            return Data("{}".utf8)
+        }
+        let discovered = ACPDiscoveredSession(worktreeId: "wt", agentId: "claude",
+            remoteSessionId: "conversation", cwd: "/work", title: "Session", updatedAt: nil,
+            additionalDirectories: [], localSessionId: session.id)
+        let deleting = Task { try await manager.deleteCoordinatedAgentHistory(discovered) }
+        for await _ in started.stream { break }
+        #expect(manager.runners.isEmpty)
+        #expect(!manager.isIdleForProjectRebinding)
+        var readiness: Bool?
+        let subscription = manager.projectRebindingReadiness.sink { readiness = $0 }
+        defer { subscription.cancel() }
+        #expect(await awaitCondition(within: .seconds(1)) { readiness == false })
+        release.continuation.yield()
+        #expect(try await deleting.value)
+        #expect(await awaitCondition { readiness == true })
+    }
+
+    private func remoteWriter(in folder: URL, nativeSubagentsDisabled: Bool? = nil, client injectedClient: ACPMockClient? = nil) async throws -> (
         ACPSessionManager, ACPSession, ACPSessionStore, ACPRemoteSessionCoordinator, ACPSessionRunner, ReplicaEndpoint
     ) {
         let store = try ACPSessionStore(path: folder.appendingPathComponent("writer.sqlite").path)
@@ -299,7 +334,7 @@ import Foundation
         let coordinator = ACPRemoteSessionCoordinator(owner: .init(serverId: "mac-a", instanceId: "A")) {
             method, data in try await endpoint.request(method, data)
         }
-        let client = ACPMockClient()
+        let client = injectedClient ?? ACPMockClient()
         client.script(method: "initialize") { _ in
             try JSONEncoder().encode(ACPInitializeResult(protocolVersion: 1,
                 agentCapabilities: .init(loadSession: true), authMethods: [],

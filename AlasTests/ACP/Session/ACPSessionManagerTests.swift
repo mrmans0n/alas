@@ -2106,6 +2106,11 @@ struct ACPSessionManagerTests {
         let otherAnswer = ACPVisualAid.Answer.dismissed(at: Date(timeIntervalSince1970: 2))
         let second = Task { @MainActor in await manager.answerVisualAid(id: visual.id, answer: otherAnswer, in: session.id) }
         #expect(await awaitCondition { runner.visualAidFirstWriteWaiterCountForTesting(id: visual.id) == 2 })
+        #expect(!manager.isIdleForProjectRebinding)
+        var readiness: Bool?
+        let subscription = manager.projectRebindingReadiness.sink { readiness = $0 }
+        defer { subscription.cancel() }
+        #expect(await awaitCondition(within: .seconds(1)) { readiness == false })
         await initialWrite.release()
 
         #expect(await show.value)
@@ -2115,6 +2120,7 @@ struct ACPSessionManagerTests {
         let winningAnswer = firstSucceeded ? answer : otherAnswer
         #expect(session.transcript.visualAid(id: visual.id)?.answer == winningAnswer)
         #expect(try storedVisualAids(store, sessionId: session.id).first?.answer == winningAnswer)
+        #expect(await awaitCondition { readiness == true })
     }
 
     @Test("an answer cancelled while the card's first write is held stores nothing, sends nothing and leaves the card answerable")
@@ -2163,7 +2169,20 @@ struct ACPSessionManagerTests {
         #expect(session.transcript.visualAid(id: visual.id)?.answer == answer)
         #expect(session.visualAidSendStatus(for: visual.id).error == nil)
 
-        await manager.rollBackVisualAidAnswer(id: visual.id, answer: answer, in: session.id)
+        let runner = try #require(manager.runners[session.id])
+        let write = AsyncGate()
+        runner.beforePersistenceForTesting = { await write.enterAndWait() }
+        let rollback = Task { await manager.rollBackVisualAidAnswer(id: visual.id, answer: answer, in: session.id) }
+        await write.waitUntilEntered()
+        #expect(!manager.isIdleForProjectRebinding)
+        var readiness: Bool?
+        let subscription = manager.projectRebindingReadiness.sink { readiness = $0 }
+        defer { subscription.cancel() }
+        #expect(await awaitCondition(within: .seconds(1)) { readiness == false })
+        runner.beforePersistenceForTesting = nil
+        await write.release()
+        await rollback.value
+        #expect(await awaitCondition { readiness == true })
         #expect(session.transcript.visualAid(id: visual.id)?.answer == nil)
         #expect(session.visualAidSendStatus(for: visual.id).error == ACPVisualAidSendStatus.failureMessage)
         #expect(try storedVisualAids(store, sessionId: session.id).first?.answer == nil)

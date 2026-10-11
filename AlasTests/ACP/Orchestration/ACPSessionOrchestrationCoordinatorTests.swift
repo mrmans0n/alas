@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 import Testing
 @testable import Alas
 
@@ -852,6 +853,11 @@ struct ACPSessionOrchestrationCoordinatorTests {
     @Test("a restored tab attaching a selected child before recovery cannot run its queued initial prompt")
     func restoredAttachHoldsInitialPromptForRecovery() async throws {
         let client = makeSelectionClient()
+        let setModel = GenerationGate()
+        client.scriptAsync(method: "session/set_model") { _ in
+            await setModel.wait()
+            return Data("{}".utf8)
+        }
         let fixture = try makeModelSelectionFixture(client: client)
         defer { fixture.manager.shutdownBackgroundTasks() }
         let record = selectedChildRecord()
@@ -869,13 +875,22 @@ struct ACPSessionOrchestrationCoordinatorTests {
         let withheld = fixture.manager.withholdQueuedDelegatedPrompt(messageId: initial.messageId, in: "child")
         #expect(withheld == "Review the parser.")
         let selection = try #require(record.modelSelection)
-        #expect(await fixture.coordinator.queueInitialPromptAfterModelSelection(
+        let selecting = Task { await fixture.coordinator.queueInitialPromptAfterModelSelection(
             selection, record: record, prompt: "Review the parser.", manager: fixture.manager
-        ))
+        ) }
+        await setModel.waitUntilStarted()
+        #expect(!fixture.manager.isIdleForProjectRebinding)
+        var readiness: Bool?
+        let subscription = fixture.manager.projectRebindingReadiness.sink { readiness = $0 }
+        defer { subscription.cancel() }
+        #expect(await awaitCondition(within: .seconds(1)) { readiness == false })
+        await setModel.release()
+        #expect(await selecting.value)
         #expect(childRequests(client) == ["set_model:opus"])
         fixture.manager.releaseDelegatedSelectionHold("child")
         try await waitUntil { childRequests(client).count == 2 }
         #expect(childRequests(client) == ["set_model:opus", "prompt:Review the parser."])
+        #expect(await awaitCondition { readiness == true })
     }
 
     enum ReasoningRefresh: CaseIterable {

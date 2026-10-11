@@ -1792,6 +1792,7 @@ public final class ACPSessionManager: ChangeTracking {
                     && $0.transcript.streamingState == .idle
                     && !$0.subagents.values.contains { $0.isRunning }
                     && $0.activeBackgroundTasks.isEmpty
+                    && !$0.holdsPromptsForDelegatedSelection
                     && $0.nextPromptWorkCount == 0
                     && $0.pendingQueuePersistenceCount == 0
                     && !$0.queue.contains { $0.status == .sending }
@@ -3925,6 +3926,8 @@ public final class ACPSessionManager: ChangeTracking {
     /// Returns false for local discovery. SSH deletion uses the session's
     /// fenced helper process, never the unfenced listing connection.
     public func deleteCoordinatedAgentHistory(_ discovered: ACPDiscoveredSession) async throws -> Bool {
+        activeSessionDeletionCount += 1
+        defer { activeSessionDeletionCount -= 1 }
         guard let host = effectiveRemoteHost(), let coordinator = try coordination() else { return false }
         let existing = try await persistence.loadSession(agentId: discovered.agentId, remoteSessionId: discovered.remoteSessionId)
         let sessionId = existing?.id ?? UUID().uuidString
@@ -8699,9 +8702,11 @@ extension ACPSessionManager {
         _ selection: ACPDelegatedModelSelection,
         to id: ACPSession.ID
     ) async throws {
-        guard let session = sessions[id], runners[id] != nil, session.agentState == .ready else {
+        guard !isDisposed, let session = sessions[id], runners[id] != nil, session.agentState == .ready else {
             throw ACPDelegatedModelSelectionError.sessionUnavailable
         }
+        session.nextPromptWorkCount += 1
+        defer { session.nextPromptWorkCount -= 1 }
         var modelChanged = false
         if let model = selection.model,
            let step = try ACPSessionOrchestrationPolicy.liveModelStep(
@@ -8989,6 +8994,9 @@ extension ACPSessionManager {
     /// A send that reports failure clears the answer too. A send whose callback
     /// never fires (superseded prompt) keeps the answer.
     public func answerVisualAid(id visualId: UUID, answer: ACPVisualAid.Answer, in sessionId: ACPSession.ID) async -> Bool {
+        guard !isDisposed, let answeringSession = sessions[sessionId] else { return false }
+        answeringSession.nextPromptWorkCount += 1
+        defer { answeringSession.nextPromptWorkCount -= 1 }
         // The wait comes before every guard and before the synchronous mutation below, so two answers
         // that wait together compete for the synchronous mutation; the loser finds the winner's answer.
         guard let firstWriteRunner = runners[sessionId],
@@ -9029,7 +9037,13 @@ extension ACPSessionManager {
                     for: sessionId, text: prompt, attachments: [],
                     isStillWanted: { cancellation.commit() }
                 ) { ok in
-                    if !ok { Task { @MainActor in await self?.rollBackVisualAidAnswer(id: visualId, answer: answer, in: sessionId) } }
+                    if !ok {
+                        answeringSession.nextPromptWorkCount += 1
+                        Task { @MainActor in
+                            defer { answeringSession.nextPromptWorkCount -= 1 }
+                            await self?.rollBackVisualAidAnswer(id: visualId, answer: answer, in: sessionId)
+                        }
+                    }
                 }
             }, timeout: visualAidPromptRegistrationWait)
         } onCancel: {
@@ -9090,6 +9104,8 @@ extension ACPSessionManager {
               }),
               case .visualAid(var current) = session.transcript.messages[index], current.answer == answer
         else { return }
+        session.nextPromptWorkCount += 1
+        defer { session.nextPromptWorkCount -= 1 }
         current.answer = nil
         session.transcript.replaceMessage(at: index, with: .visualAid(current))
         let status = session.visualAidSendStatus(for: visualId)
