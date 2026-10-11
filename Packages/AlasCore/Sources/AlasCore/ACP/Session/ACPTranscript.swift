@@ -1,5 +1,4 @@
 import Foundation
-import Combine
 
 /// Narrow observable holder for the rapidly-mutating slice of session
 /// state (transcript + stream state + pending permission). Lives inside
@@ -7,9 +6,10 @@ import Combine
 /// this instead of the full `ACPSession`, so updates to model/mode/setup
 /// state no longer invalidate the message list.
 @MainActor
-public final class ACPTranscript: ObservableObject {
+public final class ACPTranscript: ChangeTracking {
+    nonisolated(unsafe) public let willChange = ChangeSignal<Void>()
     public var onNextPromptActivity: (() -> Void)?
-    @Published public var messages: [ACPMessage] = [] {
+    @Tracked public var messages: [ACPMessage] = [] {
         willSet { onNextPromptActivity?() }
         didSet {
             let mutation = pendingMessagesMutation
@@ -65,16 +65,16 @@ public final class ACPTranscript: ObservableObject {
     /// Mutation log consumed by remote-web gateways for incremental deltas.
     /// Recording is enabled only while at least one gateway is subscribed.
     public let changeLog = ACPTranscriptChangeLog()
-    @Published public var streamingState: ACPSession.StreamingState = .idle { willSet { onNextPromptActivity?() } }
-    @Published public var pendingPermission: ACPSession.PendingPermission? { willSet { onNextPromptActivity?() } }
-    @Published public var pendingQuestion: ACPSession.PendingQuestion? { willSet { onNextPromptActivity?() } }
-    @Published public var pendingPlan: ACPSession.PendingPlan? { willSet { onNextPromptActivity?() } }
-    @Published public var pendingUserInputs: [ACPUserInputRequest] = [] { willSet { onNextPromptActivity?() } }
-    @Published public var urlElicitationWaits: [ACPURLElicitationWait] = [] { willSet { onNextPromptActivity?() } }
+    @Tracked public var streamingState: ACPSession.StreamingState = .idle { willSet { onNextPromptActivity?() } }
+    @Tracked public var pendingPermission: ACPSession.PendingPermission? { willSet { onNextPromptActivity?() } }
+    @Tracked public var pendingQuestion: ACPSession.PendingQuestion? { willSet { onNextPromptActivity?() } }
+    @Tracked public var pendingPlan: ACPSession.PendingPlan? { willSet { onNextPromptActivity?() } }
+    @Tracked public var pendingUserInputs: [ACPUserInputRequest] = [] { willSet { onNextPromptActivity?() } }
+    @Tracked public var urlElicitationWaits: [ACPURLElicitationWait] = [] { willSet { onNextPromptActivity?() } }
     /// Items of the plan emitted for the current turn. Updated when the
     /// transcript array changes so high-frequency streaming ticks do not scan
     /// the full message list from `ACPSessionView` / plan UI bodies.
-    @Published public private(set) var currentPlan: [ACPMessage.PlanItem]?
+    @Tracked public private(set) var currentPlan: [ACPMessage.PlanItem]?
     /// Tick incremented (throttled) on streaming chunks that mutate an
     /// existing agent/thought buffer. Deliberately NOT `@Published`: the
     /// buffer itself publishes to the row rendering it, and that row's
@@ -84,7 +84,7 @@ public final class ACPTranscript: ObservableObject {
     /// Observers that summarize streamed text subscribe to `streamingTicks`.
     public var streamingTick: UInt32 = 0
     /// Fires with every `streamingTick` increment.
-    public let streamingTicks = PassthroughSubject<Void, Never>()
+    public let streamingTicks = ChangeSignal<Void>()
     /// Wall-clock time (`ProcessInfo.systemUptime`) of the last `streamingTick`
     /// publish. Used to throttle publishes to `streamingTickMinInterval`.
     private var lastStreamingTickPublish: TimeInterval = 0
@@ -96,7 +96,7 @@ public final class ACPTranscript: ObservableObject {
     /// persisted rows. This is separate from `visibleHead`: a non-zero head
     /// means older rows are available behind the render window, not that an
     /// async load is still running.
-    @Published public var isBackfillingOlderMessages: Bool = false
+    @Tracked public var isBackfillingOlderMessages: Bool = false
 
     /// Number of known persisted messages that precede `messages[0]` while
     /// tail-first hydration is still materialising the older prefix. This is
@@ -113,11 +113,11 @@ public final class ACPTranscript: ObservableObject {
     /// long transcripts paint quickly; user can scroll up or click the
     /// "Earlier messages…" affordance to reveal older rows in chunks of
     /// `tailWindow`.
-    @Published public var visibleHead: Int = 0
+    @Tracked public var visibleHead: Int = 0
     /// Exclusive upper bound of the render window. `nil` means the live tail.
     /// Non-tail restored anchors use this to avoid asking SwiftUI to keep every
     /// newer transcript row in a single lazy-stack layout pass.
-    @Published public var visibleTail: Int?
+    @Tracked public var visibleTail: Int?
 
     /// Number of rows revealed per backfill step. Tuned for chat-style
     /// content where a screenful is a few rows; bigger steps feel like
@@ -154,7 +154,7 @@ public final class ACPTranscript: ObservableObject {
     /// Publishes only when it moves: a chunk resuming an older row changes
     /// which row shimmers without changing `messages`.
     public var lastContentTouchIndex: Int? {
-        didSet { if oldValue != lastContentTouchIndex { objectWillChange.send() } }
+        didSet { if oldValue != lastContentTouchIndex { willChange.send() } }
     }
 
     // MARK: - Per-message markdown caches

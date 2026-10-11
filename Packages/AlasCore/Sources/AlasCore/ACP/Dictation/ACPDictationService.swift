@@ -5,8 +5,9 @@ import Foundation
 /// just the state machine: idle → preparing → listening, with `failed`
 /// surfacing engine errors and `unavailable` hiding the control entirely.
 @MainActor
-public final class ACPDictationService: ObservableObject {
-    @Published public private(set) var state: ACPDictationState
+public final class ACPDictationService: ChangeTracking {
+    nonisolated(unsafe) public let willChange = ChangeSignal<Void>()
+    @Tracked public private(set) var state: ACPDictationState
 
     /// Fires for every transcript update while listening — volatile
     /// updates (not yet final) may repeat as the utterance is corrected,

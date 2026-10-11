@@ -7,7 +7,8 @@ public enum ACPTerminalHostError: Error, Equatable, Sendable {
 }
 
 @MainActor
-public final class ACPTerminalHost: ObservableObject {
+public final class ACPTerminalHost: ChangeTracking {
+    nonisolated(unsafe) public let willChange = ChangeSignal<Void>()
     public static let maxLiveTerminals = 32
     public static let maxRetainedFinishedTerminals = 64
     public static let maxMetadataTerminals = 64
@@ -15,7 +16,7 @@ public final class ACPTerminalHost: ObservableObject {
     public private(set) var sessionCwd: String
     public private(set) var sessionEnv: [String: String]
     public private(set) var sessionRemoteHost: String?
-    @Published public private(set) var terminals: [String: ACPTerminal] = [:]
+    @Tracked public private(set) var terminals: [String: ACPTerminal] = [:]
 
     public init(sessionCwd: String, sessionEnv: [String: String], sessionRemoteHost: String? = nil) {
         self.sessionCwd = sessionCwd

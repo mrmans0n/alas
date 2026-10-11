@@ -1,5 +1,4 @@
 #if DEBUG
-import Combine
 import Foundation
 import os
 
@@ -11,8 +10,9 @@ import os
 /// emits the one-line summary via `os.Logger`. The `latest` publisher feeds
 /// the debug "Memory report…" window.
 @MainActor
-public final class MemoryDiagnostics: ObservableObject {
-    @Published public private(set) var latest: MemorySnapshot?
+public final class MemoryDiagnostics: ChangeTracking {
+    nonisolated(unsafe) public let willChange = ChangeSignal<Void>()
+    @Tracked public private(set) var latest: MemorySnapshot?
 
     private var managers: [String: ACPSessionManager] = [:]
     private var timer: Timer?

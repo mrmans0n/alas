@@ -1,4 +1,3 @@
-import Combine
 import Foundation
 
 /// One native subagent (child ACP session) owned by a parent session.
@@ -13,7 +12,8 @@ import Foundation
 /// Observable in its own right so an expanded child row re-renders on its
 /// own streaming chunks without invalidating the parent's message list.
 @MainActor
-public final class ACPSubagentRun: ObservableObject, Identifiable {
+public final class ACPSubagentRun: ChangeTracking, Identifiable {
+    nonisolated(unsafe) public let willChange = ChangeSignal<Void>()
     nonisolated public let subagentSessionId: String
     public nonisolated var id: String { subagentSessionId }
 
@@ -23,18 +23,18 @@ public final class ACPSubagentRun: ObservableObject, Identifiable {
     /// single crash window could have dropped.
     private static let prefixRecoverySeqReserve: Int64 = 1_000_000
 
-    @Published public private(set) var name: String?
-    @Published public private(set) var task: String?
-    @Published public private(set) var state: ACPSubagentState
-    @Published public private(set) var capabilities: ACPSubagentCapabilities
+    @Tracked public private(set) var name: String?
+    @Tracked public private(set) var task: String?
+    @Tracked public private(set) var state: ACPSubagentState
+    @Tracked public private(set) var capabilities: ACPSubagentCapabilities
     /// Diagnostic text from the most recent failure, when the agent
     /// provided one (OpenCode's status notification; the standard
     /// `subagent_state_update` carries none). Sticky across further
     /// updates that don't themselves carry a new error, so the reason a
     /// row failed survives whatever housekeeping update lands after it.
-    @Published public private(set) var lastError: String?
+    @Tracked public private(set) var lastError: String?
     /// The child's own transcript, in arrival order.
-    @Published public private(set) var messages: [ACPMessage] = []
+    @Tracked public private(set) var messages: [ACPMessage] = []
 
     /// Index of the row most recently touched by a LIVE (non-replayed)
     /// `apply(_:at:)`, excluding `.plan`. Mirrors

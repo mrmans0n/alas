@@ -1,18 +1,18 @@
 import Foundation
-import Combine
 
 /// Narrow observable holder for the rapidly-mutating composer draft.
 /// Keystrokes update this object instead of `ACPSession` so the transcript
 /// pane is not invalidated while the user types in long sessions.
 @MainActor
-public final class ACPComposerState: ObservableObject {
+public final class ACPComposerState: ChangeTracking {
+    nonisolated(unsafe) public let willChange = ChangeSignal<Void>()
     public var onNextPromptActivity: (() -> Void)?
     public private(set) var draft: ACPComposerDraft = .empty
     public private(set) var revision: Int = 0
 
     public func replaceDraft(_ draft: ACPComposerDraft) {
         onNextPromptActivity?()
-        objectWillChange.send()
+        willChange.send()
         self.draft = draft
         revision += 1
     }
@@ -96,16 +96,17 @@ public struct ACPBlockedToolCall: Equatable, Sendable {
 }
 
 @MainActor
-public final class ACPSession: ObservableObject, Identifiable {
+public final class ACPSession: ChangeTracking, Identifiable {
+    nonisolated(unsafe) public let willChange = ChangeSignal<Void>()
     public typealias ID = String
 
     nonisolated public let id: ID
     nonisolated public let incarnation = UUID()
     /// Synchronous runtime invalidation, independent of persistence and UI observation.
-    public let nextPromptActivity = PassthroughSubject<Void, Never>()
+    public let nextPromptActivity = ChangeSignal<Void>()
     /// Presentation-only visibility changes suspend suggestions without consuming their turn.
-    public let nextPromptVisibilityChanged = PassthroughSubject<Bool, Never>()
-    public let nextPromptTeardown = PassthroughSubject<Void, Never>()
+    public let nextPromptVisibilityChanged = ChangeSignal<Bool>()
+    public let nextPromptTeardown = ChangeSignal<Void>()
     /// Manager work may await before it reaches the runner or queue.
     public var nextPromptWorkCount = 0 { willSet { nextPromptActivity.send() } }
     public var hasPendingDelegatedMessages = false { willSet { nextPromptActivity.send() } }
@@ -137,12 +138,12 @@ public final class ACPSession: ObservableObject, Identifiable {
     public let composer = ACPComposerState()
     public let terminalHost: ACPTerminalHost = ACPTerminalHost(sessionCwd: "/", sessionEnv: [:])
 
-    @Published public var title: String
-    @Published public var titleSource: ACPSessionTitleSource
+    @Tracked public var title: String
+    @Tracked public var titleSource: ACPSessionTitleSource
     public private(set) var origin: ACPSessionOrigin
-    @Published public var availableModels: [ACPModelInfo] = []
-    @Published public var availableModes: [ACPModeInfo] = []
-    @Published public var availableConfigOptions: [ACPConfigOption] = [] {
+    @Tracked public var availableModels: [ACPModelInfo] = []
+    @Tracked public var availableModes: [ACPModeInfo] = []
+    @Tracked public var availableConfigOptions: [ACPConfigOption] = [] {
         didSet {
             availableConfigOptionsRevision += 1
             hasReceivedConfigOptions = true
@@ -194,18 +195,18 @@ public final class ACPSession: ObservableObject, Identifiable {
     }
 
     /// Runtime-only provider state learned from the adapter on each attach.
-    @Published public var providerCapabilities: EmptyObject?
-    @Published public var goalCapability: ACPGoalCapability?
-    @Published public var availableProviders: [ACPProviderInfo] = []
-    @Published public var currentModel: String?
-    @Published public var contextUsage: ACPUsageInfo?
+    @Tracked public var providerCapabilities: EmptyObject?
+    @Tracked public var goalCapability: ACPGoalCapability?
+    @Tracked public var availableProviders: [ACPProviderInfo] = []
+    @Tracked public var currentModel: String?
+    @Tracked public var contextUsage: ACPUsageInfo?
     /// Latest Claude rate-limit info seen on `usage_update`; read by usage-limit
     /// detection for a structured reset time. Runtime only.
-    @Published public private(set) var latestClaudeRateLimit: ACPClaudeRateLimit?
+    @Tracked public private(set) var latestClaudeRateLimit: ACPClaudeRateLimit?
     /// Per-model token usage from the most recent `session/prompt` result's
     /// `_meta.quota` (claude-agent-acp ≥ 0.71, codex-acp, Gemini). Runtime
     /// only: re-derived on each prompt response, never persisted.
-    @Published public private(set) var lastTurnQuota: ACPPromptQuota?
+    @Tracked public private(set) var lastTurnQuota: ACPPromptQuota?
     /// Running sum of every turn's `lastTurnQuota` for the lifetime of this
     /// in-memory `ACPSession` object, per model. `_meta.quota` reports each
     /// turn's own usage rather than a running total, so this is accumulated
@@ -218,11 +219,11 @@ public final class ACPSession: ObservableObject, Identifiable {
     /// it starts at nil and never reconstructs from the persisted
     /// transcript — the UI labels it accordingly rather than claiming the
     /// whole session's usage.
-    @Published public private(set) var sessionQuotaTotal: ACPPromptQuota?
-    @Published public var currentMode: String?
+    @Tracked public private(set) var sessionQuotaTotal: ACPPromptQuota?
+    @Tracked public var currentMode: String?
     /// Summaries read the objective, status, and budget, so only those changes reach the
     /// activity observers; telemetry (tokens, time, iterations) must not consume a suggestion.
-    @Published public var currentGoal: ACPGoalState? {
+    @Tracked public var currentGoal: ACPGoalState? {
         willSet {
             let old = currentGoal, new = newValue
             if old?.objective != new?.objective || old?.status != new?.status
@@ -231,42 +232,42 @@ public final class ACPSession: ObservableObject, Identifiable {
             }
         }
     }
-    @Published public var promptSuggestions: [ACPPromptSuggestion] = []
-    @Published public var autoRunEnabled: Bool = false { willSet { nextPromptActivity.send() } }
+    @Tracked public var promptSuggestions: [ACPPromptSuggestion] = []
+    @Tracked public var autoRunEnabled: Bool = false { willSet { nextPromptActivity.send() } }
     /// A hidden `/btw` side session: only read-only tools run (see
     /// `ACPSideQuestionPermissionRule`), and the agent launches without the
     /// project's bypass-permissions flag. In-memory only; side sessions never
     /// outlive the app.
-    @Published public var readOnlyRestricted = false
+    @Tracked public var readOnlyRestricted = false
     /// Tool calls the read-only gate rejected, for the side card.
-    @Published public private(set) var readOnlyBlockedTools: [ACPBlockedToolCall] = []
+    @Tracked public private(set) var readOnlyBlockedTools: [ACPBlockedToolCall] = []
 
     public func recordReadOnlyBlock(_ title: String) {
         readOnlyBlockedTools.append(.init(title: title, messageIndex: transcript.messages.count))
     }
-    @Published public var setupState: SetupState = .checking { willSet { nextPromptActivity.send() } }
-    @Published public var lastError: String?
+    @Tracked public var setupState: SetupState = .checking { willSet { nextPromptActivity.send() } }
+    @Tracked public var lastError: String?
     /// Runtime-only state reported by Codex while its current turn retries.
-    @Published public private(set) var retryStatus: ACPRetryStatus? { willSet { nextPromptActivity.send() } }
-    @Published public var contextRestoreWarning: ContextRestoreWarning? { willSet { nextPromptActivity.send() } }
-    @Published public var contextRecoveryStatus: ContextRecoveryStatus? { willSet { nextPromptActivity.send() } }
+    @Tracked public private(set) var retryStatus: ACPRetryStatus? { willSet { nextPromptActivity.send() } }
+    @Tracked public var contextRestoreWarning: ContextRestoreWarning? { willSet { nextPromptActivity.send() } }
+    @Tracked public var contextRecoveryStatus: ContextRecoveryStatus? { willSet { nextPromptActivity.send() } }
     /// Runtime-only ACP `notice` update — a fire-and-forget out-of-band
     /// event (MCP server dropped, rate limit, model fallback…). Live state
     /// only: never written into the persisted transcript, never restored
     /// from `session/load` replay, and does not affect `streamingState`.
     /// Surfaced as a transient banner above the composer.
-    @Published public private(set) var activeNotice: ACPSessionNotice?
+    @Tracked public private(set) var activeNotice: ACPSessionNotice?
     /// Runtime-only transcript scroll intent. When true, the ACP message
     /// list follows new content and restores to the latest bottom after
     /// returning to this session. Set false when the user scrolls upward.
-    @Published public var followsTranscriptTail: Bool = true
+    @Tracked public var followsTranscriptTail: Bool = true
     /// Lifecycle state of the agent process backing this session.
     /// Single source of truth for the composer, header pill, and runner
     /// registry checks.
     /// Note: `AgentState.idle` means "no runner spawned yet" (process
     /// lifecycle), distinct from `StreamingState.idle` which means
     /// "runner is attached but not currently mid-prompt" (turn lifecycle).
-    @Published public var agentState: AgentState = .idle {
+    @Tracked public var agentState: AgentState = .idle {
         willSet { nextPromptActivity.send() }
         didSet {
             if agentState == .spawning {
@@ -278,23 +279,23 @@ public final class ACPSession: ObservableObject, Identifiable {
             }
         }
     }
-    @Published public private(set) var connectionAttemptStartedAt: Date?
+    @Tracked public private(set) var connectionAttemptStartedAt: Date?
     /// True while a user-triggered restart or retry is replacing the active
     /// connection. Views use it to keep recovery visible without offering a
     /// second action against the same session.
-    @Published public var connectionRestartInProgress = false
+    @Tracked public var connectionRestartInProgress = false
     /// Runtime-only state for the current unexpected connection loss.
     /// Nil outside a recovery incident.
-    @Published public private(set) var connectionRecoveryState: ACPConnectionRecoveryState? { willSet { nextPromptActivity.send() } }
+    @Tracked public private(set) var connectionRecoveryState: ACPConnectionRecoveryState? { willSet { nextPromptActivity.send() } }
     /// Prompt content capabilities learned from ACP `initialize`.
     /// Runtime-only: re-learned on each attach, never persisted. Drives
     /// send-time hydration in `ACPSessionRunner.hydrate`.
-    @Published public var promptCapabilities: ACPInitializeResult.ACPPromptCapabilities = .init()
+    @Tracked public var promptCapabilities: ACPInitializeResult.ACPPromptCapabilities = .init()
     /// Relearned on attach; adapters must explicitly advertise this extension.
-    @Published public var supportsSteering = false
+    @Tracked public var supportsSteering = false
     public var supportsCodexSteeringCompletion = false
     /// Relearned on attach: the adapter serves `_alas/context_usage`.
-    @Published public var supportsContextBreakdown = false
+    @Tracked public var supportsContextBreakdown = false
 
     public var canSteerRunningTurn: Bool {
         agentState == .ready && supportsSteering
@@ -303,38 +304,38 @@ public final class ACPSession: ObservableObject, Identifiable {
     /// Session capabilities learned from ACP `initialize`.
     /// Runtime-only: re-learned on each attach and used to select a fork
     /// mechanism for this session.
-    @Published public var sessionCapabilities: ACPInitializeResult.ACPAgentSessionCapabilities?
+    @Tracked public var sessionCapabilities: ACPInitializeResult.ACPAgentSessionCapabilities?
     /// Persisted fork lineage hydrated with the session. A nil value means
     /// this session was not created as a fork.
-    @Published public var forkRecord: ACPSessionForkRecord? { willSet { nextPromptActivity.send() } }
+    @Tracked public var forkRecord: ACPSessionForkRecord? { willSet { nextPromptActivity.send() } }
     /// Auth methods learned from ACP `initialize`.
     /// Runtime-only: re-learned on each attach and used when an agent asks
     /// the client to authenticate before ACP can continue.
-    @Published public var authMethods: [ACPInitializeResult.ACPAuthMethod] = []
+    @Tracked public var authMethods: [ACPInitializeResult.ACPAuthMethod] = []
     /// Latest auth status pushed by the `_auth/status_update` ACP
     /// extension (claude-agent-acp >= 0.75, codex-acp >= 1.9). Nil for
     /// adapters that don't advertise the extension, or before the first
     /// notification of a fresh attach arrives.
     /// Runtime-only: re-learned on each attach, never persisted.
-    @Published public var authStatus: ACPAuthStatus?
+    @Tracked public var authStatus: ACPAuthStatus?
     /// Runtime-only MCP attachment result for the most recent attach. It
     /// contains no resolved commands, environment values, or headers.
-    @Published public var mcpAttachmentSummary: MCPAttachmentSummary?
+    @Tracked public var mcpAttachmentSummary: MCPAttachmentSummary?
     /// MCP context preamble queued for the next prompt of a freshly created
     /// remote session. Wire-only: prepended to the outgoing blocks by the
     /// runner, never recorded in the transcript. Cleared after the first
     /// successful `session/prompt`. Persisted so an app restart before the
     /// first prompt does not lose it.
-    @Published public var pendingMCPPreamble: String?
+    @Tracked public var pendingMCPPreamble: String?
     /// Whether this session's MCP preamble was delivered in a prompt.
-    @Published public var mcpPreambleSent: Bool = false
+    @Tracked public var mcpPreambleSent: Bool = false
     /// Runtime-only status for adapters that ignore ACP MCP config
     /// (`ACPMCPInjectionSupport.external`): how Alas tools and user MCP
     /// servers actually reach this agent. Recomputed on every attach.
-    @Published public var mcpExternalStatus: ACPMCPExternalStatus?
+    @Tracked public var mcpExternalStatus: ACPMCPExternalStatus?
     /// Registration state of the built-in "alas" MCP server for the current
     /// attach. Drives the MCP status control's warning + transport-switch action.
-    @Published public var builtInMCPRegistration: MCPServerRegistration = .unknown
+    @Tracked public var builtInMCPRegistration: MCPServerRegistration = .unknown
     /// Whether the current attach adopted an already-running agent whose
     /// stdio built-in server started before this attach, so it won't send a
     /// new hello. See `MCPRegistrationDecision`.
@@ -347,7 +348,7 @@ public final class ACPSession: ObservableObject, Identifiable {
     /// Learned on each attach. Gates the "switch to HTTP transport" action: an
     /// adapter without HTTP MCP falls back to stdio, so offering the switch
     /// would loop back to a `.notRegistered` stdio server.
-    @Published public var adapterSupportsHTTPMCP: Bool = false
+    @Tracked public var adapterSupportsHTTPMCP: Bool = false
     /// Runtime-only auth method selected by the user in the sign-in banner.
     /// The next attach consumes it by calling ACP `authenticate` after
     /// initialize and before session creation/loading.
@@ -356,16 +357,16 @@ public final class ACPSession: ObservableObject, Identifiable {
     /// opening a brand-new ACP chat and receiving the ready remote session.
     /// This is never persisted; restored sessions derive their UI from
     /// persisted session fields instead.
-    @Published public var firstRunConnectingPhase: ACPFirstRunConnectingPhase?
+    @Tracked public var firstRunConnectingPhase: ACPFirstRunConnectingPhase?
     /// Native subagents (child ACP sessions) spawned during this session,
     /// keyed by child session id. Each parent-transcript subagent row reads
     /// its live child transcript from here; `subagentOrder` keeps spawn
     /// order for the rare consumer that wants the list rather than a row.
-    @Published public private(set) var subagents: [String: ACPSubagentRun] = [:]
-    @Published public var backgroundTasks: [ACPBackgroundTask] = []
-    @Published public var backgroundTaskStopSupported = false
+    @Tracked public private(set) var subagents: [String: ACPSubagentRun] = [:]
+    @Tracked public var backgroundTasks: [ACPBackgroundTask] = []
+    @Tracked public var backgroundTaskStopSupported = false
     /// The user's explicit collapse choice for the background task tray; nil follows the default.
-    @Published public var backgroundTrayExpanded: Bool?
+    @Tracked public var backgroundTrayExpanded: Bool?
     private var subagentOrder: [String] = []
 
     private static let metadataPreviewLimit = 4096
@@ -545,7 +546,7 @@ public final class ACPSession: ObservableObject, Identifiable {
     /// state for sessions returned by `placeholderSession`; `.ready` is the
     /// initial state for sessions returned by `createSession`. `.failed`
     /// surfaces a hydration error to the view.
-    @Published public var hydrationState: HydrationState { willSet { nextPromptActivity.send() } }
+    @Tracked public var hydrationState: HydrationState { willSet { nextPromptActivity.send() } }
     /// ACP session id assigned by the agent on `session/new` (or the
     /// id we passed to `session/load`). Used for every subsequent
     /// protocol call (`session/prompt`, `session/cancel`, etc).
@@ -554,16 +555,16 @@ public final class ACPSession: ObservableObject, Identifiable {
     /// Persisted in `ACPSessionStore` and refreshed on each successful
     /// `session/new` or `session/load`.
     public var remoteSessionId: String?
-    @Published public var queue: [QueuedPrompt] = [] { willSet { nextPromptActivity.send() } }
+    @Tracked public var queue: [QueuedPrompt] = [] { willSet { nextPromptActivity.send() } }
 
     /// Set while a provider usage limit has stopped this session; cleared by
     /// the next turn that completes. See `ACPUsageLimitResumePolicy`.
-    @Published public var usageLimit: ACPUsageLimit?
+    @Tracked public var usageLimit: ACPUsageLimit?
 
     /// Error message of the last turn when it failed; cleared by the next
     /// turn that ends any other way. Runtime only, like the sidebar badge it
     /// drives.
-    @Published public var turnFailure: String?
+    @Tracked public var turnFailure: String?
 
     public var usageLimitResumeItem: QueuedPrompt? {
         queue.first { $0.usageLimit != nil }
@@ -581,7 +582,7 @@ public final class ACPSession: ObservableObject, Identifiable {
         case pending
         case released
     }
-    @Published public private(set) var delegatedSelectionHold: DelegatedSelectionHold = .none {
+    @Tracked public private(set) var delegatedSelectionHold: DelegatedSelectionHold = .none {
         willSet { nextPromptActivity.send() }
     }
 
@@ -4322,7 +4323,7 @@ public final class ACPSession: ObservableObject, Identifiable {
                         transcript.noteStreamingChange(at: i)
                         // Chunks do not republish the transcript, but a phase
                         // decides how the row renders and groups.
-                        if buf.phase != phaseBefore { transcript.objectWillChange.send() }
+                        if buf.phase != phaseBefore { transcript.willChange.send() }
                         return i
                     }
                 default:
