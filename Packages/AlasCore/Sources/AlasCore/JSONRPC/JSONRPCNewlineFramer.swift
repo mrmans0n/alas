@@ -2,15 +2,17 @@ import Foundation
 
 /// Splits a stream of bytes into newline-delimited JSON payloads.
 /// Used by ACP, which sends one JSON object per line on stdout/stdin.
-struct JSONRPCNewlineFramer {
+public struct JSONRPCNewlineFramer: Sendable {
     private var buffer = Data()
     private var scannedBytes = 0
 
-    mutating func append<S: Sequence>(_ bytes: S) where S.Element == UInt8 {
+    public init() {}
+
+    public mutating func append<S: Sequence>(_ bytes: S) where S.Element == UInt8 {
         buffer.append(contentsOf: bytes)
     }
 
-    mutating func drainFrames() -> [Data] {
+    public mutating func drainFrames() -> [Data] {
         var out: [Data] = []
         var consumedBytes = 0
         buffer.withUnsafeBytes { (bytes: UnsafeRawBufferPointer) in
@@ -36,7 +38,7 @@ struct JSONRPCNewlineFramer {
         return out
     }
 
-    static func encode(_ body: Data) -> Data {
+    public static func encode(_ body: Data) -> Data {
         var out = body
         out.append(0x0A)
         return out

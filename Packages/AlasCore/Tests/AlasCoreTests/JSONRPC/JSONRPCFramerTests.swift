@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import Alas
+@testable import AlasCore
 
 @Suite("JSONRPCFramer")
 struct JSONRPCFramerTests {

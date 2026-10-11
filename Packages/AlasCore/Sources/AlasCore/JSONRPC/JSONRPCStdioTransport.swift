@@ -1,17 +1,17 @@
 import Darwin
 import Foundation
 
-enum JSONRPCFraming {
+public enum JSONRPCFraming: Sendable {
     case contentLength   // LSP-style "Content-Length: N\r\n\r\n<body>"
     case newline         // ACP-style one-JSON-object-per-line
 }
 
-enum JSONRPCProcessTerminationScope: Equatable {
+public enum JSONRPCProcessTerminationScope: Equatable, Sendable {
     case processOnly
     case processTree
 }
 
-protocol JSONRPCStdioTransporting: AnyObject, Sendable {
+public protocol JSONRPCStdioTransporting: AnyObject, Sendable {
     var incoming: AsyncStream<JSONRPCStdioTransport.Incoming> { get }
     var requestIDPrefix: String? { get }
     func start() throws
@@ -21,16 +21,16 @@ protocol JSONRPCStdioTransporting: AnyObject, Sendable {
 }
 
 extension JSONRPCStdioTransporting {
-    var requestIDPrefix: String? { nil }
+    public var requestIDPrefix: String? { nil }
 
-    func send(_ data: Data, onWritten: @escaping @Sendable () -> Void) throws {
+    public func send(_ data: Data, onWritten: @escaping @Sendable () -> Void) throws {
         try send(data)
         onWritten()
     }
 }
 
-final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting {
-    enum Incoming: Sendable {
+public final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting {
+    public enum Incoming: Sendable {
         case frame(Data, onConsumed: (@Sendable () -> Void)? = nil)
         case stderr(Data)
         case exited(Int32)
@@ -80,9 +80,9 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
     private var descendantTracker: Task<Void, Never>?
     private var descendantForkSources: [pid_t: DispatchSourceProcess] = [:]
 
-    let incoming: AsyncStream<Incoming>
+    public let incoming: AsyncStream<Incoming>
 
-    init(
+    public init(
         executable: URL,
         arguments: [String],
         environment: [String: String]?,
@@ -107,7 +107,7 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
         }
     }
 
-    func start() throws {
+    public func start() throws {
         stdout.fileHandleForReading.readabilityHandler = { [weak self] h in
             let d = h.availableData
             guard let self, !d.isEmpty else { return }
@@ -176,7 +176,7 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
         startDescendantTracker()
     }
 
-    func send(_ data: Data) throws {
+    public func send(_ data: Data) throws {
         let framed: Data
         switch framing {
         case .contentLength: framed = JSONRPCFramer.encode(data)
@@ -185,7 +185,7 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
         try stdin.fileHandleForWriting.write(contentsOf: framed)
     }
 
-    func terminate() {
+    public func terminate() {
         descendantTracker?.cancel()
         cancelDescendantForkObservers()
         guard let process, process.pid > 0 else { return }

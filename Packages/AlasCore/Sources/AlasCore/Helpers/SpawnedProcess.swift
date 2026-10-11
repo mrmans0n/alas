@@ -5,20 +5,20 @@ import Foundation
 /// `POSIX_SPAWN_SETPGROUP` sets the group before the child runs anything, so `kill(-pid, …)` reaches everything it
 /// forks. Foundation's `Process` cannot do that, and a parent-side `setpgid` after `run()` races the child's `exec`.
 /// Only the standard streams are inherited; every other descriptor is closed in the child.
-final class SpawnedProcess: @unchecked Sendable {
-    enum Termination: Equatable, Sendable {
+public final class SpawnedProcess: @unchecked Sendable {
+    public enum Termination: Equatable, Sendable {
         case exit(Int32)
         case signal(Int32)
 
         /// The exit code or the signal number, as Foundation's `terminationStatus`.
-        var status: Int32 {
+        public var status: Int32 {
             switch self {
             case .exit(let code), .signal(let code): code
             }
         }
 
         /// The exit code, or 128 plus the signal number, as shells report it.
-        var shellStatus: Int32 {
+        public var shellStatus: Int32 {
             switch self {
             case .exit(let code): code
             case .signal(let signal): 128 + signal
@@ -26,19 +26,19 @@ final class SpawnedProcess: @unchecked Sendable {
         }
     }
 
-    let pid: pid_t
+    public let pid: pid_t
     private let lock = NSLock()
     private var _termination: Termination?
     private var onExit: (@Sendable (pid_t, Termination) -> Void)?
 
     /// Set once the child has exited, before it is reaped.
-    var termination: Termination? { lock.withLock { _termination } }
-    var isRunning: Bool { termination == nil }
+    public var termination: Termination? { lock.withLock { _termination } }
+    public var isRunning: Bool { termination == nil }
 
     /// A nil `stdin` reads `/dev/null`. The child's ends of the pipes are closed here once it has them, so the
     /// readers see EOF when it and whatever inherited them are gone. `onExit` gets the pid and how it ended, once,
     /// on the reaper thread, before the child is reaped, so its pid is still its own.
-    init(
+    public init(
         executable: URL, arguments: [String], environment: [String: String], directory: URL? = nil,
         newProcessGroup: Bool = true, stdin: Pipe?, stdout: Pipe, stderr: Pipe,
         onExit: @escaping @Sendable (pid_t, Termination) -> Void
@@ -94,7 +94,7 @@ final class SpawnedProcess: @unchecked Sendable {
     }
 
     /// Sends SIGTERM while the child has not been reaped, so the pid is still its own.
-    func terminate() {
+    public func terminate() {
         lock.withLock { if _termination == nil { _ = kill(pid, SIGTERM) } }
     }
 

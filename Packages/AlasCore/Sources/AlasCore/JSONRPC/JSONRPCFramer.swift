@@ -2,15 +2,27 @@ import Foundation
 
 /// Splits a stream of bytes into JSON-RPC `Content-Length`-framed payloads.
 /// Used by LSP (ACP uses `JSONRPCNewlineFramer`).
-struct JSONRPCFramer {
-    static let maximumBodyBytes = 16 * 1024 * 1024
-    static let maximumHeaderBytes = 8 * 1024
+public struct JSONRPCFramer: Sendable {
+    public static let maximumBodyBytes = 16 * 1024 * 1024
+    public static let maximumHeaderBytes = 8 * 1024
     private var buffer = Data()
     private var expectedBodyBytes: Int?
     private var completedFrames: [Data] = []
-    private(set) var hasFailed = false
+    public private(set) var hasFailed = false
 
-    mutating func append<C: Collection>(_ bytes: C) where C.Element == UInt8 {
+    public init() {}
+
+    public mutating func append<C: Collection>(_ bytes: C) where C.Element == UInt8 {
+        appendBytes(bytes)
+    }
+
+    /// Concrete entry point for callers in other modules: a generic call is
+    /// not specialized across the module boundary, and LSP reads land here.
+    public mutating func append(_ data: Data) {
+        appendBytes(data)
+    }
+
+    private mutating func appendBytes<C: Collection>(_ bytes: C) where C.Element == UInt8 {
         var cursor = bytes.startIndex
         while cursor != bytes.endIndex, !hasFailed {
             if let expectedBodyBytes {
@@ -32,12 +44,12 @@ struct JSONRPCFramer {
         }
     }
 
-    mutating func drainFrames() -> [Data] {
+    public mutating func drainFrames() -> [Data] {
         defer { completedFrames = [] }
         return completedFrames
     }
 
-    static func encode(_ body: Data) -> Data {
+    public static func encode(_ body: Data) -> Data {
         var out = "Content-Length: \(body.count)\r\n\r\n".data(using: .utf8)!
         out.append(body)
         return out
