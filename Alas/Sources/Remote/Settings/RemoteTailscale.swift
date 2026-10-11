@@ -27,6 +27,11 @@ enum RemoteTailscale {
         "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
     ]
     private static let timeout: TimeInterval = 5
+    /// The App Store build's app binary doubles as the CLI; without this it
+    /// may launch as the GUI instead of answering the command.
+    private static var environment: [String: String] {
+        ProcessInfo.processInfo.environment.merging(["TAILSCALE_BE_CLI": "1"]) { _, new in new }
+    }
 
     static func executable() -> String? {
         candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
@@ -95,14 +100,14 @@ enum RemoteTailscale {
 
     private static func run(_ args: [String]) async -> Data? {
         guard let executable = executable(),
-              let result = try? await Process.run(executable, args: args, timeout: timeout),
+              let result = try? await Process.run(executable, args: args, env: environment, timeout: timeout),
               result.exitCode == 0 else { return nil }
         return Data(result.stdout.utf8)
     }
 
     private static func runChecked(_ args: [String]) async throws {
         guard let executable = executable() else { throw ProcessError.launchFailed("tailscale") }
-        let result = try await Process.run(executable, args: args, timeout: timeout)
+        let result = try await Process.run(executable, args: args, env: environment, timeout: timeout)
         guard result.exitCode == 0 else { throw ProcessError.nonZeroExit(result.exitCode, result.stderr) }
     }
 }

@@ -196,8 +196,11 @@ struct RemoteServerPane: View {
                     }
                 }
 
-                if state.config.remote.enabled, let tailscale = state.remoteTailscale {
-                    tailscaleGroup(tailscale)
+                // Stay visible while either setting is on, even with Tailscale
+                // stopped, so a loopback-only bind can always be turned off.
+                if state.config.remote.enabled,
+                   state.remoteTailscale != nil || state.config.remote.tailscaleServe || state.config.remote.tailscaleOnly {
+                    tailscaleGroup(state.remoteTailscale)
                 }
 
                 SettingsGroup(title: "Paired devices") {
@@ -336,24 +339,20 @@ struct RemoteServerPane: View {
     }
 
     @ViewBuilder
-    private func tailscaleGroup(_ tailscale: RemoteTailscaleStatus) -> some View {
+    private func tailscaleGroup(_ tailscale: RemoteTailscaleStatus?) -> some View {
         let serving: Bool = if case .ours = state.remoteTailscaleServe { true } else { false }
         SettingsGroup(title: "Tailscale") {
-            SettingsRow(
-                name: "Status",
-                desc: tailscale.httpsEnabled
-                    ? "Connected as \(tailscale.dnsName) · HTTPS certificates enabled"
-                    : "Connected as \(tailscale.dnsName) · Enable HTTPS certificates in the Tailscale admin console to serve over HTTPS"
-            ) {
-                Text("Connected")
+            SettingsRow(name: "Status", desc: tailscaleStatusDescription(tailscale)) {
+                Text(tailscale == nil ? "Not running" : "Connected")
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(theme.color("add"))
+                    .foregroundColor(theme.color(tailscale == nil ? "warn" : "add"))
             }
             SettingsRow(
                 name: "Serve over HTTPS",
                 desc: "Runs tailscale serve so devices on your tailnet get an HTTPS address. Enables PWA install, the offline shell, and notifications."
             ) {
-                AlasToggle(on: remoteBinding(\.tailscaleServe)).disabled(!tailscale.httpsEnabled)
+                AlasToggle(on: remoteBinding(\.tailscaleServe))
+                    .disabled(tailscale?.httpsEnabled != true && !state.config.remote.tailscaleServe)
             }
             if case .conflict(let reason) = state.remoteTailscaleServe {
                 SettingsRow(name: "Can't serve", desc: reason) {
@@ -372,6 +371,15 @@ struct RemoteServerPane: View {
                 AlasToggle(on: remoteBinding(\.tailscaleOnly)).disabled(!serving && !state.config.remote.tailscaleOnly)
             }
         }
+    }
+
+    private func tailscaleStatusDescription(_ tailscale: RemoteTailscaleStatus?) -> String {
+        guard let tailscale else {
+            return "Tailscale isn't installed, running, or logged in. Turn these off to listen on the local network again."
+        }
+        return tailscale.httpsEnabled
+            ? "Connected as \(tailscale.dnsName) · HTTPS certificates enabled"
+            : "Connected as \(tailscale.dnsName) · Enable HTTPS certificates in the Tailscale admin console to serve over HTTPS"
     }
 
     private func remoteBinding(_ keyPath: WritableKeyPath<AppConfig.Remote, Bool>) -> Binding<Bool> {

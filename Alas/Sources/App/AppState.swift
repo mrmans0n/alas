@@ -725,6 +725,9 @@ final class AppState {
     /// Last failed `tailscale serve` command, surfaced by the Settings pane.
     private(set) var remoteTailscaleError: String?
     @ObservationIgnored private var remoteTailscaleSync: Task<Void, Never>?
+    /// Port our Serve handler last targeted. Stays recognizable as ours after
+    /// a fallback port once `remotePort` clears on shutdown.
+    @ObservationIgnored private var remoteTailscaleServedPort: UInt16?
     private(set) var remoteConnectedDeviceCountsSnapshot: [String: Int] = [:]
     @ObservationIgnored
     var remoteSessionAttachScheduler: (@MainActor (ACPSessionManager, ACPSession.ID) -> Void)?
@@ -946,6 +949,7 @@ final class AppState {
     func syncRemoteTailscale() {
         let remote = config.remote
         let port = remotePort
+        let servedPort = remoteTailscaleServedPort
         remoteTailscaleSync?.cancel()
         // Nothing to trust or tear down: skip spawning the CLI entirely.
         guard remote.enabled || remote.tailscaleServe || remoteTailscaleServe != .off else {
@@ -957,7 +961,7 @@ final class AppState {
             var serve = RemoteTailscaleServeState.off
             var failure: String?
             if let status {
-                let ports = Set([port, remote.preferredPort].compactMap { $0 })
+                let ports = Set([port, remote.preferredPort, servedPort].compactMap { $0 })
                 serve = await RemoteTailscale.serveState(dnsName: status.dnsName, ports: ports)
                 let want = remote.enabled && remote.tailscaleServe && status.httpsEnabled
                 do {
@@ -982,6 +986,7 @@ final class AppState {
             guard let self, !Task.isCancelled else { return }
             remoteTailscale = status
             remoteTailscaleServe = serve
+            if case .ours(let served) = serve { remoteTailscaleServedPort = served }
             remoteTailscaleError = failure
             refreshRemoteAccessState()
         }
