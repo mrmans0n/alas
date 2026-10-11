@@ -5,7 +5,7 @@ import Foundation
 @MainActor
 struct URLOpening {
     /// Launches the app that handles `url` without opening the URL itself.
-    var launchHandler: (URL) async -> Bool
+    var launchHandler: @Sendable (URL) async -> Bool
     var open: (URL) -> Void
 
     static var shared = URLOpening(launchHandler: { _ in false }, open: { _ in })
