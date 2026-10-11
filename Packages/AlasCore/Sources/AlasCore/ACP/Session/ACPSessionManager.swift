@@ -815,11 +815,14 @@ public final class ACPSessionManager: ObservableObject {
         for id: ACPSession.ID,
         selection: ModelModeSelection
     ) -> Task<Void, Never> {
+        let session = sessions[id]
+        session?.nextPromptWorkCount += 1
         let generation = modelModeSelectionGenerations[id] ?? UUID()
         modelModeSelectionGenerations[id] = generation
         let previousTask = modelModeSelectionTails[id]?.task
         let token = UUID()
         let task = Task { @MainActor [weak self] in
+            defer { session?.nextPromptWorkCount -= 1 }
             await previousTask?.value
             guard let self else { return }
             guard self.modelModeSelectionGenerations[id] == generation else {
@@ -990,7 +993,7 @@ public final class ACPSessionManager: ObservableObject {
         configId: String,
         value: ACPConfigValue
     ) -> Task<Void, Never>? {
-        guard let session = sessions[id],
+        guard !isDisposed, let session = sessions[id],
               !isMirror(sessionId: id),
               let index = session.availableConfigOptions.firstIndex(where: { $0.id == configId })
         else { return nil }
@@ -1048,7 +1051,9 @@ public final class ACPSessionManager: ObservableObject {
         }
 
         persist(session)
+        session.nextPromptWorkCount += 1
         return Task { @MainActor [weak self] in
+            defer { session.nextPromptWorkCount -= 1 }
             guard let self else { return }
             await self.sendConfigOptionUpdate(
                 session: session,

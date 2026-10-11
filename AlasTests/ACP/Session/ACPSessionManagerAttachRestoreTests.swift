@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 import Testing
 @testable import Alas
 
@@ -2618,6 +2619,7 @@ struct ACPSessionManagerAttachRestoreTests {
 
         manager.enqueueModelSelection(for: session.id, modelId: "haiku")
         try await waitUntilAsync { await modelGate.hasEntered }
+        #expect(!manager.isIdleForProjectRebinding)
         manager.enqueueModeSelection(for: session.id, modeId: "act")
         let lastSelection = manager.enqueueModelSelection(for: session.id, modelId: "opus")
         var firstPromptCompleted: Bool?
@@ -3513,7 +3515,9 @@ struct ACPSessionManagerAttachRestoreTests {
                 ]
             ))
         }
-        client.script(method: "session/set_config_option") { _ in
+        let responseGate = AttachPhaseGate()
+        client.scriptAsync(method: "session/set_config_option") { _ in
+            await responseGate.enterAndWait()
             throw ACPClientError.noScript(method: "session/set_config_option")
         }
         let manager = manager(store: store, client: client)
@@ -3521,12 +3525,21 @@ struct ACPSessionManagerAttachRestoreTests {
 
         await manager.hydrateIfNeeded(id: "local")
         await manager.attach(to: session.id, freshlyCreated: false)
+        var readiness: Bool?
+        let subscription = manager.projectRebindingReadiness.sink { readiness = $0 }
+        defer { subscription.cancel() }
         let update = try #require(manager.setConfigOption(
             for: session.id,
             configId: "autoApprove",
             value: .boolean(true)
         ))
+        #expect(!manager.isIdleForProjectRebinding)
+        try await waitUntilAsync { await responseGate.hasEntered }
+        #expect(!manager.isIdleForProjectRebinding)
+        #expect(await awaitCondition(within: .seconds(1)) { readiness == false })
+        await responseGate.release()
         await update.value
+        #expect(await awaitCondition { readiness == true })
         await manager.flushAllPersistence()
 
         #expect(ACPConfigOption.currentValues(in: session.availableConfigOptions) == [
