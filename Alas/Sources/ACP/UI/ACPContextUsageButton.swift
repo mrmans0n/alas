@@ -64,6 +64,13 @@ struct ACPContextUsageButton: View {
                 details
                     .task { await refreshBreakdown() }
             }
+            // A reattach resets the capability and relearns it from the new
+            // `initialize`, so a flip means the cached breakdown was measured
+            // on another connection, or the adapter no longer serves one.
+            .onChange(of: loadBreakdown == nil) {
+                breakdown = nil
+                breakdownUsage = nil
+            }
         }
     }
 
