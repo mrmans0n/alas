@@ -14,7 +14,7 @@ struct ACPConnectionTests {
             let meta = try #require(capabilities["_meta"] as? [String: Any])
             #expect((meta["goal"] as? [String: Any])?.isEmpty == true)
             #expect(meta["async-tasks"] as? Bool == true)
-            #expect(Set(meta.keys) == ["goal", "async-tasks", "terminal-auth", "parameterizedModelPicker", "opencode/child-session-updates"])
+            #expect(Set(meta.keys) == ["goal", "async-tasks", "terminal-auth", "parameterizedModelPicker", "opencode/child-session-updates", "contextUsage"])
             #expect(meta["jetbrains"] == nil)
             #expect(meta["terminal_output_delta"] == nil)
             #expect(meta["terminal-auth"] as? Bool == true)
@@ -65,7 +65,8 @@ struct ACPConnectionTests {
             Data("""
             {"protocolVersion":1,
              "_meta":{"goal":{"version":1,"controlMethod":"_session/goal","actions":["set","clear"]},
-                      "async-tasks":\(malformedTasks ? "true" : "null"),"steering":{"supported":true}},
+                      "async-tasks":\(malformedTasks ? "true" : "null"),"steering":{"supported":true},
+                      "contextUsage":{"supported":true}},
              "agentCapabilities":{"_meta":{"goal":{"version":1,"controlMethod":"_legacy/goal","actions":["set"]}}}}
             """.utf8)
         }
@@ -73,6 +74,26 @@ struct ACPConnectionTests {
         #expect(initialized.goalCapability?.controlMethod == "_session/goal")
         #expect(initialized.goalCapability?.actions == [.set, .clear])
         #expect(initialized.supportsSteering)
+        #expect(initialized.supportsContextBreakdown)
+    }
+
+    @Test("context breakdown tolerates missing and malformed fields")
+    func contextBreakdownDecodesLeniently() async throws {
+        let mock = ACPMockClient()
+        mock.script(method: "_alas/context_usage") { _ in
+            Data("""
+            {"categories":[{"name":"Messages","tokens":40,"color":"x","kind":"used"},
+                           {"name":"Later","tokens":5,"color":"x","kind":"someday"}],
+             "maxTokens":200,"memoryFiles":"oops",
+             "skills":{"totalSkills":3,"includedSkills":2,"tokens":9}}
+            """.utf8)
+        }
+        let breakdown = try await ACPConnection(client: mock).contextBreakdown(sessionId: "s1", detail: "full")
+        #expect(breakdown.categories.map(\.kind) == [.used, .unknown])
+        #expect(breakdown.maxTokens == 200)
+        #expect(breakdown.memoryFiles.isEmpty)
+        #expect(breakdown.skills?.includedSkills == 2)
+        #expect(breakdown.skills?.skillFrontmatter == nil)
     }
 
     @Test("deleteSession sends session/delete with the wire id and accepts an empty result")

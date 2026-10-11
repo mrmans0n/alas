@@ -250,7 +250,8 @@ struct ACPClientCapabilitiesMeta: Codable, Equatable {
         terminalAuth: true,
         parameterizedModelPicker: true,
         openCodeChildSessionUpdates: true,
-        asyncTasks: true)
+        asyncTasks: true,
+        contextUsage: true)
 
     let terminalAuth: Bool
     let parameterizedModelPicker: Bool
@@ -260,22 +261,27 @@ struct ACPClientCapabilitiesMeta: Codable, Equatable {
     let openCodeChildSessionUpdates: Bool
     let goal: EmptyObject
     let asyncTasks: Bool
+    /// Asks our Claude adapter fork to serve `_alas/context_usage`.
+    let contextUsage: Bool
 
     init(
         terminalAuth: Bool,
         parameterizedModelPicker: Bool = false,
         openCodeChildSessionUpdates: Bool = false,
         goal: EmptyObject = .init(),
-        asyncTasks: Bool = false
+        asyncTasks: Bool = false,
+        contextUsage: Bool = false
     ) {
         self.terminalAuth = terminalAuth
         self.parameterizedModelPicker = parameterizedModelPicker
         self.openCodeChildSessionUpdates = openCodeChildSessionUpdates
         self.goal = goal
         self.asyncTasks = asyncTasks
+        self.contextUsage = contextUsage
     }
 
     enum CodingKeys: String, CodingKey {
+        case contextUsage
         case terminalAuth = "terminal-auth"
         case parameterizedModelPicker
         case openCodeChildSessionUpdates = "opencode/child-session-updates"
@@ -291,6 +297,7 @@ struct ACPClientCapabilitiesMeta: Codable, Equatable {
             Bool.self, forKey: .openCodeChildSessionUpdates) ?? false
         goal = try c.decodeIfPresent(EmptyObject.self, forKey: .goal) ?? .init()
         asyncTasks = try c.decodeIfPresent(Bool.self, forKey: .asyncTasks) ?? false
+        contextUsage = try c.decodeIfPresent(Bool.self, forKey: .contextUsage) ?? false
     }
 }
 
@@ -312,6 +319,10 @@ struct ACPInitializeResult: Codable, Equatable {
 
     var supportsSteering: Bool {
         meta?.steering?.supported == true
+    }
+
+    var supportsContextBreakdown: Bool {
+        meta?.contextUsage?.supported == true
     }
 
     init(
@@ -346,9 +357,11 @@ struct ACPInitializeResult: Codable, Equatable {
         let goal: ACPGoalCapability?
         let asyncTasks: ACPAsyncTaskCapability?
         let steering: Steering?
+        /// `_alas/context_usage` extension (our Claude adapter fork).
+        let contextUsage: Steering?
 
         enum CodingKeys: String, CodingKey {
-            case goal, steering
+            case goal, steering, contextUsage
             case asyncTasks = "async-tasks"
         }
 
@@ -357,6 +370,7 @@ struct ACPInitializeResult: Codable, Equatable {
             goal = try? c.decodeIfPresent(ACPGoalCapability.self, forKey: .goal)
             asyncTasks = try? c.decodeIfPresent(ACPAsyncTaskCapability.self, forKey: .asyncTasks)
             steering = try? c.decodeIfPresent(Steering.self, forKey: .steering)
+            contextUsage = try? c.decodeIfPresent(Steering.self, forKey: .contextUsage)
         }
 
         struct Steering: Codable, Equatable {

@@ -58,6 +58,7 @@ struct ACPInitializeOutcome: Equatable {
     let advertisesAuthStatus: Bool
     let supportsSteering: Bool
     let supportsAsyncTasks: Bool
+    let supportsContextBreakdown: Bool
     /// The adapter's self-reported name/version, when it sent `agentInfo`.
     let agentInfo: ACPImplementationInfo?
 
@@ -73,7 +74,8 @@ struct ACPInitializeOutcome: Equatable {
         advertisesAuthStatus: Bool = false,
         agentInfo: ACPImplementationInfo? = nil,
         supportsSteering: Bool = false,
-        supportsAsyncTasks: Bool = false
+        supportsAsyncTasks: Bool = false,
+        supportsContextBreakdown: Bool = false
     ) {
         self.promptCapabilities = promptCapabilities
         self.authMethods = authMethods
@@ -87,6 +89,7 @@ struct ACPInitializeOutcome: Equatable {
         self.agentInfo = agentInfo
         self.supportsSteering = supportsSteering
         self.supportsAsyncTasks = supportsAsyncTasks
+        self.supportsContextBreakdown = supportsContextBreakdown
     }
 }
 
@@ -166,7 +169,8 @@ final class ACPConnection: @unchecked Sendable {
             advertisesAuthStatus: capabilities?.advertisesAuthStatus ?? false,
             agentInfo: result.agentInfo,
             supportsSteering: result.supportsSteering,
-            supportsAsyncTasks: result.meta?.asyncTasks?.supportsStop == true
+            supportsAsyncTasks: result.meta?.asyncTasks?.supportsStop == true,
+            supportsContextBreakdown: result.supportsContextBreakdown
         )
     }
 
@@ -297,6 +301,17 @@ final class ACPConnection: @unchecked Sendable {
             method: "_session/async_task/stop", params: Params(sessionId: sessionId, asyncTaskId: asyncTaskId)))
         defer { response.acknowledgeDurableConsumption() }
         return try JSONDecoder().decode(Result.self, from: response.body).stopped
+    }
+
+    /// `detail: "full"` counts each category with the token-count API;
+    /// `"summary"` estimates locally from the last response's usage.
+    func contextBreakdown(sessionId: String, detail: String) async throws -> ACPContextBreakdown {
+        struct Params: Encodable { let sessionId: String
+        let detail: String }
+        let response = try await client.send(ACPRequest(
+            method: "_alas/context_usage", params: Params(sessionId: sessionId, detail: detail)))
+        defer { response.acknowledgeDurableConsumption() }
+        return try JSONDecoder().decode(ACPContextBreakdown.self, from: response.body)
     }
 
     // ACP wire methods use snake_case (`session/set_mode`,

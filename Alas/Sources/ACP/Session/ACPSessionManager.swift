@@ -6087,6 +6087,7 @@ extension ACPSessionManager {
         session.goalCapability = nil
         session.supportsSteering = false
         session.supportsCodexSteeringCompletion = false
+        session.supportsContextBreakdown = false
         session.availableProviders = []
         session.agentState = .spawning
 
@@ -6388,6 +6389,7 @@ extension ACPSessionManager {
             }
             session.promptCapabilities = initialized.promptCapabilities
             session.supportsSteering = initialized.supportsSteering
+            session.supportsContextBreakdown = initialized.supportsContextBreakdown
             session.supportsCodexSteeringCompletion = (ACPManagedAdapterDescriptor.codex.verifiedPackageNames + ["codex-acp"]).contains(initialized.agentInfo?.name ?? "")
             session.backgroundTaskStopSupported = initialized.supportsAsyncTasks
             session.sessionCapabilities = initialized.sessionCapabilities
