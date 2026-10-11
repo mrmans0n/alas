@@ -4,7 +4,7 @@ import Foundation
 /// `.git` directory. Used by `ProjectGitWatcher` to dispatch fast-path HEAD
 /// updates vs slow-path topology refreshes, and by `WorktreeWatcher` to
 /// share the lockfile rule.
-enum GitEventCategory: Equatable {
+public enum GitEventCategory: Equatable, Sendable {
     case ignored                  // *.lock under .git/ — mid-write, never react
     case headChange(URL)          // worktree root whose HEAD just changed
     case revisionChange           // shared refs moved; tracked revisions may resolve differently
@@ -14,7 +14,7 @@ enum GitEventCategory: Equatable {
     case other                    // unrelated event, caller decides
 }
 
-enum GitEventFilter {
+public enum GitEventFilter {
     /// Classify a single FSEvents path against `gitDir` (an absolute path to
     /// the repo's `.git` directory). For linked worktrees the worktree root
     /// is resolved by reading `.git/worktrees/<name>/gitdir`, which contains
@@ -25,7 +25,7 @@ enum GitEventFilter {
     /// `gitDir` lives outside the worktree, so we cannot infer the worktree
     /// root from `gitDir.deletingLastPathComponent()` — caller must resolve it
     /// via `git rev-parse --show-toplevel` and pass it explicitly.
-    static func classify(eventPath: String, gitDir: URL, worktreeRoot: URL) -> GitEventCategory {
+    public static func classify(eventPath: String, gitDir: URL, worktreeRoot: URL) -> GitEventCategory {
         let gitDirPath = gitDir.standardizedFileURL.path
         let prefix = gitDirPath.hasSuffix("/") ? gitDirPath : gitDirPath + "/"
         guard eventPath == gitDirPath || eventPath.hasPrefix(prefix) else {

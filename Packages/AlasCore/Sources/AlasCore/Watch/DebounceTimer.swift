@@ -1,7 +1,7 @@
 import Foundation
 
-final class DebounceTimer {
-    var onFire: (() -> Void)?
+public final class DebounceTimer {
+    public var onFire: (() -> Void)?
     private let interval: TimeInterval
     private let maxWait: TimeInterval?
     private var workItem: DispatchWorkItem?
@@ -16,13 +16,13 @@ final class DebounceTimer {
     ///   work item. With it, fire happens by `firstPoke + maxWait`
     ///   regardless of subsequent pokes. `nil` keeps the classic
     ///   debounce semantics.
-    init(interval: TimeInterval, queue: DispatchQueue = .main, maxWait: TimeInterval? = nil) {
+    public init(interval: TimeInterval, queue: DispatchQueue = .main, maxWait: TimeInterval? = nil) {
         self.interval = interval
         self.queue = queue
         self.maxWait = maxWait
     }
 
-    func poke() {
+    public func poke() {
         workItem?.cancel()
         let now = Date()
         if firstPokeAt == nil { firstPokeAt = now }
@@ -41,7 +41,7 @@ final class DebounceTimer {
         queue.asyncAfter(deadline: .now() + delay, execute: item)
     }
 
-    func cancel() {
+    public func cancel() {
         workItem?.cancel()
         workItem = nil
         firstPokeAt = nil

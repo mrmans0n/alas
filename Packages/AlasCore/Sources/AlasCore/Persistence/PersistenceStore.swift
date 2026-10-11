@@ -1,6 +1,6 @@
 import Foundation
 
-protocol PersistenceStoreProtocol {
+public protocol PersistenceStoreProtocol {
     func write<T: Encodable>(_ value: T, to url: URL) throws
     func readIfExists<T: Decodable>(_ type: T.Type, from url: URL) throws -> T?
     func readIfExistsReportingRecovery<T: Decodable>(
@@ -9,18 +9,18 @@ protocol PersistenceStoreProtocol {
     ) throws -> PersistenceReadResult<T>
 }
 
-struct PersistenceReadResult<Value> {
-    let value: Value?
-    let recoveryError: Error?
+public struct PersistenceReadResult<Value> {
+    public let value: Value?
+    public let recoveryError: Error?
 
-    init(value: Value?, recoveryError: Error? = nil) {
+    public init(value: Value?, recoveryError: Error? = nil) {
         self.value = value
         self.recoveryError = recoveryError
     }
 }
 
 extension PersistenceStoreProtocol {
-    func readIfExistsReportingRecovery<T: Decodable>(
+    public func readIfExistsReportingRecovery<T: Decodable>(
         _ type: T.Type,
         from url: URL
     ) throws -> PersistenceReadResult<T> {
@@ -28,19 +28,19 @@ extension PersistenceStoreProtocol {
     }
 }
 
-struct PersistenceStore: PersistenceStoreProtocol {
+public struct PersistenceStore: PersistenceStoreProtocol, Sendable {
     private let encoder: JSONEncoder
     private let decoder = JSONDecoder()
 
-    init() {
+    public init() {
         encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         encoder.dateEncodingStrategy = .iso8601
         decoder.dateDecodingStrategy = .iso8601
     }
 
-    func write<T: Encodable>(_ value: T, to url: URL) throws {
-        try Paths.ensureDirectoryExists(url.deletingLastPathComponent())
+    public func write<T: Encodable>(_ value: T, to url: URL) throws {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let data = try encoder.encode(value)
         let tmp = url.deletingLastPathComponent()
             .appendingPathComponent(".\(url.lastPathComponent).\(UUID().uuidString).tmp")
@@ -53,16 +53,16 @@ struct PersistenceStore: PersistenceStoreProtocol {
         }
     }
 
-    func read<T: Decodable>(_ type: T.Type, from url: URL) throws -> T {
+    public func read<T: Decodable>(_ type: T.Type, from url: URL) throws -> T {
         let data = try Data(contentsOf: url)
         return try decoder.decode(T.self, from: data)
     }
 
-    func readIfExists<T: Decodable>(_ type: T.Type, from url: URL) throws -> T? {
+    public func readIfExists<T: Decodable>(_ type: T.Type, from url: URL) throws -> T? {
         try readIfExistsReportingRecovery(type, from: url).value
     }
 
-    func readIfExistsReportingRecovery<T: Decodable>(
+    public func readIfExistsReportingRecovery<T: Decodable>(
         _ type: T.Type,
         from url: URL
     ) throws -> PersistenceReadResult<T> {
