@@ -13577,6 +13577,9 @@ final class AppState {
         Task {
             await previousManagerDisposal?.value
             await mgr.purgeOrphanedEphemeralSessions()
+            if previousManagerDisposal != nil, self.acpManagers[owner] === mgr {
+                await self.bootstrapScheduledACPSessions(owner: owner, manager: mgr)
+            }
         }
         #if DEBUG
         memoryDiagnostics.attach(manager: mgr)

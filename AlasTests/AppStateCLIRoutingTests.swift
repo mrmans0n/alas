@@ -333,6 +333,14 @@ struct AppStateCLIRoutingTests {
         session.transcript.streamingState = .streaming
         let otherSession = manager.createSession(agentId: "pi")
         otherSession.transcript.streamingState = .streaming
+        let scheduledSession = manager.createSession(agentId: "pi")
+        let scheduledAt = Date().addingTimeInterval(3600)
+        let scheduled = manager.submit(
+            sessionId: scheduledSession.id, text: "unmounted scheduled turn", attachments: [],
+            intent: .schedule(scheduledAt), onCompleted: { _ in }
+        )
+        #expect(scheduled)
+        await manager.flushPersistence()
         let moved = Worktree(
             id: worktree.id, projectId: repository.id, name: worktree.name,
             branch: "main", path: worktree.path, status: .clean,
@@ -372,6 +380,13 @@ struct AppStateCLIRoutingTests {
         let restored = try #require(rebound.placeholderSession(id: session.id))
         await rebound.hydrateIfNeeded(id: session.id)
         #expect(restored.title == "Moved session")
+        #expect(await awaitCondition(within: .seconds(5)) {
+            rebound.liveSession(for: scheduledSession.id)?.queue.first?.scheduledAt == scheduledAt
+        })
+        #expect(!state.tabs.tabs(forWorktree: worktree.id).contains {
+            if case .acpSession(let tab) = $0 { return tab.sessionId == scheduledSession.id }
+            return false
+        })
         let remotes = try await rebound.upstreamReferences.environment.remotes(path)
         #expect(Set(remotes.map(\.name)) == ["origin"])
         let accepted = manager.submit(sessionId: session.id, text: "later turn", attachments: [],
