@@ -306,7 +306,8 @@ public final class ACPSessionManager: ObservableObject {
     private var mergingForks: Set<ACPSession.ID> = []
     private var scheduledReconnectTasks: [ACPSession.ID: (deadline: Date, task: Task<Void, Never>)] = [:]
     private var managerQueuePersistenceCounts: [ACPSession.ID: Int] = [:]
-    private var disposalTasks: [ACPSession.ID: Task<Void, Error>] = [:]
+    @Published private var disposalTasks: [ACPSession.ID: Task<Void, Error>] = [:]
+    @Published private var activeSessionDeletionCount = 0
     /// Per-session attach counter. The built-in MCP registration grace timer
     /// captures the epoch at attach and only writes the row if it still matches,
     /// so a timer from a superseded attach can never clobber the current state.
@@ -1767,7 +1768,8 @@ public final class ACPSessionManager: ObservableObject {
 
     public var isIdleForProjectRebinding: Bool {
         !isDisposed && attachingSessions.isEmpty && restartingConnections.isEmpty
-            && autoReconnectTasks.isEmpty
+            && autoReconnectTasks.isEmpty && disposalTasks.isEmpty
+            && activeSessionDeletionCount == 0
             && runners.values.allSatisfy { !$0.hasRetainedCleanupPromptWork }
             && sessions.values.allSatisfy {
                 $0.hydrationState != .loading && $0.agentState != .spawning
@@ -1789,6 +1791,7 @@ public final class ACPSessionManager: ObservableObject {
                 .eraseToAnyPublisher()
         }
         .switchToLatest()
+        .combineLatest($disposalTasks, $activeSessionDeletionCount)
         .receive(on: DispatchQueue.main)
         .map { [weak self] _ in self?.isIdleForProjectRebinding == true }
         .removeDuplicates()
@@ -2979,6 +2982,8 @@ public final class ACPSessionManager: ObservableObject {
     }
 
     public func deletePersistedSession(id: ACPSession.ID) async throws {
+        activeSessionDeletionCount += 1
+        defer { activeSessionDeletionCount -= 1 }
         // A side session can't outlive its parent; nothing could reach it.
         await dismissSideQuestion(parentID: id)
         try await disposeSession(id: id)

@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 import Testing
 @testable import Alas
 
@@ -257,10 +258,27 @@ struct ACPSessionManagerDisposalTests {
     @Test("local history deletion disposes an attached session")
     func localHistoryDeletionUsesDisposal() async throws {
         let client = ACPMockClient()
-        client.script(method: "session/close") { _ in Data("{}".utf8) }
+        let closeStarted = AsyncStream<Void>.makeStream()
+        let releaseClose = AsyncStream<Void>.makeStream()
+        client.scriptAsync(method: "session/close") { _ in
+            closeStarted.continuation.yield()
+            for await _ in releaseClose.stream { break }
+            return Data("{}".utf8)
+        }
         let (manager, store, session) = try await attachedManager(client: client, supportsClose: true)
 
-        try await manager.deleteSession(id: session.id)
+        var readiness: Bool?
+        let subscription = manager.projectRebindingReadiness.sink { readiness = $0 }
+        defer { subscription.cancel() }
+        let deletion = Task { @MainActor in try await manager.deleteSession(id: session.id) }
+        for await _ in closeStarted.stream { break }
+        #expect(manager.runners[session.id] == nil)
+        #expect(!manager.isIdleForProjectRebinding)
+        #expect(await awaitCondition(within: .seconds(1)) { readiness == false })
+        #expect(try store.loadSession(id: session.id) != nil)
+        releaseClose.continuation.yield()
+        try await deletion.value
+        #expect(await awaitCondition { readiness == true })
 
         #expect(client.sent.map(\.method).filter { $0 == "session/close" }.count == 1)
         #expect(manager.runners[session.id] == nil)
