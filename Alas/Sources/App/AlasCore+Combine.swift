@@ -107,3 +107,21 @@ extension SessionSummaryCoordinator: @retroactive ObservableObject {
 extension StreamingText: @retroactive ObservableObject {
     public nonisolated var objectWillChange: ObservableObjectPublisher { willChange.objectWillChangePublisher }
 }
+
+extension ACPSessionManager {
+    /// Session activity fires before setters finish. Resolve readiness on the
+    /// next main-queue turn, including activity in tabs that are not mounted.
+    public var projectRebindingReadiness: AnyPublisher<Bool, Never> {
+        $sessions.map { sessions in
+            Publishers.MergeMany(sessions.values.map { $0.nextPromptActivity })
+                .prepend(())
+                .eraseToAnyPublisher()
+        }
+        .switchToLatest()
+        .merge(with: projectRebindingActivity)
+        .receive(on: DispatchQueue.main)
+        .map { [weak self] _ in self?.isIdleForProjectRebinding == true }
+        .removeDuplicates()
+        .eraseToAnyPublisher()
+    }
+}

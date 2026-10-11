@@ -306,8 +306,13 @@ public final class ACPSessionManager: ChangeTracking {
     private var mergingForks: Set<ACPSession.ID> = []
     private var scheduledReconnectTasks: [ACPSession.ID: (deadline: Date, task: Task<Void, Never>)] = [:]
     private var managerQueuePersistenceCounts: [ACPSession.ID: Int] = [:]
-    @Published private var disposalTasks: [ACPSession.ID: Task<Void, Error>] = [:]
-    @Published private var activeSessionDeletionCount = 0
+    public let projectRebindingActivity = ChangeSignal<Void>()
+    private var disposalTasks: [ACPSession.ID: Task<Void, Error>] = [:] {
+        willSet { projectRebindingActivity.send() }
+    }
+    private var activeSessionDeletionCount = 0 {
+        willSet { projectRebindingActivity.send() }
+    }
     /// Per-session attach counter. The built-in MCP registration grace timer
     /// captures the epoch at attach and only writes the row if it still matches,
     /// so a timer from a superseded attach can never clobber the current state.
@@ -1780,22 +1785,6 @@ public final class ACPSessionManager: ChangeTracking {
                     && $0.pendingQueuePersistenceCount == 0
                     && !$0.queue.contains { $0.status == .sending }
             }
-    }
-
-    /// Session activity fires before setters finish. Resolve readiness on the
-    /// next main-queue turn, including activity in tabs that are not mounted.
-    public var projectRebindingReadiness: AnyPublisher<Bool, Never> {
-        $sessions.map { sessions in
-            Publishers.MergeMany(sessions.values.map { $0.nextPromptActivity })
-                .prepend(())
-                .eraseToAnyPublisher()
-        }
-        .switchToLatest()
-        .combineLatest($disposalTasks, $activeSessionDeletionCount)
-        .receive(on: DispatchQueue.main)
-        .map { [weak self] _ in self?.isIdleForProjectRebinding == true }
-        .removeDuplicates()
-        .eraseToAnyPublisher()
     }
 
     public func activeCheckpointWriterLeaseCount() -> Int {
