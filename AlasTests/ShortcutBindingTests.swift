@@ -88,4 +88,10 @@ struct ShortcutBindingTests {
         #expect(binding == .init(key: "P", modifiers: [.command]))
         #expect(binding.asKeyboardShortcut() == shortcut)
     }
+
+    @Test(arguments: ["return", "leftArrow", "space", "tab", "p", "P", "7", "/", "`", "f1", "", "pageDown", "é", "ß", "ab"])
+    func supportedKeyMatchesKeyboardShortcutConversion(key: String) {
+        let binding = ShortcutBinding(key: key, modifiers: [.command])
+        #expect(binding.hasSupportedKey == (binding.asKeyboardShortcut() != nil))
+    }
 }
