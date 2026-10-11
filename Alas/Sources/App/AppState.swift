@@ -986,14 +986,20 @@ final class AppState {
                 switch serve {
                 case .off where want, .ours where want:
                     if let port, serve != .ours(port: port) {
-                        // Reserve ownership before the route can exist, so a
-                        // quit mid-enable still finds and removes it; a failed
-                        // enable is observed as off next sync and cleared.
-                        servedPort = port
-                        config.remote.tailscaleServedPort = port
-                        saveConfig()
+                        if serve == .off {
+                            // Reserve ownership before the route can exist, so a
+                            // quit mid-enable still finds and removes it; a failed
+                            // enable is observed as off next sync and cleared.
+                            servedPort = port
+                            config.remote.tailscaleServedPort = port
+                            saveConfig()
+                        }
+                        // Retargeting keeps the old port on record until it
+                        // succeeds: a failed retarget leaves the route there.
+                        // Quit cleanup also checks the bound port.
                         try await RemoteTailscale.enableServe(port: port)
                         serve = .ours(port: port)
+                        servedPort = port
                     }
                 case .ours where !want:
                     try await RemoteTailscale.disableServe()
