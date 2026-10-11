@@ -999,7 +999,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
     private func configurationValue(scope: String?, section: String?, key: Key) -> LSPJSONValue {
         guard let scope, let holder = holders[key], holder.openedURIs.contains(scope),
               let text = holder.texts[scope] else { return .null }
-        let options = RenameFeature.formattingOptions(text: text)
+        let options = LSPFormattingOptions.inferred(from: text)
         switch section {
         case "editor": return .object(["tabSize": .number(String(options.tabSize)), "insertSpaces": .bool(options.insertSpaces)])
         case "editor.tabSize": return .number(String(options.tabSize))

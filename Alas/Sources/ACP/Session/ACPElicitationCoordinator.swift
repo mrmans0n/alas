@@ -1,4 +1,3 @@
-import AppKit
 import Foundation
 
 @MainActor
@@ -25,20 +24,8 @@ final class ACPElicitationCoordinator {
     init(
         session: ACPSession,
         client: ACPClient,
-        launchBrowser: @escaping (URL) async -> Bool = { url in
-            guard let applicationURL = NSWorkspace.shared.urlForApplication(toOpen: url) else {
-                return false
-            }
-            return await withCheckedContinuation { continuation in
-                NSWorkspace.shared.openApplication(
-                    at: applicationURL,
-                    configuration: .init()
-                ) { application, error in
-                    continuation.resume(returning: application != nil && error == nil)
-                }
-            }
-        },
-        navigateURL: @escaping (URL) -> Void = { _ = NSWorkspace.shared.open($0) },
+        launchBrowser: @escaping (URL) async -> Bool = { await URLOpening.shared.launchHandler($0) },
+        navigateURL: @escaping (URL) -> Void = { URLOpening.shared.open($0) },
         onInputAwaiting: @escaping (ACPSession, ACPUserInputRequest) -> Void = { _, _ in },
         onInputResolved: @escaping () -> Void = {},
         onPlanAwaiting: @escaping (ACPSession, ACPCursorPlanRequest) -> Void = { _, _ in },

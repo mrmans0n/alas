@@ -82,8 +82,8 @@ struct RenameFeatureTests {
     }
 
     @Test func indentationMatchesEditor() {
-        #expect(RenameFeature.formattingOptions(text: "x\n  y").tabSize == 2)
-        #expect(RenameFeature.formattingOptions(text: "x\n\ty").insertSpaces == false)
+        #expect(LSPFormattingOptions.inferred(from: "x\n  y").tabSize == 2)
+        #expect(LSPFormattingOptions.inferred(from: "x\n\ty").insertSpaces == false)
     }
 
     @Test func prepareCapabilityAndRangeFormatting() async throws {

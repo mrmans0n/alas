@@ -60,11 +60,6 @@ final class RenameFeature {
         return PreparedSymbol(name: placeholder ?? (text as NSString).substring(with: range), range: range)
     }
 
-    static func formattingOptions(text: String) -> LSPFormattingOptions {
-        let unit = IndentationHelper.indentUnit(in: text)
-        return LSPFormattingOptions(tabSize: unit == "\t" ? 4 : unit.count, insertSpaces: unit != "\t")
-    }
-
     static func message(for error: any Swift.Error) -> String {
         if case LSPError.responseError(let response) = error { return response.message }
         return error.localizedDescription
@@ -140,7 +135,7 @@ final class RenameFeature {
             guard let self, let request = await synchronize(range), let textView,
                   id == requestID, isCurrent(request.1) else { return }
             let generations = tabs.workspaceEditGenerations(host: request.1.document.host, worktreeID: request.1.document.worktreeID)
-            let options = Self.formattingOptions(text: textView.sourceString)
+            let options = LSPFormattingOptions.inferred(from: textView.sourceString)
             do {
                 let edits = try await selectionOnly
                     ? request.0.rangeFormatting(uri: request.1.document.uri, range: request.1.range, options: options)

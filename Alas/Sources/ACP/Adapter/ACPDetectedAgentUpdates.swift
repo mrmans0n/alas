@@ -171,7 +171,7 @@ struct ACPDetectedAgentUpdater: Sendable {
               case .binaryOnPath(let name) = spec.setupCheck
         else { return nil }
         if let override = binaryOverride.flatMap({
-            AppState.normalizedACPBinaryOverride($0, remoteHome: nil)
+            ACPBinaryOverride.normalized($0, remoteHome: nil)
         }) {
             return override
         }
