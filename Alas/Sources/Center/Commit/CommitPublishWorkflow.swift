@@ -203,7 +203,7 @@ struct CommitPublishOperations {
                 let result = try await run(["push", "-u", remote, ref])
                 guard result.exitCode == 0 else {
                     throw NSError(domain: "CommitPublish", code: Int(result.exitCode),
-                        userInfo: [NSLocalizedDescriptionKey: RightPaneState.reviewLoopPushFailureMessage(result)])
+                        userInfo: [NSLocalizedDescriptionKey: result.pushFailureMessage])
                 }
             },
             configureUpstreamTracking: { target in

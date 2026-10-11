@@ -1,11 +1,6 @@
 import Foundation
 import SwiftUI
 
-enum CommitComposerActionPosition: Sendable {
-    case leading
-    case trailing
-}
-
 enum CommitComposerActionBadgeColor: Equatable, Sendable {
     case systemWhite
     case systemBlack

@@ -18,11 +18,6 @@ protocol WorktreeCheckpointServicing: Sendable {
                                    coordination: CheckpointCoordinationSnapshot) async throws -> CheckpointRestoreResult
 }
 
-enum CheckpointCaptureError: Error, Equatable, Sendable {
-    case unstableWorktree
-    case missingSelectedPath(String)
-}
-
 struct CheckpointCaptureHooks: Sendable {
     let afterPayloadStaging: @Sendable (Int) async throws -> Void
     static let none = Self(afterPayloadStaging: { _ in })

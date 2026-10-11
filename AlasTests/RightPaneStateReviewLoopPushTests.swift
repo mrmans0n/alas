@@ -379,7 +379,7 @@ struct RightPaneStateReviewLoopPushTests {
             stderr: " fatal: no upstream \n"
         )
 
-        #expect(RightPaneState.reviewLoopPushFailureMessage(result) == "fatal: no upstream")
+        #expect(result.pushFailureMessage == "fatal: no upstream")
     }
 
     @Test func pushFailureMessageUsesStdoutWhenStderrIsEmpty() {
@@ -389,13 +389,13 @@ struct RightPaneStateReviewLoopPushTests {
             stderr: ""
         )
 
-        #expect(RightPaneState.reviewLoopPushFailureMessage(result) == "rejected by remote")
+        #expect(result.pushFailureMessage == "rejected by remote")
     }
 
     @Test func pushFailureMessageFallsBackToExitCode() {
         let result = ProcessResult(exitCode: 1, stdout: "", stderr: "")
 
-        #expect(RightPaneState.reviewLoopPushFailureMessage(result) == "git push failed with exit code 1.")
+        #expect(result.pushFailureMessage == "git push failed with exit code 1.")
     }
 
     private static func makeRemoteFingerprint(headSHA: String) -> ReviewLoopRemoteFingerprint {

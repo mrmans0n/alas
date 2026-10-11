@@ -1302,7 +1302,7 @@ final class RightPaneState: GGSplitCommitServicing {
         do {
             let result = try await push()
             guard result.exitCode == 0 else {
-                sidebarError = Self.reviewLoopPushFailureMessage(result)
+                sidebarError = result.pushFailureMessage
                 return
             }
             let refreshed = await refresh()
@@ -1375,14 +1375,6 @@ final class RightPaneState: GGSplitCommitServicing {
         let pushRef = snapshot.local.upstreamBranchName.map { "HEAD:\($0)" } ?? snapshot.local.branchName
         args.append(contentsOf: ["-u", remoteName, pushRef])
         return args
-    }
-
-    nonisolated static func reviewLoopPushFailureMessage(_ result: ProcessResult) -> String {
-        let stderr = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !stderr.isEmpty { return stderr }
-        let stdout = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !stdout.isEmpty { return stdout }
-        return "git push failed with exit code \(result.exitCode)."
     }
 
     nonisolated static func reviewLoopAheadCommitCount(
