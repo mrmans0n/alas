@@ -44,40 +44,89 @@ struct GGCommandRunningStreamingTests {
 
     private struct TimeoutError: Error {}
 
-    /// The two detached-child watchdog tests below need their Python child to
-    /// reach `signal.signal(SIGTERM, ...)` *before* the production watchdog
-    /// fires. A SIGTERM that lands earlier hits the default disposition and
-    /// kills the child outright, so the detached grandchild those tests are
-    /// actually about never gets forked and its PID file is never written —
-    /// the test then fails on a missing file, which looks nothing like the
-    /// process leak it is meant to catch.
-    ///
-    /// `/usr/bin/python3` itself only takes ~60-170ms to get from `exec()` to
-    /// that line even under heavy CPU contention, so the original 0.2s budget
-    /// being a near-miss on a busy CI host isn't just process-startup cost:
-    /// the watchdog's `Task.sleep` fires on a real-time timer independent of
-    /// scheduling pressure, but the synchronous work between arming it and
-    /// releasing the launch gate (`processTree.start`, installing handlers)
-    /// still has to get a thread from Swift's cooperative pool first — under
-    /// heavy contention that alone measurably eats into the budget before the
-    /// child even execs. 1.5s was still observed to fail under sustained
-    /// heavy load; keep enough headroom that both sources of delay have to
-    /// stack up badly to matter.
-    private static let detachedChildWatchdogTimeout: TimeInterval = 3
-
     /// SIGTERM grace for the detached-child tests, standing in for the
     /// production 2s. The children under test ignore SIGTERM, so the grace
     /// always runs to completion; it only has to outlast the fork that
     /// spawns the detached child, which takes milliseconds.
     private static let detachedChildTerminationGrace: UInt64 = 500_000_000
 
-    /// Worst case for a `detachedChildWatchdogTimeout` run: the timeout
-    /// itself, then `terminateAndWait`'s SIGTERM grace (at most the
-    /// production 2s), its 1s SIGKILL sweep, and the termination handler's
-    /// 2s stdout/stderr EOF wait. Tripping this ceiling early would cancel
-    /// the stream and change the very termination path under test, so leave
-    /// real headroom over that ~8s.
-    private static let detachedChildCollectCeiling: UInt64 = 15
+    private func fixturePID(at file: URL) -> pid_t? {
+        guard let text = try? String(contentsOf: file, encoding: .utf8),
+              let pid = pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)),
+              pid > 0 else { return nil }
+        return pid
+    }
+
+    private func waitForFixture(_ condition: () -> Bool) async throws {
+        let deadline = ContinuousClock.now + .seconds(30)
+        while !condition() {
+            guard ContinuousClock.now < deadline else { throw TimeoutError() }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
+    /// Startup is outside the termination grace. The watchdog's timer is
+    /// covered separately; these fixtures exercise its real SIGTERM cleanup
+    /// after the Python handlers and detached launcher report readiness.
+    private func terminateReadyProcessTree(
+        script: String,
+        environment: [String: String],
+        childPIDFile: URL,
+        graceNanoseconds: UInt64
+    ) async throws -> pid_t {
+        let rootPIDFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-gg-root-\(UUID().uuidString).pid")
+        let readyFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-gg-ready-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: rootPIDFile) }
+        defer { try? FileManager.default.removeItem(at: readyFile) }
+        var env = environment
+        let treeID = UUID().uuidString
+        env["ALAS_GG_PROCESS_TREE_ID"] = treeID
+        env["ROOT_PID_FILE"] = rootPIDFile.path
+        env["ROOT_READY"] = readyFile.path
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = [
+            "-c", #"/usr/bin/python3 -c "$1" & wait "$!""#,
+            "alas-process-tree-fixture",
+            "import os\nos.setsid()\nopen(os.environ['ROOT_PID_FILE'], 'w').write(str(os.getpid()))\n" + script,
+        ]
+        process.environment = env
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.standardError
+        let tree = GGStreamingProcessTree(
+            process: process,
+            environmentMarker: "ALAS_GG_PROCESS_TREE_ID=\(treeID)"
+        )
+        process.terminationHandler = { [weak tree] _ in tree?.rootDidExit() }
+        try process.run()
+        var transferredChild = false
+        defer {
+            for identity in ACPTerminal.collectChildDescendants(of: process.processIdentifier) {
+                if ACPTerminal.currentlyMatching([identity]).contains(identity) { kill(identity.pid, SIGKILL) }
+            }
+            if !transferredChild, let pid = fixturePID(at: childPIDFile) { kill(pid, SIGKILL) }
+            if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+            process.waitUntilExit()
+        }
+        try await waitForFixture { fixturePID(at: rootPIDFile) != nil || !process.isRunning }
+        let rootPID = try #require(fixturePID(at: rootPIDFile))
+        let rootIdentity = try #require(ACPTerminal.childProcessKey(of: rootPID, parentPID: process.processIdentifier))
+        let wrapperIdentity = try #require(ACPTerminal.processKey(of: process.processIdentifier))
+        tree.start(rootIdentity: rootIdentity, wrapperIdentity: wrapperIdentity)
+        do {
+            try await waitForFixture { FileManager.default.fileExists(atPath: readyFile.path) || !process.isRunning }
+            try #require(FileManager.default.fileExists(atPath: readyFile.path))
+        } catch {
+            await BlockingWork.run { tree.terminateAndWait(graceNanoseconds: graceNanoseconds) }
+            throw error
+        }
+        await BlockingWork.run { tree.terminateAndWait(graceNanoseconds: graceNanoseconds) }
+        let childPID = try #require(fixturePID(at: childPIDFile))
+        transferredChild = true
+        return childPID
+    }
 
     @Test func terminationHandlerDoesNotRetainProcessTree() throws {
         let root = URL(fileURLWithPath: #filePath)
@@ -334,45 +383,38 @@ struct GGCommandRunningStreamingTests {
         #expect(FileManager.default.fileExists(atPath: marker.path))
     }
 
-    @Test func watchdogKillsDetachedChildSpawnedByTerminationHandler() async throws {
+    @Test func terminationKillsDetachedChildSpawnedByTerminationHandler() async throws {
         let childPIDFile = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-gg-term-child-\(UUID().uuidString).pid")
         defer { try? FileManager.default.removeItem(at: childPIDFile) }
         var env = ProcessInfo.processInfo.environment
         env["CHILD_PID_FILE"] = childPIDFile.path
-        let script = #"import os,signal,time; handler=lambda *_: spawn(); spawn=lambda: (os.fork() and os._exit(0)) or (os.setsid(), signal.signal(signal.SIGTERM, signal.SIG_IGN), open(os.environ['CHILD_PID_FILE'],'w').write(str(os.getpid())), time.sleep(30)); signal.signal(signal.SIGTERM, handler); time.sleep(30)"#
-        let stream = ProcessGGCommandRunner.streamProcess(
-            executable: "/usr/bin/python3",
-            args: ["-c", script],
-            cwd: nil,
-            env: env,
-            timeout: Self.detachedChildWatchdogTimeout,
-            terminationGraceNanoseconds: Self.detachedChildTerminationGrace
+        let script = #"""
+        import os, signal, time
+        def spawn(*_):
+            signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
+            if os.fork():
+                os._exit(0)
+            os.setsid()
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+            open(os.environ['CHILD_PID_FILE'], 'w').write(str(os.getpid()))
+            signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM})
+            time.sleep(30)
+        signal.signal(signal.SIGTERM, spawn)
+        open(os.environ['ROOT_READY'], 'w').write('ready')
+        time.sleep(30)
+        """#
+        let childPID = try await terminateReadyProcessTree(
+            script: script,
+            environment: env,
+            childPIDFile: childPIDFile,
+            graceNanoseconds: Self.detachedChildTerminationGrace
         )
-
-        _ = try? await collectWithTimeout(stream, seconds: Self.detachedChildCollectCeiling)
-        // The detached grandchild writes this file itself, on its own fork
-        // chain, so it can still be a few milliseconds from existing the
-        // instant `collectWithTimeout` returns. Poll rather than read once.
-        var discoveredChildPID: pid_t?
-        for _ in 0 ..< 50 {
-            if let text = try? String(contentsOf: childPIDFile, encoding: .utf8),
-               let pid = pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines))
-            {
-                discoveredChildPID = pid
-                break
-            }
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
-        let childPID = try #require(discoveredChildPID)
         defer { kill(childPID, SIGKILL) }
-        for _ in 0 ..< 50 where kill(childPID, 0) == 0 {
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
         #expect(kill(childPID, 0) == -1 && errno == ESRCH)
     }
 
-    @Test func watchdogGracefullyTerminatesLateDetachedChild() async throws {
+    @Test func terminationGracefullyTerminatesLateDetachedChild() async throws {
         let termMarker = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-gg-late-term-\(UUID().uuidString)")
         let launcherReady = FileManager.default.temporaryDirectory
@@ -413,35 +455,18 @@ struct GGCommandRunningStreamingTests {
             time.sleep(30)
         while not os.path.exists(os.environ['LAUNCHER_READY']):
             time.sleep(0.01)
+        open(os.environ['ROOT_READY'], 'w').write('ready')
         time.sleep(30)
         """#
-        let stream = ProcessGGCommandRunner.streamProcess(
-            executable: "/usr/bin/python3",
-            args: ["-c", script],
-            cwd: nil,
-            env: env,
-            timeout: Self.detachedChildWatchdogTimeout,
+        let childPID = try await terminateReadyProcessTree(
+            script: script,
+            environment: env,
+            childPIDFile: childPIDFile,
             // The late child is only found by the 100ms environment scan and
             // must get its SIGTERM *within* the grace for the marker to be
             // written, so give it several scans' worth, not the bare minimum.
-            terminationGraceNanoseconds: 1_000_000_000
+            graceNanoseconds: 1_000_000_000
         )
-
-        _ = try? await collectWithTimeout(stream, seconds: Self.detachedChildCollectCeiling)
-        // Same race as watchdogKillsDetachedChildSpawnedByTerminationHandler
-        // above: the grandchild writes this file itself, on its own delayed
-        // fork chain. Poll rather than read once.
-        var discoveredChildPID: pid_t?
-        for _ in 0 ..< 50 {
-            if let text = try? String(contentsOf: childPIDFile, encoding: .utf8),
-               let pid = pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines))
-            {
-                discoveredChildPID = pid
-                break
-            }
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
-        let childPID = try #require(discoveredChildPID)
         defer { kill(childPID, SIGKILL) }
         #expect(FileManager.default.fileExists(atPath: termMarker.path))
         #expect(kill(childPID, 0) == -1 && errno == ESRCH)

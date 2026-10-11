@@ -8845,7 +8845,7 @@ extension ACPSessionManager {
     /// never fires (superseded prompt) keeps the answer.
     func answerVisualAid(id visualId: UUID, answer: ACPVisualAid.Answer, in sessionId: ACPSession.ID) async -> Bool {
         // The wait comes before every guard and before the synchronous mutation below, so two answers
-        // that wait together resume in order and the second finds the first one's answer.
+        // that wait together compete for the synchronous mutation; the loser finds the winner's answer.
         guard let firstWriteRunner = runners[sessionId],
               await firstWriteRunner.awaitVisualAidFirstWrite(id: visualId)
         else { return false }

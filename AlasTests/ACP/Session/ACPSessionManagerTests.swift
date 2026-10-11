@@ -1970,18 +1970,21 @@ struct ACPSessionManagerTests {
         let show = Task { @MainActor in await manager.showVisualAid(visual, in: session.id) }
         await initialWrite.waitUntilEntered()
         let answer = ACPVisualAid.Answer.dismissed(at: Date(timeIntervalSince1970: 1))
-        // Unstructured tasks may start in any order; queue the second answer only behind the first.
+        // Both answers must be waiting before the first write lands; resumption order is unspecified.
         let answering = Task { @MainActor in await manager.answerVisualAid(id: visual.id, answer: answer, in: session.id) }
         #expect(await awaitCondition { runner.visualAidFirstWriteWaiterCountForTesting(id: visual.id) == 1 })
-        let second = Task { @MainActor in await manager.answerVisualAid(id: visual.id, answer: .dismissed(at: Date(timeIntervalSince1970: 2)), in: session.id) }
+        let otherAnswer = ACPVisualAid.Answer.dismissed(at: Date(timeIntervalSince1970: 2))
+        let second = Task { @MainActor in await manager.answerVisualAid(id: visual.id, answer: otherAnswer, in: session.id) }
         #expect(await awaitCondition { runner.visualAidFirstWriteWaiterCountForTesting(id: visual.id) == 2 })
         await initialWrite.release()
 
         #expect(await show.value)
-        #expect(await answering.value)
-        #expect(await second.value == false)
-        #expect(session.transcript.visualAid(id: visual.id)?.answer == answer)
-        #expect(try storedVisualAids(store, sessionId: session.id).first?.answer == answer)
+        let firstSucceeded = await answering.value
+        let secondSucceeded = await second.value
+        #expect(firstSucceeded != secondSucceeded)
+        let winningAnswer = firstSucceeded ? answer : otherAnswer
+        #expect(session.transcript.visualAid(id: visual.id)?.answer == winningAnswer)
+        #expect(try storedVisualAids(store, sessionId: session.id).first?.answer == winningAnswer)
     }
 
     @Test("an answer cancelled while the card's first write is held stores nothing, sends nothing and leaves the card answerable")
