@@ -1,6 +1,6 @@
 import Foundation
 
-enum SQLiteError: Error, LocalizedError {
+public enum SQLiteError: Error, LocalizedError, Sendable {
     case openFailed(code: Int32, message: String)
     case prepareFailed(code: Int32, message: String, sql: String)
     case stepFailed(code: Int32, message: String, sql: String)
@@ -10,7 +10,7 @@ enum SQLiteError: Error, LocalizedError {
     // user-facing alerts (e.g. "Run History Failed"), and a raw multi-line
     // SQL statement isn't actionable there. The full statement is still
     // available via `String(describing:)` for diagnostic logging.
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .openFailed(_, let m): return "sqlite open failed: \(m)"
         case .prepareFailed(_, let m, _): return "sqlite prepare failed: \(m)"

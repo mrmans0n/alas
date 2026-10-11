@@ -16,6 +16,8 @@ settings:
     GENERATE_INFOPLIST_FILE: NO
 
 packages:
+  AlasCore:
+    path: Packages/AlasCore
   MLXSwiftLM:
     url: https://github.com/ml-explore/mlx-swift-lm
     exactVersion: 3.31.4
@@ -99,6 +101,8 @@ targets:
       - sdk: AppIntents.framework
       - sdk: Carbon.framework
       - sdk: libsqlite3.tbd
+      - package: AlasCore
+        product: AlasCore
       - package: MLXSwift
         product: MLX
       - package: MLXSwiftLM

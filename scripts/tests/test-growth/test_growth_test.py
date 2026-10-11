@@ -58,8 +58,8 @@ class TestGrowthReport(unittest.TestCase):
 
         stdout, summary = self.run_report(actions=True)
 
-        self.assertIn("| Test lines (`AlasTests`) | 4 | 0 | +4 |", stdout)
-        self.assertIn("| App lines (`Alas`) | 1 | 1 | +0 |", stdout)
+        self.assertIn("| Test lines | 4 | 0 | +4 |", stdout)
+        self.assertIn("| App lines | 1 | 1 | +0 |", stdout)
         self.assertIn("`@Test` definitions: 1 → 3 (+2).", stdout)
         self.assertIn("::notice title=Test growth::", stdout)
         self.assertIn("## Test growth", summary.read_text())
@@ -72,6 +72,19 @@ class TestGrowthReport(unittest.TestCase):
 
         self.assertIn("`@Test` definitions: 1 → 0 (-1).", stdout)
         self.assertNotIn("::notice", stdout)
+
+    def test_moving_code_into_the_core_package_is_not_counted_as_removal(self):
+        for source, destination in (("AlasTests/AppTests.swift", "Packages/AlasCore/Tests/AlasCoreTests/AppTests.swift"),
+                                    ("Alas/App.swift", "Packages/AlasCore/Sources/AlasCore/App.swift")):
+            (self.repo / destination).parent.mkdir(parents=True, exist_ok=True)
+            git(self.repo, "mv", source, destination)
+        git(self.repo, "commit", "-q", "-m", "move to core")
+
+        stdout, _ = self.run_report()
+
+        self.assertRegex(stdout, r"\| Test lines \| \d+ \| \d+ \| \+0 \|")
+        self.assertRegex(stdout, r"\| App lines \| \d+ \| \d+ \| \+0 \|")
+        self.assertIn("`@Test` definitions: 1 → 1 (+0).", stdout)
 
     def test_outside_actions_prints_the_report_without_annotations(self):
         write(self.repo, "AlasTests/MoreTests.swift", "@Test func more() {}\n")

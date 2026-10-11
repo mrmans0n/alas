@@ -1,12 +1,12 @@
 import Foundation
 import SQLite3
 
-final class SQLiteStatement {
+public final class SQLiteStatement {
     private let db: OpaquePointer
     private let handle: OpaquePointer
     private let sql: String
 
-    init(db: OpaquePointer, sql: String) throws {
+    public init(db: OpaquePointer, sql: String) throws {
         self.db = db
         self.sql = sql
         var h: OpaquePointer?
@@ -19,7 +19,7 @@ final class SQLiteStatement {
 
     deinit { sqlite3_finalize(handle) }
 
-    func bind(_ values: [Any?]) throws {
+    public func bind(_ values: [Any?]) throws {
         for (i, v) in values.enumerated() {
             let idx = Int32(i + 1)
             let rc: Int32
@@ -43,7 +43,7 @@ final class SQLiteStatement {
     }
 
     /// Steps until completion (for `INSERT` / `UPDATE` / DDL).
-    func run() throws {
+    public func run() throws {
         let rc = sqlite3_step(handle)
         if rc != SQLITE_DONE && rc != SQLITE_ROW {
             throw SQLiteError.stepFailed(code: rc, message: String(cString: sqlite3_errmsg(db)), sql: sql)
@@ -51,7 +51,7 @@ final class SQLiteStatement {
     }
 
     /// Steps and yields each row as `[String: Any?]`.
-    func rows() throws -> [[String: Any?]] {
+    public func rows() throws -> [[String: Any?]] {
         var out: [[String: Any?]] = []
         while true {
             let rc = sqlite3_step(handle)

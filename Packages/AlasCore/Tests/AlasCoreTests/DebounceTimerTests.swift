@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-@testable import Alas
+@testable import AlasCore
 
 struct DebounceTimerTests {
     // Reference type so the closure mutation propagates without capture warnings.

@@ -119,7 +119,7 @@ struct LSPTransportFramingTests {
 struct ProcessTransportTerminationTests {
     @Test("LSPTransport snapshots live descendants before signaling root")
     func lspSnapshotsDescendantsBeforeRootSignal() throws {
-        let source = try source(named: "Code/LSP/LSPTransport.swift")
+        let source = try source(named: "Alas/Sources/Code/LSP/LSPTransport.swift")
         #expect(source.requiresLiveDescendantSnapshotBeforeRootSignal())
         #expect(source.validatesCachedDescendantsBeforeKilling())
         #expect(source.signalsProcessGroupFromTerminationHandler())
@@ -138,7 +138,7 @@ struct ProcessTransportTerminationTests {
 
     @Test("JSONRPCStdioTransport snapshots live descendants before signaling root")
     func jsonrpcSnapshotsDescendantsBeforeRootSignal() throws {
-        let source = try source(named: "JSONRPC/JSONRPCStdioTransport.swift")
+        let source = try source(named: "Packages/AlasCore/Sources/AlasCore/JSONRPC/JSONRPCStdioTransport.swift")
         #expect(source.requiresLiveDescendantSnapshotBeforeRootSignal())
         #expect(source.validatesCachedDescendantsBeforeKilling())
         #expect(source.signalsProcessGroupFromTerminationHandler())
@@ -156,8 +156,8 @@ struct ProcessTransportTerminationTests {
 
     @Test("Local ACP helper termination preserves detached broker supervisors")
     func localACPHelperPreservesBrokerSupervisors() throws {
-        let transportSource = try source(named: "JSONRPC/JSONRPCStdioTransport.swift")
-        let brokerSource = try source(named: "ACP/Broker/LocalACPBrokerService.swift")
+        let transportSource = try source(named: "Packages/AlasCore/Sources/AlasCore/JSONRPC/JSONRPCStdioTransport.swift")
+        let brokerSource = try source(named: "Alas/Sources/ACP/Broker/LocalACPBrokerService.swift")
 
         #expect(transportSource.contains("terminationScope == .processTree"))
         #expect(brokerSource.contains("terminationScope: .processOnly"))
@@ -169,7 +169,7 @@ struct ProcessTransportTerminationTests {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-        return try String(contentsOf: root.appendingPathComponent("Alas/Sources/\(path)"),
+        return try String(contentsOf: root.appendingPathComponent(path),
                           encoding: .utf8)
     }
 }

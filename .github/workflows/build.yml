@@ -123,7 +123,12 @@ jobs:
         run: brew install xcodegen zig@0.15 zig@0.16 swiftformat ripgrep
 
       - name: Check formatting
-        run: swiftformat Alas AlasTests --lint --reporter github-actions-log
+        run: swiftformat Alas AlasTests Packages --lint --reporter github-actions-log
+
+      - name: Test AlasCore
+        # Hostless: no app, Ghostty, MLX, or submodules. Fails fast before
+        # the app build starts.
+        run: swift test --package-path Packages/AlasCore
 
       - name: Test Swift test inventory harness
         run: bash scripts/tests/swift-test-inventory/run.sh

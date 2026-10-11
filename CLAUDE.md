@@ -73,6 +73,13 @@ code they cover should be able to justify it.
 
 - For documentation-only changes, do not build or run tests.
 - If `project.yml` changed, run `xcodegen` and commit both `project.yml` and the generated Xcode project.
+- For changes under `Packages/AlasCore`, run its tests first. They need no
+  app build, submodules, or Ghostty:
+
+  ```bash
+  swift test --package-path Packages/AlasCore
+  ```
+
 - For code changes, run only the affected test suites or individual tests locally whenever possible:
 
   ```bash

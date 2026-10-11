@@ -2,15 +2,17 @@ import Foundation
 
 /// Accumulates partial reads and yields complete lines. Trailing newline-less
 /// content is held until either more data arrives or `flush()` is called.
-final class LineBuffer: @unchecked Sendable {
+public final class LineBuffer: @unchecked Sendable {
     private let lock = NSLock()
     private var pending = Data()
 
-    func feed(_ chunk: String) -> [String] {
+    public init() {}
+
+    public func feed(_ chunk: String) -> [String] {
         feed(Data(chunk.utf8))
     }
 
-    func feed(_ data: Data) -> [String] {
+    public func feed(_ data: Data) -> [String] {
         lock.lock()
         defer { lock.unlock() }
         pending.append(data)
@@ -24,7 +26,7 @@ final class LineBuffer: @unchecked Sendable {
         return out
     }
 
-    func flush() -> String? {
+    public func flush() -> String? {
         lock.lock()
         defer { lock.unlock() }
         if pending.isEmpty { return nil }
