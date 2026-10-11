@@ -298,7 +298,9 @@ public final class ACPSessionManager: ObservableObject {
     private var draftFlushHandoffSequence: UInt64 = 0
     public private(set) var runners: [ACPSession.ID: ACPSessionRunner] = [:]
     private var elicitationCoordinators: [ACPSession.ID: ACPElicitationCoordinator] = [:]
-    private var autoReconnectTasks: [ACPSession.ID: Task<Void, Never>] = [:]
+    private var autoReconnectTasks: [ACPSession.ID: Task<Void, Never>] = [:] {
+        willSet { sessions.values.forEach { $0.nextPromptActivity.send() } }
+    }
     private var autoReconnectTaskGenerations: [ACPSession.ID: UUID] = [:]
     private var restartingConnections: Set<ACPSession.ID> = []
     private var mergingForks: Set<ACPSession.ID> = []
@@ -1765,6 +1767,7 @@ public final class ACPSessionManager: ObservableObject {
 
     public var isIdleForProjectRebinding: Bool {
         !isDisposed && attachingSessions.isEmpty && restartingConnections.isEmpty
+            && autoReconnectTasks.isEmpty
             && runners.values.allSatisfy { !$0.hasRetainedCleanupPromptWork }
             && sessions.values.allSatisfy {
                 $0.hydrationState != .loading && $0.agentState != .spawning
