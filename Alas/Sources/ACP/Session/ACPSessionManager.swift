@@ -6785,6 +6785,7 @@ extension ACPSessionManager {
                                               guard let self,
                                                     self.connectionOwnerIDs[sessionId] == runnerConnectionOwnerID
                                               else { return }
+                                              self.sessions[sessionId]?.nextPromptActivity.send()
                                               self.onQueueChanged?(sessionId, self.retainedCleanupHasActivePromptWork(for: sessionId))
                                               self.remoteCoordinator?.wake(sessionId: sessionId)
                                           },

@@ -253,7 +253,7 @@ final class ACPSessionRunner {
     /// `streamingState`; `cancelledPromptIDs` carries explicit
     /// invalidations (steer, userCancel) so a slow `session/cancel`
     /// can't let a stale completion clobber the successor task.
-    private var activePromptID: Int?
+    private var activePromptID: Int? { willSet { session.nextPromptActivity.send() } }
     private var cancelledPromptIDs: Set<Int> = []
     /// Retains the most recently dispatched prompt RPC so steering can wait
     /// for its response after sending the cancellation notification.

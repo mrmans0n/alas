@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 import Testing
 @testable import Alas
 
@@ -2825,6 +2826,33 @@ struct ACPSessionRunnerQueueTests {
         try await Task.sleep(for: .milliseconds(100))
 
         #expect(finished == nil)
+    }
+
+    @Test("lease failure publishes idle readiness after prompt preflight")
+    func leaseFailurePublishesIdleReadinessAfterPreflight() async throws {
+        let leaseGate = LeaseValidationGate(result: false)
+        let (runner, _, session, _) = try mkRunner(validateLease: { await leaseGate.validate() })
+        let completed = QueueTestGate()
+        runner.sendNow(blocks: [.text("pending")], queuedItemId: nil,
+                       onPromptFinished: { _ in Task { await completed.open() } })
+        await leaseGate.waitUntilEntered()
+        #expect(session.transcript.streamingState == .idle)
+        var observedIdle: Bool?
+        let subscription = session.nextPromptActivity.prepend(())
+            .receive(on: DispatchQueue.main)
+            .sink { observedIdle = !runner.hasRetainedCleanupPromptWork }
+        defer { subscription.cancel() }
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+        #expect(observedIdle == false)
+        await leaseGate.release()
+        await completed.wait()
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+        #expect(session.transcript.streamingState == .idle)
+        #expect(observedIdle == true)
     }
 
     @Test("superseded prompt lease failure does not finish its callback")
