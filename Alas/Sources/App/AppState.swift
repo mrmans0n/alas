@@ -2226,17 +2226,28 @@ final class AppState {
             saveSpaces()
         }
         let selectedWasRemoved = selectedWorktreeId.map(disappeared.contains) ?? false
-        // A row can also leave the active space while its id stays live: the
-        // directory moved to a project in another space.
-        let selectionMovedOutOfActiveSpace = selectedWorktreeId.map { id in
-            !activeSpaceProjects.contains { projectsManager.visibleWorktrees(projectId: $0.id).contains { $0.id == id } }
-                && activeSpaceProjects.contains { projectsManager.worktreeIdConflicts[$0.id]?[id] != nil }
-        } ?? false
         if let current = selectedWorktreeId, !afterIds.contains(current) || selectionMovedOutOfActiveSpace {
             selectWorktree(id: resolvedSelectionForActiveSpace())
         }
         for projectId in landingProjectsToMigrate {
             migrateGGLanding(projectId: projectId, selectHost: selectedWasRemoved)
+        }
+    }
+
+    /// A row can leave the active space while its id stays live: the directory
+    /// moved to a project in another space.
+    private var selectionMovedOutOfActiveSpace: Bool {
+        selectedWorktreeId.map { id in
+            !activeSpaceProjects.contains { projectsManager.visibleWorktrees(projectId: $0.id).contains { $0.id == id } }
+                && activeSpaceProjects.contains { projectsManager.worktreeIdConflicts[$0.id]?[id] != nil }
+        } ?? false
+    }
+
+    /// Reselects when directory ownership moved the selected row to a project
+    /// outside the active space, which startup arbitration can do.
+    func reconcileSelectionAfterOwnershipChange() {
+        if selectionMovedOutOfActiveSpace {
+            selectWorktree(id: resolvedSelectionForActiveSpace())
         }
     }
 
@@ -6641,6 +6652,7 @@ final class AppState {
         let previousPaths = Dictionary(uniqueKeysWithValues: projectsManager.projects.map { ($0.id, $0.path) })
         let previousOperationStates = projectsManager.operationStatesSnapshot()
         let changed = await projectsManager.refreshAll()
+        reconcileSelectionAfterOwnershipChange()
         var completedCreateFailure = false
         for projectId in previousPaths.keys {
             completedCreateFailure = await completeReconciledCreateFailures(

@@ -157,19 +157,18 @@ final class ProjectsManager {
                               userInfo: [NSLocalizedDescriptionKey: "Not a git repository: \(path.path)"])
             }
         }
-        // Worktree ids are paths, so two local projects at one directory would
+        // Worktree ids are paths, so two projects at one directory would
         // share row ids that selection, tabs, and sessions key on. Remote ids
-        // are namespaced per host, so remote projects are exempt.
-        if host == nil {
-            let storedID = canonical(URL(fileURLWithPath: storedPath))
-            if let existing = projects.first(where: { project in
-                project.host == nil
-                    && (canonical(URL(fileURLWithPath: project.path)) == storedID
-                        || worktreesByProject[project.id, default: []].contains { $0.id == storedID })
-            }) {
-                throw NSError(domain: "ProjectsManager", code: 5,
-                              userInfo: [NSLocalizedDescriptionKey: "\(path.path) is already part of \"\(existing.name)\"."])
-            }
+        // are namespaced per host, so only projects on the same host (or both
+        // local) can collide.
+        let storedID = canonical(URL(fileURLWithPath: storedPath))
+        if let existing = projects.first(where: { project in
+            project.host == host
+                && (canonical(URL(fileURLWithPath: project.path)) == storedID
+                    || worktreesByProject[project.id, default: []].contains { $0.id == storedID })
+        }) {
+            throw NSError(domain: "ProjectsManager", code: 5,
+                          userInfo: [NSLocalizedDescriptionKey: "\(path.path) is already part of \"\(existing.name)\"."])
         }
         let project = ProjectConfig(
             id: id,
@@ -539,7 +538,13 @@ final class ProjectsManager {
             loserId != winnerId && lost.contains { ids.contains($0.key) && $0.value == winnerId }
         }.keys
         for loserId in losers {
-            storeRows(listedRows(projectId: loserId), projectId: loserId)
+            // A shadowed row's directory may have been removed meanwhile (for
+            // example by `git worktree remove`), and a folder project has no
+            // watcher to notice, so only restore rows that still exist.
+            let live = worktreesByProject[loserId, default: []]
+            let shadowed = (shadowedRows[loserId]?.values.map { $0 } ?? [])
+                .filter { FileManager.default.fileExists(atPath: $0.path.path) }
+            storeRows(live + shadowed, projectId: loserId)
         }
         return Set(losers)
     }
