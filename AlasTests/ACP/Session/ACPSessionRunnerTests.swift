@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 import Testing
 @testable import Alas
 @testable import AlasCore
@@ -1623,12 +1624,18 @@ struct ACPSessionRunnerTests {
     @Test("local title updates the tab and stored history, then a provider title wins")
     func localTitleThenProviderTitle() async throws {
         var titles: [String] = []
+        let titleStarted = AsyncGate()
+        let releaseTitle = AsyncGate()
         let tabWorktreeID = "title-test-\(UUID().uuidString)"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: tabWorktreeID)) }
         let tabs = TabsManager()
         _ = tabs.append(acpSession: .init(sessionId: "s", title: "New session"), to: tabWorktreeID)
         let (runner, mock, store) = try makeLocalTitleRunner(
-            generate: { _ in "Fix sign-in persistence" },
+            generate: { _ in
+                await titleStarted.open()
+                await releaseTitle.wait()
+                return "Fix sign-in persistence"
+            },
             onTitle: {
                 titles.append($0)
                 _ = tabs.renameACPSessionTabs(worktreeId: tabWorktreeID, sessionId: "s", title: $0)
@@ -1643,7 +1650,20 @@ struct ACPSessionRunnerTests {
             }
         }
         #expect(submitted)
+        await titleStarted.wait()
+        #expect(runner.session.transcript.streamingState == .idle)
+        #expect(!runner.hasRetainedCleanupPromptWork)
+        #expect(!runner.isIdleForProjectRebinding)
+        var observedBusy: Bool?
+        let subscription = runner.session.nextPromptActivity
+            .prepend(())
+            .receive(on: DispatchQueue.main)
+            .sink { observedBusy = !runner.isIdleForProjectRebinding }
+        defer { subscription.cancel() }
+        #expect(await awaitCondition(within: .seconds(1)) { observedBusy == true })
+        await releaseTitle.open()
         try await waitUntil { runner.session.titleSource == .local }
+        #expect(await awaitCondition { observedBusy == false })
         #expect(titles == ["Please fix sign-in persistence", "Fix sign-in persistence"])
         let localRow = try #require(try store.loadSession(id: "s"))
         #expect(tabs.tabs(forWorktree: tabWorktreeID).first?.title == "Fix sign-in persistence")

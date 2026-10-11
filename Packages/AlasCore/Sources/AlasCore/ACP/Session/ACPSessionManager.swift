@@ -1786,7 +1786,7 @@ public final class ACPSessionManager: ChangeTracking {
             && autoReconnectTasks.isEmpty && disposalTasks.isEmpty
             && activeSessionDeletionCount == 0 && teardownCounts.isEmpty
             && sideQuestions.isEmpty && activeSideQuestionWorkCount == 0
-            && runners.values.allSatisfy { !$0.hasRetainedCleanupPromptWork }
+            && runners.values.allSatisfy(\.isIdleForProjectRebinding)
             && sessions.values.allSatisfy {
                 $0.hydrationState != .loading && $0.agentState != .spawning
                     && $0.transcript.streamingState == .idle
