@@ -943,71 +943,88 @@ final class AppState {
     /// Reads Tailscale status and reconciles our `tailscale serve` handler
     /// with `config.remote`: on while remote control and the Serve toggle are
     /// on, off otherwise. Never touches a handler Alas doesn't own.
+    ///
+    /// Syncs run one after another, never cancelled: a cancelled sync could
+    /// install a route and then drop the record that proves it's ours.
     func syncRemoteTailscale() {
+        let prior = remoteTailscaleSync
+        remoteTailscaleSync = Task { @MainActor [weak self] in
+            await prior?.value
+            await self?.reconcileRemoteTailscale()
+        }
+    }
+
+    private func reconcileRemoteTailscale() async {
+        // Read after any prior sync finished, so its outcome is visible.
         let remote = config.remote
         let port = remotePort
-        let previous = (status: remoteTailscale, serve: remoteTailscaleServe)
-        remoteTailscaleSync?.cancel()
         // Nothing to trust or tear down: skip spawning the CLI entirely.
         guard remote.enabled || remote.tailscaleServe || remote.tailscaleServedPort != nil else {
             remoteTailscale = nil
             return
         }
-        remoteTailscaleSync = Task { @MainActor [weak self] in
-            var status = previous.status
-            var serve = previous.serve
-            var failure: String?
-            // Ownership: the port Alas is listening on, or one it recorded
-            // after installing the handler. Never just the preferred port —
-            // another local service may hold it.
-            var servedPort = remote.tailscaleServedPort
-            do {
-                // A failed read keeps the last known status and changes nothing.
-                status = try await RemoteTailscale.status()
-                if let status {
-                    let ports = Set([port, servedPort].compactMap { $0 })
-                    guard let observed = await RemoteTailscale.serveState(dnsName: status.dnsName, ports: ports) else {
-                        // Unknown config: changing it could overwrite another service.
-                        throw ProcessError.launchFailed("Couldn't read the Tailscale Serve configuration.")
-                    }
-                    serve = observed
-                    // Authoritatively off: any recorded port no longer proves ownership.
-                    if serve == .off { servedPort = nil }
-                    let want = remote.enabled && remote.tailscaleServe && status.httpsEnabled
-                    switch serve {
-                    case .off where want, .ours where want:
-                        if let port, serve != .ours(port: port) {
-                            try await RemoteTailscale.enableServe(port: port)
-                            serve = .ours(port: port)
-                            servedPort = port
-                        }
-                    case .ours where !want:
-                        try await RemoteTailscale.disableServe()
-                        serve = .off
-                        servedPort = nil
-                    default:
-                        break
-                    }
-                } else {
-                    serve = .off
+        var status = remoteTailscale
+        var serve = remoteTailscaleServe
+        var failure: String?
+        // Ownership: the port Alas is listening on, or one it recorded after
+        // installing the handler. Never just the preferred port — another
+        // local service may hold it.
+        var servedPort = remote.tailscaleServedPort
+        do {
+            // A failed read keeps the last known status and changes nothing.
+            status = try await RemoteTailscale.status()
+            if let status {
+                let ports = Set([port, servedPort].compactMap { $0 })
+                guard let observed = await RemoteTailscale.serveState(dnsName: status.dnsName, ports: ports) else {
+                    // Unknown config: changing it could overwrite another service.
+                    throw ProcessError.launchFailed("Couldn't read the Tailscale Serve configuration.")
                 }
-            } catch ProcessError.launchFailed(let message) {
-                failure = message
-            } catch ProcessError.nonZeroExit(_, let stderr) {
-                failure = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
-            } catch {
-                failure = "\(error)"
+                serve = observed
+                // The record only stands while the observed handler is ours.
+                if case .ours = serve {} else { servedPort = nil }
+                let want = remote.enabled && remote.tailscaleServe && status.httpsEnabled
+                switch serve {
+                case .off where want, .ours where want:
+                    if let port, serve != .ours(port: port) {
+                        try await RemoteTailscale.enableServe(port: port)
+                        serve = .ours(port: port)
+                        servedPort = port
+                    }
+                case .ours where !want:
+                    try await RemoteTailscale.disableServe()
+                    serve = .off
+                    servedPort = nil
+                default:
+                    break
+                }
+            } else {
+                serve = .off
             }
-            guard let self, !Task.isCancelled else { return }
-            remoteTailscale = status
-            remoteTailscaleServe = serve
-            if config.remote.tailscaleServedPort != servedPort {
-                config.remote.tailscaleServedPort = servedPort
-                saveConfig()
-            }
-            remoteTailscaleError = failure
-            refreshRemoteAccessState()
+        } catch ProcessError.launchFailed(let message) {
+            failure = message
+        } catch ProcessError.nonZeroExit(_, let stderr) {
+            failure = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+        } catch {
+            failure = "\(error)"
         }
+        remoteTailscale = status
+        remoteTailscaleServe = serve
+        if config.remote.tailscaleServedPort != servedPort {
+            config.remote.tailscaleServedPort = servedPort
+            saveConfig()
+        }
+        remoteTailscaleError = failure
+        refreshRemoteAccessState()
+    }
+
+    /// Removes our background Serve route on quit: it otherwise outlives
+    /// Alas, forwarding the tailnet to a closed port another process could
+    /// later bind. The next launch re-installs it.
+    func removeRemoteTailscaleServeForQuit() {
+        guard config.remote.tailscaleServedPort != nil else { return }
+        RemoteTailscale.disableServeBeforeExit()
+        config.remote.tailscaleServedPort = nil
+        saveConfig()
     }
 
     func syncRemoteKeepAwake() {

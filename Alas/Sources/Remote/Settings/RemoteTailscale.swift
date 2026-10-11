@@ -108,6 +108,22 @@ enum RemoteTailscale {
         _ = try await run(["serve", "--https=443", "off"])
     }
 
+    /// Blocking variant for app termination, where an async hop would never
+    /// run before the process exits.
+    static func disableServeBeforeExit(timeout: TimeInterval = 3) {
+        guard let executable = executable() else { return }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = ["serve", "--https=443", "off"]
+        process.environment = environment
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        let done = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in done.signal() }
+        guard (try? process.run()) != nil else { return }
+        if done.wait(timeout: .now() + timeout) == .timedOut { process.terminate() }
+    }
+
     private static func target(port: UInt16) -> String { "http://127.0.0.1:\(port)" }
 
     private static func normalizedDNSName(_ name: String) -> String {

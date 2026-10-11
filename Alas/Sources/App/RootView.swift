@@ -1254,6 +1254,7 @@ private struct RootBaseHandlers: ViewModifier {
         return s
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
                 state.stopPairingApprovals()
+                state.removeRemoteTailscaleServeForQuit()
                 state.flushScheduledSpacesSave()
                 state.stopAllProjectGitWatchers()
                 state.tabs.snapshotDirtyBuffersForQuit()
