@@ -1686,6 +1686,7 @@ final class ACPSessionManager: ObservableObject {
 
     var isIdleForProjectRebinding: Bool {
         !isDisposed && attachingSessions.isEmpty && restartingConnections.isEmpty
+            && runners.values.allSatisfy { !$0.hasRetainedCleanupPromptWork }
             && sessions.values.allSatisfy {
                 $0.hydrationState != .loading && $0.agentState != .spawning
                     && $0.transcript.streamingState == .idle

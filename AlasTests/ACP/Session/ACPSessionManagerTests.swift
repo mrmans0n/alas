@@ -92,7 +92,19 @@ struct ACPSessionManagerTests {
         defer { manager.shutdownBackgroundTasks() }
         let session = manager.createSession(agentId: "claude")
         await manager.attach(to: session.id, freshlyCreated: true)
-        #expect(manager.runners[session.id] != nil)
+        let runner = try #require(manager.runners[session.id])
+        #expect(manager.isIdleForProjectRebinding)
+        let cancelled = await withCheckedContinuation { continuation in
+            let accepted = manager.submit(
+                sessionId: session.id, text: "preflight", attachments: [], intent: .auto,
+                onCompleted: { continuation.resume(returning: !$0) }
+            )
+            #expect(accepted)
+            #expect(session.transcript.streamingState == .idle)
+            #expect(!manager.isIdleForProjectRebinding)
+            runner.invalidateActivePrompt()
+        }
+        #expect(cancelled)
         #expect(manager.isIdleForProjectRebinding)
         session.transcript.streamingState = .streaming
         #expect(!manager.isIdleForProjectRebinding)
