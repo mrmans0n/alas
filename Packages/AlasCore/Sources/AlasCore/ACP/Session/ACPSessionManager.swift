@@ -430,10 +430,16 @@ public final class ACPSessionManager: ObservableObject {
     /// side effect. Cached observations remain suitable for rendering, but are
     /// not authority for actions that cannot be transactionally fenced.
     private func confirmedWriterLease(for sessionId: ACPSession.ID) async -> Bool {
-        guard _ownedLeases.contains(sessionId),
+        guard !isDisposed, _ownedLeases.contains(sessionId),
               let token = ownedLeaseTokens[sessionId]
         else { return false }
+        let session = sessions[sessionId]
+        session?.nextPromptWorkCount += 1
+        defer { session?.nextPromptWorkCount -= 1 }
         do {
+#if DEBUG
+            await beforeLeaseReadForTesting?()
+#endif
             let lease = try await persistence.loadLease(sessionId: sessionId)
             observedLeases[sessionId] = lease
             guard lease?.ownerInstance == instanceId, lease?.token == token else {
@@ -1485,6 +1491,7 @@ public final class ACPSessionManager: ObservableObject {
     public var beforePersistenceForTesting: (@MainActor () async -> Void)?
     /// Runs inside `sendPrompt`, just before the writer lease is confirmed.
     public var beforeLeaseConfirmationForTesting: (@MainActor () async -> Void)?
+    public var beforeLeaseReadForTesting: (@MainActor () async -> Void)?
     public var afterRunnerRegistrationForTesting: (@MainActor (_ sessionId: ACPSession.ID) async -> Void)?
     public var pendingFreshBrokerNamespacesForTesting: Set<ACPSession.ID> {
         pendingFreshBrokerNamespaces

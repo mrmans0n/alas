@@ -146,6 +146,26 @@ struct ACPSessionManagerTests {
         #expect(manager.isIdleForProjectRebinding)
         session.enqueueScheduled(blocks: [.text("later")], scheduledAt: .distantFuture)
         #expect(manager.isIdleForProjectRebinding)
+        manager.persistQueue(for: session)
+        await manager.flushAllPersistence()
+        let queueEditGate = AsyncGate()
+        manager.beforeLeaseReadForTesting = { await queueEditGate.enterAndWait() }
+        let scheduledItem = try #require(session.queue.first)
+        let removal = Task { await manager.queueRemove(for: session.id, itemId: scheduledItem.id) }
+        await queueEditGate.waitUntilEntered()
+        #expect(!manager.isIdleForProjectRebinding)
+        var queueEditReadiness: Bool?
+        let queueEditSubscription = manager.projectRebindingReadiness.sink { queueEditReadiness = $0 }
+        defer { queueEditSubscription.cancel() }
+        #expect(await awaitCondition(within: .seconds(1)) { queueEditReadiness == false })
+        manager.beforeLeaseReadForTesting = nil
+        await queueEditGate.release()
+        await removal.value
+        await manager.flushAllPersistence()
+        #expect(session.queue.isEmpty)
+        #expect(try store.loadQueue(sessionId: session.id).isEmpty)
+        #expect(await awaitCondition { queueEditReadiness == true })
+        session.enqueueScheduled(blocks: [.text("later")], scheduledAt: .distantFuture)
         session.markQueueHeadSending()
         #expect(!manager.isIdleForProjectRebinding)
         await manager.disposeAllLiveSessions()
