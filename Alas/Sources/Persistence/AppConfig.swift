@@ -81,9 +81,6 @@ struct AppConfig: Codable, Equatable {
         /// With `tailscaleServe`, listen on loopback only so the server is
         /// reachable solely through Tailscale Serve.
         var tailscaleOnly: Bool = false
-        /// Loopback port of the Serve handler Alas installed, so it is still
-        /// recognized as ours (and removed) after a port fallback or relaunch.
-        var tailscaleServedPort: UInt16? = nil
 
         /// Effective bind mode: "Tailscale only" means nothing without Serve.
         var listensOnLoopbackOnly: Bool { tailscaleServe && tailscaleOnly }
@@ -121,7 +118,7 @@ struct AppConfig: Codable, Equatable {
         enum CodingKeys: String, CodingKey {
             case enabled, keepAwake, port, allowedHosts, preferredAdvertisedHost
             case allowedOrigins, serverId, displayName, discoverable
-            case tailscaleServe, tailscaleOnly, tailscaleServedPort
+            case tailscaleServe, tailscaleOnly
         }
 
         init(from decoder: Decoder) throws {
@@ -137,7 +134,6 @@ struct AppConfig: Codable, Equatable {
             discoverable = (try? c.decode(Bool.self, forKey: .discoverable)) ?? false
             tailscaleServe = (try? c.decode(Bool.self, forKey: .tailscaleServe)) ?? false
             tailscaleOnly = (try? c.decode(Bool.self, forKey: .tailscaleOnly)) ?? false
-            tailscaleServedPort = try? c.decodeIfPresent(UInt16.self, forKey: .tailscaleServedPort)
         }
 
         /// Assigns a fresh UUID when `serverId` is empty. Returns true when it changed.

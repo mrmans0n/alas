@@ -111,6 +111,8 @@ enum RemoteNetwork {
         let interfaces = tailnetHTTPSOnly ? [] : interfaces
         let allowedHosts = tailnetHTTPSOnly ? [] : allowedHosts
         let machineHostName = tailnetHTTPSOnly ? nil : machineHostName
+        // The only other candidate is localhost, which no phone can load.
+        let preferredHost = tailnetHTTPSOnly && tailnetHTTPSHost != nil ? nil : preferredHost
 
         if let tailnetHTTPSHost {
             candidates.append((.tailnet, nil, tailnetHTTPSHost))

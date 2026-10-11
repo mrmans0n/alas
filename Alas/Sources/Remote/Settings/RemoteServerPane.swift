@@ -346,7 +346,7 @@ struct RemoteServerPane: View {
 
     @ViewBuilder
     private func tailscaleGroup(_ tailscale: RemoteTailscaleStatus?) -> some View {
-        let serving: Bool = if case .ours = state.remoteTailscaleServe { true } else { false }
+        let serving: Bool = if case .serving = state.remoteTailscaleServe { true } else { false }
         SettingsGroup(title: "Tailscale") {
             SettingsRow(name: "Status", desc: tailscaleStatusDescription(tailscale)) {
                 Text(tailscale == nil ? "Not running" : "Connected")
@@ -355,13 +355,13 @@ struct RemoteServerPane: View {
             }
             SettingsRow(
                 name: "Serve over HTTPS",
-                desc: "Runs tailscale serve so devices on your tailnet get an HTTPS address. Enables PWA install, the offline shell, and notifications."
+                desc: "Runs tailscale serve while Alas is open so devices on your tailnet get an HTTPS address. Enables PWA install, the offline shell, and notifications."
             ) {
                 AlasToggle(on: remoteBinding(\.tailscaleServe))
                     .disabled(tailscale?.httpsEnabled != true && !state.config.remote.tailscaleServe)
             }
-            if case .conflict(let reason) = state.remoteTailscaleServe {
-                SettingsRow(name: "Can't serve", desc: reason) {
+            if case .failed(let reason) = state.remoteTailscaleServe {
+                SettingsRow(name: "Can't serve", desc: reason + " Turn Serve over HTTPS off and on to retry.") {
                     Icon(name: "alert", size: 14, color: theme.color("warn"))
                 }
             }

@@ -52,6 +52,15 @@ header-echo server, then in front of the running Alas:
 Funnel adds `"AllowFunnel":{"<name>:443":true}` (from Tailscale's
 `ipn.ServeConfig`; not exercised — enabling Funnel would publish the Mac).
 
+## Revision (review)
+
+Shipped with a supervised **foreground** `tailscale serve` instead of `--bg`.
+Tailscale drops a foreground route as soon as its process dies (verified with
+SIGKILL), so the route can't outlive Alas; a `/bin/sh` wrapper polls Alas's PID
+to cover crashes. This removed the ownership record, `serve status` parsing, and
+quit cleanup that the `--bg` design below needed. Note `/usr/local/bin/tailscale`
+is a shim that doesn't `exec`; Alas runs the app binary directly.
+
 ## Task 1 — `RemoteTailscale` (new, `Alas/Sources/Remote/Settings/RemoteTailscale.swift`)
 
 Small type, CLI-backed, pure parsing split from process I/O.

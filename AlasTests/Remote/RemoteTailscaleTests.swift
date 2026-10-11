@@ -21,35 +21,32 @@ struct RemoteTailscaleTests {
         #expect(throws: (any Error).self) { try RemoteTailscale.parseStatus(Data("not json".utf8)) }
     }
 
-    @Test(arguments: [
-        ("{}", RemoteTailscaleServeState.off),
-        ("not json", nil),
-        // Captured from `tailscale serve status --json` (1.102.4).
-        (#"{"TCP":{"443":{"HTTPS":true}},"Web":{"mac.tail1.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:8765"}}}}}"#,
-         .ours(port: 8765)),
-        (#"{"TCP":{"443":{"HTTPS":true}},"Web":{"mac.tail1.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:3000"}}}}}"#,
-         .conflict("already serves something else")),
-        (#"{"TCP":{"443":{"HTTPS":true}},"Web":{"mac.tail1.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:8765"},"/api":{"Proxy":"http://127.0.0.1:9000"}}}}}"#,
-         .conflict("already serves something else")),
-        (#"{"TCP":{"443":{"TCPForward":"127.0.0.1:22"}}}"#, .conflict("another Tailscale service")),
-        // Route left under the pre-rename hostname.
-        (#"{"TCP":{"443":{"HTTPS":true}},"Web":{"old.tail1.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:8765"}}}}}"#,
-         .conflict("old.tail1.ts.net")),
-        (#"{"TCP":{"443":{"HTTPS":true}},"Web":{"mac.tail1.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:8765"}}}},"AllowFunnel":{"mac.tail1.ts.net:443":true}}"#,
-         .conflict("Funnel")),
-    ] as [(String, RemoteTailscaleServeState?)])
-    func parseServe(json: String, expected: RemoteTailscaleServeState?) {
-        let state = RemoteTailscale.parseServe(Data(json.utf8), dnsName: Self.name, ports: [8765, 9999])
-        // 3000 isn't a port Alas listens on or recorded, so it isn't ours.
-        // Conflicts match on a substring identifying which check fired.
-        if case .conflict(let expectedReason)? = expected {
-            guard case .conflict(let reason)? = state else {
-                Issue.record("expected conflict, got \(String(describing: state))")
-                return
-            }
-            #expect(reason.contains(expectedReason))
-        } else {
-            #expect(state == expected)
+    /// The route must not outlive Alas, crashes included: the wrapper stops
+    /// serving once the parent PID is gone.
+    @Test func serveStopsWhenParentProcessIsGone() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let fakeTailscale = dir.appendingPathComponent("tailscale")
+        try "#!/bin/sh\nexec sleep 30\n".write(to: fakeTailscale, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fakeTailscale.path)
+
+        let exitedParent = Process()
+        exitedParent.executableURL = URL(fileURLWithPath: "/usr/bin/true")
+        try exitedParent.run()
+        exitedParent.waitUntilExit()
+
+        let serve = try RemoteTailscaleServeProcess(
+            executable: fakeTailscale.path,
+            port: 8765,
+            parentPID: exitedParent.processIdentifier
+        ) { _ in }
+        defer { serve.stop() }
+
+        let deadline = Date().addingTimeInterval(10)
+        while serve.isRunning, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(100))
         }
+        #expect(!serve.isRunning)
     }
 }

@@ -311,7 +311,8 @@ struct RemoteNetworkTests {
             port: 8765,
             interfaces: interfaces,
             allowedHosts: ["custom.example"],
-            preferredHost: nil,
+            // HTTPS-only ignores a localhost preference no phone could load.
+            preferredHost: httpsOnly ? "localhost" : nil,
             machineHostName: "nacho-mbp",
             tailnetHTTPSHost: "mac.tail1.ts.net",
             tailnetHTTPSOnly: httpsOnly
