@@ -418,7 +418,7 @@ struct DiffPaneActionButton: NSViewRepresentable {
     let tooltip: String
     let action: () -> Void
 
-    func makeCoordinator() -> Coordinator { Coordinator(action: action) }
+    func makeCoordinator() -> Coordinator { Coordinator(action: action, systemName: systemName) }
 
     func makeNSView(context: Context) -> NSButton {
         let button = NSButton(image: image(), target: context.coordinator, action: #selector(Coordinator.fire))
@@ -433,9 +433,17 @@ struct DiffPaneActionButton: NSViewRepresentable {
 
     func updateNSView(_ button: NSButton, context: Context) {
         context.coordinator.action = action
-        button.image = image()
-        button.toolTip = tooltip
-        button.setAccessibilityLabel(tooltip)
+        // Only touch the button when something changed: assigning a fresh image
+        // invalidates its intrinsic size, which re-measures the hosting row and
+        // calls back into here, so the controls would redraw (blink) forever.
+        if context.coordinator.systemName != systemName {
+            context.coordinator.systemName = systemName
+            button.image = image()
+        }
+        if button.toolTip != tooltip {
+            button.toolTip = tooltip
+            button.setAccessibilityLabel(tooltip)
+        }
     }
 
     private func image() -> NSImage {
@@ -444,7 +452,11 @@ struct DiffPaneActionButton: NSViewRepresentable {
 
     final class Coordinator: NSObject {
         var action: () -> Void
-        init(action: @escaping () -> Void) { self.action = action }
+        var systemName: String
+        init(action: @escaping () -> Void, systemName: String) {
+            self.action = action
+            self.systemName = systemName
+        }
         @objc func fire() { action() }
     }
 }
