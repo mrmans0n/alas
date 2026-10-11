@@ -230,4 +230,34 @@ struct AppConfigCodeInstallTests {
         #expect(code.userDefinedRecipes["old"] == nil)
         #expect(code.userDefinedRecipes["new"] == [InstallRecipe(installer: .brew, package: "old-lsp")])
     }
+
+    @Test(
+        "decoding drops only the YAML server the old install nudge persisted",
+        arguments: [
+            ("gh-actions-language-server", "@actions/languageserver", false),
+            ("gh-actions-language-server", "gh-actions-language-server", true),
+            ("yaml-language-server", "@actions/languageserver", true),
+        ]
+    )
+    func legacyYAMLNudgeServerMigration(command: String, npmPackage: String, kept: Bool) throws {
+        var cfg = AppConfig.defaults
+        cfg.code.languageServers = [
+            LanguageServerConfig(
+                language: "yaml",
+                extensions: ["yaml", "yml"],
+                command: command,
+                args: ["--stdio"],
+                env: [:],
+                rootMarkers: [".git"],
+                enabled: true
+            )
+        ]
+        let recipes = [InstallRecipe(installer: .npm, package: npmPackage)]
+        cfg.code.userDefinedRecipes["yaml"] = recipes
+
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: JSONEncoder().encode(cfg))
+
+        #expect(decoded.code.languageServers.map(\.command) == (kept ? [command] : []))
+        #expect(decoded.code.userDefinedRecipes["yaml"] == (kept ? recipes : nil))
+    }
 }

@@ -58,3 +58,24 @@ extension AppConfig.Code {
         }
     }
 }
+
+extension AppConfig.Code {
+    /// The YAML install nudge used to rank gh-actions-language-server first
+    /// and, on install, persisted it as the user's `yaml` server with a
+    /// command its `@actions/languageserver` package never provides. That
+    /// entry overrides the built-in YAML preset, so drop exactly the shape
+    /// the nudge wrote; any other user YAML config is left alone.
+    mutating func removeLegacyYAMLNudgeServer() {
+        let legacyRecipes = [InstallRecipe(installer: .npm, package: "@actions/languageserver")]
+        guard userDefinedRecipes["yaml"] == legacyRecipes else { return }
+        let before = languageServers.count
+        languageServers.removeAll {
+            $0.language == "yaml"
+                && $0.command == "gh-actions-language-server"
+                && $0.args == ["--stdio"]
+        }
+        if languageServers.count != before {
+            userDefinedRecipes["yaml"] = nil
+        }
+    }
+}
