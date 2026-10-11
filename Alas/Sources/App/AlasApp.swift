@@ -11,6 +11,7 @@ struct AlasApp: App {
     private static var isRunningUnitTests: Bool { AppState.isRunningUnitTests }
 
     init() {
+        PlatformServices.install()
         // Applies the AppKit menu-crash workaround on the affected OS, and
         // is a no-op everywhere else; see SystemMenuItems.swift.
         AppKitMenuInjection.applyOptOut()

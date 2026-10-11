@@ -1,18 +1,16 @@
-import AppKit
+import Foundation
+
+/// A decoded image owned by the platform layer (an `NSImage` in the app).
+protocol DiffImage: AnyObject, Sendable {}
 
 struct ImageDiffLoadFailure: Equatable, Sendable {
     let message: String
 }
 
 enum ImageDiffSide {
-    case image(NSImage, frameCount: Int)
+    case image(any DiffImage, frameCount: Int)
     case missing
     case failed(ImageDiffLoadFailure)
-
-    var image: NSImage? {
-        guard case .image(let image, _) = self else { return nil }
-        return image
-    }
 
     var frameCount: Int {
         guard case .image(_, let frameCount) = self else { return 0 }
@@ -20,7 +18,8 @@ enum ImageDiffSide {
     }
 
     var isLoadedImage: Bool {
-        image != nil
+        if case .image = self { return true }
+        return false
     }
 }
 
@@ -31,8 +30,6 @@ struct ImageDiffPair {
     let oldPath: String?
     let kind: ImageDiffPairKind
 
-    var beforeImage: NSImage? { before.image }
-    var afterImage: NSImage? { after.image }
     var beforeFrameCount: Int { before.frameCount }
     var afterFrameCount: Int { after.frameCount }
     var hasFailure: Bool {
@@ -61,21 +58,5 @@ struct ImageDiffPair {
         self.after = after
         self.oldPath = oldPath
         self.kind = kind
-    }
-
-    init(
-        before: NSImage?,
-        after: NSImage?,
-        oldPath: String?,
-        kind: ImageDiffPairKind,
-        beforeFrameCount: Int,
-        afterFrameCount: Int
-    ) {
-        self.init(
-            before: before.map { .image($0, frameCount: beforeFrameCount) } ?? .missing,
-            after: after.map { .image($0, frameCount: afterFrameCount) } ?? .missing,
-            oldPath: oldPath,
-            kind: kind
-        )
     }
 }

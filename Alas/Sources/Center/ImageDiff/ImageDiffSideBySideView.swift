@@ -140,13 +140,15 @@ struct ImageDiffSideBySideView: View {
                 ZStack {
                     ImageCheckerboardBackground()
                     switch side {
-                    case .image(let image, _):
+                    case .image(let image as NSImage, _):
                         Image(nsImage: image)
                             .resizable()
                             .interpolation(.none)
                             .aspectRatio(contentMode: .fit)
                             .scaleEffect(transform.scale)
                             .offset(Self.displayOffset(committed: transform.offset, translation: dragTranslation))
+                    case .image:
+                        EmptyView()
                     case .missing, .failed:
                         if let message = Self.placeholderMessage(for: side, missingText: missingText) {
                             placeholder(message)
@@ -158,13 +160,13 @@ struct ImageDiffSideBySideView: View {
                     SpatialTapGesture(count: 2)
                         .onEnded { _ in transform.reset() }
                         .exclusively(before: SpatialTapGesture().onEnded { value in
-                            guard annotation != nil, case .image(let image, _) = side,
+                            guard annotation != nil, case .image(let image as NSImage, _) = side,
                                   let point = geometry(imageSize: image.size, viewportSize: proxy.size)
                                     .normalizedPoint(at: value.location) else { return }
                             annotation?.onPointSelected(role, point)
                         })
                 )
-                if annotation != nil, case .image(let image, _) = side {
+                if annotation != nil, case .image(let image as NSImage, _) = side {
                     markers(side: role, imageSize: image.size, viewportSize: proxy.size)
                 }
             }

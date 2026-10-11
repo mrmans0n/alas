@@ -230,12 +230,9 @@ struct ReviewRequestDiffLoader {
         path: String,
         cwd: URL
     ) async -> ImageDiffSide {
-        let key = ImageDiffDecodedCache.Key(repository: repository, revision: revision, path: path)
-        return await ImageDiffDecodedCache.shared.side(
-            for: key,
-            cost: ImageDiffDecodedCache.decodedImageCost,
-            makeImageSide: GitService.imageSide(forDecodedImage:)
-        ) {
+        let key = ImageDiffCacheKey(repository: repository, revision: revision, path: path)
+        let decoding = ImageDiffDecoding.shared
+        return await decoding.cachedSide(key) {
             do {
                 let data = try await provider.reviewFileData(
                     remote: remote,
@@ -244,7 +241,7 @@ struct ReviewRequestDiffLoader {
                     path: path,
                     cwd: cwd
                 )
-                let side = await GitService.imageSide(fromRawData: data, worktreePath: cwd)
+                let side = await decoding.decode(data, cwd)
                 if case .failed(let failure) = side {
                     Self.logHostedImageFailure(
                         provider: kind,

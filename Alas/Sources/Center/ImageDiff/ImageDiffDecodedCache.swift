@@ -2,11 +2,7 @@ import AppKit
 
 @MainActor
 final class ImageDiffDecodedCache {
-    struct Key: Hashable, Sendable {
-        let repository: String
-        let revision: String
-        let path: String
-    }
+    typealias Key = ImageDiffCacheKey
 
     static let shared = ImageDiffDecodedCache(totalCostLimit: 256 * 1024 * 1024)
 
@@ -63,7 +59,7 @@ final class ImageDiffDecodedCache {
             defer { self.inFlightSides.removeValue(forKey: key) }
 
             let side = await load()
-            if case .image(let image, _) = side {
+            if case .image(let image as NSImage, _) = side {
                 self.cache.setObject(Box(image), forKey: self.cacheKey(for: key), cost: cost(image))
             }
             return side
