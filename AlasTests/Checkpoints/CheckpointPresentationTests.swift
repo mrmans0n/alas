@@ -11,8 +11,8 @@ struct CheckpointPresentationTests {
     }
 
     @Test func byteFormattingUsesBinaryUnits() {
-        #expect(CheckpointPresentation.bytes(1_536) == "1.5 KiB")
-        #expect(CheckpointPresentation.bytes(2 * 1_073_741_824) == "2 GiB")
+        #expect(CheckpointBytes.format(1_536) == "1.5 KiB")
+        #expect(CheckpointBytes.format(2 * 1_073_741_824) == "2 GiB")
     }
 
     @Test func summaryOmitsZeroCountsAndUsesCompactSeparators() {

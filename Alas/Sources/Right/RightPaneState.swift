@@ -24,6 +24,14 @@ struct RightPaneAttentionSnapshot: Equatable {
     let review: ReviewLoopSnapshot?
 }
 
+enum CheckpointOperationKind: Equatable {
+    case capture
+    case preview
+    case restore
+    case delete
+    case recovery
+}
+
 struct CheckpointCreatePresentation: Identifiable, Equatable {
     let id = UUID()
 }
