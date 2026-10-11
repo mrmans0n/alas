@@ -8,6 +8,7 @@ on:
     paths:
       - "Alas/**"
       - "AlasTests/**"
+      - "Packages/**"
 
 permissions:
   contents: read

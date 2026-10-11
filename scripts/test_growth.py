@@ -14,8 +14,8 @@ import re
 import subprocess
 import sys
 
-TESTS = "AlasTests"
-APP = "Alas"
+TESTS = ["AlasTests", "Packages/AlasCore/Tests"]
+APP = ["Alas", "Packages/AlasCore/Sources"]
 TEST_ATTRIBUTE = re.compile(r"^\s*@Test\b", re.MULTILINE)
 
 
@@ -23,9 +23,9 @@ def git(*args):
     return subprocess.run(["git", *args], check=True, capture_output=True, text=True).stdout
 
 
-def line_delta(base, head, path):
+def line_delta(base, head, paths):
     added = removed = 0
-    for row in git("diff", "--numstat", f"{base}...{head}", "--", path).splitlines():
+    for row in git("diff", "--numstat", f"{base}...{head}", "--", *paths).splitlines():
         plus, minus, _ = row.split("\t", 2)
         if plus != "-":  # binary files report "-"
             added += int(plus)
@@ -35,7 +35,7 @@ def line_delta(base, head, path):
 
 def test_count(ref):
     total = 0
-    for name in git("ls-tree", "-r", "--name-only", ref, "--", TESTS).splitlines():
+    for name in git("ls-tree", "-r", "--name-only", ref, "--", *TESTS).splitlines():
         if name.endswith(".swift"):
             total += len(TEST_ATTRIBUTE.findall(git("show", f"{ref}:{name}")))
     return total
@@ -53,8 +53,8 @@ def report(base, head):
         "",
         "| | Added | Removed | Net |",
         "|---|---:|---:|---:|",
-        f"| Test lines (`{TESTS}`) | {test_added} | {test_removed} | {test_net:+d} |",
-        f"| App lines (`{APP}`) | {app_added} | {app_removed} | {app_net:+d} |",
+        f"| Test lines | {test_added} | {test_removed} | {test_net:+d} |",
+        f"| App lines | {app_added} | {app_removed} | {app_net:+d} |",
         "",
         f"`@Test` definitions: {before} → {after} ({after - before:+d}).",
         "",
