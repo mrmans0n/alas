@@ -1,21 +1,21 @@
 import Foundation
 import UserNotifications
-import AppKit
+
+/// The AppKit pieces of notifications: the ping sound and agent logos.
+/// `PlatformServices.install()` sets these once at launch, before any reads.
+struct NotificationPlatform {
+    var playAwaitingPing: @Sendable () -> Void
+    var logoPNG: @Sendable (_ assetName: String) -> Data?
+
+    nonisolated(unsafe) static var shared = NotificationPlatform(playAwaitingPing: {}, logoPNG: { _ in nil })
+}
 
 final class NotificationService {
     let delegate = NotificationDelegate()
     private let center = UNUserNotificationCenter.current()
     private var enabled: Bool = true
     var notificationAdder: (UNNotificationRequest) -> Void
-    var awaitingPingPlayer: () -> Void = {
-        DispatchQueue.main.async {
-            if let sound = NSSound(named: NSSound.Name("Tink")) {
-                sound.play()
-            } else {
-                NSSound.beep()
-            }
-        }
-    }
+    var awaitingPingPlayer: () -> Void = { NotificationPlatform.shared.playAwaitingPing() }
 
     init(notificationAdder: ((UNNotificationRequest) -> Void)? = nil) {
         if let notificationAdder {
@@ -247,10 +247,7 @@ final class NotificationService {
     }
 
     private func makeLogoAttachment(for agent: AgentKind) -> UNNotificationAttachment? {
-        guard let image = NSImage(named: NSImage.Name(agent.logoAssetName)) else { return nil }
         // macOS requires attachments to be plain files on disk.
-        guard let tiffData = image.tiffRepresentation else { return nil }
-
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-notification-\(agent.rawValue).png", isDirectory: false)
 
@@ -259,8 +256,7 @@ final class NotificationService {
             return try? UNNotificationAttachment(identifier: "logo", url: tmp, options: nil)
         }
 
-        guard let bitmap = NSBitmapImageRep(data: tiffData),
-              let pngData = bitmap.representation(using: .png, properties: [:]) else { return nil }
+        guard let pngData = NotificationPlatform.shared.logoPNG(agent.logoAssetName) else { return nil }
 
         do {
             try pngData.write(to: tmp)

@@ -5,13 +5,13 @@ import Foundation
 /// fenced code block. Only the un-promoted tail is
 /// re-parsed on each streaming chunk.
 ///
-/// Behavior-preserving: `stableBlocks + ACPMarkdownText.parse(tailUnparsed)`
-/// must equal `ACPMarkdownText.parse(fullText)` for any prefix-extending
+/// Behavior-preserving: `stableBlocks + ACPMarkdownParser.parse(tailUnparsed)`
+/// must equal `ACPMarkdownParser.parse(fullText)` for any prefix-extending
 /// stream. If a chunk arrives that does NOT extend the previous text
 /// (e.g. the message was edited or replaced), the cache resets.
 @MainActor
 final class ACPMarkdownBlockCache {
-    private(set) var stableBlocks: [ACPMarkdownText.Block] = []
+    private(set) var stableBlocks: [ACPMarkdownParser.Block] = []
     private(set) var tailUnparsed: String = ""
     private var stablePrefixLength: Int = 0
     private var tailUnparsedLength: Int = 0
@@ -114,7 +114,7 @@ final class ACPMarkdownBlockCache {
             return
         }
         let promoted = String(tailUnparsed.prefix(safeEnd))
-        let newBlocks = ACPMarkdownText.parse(promoted)
+        let newBlocks = ACPMarkdownParser.parse(promoted)
         stableBlocks.append(contentsOf: newBlocks)
         stablePrefixLength += promoted.count
         tailUnparsed = String(tailUnparsed.dropFirst(safeEnd))

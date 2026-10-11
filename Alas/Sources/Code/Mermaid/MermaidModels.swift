@@ -15,15 +15,6 @@ enum MermaidPresentationProfile: String, Hashable, Sendable {
     }
 }
 
-enum MermaidFence {
-    static func isMermaid(language: String?) -> Bool {
-        language?
-            .split(whereSeparator: \.isWhitespace)
-            .first?
-            .lowercased() == "mermaid"
-    }
-}
-
 enum MermaidSource {
     static func copyPayload(for source: String) -> String {
         source

@@ -1,12 +1,8 @@
 import AppKit
 import Foundation
 
-/// Produces the inline base64 payload Alas sends for an image when the agent
-/// advertises image capability. Large images are downscaled to a max
-/// dimension (keeping aspect ratio) and re-encoded as PNG to keep the
-/// JSON-RPC payload sane. Returns `nil` if the file can't be read/decoded.
-enum ACPImageEncoding {
-    static func inlineBase64(fileURL: URL, maxDimension: CGFloat) -> (data: String, mimeType: String)? {
+extension ACPImageEncoding {
+    static func appKitInlineBase64(fileURL: URL, maxDimension: CGFloat) -> (data: String, mimeType: String)? {
         guard let raw = try? Data(contentsOf: fileURL),
               let rep = NSBitmapImageRep(data: raw) else { return nil }
 

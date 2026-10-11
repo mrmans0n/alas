@@ -309,8 +309,8 @@ enum RunScriptStackCatalog {
             ]
         case .dotnet:
             let runCommand = context.dotnetRunProject
-                .map { "dotnet run --project \(AppState.shellQuote($0))" } ?? "dotnet run"
-            let buildTarget = context.dotnetBuildTarget.map { " \(AppState.shellQuote($0))" } ?? ""
+                .map { "dotnet run --project \(ShellQuoting.quote($0))" } ?? "dotnet run"
+            let buildTarget = context.dotnetBuildTarget.map { " \(ShellQuoting.quote($0))" } ?? ""
             return [
                 .init("restore", "Restore", "dotnet restore\(buildTarget)", checked: context.dotnetCommandsChecked),
                 .init("build", "Build", "dotnet build\(buildTarget)", checked: context.dotnetCommandsChecked),
@@ -323,7 +323,7 @@ enum RunScriptStackCatalog {
                 .init("test", "Test", "go test ./..."),
                 .init("vet", "Vet", "go vet ./..."),
                 .init(
-                    "run", "Run", "go run \(AppState.shellQuote(context.goRunTarget ?? "."))",
+                    "run", "Run", "go run \(ShellQuoting.quote(context.goRunTarget ?? "."))",
                     checked: context.goRunTarget != nil, onExit: .keep
                 ),
             ]
@@ -362,7 +362,7 @@ enum RunScriptStackCatalog {
         case .php:
             return [
                 .init("install", "Install", "composer install"),
-                .init("test", "Test", AppState.shellQuote(context.phpUnitBinaryPath), checked: context.hasPHPUnit),
+                .init("test", "Test", ShellQuoting.quote(context.phpUnitBinaryPath), checked: context.hasPHPUnit),
             ]
         case .swiftPackage:
             return [
@@ -383,7 +383,7 @@ enum RunScriptStackCatalog {
             // own default and let the user pin a destination if they need one.
             let destinationNote =
                 "# Add -destination if this scheme needs one, e.g. -destination 'platform=macOS' or 'generic/platform=iOS Simulator'."
-            let target = "\(flag) \(AppState.shellQuote(container)) -scheme \(AppState.shellQuote(scheme))"
+            let target = "\(flag) \(ShellQuoting.quote(container)) -scheme \(ShellQuoting.quote(scheme))"
             return [
                 .init("build", "Build", "\(note)\n\(destinationNote)\nxcodebuild \(target) build"),
                 .init("test", "Test", "\(note)\n\(destinationNote)\nxcodebuild \(target) test"),

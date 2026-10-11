@@ -18,7 +18,7 @@ import Combine
 /// SwiftUI-facing `objectWillChange` publish is throttled to display rate
 /// via `ACPTranscript.streamingTickAction`. Without this, a fast agent
 /// response forces one full agent-row re-render — which re-runs
-/// `ACPMarkdownBlockCache.update` + `ACPMarkdownText.parse(tail)` — per
+/// `ACPMarkdownBlockCache.update` + `ACPMarkdownParser.parse(tail)` — per
 /// streaming chunk (potentially hundreds/sec). Mirrors the `streamingTick`
 /// throttle from #823, which coalesces whole-list invalidation but does
 /// not cover this per-row buffer publish. A trailing-edge drain guarantees

@@ -1,8 +1,6 @@
 import CryptoKit
 import Foundation
 
-typealias TabID = String
-
 enum Tab: Codable, Equatable, Identifiable {
     case terminal(TerminalTabState)
     case editor(EditorTabState)
