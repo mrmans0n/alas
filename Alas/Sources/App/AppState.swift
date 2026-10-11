@@ -2235,18 +2235,10 @@ final class AppState {
         }
     }
 
-    /// Applies directory ownership moves: an idle ACP manager is rebuilt under
-    /// its new owner, since its providers captured the previous project (a
-    /// manager with running sessions is left alone rather than torn down).
     /// Returns whether the selected row moved to a project outside the active
     /// space while its id stayed live, so the selection must be re-resolved.
     private func applyOwnershipChanges() -> Bool {
         let changed = projectsManager.takeOwnershipChangedIds()
-        for id in changed {
-            if let manager = acpManager(forWorktreeId: id), manager.runners.isEmpty {
-                disposeACPManager(for: id)
-            }
-        }
         guard let selected = selectedWorktreeId, changed.contains(selected) else { return false }
         return !activeSpaceProjects.contains { projectsManager.worktrees(projectId: $0.id).contains { $0.id == selected } }
     }
@@ -12580,6 +12572,9 @@ final class AppState {
     /// pairs cannot collide with them or with each other.
     @ObservationIgnored
     private var acpManagers: [SessionOwnerID: ACPSessionManager] = [:]
+    /// The project each worktree manager was built for, to notice a directory
+    /// that later moved to another project.
+    private var acpManagerProjectIds: [SessionOwnerID: String] = [:]
 
     @ObservationIgnored
     private let acpOrchestrationPersistence = ACPOrchestrationPersistence()
@@ -13075,7 +13070,15 @@ final class AppState {
     /// Store opening and migration happen lazily on the persistence actor.
     func acpManager(for worktree: Worktree) -> ACPSessionManager? {
         let owner = SessionOwnerID.worktree(worktree.id)
-        if let existing = acpManagers[owner] { return existing }
+        if let existing = acpManagers[owner] {
+            // The manager's providers captured the project that owned the
+            // directory when it was built. When ownership has moved, replace it
+            // once it is idle; one with running sessions stays until then.
+            guard let builtFor = acpManagerProjectIds[owner], builtFor != worktree.projectId,
+                  existing.runners.isEmpty
+            else { return existing }
+            disposeACPManager(owner: owner)
+        }
         let dbURL = Paths.acpSessionsDB(forWorktreeId: worktree.id)
         let persistence = ACPSessionPersistence(path: dbURL.path)
         let mgr = ACPSessionManager(
@@ -13471,6 +13474,7 @@ final class AppState {
             mgr.upstreamReferences.environment = .noRemotes
         }
         acpManagers[owner] = mgr
+        acpManagerProjectIds[owner] = worktree.projectId
         observeNextPromptSessions(mgr, owner: owner)
         acpHarnessBridge.attach(manager: mgr)
         Task { await mgr.purgeOrphanedEphemeralSessions() }
@@ -13936,6 +13940,7 @@ final class AppState {
 
     private func disposeACPManager(owner: SessionOwnerID) {
         guard let manager = acpManagers.removeValue(forKey: owner) else { return }
+        acpManagerProjectIds.removeValue(forKey: owner)
         prepareACPManagerForDisposal(manager, owner: owner)
         Task { @MainActor in
             await self.finishDisposingACPManager(manager)
@@ -13944,6 +13949,7 @@ final class AppState {
 
     private func disposeACPManagerAndWait(owner: SessionOwnerID) async {
         guard let manager = acpManagers.removeValue(forKey: owner) else { return }
+        acpManagerProjectIds.removeValue(forKey: owner)
         prepareACPManagerForDisposal(manager, owner: owner)
         await finishDisposingACPManager(manager)
     }
