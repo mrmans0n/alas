@@ -946,7 +946,7 @@ final class AppState {
     func syncRemoteTailscale() {
         let remote = config.remote
         let port = remotePort
-        let previous = remoteTailscaleServe
+        let previous = (status: remoteTailscale, serve: remoteTailscaleServe)
         remoteTailscaleSync?.cancel()
         // Nothing to trust or tear down: skip spawning the CLI entirely.
         guard remote.enabled || remote.tailscaleServe || remote.tailscaleServedPort != nil else {
@@ -954,22 +954,26 @@ final class AppState {
             return
         }
         remoteTailscaleSync = Task { @MainActor [weak self] in
-            let status = await RemoteTailscale.status()
-            var serve = RemoteTailscaleServeState.off
+            var status = previous.status
+            var serve = previous.serve
             var failure: String?
             // Ownership: the port Alas is listening on, or one it recorded
             // after installing the handler. Never just the preferred port —
             // another local service may hold it.
             var servedPort = remote.tailscaleServedPort
-            if let status {
-                let ports = Set([port, servedPort].compactMap { $0 })
-                let want = remote.enabled && remote.tailscaleServe && status.httpsEnabled
-                do {
+            do {
+                // A failed read keeps the last known status and changes nothing.
+                status = try await RemoteTailscale.status()
+                if let status {
+                    let ports = Set([port, servedPort].compactMap { $0 })
                     guard let observed = await RemoteTailscale.serveState(dnsName: status.dnsName, ports: ports) else {
                         // Unknown config: changing it could overwrite another service.
                         throw ProcessError.launchFailed("Couldn't read the Tailscale Serve configuration.")
                     }
                     serve = observed
+                    // Authoritatively off: any recorded port no longer proves ownership.
+                    if serve == .off { servedPort = nil }
+                    let want = remote.enabled && remote.tailscaleServe && status.httpsEnabled
                     switch serve {
                     case .off where want, .ours where want:
                         if let port, serve != .ours(port: port) {
@@ -981,19 +985,18 @@ final class AppState {
                         try await RemoteTailscale.disableServe()
                         serve = .off
                         servedPort = nil
-                    case .off:
-                        servedPort = nil
                     default:
                         break
                     }
-                } catch ProcessError.launchFailed(let message) {
-                    serve = previous
-                    failure = message
-                } catch ProcessError.nonZeroExit(_, let stderr) {
-                    failure = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
-                } catch {
-                    failure = "\(error)"
+                } else {
+                    serve = .off
                 }
+            } catch ProcessError.launchFailed(let message) {
+                failure = message
+            } catch ProcessError.nonZeroExit(_, let stderr) {
+                failure = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            } catch {
+                failure = "\(error)"
             }
             guard let self, !Task.isCancelled else { return }
             remoteTailscale = status

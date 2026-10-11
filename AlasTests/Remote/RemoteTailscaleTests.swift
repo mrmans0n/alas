@@ -12,10 +12,13 @@ struct RemoteTailscaleTests {
          RemoteTailscaleStatus(dnsName: name, httpsEnabled: false)),
         (#"{"BackendState":"Stopped","Self":{"DNSName":"mac.tail1.ts.net."}}"#, nil),
         (#"{"BackendState":"Running","Self":{"DNSName":""}}"#, nil),
-        ("not json", nil),
     ] as [(String, RemoteTailscaleStatus?)])
-    func parseStatus(json: String, expected: RemoteTailscaleStatus?) {
-        #expect(RemoteTailscale.parseStatus(Data(json.utf8)) == expected)
+    func parseStatus(json: String, expected: RemoteTailscaleStatus?) throws {
+        #expect(try RemoteTailscale.parseStatus(Data(json.utf8)) == expected)
+    }
+
+    @Test func parseStatusTreatsMalformedOutputAsUnknownNotStopped() {
+        #expect(throws: (any Error).self) { try RemoteTailscale.parseStatus(Data("not json".utf8)) }
     }
 
     @Test(arguments: [

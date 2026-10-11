@@ -37,10 +37,13 @@ enum RemoteTailscale {
         candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
-    /// Nil unless the backend is running and has a MagicDNS name.
-    static func parseStatus(_ data: Data) -> RemoteTailscaleStatus? {
-        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              root["BackendState"] as? String == "Running",
+    /// Nil unless the backend is running and has a MagicDNS name. Throws on
+    /// output that isn't a JSON object: unknown, not "stopped".
+    static func parseStatus(_ data: Data) throws -> RemoteTailscaleStatus? {
+        guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            throw ProcessError.launchFailed("Unexpected tailscale status output.")
+        }
+        guard root["BackendState"] as? String == "Running",
               let me = root["Self"] as? [String: Any],
               let raw = me["DNSName"] as? String else { return nil }
         let dnsName = normalizedDNSName(raw)
@@ -72,23 +75,25 @@ enum RemoteTailscale {
         return .ours(port: port)
     }
 
-    static func status() async -> RemoteTailscaleStatus? {
-        guard let output = await run(["status", "--json"]) else { return nil }
-        return parseStatus(output)
+    /// Nil when Tailscale isn't installed or isn't running; throws when the
+    /// CLI fails, times out, or answers with something unparsable.
+    static func status() async throws -> RemoteTailscaleStatus? {
+        guard executable() != nil else { return nil }
+        return try parseStatus(await run(["status", "--json"]))
     }
 
     /// Nil when the CLI fails or times out.
     static func serveState(dnsName: String, ports: Set<UInt16>) async -> RemoteTailscaleServeState? {
-        guard let output = await run(["serve", "status", "--json"]) else { return nil }
+        guard let output = try? await run(["serve", "status", "--json"]) else { return nil }
         return parseServe(output, dnsName: dnsName, ports: ports)
     }
 
     static func enableServe(port: UInt16) async throws {
-        try await runChecked(["serve", "--bg", "--https=443", target(port: port)])
+        _ = try await run(["serve", "--bg", "--https=443", target(port: port)])
     }
 
     static func disableServe() async throws {
-        try await runChecked(["serve", "--https=443", "off"])
+        _ = try await run(["serve", "--https=443", "off"])
     }
 
     private static func target(port: UInt16) -> String { "http://127.0.0.1:\(port)" }
@@ -99,16 +104,10 @@ enum RemoteTailscale {
         return name
     }
 
-    private static func run(_ args: [String]) async -> Data? {
-        guard let executable = executable(),
-              let result = try? await Process.run(executable, args: args, env: environment, timeout: timeout),
-              result.exitCode == 0 else { return nil }
-        return Data(result.stdout.utf8)
-    }
-
-    private static func runChecked(_ args: [String]) async throws {
+    private static func run(_ args: [String]) async throws -> Data {
         guard let executable = executable() else { throw ProcessError.launchFailed("Tailscale CLI not found.") }
         let result = try await Process.run(executable, args: args, env: environment, timeout: timeout)
         guard result.exitCode == 0 else { throw ProcessError.nonZeroExit(result.exitCode, result.stderr) }
+        return Data(result.stdout.utf8)
     }
 }
