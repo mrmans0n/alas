@@ -283,8 +283,10 @@ struct ProjectsManagerTests {
         #expect(mgr.worktrees(projectId: folder.id).isEmpty)
         #expect(mgr.worktreeIdConflicts[folder.id] == [id: git.id])
         #expect(mgr.alsoInNotes(projectId: folder.id) == ["\(dir.lastPathComponent) · Also in repo"])
+        #expect(mgr.takeOwnershipChangedIds() == [id])
 
         #expect(mgr.removeProject(id: git.id) == [folder.id])
+        #expect(mgr.takeOwnershipChangedIds() == [id])
         #expect(mgr.worktrees(projectId: folder.id).map(\.id) == [id])
         #expect(mgr.worktreeIdConflicts.isEmpty)
     }

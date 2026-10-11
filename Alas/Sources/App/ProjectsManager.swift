@@ -96,6 +96,14 @@ final class ProjectsManager {
     /// The rows behind `worktreeIdConflicts`, kept so a loser gets its row
     /// back the moment the winner lets go of it.
     private var shadowedRows: [String: [String: Worktree]] = [:]
+    /// Ids whose owning project changed since `takeOwnershipChangedIds()` was
+    /// last called, so state keyed by project can be rebuilt for them.
+    private var ownershipChangedIds: Set<String> = []
+
+    func takeOwnershipChangedIds() -> Set<String> {
+        defer { ownershipChangedIds = [] }
+        return ownershipChangedIds
+    }
 
     private let git = GitService()
     private let worktreeSvc = WorktreeService()
@@ -522,6 +530,7 @@ final class ProjectsManager {
         worktreesByProject[loserId]?.removeAll { $0.id == id }
         worktreeIdConflicts[loserId, default: [:]][id] = winnerId
         shadowedRows[loserId, default: [:]][id] = row
+        ownershipChangedIds.insert(id)
         // Projects that already lost this row to the displaced owner now lose
         // it to the final one, so restoring never has to follow a chain.
         for (otherId, lost) in worktreeIdConflicts where lost[id] == loserId {
@@ -538,6 +547,8 @@ final class ProjectsManager {
             loserId != winnerId && lost.contains { ids.contains($0.key) && $0.value == winnerId }
         }.keys
         for loserId in losers {
+            let restored = worktreeIdConflicts[loserId, default: [:]].filter { ids.contains($0.key) && $0.value == winnerId }
+            ownershipChangedIds.formUnion(restored.keys)
             // A shadowed row's directory may have been removed meanwhile (for
             // example by `git worktree remove`), and a folder project has no
             // watcher to notice, so only restore rows that still exist.

@@ -2226,6 +2226,7 @@ final class AppState {
             saveSpaces()
         }
         let selectedWasRemoved = selectedWorktreeId.map(disappeared.contains) ?? false
+        let selectionMovedOutOfActiveSpace = applyOwnershipChanges()
         if let current = selectedWorktreeId, !afterIds.contains(current) || selectionMovedOutOfActiveSpace {
             selectWorktree(id: resolvedSelectionForActiveSpace())
         }
@@ -2234,19 +2235,26 @@ final class AppState {
         }
     }
 
-    /// A row can leave the active space while its id stays live: the directory
-    /// moved to a project in another space.
-    private var selectionMovedOutOfActiveSpace: Bool {
-        selectedWorktreeId.map { id in
-            !activeSpaceProjects.contains { projectsManager.visibleWorktrees(projectId: $0.id).contains { $0.id == id } }
-                && activeSpaceProjects.contains { projectsManager.worktreeIdConflicts[$0.id]?[id] != nil }
-        } ?? false
+    /// Applies directory ownership moves: an idle ACP manager is rebuilt under
+    /// its new owner, since its providers captured the previous project (a
+    /// manager with running sessions is left alone rather than torn down).
+    /// Returns whether the selected row moved to a project outside the active
+    /// space while its id stayed live, so the selection must be re-resolved.
+    private func applyOwnershipChanges() -> Bool {
+        let changed = projectsManager.takeOwnershipChangedIds()
+        for id in changed {
+            if let manager = acpManager(forWorktreeId: id), manager.runners.isEmpty {
+                disposeACPManager(for: id)
+            }
+        }
+        guard let selected = selectedWorktreeId, changed.contains(selected) else { return false }
+        return !activeSpaceProjects.contains { projectsManager.worktrees(projectId: $0.id).contains { $0.id == selected } }
     }
 
-    /// Reselects when directory ownership moved the selected row to a project
-    /// outside the active space, which startup arbitration can do.
+    /// Reselects when directory ownership moved the selected row out of the
+    /// active space, which startup arbitration can do.
     func reconcileSelectionAfterOwnershipChange() {
-        if selectionMovedOutOfActiveSpace {
+        if applyOwnershipChanges() {
             selectWorktree(id: resolvedSelectionForActiveSpace())
         }
     }
