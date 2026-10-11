@@ -1,16 +1,16 @@
 import Foundation
 import Observation
 
-struct ProjectUpdate: Equatable {
-    var name: String
-    var icon: ProjectIcon
-    var startupScripts: ProjectStartupScripts = .defaults
+public struct ProjectUpdate: Equatable, Sendable {
+    public var name: String
+    public var icon: ProjectIcon
+    public var startupScripts: ProjectStartupScripts = .defaults
     /// `nil` means this update does not change the project's MCP configuration.
-    var mcpServers: [ProjectMCPServer]?
+    public var mcpServers: [ProjectMCPServer]?
     /// Nil leaves naming unchanged; a blank string resets to the global default.
-    var worktreeBranchTemplate: String?
+    public var worktreeBranchTemplate: String?
 
-    init(
+    public init(
         name: String,
         icon: ProjectIcon,
         startupScripts: ProjectStartupScripts = .defaults,
@@ -24,7 +24,7 @@ struct ProjectUpdate: Equatable {
         self.worktreeBranchTemplate = worktreeBranchTemplate
     }
 
-    init(
+    public init(
         name: String,
         color: String,
         startupScripts: ProjectStartupScripts = .defaults,
@@ -41,7 +41,7 @@ struct ProjectUpdate: Equatable {
     }
 }
 
-enum WorktreeOperationState: Equatable {
+public enum WorktreeOperationState: Equatable, Sendable {
     case creating
     /// Claimed the moment the delete confirmation goes up, before the user
     /// has answered it — not tied to any async preflight work. `NSAlert`'s
@@ -72,27 +72,32 @@ enum WorktreeOperationState: Equatable {
 /// Identity of a worktree claim inside a specific project. A worktree id is
 /// its path, so the project is part of the claim's identity: two projects
 /// (typically one per SSH host) can list a checkout at the same path.
-struct WorktreeOperationKey: Hashable {
-    var projectId: String
-    var worktreeId: String
+public struct WorktreeOperationKey: Hashable, Sendable {
+    public var projectId: String
+    public var worktreeId: String
+
+    public init(projectId: String, worktreeId: String) {
+        self.projectId = projectId
+        self.worktreeId = worktreeId
+    }
 }
 
 @Observable
 @MainActor
-final class ProjectsManager {
-    private(set) var projects: [ProjectConfig]
-    private(set) var worktreesByProject: [String: [Worktree]] = [:]
+public final class ProjectsManager {
+    public private(set) var projects: [ProjectConfig]
+    public private(set) var worktreesByProject: [String: [Worktree]] = [:]
     /// Keyed by project *and* worktree id: a worktree id is its own path, and
     /// two projects (typically one per SSH host) can list a checkout at the
     /// same path. Keying by id alone would let one project's claim overwrite
     /// the other's, so cancelling a delete on one host would silently reopen
     /// admission for a worktree the other host is still removing.
-    private(set) var worktreeOperationStates: [WorktreeOperationKey: WorktreeOperationState] = [:]
-    private(set) var worktreeRefreshFailures: Set<String> = []
+    public private(set) var worktreeOperationStates: [WorktreeOperationKey: WorktreeOperationState] = [:]
+    public private(set) var worktreeRefreshFailures: Set<String> = []
     /// Rows a project lists but does not show because another local project
     /// owns the same directory: `[losing projectId][worktree id] = winner`.
     /// A worktree id is its path, so only one project may hold it.
-    private(set) var worktreeIdConflicts: [String: [String: String]] = [:]
+    public private(set) var worktreeIdConflicts: [String: [String: String]] = [:]
     /// The rows behind `worktreeIdConflicts`, kept so a loser gets its row
     /// back the moment the winner lets go of it.
     private var shadowedRows: [String: [String: Worktree]] = [:]
@@ -100,7 +105,7 @@ final class ProjectsManager {
     /// last called, so state keyed by project can be rebuilt for them.
     private var ownershipChangedIds: Set<String> = []
 
-    func takeOwnershipChangedIds() -> Set<String> {
+    public func takeOwnershipChangedIds() -> Set<String> {
         defer { ownershipChangedIds = [] }
         return ownershipChangedIds
     }
@@ -113,7 +118,7 @@ final class ProjectsManager {
     /// tests inject a fixed value via the convenience `defaultOrdering:` init.
     private var defaultOrderingSource: () -> AppConfig.WorktreeSortMode = { .manual }
 
-    init(
+    public init(
         persistedProjects: [ProjectConfig],
         defaultOrdering: @escaping () -> AppConfig.WorktreeSortMode = { .manual }
     ) {
@@ -128,11 +133,11 @@ final class ProjectsManager {
     /// of already-sorted lists* is therefore not implicit. Callers must invoke
     /// `reapplyOrderingForAllProjects()` after a config change to propagate the
     /// new mode to lists that were already sorted.
-    func setDefaultOrdering(_ source: @escaping () -> AppConfig.WorktreeSortMode) {
+    public func setDefaultOrdering(_ source: @escaping () -> AppConfig.WorktreeSortMode) {
         self.defaultOrderingSource = source
     }
 
-    func addProject(
+    public func addProject(
         path: URL,
         displayName: String,
         icon: ProjectIcon,
@@ -196,7 +201,7 @@ final class ProjectsManager {
         return project
     }
 
-    func addProject(
+    public func addProject(
         path: URL,
         displayName: String,
         color: String,
@@ -213,7 +218,7 @@ final class ProjectsManager {
     /// Returns the projects that got back rows they had lost to this one, so
     /// the caller can refresh and persist them.
     @discardableResult
-    func removeProject(id: String) -> Set<String> {
+    public func removeProject(id: String) -> Set<String> {
         let released = Set(worktreesByProject[id, default: []].map(\.id))
         projects.removeAll { $0.id == id }
         worktreesByProject.removeValue(forKey: id)
@@ -223,7 +228,7 @@ final class ProjectsManager {
         return restoreRows(releasedBy: id, ids: released)
     }
 
-    func updateProject(id: String, update: ProjectUpdate) {
+    public func updateProject(id: String, update: ProjectUpdate) {
         guard let idx = projects.firstIndex(where: { $0.id == id }) else { return }
         projects[idx].name = update.name
         projects[idx].icon = update.icon
@@ -239,16 +244,16 @@ final class ProjectsManager {
 
     /// Sets the per-project stacked-diffs mode. Callers persist via
     /// `AppState.saveProjects()`.
-    func setGGMode(projectId: String, mode: GGProjectMode) {
+    public func setGGMode(projectId: String, mode: GGProjectMode) {
         guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
         projects[idx].ggMode = mode
     }
 
-    func ggWorktreeMode(projectId: String, worktreeId: String) -> GGWorktreeMode {
+    public func ggWorktreeMode(projectId: String, worktreeId: String) -> GGWorktreeMode {
         projects.first(where: { $0.id == projectId })?.ggWorktreeModes[worktreeId] ?? .inherit
     }
 
-    func setGGWorktreeMode(projectId: String, worktreeId: String, mode: GGWorktreeMode) {
+    public func setGGWorktreeMode(projectId: String, worktreeId: String, mode: GGWorktreeMode) {
         guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
         if mode == .inherit {
             projects[idx].ggWorktreeModes.removeValue(forKey: worktreeId)
@@ -259,38 +264,38 @@ final class ProjectsManager {
 
     // MARK: - Files-tab bookmarks
 
-    func fileBookmarks(projectId: String) -> [String] {
+    public func fileBookmarks(projectId: String) -> [String] {
         projects.first(where: { $0.id == projectId })?.fileBookmarks ?? []
     }
 
     /// Adds or removes a Files-tab bookmark. Callers persist via
     /// `AppState.saveProjects()`.
-    func toggleFileBookmark(projectId: String, path: String) {
+    public func toggleFileBookmark(projectId: String, path: String) {
         guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
         projects[idx].fileBookmarks = FileBookmarks.toggled(path, in: projects[idx].fileBookmarks)
     }
 
-    func toggleFileBookmark(projectId: String, node: FileTreeNode) {
+    public func toggleFileBookmark(projectId: String, node: FileTreeNode) {
         guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
         projects[idx].fileBookmarks = FileBookmarks.toggled(node, in: projects[idx].fileBookmarks)
     }
 
-    func removeFileBookmark(projectId: String, path: String) {
+    public func removeFileBookmark(projectId: String, path: String) {
         guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
         projects[idx].fileBookmarks = FileBookmarks.removing(path, from: projects[idx].fileBookmarks)
     }
 
-    func removeFileBookmark(projectId: String, node: FileTreeNode) {
+    public func removeFileBookmark(projectId: String, node: FileTreeNode) {
         guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
         projects[idx].fileBookmarks = FileBookmarks.removing(node, from: projects[idx].fileBookmarks)
     }
 
-    func removeFileBookmark(projectId: String, bookmark: String) {
+    public func removeFileBookmark(projectId: String, bookmark: String) {
         guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
         projects[idx].fileBookmarks = FileBookmarks.removingBookmark(bookmark, from: projects[idx].fileBookmarks)
     }
 
-    func removeGGWorktreeMode(projectId: String, worktreeId: String) {
+    public func removeGGWorktreeMode(projectId: String, worktreeId: String) {
         guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
         projects[idx].ggWorktreeModes.removeValue(forKey: worktreeId)
     }
@@ -298,26 +303,26 @@ final class ProjectsManager {
     /// Records a per-user trust decision for a repo-defined MCP server,
     /// keyed by `RepoMCPTrust.hash(for:)`. Callers persist via
     /// `AppState.saveProjects()`.
-    func setRepoMCPTrust(projectId: String, hash: String, state: RepoMCPTrustState) {
+    public func setRepoMCPTrust(projectId: String, hash: String, state: RepoMCPTrustState) {
         guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
         projects[idx].repoMCPTrust[hash] = state
     }
 
     /// The recorded trust decision for a repo-defined MCP server's exact
     /// config, or nil when no decision exists yet.
-    func repoMCPTrustState(projectId: String, for server: ProjectMCPServer) -> RepoMCPTrustState? {
+    public func repoMCPTrustState(projectId: String, for server: ProjectMCPServer) -> RepoMCPTrustState? {
         projects.first(where: { $0.id == projectId })?
             .repoMCPTrust[RepoMCPTrust.hash(for: server)]
     }
 
-    func isRepoHookApproved(projectId: String, hash: String) -> Bool {
+    public func isRepoHookApproved(projectId: String, hash: String) -> Bool {
         projects.first(where: { $0.id == projectId })?.approvedRepoHookHashes.contains(hash) == true
     }
 
     /// Records an approval for the exact repository hook contents. Returns
     /// whether persistent project configuration changed.
     @discardableResult
-    func approveRepoHook(projectId: String, hash: String) -> Bool {
+    public func approveRepoHook(projectId: String, hash: String) -> Bool {
         guard let idx = projects.firstIndex(where: { $0.id == projectId }),
               !projects[idx].approvedRepoHookHashes.contains(hash)
         else {
@@ -328,7 +333,7 @@ final class ProjectsManager {
     }
 
     @discardableResult
-    func revokeRepoHookApproval(projectId: String, hash: String) -> Bool {
+    public func revokeRepoHookApproval(projectId: String, hash: String) -> Bool {
         guard let idx = projects.firstIndex(where: { $0.id == projectId }),
               projects[idx].approvedRepoHookHashes.contains(hash)
         else {
@@ -340,7 +345,7 @@ final class ProjectsManager {
 
     /// Enables/disables a repo-defined MCP server for this project by name.
     /// Callers persist via `AppState.saveProjects()`.
-    func setRepoMCPServerDisabled(projectId: String, name: String, disabled: Bool) {
+    public func setRepoMCPServerDisabled(projectId: String, name: String, disabled: Bool) {
         guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
         if disabled {
             if !projects[idx].disabledRepoMCPServers.contains(name) {
@@ -351,21 +356,21 @@ final class ProjectsManager {
         }
     }
 
-    func issueAttachment(projectId: String, worktreeId: String) -> IssueAttachment? {
+    public func issueAttachment(projectId: String, worktreeId: String) -> IssueAttachment? {
         projects.first(where: { $0.id == projectId })?.issueAttachments[worktreeId]
     }
 
-    func setIssueAttachment(projectId: String, worktreeId: String, attachment: IssueAttachment) {
+    public func setIssueAttachment(projectId: String, worktreeId: String, attachment: IssueAttachment) {
         guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
         projects[idx].issueAttachments[worktreeId] = attachment
     }
 
-    func removeIssueAttachment(projectId: String, worktreeId: String) {
+    public func removeIssueAttachment(projectId: String, worktreeId: String) {
         guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
         projects[idx].issueAttachments.removeValue(forKey: worktreeId)
     }
 
-    func reorderProject(fromIndex: Int, toIndex: Int) {
+    public func reorderProject(fromIndex: Int, toIndex: Int) {
         guard projects.indices.contains(fromIndex),
               projects.indices.contains(toIndex),
               fromIndex != toIndex
@@ -376,7 +381,7 @@ final class ProjectsManager {
         projects.insert(moving, at: clampedDestination)
     }
 
-    func reorderProject(movingId: String, destinationId: String) {
+    public func reorderProject(movingId: String, destinationId: String) {
         guard let fromIndex = projects.firstIndex(where: { $0.id == movingId }),
               let toIndex = projects.firstIndex(where: { $0.id == destinationId }),
               fromIndex != toIndex
@@ -384,7 +389,7 @@ final class ProjectsManager {
         reorderProject(fromIndex: fromIndex, toIndex: toIndex)
     }
 
-    func moveProjectToEnd(id: String) {
+    public func moveProjectToEnd(id: String) {
         guard let fromIndex = projects.firstIndex(where: { $0.id == id }),
               fromIndex != projects.count - 1
         else { return }
@@ -392,33 +397,33 @@ final class ProjectsManager {
         projects.append(moving)
     }
 
-    func worktrees(projectId: String) -> [Worktree] {
+    public func worktrees(projectId: String) -> [Worktree] {
         worktreesByProject[projectId] ?? []
     }
 
     /// The claim open for this exact worktree, looked up by project *and* id.
     /// Both are needed: a worktree id is its own path, and two projects
     /// (typically one per SSH host) can list a checkout at the same path.
-    func operationState(forWorktreeId worktreeId: String, projectId: String) -> WorktreeOperationState? {
+    public func operationState(forWorktreeId worktreeId: String, projectId: String) -> WorktreeOperationState? {
         worktreeOperationStates[WorktreeOperationKey(projectId: projectId, worktreeId: worktreeId)]
     }
 
     /// The claim for a worktree value, which carries both halves of the key.
-    func operationState(for worktree: Worktree) -> WorktreeOperationState? {
+    public func operationState(for worktree: Worktree) -> WorktreeOperationState? {
         operationState(forWorktreeId: worktree.id, projectId: worktree.projectId)
     }
 
     /// Opens or clears a claim for a worktree value.
-    func setOperationState(for worktree: Worktree, state: WorktreeOperationState?) {
+    public func setOperationState(for worktree: Worktree, state: WorktreeOperationState?) {
         setOperationState(forWorktreeId: worktree.id, projectId: worktree.projectId, state: state)
     }
 
     /// Every claim currently open, keyed by project and worktree id.
-    func operationStatesSnapshot() -> [WorktreeOperationKey: WorktreeOperationState] {
+    public func operationStatesSnapshot() -> [WorktreeOperationKey: WorktreeOperationState] {
         worktreeOperationStates
     }
 
-    func setOperationState(forWorktreeId worktreeId: String, projectId: String, state: WorktreeOperationState?) {
+    public func setOperationState(forWorktreeId worktreeId: String, projectId: String, state: WorktreeOperationState?) {
         let key = WorktreeOperationKey(projectId: projectId, worktreeId: worktreeId)
         if let state {
             worktreeOperationStates[key] = state
@@ -427,23 +432,29 @@ final class ProjectsManager {
         }
     }
 
-    func insertOptimisticWorktree(_ worktree: Worktree) {
+    public func insertOptimisticWorktree(_ worktree: Worktree) {
         let projectId = worktree.projectId
         storeRows(listedRows(projectId: projectId).filter { $0.id != worktree.id } + [worktree], projectId: projectId)
     }
 
     /// Which local project keeps a directory two projects both list.
-    enum RowOwnership {
-        struct Claimant: Equatable {
-            var projectId: String
-            var isFolder: Bool
-            var addedAt: Date
+    public enum RowOwnership: Sendable {
+        public struct Claimant: Equatable, Sendable {
+            public var projectId: String
+            public var isFolder: Bool
+            public var addedAt: Date
+
+            public init(projectId: String, isFolder: Bool, addedAt: Date) {
+                self.projectId = projectId
+                self.isFolder = isFolder
+                self.addedAt = addedAt
+            }
         }
 
         /// Pure and order-independent, so it does not matter which project
         /// refreshes first: a git row beats a folder row, and between two
         /// projects of the same kind the earlier-added one wins.
-        static func winner(_ a: Claimant, _ b: Claimant) -> String {
+        public static func winner(_ a: Claimant, _ b: Claimant) -> String {
             if a.isFolder != b.isFolder { return a.isFolder ? b.projectId : a.projectId }
             if a.addedAt != b.addedAt { return a.addedAt < b.addedAt ? a.projectId : b.projectId }
             return min(a.projectId, b.projectId)
@@ -451,7 +462,7 @@ final class ProjectsManager {
     }
 
     /// One "Also in X" line per row this project lost to another project.
-    static func alsoInNotes(
+    public static func alsoInNotes(
         conflicts: [String: String],
         rows: [String: Worktree],
         projects: [ProjectConfig]
@@ -463,7 +474,7 @@ final class ProjectsManager {
         }
     }
 
-    func alsoInNotes(projectId: String) -> [String] {
+    public func alsoInNotes(projectId: String) -> [String] {
         Self.alsoInNotes(
             conflicts: worktreeIdConflicts[projectId] ?? [:],
             rows: shadowedRows[projectId] ?? [:],
@@ -560,14 +571,14 @@ final class ProjectsManager {
         return Set(losers)
     }
 
-    static func isDirectory(_ path: String) -> Bool {
+    public static func isDirectory(_ path: String) -> Bool {
         var isDirectory: ObjCBool = false
         return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) && isDirectory.boolValue
     }
 
     /// The single row of a folder project. Built without touching git or the
     /// filesystem so refreshes stay stable and never persist churn.
-    static func folderWorktree(for project: ProjectConfig) -> Worktree {
+    public static func folderWorktree(for project: ProjectConfig) -> Worktree {
         let path = URL(fileURLWithPath: project.path)
         return Worktree(
             id: Worktree.makeId(path: path),
@@ -581,7 +592,7 @@ final class ProjectsManager {
         )
     }
 
-    func populateConfiguredProjectWorktreesForRecovery() {
+    public func populateConfiguredProjectWorktreesForRecovery() {
         for project in projects where worktreesByProject[project.id, default: []].isEmpty {
             let cachedWorktrees = project.cachedWorktrees.filter {
                 project.host != nil || FileManager.default.fileExists(atPath: $0.path.path)
@@ -612,7 +623,7 @@ final class ProjectsManager {
         }
     }
 
-    func removeOptimisticWorktree(id: String, projectId: String) {
+    public func removeOptimisticWorktree(id: String, projectId: String) {
         if worktreesByProject[projectId] != nil {
             storeRows(listedRows(projectId: projectId).filter { $0.id != id }, projectId: projectId)
         }
@@ -626,7 +637,7 @@ final class ProjectsManager {
     /// when the refresh that normally does that could not run; without it a
     /// hosted project's deleted row would be restored from `cachedWorktrees`
     /// at startup recovery. Callers persist via `saveProjects()`.
-    func dropRemovedWorktree(id: String, projectId: String) {
+    public func dropRemovedWorktree(id: String, projectId: String) {
         let removedRows = worktreesByProject[projectId, default: []].filter { $0.id == id }
         let removedPaths = Set(removedRows.map { canonical($0.path) })
         removeOptimisticWorktree(id: id, projectId: projectId)
@@ -637,22 +648,22 @@ final class ProjectsManager {
         projects[idx].issueAttachments.removeValue(forKey: id)
     }
 
-    func visibleWorktrees(projectId: String) -> [Worktree] {
+    public func visibleWorktrees(projectId: String) -> [Worktree] {
         let hidden = hiddenSet(projectId: projectId)
         return worktrees(projectId: projectId).filter { !hidden.contains(canonical($0.path)) }
     }
 
-    func archivedWorktrees(projectId: String) -> [Worktree] {
+    public func archivedWorktrees(projectId: String) -> [Worktree] {
         let hidden = hiddenSet(projectId: projectId)
         return worktrees(projectId: projectId).filter { hidden.contains(canonical($0.path)) }
     }
 
-    func visibleMainWorktree(projectId: String) -> Worktree? {
+    public func visibleMainWorktree(projectId: String) -> Worktree? {
         guard let project = projects.first(where: { $0.id == projectId }) else { return nil }
         return visibleWorktrees(projectId: projectId).first { isMainWorktree($0, project: project) }
     }
 
-    func resetWorktreeOrder(projectId: String) {
+    public func resetWorktreeOrder(projectId: String) {
         guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
         let wasManual = projects[idx].worktreeOrderIsManual || !projects[idx].worktreeOrder.isEmpty
         guard wasManual else { return }
@@ -669,7 +680,7 @@ final class ProjectsManager {
     /// actually changed (e.g. orphan ids dropped during normalization), so
     /// callers can decide whether to persist.
     @discardableResult
-    func reapplyOrderingForAllProjects() -> Bool {
+    public func reapplyOrderingForAllProjects() -> Bool {
         var changed = false
         for project in projects {
             if applyWorktreeOrdering(projectId: project.id) {
@@ -679,7 +690,7 @@ final class ProjectsManager {
         return changed
     }
 
-    func reorderWorktree(projectId: String, fromIndex: Int, toIndex: Int) {
+    public func reorderWorktree(projectId: String, fromIndex: Int, toIndex: Int) {
         guard let projectIndex = projects.firstIndex(where: { $0.id == projectId }),
               var rows = worktreesByProject[projectId],
               rows.indices.contains(fromIndex)
@@ -705,7 +716,7 @@ final class ProjectsManager {
         applyWorktreeOrdering(projectId: projectId)
     }
 
-    func reorderWorktree(projectId: String, movingId: String, destinationId: String) {
+    public func reorderWorktree(projectId: String, movingId: String, destinationId: String) {
         applyWorktreeOrdering(projectId: projectId)
         let rows = worktreesByProject[projectId, default: []]
         guard let fromIndex = rows.firstIndex(where: { $0.id == movingId }),
@@ -715,11 +726,11 @@ final class ProjectsManager {
         reorderWorktree(projectId: projectId, fromIndex: fromIndex, toIndex: toIndex)
     }
 
-    func isWorktreeHidden(projectId: String, path: URL) -> Bool {
+    public func isWorktreeHidden(projectId: String, path: URL) -> Bool {
         hiddenSet(projectId: projectId).contains(canonical(path))
     }
 
-    func setWorktreeLaunchDefaults(projectId: String, openAfterCreate: Bool, launcherMode: AppConfig.LauncherMode) {
+    public func setWorktreeLaunchDefaults(projectId: String, openAfterCreate: Bool, launcherMode: AppConfig.LauncherMode) {
         guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
         projects[idx].setWorktreeLaunchPreference(.init(
             openAfterCreate: openAfterCreate,
@@ -727,7 +738,7 @@ final class ProjectsManager {
         ))
     }
 
-    func setWorktreeHidden(projectId: String, path: URL, hidden: Bool) {
+    public func setWorktreeHidden(projectId: String, path: URL, hidden: Bool) {
         guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
         let key = canonical(path)
         var paths = projects[idx].hiddenWorktreePaths
@@ -742,7 +753,7 @@ final class ProjectsManager {
     /// Refresh the live worktree list and reconcile per-worktree persisted
     /// configuration. Returns `true` when the caller should persist changes.
     @discardableResult
-    func refreshWorktrees(projectId: String) async throws -> Bool {
+    public func refreshWorktrees(projectId: String) async throws -> Bool {
         do {
             let changed = try await refreshWorktreesImpl(projectId: projectId)
             worktreeRefreshFailures.remove(projectId)
@@ -753,7 +764,7 @@ final class ProjectsManager {
         }
     }
 
-    func worktreeDiscoverySucceeded(projectId: String) -> Bool {
+    public func worktreeDiscoverySucceeded(projectId: String) -> Bool {
         !worktreeRefreshFailures.contains(projectId)
     }
 
@@ -892,7 +903,7 @@ final class ProjectsManager {
     /// Refresh every project. Returns `true` when at least one project's
     /// persisted configuration changed, so the caller can save it.
     @discardableResult
-    func refreshAll() async -> Bool {
+    public func refreshAll() async -> Bool {
         var changed = false
         for project in projects {
             if let didGC = try? await refreshWorktrees(projectId: project.id) {
@@ -912,7 +923,7 @@ final class ProjectsManager {
     /// has on disk yet. Delete-operation rows are still updated — they
     /// correspond to real git worktrees, so git's branch is still the truth.
     @discardableResult
-    func applyHeadUpdates(projectId: String, branchByWorktreePath: [URL: String]) -> Set<String> {
+    public func applyHeadUpdates(projectId: String, branchByWorktreePath: [URL: String]) -> Set<String> {
         guard let projectIndex = projects.firstIndex(where: { $0.id == projectId }),
               !branchByWorktreePath.isEmpty
         else { return [] }
@@ -1076,7 +1087,7 @@ final class ProjectsManager {
     /// Whether `worktree` is the project's primary on-disk checkout (the main
     /// worktree) rather than a feature worktree. Reuses the same path
     /// comparison the sort logic uses to pin main at position 0.
-    func isMain(_ worktree: Worktree, in project: ProjectConfig) -> Bool {
+    public func isMain(_ worktree: Worktree, in project: ProjectConfig) -> Bool {
         isMainWorktree(worktree, project: project)
     }
 

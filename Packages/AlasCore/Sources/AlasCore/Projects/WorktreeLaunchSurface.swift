@@ -2,22 +2,30 @@ import Foundation
 
 /// A chat session to open on a new worktree, decided before the worktree
 /// exists so a retry reuses the same ids instead of queueing twice.
-struct PreparedWorktreeACPPrompt: Equatable, Sendable {
-    let sessionID: ACPSession.ID
-    let promptID: UUID
-    let text: String
+public struct PreparedWorktreeACPPrompt: Equatable, Sendable {
+    public let sessionID: ACPSession.ID
+    public let promptID: UUID
+    public let text: String
     /// Queued to go out as soon as the agent is ready, or left in the
     /// composer for the user to send. Meaningless when `text` is empty.
-    var sendsAutomatically = true
+    public var sendsAutomatically = true
     /// Model to switch the session to before the prompt goes out, or nil for
     /// the agent's default.
-    var modelID: String? = nil
+    public var modelID: String? = nil
+
+    public init(sessionID: ACPSession.ID, promptID: UUID, text: String, sendsAutomatically: Bool = true, modelID: String? = nil) {
+        self.sessionID = sessionID
+        self.promptID = promptID
+        self.text = text
+        self.sendsAutomatically = sendsAutomatically
+        self.modelID = modelID
+    }
 }
 
 /// Describes what (if anything) the New Worktree dialog should open in the
 /// center pane after the worktree is created. Makes invalid combinations
 /// (ACP without an agent, "no tab" with an agent) unrepresentable.
-enum WorktreeLaunchSurface: Equatable {
+public enum WorktreeLaunchSurface: Equatable, Sendable {
     /// No tab is opened. The new worktree is still selected.
     case none
     /// A terminal tab is opened. When `agentId` is non-nil, the agent's

@@ -286,7 +286,8 @@ public enum RunScriptCompletionMonitor: Sendable {
     }
 }
 
-private extension StringProtocol {
+extension StringProtocol {
+    /// Escapes the characters that stay special inside double quotes.
     var doubleQuotedShellEscaped: String {
         String(self)
             .replacingOccurrences(of: "\\", with: "\\\\")

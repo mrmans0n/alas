@@ -52,7 +52,7 @@ struct AppStateRemoteWorktreePathTests {
     }
 
     @Test func remoteWorktreeDestinationReplacesLocalHomePrefix() {
-        let path = AppState.destinationPathReplacingLocalHome(
+        let path = WorktreeLifecycle.destinationPathReplacingLocalHome(
             "/Users/local/.alas/worktrees/repo-feature",
             localHome: "/Users/local",
             remoteHome: "/home/remote"
@@ -62,7 +62,7 @@ struct AppStateRemoteWorktreePathTests {
     }
 
     @Test func remoteWorktreeDestinationKeepsNonHomeAbsolutePath() {
-        let path = AppState.destinationPathReplacingLocalHome(
+        let path = WorktreeLifecycle.destinationPathReplacingLocalHome(
             "/srv/worktrees/repo-feature",
             localHome: "/Users/local",
             remoteHome: "/home/remote"
@@ -78,7 +78,7 @@ struct AppStateRemoteWorktreePathTests {
         ("/.alas-remote/mini/srv/repo", "/.alas-remote/mini/srv/worktrees/repo-feature"),
     ])
     func delegatedDestinationHasTheCreatedWorktreesForm(projectPath: String, expected: String) {
-        let destination = AppState.delegatedWorktreeDestination(
+        let destination = WorktreeLifecycle.delegatedWorktreeDestination(
             rendered: URL(fileURLWithPath: "/srv/worktrees/repo-feature"),
             projectPath: projectPath
         )
@@ -91,7 +91,7 @@ struct AppStateRemoteWorktreePathTests {
     @Test(arguments: [RemotePath.root, RemotePath.root + "/x/wt"])
     func localDestinationRefusesTheReservedNamespace(destination: String) async {
         await #expect(throws: (any Error).self) {
-            try await AppState.preparedCreateWorktreeDestination(
+            try await WorktreeLifecycle.preparedCreateWorktreeDestination(
                 repoPath: URL(fileURLWithPath: "/srv/repo"),
                 destination: URL(fileURLWithPath: destination)
             )
