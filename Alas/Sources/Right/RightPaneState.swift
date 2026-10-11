@@ -24,26 +24,8 @@ struct RightPaneAttentionSnapshot: Equatable {
     let review: ReviewLoopSnapshot?
 }
 
-enum CheckpointOperationKind: Equatable {
-    case capture
-    case preview
-    case restore
-    case delete
-    case recovery
-}
-
 struct CheckpointCreatePresentation: Identifiable, Equatable {
     let id = UUID()
-}
-
-enum GGStackLoadState: Equatable {
-    case inactive
-    case loading
-    case empty
-    case loaded
-    case failed(String)
-
-    var hasLoadedCommit: Bool { self == .loaded }
 }
 
 struct ReviewLoopRemoteFingerprint: Equatable, Sendable {

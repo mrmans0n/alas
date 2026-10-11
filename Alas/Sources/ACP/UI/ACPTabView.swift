@@ -2,12 +2,6 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-enum ACPSessionAttachFreshness {
-    static func isFresh(restoredFromPersistence: Bool, remoteSessionId: String?) -> Bool {
-        !restoredFromPersistence && (remoteSessionId?.isEmpty ?? true)
-    }
-}
-
 struct ACPTabView: View {
     let sessionId: ACPSession.ID
     let state: AppState

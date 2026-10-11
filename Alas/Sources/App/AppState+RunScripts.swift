@@ -3,11 +3,6 @@ import os
 
 private let runScriptLogger = Logger(subsystem: "io.nlopez.alas", category: "RunScripts")
 
-struct RunScriptCapturePaths: Equatable, Sendable {
-    let transcript: String
-    let completion: String
-}
-
 /// What `startScriptLaunch` did with a request.
 enum RunScriptLaunchStart: Equatable, Sendable {
     /// A run slot was claimed under this run ID; the terminal is opening.

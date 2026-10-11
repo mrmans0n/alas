@@ -6,12 +6,6 @@ struct PluginPanelRef: Hashable, Sendable {
     let panelID: String
 }
 
-/// What a `right` panel's rail button carries, set with `panel/badge` (API 15): a count, or a dot when `count` is nil.
-struct PluginPanelBadge: Equatable, Sendable {
-    let count: Int?
-    let tone: PluginViewNode.Tone
-}
-
 /// A plugin panel's button in the right pane's rail.
 struct PluginPanelItem: Equatable, Identifiable {
     let ref: PluginPanelRef
