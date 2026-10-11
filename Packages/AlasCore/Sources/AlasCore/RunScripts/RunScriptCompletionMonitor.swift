@@ -187,6 +187,14 @@ public enum RunScriptCompletionMonitor: Sendable {
         )
     }
 
+    /// Deletes one local run's transcript and completion artifacts.
+    public static func removeLocalCapture(_ paths: RunScriptCapturePaths) {
+        try? FileManager.default.removeItem(atPath: paths.transcript)
+        try? FileManager.default.removeItem(atPath: paths.completion)
+        try? FileManager.default.removeItem(atPath: "\(paths.completion).tmp")
+        try? FileManager.default.removeItem(atPath: "\(paths.completion).status")
+    }
+
     public static func cleanupStaleLocalFiles(now: Date = Date()) {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("Alas", isDirectory: true)
@@ -207,10 +215,7 @@ public enum RunScriptCompletionMonitor: Sendable {
 
     private static func waitLocal(paths: RunScriptCapturePaths) async throws -> RunScriptCompletion {
         defer {
-            try? FileManager.default.removeItem(atPath: paths.transcript)
-            try? FileManager.default.removeItem(atPath: paths.completion)
-            try? FileManager.default.removeItem(atPath: "\(paths.completion).tmp")
-            try? FileManager.default.removeItem(atPath: "\(paths.completion).status")
+            removeLocalCapture(paths)
         }
         while !FileManager.default.fileExists(atPath: paths.completion) {
             try Task.checkCancellation()

@@ -42,7 +42,10 @@ public final class RunService {
                         stdin: nil,
                         stdout: output,
                         stderr: output,
-                        onExit: { _, termination in continuation.resume(returning: termination.status) }
+                        onExit: { _, termination in
+                            group.exited()
+                            continuation.resume(returning: termination.status)
+                        }
                     )
                     group.started(process.pid)
                 } catch {
@@ -72,10 +75,17 @@ public final class RunService {
             repoRoot: project.path,
             capturePaths: location.paths
         )
-        let exitCode = try await launch(command, worktree.path)
+        let exitCode: Int32
+        do {
+            exitCode = try await launch(command, worktree.path)
+        } catch {
+            RunScriptCompletionMonitor.removeLocalCapture(location.paths)
+            throw error
+        }
         // The command publishes its completion file before the shell exits, so
         // a missing file now means it never will be.
         guard FileManager.default.fileExists(atPath: location.paths.completion) else {
+            RunScriptCompletionMonitor.removeLocalCapture(location.paths)
             throw RunError.completionNotPublished(exitCode: exitCode)
         }
         return try await RunScriptCompletionMonitor.wait(for: location)
@@ -83,18 +93,24 @@ public final class RunService {
 }
 
 /// The shell's process group, terminated on cancellation even when the
-/// cancellation arrives before the shell has started.
+/// cancellation arrives before the shell has started. SIGTERM goes first; the
+/// group gets SIGKILL if the shell is still running after a grace period, and
+/// whatever is left in it gets SIGKILL when a cancelled shell exits. Both
+/// happen before the shell is reaped, so its pid is still its own.
 private final class ShellGroup: @unchecked Sendable {
+    static let killGrace: DispatchTimeInterval = .seconds(2)
+
     private let lock = NSLock()
     private var pid: pid_t?
     private var cancelled = false
+    private var hasExited = false
 
     func started(_ pid: pid_t) {
         let cancelled = lock.withLock {
             self.pid = pid
             return self.cancelled
         }
-        if cancelled { _ = kill(-pid, SIGTERM) }
+        if cancelled { terminate(pid) }
     }
 
     func terminate() {
@@ -102,6 +118,26 @@ private final class ShellGroup: @unchecked Sendable {
             cancelled = true
             return self.pid
         }
-        if let pid { _ = kill(-pid, SIGTERM) }
+        if let pid { terminate(pid) }
+    }
+
+    /// Runs on the reaper thread before the shell is reaped.
+    func exited() {
+        let pid = lock.withLock {
+            hasExited = true
+            return cancelled ? self.pid : nil
+        }
+        if let pid { _ = kill(-pid, SIGKILL) }
+    }
+
+    private func terminate(_ pid: pid_t) {
+        _ = kill(-pid, SIGTERM)
+        DispatchQueue.global().asyncAfter(deadline: .now() + Self.killGrace) { [self] in
+            // The lock is held across the signal so the shell cannot be reaped
+            // in between, which would let its pid be reused.
+            lock.withLock {
+                if !hasExited { _ = kill(-pid, SIGKILL) }
+            }
+        }
     }
 }
