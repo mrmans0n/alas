@@ -42,8 +42,8 @@ struct ACPSessionManagerTests {
         }
     }
 
-    @Test(.timeLimit(.minutes(1)))
-    func replacementReadsWaitForPreviousManagerWrites() async throws {
+    @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+    func replacementReadsWaitForPreviousManagerWrites(afterFlush: Bool) async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rebind-writes-\(UUID()).sqlite")
         defer { try? FileManager.default.removeItem(at: url) }
         let store = try ACPSessionStore(path: url.path)
@@ -63,7 +63,13 @@ struct ACPSessionManagerTests {
         )
         defer { replacement.shutdownBackgroundTasks() }
         #expect(replacement.placeholderSession(id: "restored") == nil)
-        let lookup = Task { await replacement.persistedSessionRow(id: "restored") }
+        let lookup = Task {
+            if afterFlush {
+                await replacement.flushPersistence()
+                return try? await replacement.persistence.loadSession(id: "restored")
+            }
+            return await replacement.persistedSessionRow(id: "restored")
+        }
         await writes.waitUntilEntered()
         await writes.release()
         let row = await lookup.value

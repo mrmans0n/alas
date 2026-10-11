@@ -1787,6 +1787,7 @@ final class ACPSessionManager: ObservableObject {
         self.usesRemoteHostRegistry = usesRemoteHostRegistry
         self.persistence = resolvedPersistence
         self.previousManagerDisposal = previousManagerDisposal
+        self.persistenceTail = previousManagerDisposal
         self.onDirtyCheck = onDirtyCheck
         self.onLiveBufferRead = onLiveBufferRead
         self.onSessionTitleUpdated = onSessionTitleUpdated
