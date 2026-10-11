@@ -79,7 +79,9 @@ public final class AlasCoreContext {
             projects.removeProject(id: project.id)
             throw ProjectCreationError.projectPersistenceFailed
         }
-        _ = try await projects.refreshWorktrees(projectId: project.id)
+        if try await projects.refreshWorktrees(projectId: project.id) {
+            try saveProjects()
+        }
         return project
     }
 

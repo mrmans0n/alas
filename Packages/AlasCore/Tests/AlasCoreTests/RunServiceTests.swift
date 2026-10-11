@@ -24,4 +24,33 @@ struct RunServiceTests {
             _ = try await service.run(script, in: worktree, project: project)
         }
     }
+
+    @Test(.timeLimit(.minutes(1)))
+    func cancellingARunStopsTheScript() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-run-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let started = root.appendingPathComponent("started")
+        let scriptURL = root.appendingPathComponent("long.sh")
+        try "touch \(started.path)\nsleep 300\n".write(to: scriptURL, atomically: true, encoding: .utf8)
+        let script = RunScript(
+            scope: .repo, fileName: "long.sh", fileURL: scriptURL,
+            displayName: "Long", onExit: .close, cwd: nil, isExecutable: false
+        )
+        let worktree = Worktree(
+            id: root.path, projectId: "p", name: "main", branch: "main", path: root,
+            status: .clean, lastActivity: Date()
+        )
+        let project = ProjectConfig(id: "p", name: "p", path: root.path, color: "blue", addedAt: Date())
+        let service = RunService()
+
+        let run = Task { try await service.run(script, in: worktree, project: project) }
+        let deadline = ContinuousClock.now + .seconds(30)
+        while !FileManager.default.fileExists(atPath: started.path), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        run.cancel()
+
+        await #expect(throws: CancellationError.self) { _ = try await run.value }
+    }
 }

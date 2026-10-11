@@ -35,6 +35,8 @@ struct AlasCoreContextTests {
         )
 
         let project = try await context.addProject(path: repo, displayName: "repo", icon: .default(color: "blue"))
+        let saved = try PersistenceStore().readIfExists(ProjectsFile.self, from: projectsFile)
+        #expect(saved?.projects.first?.cachedWorktrees.isEmpty == false, "the first refresh's topology is persisted")
         let worktree = try await context.createWorktree(
             projectID: project.id,
             branch: "feature",

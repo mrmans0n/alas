@@ -21,25 +21,39 @@ public final class RunService {
         self.launch = launch
     }
 
-    /// Runs the shell with its output discarded: the captured command already
-    /// records the transcript, so nothing here grows with the script's output.
+    /// Runs the shell in its own process group with its output drained and
+    /// discarded: the captured command already records the transcript, so
+    /// nothing here grows with the script's output. Cancelling the calling
+    /// task terminates the whole group and throws `CancellationError`.
     public static let runInShell: Launch = { shellScript, workingDirectory in
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        process.arguments = ["-c", shellScript]
-        process.currentDirectoryURL = workingDirectory
-        process.standardInput = FileHandle.nullDevice
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        return try await withCheckedThrowingContinuation { continuation in
-            process.terminationHandler = { continuation.resume(returning: $0.terminationStatus) }
-            do {
-                try process.run()
-            } catch {
-                process.terminationHandler = nil
-                continuation.resume(throwing: error)
-            }
+        let output = Pipe()
+        output.fileHandleForReading.readabilityHandler = { handle in
+            if handle.availableData.isEmpty { handle.readabilityHandler = nil }
         }
+        let group = ShellGroup()
+        let status: Int32 = try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                do {
+                    let process = try SpawnedProcess(
+                        executable: URL(fileURLWithPath: "/bin/zsh"),
+                        arguments: ["-c", shellScript],
+                        environment: ProcessInfo.processInfo.environment,
+                        directory: workingDirectory,
+                        stdin: nil,
+                        stdout: output,
+                        stderr: output,
+                        onExit: { _, termination in continuation.resume(returning: termination.status) }
+                    )
+                    group.started(process.pid)
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        } onCancel: {
+            group.terminate()
+        }
+        try Task.checkCancellation()
+        return status
     }
 
     /// Runs `script` in `worktree` on this machine and returns how it ended.
@@ -65,5 +79,29 @@ public final class RunService {
             throw RunError.completionNotPublished(exitCode: exitCode)
         }
         return try await RunScriptCompletionMonitor.wait(for: location)
+    }
+}
+
+/// The shell's process group, terminated on cancellation even when the
+/// cancellation arrives before the shell has started.
+private final class ShellGroup: @unchecked Sendable {
+    private let lock = NSLock()
+    private var pid: pid_t?
+    private var cancelled = false
+
+    func started(_ pid: pid_t) {
+        let cancelled = lock.withLock {
+            self.pid = pid
+            return self.cancelled
+        }
+        if cancelled { _ = kill(-pid, SIGTERM) }
+    }
+
+    func terminate() {
+        let pid = lock.withLock {
+            cancelled = true
+            return self.pid
+        }
+        if let pid { _ = kill(-pid, SIGTERM) }
     }
 }
