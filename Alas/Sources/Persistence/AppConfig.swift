@@ -76,6 +76,18 @@ struct AppConfig: Codable, Equatable {
         /// Advertise this Mac on the local network with Bonjour and browse for
         /// other Alas instances there.
         var discoverable: Bool = false
+        /// Front the server with `tailscale serve` at `https://<MagicDNS name>`.
+        var tailscaleServe: Bool = false
+        /// With `tailscaleServe`, listen on loopback only so the server is
+        /// reachable solely through Tailscale Serve.
+        var tailscaleOnly: Bool = false
+
+        /// Effective bind mode: "Tailscale only" means nothing without Serve.
+        var listensOnLoopbackOnly: Bool { tailscaleServe && tailscaleOnly }
+
+        /// Port to bind. A stable default keeps a paired phone's URL valid
+        /// across restarts (config 0 means "use the default").
+        var preferredPort: UInt16 { port != 0 ? port : 8765 }
 
         init(
             enabled: Bool = false,
@@ -86,7 +98,9 @@ struct AppConfig: Codable, Equatable {
             allowedOrigins: [String] = [],
             serverId: String = "",
             displayName: String = "",
-            discoverable: Bool = false
+            discoverable: Bool = false,
+            tailscaleServe: Bool = false,
+            tailscaleOnly: Bool = false
         ) {
             self.enabled = enabled
             self.keepAwake = keepAwake
@@ -97,11 +111,14 @@ struct AppConfig: Codable, Equatable {
             self.serverId = serverId
             self.displayName = displayName
             self.discoverable = discoverable
+            self.tailscaleServe = tailscaleServe
+            self.tailscaleOnly = tailscaleOnly
         }
 
         enum CodingKeys: String, CodingKey {
             case enabled, keepAwake, port, allowedHosts, preferredAdvertisedHost
             case allowedOrigins, serverId, displayName, discoverable
+            case tailscaleServe, tailscaleOnly
         }
 
         init(from decoder: Decoder) throws {
@@ -115,6 +132,8 @@ struct AppConfig: Codable, Equatable {
             serverId = (try? c.decode(String.self, forKey: .serverId)) ?? ""
             displayName = (try? c.decode(String.self, forKey: .displayName)) ?? ""
             discoverable = (try? c.decode(Bool.self, forKey: .discoverable)) ?? false
+            tailscaleServe = (try? c.decode(Bool.self, forKey: .tailscaleServe)) ?? false
+            tailscaleOnly = (try? c.decode(Bool.self, forKey: .tailscaleOnly)) ?? false
         }
 
         /// Assigns a fresh UUID when `serverId` is empty. Returns true when it changed.

@@ -719,6 +719,13 @@ final class AppState {
     /// listener binds asynchronously, so the value arrives after `start`).
     private(set) var remotePort: UInt16?
     private(set) var remoteAdvertisedAddresses: [RemoteAdvertisedAddress] = []
+    /// This Mac's tailnet identity; nil when Tailscale isn't installed or running.
+    private(set) var remoteTailscale: RemoteTailscaleStatus?
+    private(set) var remoteTailscaleServe: RemoteTailscaleServeState = .off
+    /// Last failed `tailscale serve` command, surfaced by the Settings pane.
+    private(set) var remoteTailscaleError: String?
+    @ObservationIgnored private var remoteTailscaleSync: Task<Void, Never>?
+    @ObservationIgnored private var remoteTailscaleServeProcess: RemoteTailscaleServeProcess?
     private(set) var remoteConnectedDeviceCountsSnapshot: [String: Int] = [:]
     @ObservationIgnored
     var remoteSessionAttachScheduler: (@MainActor (ACPSessionManager, ACPSession.ID) -> Void)?
@@ -744,7 +751,9 @@ final class AppState {
             port: port,
             interfaces: interfaces,
             allowedHosts: config.remote.allowedHosts,
-            preferredHost: config.remote.preferredAdvertisedHost
+            preferredHost: config.remote.preferredAdvertisedHost,
+            tailnetHTTPSHost: remoteTailscaleServe == .serving(port: port) ? remoteTailscale?.dnsName : nil,
+            tailnetHTTPSOnly: config.remote.listensOnLoopbackOnly
         )
     }
 
@@ -755,7 +764,8 @@ final class AppState {
     private func makeRemoteAccessPolicy(interfaces: [RemoteNetworkInterface]) -> RemoteAccessPolicy {
         let hosts = RemoteNetwork.allowedHostCandidates(
             interfaces: interfaces,
-            allowedHosts: config.remote.allowedHosts
+            allowedHosts: config.remote.allowedHosts,
+            tailnetDNSName: remoteTailscale?.dnsName
         )
         return RemoteAccessPolicy(allowedHosts: hosts)
     }
@@ -843,7 +853,12 @@ final class AppState {
         }
         if config.remote.enabled {
             if config.remote.ensureServerId() { saveConfig() }
+            if let server = remoteServer, server.loopbackOnly != config.remote.listensOnLoopbackOnly {
+                // Rebinding needs a fresh listener; existing sockets drop and reconnect.
+                try? server.start(port: config.remote.preferredPort, loopbackOnly: config.remote.listensOnLoopbackOnly)
+            }
             guard remoteServer == nil else {
+                syncRemoteTailscale()
                 refreshRemoteAccessState()
                 syncRemotePeers()
                 return
@@ -877,6 +892,7 @@ final class AppState {
                 self?.remotePort = p
                 self?.refreshRemoteAccessState()
                 self?.syncRemoteKeepAwake()
+                self?.syncRemoteTailscale()
             }
             server.onConnectionDeviceCountsChange = { [weak self] counts in
                 self?.remoteConnectedDeviceCountsSnapshot = counts
@@ -892,10 +908,7 @@ final class AppState {
             configurePairingApprovals(server: server)
             server.federation = remoteFederation
             do {
-                // Pin a stable default port so a paired phone's URL survives app
-                // restarts (config 0 means "use the default", not OS-assigned).
-                let boundPort: UInt16 = config.remote.port != 0 ? config.remote.port : 8765
-                try server.start(port: boundPort)
+                try server.start(port: config.remote.preferredPort, loopbackOnly: config.remote.listensOnLoopbackOnly)
                 remoteServer = server
                 lastRemoteError = nil
                 syncRemotePeers()
@@ -924,7 +937,77 @@ final class AppState {
             remoteAdvertisedAddresses = []
             remoteConnectedDeviceCountsSnapshot = [:]
             lastRemoteError = nil
+            syncRemoteTailscale()
         }
+    }
+
+    /// Refreshes Tailscale status, then starts or stops our foreground
+    /// `tailscale serve` to match `config.remote`.
+    func syncRemoteTailscale() {
+        // Nothing to trust or serve: skip spawning the CLI entirely.
+        guard config.remote.enabled || config.remote.tailscaleServe else {
+            remoteTailscaleSync?.cancel()
+            remoteTailscale = nil
+            applyRemoteTailscaleServe()
+            return
+        }
+        remoteTailscaleSync?.cancel()
+        remoteTailscaleSync = Task { @MainActor [weak self] in
+            var failure: String?
+            var status = self?.remoteTailscale
+            do {
+                status = try await RemoteTailscale.status()
+            } catch ProcessError.nonZeroExit(_, let stderr) {
+                // A failed read keeps the last known status (and MagicDNS trust).
+                failure = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            } catch {
+                failure = "\(error)"
+            }
+            guard let self, !Task.isCancelled else { return }
+            remoteTailscale = status
+            remoteTailscaleError = failure
+            applyRemoteTailscaleServe()
+        }
+    }
+
+    /// Synchronous on the main actor, so starts and stops can't interleave.
+    private func applyRemoteTailscaleServe() {
+        let remote = config.remote
+        let want = remote.enabled && remote.tailscaleServe && remoteTailscale?.httpsEnabled == true
+        let current = remoteTailscaleServeProcess
+        if want, let port = remotePort {
+            guard current?.port != port || current?.isRunning != true else { return }
+            // A failure stays shown until settings change, instead of retrying
+            // a doomed `serve` on every refresh.
+            if case .failed = remoteTailscaleServe, current?.port == port { return }
+            current?.stop()
+            remoteTailscaleServeProcess = nil
+            guard let executable = RemoteTailscale.executable() else { return }
+            do {
+                weak var started: RemoteTailscaleServeProcess?
+                started = try RemoteTailscaleServeProcess(executable: executable, port: port) { [weak self] reason in
+                    guard let self, let started, remoteTailscaleServeProcess === started else { return }
+                    remoteTailscaleServe = .failed(reason)
+                    refreshRemoteAccessState()
+                }
+                remoteTailscaleServeProcess = started
+                remoteTailscaleServe = .serving(port: port)
+            } catch {
+                remoteTailscaleServe = .failed("\(error)")
+            }
+        } else {
+            current?.stop()
+            remoteTailscaleServeProcess = nil
+            remoteTailscaleServe = .off
+        }
+        refreshRemoteAccessState()
+    }
+
+    /// Stops serving on quit. The wrapper would notice Alas exiting within a
+    /// second anyway; this just makes it immediate.
+    func stopRemoteTailscaleServe() {
+        remoteTailscaleServeProcess?.stop()
+        remoteTailscaleServeProcess = nil
     }
 
     func syncRemoteKeepAwake() {

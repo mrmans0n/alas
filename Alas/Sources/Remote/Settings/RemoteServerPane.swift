@@ -196,6 +196,13 @@ struct RemoteServerPane: View {
                     }
                 }
 
+                // Stay visible while either setting is on, even with Tailscale
+                // stopped, so a loopback-only bind can always be turned off.
+                if state.config.remote.enabled,
+                   state.remoteTailscale != nil || state.config.remote.tailscaleServe || state.config.remote.tailscaleOnly {
+                    tailscaleGroup(state.remoteTailscale)
+                }
+
                 SettingsGroup(title: "Paired devices") {
                     if state.remotePairing.devices.isEmpty {
                         SettingsRow(name: "No devices", desc: "Pair a device to see it here.") {
@@ -319,6 +326,14 @@ struct RemoteServerPane: View {
             }
             .padding(.horizontal, 32).padding(.vertical, 24)
         }
+        // Tailscale may log in or out, or gain HTTPS certificates, while the
+        // pane is open; re-check until it closes.
+        .task {
+            while !Task.isCancelled {
+                state.syncRemoteTailscale()
+                try? await Task.sleep(for: .seconds(15))
+            }
+        }
         .onChange(of: state.config.remote.enabled) { _, enabled in
             if !enabled { pairingCode = nil }   // don't show a stale code after re-enabling
         }
@@ -329,9 +344,65 @@ struct RemoteServerPane: View {
         .onDisappear { state.cancelNearbyApproval() }
     }
 
+    @ViewBuilder
+    private func tailscaleGroup(_ tailscale: RemoteTailscaleStatus?) -> some View {
+        let serving: Bool = if case .serving = state.remoteTailscaleServe { true } else { false }
+        SettingsGroup(title: "Tailscale") {
+            SettingsRow(name: "Status", desc: tailscaleStatusDescription(tailscale)) {
+                Text(tailscale == nil ? "Not running" : "Connected")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(theme.color(tailscale == nil ? "warn" : "add"))
+            }
+            SettingsRow(
+                name: "Serve over HTTPS",
+                desc: "Runs tailscale serve while Alas is open so devices on your tailnet get an HTTPS address. Enables PWA install, the offline shell, and notifications."
+            ) {
+                AlasToggle(on: remoteBinding(\.tailscaleServe))
+                    .disabled(tailscale?.httpsEnabled != true && !state.config.remote.tailscaleServe)
+            }
+            if case .failed(let reason) = state.remoteTailscaleServe {
+                SettingsRow(name: "Can't serve", desc: reason + " Turn Serve over HTTPS off and on to retry.") {
+                    Icon(name: "alert", size: 14, color: theme.color("warn"))
+                }
+            }
+            if let error = state.remoteTailscaleError {
+                SettingsRow(name: "Error", desc: error) {
+                    Icon(name: "alert", size: 14, color: theme.color("warn"))
+                }
+            }
+            SettingsRow(
+                name: "Tailscale only",
+                desc: "Stop listening on the local network; accept connections only through Tailscale Serve. Turns off Bonjour discovery."
+            ) {
+                AlasToggle(on: remoteBinding(\.tailscaleOnly)).disabled(!serving && !state.config.remote.tailscaleOnly)
+            }
+        }
+    }
+
+    private func tailscaleStatusDescription(_ tailscale: RemoteTailscaleStatus?) -> String {
+        guard let tailscale else {
+            return "Tailscale isn't installed, running, or logged in. Turn these off to listen on the local network again."
+        }
+        return tailscale.httpsEnabled
+            ? "Connected as \(tailscale.dnsName) · HTTPS certificates enabled"
+            : "Connected as \(tailscale.dnsName) · Enable HTTPS certificates in the Tailscale admin console to serve over HTTPS"
+    }
+
+    private func remoteBinding(_ keyPath: WritableKeyPath<AppConfig.Remote, Bool>) -> Binding<Bool> {
+        Binding(
+            get: { state.config.remote[keyPath: keyPath] },
+            set: {
+                state.config.remote[keyPath: keyPath] = $0
+                state.saveConfig()
+                state.syncRemoteServer()
+                state.syncRemoteDiscovery()
+            }
+        )
+    }
+
     private func addressLabel(_ address: RemoteAdvertisedAddress) -> String {
         switch address.kind {
-        case .tailnet: return "Tailnet"
+        case .tailnet: return address.isSecure ? "Tailnet HTTPS" : "Tailnet"
         case .lan: return "LAN"
         case .localhost: return "Localhost"
         case .custom: return "Custom"

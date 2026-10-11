@@ -60,6 +60,7 @@ final class RemoteServer {
     /// Set once we've already retried on an OS-assigned port after a fixed-port
     /// bind failure, so we don't loop.
     private var didFallback = false
+    private(set) var loopbackOnly = false
     /// Invoked on the main actor when the bound port changes — set when the
     /// listener becomes ready, nil when it fails/cancels. Lets observers (the
     /// Settings pane via AppState) react, since `port` itself isn't observable.
@@ -111,13 +112,22 @@ final class RemoteServer {
     /// is already in use surfaces asynchronously as `.failed`; we then retry once
     /// on an OS-assigned port so the server still starts (the Address/QR use the
     /// actual bound port, so pairing still works). Throws only on invalid params.
-    func start(port desired: UInt16 = 0) throws {
+    /// `loopbackOnly` binds 127.0.0.1 so only a local proxy (Tailscale Serve)
+    /// can reach the server; a fallback restart keeps the same bind.
+    func start(port desired: UInt16 = 0, loopbackOnly: Bool = false) throws {
         stop()
         if desired != 0 { didFallback = false }
+        self.loopbackOnly = loopbackOnly
         let params = NWParameters.tcp
         params.allowLocalEndpointReuse = true
         let endpointPort: NWEndpoint.Port = desired == 0 ? .any : (NWEndpoint.Port(rawValue: desired) ?? .any)
-        let listener = try NWListener(using: params, on: endpointPort)
+        let listener: NWListener
+        if loopbackOnly {
+            params.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: endpointPort)
+            listener = try NWListener(using: params)
+        } else {
+            listener = try NWListener(using: params, on: endpointPort)
+        }
         listener.stateUpdateHandler = { [weak self] state in
             switch state {
             case .ready:
@@ -135,7 +145,7 @@ final class RemoteServer {
                     guard let self, self.listener === listener else { return }
                     if desired != 0 && !self.didFallback {
                         self.didFallback = true
-                        try? self.start(port: 0)   // preferred port taken — fall back to OS-assigned
+                        try? self.start(port: 0, loopbackOnly: loopbackOnly)   // preferred port taken — fall back to OS-assigned
                     } else {
                         self.port = nil
                         self.onPortChange?(nil)
