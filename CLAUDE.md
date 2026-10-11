@@ -13,7 +13,7 @@
 - After editing `project.yml`, regenerate the Xcode project with `xcodegen` and commit both files.
 - `Info.plist` keys are pinned in `project.yml` under `info: properties:` — edit there, not the plist.
 - Do not introduce large architectural changes without an explicit plan.
-- UI-free core code lives in the `Packages/AlasCore` SwiftPM package. It must not import SwiftUI, AppKit, WebKit, GhosttyKit, MLX, or the tree-sitter and fff native libraries. When core code needs one of those, add a small seam in the package and install the implementation from `PlatformServices.install()` in the app. Anything the app or tests use from the package must be `public`.
+- UI-free core code lives in the `Packages/AlasCore` SwiftPM package. It must not import SwiftUI, AppKit, WebKit, or anything the app builds outside SwiftPM: GhosttyKit, MLX, the Rust tree-sitter grammar pack (`TreeSitterPack`), or fff (`FffC`). Plain SwiftPM dependencies that build from source, such as the `SwiftTreeSitter` runtime, are fine; `swift test --package-path Packages/AlasCore` must keep working without the app build. When core code needs one of the excluded pieces, add a small seam in the package and install the implementation from `PlatformServices.install()` in the app. Anything the app or tests use from the package must be `public`.
 - Do not add agent attributions of any kind: no `Co-Authored-By: Claude` (or any other model/tool) trailers in commits, no "Generated with Claude Code" footers in PR/MR descriptions, no "🤖" markers, no "this was written by an AI" notes in code, comments, docs, or commit/PR bodies. Commits and PRs should read as if written by the human author.
 
 ## Testing policy
