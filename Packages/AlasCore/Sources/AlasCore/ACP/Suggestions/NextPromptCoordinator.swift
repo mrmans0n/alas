@@ -1,4 +1,3 @@
-import Combine
 import Foundation
 import os
 
@@ -124,8 +123,9 @@ public struct NextPromptEligibilitySnapshot: Sendable {
 }
 
 @MainActor
-public final class NextPromptCoordinator: ObservableObject {
-    @Published public private(set) var offer: String?
+public final class NextPromptCoordinator: ChangeTracking {
+    nonisolated(unsafe) public let willChange = ChangeSignal<Void>()
+    @Tracked public private(set) var offer: String?
     public private(set) var generationTask: Task<Void, Never>?
     private let engine: any NextPromptGenerating
     private let snapshot: @MainActor (NextPromptCompletedTurn) -> NextPromptEligibilitySnapshot?
@@ -353,7 +353,7 @@ public final class NextPromptCoordinator: ObservableObject {
                 nextPromptLogger.notice("prompt \(turn.promptID) offered \(text.count) characters")
                 self.opportunities[turn.incarnation]?.state = .offered(request.id, text)
                 self.offer = text
-                // @Published stores after notifying; a subscriber may have invalidated this value.
+                // @Tracked stores after notifying; a subscriber may have invalidated this value.
                 if self.epoch != capturedEpoch { self.offer = nil }
             case .success(nil):
                 self.invalidate(incarnation: turn.incarnation, reason: "model abstained")

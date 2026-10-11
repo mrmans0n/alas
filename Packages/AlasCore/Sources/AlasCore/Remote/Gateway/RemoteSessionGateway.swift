@@ -1,5 +1,4 @@
 import Foundation
-import Combine
 
 /// Bridges one remote WebSocket connection to the in-process ACP world.
 ///
@@ -21,8 +20,8 @@ public final class RemoteSessionGateway {
     private let send: (RemoteServerMessage) -> Void
     /// Console channel of an authenticated Alas peer; nil for browsers.
     private let consoleLink: PeerConsoleLink?
-    private var subscriptions: [String: AnyCancellable] = [:]
-    private var configSubscriptions: [String: AnyCancellable] = [:]
+    private var subscriptions: [String: [ChangeSubscription]] = [:]
+    private var configSubscriptions: [String: ChangeSubscription] = [:]
     private var configCoalesce: [String: Task<Void, Never>] = [:]
     private var lastConfig: [String: RemoteSessionConfig] = [:]
     private var lastQueue: [String: [RemoteQueuedPrompt]] = [:]
@@ -709,13 +708,12 @@ public final class RemoteSessionGateway {
     private func observe(id: String, session: ACPSession) {
         // Replace any existing subscription / pending coalesce for this id so a
         // re-subscribe can't leave an orphaned timer firing one stray delta.
-        subscriptions[id]?.cancel()
+        subscriptions[id]?.forEach { $0.cancel() }
         coalesce[id]?.cancel()
-        // ACPTranscript is an ObservableObject; objectWillChange fires on any
-        // @Published mutation (new message, pending permission). Streaming
-        // chunks that grow an existing row publish only `streamingTicks`.
-        let changes = session.transcript.objectWillChange.merge(with: session.transcript.streamingTicks)
-        subscriptions[id] = changes.sink { [weak self, weak session] _ in
+        // The transcript's `willChange` fires on any `@Tracked` mutation (new
+        // message, pending permission). Streaming chunks that grow an existing
+        // row send only `streamingTicks`.
+        let onChange: () -> Void = { [weak self, weak session] in
             guard let self, let session else { return }
             // Coalesce bursts of streaming chunks into one delta.
             self.coalesce[id]?.cancel()
@@ -725,21 +723,25 @@ public final class RemoteSessionGateway {
                 await self.sendDelta(id: id, session: session)
             }
         }
+        subscriptions[id] = [
+            session.transcript.willChange.observe(onChange),
+            session.transcript.streamingTicks.observe(onChange),
+        ]
         // Re-emit sessionConfig when the session's config publishers change.
-        // ACPSession.objectWillChange fires for ANY @Published change (agentState,
+        // ACPSession.willChange fires for ANY @Tracked change (agentState,
         // queue, etc.), not just config — and BEFORE the value settles. Coalesce
         // a run-loop turn's worth of fires into one next-tick read (zero-delay,
         // mirroring the transcript coalesce above) and dedupe against the last
         // config so non-config churn never reaches the wire.
         configSubscriptions[id]?.cancel()
         configCoalesce[id]?.cancel()
-        configSubscriptions[id] = session.objectWillChange.sink { [weak self, weak session] _ in
+        configSubscriptions[id] = session.willChange.observe { [weak self, weak session] in
             guard let self, let session else { return }
             self.configCoalesce[id]?.cancel()
             self.configCoalesce[id] = Task { @MainActor [weak self, weak session] in
                 guard !Task.isCancelled, let self, let session else { return }
                 // Same publisher, independently deduped: ACPSession's
-                // objectWillChange fires for queue mutations too, and the
+                // willChange fires for queue mutations too, and the
                 // queue changes far more often than the config does.
                 self.sendQueueState(id: id, session: session)
                 if self.syncStates[id]?.sentBackgroundWorkCancellable != session.hasCancellableBackgroundWork {

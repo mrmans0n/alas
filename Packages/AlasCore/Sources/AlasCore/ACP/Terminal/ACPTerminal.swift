@@ -1,12 +1,12 @@
 import Darwin
 import Foundation
-import Combine
 
 /// Wraps one agent-spawned subprocess. Owns the merged stdout+stderr
 /// rolling buffer (capped at 1 MiB), captures the exit status, and
 /// publishes a display-rate-limited terminal tail for the transcript UI.
 @MainActor
-public final class ACPTerminal: ObservableObject {
+public final class ACPTerminal: ChangeTracking {
+    nonisolated(unsafe) public let willChange = ChangeSignal<Void>()
     /// 1 MiB protocol-output cap. Independent from the agent-supplied
     /// `outputByteLimit`; the transcript UI keeps its own smaller tail.
     public static let internalBufferCap = 1 << 20
@@ -27,7 +27,7 @@ public final class ACPTerminal: ObservableObject {
     nonisolated public let outputByteLimit: Int
     private let normalizesCRLF: Bool
 
-    @Published public private(set) var cwd: String?
+    @Tracked public private(set) var cwd: String?
     /// Full protocol buffer. This is intentionally not `@Published`: raw pipe
     /// chunks must not invalidate SwiftUI. `displayRevision` below is the
     /// coalesced UI signal.
@@ -36,8 +36,8 @@ public final class ACPTerminal: ObservableObject {
     private var bufferStorage = Data()
     private var bufferStart = 0
     public private(set) var truncated: Bool = false
-    @Published public private(set) var exitStatus: ACPTerminalExitStatus?
-    @Published public private(set) var displayRevision: UInt64 = 0
+    @Tracked public private(set) var exitStatus: ACPTerminalExitStatus?
+    @Tracked public private(set) var displayRevision: UInt64 = 0
     public private(set) var displayRuns: [AttributedRun] = []
     private var displayTail: ANSITailBuffer
     private var lastDisplayPublish = -Double.greatestFiniteMagnitude
