@@ -109,6 +109,7 @@ struct RecommendedLanguageCatalogTests {
             "cmake": "cmake-language-server",
             "dart": "dart-sdk",
             "haskell": "haskell-language-server",
+            "yaml": "yaml-language-server",
         ]
         for (lang, formula) in expected {
             let entry = RecommendedLanguageCatalog.entry(forLanguage: lang)

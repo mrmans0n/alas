@@ -231,6 +231,8 @@ struct LanguageServerRegistryTests {
             "dart": "dart",
             "hs": "haskell",
             "lhs": "haskell",
+            "yaml": "yaml",
+            "yml": "yaml",
         ]
         for (ext, language) in expected {
             #expect(r.language(forFileExtension: ext) == language,

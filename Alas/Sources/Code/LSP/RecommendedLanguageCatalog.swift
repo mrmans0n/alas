@@ -265,6 +265,16 @@ enum RecommendedLanguageCatalog {
                 InstallRecipe(installer: .pipx, package: "cmake-language-server"),
             ]
         ),
+        RecommendedLanguage(
+            language: "yaml",
+            displayName: "YAML",
+            masonId: "yaml-language-server",
+            aliasOf: nil,
+            recipes: [
+                InstallRecipe(installer: .brew, package: "yaml-language-server"),
+                InstallRecipe(installer: .npm, package: "yaml-language-server"),
+            ]
+        ),
         // The language server is a subcommand of the SDK, so the install is
         // the whole SDK rather than a standalone server package.
         RecommendedLanguage(

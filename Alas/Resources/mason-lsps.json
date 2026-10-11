@@ -1373,7 +1373,7 @@
         "yaml",
         "yml"
       ],
-      "command": "gh-actions-language-server",
+      "command": "actions-languageserver",
       "args": [
         "--stdio"
       ],

@@ -230,4 +230,45 @@ struct AppConfigCodeInstallTests {
         #expect(code.userDefinedRecipes["old"] == nil)
         #expect(code.userDefinedRecipes["new"] == [InstallRecipe(installer: .brew, package: "old-lsp")])
     }
+
+    @Test(
+        "decoding drops only the untouched YAML server the old install nudge persisted",
+        arguments: [
+            ("gh-actions-language-server", "@actions/languageserver", true, false),
+            ("gh-actions-language-server", "@actions/languageserver", false, true),
+            ("gh-actions-language-server", "gh-actions-language-server", true, true),
+            ("yaml-language-server", "@actions/languageserver", true, true),
+        ]
+    )
+    func legacyYAMLNudgeServerMigration(command: String, npmPackage: String, enabled: Bool, kept: Bool) throws {
+        var cfg = AppConfig.defaults
+        cfg.code.languageServers = [
+            LanguageServerConfig(
+                language: "yaml",
+                extensions: ["yaml", "yml"],
+                command: command,
+                args: ["--stdio"],
+                env: [:],
+                rootMarkers: [".git"],
+                enabled: enabled
+            )
+        ]
+        let recipes = [InstallRecipe(installer: .npm, package: npmPackage)]
+        cfg.code.userDefinedRecipes["yaml"] = recipes
+
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: JSONEncoder().encode(cfg))
+
+        #expect(decoded.code.languageServers.map(\.command) == (kept ? [command] : []))
+        #expect(decoded.code.userDefinedRecipes["yaml"] == (kept ? recipes : nil))
+    }
+
+    @Test("decoding carries a dismissed YAML extension nudge over to the built-in", arguments: ["yaml", "yml"])
+    func legacyYAMLNudgeDismissalMigration(ext: String) throws {
+        var cfg = AppConfig.defaults
+        cfg.code.dismissedInstallNudges = ["extension:\(ext)"]
+
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: JSONEncoder().encode(cfg))
+
+        #expect(decoded.code.dismissedInstallNudges.contains("yaml"))
+    }
 }
