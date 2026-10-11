@@ -18,9 +18,6 @@ enum ACPMessageQuote {
 /// and composer controls call them without owning editor state.
 @MainActor
 final class ACPComposerActions: ObservableObject {
-    let draftCleanup = ACPDraftCleanupController()
-    var canCleanUpDraft: (() -> Bool)?
-    var cleanUpDraft: (() -> Void)?
     var submitWithIntent: ((ACPSubmitIntent) -> Void)?
     var insertQuote: ((String) -> Void)?
     /// Published by the coordinator; opens an image picker and inserts the
