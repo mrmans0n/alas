@@ -6,6 +6,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-10-11
+
+### ✨ Features
+
+- Support plain local and SSH folders as non-git projects, including terminals, agent sessions, filesystem browsing, search, and folder-aware project controls (#1901).
+- Add dictation and safe host-resolved `@` mentions to native and web peer composers (#1900).
+- Hide Changes and skip change requests for plain-folder projects viewed through peers (#1907).
+
+### 🐛 Fixes
+
+- Reconcile already-answered prompts during cached ACP session recovery so stale queued prompts are not restored (#1902).
+- Keep the peer composer toolbar within narrow columns by adapting its controls and overflow presentation (#1903).
+
+### 🏗️ Internal
+
+- Update `serde_json` to 1.0.152 (#1904).
+
 ## [0.20.11] - 2026-10-10
 
 ### ✨ Features
