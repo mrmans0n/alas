@@ -167,6 +167,9 @@ final class ACPSessionManager: ObservableObject {
     let remoteHost: String?
     let usesRemoteHostRegistry: Bool
     let persistence: ACPSessionPersistence
+    /// A replacement must not read persisted state or claim leases until the
+    /// previous manager has flushed its writes and shut down its connections.
+    private let previousManagerDisposal: Task<Void, Never>?
     let changeNotifier: ACPChangeNotifier
     /// Reference-chip caches, one per worktree, shared by composer and transcript.
     let upstreamReferences = ACPUpstreamReferenceStore.Registry()
@@ -1681,6 +1684,33 @@ final class ACPSessionManager: ObservableObject {
         !runners.isEmpty || !attachingSessions.isEmpty
     }
 
+    var isIdleForProjectRebinding: Bool {
+        !isDisposed && attachingSessions.isEmpty && restartingConnections.isEmpty
+            && sessions.values.allSatisfy {
+                $0.hydrationState != .loading && $0.agentState != .spawning
+                    && $0.transcript.streamingState == .idle
+                    && !$0.subagents.values.contains { $0.isRunning }
+                    && $0.activeBackgroundTasks.isEmpty
+                    && $0.pendingQueuePersistenceCount == 0
+                    && !$0.queue.contains { $0.status == .sending }
+            }
+    }
+
+    /// Session activity fires before setters finish. Resolve readiness on the
+    /// next main-queue turn, including activity in tabs that are not mounted.
+    var projectRebindingReadiness: AnyPublisher<Bool, Never> {
+        $sessions.map { sessions in
+            Publishers.MergeMany(sessions.values.map { $0.nextPromptActivity })
+                .prepend(())
+                .eraseToAnyPublisher()
+        }
+        .switchToLatest()
+        .receive(on: DispatchQueue.main)
+        .map { [weak self] _ in self?.isIdleForProjectRebinding == true }
+        .removeDuplicates()
+        .eraseToAnyPublisher()
+    }
+
     func activeCheckpointWriterLeaseCount() -> Int {
         do {
             return try ACPSessionStore(path: persistence.path).activeLeaseCount(
@@ -1694,6 +1724,7 @@ final class ACPSessionManager: ObservableObject {
 
     init(worktreeId: String, worktreePath: String, owner: SessionOwnerID? = nil, store: ACPSessionStore? = nil,
          persistence: ACPSessionPersistence? = nil,
+         previousManagerDisposal: Task<Void, Never>? = nil,
          instanceId: String = UUID().uuidString,
          pid: Int64 = Int64(ProcessInfo.processInfo.processIdentifier),
          hydratorPath: String? = nil,
@@ -1753,6 +1784,7 @@ final class ACPSessionManager: ObservableObject {
         self.remoteCoordinator = remoteSessionCoordinator
         self.usesRemoteHostRegistry = usesRemoteHostRegistry
         self.persistence = resolvedPersistence
+        self.previousManagerDisposal = previousManagerDisposal
         self.onDirtyCheck = onDirtyCheck
         self.onLiveBufferRead = onLiveBufferRead
         self.onSessionTitleUpdated = onSessionTitleUpdated
@@ -2451,8 +2483,10 @@ final class ACPSessionManager: ObservableObject {
     private func loadPersistedRowIfNeeded(id: ACPSession.ID) {
         guard rowLoadTasks[id] == nil else { return }
         let persistence = persistence
+        let previousManagerDisposal = previousManagerDisposal
         rowLoadTasks[id] = Task { @MainActor [weak self] in
             defer { self?.rowLoadTasks[id] = nil }
+            await previousManagerDisposal?.value
             do {
                 guard let row = try await persistence.loadSession(id: id) else {
                     self?.missingPersistedSessionIds.insert(id)
@@ -2475,6 +2509,7 @@ final class ACPSessionManager: ObservableObject {
     /// covers rows outside the lazy recent-session cache before a tab title is
     /// chosen.
     func persistedSessionRow(id: ACPSession.ID) async -> ACPSessionRow? {
+        await previousManagerDisposal?.value
         if let row = persistedRows[id] { return row }
         do {
             guard let row = try await persistence.loadSession(id: id) else { return nil }
@@ -2504,6 +2539,7 @@ final class ACPSessionManager: ObservableObject {
     /// in-flight task. No-op when the session is already `.ready` or
     /// `.failed`.
     func hydrateIfNeeded(id: ACPSession.ID) async {
+        await previousManagerDisposal?.value
         guard let session = sessions[id] else { return }
         guard session.hydrationState == .loading else { return }
         if let existing = inFlightHydrations[id] {
@@ -3587,6 +3623,7 @@ final class ACPSessionManager: ObservableObject {
     }
 
     func refreshRecentNow() async {
+        await previousManagerDisposal?.value
         let persistence = persistence
         do {
             let rows = try await persistence.recentSessions()
@@ -5705,6 +5742,7 @@ extension ACPSessionManager {
     /// and calls `session/new` (new sessions) or `session/load` (reopened).
     @discardableResult
     func attach(to sessionId: ACPSession.ID, freshlyCreated: Bool) async -> UUID? {
+        await previousManagerDisposal?.value
         if let attempt = attachmentAttempts[sessionId] {
             let retryAfterDetachedAttachment = await withCheckedContinuation { continuation in
                 attempt.waiters.append(.init(
@@ -9063,7 +9101,7 @@ extension ACPSessionManager {
         onCompleted: @escaping @MainActor (Bool) -> Void,
         onDispatchRegistered: (@Sendable () -> Void)? = nil
     ) -> Bool {
-        guard !mergingForks.contains(sessionId), let session = sessions[sessionId] else { return false }
+        guard !isDisposed, !mergingForks.contains(sessionId), let session = sessions[sessionId] else { return false }
         session.nextPromptActivity.send()
         if case .needsAuth = session.setupState {
             return false

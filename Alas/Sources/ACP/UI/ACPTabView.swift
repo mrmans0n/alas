@@ -14,6 +14,7 @@ struct ACPTabView: View {
     var dismissNextPromptOffer: () -> Void = {}
     var onNextPromptStateChange: (NextPromptEligibilitySnapshot.Environment) -> Void = { _ in }
     var nextPromptInputBlocked: () -> Bool = { false }
+    @State private var managerRebindingGeneration = 0
 
     var body: some View {
         Group {
@@ -21,7 +22,7 @@ struct ACPTabView: View {
                 ACPManagedTabView(
                     sessionId: sessionId,
                     state: state,
-                    worktree: worktree,
+                    worktree: state.worktree(withId: worktree.id) ?? worktree,
                     owner: owner,
                     onOpenPreview: onOpenPreview,
                     onStartupRecoveryReady: onStartupRecoveryReady,
@@ -32,10 +33,17 @@ struct ACPTabView: View {
                     onNextPromptStateChange: onNextPromptStateChange,
                     nextPromptInputBlocked: nextPromptInputBlocked
                 )
+                .id(ObjectIdentifier(manager))
+                .onReceive(manager.projectRebindingReadiness.filter { $0 }) { _ in
+                    if managerForOwnerBoundary !== manager {
+                        managerRebindingGeneration += 1
+                    }
+                }
             } else {
                 unavailable
             }
         }
+        .id(managerRebindingGeneration)
         .task(id: agentAvailabilityTaskKey) {
             if let checkout = selectedWorkspaceCheckout {
                 await state.loadAgentAvailability(
@@ -65,10 +73,7 @@ struct ACPTabView: View {
     }
 
     private var managerForOwnerBoundary: ACPSessionManager? {
-        if let owner {
-            return state.acpManager(for: owner)
-        }
-        return state.acpManager(for: worktree)
+        state.acpManagerForMountedTab(worktree: worktree, owner: owner)
     }
 
     private var unavailable: some View {

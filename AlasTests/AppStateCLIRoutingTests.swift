@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import Testing
 @testable import Alas
@@ -307,6 +308,72 @@ struct AppStateCLIRoutingTests {
             if case .editor(let editor) = $0 { return editor.relativePath == "from-socket.txt" }
             return false
         })
+    }
+
+    @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+    func movedDirectoryKeepsBusyManagerUntilEverySessionIsIdle(explicitOwner: Bool) async throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: path, withIntermediateDirectories: true)
+        let folder = ProjectConfig(id: "folder", name: "Folder", path: path.path,
+                                   color: "#000000", addedAt: .distantPast, kind: .folder)
+        let repository = ProjectConfig(id: "repository", name: "Repository", path: path.path,
+                                       color: "#000000", addedAt: .distantPast)
+        let state = AppState(store: MemoryStore(projectsFile: .init(projects: [folder, repository])))
+        let worktree = Worktree(id: path.path, projectId: folder.id, name: "Folder", branch: "",
+                                path: path, status: .clean, lastActivity: .distantPast)
+        defer {
+            state.disposeACPManager(for: worktree.id)
+            try? FileManager.default.removeItem(at: path)
+        }
+        state.projectsManager.insertOptimisticWorktree(worktree)
+        let owner: SessionOwnerID? = explicitOwner ? .worktree(worktree.id) : nil
+        let manager = try #require(state.acpManagerForMountedTab(worktree: worktree, owner: owner))
+        let session = manager.createSession(agentId: "pi")
+        manager.renameSession(id: session.id, title: "Moved session", source: .manual)
+        session.transcript.streamingState = .streaming
+        let otherSession = manager.createSession(agentId: "pi")
+        otherSession.transcript.streamingState = .streaming
+        let moved = Worktree(
+            id: worktree.id, projectId: repository.id, name: worktree.name,
+            branch: "main", path: worktree.path, status: .clean,
+            lastActivity: worktree.lastActivity
+        )
+
+        _ = try await Process.git(["init", "-q"], cwd: path)
+        _ = try await Process.git(["remote", "add", "origin", "https://github.com/mrmans0n/alas"], cwd: path)
+        #expect(try await manager.upstreamReferences.environment.remotes(path).isEmpty)
+        state.projectsManager.insertOptimisticWorktree(moved)
+        #expect(state.worktree(withId: worktree.id)?.projectId == repository.id)
+        #expect(state.acpManagerForMountedTab(worktree: worktree, owner: owner) === manager)
+        var readinessSubscription: AnyCancellable?
+        defer { readinessSubscription?.cancel() }
+        let busy = await withCheckedContinuation { continuation in
+            readinessSubscription = manager.projectRebindingReadiness
+                .filter { !$0 }.prefix(1)
+                .sink { continuation.resume(returning: $0) }
+        }
+        #expect(busy == false)
+        session.transcript.streamingState = .idle
+        #expect(state.acpManagerForMountedTab(worktree: worktree, owner: owner) === manager)
+        let idle = await withCheckedContinuation { continuation in
+            readinessSubscription = manager.projectRebindingReadiness
+                .filter { $0 }.prefix(1)
+                .sink { continuation.resume(returning: $0) }
+            otherSession.transcript.streamingState = .idle
+        }
+        #expect(idle == true)
+        let rebound = try #require(state.acpManagerForMountedTab(worktree: worktree, owner: owner))
+        #expect(rebound !== manager)
+        #expect(state.acpManagerForMountedTab(worktree: worktree, owner: owner) === rebound)
+        _ = await rebound.persistedSessionRow(id: session.id)
+        let restored = try #require(rebound.placeholderSession(id: session.id))
+        await rebound.hydrateIfNeeded(id: session.id)
+        #expect(restored.title == "Moved session")
+        let remotes = try await rebound.upstreamReferences.environment.remotes(path)
+        #expect(Set(remotes.map(\.name)) == ["origin"])
+        let accepted = manager.submit(sessionId: session.id, text: "later turn", attachments: [],
+                                      intent: .schedule(.distantFuture), onCompleted: { _ in })
+        #expect(!accepted)
     }
 
     @Test func harnessSessionLocationResolvesLiveACPSession() async throws {

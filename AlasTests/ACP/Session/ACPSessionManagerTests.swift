@@ -41,6 +41,77 @@ struct ACPSessionManagerTests {
         }
     }
 
+    @Test(.timeLimit(.minutes(1)))
+    func replacementReadsWaitForPreviousManagerWrites() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rebind-writes-\(UUID()).sqlite")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = try ACPSessionStore(path: url.path)
+        let previous = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        defer { previous.shutdownBackgroundTasks() }
+        let writes = AsyncGate()
+        let disposal = Task { @MainActor in
+            await writes.enterAndWait()
+            _ = previous.createSession(id: "restored", agentId: "claude")
+            previous.renameSession(id: "restored", title: "Flushed title", source: .manual)
+            await previous.flushAllPersistence()
+        }
+        await writes.waitUntilEntered()
+        let replacement = ACPSessionManager(
+            worktreeId: "wt", worktreePath: "/tmp/wt", store: store,
+            previousManagerDisposal: disposal
+        )
+        defer { replacement.shutdownBackgroundTasks() }
+        #expect(replacement.placeholderSession(id: "restored") == nil)
+        let lookup = Task { await replacement.persistedSessionRow(id: "restored") }
+        await writes.waitUntilEntered()
+        await writes.release()
+        let row = await lookup.value
+        await disposal.value
+        await replacement.refreshRecentNow()
+        #expect(row?.title == "Flushed title")
+        #expect(!replacement.isKnownMissingSession(id: "restored"))
+        let restored = try #require(replacement.placeholderSession(id: "restored"))
+        await replacement.hydrateIfNeeded(id: restored.id)
+        #expect(restored.title == "Flushed title")
+    }
+
+    @Test func connectedIdleRunnerCanRebindAfterWorkFinishes() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rebind-\(UUID()).sqlite")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = try ACPSessionStore(path: url.path)
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/new", sessionId: "remote")
+        let manager = ACPSessionManager(
+            worktreeId: "wt", worktreePath: "/tmp/wt", store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in ACPConnection(client: client) }
+        )
+        defer { manager.shutdownBackgroundTasks() }
+        let session = manager.createSession(agentId: "claude")
+        await manager.attach(to: session.id, freshlyCreated: true)
+        #expect(manager.runners[session.id] != nil)
+        #expect(manager.isIdleForProjectRebinding)
+        session.transcript.streamingState = .streaming
+        #expect(!manager.isIdleForProjectRebinding)
+        session.transcript.streamingState = .idle
+        session.registerSubagent(.init(subagentSessionId: "child"))
+        #expect(!manager.isIdleForProjectRebinding)
+        session.applySubagentState(.init(subagentSessionId: "child", state: .completed))
+        #expect(manager.isIdleForProjectRebinding)
+        session.applyBackgroundTask(.init(sessionUpdate: "async_task_spawned", asyncTaskId: "task"),
+                                    ownerSessionId: session.id)
+        #expect(!manager.isIdleForProjectRebinding)
+        session.applyBackgroundTask(.init(sessionUpdate: "async_task_completed", asyncTaskId: "task",
+                                          state: "completed"), ownerSessionId: session.id)
+        #expect(manager.isIdleForProjectRebinding)
+        session.enqueueScheduled(blocks: [.text("later")], scheduledAt: .distantFuture)
+        #expect(manager.isIdleForProjectRebinding)
+        session.markQueueHeadSending()
+        #expect(!manager.isIdleForProjectRebinding)
+        await manager.disposeAllLiveSessions()
+    }
+
     private func scriptInitialize(_ client: ACPMockClient) {
         client.script(method: "initialize") { _ in
             try JSONEncoder().encode(ACPInitializeResult(
