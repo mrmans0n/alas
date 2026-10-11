@@ -185,17 +185,85 @@ struct ProjectsManagerTests {
         #expect(mgr.projects.isEmpty)
     }
 
-    /// Rows are keyed by path, so a folder cannot share a path with a git project.
-    @Test func folderProjectRefusesAPathAnotherProjectHolds() async throws {
+    /// Rows are keyed by path, so a local directory belongs to one project:
+    /// a new project may not sit at another's root or at a row it lists.
+    @Test(arguments: [
+        (ProjectKind.git, ProjectKind.folder, false),
+        (.folder, .git, false),
+        (.git, .git, false),
+        (.git, .git, true),
+        (.git, .folder, true),
+    ])
+    func addProjectRefusesAPathAnotherProjectHolds(existing: ProjectKind, added: ProjectKind, atLinkedWorktree: Bool) async throws {
         let repo = try await makeRepo(name: "shared")
         defer { try? FileManager.default.removeItem(at: repo) }
         let mgr = ProjectsManager(persistedProjects: [])
-        _ = try await mgr.addProject(path: repo, displayName: "repo", color: "#fff")
+        let first = try await mgr.addProject(path: repo, displayName: "first", icon: .default(color: "#fff"), kind: existing)
+        var target = repo
+        if atLinkedWorktree {
+            target = repo.appendingPathComponent("linked")
+            _ = try await WorktreeService().add(
+                repoPath: repo, base: "main", branch: "linked", destination: target, projectId: first.id)
+            try await mgr.refreshWorktrees(projectId: first.id)
+        }
 
-        await #expect(throws: (any Error).self) {
-            try await mgr.addProject(path: repo, displayName: "folder", icon: .default(color: "#fff"), kind: .folder)
+        do {
+            _ = try await mgr.addProject(path: target, displayName: "second", icon: .default(color: "#fff"), kind: added)
+            Issue.record("Expected the add to be refused")
+        } catch let error as NSError {
+            #expect(error.domain == "ProjectsManager" && error.code == 5)
+            #expect(error.localizedDescription.contains("already part of \"first\""))
         }
         #expect(mgr.projects.count == 1)
+    }
+
+    @Test(arguments: [
+        // A git row beats a folder row, whichever project is older.
+        (false, Date(timeIntervalSince1970: 2), true, Date(timeIntervalSince1970: 1), "a"),
+        (true, Date(timeIntervalSince1970: 1), false, Date(timeIntervalSince1970: 2), "b"),
+        // Same kind: the earlier-added project wins.
+        (false, Date(timeIntervalSince1970: 2), false, Date(timeIntervalSince1970: 1), "b"),
+        (true, Date(timeIntervalSince1970: 1), true, Date(timeIntervalSince1970: 2), "a"),
+        // Same kind and date: the project id breaks the tie.
+        (false, Date(timeIntervalSince1970: 1), false, Date(timeIntervalSince1970: 1), "a"),
+    ])
+    func rowOwnershipPrefersGitThenEarlierProject(
+        aIsFolder: Bool, aAddedAt: Date, bIsFolder: Bool, bAddedAt: Date, expected: String
+    ) {
+        let a = ProjectsManager.RowOwnership.Claimant(projectId: "a", isFolder: aIsFolder, addedAt: aAddedAt)
+        let b = ProjectsManager.RowOwnership.Claimant(projectId: "b", isFolder: bIsFolder, addedAt: bAddedAt)
+        #expect(ProjectsManager.RowOwnership.winner(a, b) == expected)
+        #expect(ProjectsManager.RowOwnership.winner(b, a) == expected)
+    }
+
+    /// `git worktree add` into a registered folder: the git project takes the
+    /// row, the folder records the conflict, and gets the row back once the
+    /// git project is removed.
+    @Test func gitWorktreeAddedIntoAFolderMovesTheRowToTheGitProject() async throws {
+        let repo = try await makeRepo(name: "owner")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let dir = repo.deletingLastPathComponent().appendingPathComponent("alas-pm-claimed-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let mgr = ProjectsManager(persistedProjects: [])
+        let folder = try await mgr.addProject(path: dir, displayName: "notes", icon: .default(color: "#fff"), kind: .folder)
+        let git = try await mgr.addProject(path: repo, displayName: "repo", color: "#fff")
+        try await mgr.refreshWorktrees(projectId: folder.id)
+        _ = try await Process.git(["worktree", "add", "-q", "-b", "claimed", dir.path], cwd: repo)
+
+        await mgr.refreshAll()
+        // The loser refreshing again does not take the row back.
+        try await mgr.refreshWorktrees(projectId: folder.id)
+
+        let id = Worktree.makeId(path: dir)
+        #expect(mgr.worktrees(projectId: git.id).contains { $0.id == id })
+        #expect(mgr.worktrees(projectId: folder.id).isEmpty)
+        #expect(mgr.worktreeIdConflicts[folder.id] == [id: git.id])
+        #expect(mgr.alsoInNotes(projectId: folder.id) == ["\(dir.lastPathComponent) · Also in repo"])
+
+        #expect(mgr.removeProject(id: git.id) == [folder.id])
+        #expect(mgr.worktrees(projectId: folder.id).map(\.id) == [id])
+        #expect(mgr.worktreeIdConflicts.isEmpty)
     }
 
     @Test func refreshWorktreesPopulatesIt() async throws {
@@ -819,7 +887,6 @@ extension ProjectsManagerTests {
         try await manager.refreshWorktrees(projectId: origin.id)
         try await manager.refreshWorktrees(projectId: other.id)
         let sharedId = try #require(manager.worktrees(projectId: origin.id).first?.id)
-        #expect(manager.worktrees(projectId: other.id).first?.id == sharedId)
 
         manager.setOperationState(
             forWorktreeId: sharedId,

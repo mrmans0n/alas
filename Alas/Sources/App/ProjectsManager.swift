@@ -89,6 +89,13 @@ final class ProjectsManager {
     /// admission for a worktree the other host is still removing.
     private(set) var worktreeOperationStates: [WorktreeOperationKey: WorktreeOperationState] = [:]
     private(set) var worktreeRefreshFailures: Set<String> = []
+    /// Rows a project lists but does not show because another local project
+    /// owns the same directory: `[losing projectId][worktree id] = winner`.
+    /// A worktree id is its path, so only one project may hold it.
+    private(set) var worktreeIdConflicts: [String: [String: String]] = [:]
+    /// The rows behind `worktreeIdConflicts`, kept so a loser gets its row
+    /// back the moment the winner lets go of it.
+    private var shadowedRows: [String: [String: Worktree]] = [:]
 
     private let git = GitService()
     private let worktreeSvc = WorktreeService()
@@ -150,16 +157,19 @@ final class ProjectsManager {
                               userInfo: [NSLocalizedDescriptionKey: "Not a git repository: \(path.path)"])
             }
         }
-        // Worktree ids are paths, so a folder and a git project at one path
-        // would share row ids that selection, tabs, and sessions key on.
-        let storedID = canonical(URL(fileURLWithPath: storedPath))
-        if let existing = projects.first(where: { project in
-            (canonical(URL(fileURLWithPath: project.path)) == storedID && (kind == .folder || project.isFolder))
-                // A folder also may not sit on a known linked worktree.
-                || (kind == .folder && worktreesByProject[project.id, default: []].contains { $0.id == storedID })
-        }) {
-            throw NSError(domain: "ProjectsManager", code: 5,
-                          userInfo: [NSLocalizedDescriptionKey: "\(path.path) is already added as \"\(existing.name)\"."])
+        // Worktree ids are paths, so two local projects at one directory would
+        // share row ids that selection, tabs, and sessions key on. Remote ids
+        // are namespaced per host, so remote projects are exempt.
+        if host == nil {
+            let storedID = canonical(URL(fileURLWithPath: storedPath))
+            if let existing = projects.first(where: { project in
+                project.host == nil
+                    && (canonical(URL(fileURLWithPath: project.path)) == storedID
+                        || worktreesByProject[project.id, default: []].contains { $0.id == storedID })
+            }) {
+                throw NSError(domain: "ProjectsManager", code: 5,
+                              userInfo: [NSLocalizedDescriptionKey: "\(path.path) is already part of \"\(existing.name)\"."])
+            }
         }
         let project = ProjectConfig(
             id: id,
@@ -193,10 +203,17 @@ final class ProjectsManager {
         )
     }
 
-    func removeProject(id: String) {
+    /// Returns the projects that got back rows they had lost to this one, so
+    /// the caller can refresh and persist them.
+    @discardableResult
+    func removeProject(id: String) -> Set<String> {
+        let released = Set(worktreesByProject[id, default: []].map(\.id))
         projects.removeAll { $0.id == id }
         worktreesByProject.removeValue(forKey: id)
+        worktreeIdConflicts.removeValue(forKey: id)
+        shadowedRows.removeValue(forKey: id)
         worktreeOperationStates = worktreeOperationStates.filter { $0.key.projectId != id }
+        return restoreRows(releasedBy: id, ids: released)
     }
 
     func updateProject(id: String, update: ProjectUpdate) {
@@ -405,9 +422,121 @@ final class ProjectsManager {
 
     func insertOptimisticWorktree(_ worktree: Worktree) {
         let projectId = worktree.projectId
-        worktreesByProject[projectId, default: []].removeAll { $0.id == worktree.id }
-        worktreesByProject[projectId, default: []].append(worktree)
-        applyWorktreeOrdering(projectId: projectId)
+        storeRows(listedRows(projectId: projectId).filter { $0.id != worktree.id } + [worktree], projectId: projectId)
+    }
+
+    /// Which local project keeps a directory two projects both list.
+    enum RowOwnership {
+        struct Claimant: Equatable {
+            var projectId: String
+            var isFolder: Bool
+            var addedAt: Date
+        }
+
+        /// Pure and order-independent, so it does not matter which project
+        /// refreshes first: a git row beats a folder row, and between two
+        /// projects of the same kind the earlier-added one wins.
+        static func winner(_ a: Claimant, _ b: Claimant) -> String {
+            if a.isFolder != b.isFolder { return a.isFolder ? b.projectId : a.projectId }
+            if a.addedAt != b.addedAt { return a.addedAt < b.addedAt ? a.projectId : b.projectId }
+            return min(a.projectId, b.projectId)
+        }
+    }
+
+    /// One "Also in X" line per row this project lost to another project.
+    static func alsoInNotes(
+        conflicts: [String: String],
+        rows: [String: Worktree],
+        projects: [ProjectConfig]
+    ) -> [String] {
+        conflicts.keys.sorted().compactMap { id in
+            guard let owner = projects.first(where: { $0.id == conflicts[id] }) else { return nil }
+            let title = rows[id]?.title ?? URL(fileURLWithPath: id).lastPathComponent
+            return "\(title) · Also in \(owner.name)"
+        }
+    }
+
+    func alsoInNotes(projectId: String) -> [String] {
+        Self.alsoInNotes(
+            conflicts: worktreeIdConflicts[projectId] ?? [:],
+            rows: shadowedRows[projectId] ?? [:],
+            projects: projects
+        )
+    }
+
+    /// Every row the project lists, including the ones it lost to another
+    /// project. This is the input `storeRows` expects.
+    private func listedRows(projectId: String) -> [Worktree] {
+        worktreesByProject[projectId, default: []] + (shadowedRows[projectId]?.values.map { $0 } ?? [])
+    }
+
+    /// The only way rows enter `worktreesByProject`. `rows` is everything the
+    /// project lists; a row whose directory another local project wins under
+    /// `RowOwnership` is kept aside as a conflict instead of shown, so a
+    /// worktree id resolves to exactly one project. Returns whether the
+    /// persisted worktree order changed.
+    @discardableResult
+    private func storeRows(_ rows: [Worktree], projectId: String) -> Bool {
+        let previousIds = Set(worktreesByProject[projectId, default: []].map(\.id))
+        var kept: [Worktree] = []
+        var conflicts: [String: String] = [:]
+        var shadowed: [String: Worktree] = [:]
+        var displaced: Set<String> = []
+        if let project = projects.first(where: { $0.id == projectId }), project.host == nil {
+            for row in rows {
+                guard let holder = projects.first(where: { other in
+                    other.id != projectId && other.host == nil
+                        && worktreesByProject[other.id, default: []].contains { $0.id == row.id }
+                }) else {
+                    kept.append(row)
+                    continue
+                }
+                if RowOwnership.winner(Self.claimant(project), Self.claimant(holder)) == projectId {
+                    kept.append(row)
+                    yieldRow(row.id, from: holder.id, to: projectId)
+                    displaced.insert(holder.id)
+                } else {
+                    conflicts[row.id] = holder.id
+                    shadowed[row.id] = row
+                }
+            }
+        } else {
+            kept = rows
+        }
+        worktreesByProject[projectId] = kept
+        worktreeIdConflicts[projectId] = conflicts.isEmpty ? nil : conflicts
+        shadowedRows[projectId] = shadowed.isEmpty ? nil : shadowed
+        let orderChanged = applyWorktreeOrdering(projectId: projectId)
+        for holderId in displaced {
+            applyWorktreeOrdering(projectId: holderId)
+        }
+        restoreRows(releasedBy: projectId, ids: previousIds.subtracting(kept.map(\.id)))
+        return orderChanged
+    }
+
+    private static func claimant(_ project: ProjectConfig) -> RowOwnership.Claimant {
+        RowOwnership.Claimant(projectId: project.id, isFolder: project.isFolder, addedAt: project.addedAt)
+    }
+
+    private func yieldRow(_ id: String, from loserId: String, to winnerId: String) {
+        guard let row = worktreesByProject[loserId]?.first(where: { $0.id == id }) else { return }
+        worktreesByProject[loserId]?.removeAll { $0.id == id }
+        worktreeIdConflicts[loserId, default: [:]][id] = winnerId
+        shadowedRows[loserId, default: [:]][id] = row
+    }
+
+    /// Hands rows the winner no longer holds back to the projects that lost
+    /// them, running the precedence rule again. Returns those projects.
+    @discardableResult
+    private func restoreRows(releasedBy winnerId: String, ids: Set<String>) -> Set<String> {
+        guard !ids.isEmpty else { return [] }
+        let losers = worktreeIdConflicts.filter { loserId, lost in
+            loserId != winnerId && lost.contains { ids.contains($0.key) && $0.value == winnerId }
+        }.keys
+        for loserId in losers {
+            storeRows(listedRows(projectId: loserId), projectId: loserId)
+        }
+        return Set(losers)
     }
 
     static func isDirectory(_ path: String) -> Bool {
@@ -437,8 +566,9 @@ final class ProjectsManager {
                 project.host != nil || FileManager.default.fileExists(atPath: $0.path.path)
             }
             if !cachedWorktrees.isEmpty {
-                worktreesByProject[project.id] = cachedWorktrees
-                applyWorktreeOrdering(projectId: project.id)
+                // Older builds could persist a directory under two projects;
+                // the precedence rule filters those duplicates here.
+                storeRows(cachedWorktrees, projectId: project.id)
                 continue
             }
             let path = URL(fileURLWithPath: project.path)
@@ -462,9 +592,10 @@ final class ProjectsManager {
     }
 
     func removeOptimisticWorktree(id: String, projectId: String) {
-        worktreesByProject[projectId]?.removeAll { $0.id == id }
+        if worktreesByProject[projectId] != nil {
+            storeRows(listedRows(projectId: projectId).filter { $0.id != id }, projectId: projectId)
+        }
         worktreeOperationStates.removeValue(forKey: WorktreeOperationKey(projectId: projectId, worktreeId: id))
-        applyWorktreeOrdering(projectId: projectId)
     }
 
     /// Drops a row that is known to be gone — the removal itself already
@@ -699,8 +830,10 @@ final class ProjectsManager {
         for key in clearedOperationKeys {
             worktreeOperationStates.removeValue(forKey: key)
         }
-        worktreesByProject[projectId] = reconciled
-        let orderChanged = applyWorktreeOrdering(projectId: projectId)
+        let orderChanged = storeRows(reconciled, projectId: projectId)
+        // Only rows this project owns are cached, so a lost directory is not
+        // restored under it at startup.
+        let stored = worktreesByProject[projectId, default: []]
 
         guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return false }
         if anchorChanged {
@@ -713,7 +846,7 @@ final class ProjectsManager {
         let previousGGWorktreeModes = projects[idx].ggWorktreeModes
         let previousIssueAttachments = projects[idx].issueAttachments
         let previousCachedWorktrees = projects[idx].cachedWorktrees
-        projects[idx].cachedWorktrees = reconciled
+        projects[idx].cachedWorktrees = stored
         for (id, mode) in resolvedCreateModes {
             if mode == .inherit {
                 projects[idx].ggWorktreeModes.removeValue(forKey: id)

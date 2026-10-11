@@ -5730,7 +5730,9 @@ final class AppState {
         }
         stopProjectGitWatcher(projectId: id)
         unpersistedGGWorktreeModes.removeValue(forKey: id)
-        projectsManager.removeProject(id: id)
+        // A directory this project owned goes straight back to a project that
+        // lost it, so its id stays live and its tabs and sessions survive.
+        let restoredProjectIds = projectsManager.removeProject(id: id)
         spacesManager.removeProjectEverywhere(id)
         runScheduler.pruneSchedules(missingProjectIDs: [id])
         saveProjects()
@@ -5741,6 +5743,9 @@ final class AppState {
         for worktreeId in removedIds {
             try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId))
             try? FileManager.default.removeItem(at: Paths.buffersDir(forWorktreeId: worktreeId))
+        }
+        for projectId in restoredProjectIds {
+            Task { await refreshProjectTopology(projectId: projectId) }
         }
         return true
     }
@@ -9986,6 +9991,8 @@ final class AppState {
         return branch.isEmpty ? "Terminal" : branch
     }
 
+    /// A first match is unambiguous: `ProjectsManager` lets one local
+    /// directory belong to only one project, and remote ids carry their host.
     func worktree(withId id: String) -> Worktree? {
         if let focused = workspaceSelectedWorktree(matching: id) {
             return focused.worktree
