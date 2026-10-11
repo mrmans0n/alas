@@ -857,7 +857,16 @@ struct ACPSessionManagerDisposalTests {
     func coldManagerPurgesRemoteOrphan(ownerless: Bool) async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }
-        let (manager, store, endpoint, previous, cleanup) = try await remoteOrphanManager(in: folder, idleSeconds: 0)
+        let started = AsyncStream<Void>.makeStream()
+        let release = AsyncStream<Void>.makeStream()
+        let (manager, store, endpoint, previous, cleanup) = try await remoteOrphanManager(
+            in: folder, idleSeconds: 0, beforeCleanupRequest: { method in
+                if method == "proc/kill" {
+                    started.continuation.yield()
+                    for await _ in release.stream { break }
+                }
+            }
+        )
         defer {
             manager.shutdownBackgroundTasks()
             previous.shutdown()
@@ -871,7 +880,17 @@ struct ACPSessionManagerDisposalTests {
         #expect(cleanup.fence(sessionId: "side") == nil)
         #expect(await endpoint.runningProcId == "crashed-side-proc")
 
-        await manager.purgeOrphanedEphemeralSessions()
+        let purging = Task { await manager.purgeOrphanedEphemeralSessions() }
+        for await _ in started.stream { break }
+        #expect(manager.sessions.isEmpty)
+        #expect(!manager.isIdleForProjectRebinding)
+        var readiness: Bool?
+        let subscription = manager.projectRebindingReadiness.sink { readiness = $0 }
+        defer { subscription.cancel() }
+        #expect(await awaitCondition(within: .seconds(1)) { readiness == false })
+        release.continuation.yield()
+        await purging.value
+        #expect(await awaitCondition { readiness == true })
 
         #expect(try store.loadSession(id: "side") == nil)
         #expect(try store.loadSession(id: "parent")?.remoteSessionId == "parent-conversation")
@@ -974,7 +993,10 @@ struct ACPSessionManagerDisposalTests {
         .init(worktreePath: "/work", agentId: "codex", remoteSessionId: "crashed-side-conversation")
     }
 
-    private func remoteOrphanManager(in folder: URL, idleSeconds: Int64 = 100, client: ACPMockClient? = nil) async throws -> (
+    private func remoteOrphanManager(
+        in folder: URL, idleSeconds: Int64 = 100, client: ACPMockClient? = nil,
+        beforeCleanupRequest: @escaping @Sendable (String) async -> Void = { _ in }
+    ) async throws -> (
         ACPSessionManager, ACPSessionStore, ReplicaEndpoint, ACPRemoteSessionCoordinator, ACPRemoteSessionCoordinator
     ) {
         let path = folder.appendingPathComponent("orphan.sqlite").path
@@ -1013,7 +1035,9 @@ struct ACPSessionManagerDisposalTests {
                 ]), revision: 0)], status: "busy"
         )))
         let cleanup = ACPRemoteSessionCoordinator(owner: .init(serverId: "mac-b", instanceId: "restarted-instance")) {
-            method, data in try await endpoint.request(method, data)
+            method, data in
+            await beforeCleanupRequest(method)
+            return try await endpoint.request(method, data)
         }
         let manager = ACPSessionManager(
             worktreeId: "wt", worktreePath: "/work", store: store,

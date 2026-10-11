@@ -3738,6 +3738,9 @@ public final class ACPSessionManager: ChangeTracking {
     /// Cleans hidden `/btw` sessions left by a crash. SSH rows retain the
     /// agent and conversation identity until fenced native cleanup succeeds.
     public func purgeOrphanedEphemeralSessions() async {
+        guard !isDisposed else { return }
+        activeSessionDeletionCount += 1
+        defer { activeSessionDeletionCount -= 1 }
         await flushPersistence()
         do {
             let rows = try await persistence.orphanedEphemeralSessions(
