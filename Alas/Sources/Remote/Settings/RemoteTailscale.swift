@@ -50,10 +50,10 @@ enum RemoteTailscale {
     }
 
     /// `ours` means `/` proxies to `http://127.0.0.1:<p>` for some `p` in
-    /// `ports` — the bound port, or the pinned default a previous launch
-    /// served before a port fallback.
-    static func parseServe(_ data: Data, dnsName: String, ports: Set<UInt16>) -> RemoteTailscaleServeState {
-        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return .off }
+    /// `ports`: ports Alas is listening on or recorded installing. Nil when
+    /// the output isn't a JSON object — unknown, not "nothing served".
+    static func parseServe(_ data: Data, dnsName: String, ports: Set<UInt16>) -> RemoteTailscaleServeState? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
         let hostPort = "\(dnsName):443"
         if (root["AllowFunnel"] as? [String: Bool])?[hostPort] == true {
             return .conflict("Tailscale Funnel is on for \(dnsName). Alas won't serve on a public address.")
@@ -77,8 +77,9 @@ enum RemoteTailscale {
         return parseStatus(output)
     }
 
-    static func serveState(dnsName: String, ports: Set<UInt16>) async -> RemoteTailscaleServeState {
-        guard let output = await run(["serve", "status", "--json"]) else { return .off }
+    /// Nil when the CLI fails or times out.
+    static func serveState(dnsName: String, ports: Set<UInt16>) async -> RemoteTailscaleServeState? {
+        guard let output = await run(["serve", "status", "--json"]) else { return nil }
         return parseServe(output, dnsName: dnsName, ports: ports)
     }
 
@@ -106,7 +107,7 @@ enum RemoteTailscale {
     }
 
     private static func runChecked(_ args: [String]) async throws {
-        guard let executable = executable() else { throw ProcessError.launchFailed("tailscale") }
+        guard let executable = executable() else { throw ProcessError.launchFailed("Tailscale CLI not found.") }
         let result = try await Process.run(executable, args: args, env: environment, timeout: timeout)
         guard result.exitCode == 0 else { throw ProcessError.nonZeroExit(result.exitCode, result.stderr) }
     }

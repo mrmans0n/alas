@@ -725,9 +725,6 @@ final class AppState {
     /// Last failed `tailscale serve` command, surfaced by the Settings pane.
     private(set) var remoteTailscaleError: String?
     @ObservationIgnored private var remoteTailscaleSync: Task<Void, Never>?
-    /// Port our Serve handler last targeted. Stays recognizable as ours after
-    /// a fallback port once `remotePort` clears on shutdown.
-    @ObservationIgnored private var remoteTailscaleServedPort: UInt16?
     private(set) var remoteConnectedDeviceCountsSnapshot: [String: Int] = [:]
     @ObservationIgnored
     var remoteSessionAttachScheduler: (@MainActor (ACPSessionManager, ACPSession.ID) -> Void)?
@@ -949,10 +946,10 @@ final class AppState {
     func syncRemoteTailscale() {
         let remote = config.remote
         let port = remotePort
-        let servedPort = remoteTailscaleServedPort
+        let previous = remoteTailscaleServe
         remoteTailscaleSync?.cancel()
         // Nothing to trust or tear down: skip spawning the CLI entirely.
-        guard remote.enabled || remote.tailscaleServe || remoteTailscaleServe != .off else {
+        guard remote.enabled || remote.tailscaleServe || remote.tailscaleServedPort != nil else {
             remoteTailscale = nil
             return
         }
@@ -960,23 +957,38 @@ final class AppState {
             let status = await RemoteTailscale.status()
             var serve = RemoteTailscaleServeState.off
             var failure: String?
+            // Ownership: the port Alas is listening on, or one it recorded
+            // after installing the handler. Never just the preferred port —
+            // another local service may hold it.
+            var servedPort = remote.tailscaleServedPort
             if let status {
-                let ports = Set([port, remote.preferredPort, servedPort].compactMap { $0 })
-                serve = await RemoteTailscale.serveState(dnsName: status.dnsName, ports: ports)
+                let ports = Set([port, servedPort].compactMap { $0 })
                 let want = remote.enabled && remote.tailscaleServe && status.httpsEnabled
                 do {
+                    guard let observed = await RemoteTailscale.serveState(dnsName: status.dnsName, ports: ports) else {
+                        // Unknown config: changing it could overwrite another service.
+                        throw ProcessError.launchFailed("Couldn't read the Tailscale Serve configuration.")
+                    }
+                    serve = observed
                     switch serve {
                     case .off where want, .ours where want:
                         if let port, serve != .ours(port: port) {
                             try await RemoteTailscale.enableServe(port: port)
                             serve = .ours(port: port)
+                            servedPort = port
                         }
                     case .ours where !want:
                         try await RemoteTailscale.disableServe()
                         serve = .off
+                        servedPort = nil
+                    case .off:
+                        servedPort = nil
                     default:
                         break
                     }
+                } catch ProcessError.launchFailed(let message) {
+                    serve = previous
+                    failure = message
                 } catch ProcessError.nonZeroExit(_, let stderr) {
                     failure = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
                 } catch {
@@ -986,7 +998,10 @@ final class AppState {
             guard let self, !Task.isCancelled else { return }
             remoteTailscale = status
             remoteTailscaleServe = serve
-            if case .ours(let served) = serve { remoteTailscaleServedPort = served }
+            if config.remote.tailscaleServedPort != servedPort {
+                config.remote.tailscaleServedPort = servedPort
+                saveConfig()
+            }
             remoteTailscaleError = failure
             refreshRemoteAccessState()
         }
