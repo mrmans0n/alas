@@ -281,6 +281,8 @@ final class ACPSession: ObservableObject, Identifiable {
     /// Relearned on attach; adapters must explicitly advertise this extension.
     @Published var supportsSteering = false
     var supportsCodexSteeringCompletion = false
+    /// Relearned on attach: the adapter serves `_alas/context_usage`.
+    @Published var supportsContextBreakdown = false
 
     var canSteerRunningTurn: Bool {
         agentState == .ready && supportsSteering

@@ -528,10 +528,14 @@ struct ACPComposer: View {
     }
 
     private var contextUsageButton: some View {
-        ACPContextUsageButton(usage: session.contextUsage,
-                              modelName: session.currentModelDisplayName,
-                              lastTurnQuota: session.lastTurnQuota,
-                              sessionQuotaTotal: session.sessionQuotaTotal)
+        let sessionId = session.id
+        return ACPContextUsageButton(usage: session.contextUsage,
+                                     modelName: session.currentModelDisplayName,
+                                     lastTurnQuota: session.lastTurnQuota,
+                                     sessionQuotaTotal: session.sessionQuotaTotal,
+                                     loadBreakdown: session.supportsContextBreakdown
+                                         ? { [manager] in await manager.runners[sessionId]?.contextBreakdown() }
+                                         : nil)
     }
 
     private var actionButton: some View {

@@ -5821,6 +5821,16 @@ extension ACPSessionRunner {
         })
     }
 
+    /// Fetched on demand when the context popover opens. Mid-turn it asks for
+    /// the local `summary` estimate: Claude serializes SDK control requests, so
+    /// the slower `full` count would delay an interrupt sent meanwhile.
+    func contextBreakdown() async -> ACPContextBreakdown? {
+        guard isConnectionCurrent(), session.supportsContextBreakdown else { return nil }
+        let detail = session.transcript.streamingState == .idle ? "full" : "summary"
+        return try? await connection.contextBreakdown(
+            sessionId: session.remoteSessionId ?? sessionId, detail: detail)
+    }
+
     @discardableResult
     func stopBackgroundTask(id: String) async -> Bool {
         guard isConnectionCurrent(), session.backgroundTaskStopSupported,
