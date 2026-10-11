@@ -6545,6 +6545,9 @@ final class AppState {
             saveProjects()
             rightPaneStore.reevaluateGGGates()
         }
+        // Every direct refresh can move a directory to another project, so
+        // reselect here rather than in each caller.
+        reconcileSelectionAfterOwnershipChange()
         restartProjectGitWatchers(previousPaths: previousPaths)
         rescanWorktreeStatuses()
         await refreshMainWorktreeUpstreamStatuses(projectId: projectId)
