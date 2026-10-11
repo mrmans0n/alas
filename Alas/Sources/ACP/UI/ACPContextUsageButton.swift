@@ -80,7 +80,9 @@ struct ACPContextUsageButton: View {
                 Text("\(formatContextTokens(usage.used)) / \(formatContextTokens(usage.size)) (\(contextPercent(ratio: ratio))%)")
                     .font(.system(size: 11))
                     .foregroundStyle(theme.color("fg-muted"))
-                if let breakdown, !loadingBreakdown {
+                // A stale breakdown stays up while the new one loads, so the
+                // popover does not shrink back to the spinner and regrow.
+                if let breakdown {
                     ACPContextBreakdownView(breakdown: breakdown)
                 } else if loadingBreakdown {
                     HStack(spacing: 6) {
@@ -112,6 +114,10 @@ struct ACPContextUsageButton: View {
             }
         }
         .padding(14)
+        // A fixed width, not `minWidth`: the popover proposes its current
+        // width, and `minWidth` would accept the narrow loading width and clip
+        // the breakdown instead of growing the popover.
+        .frame(width: breakdown == nil ? nil : ACPContextBreakdownView.width + 28, alignment: .leading)
         .frame(minWidth: 220, alignment: .leading)
     }
 
@@ -151,10 +157,13 @@ struct ACPContextUsageButton: View {
         guard let loadBreakdown, !loadingBreakdown, breakdown == nil || breakdownUsage != usage else { return }
         let measuredAt = usage
         loadingBreakdown = true
-        defer { loadingBreakdown = false }
-        guard let fetched = await loadBreakdown(), !fetched.categories.isEmpty else { return }
-        breakdown = fetched
-        breakdownUsage = measuredAt
+        let fetched = await loadBreakdown()
+        withAnimation(.snappy) {
+            loadingBreakdown = false
+            guard let fetched, !fetched.categories.isEmpty else { return }
+            breakdown = fetched
+            breakdownUsage = measuredAt
+        }
     }
 
     private func formatCost(_ cost: ACPUsageInfo.Cost) -> String {
@@ -170,6 +179,7 @@ struct ACPContextBreakdownView: View {
 
     @Environment(\.theme) private var theme
 
+    static let width: CGFloat = 460
     private static let columns = 10
     private static let squareSize: CGFloat = 11
     private static let maxDetailRows = 12
@@ -188,7 +198,7 @@ struct ACPContextBreakdownView: View {
             }
             details
         }
-        .frame(width: 440, alignment: .leading)
+        .frame(width: Self.width, alignment: .leading)
     }
 
     // MARK: Grid
