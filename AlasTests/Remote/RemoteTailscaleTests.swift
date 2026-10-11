@@ -28,21 +28,26 @@ struct RemoteTailscaleTests {
         (#"{"TCP":{"443":{"HTTPS":true}},"Web":{"mac.tail1.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:8765"}}}}}"#,
          .ours(port: 8765)),
         (#"{"TCP":{"443":{"HTTPS":true}},"Web":{"mac.tail1.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:3000"}}}}}"#,
-         .conflict("")),
+         .conflict("already serves something else")),
         (#"{"TCP":{"443":{"HTTPS":true}},"Web":{"mac.tail1.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:8765"},"/api":{"Proxy":"http://127.0.0.1:9000"}}}}}"#,
-         .conflict("")),
-        (#"{"TCP":{"443":{"TCPForward":"127.0.0.1:22"}}}"#, .conflict("")),
+         .conflict("already serves something else")),
+        (#"{"TCP":{"443":{"TCPForward":"127.0.0.1:22"}}}"#, .conflict("another Tailscale service")),
+        // Route left under the pre-rename hostname.
+        (#"{"TCP":{"443":{"HTTPS":true}},"Web":{"old.tail1.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:8765"}}}}}"#,
+         .conflict("old.tail1.ts.net")),
         (#"{"TCP":{"443":{"HTTPS":true}},"Web":{"mac.tail1.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:8765"}}}},"AllowFunnel":{"mac.tail1.ts.net:443":true}}"#,
-         .conflict("")),
+         .conflict("Funnel")),
     ] as [(String, RemoteTailscaleServeState?)])
     func parseServe(json: String, expected: RemoteTailscaleServeState?) {
         let state = RemoteTailscale.parseServe(Data(json.utf8), dnsName: Self.name, ports: [8765, 9999])
         // 3000 isn't a port Alas listens on or recorded, so it isn't ours.
-        if case .conflict? = expected {
-            guard case .conflict? = state else {
+        // Conflicts match on a substring identifying which check fired.
+        if case .conflict(let expectedReason)? = expected {
+            guard case .conflict(let reason)? = state else {
                 Issue.record("expected conflict, got \(String(describing: state))")
                 return
             }
+            #expect(reason.contains(expectedReason))
         } else {
             #expect(state == expected)
         }

@@ -61,9 +61,21 @@ enum RemoteTailscale {
         if (root["AllowFunnel"] as? [String: Bool])?[hostPort] == true {
             return .conflict("Tailscale Funnel is on for \(dnsName). Alas won't serve on a public address.")
         }
-        let web = (root["Web"] as? [String: Any])?[hostPort] as? [String: Any]
-        let handlers = web?["Handlers"] as? [String: Any] ?? [:]
+        let webByHost = root["Web"] as? [String: Any] ?? [:]
+        func routes(_ key: String) -> [String: Any] {
+            (webByHost[key] as? [String: Any])?["Handlers"] as? [String: Any] ?? [:]
+        }
+        let handlers = routes(hostPort)
         if handlers.isEmpty {
+            // Tailscale keeps a route under the old name after a machine or
+            // tailnet rename, and only `serve reset` (which clears every
+            // service) removes it, so name the cleanup instead of doing it.
+            let ownTargets = Set(ports.map(target(port:)))
+            if let stale = webByHost.keys.sorted().first(where: { key in
+                routes(key).values.contains { ownTargets.contains(($0 as? [String: Any])?["Proxy"] as? String ?? "") }
+            }) {
+                return .conflict("Alas's HTTPS route is still registered under \(stale) from before a rename. Run `tailscale serve reset` to clear it (this removes every Serve route).")
+            }
             let tcp443 = (root["TCP"] as? [String: Any])?["443"] != nil
             return tcp443 ? .conflict("Port 443 on \(dnsName) is already used by another Tailscale service.") : .off
         }

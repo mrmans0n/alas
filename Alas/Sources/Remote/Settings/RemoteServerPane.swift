@@ -326,8 +326,14 @@ struct RemoteServerPane: View {
             }
             .padding(.horizontal, 32).padding(.vertical, 24)
         }
-        // Tailscale may have logged in, out, or changed since the last sync.
-        .task { state.syncRemoteTailscale() }
+        // Tailscale may log in or out, or gain HTTPS certificates, while the
+        // pane is open; re-check until it closes.
+        .task {
+            while !Task.isCancelled {
+                state.syncRemoteTailscale()
+                try? await Task.sleep(for: .seconds(15))
+            }
+        }
         .onChange(of: state.config.remote.enabled) { _, enabled in
             if !enabled { pairingCode = nil }   // don't show a stale code after re-enabling
         }
