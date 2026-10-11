@@ -236,6 +236,29 @@ struct ProjectsManagerTests {
         #expect(ProjectsManager.RowOwnership.winner(b, a) == expected)
     }
 
+    /// Three migrated projects claiming one directory: removing the middle
+    /// owner and then the winner still hands the row to the last project.
+    @Test func rowGoesToTheLastClaimantAfterTheOwnersAreRemoved() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("alas-pm-chain-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        func folder(_ id: String, added: TimeInterval) -> ProjectConfig {
+            ProjectConfig(id: id, name: id, path: dir.path, color: "#fff",
+                          addedAt: Date(timeIntervalSince1970: added), kind: .folder)
+        }
+        // Recovery claims in list order, so the weakest claimant goes first
+        // and each later project displaces the previous owner.
+        let mgr = ProjectsManager(persistedProjects: [folder("c", added: 3), folder("b", added: 2), folder("a", added: 1)])
+        mgr.populateConfiguredProjectWorktreesForRecovery()
+        #expect(mgr.worktrees(projectId: "a").count == 1)
+        #expect(mgr.worktreeIdConflicts["c"]?.values.first == "a")
+
+        mgr.removeProject(id: "b")
+        #expect(mgr.removeProject(id: "a") == ["c"])
+        #expect(mgr.worktrees(projectId: "c").count == 1)
+        #expect(mgr.worktreeIdConflicts.isEmpty)
+    }
+
     /// `git worktree add` into a registered folder: the git project takes the
     /// row, the folder records the conflict, and gets the row back once the
     /// git project is removed.

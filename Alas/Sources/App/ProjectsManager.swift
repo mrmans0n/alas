@@ -523,6 +523,11 @@ final class ProjectsManager {
         worktreesByProject[loserId]?.removeAll { $0.id == id }
         worktreeIdConflicts[loserId, default: [:]][id] = winnerId
         shadowedRows[loserId, default: [:]][id] = row
+        // Projects that already lost this row to the displaced owner now lose
+        // it to the final one, so restoring never has to follow a chain.
+        for (otherId, lost) in worktreeIdConflicts where lost[id] == loserId {
+            worktreeIdConflicts[otherId]?[id] = winnerId
+        }
     }
 
     /// Hands rows the winner no longer holds back to the projects that lost

@@ -2226,7 +2226,13 @@ final class AppState {
             saveSpaces()
         }
         let selectedWasRemoved = selectedWorktreeId.map(disappeared.contains) ?? false
-        if let current = selectedWorktreeId, !afterIds.contains(current) {
+        // A row can also leave the active space while its id stays live: the
+        // directory moved to a project in another space.
+        let selectionMovedOutOfActiveSpace = selectedWorktreeId.map { id in
+            !activeSpaceProjects.contains { projectsManager.visibleWorktrees(projectId: $0.id).contains { $0.id == id } }
+                && activeSpaceProjects.contains { projectsManager.worktreeIdConflicts[$0.id]?[id] != nil }
+        } ?? false
+        if let current = selectedWorktreeId, !afterIds.contains(current) || selectionMovedOutOfActiveSpace {
             selectWorktree(id: resolvedSelectionForActiveSpace())
         }
         for projectId in landingProjectsToMigrate {
@@ -5783,7 +5789,9 @@ final class AppState {
                 continue
             }
 
-            if projectsManager.worktrees(projectId: project.id).isEmpty {
+            // A project whose rows all sit under another project is not empty.
+            if projectsManager.worktrees(projectId: project.id).isEmpty,
+               projectsManager.worktreeIdConflicts[project.id] == nil {
                 staleProjectIds.append(project.id)
             }
         }
