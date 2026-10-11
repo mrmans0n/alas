@@ -23,7 +23,7 @@ extension CheckpointSnapshotError: LocalizedError {
         case .unsupportedPaths(let paths):
             return "Checkpoint capture does not support: \(paths.joined(separator: ", "))."
         case .payloadTooLarge(let path, let byteCount, let limit):
-            return "\(path) is too large to capture safely (\(CheckpointPresentation.bytes(byteCount)); limit \(CheckpointPresentation.bytes(limit)))."
+            return "\(path) is too large to capture safely (\(CheckpointBytes.format(byteCount)); limit \(CheckpointBytes.format(limit)))."
         case .missingPayload(let hash):
             return "Checkpoint payload is missing: \(hash)."
         case .stateChanged:

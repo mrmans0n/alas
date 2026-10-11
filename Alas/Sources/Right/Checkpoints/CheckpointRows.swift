@@ -20,18 +20,6 @@ enum CheckpointPresentation {
         return formatter.string(from: date)
     }
 
-    static func bytes(_ count: Int64) -> String {
-        let units = ["B", "KiB", "MiB", "GiB"]
-        var value = Double(max(0, count))
-        var unit = 0
-        while value >= 1024, unit < units.count - 1 {
-            value /= 1024
-            unit += 1
-        }
-        let number = value.rounded() == value ? String(Int(value)) : String(format: "%.1f", value)
-        return "\(number) \(units[unit])"
-    }
-
     static func summary(_ checkpoint: WorktreeCheckpointSummary) -> String {
         let parts = [
             checkpoint.stagedFileCount > 0 ? "\(checkpoint.stagedFileCount) staged" : nil,
@@ -44,7 +32,7 @@ enum CheckpointPresentation {
     /// Content line shown inside an expanded card. The creation time lives on
     /// the card's chip line, so it is deliberately absent here.
     static func detail(_ checkpoint: WorktreeCheckpointSummary) -> String {
-        "\(summary(checkpoint)) · \(bytes(checkpoint.byteCount))"
+        "\(summary(checkpoint)) · \(CheckpointBytes.format(checkpoint.byteCount))"
     }
 
     static func capturedFileCount(_ checkpoint: WorktreeCheckpointSummary) -> Int {
@@ -93,7 +81,7 @@ enum CheckpointPresentation {
     }
 
     static func footer(storageUsage: Int64) -> String {
-        "\(bytes(storageUsage)) used"
+        "\(CheckpointBytes.format(storageUsage)) used"
     }
 
     static let retentionHelp = "Keeps up to 50 automatic, 20 manual, and 5 recovery checkpoints within 2 GiB per worktree."

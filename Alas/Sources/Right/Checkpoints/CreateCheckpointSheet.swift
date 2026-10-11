@@ -40,7 +40,7 @@ struct CreateCheckpointSheet: View {
             Text("Create checkpoint").font(.headline)
             if let capturedManifest {
                 Text("Checkpoint saved: \(capturedManifest.label)")
-                Text("\(capturedManifest.paths.count) files · \(CheckpointPresentation.bytes(capturedManifest.byteCount))")
+                Text("\(capturedManifest.paths.count) files · \(CheckpointBytes.format(capturedManifest.byteCount))")
                     .foregroundStyle(.secondary)
                 exclusions(capturedManifest.exclusions)
             } else {

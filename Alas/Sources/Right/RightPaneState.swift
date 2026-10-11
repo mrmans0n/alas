@@ -36,16 +36,6 @@ struct CheckpointCreatePresentation: Identifiable, Equatable {
     let id = UUID()
 }
 
-enum GGStackLoadState: Equatable {
-    case inactive
-    case loading
-    case empty
-    case loaded
-    case failed(String)
-
-    var hasLoadedCommit: Bool { self == .loaded }
-}
-
 struct ReviewLoopRemoteFingerprint: Equatable, Sendable {
     var branchName: String
     var headSHA: String
