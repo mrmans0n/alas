@@ -1,4 +1,3 @@
-import Combine
 import Foundation
 
 public enum RemoteHostReachability: Equatable, Sendable {
@@ -11,10 +10,11 @@ public enum RemoteHostReachability: Equatable, Sendable {
 /// consecutive connection failures flip a host offline (one can be a
 /// transient blip mid-roam); any success flips it back.
 @MainActor
-public final class RemoteHostStatusStore: ObservableObject {
+public final class RemoteHostStatusStore: ChangeTracking {
+    nonisolated(unsafe) public let willChange = ChangeSignal<Void>()
     public static let shared = RemoteHostStatusStore()
 
-    @Published public private(set) var offlineHosts: Set<String> = []
+    @Tracked public private(set) var offlineHosts: Set<String> = []
     private var consecutiveFailures: [String: Int] = [:]
     private var observedHosts: Set<String> = []
     /// Includes the first confirmed reachable state so persisted outages can end after relaunch.

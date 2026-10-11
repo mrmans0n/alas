@@ -1,10 +1,9 @@
 import Foundation
-import Combine
 
 /// Reference-typed text buffer shared between an `ACPMessage` value and
 /// the SwiftUI row rendering it. Appending streaming chunks mutates one
 /// String in place (amortized O(1)) instead of rebuilding the enclosing
-/// enum case + reassigning the @Published transcript array on every
+/// enum case + reassigning the @Tracked transcript array on every
 /// chunk (which over the lifetime of a message is O(n²) in chars).
 ///
 /// Equality is by reference identity: two `.agent(id, buf)` values that
@@ -24,7 +23,8 @@ import Combine
 /// not cover this per-row buffer publish. A trailing-edge drain guarantees
 /// the final chunk of a burst still renders within one throttle interval.
 @MainActor
-public final class StreamingText: ObservableObject {
+public final class StreamingText: ChangeTracking {
+    nonisolated(unsafe) public let willChange = ChangeSignal<Void>()
     public private(set) var value: String
     public private(set) var utf8Length: Int
     public private(set) var revision: UInt64 = 0
@@ -82,7 +82,7 @@ public final class StreamingText: ObservableObject {
 
     public func restoreMetadata(_ metadata: AnyCodable?) {
         self.metadata = metadata
-        objectWillChange.send()
+        willChange.send()
     }
 
     private func scheduleThrottledPublish() {
@@ -110,7 +110,7 @@ public final class StreamingText: ObservableObject {
         #if DEBUG
         publishCountForTests += 1
         #endif
-        objectWillChange.send()
+        willChange.send()
     }
 }
 

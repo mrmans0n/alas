@@ -1,4 +1,3 @@
-import Combine
 import Foundation
 
 private struct ACPTranscriptScrollMemory: Equatable {
@@ -124,7 +123,8 @@ public final class VisualAidAnswerCancellation: @unchecked Sendable {
 }
 
 @MainActor
-public final class ACPSessionManager: ObservableObject {
+public final class ACPSessionManager: ChangeTracking {
+    nonisolated(unsafe) public let willChange = ChangeSignal<Void>()
     public typealias ACPSetupEvaluator = @MainActor (_ spec: ACPLaunchSpec) async -> ACPSetupResult
     public typealias ACPRemoteAdapterResolver = @MainActor (
         _ host: String,
@@ -278,7 +278,7 @@ public final class ACPSessionManager: ObservableObject {
     /// delegated Claude child never gets the tools that message other Claude
     /// Code sessions. Set post-init, mirroring `alasCLIEnvProvider`.
     public var delegatedChildProvider: (@MainActor (_ sessionId: String) async -> Bool)?
-    @Published public private(set) var sessions: [ACPSession.ID: ACPSession] = [:] {
+    @Tracked public private(set) var sessions: [ACPSession.ID: ACPSession] = [:] {
         willSet {
             for (id, session) in sessions where newValue[id] !== session {
                 session.nextPromptActivity.send()
@@ -286,12 +286,12 @@ public final class ACPSessionManager: ObservableObject {
             }
         }
     }
-    @Published public private(set) var recent: [ACPSessionRow] = []
+    @Tracked public private(set) var recent: [ACPSessionRow] = []
     /// The open `/btw` side question of each parent session that has one.
-    @Published public private(set) var sideQuestions: [ACPSession.ID: ACPSideQuestion] = [:]
-    @Published public private(set) var persistenceError: String?
-    @Published private var persistedRows: [ACPSession.ID: ACPSessionRow] = [:]
-    @Published private var missingPersistedSessionIds: Set<ACPSession.ID> = []
+    @Tracked public private(set) var sideQuestions: [ACPSession.ID: ACPSideQuestion] = [:]
+    @Tracked public private(set) var persistenceError: String?
+    @Tracked private var persistedRows: [ACPSession.ID: ACPSessionRow] = [:]
+    @Tracked private var missingPersistedSessionIds: Set<ACPSession.ID> = []
     private var rowLoadTasks: [ACPSession.ID: Task<Void, Never>] = [:]
     private var persistenceTail: Task<Void, Never>?
     private var persistenceGeneration = 0
@@ -8762,12 +8762,12 @@ extension ACPSessionManager {
     /// Whether the session's config options change within `timeout`.
     private func configOptionsChange(of session: ACPSession, within timeout: Duration) async -> Bool {
         // Snapshot and subscribe in one main-actor turn, so an update landing
-        // before the wait starts is buffered rather than missed. `@Published`
-        // replays the current value on subscription and emits in `willSet`;
-        // the waiter resumes after the assignment.
+        // before the wait starts is buffered rather than missed. The tracked
+        // property's signal fires in `willSet`; the waiter resumes after the
+        // assignment.
         let revision = session.availableConfigOptionsRevision
         let (changes, continuation) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
-        let subscription = session.$availableConfigOptions.dropFirst().sink { _ in continuation.yield() }
+        let subscription = session.$availableConfigOptions.signal.observe { _ in continuation.yield() }
         defer {
             subscription.cancel()
             continuation.finish()

@@ -1,8 +1,8 @@
-import Combine
 import Foundation
 
 @MainActor
-public final class SessionSummaryCoordinator: ObservableObject {
+public final class SessionSummaryCoordinator: ChangeTracking {
+    nonisolated(unsafe) public let willChange = ChangeSignal<Void>()
     public enum Phase: Equatable, Sendable {
         case idle
         case loading
@@ -10,8 +10,8 @@ public final class SessionSummaryCoordinator: ObservableObject {
         case failed(String, previous: SessionSummary?)
     }
 
-    @Published public private(set) var phase: Phase = .idle
-    @Published public private(set) var presentationGeneration: UInt64 = 0
+    @Tracked public private(set) var phase: Phase = .idle
+    @Tracked public private(set) var presentationGeneration: UInt64 = 0
 
     private struct CacheEntry {
         let summary: SessionSummary
@@ -25,7 +25,7 @@ public final class SessionSummaryCoordinator: ObservableObject {
 
     private let engine: any LocalTextGenerating
     private var cache: [UUID: CacheEntry] = [:]
-    private var cacheTeardownObservations: [UUID: AnyCancellable] = [:]
+    private var cacheTeardownObservations: [UUID: ChangeSubscription] = [:]
     private var generationTask: Task<Void, Never>?
     private var cancellationBarrier: Task<Void, Never>?
     private var activityReconciliationTask: Task<Void, Never>?
@@ -33,7 +33,7 @@ public final class SessionSummaryCoordinator: ObservableObject {
     private var currentIncarnation: UUID?
     private var currentRevision: SessionSummarySourceRevision?
     private weak var boundSession: ACPSession?
-    private var observations: Set<AnyCancellable> = []
+    private var observations: Set<ChangeSubscription> = []
 
     public init(engine: any LocalTextGenerating) {
         self.engine = engine
@@ -63,13 +63,13 @@ public final class SessionSummaryCoordinator: ObservableObject {
         boundSession = session
 
         session.nextPromptActivity
-            .sink { [weak self, weak session] in
+            .observe { [weak self, weak session] in
                 guard let self, let session, self.boundSession === session else { return }
                 self.handleActivity(session)
             }
             .store(in: &observations)
         session.nextPromptTeardown
-            .sink { [weak self, weak session] in
+            .observe { [weak self, weak session] in
                 guard let self, let session, self.boundSession === session else { return }
                 self.endSession(session)
             }
@@ -339,7 +339,7 @@ public final class SessionSummaryCoordinator: ObservableObject {
         let incarnation = session.incarnation
         cache[incarnation] = .init(summary: summary, revision: revision)
         guard cacheTeardownObservations[incarnation] == nil else { return }
-        cacheTeardownObservations[incarnation] = session.nextPromptTeardown.sink { [weak self] in
+        cacheTeardownObservations[incarnation] = session.nextPromptTeardown.observe { [weak self] in
             self?.evictCache(for: incarnation)
         }
     }

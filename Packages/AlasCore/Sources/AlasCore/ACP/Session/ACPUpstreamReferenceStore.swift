@@ -1,11 +1,11 @@
-import Combine
 import Foundation
 
 /// Per-worktree cache behind reference chips: resolves the code host remote
 /// once, then looks up each `#N` / `!N` at most once per `staleAfter`.
 /// Composer and transcript share one store per worktree through `Registry`.
 @MainActor
-public final class ACPUpstreamReferenceStore: ObservableObject {
+public final class ACPUpstreamReferenceStore: ChangeTracking {
+    nonisolated(unsafe) public let willChange = ChangeSignal<Void>()
     public struct Environment: Sendable {
         public var remotes: @Sendable (URL) async throws -> [GitRemote]
         public var providers: CodeHostProviderRegistry
@@ -81,10 +81,10 @@ public final class ACPUpstreamReferenceStore: ObservableObject {
     private static let maxConcurrentLoads = 4
 
     nonisolated public let worktreeRoot: URL
-    @Published public private(set) var remote: CodeHostRemote?
-    @Published public private(set) var remoteResolved = false
+    @Tracked public private(set) var remote: CodeHostRemote?
+    @Tracked public private(set) var remoteResolved = false
     /// Bumps on every entry change so chips and open cards repaint.
-    @Published public private(set) var revision: UInt64 = 0
+    @Tracked public private(set) var revision: UInt64 = 0
 
     private let environment: Environment
     private var entries: [CodeHostReference: (entry: Entry, at: Date)] = [:]
