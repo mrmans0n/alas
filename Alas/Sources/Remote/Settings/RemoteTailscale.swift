@@ -109,19 +109,41 @@ enum RemoteTailscale {
     }
 
     /// Blocking variant for app termination, where an async hop would never
-    /// run before the process exits.
-    static func disableServeBeforeExit(timeout: TimeInterval = 3) {
-        guard let executable = executable() else { return }
+    /// run before the process exits. Re-checks ownership first — the route
+    /// may have changed since the last sync — and returns true only when our
+    /// route is confirmed gone.
+    static func disableServeBeforeExit(ports: Set<UInt16>) -> Bool {
+        guard let dnsName = runBlocking(["status", "--json"]).flatMap({ try? parseStatus($0) })?.dnsName,
+              let output = runBlocking(["serve", "status", "--json"]),
+              let state = parseServe(output, dnsName: dnsName, ports: ports) else { return false }
+        switch state {
+        case .ours: return runBlocking(["serve", "--https=443", "off"]) != nil
+        case .off: return true
+        case .conflict: return false
+        }
+    }
+
+    /// Stdout on a zero exit within `timeout`, else nil.
+    private static func runBlocking(_ args: [String], timeout: TimeInterval = 2) -> Data? {
+        guard let executable = executable() else { return nil }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = ["serve", "--https=443", "off"]
+        process.arguments = args
         process.environment = environment
-        process.standardOutput = FileHandle.nullDevice
+        let output = Pipe()
+        process.standardOutput = output
         process.standardError = FileHandle.nullDevice
         let done = DispatchSemaphore(value: 0)
         process.terminationHandler = { _ in done.signal() }
-        guard (try? process.run()) != nil else { return }
-        if done.wait(timeout: .now() + timeout) == .timedOut { process.terminate() }
+        guard (try? process.run()) != nil else { return nil }
+        guard done.wait(timeout: .now() + timeout) == .success else {
+            process.terminate()
+            return nil
+        }
+        // Serve/status JSON is small, well under the pipe buffer, so reading
+        // after exit can't deadlock.
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        return process.terminationStatus == 0 ? data : nil
     }
 
     private static func target(port: UInt16) -> String { "http://127.0.0.1:\(port)" }

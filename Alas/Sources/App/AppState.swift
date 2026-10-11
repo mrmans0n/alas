@@ -1021,8 +1021,11 @@ final class AppState {
     /// Alas, forwarding the tailnet to a closed port another process could
     /// later bind. The next launch re-installs it.
     func removeRemoteTailscaleServeForQuit() {
-        guard config.remote.tailscaleServedPort != nil else { return }
-        RemoteTailscale.disableServeBeforeExit()
+        guard let recorded = config.remote.tailscaleServedPort else { return }
+        let ports = Set([recorded, remotePort].compactMap { $0 })
+        // Keep the record unless removal is confirmed, so the next launch can
+        // still recognize and clean up a surviving route.
+        guard RemoteTailscale.disableServeBeforeExit(ports: ports) else { return }
         config.remote.tailscaleServedPort = nil
         saveConfig()
     }
