@@ -1691,6 +1691,7 @@ final class ACPSessionManager: ObservableObject {
                     && $0.transcript.streamingState == .idle
                     && !$0.subagents.values.contains { $0.isRunning }
                     && $0.activeBackgroundTasks.isEmpty
+                    && $0.nextPromptWorkCount == 0
                     && $0.pendingQueuePersistenceCount == 0
                     && !$0.queue.contains { $0.status == .sending }
             }

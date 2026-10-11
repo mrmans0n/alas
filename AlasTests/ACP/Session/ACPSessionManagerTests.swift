@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 import SQLite3
 import Testing
 @testable import Alas
@@ -75,7 +76,8 @@ struct ACPSessionManagerTests {
         #expect(restored.title == "Flushed title")
     }
 
-    @Test func connectedIdleRunnerCanRebindAfterWorkFinishes() async throws {
+    @Test(.timeLimit(.minutes(1)))
+    func connectedIdleRunnerCanRebindAfterWorkFinishes() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rebind-\(UUID()).sqlite")
         defer { try? FileManager.default.removeItem(at: url) }
         let store = try ACPSessionStore(path: url.path)
@@ -95,6 +97,10 @@ struct ACPSessionManagerTests {
         session.transcript.streamingState = .streaming
         #expect(!manager.isIdleForProjectRebinding)
         session.transcript.streamingState = .idle
+        session.nextPromptWorkCount += 1
+        #expect(!manager.isIdleForProjectRebinding)
+        session.nextPromptWorkCount -= 1
+        #expect(manager.isIdleForProjectRebinding)
         session.registerSubagent(.init(subagentSessionId: "child"))
         #expect(!manager.isIdleForProjectRebinding)
         session.applySubagentState(.init(subagentSessionId: "child", state: .completed))
@@ -102,8 +108,23 @@ struct ACPSessionManagerTests {
         session.applyBackgroundTask(.init(sessionUpdate: "async_task_spawned", asyncTaskId: "task"),
                                     ownerSessionId: session.id)
         #expect(!manager.isIdleForProjectRebinding)
-        session.applyBackgroundTask(.init(sessionUpdate: "async_task_completed", asyncTaskId: "task",
-                                          state: "completed"), ownerSessionId: session.id)
+        var readinessSubscription: AnyCancellable?
+        defer { readinessSubscription?.cancel() }
+        var sawBusy = false
+        await withCheckedContinuation { continuation in
+            readinessSubscription = manager.projectRebindingReadiness.sink { ready in
+                if !ready && !sawBusy {
+                    sawBusy = true
+                    session.applyBackgroundTask(
+                        .init(sessionUpdate: "async_task_completed", asyncTaskId: "task", state: "completed"),
+                        ownerSessionId: session.id
+                    )
+                } else if ready && sawBusy {
+                    continuation.resume()
+                }
+            }
+        }
+        readinessSubscription?.cancel()
         #expect(manager.isIdleForProjectRebinding)
         session.enqueueScheduled(blocks: [.text("later")], scheduledAt: .distantFuture)
         #expect(manager.isIdleForProjectRebinding)

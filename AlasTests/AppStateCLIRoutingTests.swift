@@ -355,11 +355,14 @@ struct AppStateCLIRoutingTests {
         #expect(busy == false)
         session.transcript.streamingState = .idle
         #expect(state.acpManagerForMountedTab(worktree: worktree, owner: owner) === manager)
+        otherSession.nextPromptWorkCount += 1
+        otherSession.transcript.streamingState = .idle
+        #expect(state.acpManagerForMountedTab(worktree: worktree, owner: owner) === manager)
         let idle = await withCheckedContinuation { continuation in
             readinessSubscription = manager.projectRebindingReadiness
                 .filter { $0 }.prefix(1)
                 .sink { continuation.resume(returning: $0) }
-            otherSession.transcript.streamingState = .idle
+            otherSession.nextPromptWorkCount -= 1
         }
         #expect(idle == true)
         let rebound = try #require(state.acpManagerForMountedTab(worktree: worktree, owner: owner))
