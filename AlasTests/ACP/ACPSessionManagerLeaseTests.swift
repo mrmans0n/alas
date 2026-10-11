@@ -1,4 +1,5 @@
 import Testing
+import Combine
 import Foundation
 @testable import Alas
 
@@ -133,9 +134,15 @@ import Foundation
             remoteSessionId: "conversation", currentModel: nil, currentMode: nil, autoRun: false,
             createdAt: 1, updatedAt: 1, lastOpenedAt: 1, archived: false))
         let gate = LeaseTestGate()
+        let claiming = AsyncStream<Void>.makeStream()
+        let claimGate = LeaseTestGate()
         let parked = AsyncStream<Void>.makeStream()
         let ready = AsyncStream<Void>.makeStream()
         let coordinator = ACPRemoteSessionCoordinator(owner: .init(serverId: "mac-b", instanceId: "B")) { method, data in
+            if method == "lease/seize" {
+                claiming.continuation.yield()
+                await claimGate.wait()
+            }
             if method == "replica/read",
                try JSONDecoder().decode(RemoteSessionReadParams.self, from: data).pageToken != nil {
                 parked.continuation.yield(())
@@ -169,6 +176,15 @@ import Foundation
             if takeover { return await reader.takeOver(sessionId: session.id) }
             await reader.attach(to: session.id, freshlyCreated: false)
             return reader.runners[session.id] != nil
+        }
+        if takeover {
+            for await _ in claiming.stream { break }
+            #expect(!reader.isIdleForProjectRebinding)
+            var readiness: Bool?
+            let subscription = reader.projectRebindingReadiness.sink { readiness = $0 }
+            #expect(await awaitCondition(within: .seconds(1)) { readiness == false })
+            subscription.cancel()
+            await claimGate.open()
         }
         for await _ in parked.stream { break }
         // Only the manager's renewal task can heartbeat while the read is paused.

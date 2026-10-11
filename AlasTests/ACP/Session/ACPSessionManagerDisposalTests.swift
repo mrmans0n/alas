@@ -194,8 +194,19 @@ struct ACPSessionManagerDisposalTests {
     @Test("keeping a side question twice promotes it once")
     func sideQuestionPromotesOnce() async throws {
         let client = ACPMockClient()
-        let (manager, _, parent) = try await attachedManager(client: client, supportsClose: true)
+        let (manager, store, parent) = try await attachedManager(client: client, supportsClose: true)
         let side = try await manager.startSideQuestion(parentID: parent.id, question: "why?")
+        #expect(await awaitCondition {
+            side.transcript.streamingState == .idle
+                && manager.runners.values.allSatisfy { !$0.hasRetainedCleanupPromptWork }
+        })
+        #expect(!manager.isIdleForProjectRebinding)
+        var readiness: Bool?
+        let subscription = manager.projectRebindingReadiness.sink { readiness = $0 }
+        defer { subscription.cancel() }
+        #expect(await awaitCondition(within: .seconds(1)) { readiness == false })
+        await manager.flushPersistence()
+        #expect(try store.loadSession(id: side.id)?.ephemeralParentId == parent.id)
 
         async let first = manager.promoteSideQuestion(parentID: parent.id)
         async let second = manager.promoteSideQuestion(parentID: parent.id)
@@ -203,8 +214,35 @@ struct ACPSessionManagerDisposalTests {
 
         #expect(promoted == [side.id])
         #expect(manager.recent.filter { $0.id == side.id }.count == 1)
+        #expect(try store.loadSession(id: side.id)?.ephemeralParentId == nil)
+        #expect(await awaitCondition { readiness == true })
         await manager.detach(sessionId: side.id)
         await manager.detach(sessionId: parent.id)
+    }
+
+    @Test("goal control stays busy until the agent response completes")
+    func goalControlBlocksProjectRebinding() async throws {
+        let client = ACPMockClient()
+        let started = AsyncStream<Void>.makeStream()
+        let release = AsyncStream<Void>.makeStream()
+        client.scriptAsync(method: "_session/goal") { _ in
+            started.continuation.yield()
+            for await _ in release.stream { break }
+            return Data("{}".utf8)
+        }
+        let (manager, _, session) = try await attachedManager(client: client, supportsClose: true)
+        session.goalCapability = .init(version: 1, controlMethod: "_session/goal", actions: [.set])
+        let control = Task { try await manager.controlGoal(for: session.id, action: .set, objective: "finish") }
+        for await _ in started.stream { break }
+        #expect(!manager.isIdleForProjectRebinding)
+        var readiness: Bool?
+        let subscription = manager.projectRebindingReadiness.sink { readiness = $0 }
+        defer { subscription.cancel() }
+        #expect(await awaitCondition(within: .seconds(1)) { readiness == false })
+        release.continuation.yield()
+        try await control.value
+        #expect(await awaitCondition { readiness == true })
+        await manager.disposeAllLiveSessions()
     }
 
     @Test("unresponsive close times out and still tears down")
@@ -234,7 +272,26 @@ struct ACPSessionManagerDisposalTests {
         #expect(manager.runners[session.id] != nil)
         #expect(!client.sent.contains { $0.method == "session/close" })
 
-        await manager.detach(sessionId: session.id)
+        let runner = try #require(manager.runners[session.id])
+        let writing = AsyncStream<Void>.makeStream()
+        let release = AsyncStream<Void>.makeStream()
+        runner.beforePersistenceForTesting = {
+            writing.continuation.yield()
+            for await _ in release.stream { break }
+        }
+        session.transcript.messages.append(.user(id: UUID(), text: "saved before detach", attachments: []))
+        #expect(runner.persistIndices([0]))
+        for await _ in writing.stream { break }
+        let detaching = Task { await manager.detach(sessionId: session.id) }
+        #expect(await awaitCondition { manager.runners[session.id] == nil })
+        #expect(!manager.isIdleForProjectRebinding)
+        var readiness: Bool?
+        let subscription = manager.projectRebindingReadiness.sink { readiness = $0 }
+        defer { subscription.cancel() }
+        #expect(await awaitCondition(within: .seconds(1)) { readiness == false })
+        release.continuation.yield()
+        await detaching.value
+        #expect(await awaitCondition { readiness == true })
         #expect(manager.liveSession(for: session.id) == nil)
         #expect(!client.sent.contains { $0.method == "session/close" })
     }

@@ -288,7 +288,9 @@ public final class ACPSessionManager: ChangeTracking {
     }
     @Tracked public private(set) var recent: [ACPSessionRow] = []
     /// The open `/btw` side question of each parent session that has one.
-    @Tracked public private(set) var sideQuestions: [ACPSession.ID: ACPSideQuestion] = [:]
+    @Tracked public private(set) var sideQuestions: [ACPSession.ID: ACPSideQuestion] = [:] {
+        willSet { projectRebindingActivity.send() }
+    }
     @Tracked public private(set) var persistenceError: String?
     @Tracked private var persistedRows: [ACPSession.ID: ACPSessionRow] = [:]
     @Tracked private var missingPersistedSessionIds: Set<ACPSession.ID> = []
@@ -308,6 +310,9 @@ public final class ACPSessionManager: ChangeTracking {
     private var managerQueuePersistenceCounts: [ACPSession.ID: Int] = [:]
     public let projectRebindingActivity = ChangeSignal<Void>()
     private var disposalTasks: [ACPSession.ID: Task<Void, Error>] = [:] {
+        willSet { projectRebindingActivity.send() }
+    }
+    private var activeSideQuestionWorkCount = 0 {
         willSet { projectRebindingActivity.send() }
     }
     private var activeSessionDeletionCount = 0 {
@@ -529,10 +534,13 @@ public final class ACPSessionManager: ChangeTracking {
         action: ACPGoalAction,
         objective: String? = nil
     ) async throws {
-        guard let session = sessions[id],
+        guard !isDisposed, let session = sessions[id],
               let capability = session.goalCapability,
-              let runner = runners[id],
-              await confirmedWriterLease(for: id),
+              let runner = runners[id]
+        else { throw ACPGoalControlError.unavailable }
+        session.nextPromptWorkCount += 1
+        defer { session.nextPromptWorkCount -= 1 }
+        guard await confirmedWriterLease(for: id),
               sessions[id] === session,
               runners[id] === runner
         else { throw ACPGoalControlError.unavailable }
@@ -1688,7 +1696,9 @@ public final class ACPSessionManager: ChangeTracking {
     /// have observed it. `performAttach` clears `disposingAttachments` as
     /// part of its own cleanup before those waiters resume.
     private var cancelledInFlightAttachments: Set<ACPSession.ID> = []
-    private var teardownCounts: [ACPSession.ID: Int] = [:]
+    private var teardownCounts: [ACPSession.ID: Int] = [:] {
+        willSet { projectRebindingActivity.send() }
+    }
     private var teardownWaiters: [ACPSession.ID: [CheckedContinuation<Void, Never>]] = [:]
     private struct AttachingConnection {
         let connection: ACPConnection
@@ -1774,7 +1784,8 @@ public final class ACPSessionManager: ChangeTracking {
     public var isIdleForProjectRebinding: Bool {
         !isDisposed && attachingSessions.isEmpty && restartingConnections.isEmpty
             && autoReconnectTasks.isEmpty && disposalTasks.isEmpty
-            && activeSessionDeletionCount == 0
+            && activeSessionDeletionCount == 0 && teardownCounts.isEmpty
+            && sideQuestions.isEmpty && activeSideQuestionWorkCount == 0
             && runners.values.allSatisfy { !$0.hasRetainedCleanupPromptWork }
             && sessions.values.allSatisfy {
                 $0.hydrationState != .loading && $0.agentState != .spawning
@@ -2313,6 +2324,8 @@ public final class ACPSessionManager: ChangeTracking {
     /// during creation makes this call discard its side session.
     @discardableResult
     public func startSideQuestion(parentID: ACPSession.ID, question: String) async throws -> ACPSession {
+        activeSideQuestionWorkCount += 1
+        defer { activeSideQuestionWorkCount -= 1 }
         let entry = ACPSideQuestion(question: question)
         await replaceSideQuestion(parentID: parentID, with: entry)
         let side: ACPSession
@@ -2438,6 +2451,8 @@ public final class ACPSessionManager: ChangeTracking {
     /// it replaces. Installing first lets the latest command win even while
     /// the old session's teardown is still awaited.
     public func replaceSideQuestion(parentID: ACPSession.ID, with entry: ACPSideQuestion) async {
+        activeSideQuestionWorkCount += 1
+        defer { activeSideQuestionWorkCount -= 1 }
         if let previous = sideQuestions.updateValue(entry, forKey: parentID)?.sessionID {
             await discardSideSession(id: previous)
         }
@@ -2452,6 +2467,8 @@ public final class ACPSessionManager: ChangeTracking {
 
     /// Closes the parent's side session and deletes it with its transcript.
     public func dismissSideQuestion(parentID: ACPSession.ID) async {
+        activeSideQuestionWorkCount += 1
+        defer { activeSideQuestionWorkCount -= 1 }
         guard let entry = sideQuestions.removeValue(forKey: parentID),
               let sideID = entry.sessionID
         else { return }
@@ -2494,6 +2511,8 @@ public final class ACPSessionManager: ChangeTracking {
     /// question is still current once the promotion is stored, so a second
     /// Keep, a dismissal, or a newer question in the meantime wins.
     public func promoteSideQuestion(parentID: ACPSession.ID) async throws -> ACPSession? {
+        activeSideQuestionWorkCount += 1
+        defer { activeSideQuestionWorkCount -= 1 }
         guard let entry = sideQuestions[parentID], entry.isSubmitted, !entry.isPromoting,
               let sideID = entry.sessionID, let side = sessions[sideID]
         else { return nil }
@@ -5244,6 +5263,9 @@ extension ACPSessionManager {
     /// it no longer owns the lease (within ~5s).
     @discardableResult
     public func takeOver(sessionId: ACPSession.ID) async -> Bool {
+        guard !isDisposed, let takeoverSession = sessions[sessionId] else { return false }
+        takeoverSession.nextPromptWorkCount += 1
+        defer { takeoverSession.nextPromptWorkCount -= 1 }
         let takeoverAttemptID = UUID()
         takeoverAttemptIDs[sessionId] = takeoverAttemptID
         let now = Int64(Date().timeIntervalSince1970)
@@ -5282,7 +5304,7 @@ extension ACPSessionManager {
             persistenceError = error.localizedDescription
             return false
         }
-        guard takeoverAttemptIDs[sessionId] == takeoverAttemptID else {
+        guard !isDisposed, takeoverAttemptIDs[sessionId] == takeoverAttemptID else {
             try? await persistence.releaseLease(
                 sessionId: sessionId,
                 instanceId: instanceId,
