@@ -1,0 +1,318 @@
+import Foundation
+import JavaScriptCore
+
+public struct PluginLimits: Sendable, Equatable {
+    /// Limit for one call into the plugin, in CPU time of the thread running it, so a busy machine does not
+    /// stop a cheap plugin. Enforced by JavaScriptCore's watchdog, which only fires while the JIT is off:
+    /// `Alas.entitlements` must never gain `com.apple.security.cs.allow-jit`.
+    public var timePerCall: Duration = .milliseconds(250)
+    /// For evaluating the plugin's script, once at load. Every `handle` call, `alas/activate` included,
+    /// gets `timePerCall`.
+    public var timeForActivation: Duration = .seconds(1)
+    public var maxSourceBytes = 8 << 20
+    public var maxMessageBytes = 1 << 20
+    public var maxSendsPerCall = 64
+    /// Calls into the plugin per delivery, counting the replies to its own requests.
+    public var maxRoundTripsPerDelivery = 64
+    /// A request's string id is echoed back in its reply, so it has to be bounded.
+    public var maxRequestIDBytes = 256
+    public var maxFrameDimension = 1024
+    public var maxFrameBytes = 4 << 20
+
+    public init(timePerCall: Duration = .milliseconds(250), timeForActivation: Duration = .seconds(1), maxSourceBytes: Int = 8 << 20, maxMessageBytes: Int = 1 << 20, maxSendsPerCall: Int = 64, maxRoundTripsPerDelivery: Int = 64, maxRequestIDBytes: Int = 256, maxFrameDimension: Int = 1024, maxFrameBytes: Int = 4 << 20) {
+        self.timePerCall = timePerCall
+        self.timeForActivation = timeForActivation
+        self.maxSourceBytes = maxSourceBytes
+        self.maxMessageBytes = maxMessageBytes
+        self.maxSendsPerCall = maxSendsPerCall
+        self.maxRoundTripsPerDelivery = maxRoundTripsPerDelivery
+        self.maxRequestIDBytes = maxRequestIDBytes
+        self.maxFrameDimension = maxFrameDimension
+        self.maxFrameBytes = maxFrameBytes
+    }
+}
+
+public enum PluginRuntimeError: Error, Equatable, CustomStringConvertible, Sendable {
+    case instantiation(String)
+    case missingHandle
+    case messageTooLarge(Int)
+    case tooManySends(Int)
+    case badSend
+    case badFrame(String)
+    case timeout(milliseconds: Int)
+    case exception(String)
+
+    public var description: String {
+        switch self {
+        case .instantiation(let reason): "could not load plugin: \(reason)"
+        case .missingHandle: "plugin does not define globalThis.handle"
+        case .messageTooLarge(let size): "message of \(size) bytes exceeds the size limit"
+        case .tooManySends(let limit): "plugin sent more than \(limit) messages in one call"
+        case .badSend: "alas.send expects one string"
+        case .badFrame(let reason): "plugin presented an invalid frame: \(reason)"
+        case .timeout(let milliseconds): "plugin took longer than \(milliseconds) ms"
+        case .exception(let message): "plugin threw: \(message)"
+        }
+    }
+}
+
+/// RGBA8, non-premultiplied, row-major, top-left origin.
+public struct PluginFrame: Equatable, Sendable {
+    public let width: Int
+    public let height: Int
+    public let pixels: Data
+
+    public init(width: Int, height: Int, pixels: Data) {
+        self.width = width
+        self.height = height
+        self.pixels = pixels
+    }
+}
+
+/// What a canvas frame, a region list or a web page belongs to: a tab, by index in the manifest, or a `right` panel, by
+/// id (API 15).
+public enum PluginSurface: Hashable, Sendable {
+    case tab(Int)
+    case panel(String)
+
+    /// A message's target: exactly one of `tab` and `panel`.
+    public init?(tab: Int?, panel: String?) {
+        switch (tab, panel) {
+        case (let tab?, nil): self = .tab(tab)
+        case (nil, let panel?): self = .panel(panel)
+        default: return nil
+        }
+    }
+
+    public var tab: Int? { if case .tab(let tab) = self { tab } else { nil } }
+    public var panel: String? { if case .panel(let panel) = self { panel } else { nil } }
+}
+
+/// What one `handle` call produced.
+public struct PluginDelivery: Sendable {
+    public var messages: [Data] = []
+    /// Last frame per tab or panel presented during the call.
+    public var frames: [PluginSurface: PluginFrame] = [:]
+
+    public init(messages: [Data] = [], frames: [PluginSurface: PluginFrame] = [:]) {
+        self.messages = messages
+        self.frames = frames
+    }
+}
+
+// Private, but exported unchanged by JavaScriptCore since 2014. The watchdog is the only way to stop a
+// running script; its termination exception cannot be caught by the script.
+private typealias ShouldTerminate = @convention(c) (JSContextRef?, UnsafeMutableRawPointer?) -> Bool
+@_silgen_name("JSContextGroupSetExecutionTimeLimit")
+private func JSContextGroupSetExecutionTimeLimit(
+    _ group: JSContextGroupRef, _ limit: Double, _ callback: ShouldTerminate?, _ context: UnsafeMutableRawPointer?)
+@_silgen_name("JSContextGroupClearExecutionTimeLimit")
+private func JSContextGroupClearExecutionTimeLimit(_ group: JSContextGroupRef)
+
+/// One plugin instance: its own JavaScriptCore VM, whose global object holds nothing from the host but
+/// `alas`. Every call runs on `queue`, which is what makes the `@unchecked Sendable` hold. This type moves
+/// strings only; it knows nothing about JSON-RPC or Alas.
+// ponytail: no memory cap. JSC's heap statistics leave out typed-array storage and the process footprint
+// is shared with Alas, so neither attributes memory to a plugin; the time limit bounds growth per call
+// (about 70 MB in 250 ms). A helper process is the upgrade if a plugin needs a real cap.
+public final class PluginRuntime: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "io.nlopez.alas.plugin-runtime")
+    private let limits: PluginLimits
+    private let tabCount: Int
+    private let canvasPanels: Set<String>
+    private let group: JSContextGroupRef
+    private let context: JSContext
+    private var handleFunction: JSValue?
+    private var outbox: [Data] = []
+    private var frames: [PluginSurface: PluginFrame] = [:]
+    /// Why a host function refused. Set once per call; it wins over the exception it raised, which the
+    /// script may have caught.
+    private var hostFailure: PluginRuntimeError?
+    /// Set by the watchdog's callback, which runs on the thread executing the script, so on `queue`.
+    private let terminated = UnsafeMutablePointer<Bool>.allocate(capacity: 1)
+
+    private init(limits: PluginLimits, tabCount: Int, canvasPanels: Set<String>) {
+        self.limits = limits
+        self.tabCount = tabCount
+        self.canvasPanels = canvasPanels
+        group = JSContextGroupCreate()
+        let global = JSGlobalContextCreateInGroup(group, nil)
+        context = JSContext(jsGlobalContextRef: global)
+        JSGlobalContextRelease(global)
+    }
+
+    deinit {
+        JSContextGroupRelease(group)
+        terminated.deallocate()
+    }
+
+    /// `tabCount` is the number of tabs the manifest declares and `canvasPanels` its canvas panels' ids; `alas.present`
+    /// exists only when there is one of either.
+    public static func load(
+        source: Data, limits: PluginLimits, tabCount: Int = 0, canvasPanels: Set<String> = []
+    ) async throws -> PluginRuntime {
+        guard source.count <= limits.maxSourceBytes else {
+            throw PluginRuntimeError.instantiation("script of \(source.count) bytes exceeds the size limit")
+        }
+        guard let script = String(data: source, encoding: .utf8) else {
+            throw PluginRuntimeError.instantiation("script is not UTF-8")
+        }
+        let runtime = PluginRuntime(limits: limits, tabCount: tabCount, canvasPanels: canvasPanels)
+        try await runtime.run { try runtime.evaluate(script) }
+        return runtime
+    }
+
+    /// Calls `globalThis.handle` with one message. Returns what the plugin sent with `alas.send` during the
+    /// call, in order. The caller processes them after this returns, so the plugin is never re-entered.
+    public func handle(_ message: Data) async throws -> PluginDelivery {
+        try await run { try self.deliver(message) }
+    }
+
+    private func evaluate(_ script: String) throws {
+        installHost()
+        var handle: JSValue?
+        try call(limit: limits.timeForActivation) {
+            _ = context.evaluateScript(script)
+            // Reading `handle` can run a getter the plugin defined, so it happens under the watchdog too.
+            if context.exception == nil { handle = context.globalObject.forProperty("handle") }
+        }
+        guard let handle,
+              let object = JSValueToObject(context.jsGlobalContextRef, handle.jsValueRef, nil),
+              handle.isObject, JSObjectIsFunction(context.jsGlobalContextRef, object)
+        else { throw PluginRuntimeError.missingHandle }
+        handleFunction = handle
+    }
+
+    private func installHost() {
+        let global = context.globalObject!
+        // A bare context still has these; the only host object a plugin gets is `alas`.
+        global.deleteProperty("console")
+        global.deleteProperty("WebAssembly")
+        let alas = JSValue(newObjectIn: context)!
+        let send: @convention(block) (JSValue) -> Void = { [unowned self] value in receive(value) }
+        alas.setValue(send, forProperty: "send")
+        if tabCount > 0 || !canvasPanels.isEmpty {
+            let present: @convention(block) (JSValue, JSValue, JSValue) -> Void = { [unowned self] target, pixels, width in
+                self.present(target: target, pixels: pixels, width: width)
+            }
+            alas.setValue(present, forProperty: "present")
+        }
+        global.setValue(alas, forProperty: "alas")
+    }
+
+    private func deliver(_ message: Data) throws -> PluginDelivery {
+        guard message.count <= limits.maxMessageBytes else {
+            throw PluginRuntimeError.messageTooLarge(message.count)
+        }
+        outbox = []
+        frames = [:]
+        let text = String(decoding: message, as: UTF8.self)
+        try call(limit: limits.timePerCall) { _ = handleFunction?.call(withArguments: [text]) }
+        return PluginDelivery(messages: outbox, frames: frames)
+    }
+
+    /// Runs `body` under the watchdog and turns whatever stopped it into a `PluginRuntimeError`.
+    private func call(limit: Duration, _ body: () -> Void) throws {
+        hostFailure = nil
+        context.exception = nil
+        terminated.pointee = false
+        JSContextGroupSetExecutionTimeLimit(group, Self.seconds(limit), { _, flag in
+            flag?.assumingMemoryBound(to: Bool.self).pointee = true
+            return true
+        }, UnsafeMutableRawPointer(terminated))
+        body()
+        // Converting a thrown value can run plugin code (a custom `toString`), so it stays under the watchdog.
+        let message = context.exception.map { Self.firstLine(prefix(of: $0, units: 2000) ?? "exception") }
+        JSContextGroupClearExecutionTimeLimit(group)
+        context.exception = nil
+        if let hostFailure { throw hostFailure }
+        if terminated.pointee { throw PluginRuntimeError.timeout(milliseconds: Int(limit / .milliseconds(1))) }
+        if let message { throw PluginRuntimeError.exception(message) }
+    }
+
+    private func receive(_ value: JSValue) {
+        guard hostFailure == nil else { return }
+        guard value.isString else { return refuse(.badSend) }
+        guard outbox.count < limits.maxSendsPerCall else { return refuse(.tooManySends(limits.maxSendsPerCall)) }
+        // UTF-8 never takes fewer bytes than UTF-16 code units, so a string that is too long by that count is
+        // refused before any of it is copied out of JavaScriptCore.
+        guard let jsString = JSValueToStringCopy(context.jsGlobalContextRef, value.jsValueRef, nil) else {
+            return refuse(.badSend)
+        }
+        let units = JSStringGetLength(jsString)
+        JSStringRelease(jsString)
+        guard units <= limits.maxMessageBytes else { return refuse(.messageTooLarge(units)) }
+        guard let text = value.toString() else { return refuse(.badSend) }
+        let data = Data(text.utf8)
+        guard data.count <= limits.maxMessageBytes else { return refuse(.messageTooLarge(data.count)) }
+        outbox.append(data)
+    }
+
+    private func present(target: JSValue, pixels: JSValue, width: JSValue) {
+        guard hostFailure == nil else { return }
+        let surface: PluginSurface
+        if target.isString, let panel = target.toString() {
+            guard canvasPanels.contains(panel) else {
+                return refuse(.badFrame("panel \"\(panel.prefix(64))\" is not a canvas panel"))
+            }
+            surface = .panel(panel)
+        } else {
+            // Whole numbers only, so a fractional tab cannot quietly draw to another one.
+            guard target.isNumber, let tab = Int(exactly: target.toDouble()) else {
+                return refuse(.badFrame("tab and width must be whole numbers"))
+            }
+            guard (0..<tabCount).contains(tab) else { return refuse(.badFrame("tab \(tab) is not declared")) }
+            surface = .tab(tab)
+        }
+        guard width.isNumber, let width = Int(exactly: width.toDouble()) else {
+            return refuse(.badFrame(target.isString ? "width must be a whole number" : "tab and width must be whole numbers"))
+        }
+        guard (1...limits.maxFrameDimension).contains(width) else {
+            return refuse(.badFrame("width \(width) is out of range"))
+        }
+        let ref = context.jsGlobalContextRef
+        let type = JSValueGetTypedArrayType(ref, pixels.jsValueRef, nil)
+        guard type == kJSTypedArrayTypeUint8Array || type == kJSTypedArrayTypeUint8ClampedArray,
+              let object = JSValueToObject(ref, pixels.jsValueRef, nil),
+              let base = JSObjectGetTypedArrayBytesPtr(ref, object, nil)
+        else { return refuse(.badFrame("pixels must be a Uint8Array")) }
+        let length = JSObjectGetTypedArrayByteLength(ref, object, nil)
+        guard length <= limits.maxFrameBytes else {
+            return refuse(.badFrame("\(length) bytes exceeds the frame size limit"))
+        }
+        let rowBytes = width * 4
+        guard length % rowBytes == 0, (1...limits.maxFrameDimension).contains(length / rowBytes) else {
+            return refuse(.badFrame("length \(length) does not fit width \(width)"))
+        }
+        // The pointer is the start of the whole buffer, not of this view.
+        let offset = JSObjectGetTypedArrayByteOffset(ref, object, nil)
+        frames[surface] = PluginFrame(width: width, height: length / rowBytes, pixels: Data(bytes: base + offset, count: length))
+    }
+
+    /// At most `units` UTF-16 code units of `value` as text, without copying the rest out of JavaScriptCore.
+    private func prefix(of value: JSValue, units: Int) -> String? {
+        guard let string = JSValueToStringCopy(context.jsGlobalContextRef, value.jsValueRef, nil) else { return nil }
+        defer { JSStringRelease(string) }
+        return String(utf16CodeUnits: JSStringGetCharactersPtr(string), count: min(JSStringGetLength(string), units))
+    }
+
+    /// Records why a host function refused and throws into the script, which ends the call as failed.
+    private func refuse(_ error: PluginRuntimeError) {
+        hostFailure = error
+        context.exception = JSValue(newErrorFromMessage: error.description, in: context)
+    }
+
+    private static func seconds(_ duration: Duration) -> Double {
+        Double(duration.components.seconds) + Double(duration.components.attoseconds) / 1e18
+    }
+
+    private static func firstLine(_ text: String) -> String {
+        text.split(separator: "\n").first.map(String.init) ?? text
+    }
+
+    private func run<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async { continuation.resume(with: Result(catching: body)) }
+        }
+    }
+}

@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Alas
+@testable import AlasCore
 
 @MainActor
 @Suite("ACPSessionRunner")

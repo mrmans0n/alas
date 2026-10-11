@@ -1,4 +1,5 @@
 import AppKit
+import TreeSitterPack
 
 /// Installs the AppKit implementations behind the seams that core code calls
 /// through. Runs first in `AlasApp.init`, before any state is created.
@@ -16,6 +17,16 @@ enum PlatformServices {
             },
             decode: { data, worktreePath in
                 await GitService.imageSide(fromRawData: data, worktreePath: worktreePath)
+            }
+        )
+        LanguageRegistry.grammarPack = TreeSitterGrammarPack(
+            language: { id in id.withCString { alas_ts_language($0) } },
+            highlightQuery: { id in
+                // The pack returns static UTF-8 bytes that are not NUL-terminated,
+                // so the length is read back through `out_len`.
+                var length = 0
+                guard let bytes = id.withCString({ alas_ts_query($0, &length) }), length > 0 else { return nil }
+                return String(decoding: UnsafeBufferPointer(start: bytes, count: length), as: UTF8.self)
             }
         )
         ACPImageEncoding.encoder = { ACPImageEncoding.appKitInlineBase64(fileURL: $0, maxDimension: $1) }

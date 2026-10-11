@@ -1,0 +1,146 @@
+import Foundation
+
+public enum ACPLaunchPathError: LocalizedError, Equatable, Sendable {
+    case packageExecutableUnavailable(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .packageExecutableUnavailable(let package):
+            "The installed npm package `\(package)` does not provide its expected executable."
+        }
+    }
+}
+
+/// Resolves the absolute path Alas should launch for an ACP adapter, so the
+/// binary that actually runs is the one the setup check verified — not a
+/// same-named binary shadowing it earlier on PATH.
+///
+/// Scope: npm-backed adapters (those with `npmPackageName`). For everything
+/// else, and whenever a verified absolute path can't be produced, returns nil
+/// so the caller falls back to PATH-based launch (`/usr/bin/env <command>`).
+public struct ACPLaunchPathResolver {
+    public let env: [String: String]
+    public let additionalPathDirectories: [String]
+    /// Returns the npm global bin directory (e.g. `<npm prefix -g>/bin`), or nil.
+    public let npmGlobalBinDirectory: () async -> String?
+    /// Returns the active npm global package root (`npm root -g`), or nil.
+    public let npmGlobalRootDirectory: () async -> String?
+
+    public func resolvedLaunchPath(for spec: ACPLaunchSpec) async -> String? {
+        // Mirror the setup check's verification precedence so launch runs
+        // exactly the binary that made setup pass:
+        //  - `.npxPackage`: the package is the only thing verified, so prefer
+        //    the package-owned binary (this is what beats a PATH shadow).
+        //  - `.binaryOnPathOrNpmPackage`: the check resolves the PATH binary
+        //    first, so launch that same binary; the npm-global binary is the
+        //    fallback for when the check passed on the package instead.
+        //  - `.binaryOnPath`: no managed package to anchor to — return nil so
+        //    the caller launches via PATH (`/usr/bin/env <command>`) as today.
+        switch spec.setupCheck {
+        case .npxPackage(let package):
+            return await npmGlobalCandidate(for: spec, ownedBy: package)
+        case .binaryOnPathOrNpmPackage:
+            if let onPath = pathCandidate(for: spec) { return onPath }
+            return await npmGlobalCandidate(for: spec)
+        case .binaryOnPath:
+            return nil
+        }
+    }
+
+    /// The package-owned binary at `<npm global bin>/<command>`, if executable.
+    private func npmGlobalCandidate(
+        for spec: ACPLaunchSpec,
+        ownedBy package: String? = nil
+    ) async -> String? {
+        guard let binDir = await npmGlobalBinDirectory() else { return nil }
+        let candidate = "\(binDir)/\(spec.command)"
+        guard FileManager.default.isExecutableFile(atPath: candidate) else { return nil }
+        guard let package else { return candidate }
+        guard let root = await npmGlobalRootDirectory() else { return nil }
+        let packageDirectory = URL(fileURLWithPath: root, isDirectory: true)
+            .appendingPathComponent(package, isDirectory: true).path
+        return Self.isPackageOwnedExecutable(
+            atPath: candidate,
+            packageDirectory: packageDirectory
+        ) ? candidate : nil
+    }
+
+    public static func isPackageOwnedExecutable(atPath candidate: String, packageDirectory: String) -> Bool {
+        guard FileManager.default.isExecutableFile(atPath: candidate) else { return false }
+        guard let destination = try? FileManager.default.destinationOfSymbolicLink(atPath: candidate) else {
+            return false
+        }
+        let binDir = URL(fileURLWithPath: candidate).deletingLastPathComponent()
+        let target = destination.hasPrefix("/")
+            ? URL(fileURLWithPath: destination).standardizedFileURL.path
+            : binDir
+                .appendingPathComponent(destination)
+                .standardizedFileURL.path
+        let canonicalTarget = URL(fileURLWithPath: target).resolvingSymlinksInPath().path
+        let canonicalPackageDirectory = URL(fileURLWithPath: packageDirectory, isDirectory: true)
+            .resolvingSymlinksInPath().path
+        return canonicalTarget.hasPrefix(canonicalPackageDirectory + "/")
+    }
+
+    /// The PATH-resolved absolute path of `command`, if any.
+    private func pathCandidate(for spec: ACPLaunchSpec) -> String? {
+        AgentPath.resolveExecutable(
+            named: spec.command, base: env["PATH"], wellKnown: additionalPathDirectories)
+    }
+
+    /// Default provider: runs `npm prefix -g` (npm located via the augmented
+    /// PATH) and returns `<prefix>/bin`, or nil on any failure.
+    public static func defaultNpmGlobalBinDirectory(
+        env: [String: String],
+        additionalPathDirectories: [String] = AgentPath.wellKnownDirectories
+    ) -> () async -> String? {
+        defaultNpmGlobalDirectory(
+            env: env,
+            additionalPathDirectories: additionalPathDirectories,
+            arguments: ["prefix", "-g"],
+            suffix: "bin"
+        )
+    }
+
+    public static func defaultNpmGlobalRootDirectory(
+        env: [String: String],
+        additionalPathDirectories: [String] = AgentPath.wellKnownDirectories
+    ) -> () async -> String? {
+        defaultNpmGlobalDirectory(
+            env: env,
+            additionalPathDirectories: additionalPathDirectories,
+            arguments: ["root", "-g"]
+        )
+    }
+
+    private static func defaultNpmGlobalDirectory(
+        env: [String: String],
+        additionalPathDirectories: [String],
+        arguments: [String],
+        suffix: String? = nil
+    ) -> () async -> String? {
+        return {
+            guard let npm = AgentPath.resolveExecutable(
+                named: "npm", base: env["PATH"], wellKnown: additionalPathDirectories) else { return nil }
+            let augmentedEnv = ACPProcessEnvironment.augmented(
+                env, additionalPathDirectories: additionalPathDirectories)
+            guard let result = try? await Process.run(
+                npm,
+                args: arguments,
+                env: augmentedEnv
+            ) else { return nil }
+            let directory = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !directory.isEmpty else { return nil }
+            guard let suffix else { return directory }
+            return URL(fileURLWithPath: directory, isDirectory: true)
+                .appendingPathComponent(suffix, isDirectory: true).path
+        }
+    }
+
+    public init(env: [String: String], additionalPathDirectories: [String], npmGlobalBinDirectory: @escaping () async -> String?, npmGlobalRootDirectory: @escaping () async -> String?) {
+        self.env = env
+        self.additionalPathDirectories = additionalPathDirectories
+        self.npmGlobalBinDirectory = npmGlobalBinDirectory
+        self.npmGlobalRootDirectory = npmGlobalRootDirectory
+    }
+}

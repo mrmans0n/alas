@@ -1,6 +1,6 @@
 import Foundation
 
-public enum ShellQuoting {
+public enum ShellQuoting: Sendable {
     /// Returns `s` unchanged when it holds only shell-safe characters,
     /// otherwise wraps it in POSIX single quotes.
     public static func quote(_ s: String) -> String {

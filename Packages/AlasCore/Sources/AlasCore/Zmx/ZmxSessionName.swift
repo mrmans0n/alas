@@ -1,0 +1,76 @@
+import Foundation
+import CryptoKit
+
+/// Single derivation point for the zmx session name attached to a pane.
+/// Used by both `ZmxClient.wrap` (at launch) and `TerminalService.closeSession`
+/// (at kill) so the two call sites can never drift.
+public enum ZmxSessionName: Sendable {
+    /// Decoded parts of a scoped session name (`alas-<wtHash>-<leafHash>`).
+    /// Returned by `parseScoped`; legacy `alas-<leafId>` names produce nil.
+    public struct Parsed: Equatable, Sendable {
+        public let worktreeIdHash: String
+        public let leafIdHash: String
+
+        public init(worktreeIdHash: String, leafIdHash: String) {
+            self.worktreeIdHash = worktreeIdHash
+            self.leafIdHash = leafIdHash
+        }
+    }
+
+    public static func derive(worktreeId: String, leafId: String) -> String {
+        "alas-\(worktreeHash(worktreeId))-\(hash16(leafId))"
+    }
+
+    /// Worktree owners retain their exact historical name. Checkout owners
+    /// include their durable UUID and a hash of the execution location, so a
+    /// local checkout and a same-path checkout on SSH cannot collide.
+    public static func derive(owner: SessionOwnerID, leafId: String) -> String {
+        switch owner {
+        case .worktree(let worktreeID):
+            derive(worktreeId: worktreeID, leafId: leafId)
+        case .workspaceCheckout(let checkoutID, let location):
+            "alas-workspace-\(checkoutID.uuidString.lowercased())-\(hash16(location.identityComponent))-\(hash16(leafId))"
+        }
+    }
+
+    /// A zmx session lives on the worktree's own host, so remote ids hash
+    /// their real path: unique there, and stable across the move to virtual
+    /// ids so upgraded sessions stay attached.
+    public static func worktreeHash(_ worktreeId: String) -> String {
+        hash16(RemotePath.realPath(worktreeId))
+    }
+
+    /// Known worktree ids in the hash space of `derive`'s first half, for the
+    /// orphan sweeps' membership checks.
+    public static func worktreeHashes(_ worktreeIds: Set<String>) -> Set<String> {
+        Set(worktreeIds.map(worktreeHash))
+    }
+
+    public static func legacy(leafId: String) -> String {
+        "alas-\(leafId)"
+    }
+
+    /// Split a scoped session name into its (wt, leaf) hash halves. Returns
+    /// nil for legacy `alas-<UUID>` shapes (the leafId contains dashes, so
+    /// the segment count differs) and for any string that doesn't match the
+    /// 3-segment `alas-<16hex>-<16hex>` form.
+    public static func parseScoped(_ name: String) -> Parsed? {
+        let parts = name.split(separator: "-")
+        guard parts.count == 3, parts[0] == "alas",
+              parts[1].count == 16, parts[2].count == 16,
+              parts[1].allSatisfy(\.isHexDigit), parts[2].allSatisfy(\.isHexDigit)
+        else { return nil }
+        return Parsed(worktreeIdHash: String(parts[1]), leafIdHash: String(parts[2]))
+    }
+
+    /// Same hash the `derive` call uses for each id-half. Exposed so callers
+    /// computing membership sets (e.g. the boot-time orphan sweep) can map
+    /// known worktree ids and leaf ids into hash space without re-implementing
+    /// the SHA256-prefix trick.
+    public static func hash16(_ value: String) -> String {
+        SHA256.hash(data: Data(value.utf8))
+            .prefix(8)
+            .map { String(format: "%02x", $0) }
+            .joined()
+    }
+}

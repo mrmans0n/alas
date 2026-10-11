@@ -1,0 +1,234 @@
+import Foundation
+
+/// The editor's working copy of a schedule. Pure so validation and the
+/// draft → schedule mapping can be tested without the sheet.
+public struct RunScheduleDraft: Equatable, Sendable {
+    public enum TargetKind: String, CaseIterable, Equatable, Sendable {
+        case thisWorktree
+        case mainWorktree
+        case allProjects
+    }
+
+    public enum TriggerKind: String, CaseIterable, Equatable, Sendable {
+        case interval
+        case timeOfDay
+    }
+
+    public enum IntervalUnit: String, CaseIterable, Equatable, Sendable {
+        case minutes, hours, days
+
+        public var seconds: TimeInterval {
+            switch self {
+            case .minutes: 60
+            case .hours: 3_600
+            case .days: 86_400
+            }
+        }
+
+        public var label: String { rawValue.capitalized }
+    }
+
+    /// The quick picks above the weekday row. A preset is a named weekday
+    /// set; the row stays editable afterwards, at which point no preset is
+    /// selected any more.
+    public enum WeekdayPreset: String, CaseIterable, Equatable, Sendable {
+        case everyDay, weekdays, weekends
+
+        public var weekdays: Set<Int> {
+            switch self {
+            case .everyDay: Set(1...7)
+            case .weekdays: Set(2...6)
+            case .weekends: [1, 7]
+            }
+        }
+
+        public var label: String {
+            switch self {
+            case .everyDay: "Every day"
+            case .weekdays: "Weekdays"
+            case .weekends: "Weekends"
+            }
+        }
+
+        public static func matching(_ weekdays: Set<Int>) -> WeekdayPreset? {
+            allCases.first { $0.weekdays == weekdays }
+        }
+    }
+
+    public var name = ""
+    public var projectID: String?
+    public var worktreeID: String?
+    public var targetKind: TargetKind = .thisWorktree
+    public var scriptKey: String?
+    public var triggerKind: TriggerKind = .timeOfDay
+    public var intervalValue = 30
+    public var intervalUnit: IntervalUnit = .minutes
+    public var hour = 9
+    public var minute = 0
+    public var weekdays: Set<Int> = Set(1...7)
+    public var missedRunPolicy: RunScheduleMissedRunPolicy = .skip
+    public var createsWorktree = false
+    public var branchTemplate = RunScheduleComposition.defaultBranchTemplate
+    public var agentID: String?
+    public var modelID: String?
+    public var prompt = ""
+    public var sendsPromptAutomatically = true
+
+    public init() {}
+
+    /// Starts a draft for a new schedule aimed at `worktree`.
+    public init(projectID: String, worktreeID: String, isMainWorktree: Bool) {
+        self.projectID = projectID
+        self.worktreeID = worktreeID
+        self.targetKind = isMainWorktree ? .mainWorktree : .thisWorktree
+    }
+
+    public init(schedule: RunSchedule) {
+        name = schedule.name
+        switch schedule.target {
+        case .allProjects:
+            targetKind = .allProjects
+        case .project(let id):
+            targetKind = .mainWorktree
+            projectID = id
+        case let .worktree(projectId, worktreeId):
+            targetKind = .thisWorktree
+            projectID = projectId
+            worktreeID = worktreeId
+        }
+        scriptKey = schedule.scriptKey
+        switch schedule.trigger {
+        case .interval(let seconds):
+            triggerKind = .interval
+            let (value, unit) = Self.intervalComponents(seconds)
+            intervalValue = value
+            intervalUnit = unit
+        case let .timeOfDay(hour, minute, weekdays):
+            triggerKind = .timeOfDay
+            self.hour = hour
+            self.minute = minute
+            self.weekdays = weekdays.isEmpty ? Set(1...7) : weekdays
+        }
+        missedRunPolicy = schedule.missedRunPolicy
+        if let composition = schedule.composition {
+            createsWorktree = true
+            branchTemplate = composition.branchTemplate
+            agentID = composition.agentId
+            modelID = composition.modelId
+            prompt = composition.prompt ?? ""
+            sendsPromptAutomatically = composition.sendsPromptAutomatically
+        }
+    }
+
+    /// The preset the weekday row currently matches, if any.
+    public var weekdayPreset: WeekdayPreset? { WeekdayPreset.matching(weekdays) }
+
+    public mutating func apply(_ preset: WeekdayPreset) {
+        weekdays = preset.weekdays
+    }
+
+    public mutating func toggleWeekday(_ day: Int) {
+        if weekdays.contains(day) { weekdays.remove(day) } else { weekdays.insert(day) }
+    }
+
+    /// When the schedule would first fire if it were saved right now.
+    ///
+    /// `anchor` has to match what the scheduler will use, or the preview
+    /// contradicts the save. `RunScheduler.add` anchors a new schedule on
+    /// its creation, which is now; `RunScheduler.update` anchors an edited
+    /// trigger on the last fire. Interval occurrences sit on a grid from
+    /// that anchor, so an hourly schedule last run 30 minutes ago is next
+    /// due in 30 minutes, not in an hour. Time-of-day triggers ignore it.
+    ///
+    /// Nil while the trigger is not valid.
+    public func nextFireDate(now: Date, anchor: Date? = nil, calendar: Calendar = .autoupdatingCurrent) -> Date? {
+        switch triggerKind {
+        case .interval:
+            guard intervalValue >= 1 else { return nil }
+        case .timeOfDay:
+            guard (0...23).contains(hour), (0...59).contains(minute), !weekdays.isEmpty else { return nil }
+        }
+        return RunSchedulePlanner.nextFireDate(for: trigger, after: now, anchor: anchor ?? now, calendar: calendar)
+    }
+
+    public static func intervalComponents(_ seconds: TimeInterval) -> (Int, IntervalUnit) {
+        let total = Int(seconds.rounded())
+        if total % 86_400 == 0 { return (total / 86_400, .days) }
+        if total % 3_600 == 0 { return (total / 3_600, .hours) }
+        return (max(1, total / 60), .minutes)
+    }
+
+    public var trigger: RunScheduleTrigger {
+        switch triggerKind {
+        case .interval:
+            return .interval(seconds: Double(max(1, intervalValue)) * intervalUnit.seconds)
+        case .timeOfDay:
+            let storedWeekdays: Set<Int> = weekdays.count == 7 ? [] : weekdays
+            return .timeOfDay(hour: hour, minute: minute, weekdays: storedWeekdays)
+        }
+    }
+
+    public var target: RunScheduleTarget? {
+        switch targetKind {
+        case .allProjects:
+            return .allProjects
+        case .mainWorktree:
+            guard let projectID else { return nil }
+            return .project(id: projectID)
+        case .thisWorktree:
+            guard let projectID, let worktreeID else { return nil }
+            return .worktree(projectId: projectID, worktreeId: worktreeID)
+        }
+    }
+
+    public var composition: RunScheduleComposition? {
+        guard createsWorktree else { return nil }
+        let template = branchTemplate.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        return RunScheduleComposition(
+            branchTemplate: template.isEmpty ? RunScheduleComposition.defaultBranchTemplate : template,
+            agentId: agentID,
+            // A model belongs to one agent; "Project default" is resolved at
+            // fire time, so a model picked for an earlier explicit choice
+            // would be sent to whichever agent that turns out to be.
+            modelId: agentID == nil ? nil : modelID,
+            prompt: trimmedPrompt.isEmpty ? nil : trimmedPrompt,
+            sendsPromptAutomatically: sendsPromptAutomatically
+        )
+    }
+
+    /// The first reason the draft cannot be saved, or nil when it can.
+    public var validationError: String? {
+        if name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "Give the schedule a name." }
+        if target == nil { return "Pick a project and worktree." }
+        if scriptKey == nil, !createsWorktree { return "Pick a script, or create a worktree with an agent." }
+        switch triggerKind {
+        case .interval:
+            if intervalValue < 1 { return "Interval must be at least 1." }
+            if Double(intervalValue) * intervalUnit.seconds < RunScheduleTrigger.minimumIntervalSeconds {
+                return "Interval must be at least one minute."
+            }
+        case .timeOfDay:
+            if !(0...23).contains(hour) || !(0...59).contains(minute) { return "Enter a valid time." }
+            if weekdays.isEmpty { return "Pick at least one weekday." }
+        }
+        return nil
+    }
+
+    public var isValid: Bool { validationError == nil }
+
+    public func makeSchedule(id: String = UUID().uuidString, existing: RunSchedule? = nil, now: Date = Date()) -> RunSchedule? {
+        guard isValid, let target else { return nil }
+        return RunSchedule(
+            id: existing?.id ?? id,
+            name: name.trimmingCharacters(in: .whitespacesAndNewlines),
+            target: target,
+            scriptKey: scriptKey,
+            trigger: trigger,
+            missedRunPolicy: missedRunPolicy,
+            composition: composition,
+            isEnabled: existing?.isEnabled ?? true,
+            createdAt: existing?.createdAt ?? now
+        )
+    }
+}
