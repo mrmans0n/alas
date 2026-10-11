@@ -92,11 +92,15 @@ public final class RunService {
     }
 }
 
-/// The shell's process group, terminated on cancellation even when the
-/// cancellation arrives before the shell has started. SIGTERM goes first; the
-/// group gets SIGKILL if the shell is still running after a grace period, and
-/// whatever is left in it gets SIGKILL when a cancelled shell exits. Both
-/// happen before the shell is reaped, so its pid is still its own.
+/// The shell's process tree, terminated on cancellation even when the
+/// cancellation arrives before the shell has started. `/usr/bin/script` runs
+/// the command in a session of its own, outside the shell's process group, so
+/// cancellation signals the group and every descendant found under the shell.
+/// SIGTERM goes first. If the shell is still running after a grace period,
+/// the group and the descendants get SIGKILL, and whatever is left gets
+/// SIGKILL when a cancelled shell exits. The group is only signalled before
+/// the shell is reaped, and descendants are matched by start time, so a
+/// reused pid is never hit.
 private final class ShellGroup: @unchecked Sendable {
     static let killGrace: DispatchTimeInterval = .seconds(2)
 
@@ -104,6 +108,7 @@ private final class ShellGroup: @unchecked Sendable {
     private var pid: pid_t?
     private var cancelled = false
     private var hasExited = false
+    private var descendants: Set<ACPTerminal.DescendantKey> = []
 
     func started(_ pid: pid_t) {
         let cancelled = lock.withLock {
@@ -127,17 +132,33 @@ private final class ShellGroup: @unchecked Sendable {
             hasExited = true
             return cancelled ? self.pid : nil
         }
-        if let pid { _ = kill(-pid, SIGKILL) }
+        guard let pid else { return }
+        _ = kill(-pid, SIGKILL)
+        signalDescendants(SIGKILL)
     }
 
     private func terminate(_ pid: pid_t) {
-        _ = kill(-pid, SIGTERM)
+        signal(pid, SIGTERM)
         DispatchQueue.global().asyncAfter(deadline: .now() + Self.killGrace) { [self] in
-            // The lock is held across the signal so the shell cannot be reaped
-            // in between, which would let its pid be reused.
-            lock.withLock {
-                if !hasExited { _ = kill(-pid, SIGKILL) }
-            }
+            signal(pid, SIGKILL)
+        }
+    }
+
+    /// Signals the group and the descendants while the shell is unreaped;
+    /// holding the lock keeps it from being reaped in between.
+    private func signal(_ pid: pid_t, _ signal: Int32) {
+        lock.withLock {
+            guard !hasExited else { return }
+            descendants.formUnion(ACPTerminal.collectChildDescendants(of: pid))
+            _ = kill(-pid, signal)
+        }
+        signalDescendants(signal)
+    }
+
+    private func signalDescendants(_ signal: Int32) {
+        let known = lock.withLock { descendants }
+        for key in ACPTerminal.currentlyMatching(known) {
+            _ = kill(key.pid, signal)
         }
     }
 }

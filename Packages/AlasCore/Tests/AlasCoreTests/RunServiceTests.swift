@@ -76,4 +76,41 @@ struct RunServiceTests {
         await #expect(throws: CancellationError.self) { _ = try await run.value }
         #expect(kill(pid, 0) != 0, "the SIGTERM-ignoring child is gone")
     }
+
+    @Test(.timeLimit(.minutes(1)))
+    func cancellationReachesCommandsInScriptsOwnSession() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-run-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let childPID = root.appendingPathComponent("child")
+        let scriptURL = root.appendingPathComponent("stubborn.sh")
+        // `/usr/bin/script` starts this in a new session; it ignores both TERM and HUP.
+        try "trap '' TERM HUP\necho $$ > \(childPID.path)\nwhile :; do sleep 1; done\n"
+            .write(to: scriptURL, atomically: true, encoding: .utf8)
+        let script = RunScript(
+            scope: .repo, fileName: "stubborn.sh", fileURL: scriptURL,
+            displayName: "Stubborn", onExit: .close, cwd: nil, isExecutable: false
+        )
+        let worktree = Worktree(
+            id: root.path, projectId: "p", name: "main", branch: "main", path: root,
+            status: .clean, lastActivity: Date()
+        )
+        let project = ProjectConfig(id: "p", name: "p", path: root.path, color: "blue", addedAt: Date())
+
+        let run = Task { try await RunService().run(script, in: worktree, project: project) }
+        let deadline = ContinuousClock.now + .seconds(30)
+        while (try? String(contentsOf: childPID, encoding: .utf8))?.isEmpty ?? true, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let pid = try #require(pid_t(String(contentsOf: childPID, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)))
+        defer { _ = kill(pid, SIGKILL) }
+        run.cancel()
+
+        await #expect(throws: CancellationError.self) { _ = try await run.value }
+        let gone = ContinuousClock.now + .seconds(10)
+        while kill(pid, 0) == 0, ContinuousClock.now < gone {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        #expect(kill(pid, 0) != 0, "the script command in script's own session is gone")
+    }
 }
