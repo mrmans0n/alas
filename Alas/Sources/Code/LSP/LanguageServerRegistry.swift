@@ -336,6 +336,15 @@ struct LanguageServerRegistry {
             rootMarkers: ["CMakeLists.txt", ".git"],
             enabled: true
         ),
+        LanguageServerConfig(
+            language: "yaml",
+            extensions: ["yaml", "yml"],
+            command: "yaml-language-server",
+            args: ["--stdio"],
+            env: [:],
+            rootMarkers: [".git"],
+            enabled: true
+        ),
         // The LSP is a subcommand of the Dart SDK's own driver rather than a
         // standalone binary, and it speaks the legacy analysis-server
         // protocol unless `--protocol=lsp` is passed.

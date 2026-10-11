@@ -97,7 +97,7 @@ LSP_OVERRIDE_MAP=$(cat <<'JSON'
   "erg":                            {"command": "erg", "args": ["--language-server"]},
   "eslint-lsp":                     {"command": "vscode-eslint-language-server", "args": ["--stdio"]},
   "expert":                         {"command": "expert", "args": ["--stdio"]},
-  "gh-actions-language-server":     {"command": "gh-actions-language-server", "args": ["--stdio"]},
+  "gh-actions-language-server":     {"command": "actions-languageserver", "args": ["--stdio"]},
   "glint":                          {"command": "glint", "args": ["--stdio"]},
   "grammarly-languageserver":       {"command": "grammarly-languageserver", "args": ["--stdio"]},
   "graphql-language-service-cli":   {"command": "graphql-lsp", "args": ["server", "-m", "stream"]},
