@@ -60,22 +60,33 @@ extension AppConfig.Code {
 }
 
 extension AppConfig.Code {
-    /// The YAML install nudge used to rank gh-actions-language-server first
-    /// and, on install, persisted it as the user's `yaml` server with a
-    /// command its `@actions/languageserver` package never provides. That
-    /// entry overrides the built-in YAML preset, so drop exactly the shape
-    /// the nudge wrote; any other user YAML config is left alone.
-    mutating func removeLegacyYAMLNudgeServer() {
+    /// YAML used to have no built-in server, so its files went through the
+    /// Mason install nudge, which ranked gh-actions-language-server first.
+    /// Accepting it persisted a user `yaml` server whose command its
+    /// `@actions/languageserver` package never provides, and dismissing it
+    /// persisted an `extension:` key the built-in nudge doesn't read.
+    mutating func migrateLegacyYAMLNudgeState() {
+        let legacyServer = LanguageServerConfig(
+            language: "yaml",
+            extensions: ["yaml", "yml"],
+            command: "gh-actions-language-server",
+            args: ["--stdio"],
+            env: [:],
+            rootMarkers: [".git"],
+            enabled: true
+        )
         let legacyRecipes = [InstallRecipe(installer: .npm, package: "@actions/languageserver")]
-        guard userDefinedRecipes["yaml"] == legacyRecipes else { return }
-        let before = languageServers.count
-        languageServers.removeAll {
-            $0.language == "yaml"
-                && $0.command == "gh-actions-language-server"
-                && $0.args == ["--stdio"]
-        }
-        if languageServers.count != before {
+        // Only the untouched nudge entry is removed: a user who disabled or
+        // edited it made a choice the built-in must not silently override.
+        if userDefinedRecipes["yaml"] == legacyRecipes,
+           let index = languageServers.firstIndex(of: legacyServer) {
+            languageServers.remove(at: index)
             userDefinedRecipes["yaml"] = nil
+        }
+
+        if !dismissedInstallNudges.contains("yaml"),
+           dismissedInstallNudges.contains(where: { $0 == "extension:yaml" || $0 == "extension:yml" }) {
+            dismissedInstallNudges.append("yaml")
         }
     }
 }

@@ -837,7 +837,7 @@ extension AppConfig {
                 inlayHintsByLanguage: (try? codeContainer.decode([String: InlayHintSettings].self, forKey: .inlayHintsByLanguage)) ?? [:],
                 codeThemeFamily: (try? codeContainer.decode(String.self, forKey: .codeThemeFamily)) ?? "default"
             )
-            code.removeLegacyYAMLNudgeServer()
+            code.migrateLegacyYAMLNudgeState()
         } else {
             code = Code(
                 fontFamily: "JetBrainsMono Nerd Font",
