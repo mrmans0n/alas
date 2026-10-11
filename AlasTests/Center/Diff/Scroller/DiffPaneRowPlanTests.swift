@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import Testing
 @testable import Alas
@@ -133,6 +134,29 @@ struct DiffPaneRowPlanTests {
         )
 
         #expect(expanded.estimatedHeight == expected)
+    }
+
+    @Test func actionButtonKeepsItsImageAcrossUnchangedUpdates() throws {
+        let host = NSHostingView(rootView: DiffPaneActionButton(systemName: "trash", tooltip: "Discard hunk", action: {}))
+        host.frame = NSRect(x: 0, y: 0, width: 22, height: 20)
+        host.layoutSubtreeIfNeeded()
+        let button = try #require(firstButton(in: host))
+        let original = try #require(button.image)
+
+        // A fresh image on every update re-measures the hosting row, which updates again: endless blinking.
+        host.rootView = DiffPaneActionButton(systemName: "trash", tooltip: "Discard hunk", action: {})
+        host.layoutSubtreeIfNeeded()
+        #expect(button.image === original)
+
+        host.rootView = DiffPaneActionButton(systemName: "plus.square", tooltip: "Stage hunk", action: {})
+        host.layoutSubtreeIfNeeded()
+        #expect(button.image !== original)
+        #expect(button.toolTip == "Stage hunk")
+    }
+
+    private func firstButton(in view: NSView) -> NSButton? {
+        if let button = view as? NSButton { return button }
+        return view.subviews.lazy.compactMap(firstButton(in:)).first
     }
 
     private func input(

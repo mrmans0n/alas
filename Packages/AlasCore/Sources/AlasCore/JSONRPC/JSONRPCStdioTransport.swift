@@ -39,16 +39,31 @@ public final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTrans
     private struct DescendantKey: Hashable {
         let pid: pid_t
         let startedAt: ProcessStartTime
+
+        public init(pid: pid_t, startedAt: ProcessStartTime) {
+            self.pid = pid
+            self.startedAt = startedAt
+        }
     }
 
     private struct ProcessStartTime: Hashable, Sendable {
         let seconds: Int64
         let microseconds: Int64
+
+        public init(seconds: Int64, microseconds: Int64) {
+            self.seconds = seconds
+            self.microseconds = microseconds
+        }
     }
 
     private struct ProcessIdentity: Sendable {
         let parentPid: pid_t
         let startedAt: ProcessStartTime
+
+        public init(parentPid: pid_t, startedAt: ProcessStartTime) {
+            self.parentPid = parentPid
+            self.startedAt = startedAt
+        }
     }
 
     private let executable: URL

@@ -119,7 +119,7 @@ struct LSPTransportFramingTests {
 struct ProcessTransportTerminationTests {
     @Test("LSPTransport snapshots live descendants before signaling root")
     func lspSnapshotsDescendantsBeforeRootSignal() throws {
-        let source = try source(named: "Alas/Sources/Code/LSP/LSPTransport.swift")
+        let source = try source(named: "Packages/AlasCore/Sources/AlasCore/Code/LSP/LSPTransport.swift")
         #expect(source.requiresLiveDescendantSnapshotBeforeRootSignal())
         #expect(source.validatesCachedDescendantsBeforeKilling())
         #expect(source.signalsProcessGroupFromTerminationHandler())
@@ -157,7 +157,7 @@ struct ProcessTransportTerminationTests {
     @Test("Local ACP helper termination preserves detached broker supervisors")
     func localACPHelperPreservesBrokerSupervisors() throws {
         let transportSource = try source(named: "Packages/AlasCore/Sources/AlasCore/JSONRPC/JSONRPCStdioTransport.swift")
-        let brokerSource = try source(named: "Alas/Sources/ACP/Broker/LocalACPBrokerService.swift")
+        let brokerSource = try source(named: "Packages/AlasCore/Sources/AlasCore/ACP/Broker/LocalACPBrokerService.swift")
 
         #expect(transportSource.contains("terminationScope == .processTree"))
         #expect(brokerSource.contains("terminationScope: .processOnly"))

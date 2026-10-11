@@ -473,7 +473,7 @@ private func acpTerminalSource() throws -> String {
         .deletingLastPathComponent()
         .deletingLastPathComponent()
         .deletingLastPathComponent()
-    return try String(contentsOf: root.appendingPathComponent("Alas/Sources/ACP/Terminal/ACPTerminal.swift"),
+    return try String(contentsOf: root.appendingPathComponent("Packages/AlasCore/Sources/AlasCore/ACP/Terminal/ACPTerminal.swift"),
                       encoding: .utf8)
 }
 

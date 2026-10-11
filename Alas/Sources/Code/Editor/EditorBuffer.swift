@@ -2046,7 +2046,7 @@ final class EditorBuffer {
         let url = worktreeRoot.appendingPathComponent(relativePath)
         let text = storage.string
         await lsp.didChange(worktreeRoot: worktreeRoot, fileURL: url, languageId: resolvedLanguage, text: text, edits: nil)
-        let options = RenameFeature.formattingOptions(text: text)
+        let options = LSPFormattingOptions.inferred(from: text)
         let edits: [LSPTextEdit]? = await requestFormatting(lsp: lsp, url: url, language: resolvedLanguage, options: options, timeoutNanoseconds: formattingTimeoutNanoseconds)
         guard editGeneration == generation else {
             try await saveAwaitingRemote()

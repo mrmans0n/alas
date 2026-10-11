@@ -1,0 +1,130 @@
+import Foundation
+
+/// What a gateway needs from the app. Abstracted so tests inject fakes and
+/// production wires it to AppState (Task 8).
+@MainActor
+public protocol RemoteSessionsProvider: AnyObject {
+    func sessionSummaries() async -> [RemoteSessionSummary]
+    func remoteWorktrees() async -> [RemoteWorktreeOption]
+    func remoteProjects() async -> [RemoteProjectOption]
+    func remoteBranches(projectId: String) async -> RemoteBranchListResult
+    func remoteAgents() -> [RemoteAgentOption]
+    func createRemoteSession(worktreeId: String, agentId: String, modelId: String?, effortId: String?) async -> RemoteCreateSessionResult
+    func createRemoteWorktreeSession(
+        projectId: String,
+        base: String,
+        branch: String,
+        agentId: String,
+        modelId: String?,
+        effortId: String?
+    ) async -> RemoteCreateWorktreeSessionResult
+    func session(for id: String) -> ACPSession?
+    func permissionPolicy(for id: String) -> ACPPermissionPolicy?
+    func hydrateIfNeeded(id: String) async
+    func answerQuestion(for id: String, requestId: JSONRPCID, _ response: ACPQuestionResponse)
+    func respondToPlan(for id: String, requestId: JSONRPCID, _ response: ACPCursorPlanResponse)
+    func respondToUserInput(for id: String, token: UUID, action: ACPUserInputAction)
+    func fullToolCallContent(sessionId: String, toolCallId: String) async -> String?
+    func isWriter(for id: String) -> Bool
+    func takeOver(for id: String) async
+    /// Opens a stored session as a tab in its worktree without selecting that
+    /// worktree. Succeeds without change when the tab is already open.
+    func openSessionTab(for id: String) async -> RemoteSessionTabActionResult
+    /// Closes the session's tab with the same teardown and reopen history as
+    /// a local close, minus the confirmation the requesting Mac already ran.
+    /// The session stays in recent history.
+    func closeSessionTab(for id: String) async -> RemoteSessionTabActionResult
+    /// `onResult` fires once with the final outcome (false = refused now or
+    /// failed delivery later); the gateway emits `promptRejected` on false so
+    /// the client can restore the text instead of losing it.
+    func sendPrompt(for id: String, text: String, attachments: [ACPMessage.Attachment], onResult: @escaping @MainActor (Bool) -> Void) async
+    /// Stores `answer` on the visual and starts sending it to the agent. False
+    /// when no live session owns `id` or the manager could not store it.
+    func answerVisualAid(for id: String, visualId: UUID, answer: ACPVisualAid.Answer) async -> Bool
+    /// Decode a base64 image to a file under the session's acp-attachments dir.
+    /// Returns the file URL on success, nil on any write error.
+    func writeAttachment(_ data: Data, mimeType: String, name: String?, for id: String) -> URL?
+    func stop(for id: String) async
+    func setModel(for id: String, modelId: String) async
+    func setMode(for id: String, modeId: String) async
+    func setAutoRun(for id: String, enabled: Bool) async
+    func setConfigOption(for id: String, configId: String, value: ACPConfigValue) async
+    func renameSession(for id: String, title: String) -> Bool
+    /// Queue mutation. All of these are writer-gated inside the manager (the
+    /// gateway also pre-checks, mirroring `sendPrompt`) and delegate to the
+    /// same native call sites the ACP pane uses, so the `.sending`-head,
+    /// persistence, and flush invariants are not duplicated for the remote path.
+    func queueForceSend(for id: String, itemId: UUID) async
+    func queueRemove(for id: String, itemId: UUID) async
+    func queueRetry(for id: String, itemId: UUID) async
+    /// Removes the item and returns its text for the web composer, or nil if
+    /// the item is gone or already `.sending` (mid-RPC, must not be duplicated).
+    func queueEdit(for id: String, itemId: UUID) async -> String?
+    func queueClear(for id: String) async
+    /// Moves `itemId` into `targetItemId`'s slot, the "Up next" row's move
+    /// and drop. A move the local queue would refuse is a no-op.
+    func queueMove(for id: String, itemId: UUID, targetItemId: UUID) async
+    /// Moves `itemId` to the front without interrupting a running turn.
+    func queuePromote(for id: String, itemId: UUID) async
+    /// Cancel the in-flight turn, send this prompt instead, without
+    /// disturbing pending queued items.
+    func steerPrompt(for id: String, text: String, attachments: [ACPMessage.Attachment], onResult: @escaping @MainActor (Bool) -> Void) async
+    /// Projection of the session's config for the `sessionConfig` wire message,
+    /// or nil if the session isn't live.
+    func sessionConfig(for id: String) -> RemoteSessionConfig?
+    /// Read-only worktree inspection for the remote changes/files tabs. All
+    /// methods resolve the session's worktree first and are ungated by the writer
+    /// lease: seeing a session is enough to read its code.
+    func remoteChangeList(
+        sessionId: String,
+        comparisonMode: AppConfig.Changes.ChangesComparisonMode?
+    ) async -> RemoteChangeListResult
+    func remoteFileDiff(
+        sessionId: String,
+        path: String,
+        stage: String?,
+        comparisonMode: AppConfig.Changes.ChangesComparisonMode?
+    ) async -> RemoteFileDiffResult
+    func remoteFileTree(
+        sessionId: String,
+        path: String?,
+        comparisonMode: AppConfig.Changes.ChangesComparisonMode?
+    ) async -> RemoteFileTreeResult
+    func remoteCommitFiles(sessionId: String, sha: String) async -> RemoteCommitFilesResult
+    func remoteCommitDiff(sessionId: String, sha: String, path: String) async -> RemoteFileDiffResult
+    func remoteFileContents(sessionId: String, path: String) async -> RemoteFileContentsResult
+    /// Files, sessions and symbols of the session's project matching an
+    /// `@` query, as the local mention picker ranks them.
+    func remoteMentionCandidates(sessionId: String, query: String) async -> [RemoteMention]
+    /// The prompt attachments for a viewer's mentions, or nil when any of
+    /// them doesn't resolve inside the session's project.
+    func remoteMentionAttachments(_ mentions: [RemoteMention], sessionId: String) async -> [ACPMessage.Attachment]?
+    /// Serves peer console traffic; nil when this app does not.
+    var peerConsoleHost: PeerConsoleHost? { get }
+}
+
+extension RemoteSessionsProvider {
+    public var peerConsoleHost: PeerConsoleHost? { nil }
+
+    public func remoteCommitFiles(sessionId: String, sha: String) async -> RemoteCommitFilesResult {
+        .failure(reason: .unknown, message: "Commit inspection is unavailable.")
+    }
+    public func remoteCommitDiff(sessionId: String, sha: String, path: String) async -> RemoteFileDiffResult {
+        .failure(reason: .unknown, message: "Commit inspection is unavailable.")
+    }
+
+    public func openSessionTab(for id: String) async -> RemoteSessionTabActionResult {
+        .failure("Opening session tabs is unavailable.")
+    }
+    public func closeSessionTab(for id: String) async -> RemoteSessionTabActionResult {
+        .failure("Closing session tabs is unavailable.")
+    }
+
+    public func remoteMentionCandidates(sessionId: String, query: String) async -> [RemoteMention] { [] }
+    public func remoteMentionAttachments(_ mentions: [RemoteMention], sessionId: String) async -> [ACPMessage.Attachment]? {
+        mentions.isEmpty ? [] : nil
+    }
+
+    public func respondToUserInput(for id: String, token: UUID, action: ACPUserInputAction) {}
+    public func respondToPlan(for id: String, requestId: JSONRPCID, _ response: ACPCursorPlanResponse) {}
+}

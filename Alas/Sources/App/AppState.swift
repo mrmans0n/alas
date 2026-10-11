@@ -5571,13 +5571,7 @@ final class AppState {
     }
 
     nonisolated static func shellQuote(_ s: String) -> String {
-        if s.range(of: "[^A-Za-z0-9_/.@%+=,:-]", options: .regularExpression) == nil {
-            return s
-        }
-        // POSIX single-quote escape: end the quoted string, insert an
-        // escaped quote, restart the quoted string.
-        let escaped = s.replacingOccurrences(of: "'", with: "'\\''")
-        return "'\(escaped)'"
+        ShellQuoting.quote(s)
     }
 
     nonisolated private static func performCreateWorktree(
@@ -13927,7 +13921,7 @@ final class AppState {
         if ACPManagedAdapterDescriptor.descriptor(for: spec.agentID) == nil,
            let binaryOverride = configuredAgent?.binaryOverride?.trimmingCharacters(in: .whitespaces),
            !binaryOverride.isEmpty,
-           let command = Self.normalizedACPBinaryOverride(
+           let command = ACPBinaryOverride.normalized(
             binaryOverride,
             remoteHome: remoteHome,
             treatsHomeAsRemote: treatsHomeAsRemote
@@ -13950,24 +13944,6 @@ final class AppState {
             launchSpec = launchSpec.prependingArguments([flag])
         }
         return launchSpec
-    }
-
-    nonisolated static func normalizedACPBinaryOverride(
-        _ override: String,
-        remoteHome: String?,
-        treatsHomeAsRemote: Bool = false
-    ) -> String? {
-        let trimmed = override.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return nil }
-        if trimmed.hasPrefix("~/") {
-            if let remoteHome {
-                let home = remoteHome.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-                guard !home.isEmpty else { return treatsHomeAsRemote ? nil : trimmed }
-                return "/\(home)/\(trimmed.dropFirst(2))"
-            }
-            guard treatsHomeAsRemote == false else { return trimmed }
-        }
-        return (trimmed as NSString).expandingTildeInPath
     }
 
     /// Adds `.pi/` to this worktree's `.git/info/exclude` after a managed
