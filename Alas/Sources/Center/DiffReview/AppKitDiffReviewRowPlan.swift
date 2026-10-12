@@ -408,8 +408,8 @@ struct AppKitDiffReviewLineTargets {
 
 @MainActor
 enum AppKitDiffReviewRowPlanBuilder {
-    /// Spike: draws fused split hunks with `DiffSplitCoreTextRowView`.
-    static var usesCoreTextSplitRows = ProcessInfo.processInfo.environment["ALAS_DIFF_CORETEXT"] == "1"
+    /// Spike: draws unwrapped hunks and comment segments with `DiffSplitCoreTextRowView`.
+    static var usesCoreTextRows = ProcessInfo.processInfo.environment["ALAS_DIFF_CORETEXT"] == "1"
 
     static func build(
         inputs: [AppKitDiffReviewRowInput],
@@ -540,10 +540,11 @@ enum AppKitDiffReviewRowPlanBuilder {
 
     /// The fused hunk drawn by `DiffSplitCoreTextRowView`, with the same
     /// header, actions and card as `DiffPaneHunkRow`.
-    private static func coreTextSplitRow(
-        group: DiffDisplayGroup,
+    /// `header` is the hunk the row heads; segment blocks under a separate
+    /// group-header row pass nil.
+    private static func coreTextRow(
         visibleRows: [DiffDisplayRow],
-        fusion: DiffPaneHunkFusionState,
+        header: (group: DiffDisplayGroup, fusion: DiffPaneHunkFusionState)?,
         input: AppKitDiffReviewRowInput
     ) -> AppKitDiffNativeRow {
         let font = CenterTypography.resolveCodeFont(family: input.codeFontFamily, size: input.codeFontSize)
@@ -551,21 +552,31 @@ enum AppKitDiffReviewRowPlanBuilder {
         let fileExtension = LanguageRegistry.highlighterExtension(forPath: input.file.summary.path)
         let theme = input.theme
         let showWhitespace = input.showWhitespace
+        let layoutMode = input.layoutMode
         let state = input.state
         return AppKitDiffNativeRow(
             make: { DiffSplitCoreTextRowView(frame: .zero) },
             configure: { view in
-                let result = DiffPaneDocumentCache.shared.splitResult(
-                    rows: visibleRows, fileExtension: fileExtension, font: font,
-                    showWhitespace: showWhitespace, theme: theme
-                )
-                (view as? DiffSplitCoreTextRowView)?.configure(
-                    result: result, font: font, theme: theme,
-                    chrome: .init(
-                        header: group.header, headerFont: headerFont, fusion: fusion,
-                        actions: hunkHeaderActions(group: group, state: state)
+                guard let view = view as? DiffSplitCoreTextRowView else { return }
+                let chrome = header.map { header in
+                    DiffSplitCoreTextRowView.HunkChrome(
+                        header: header.group.header, headerFont: headerFont, fusion: header.fusion,
+                        actions: hunkHeaderActions(group: header.group, state: state)
                     )
-                )
+                }
+                if layoutMode == .split {
+                    let result = DiffPaneDocumentCache.shared.splitResult(
+                        rows: visibleRows, fileExtension: fileExtension, font: font,
+                        showWhitespace: showWhitespace, theme: theme
+                    )
+                    view.configure(result: result, font: font, theme: theme, chrome: chrome)
+                } else {
+                    let result = DiffPaneDocumentCache.shared.stackedResult(
+                        rows: visibleRows, fileExtension: fileExtension, font: font,
+                        showWhitespace: showWhitespace, theme: theme
+                    )
+                    view.configure(stacked: result, font: font, theme: theme, chrome: chrome)
+                }
             }
         )
     }
@@ -707,9 +718,9 @@ enum AppKitDiffReviewRowPlanBuilder {
                 ) {
                     hunk.build()
                 }
-                if usesCoreTextSplitRows, input.layoutMode == .split, !input.wrapLines {
-                    spec.native = coreTextSplitRow(
-                        group: group.displayGroup, visibleRows: visibleRows, fusion: fusions[groupIndex], input: input
+                if usesCoreTextRows, !input.wrapLines {
+                    spec.native = coreTextRow(
+                        visibleRows: visibleRows, header: (group.displayGroup, fusions[groupIndex]), input: input
                     )
                 }
                 rows.append(spec)
@@ -731,6 +742,10 @@ enum AppKitDiffReviewRowPlanBuilder {
                             in: rowBlock.rows,
                             expandedCollapsedRowIDs: input.state.expandedCollapsedRowIDs
                         )
+                        if usesCoreTextRows, !input.wrapLines {
+                            // The group header is its own row here, so the block has none.
+                            rows[rows.count - 1].native = coreTextRow(visibleRows: visibleRows, header: nil, input: input)
+                        }
                         lineTargets.append(visibleRows, fileID: input.file.id, rowID: blockID)
                     case let .thread(thread):
                         let threadID = AppKitDiffReviewRowID.thread(fileID: input.file.id, threadID: thread.id)

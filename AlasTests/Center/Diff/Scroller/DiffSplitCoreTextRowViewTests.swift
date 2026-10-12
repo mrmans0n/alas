@@ -209,6 +209,21 @@ import Testing
         #expect(view.horizontalScroll.newViewportWidth == pane.width - gutter)
     }
 
+    @Test func stackedHunksUseOneFullWidthPane() {
+        let diff = DiffParser.parse("@@ -1,1 +1,1 @@\n-" + String(repeating: "w", count: 400) + "\n+b\n")
+        let rows = DiffDisplayModelBuilder.build(diff: diff, filePath: "Sources/Example.swift").groups.flatMap(\.rows)
+        let stacked = DiffPaneTextDocumentBuilder.buildStacked(rows: rows, fileExtension: "swift", font: font, showWhitespace: false, theme: theme)
+        let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 100))
+        view.configure(stacked: stacked, font: font, theme: theme)
+        view.layout()
+        let gutter = DiffPaneLineNumberGutterGeometry.thickness(labels: stacked.gutter.string.components(separatedBy: "\n"))
+        #expect(view.measuredHeight(forWidth: 800) == 2 * view.lineHeight + 2 * DiffSplitCoreTextRowView.verticalInset)
+        #expect(view.horizontalScroll.newViewportWidth == 800 - gutter)
+        #expect(view.side(at: NSPoint(x: 10, y: 20)) == .new)
+        #expect(view.scrollerForTesting(.old).isHidden)
+        #expect(!view.scrollerForTesting(.new).isHidden)
+    }
+
     @Test func headerButtonsRunTheirActions() {
         var pressed: [String] = []
         let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 200))

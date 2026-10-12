@@ -585,8 +585,8 @@ struct AppKitDiffReviewRowPlanTests {
     }
 
     @Test func coreTextHunkRowsCarryTheirHeaderAndCardEdges() throws {
-        AppKitDiffReviewRowPlanBuilder.usesCoreTextSplitRows = true
-        defer { AppKitDiffReviewRowPlanBuilder.usesCoreTextSplitRows = false }
+        AppKitDiffReviewRowPlanBuilder.usesCoreTextRows = true
+        defer { AppKitDiffReviewRowPlanBuilder.usesCoreTextRows = false }
         let input = AppKitDiffReviewRowInput(file: textFile(), state: AppKitDiffReviewFileState(), theme: theme, layoutMode: .split)
         let plan = AppKitDiffReviewRowPlanBuilder.build(inputs: [input])
         let native = try #require(plan.corePlan.rows.first { $0.id.contains(":group:") }?.native)
@@ -597,10 +597,28 @@ struct AppKitDiffReviewRowPlanTests {
         #expect(view.cardEdges == DiffSplitCoreTextRowView.CardEdges(top: false, bottom: true))
     }
 
-    @Test(arguments: [(DiffLayoutMode.split, false, true), (.split, true, false), (.stacked, false, false)])
-    func coreTextFlagMountsUnwrappedSplitHunksNatively(layout: DiffLayoutMode, wrap: Bool, native: Bool) {
-        AppKitDiffReviewRowPlanBuilder.usesCoreTextSplitRows = true
-        defer { AppKitDiffReviewRowPlanBuilder.usesCoreTextSplitRows = false }
+    @Test func coreTextSegmentRowsAroundCommentsMountNativelyWithoutAHeader() throws {
+        AppKitDiffReviewRowPlanBuilder.usesCoreTextRows = true
+        defer { AppKitDiffReviewRowPlanBuilder.usesCoreTextRows = false }
+        let file = textFile()
+        let input = AppKitDiffReviewRowInput(
+            file: file, draftComments: [draftComment(fileID: file.id)], state: AppKitDiffReviewFileState(), theme: theme, layoutMode: .split
+        )
+        let plan = AppKitDiffReviewRowPlanBuilder.build(inputs: [input])
+        let segments = plan.corePlan.rows.filter { $0.id.contains(":segment:") }
+        #expect(!segments.isEmpty)
+        for segment in segments {
+            let native = try #require(segment.native)
+            let view = try #require(native.make() as? DiffSplitCoreTextRowView)
+            native.configure(view)
+            #expect(view.headerHeight == 0)
+        }
+    }
+
+    @Test(arguments: [(DiffLayoutMode.split, false, true), (.split, true, false), (.stacked, false, true), (.stacked, true, false)])
+    func coreTextFlagMountsUnwrappedHunksNatively(layout: DiffLayoutMode, wrap: Bool, native: Bool) {
+        AppKitDiffReviewRowPlanBuilder.usesCoreTextRows = true
+        defer { AppKitDiffReviewRowPlanBuilder.usesCoreTextRows = false }
         let input = AppKitDiffReviewRowInput(
             file: textFile(), state: AppKitDiffReviewFileState(), theme: theme, layoutMode: layout, wrapLines: wrap
         )

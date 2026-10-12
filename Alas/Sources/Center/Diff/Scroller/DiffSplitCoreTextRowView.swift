@@ -1,9 +1,10 @@
 import AppKit
 import CoreText
 
-/// A split hunk drawn with CoreText in one view: no text views, scroll
-/// views, or rulers. Behind `ALAS_DIFF_CORETEXT`; unwrapped only, and no
-/// selection, hover, LSP, or expansion pills yet.
+/// A split or stacked hunk drawn with CoreText in one view: no text views,
+/// scroll views, or rulers. Behind `ALAS_DIFF_CORETEXT`; unwrapped only, and
+/// no selection, hover, LSP, or expansion pills yet. A stacked hunk is one
+/// full-width pane, held as the new side.
 @MainActor
 final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
     enum Side { case old, new }
@@ -59,6 +60,7 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
 
     private var old = SideLines()
     private var new = SideLines()
+    private(set) var isStacked = false
     private var theme: Theme?
     /// Distance from a line's top to its baseline, as TextKit places it.
     private var baselineOffset: CGFloat = 12
@@ -103,13 +105,30 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         theme: Theme,
         chrome: HunkChrome? = nil
     ) {
+        isStacked = false
+        old = Self.lines(code: result.oldCode, gutter: result.oldGutter, theme: theme)
+        new = Self.lines(code: result.newCode, gutter: result.newGutter, theme: theme)
+        applyContent(font: font, theme: theme, chrome: chrome)
+    }
+
+    func configure(
+        stacked result: DiffPaneTextDocumentBuilder.StackedResult,
+        font: NSFont,
+        theme: Theme,
+        chrome: HunkChrome? = nil
+    ) {
+        isStacked = true
+        old = SideLines()
+        new = Self.lines(code: result.code, gutter: result.gutter, theme: theme)
+        applyContent(font: font, theme: theme, chrome: chrome)
+    }
+
+    private func applyContent(font: NSFont, theme: Theme, chrome: HunkChrome?) {
         self.theme = theme
         let metrics = Self.textKitMetrics(for: font)
         lineHeight = metrics.lineHeight
         baselineOffset = metrics.baselineOffset
-        old = Self.lines(code: result.oldCode, gutter: result.oldGutter, theme: theme)
-        new = Self.lines(code: result.newCode, gutter: result.newGutter, theme: theme)
-        horizontalScroll.oldContentWidth = old.widest + 2 * Self.textInset
+        horizontalScroll.oldContentWidth = isStacked ? 0 : old.widest + 2 * Self.textInset
         horizontalScroll.newContentWidth = new.widest + 2 * Self.textInset
         // New content starts at the leading edge, as the panes do today.
         horizontalScroll.resetToLeading()
@@ -220,21 +239,31 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
     }
 
     private func updateViewportWidths() {
-        let frames = DiffPaneSplitGeometry.frames(containerWidth: bounds.width)
         horizontalScroll.setViewportWidths(
-            old: frames.oldPane.width - old.gutterWidth,
-            new: frames.newPane.width - new.gutterWidth
+            old: isStacked ? 0 : pane(.old).width - old.gutterWidth,
+            new: pane(.new).width - new.gutterWidth
         )
     }
 
+    /// The column `side` draws in: a split half, or the full width for the
+    /// new side of a stacked hunk.
+    private func pane(_ side: Side) -> NSRect {
+        if isStacked {
+            return side == .new ? NSRect(x: 0, y: 0, width: bounds.width, height: bounds.height) : .zero
+        }
+        let frames = DiffPaneSplitGeometry.frames(containerWidth: bounds.width)
+        return side == .old ? frames.oldPane : frames.newPane
+    }
+
     func side(at point: NSPoint) -> Side {
-        point.x < DiffPaneSplitGeometry.frames(containerWidth: bounds.width).divider.minX ? .old : .new
+        if isStacked { return .new }
+        return point.x < DiffPaneSplitGeometry.frames(containerWidth: bounds.width).divider.minX ? .old : .new
     }
 
     /// The code area of `side`, which scrolls; the gutter beside it does not.
     private func codeRect(_ side: Side) -> NSRect {
-        let frames = DiffPaneSplitGeometry.frames(containerWidth: bounds.width)
-        let pane = side == .old ? frames.oldPane : frames.newPane
+        if isStacked, side == .old { return .zero }
+        let pane = pane(side)
         let gutter = side == .old ? old.gutterWidth : new.gutterWidth
         return NSRect(
             x: pane.minX + gutter, y: headerHeight,
@@ -312,12 +341,16 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         context.saveGState()
         if let hunkPath { hunkPath.addClip() }
         drawHeader(theme: theme, context: context, dirtyRect: dirtyRect)
-        let frames = DiffPaneSplitGeometry.frames(containerWidth: bounds.width)
         let range = visibleLineRange(in: dirtyRect)
-        draw(old, in: frames.oldPane, offset: horizontalScroll.offset(.old), range: range, theme: theme, context: context)
-        draw(new, in: frames.newPane, offset: horizontalScroll.offset(.new), range: range, theme: theme, context: context)
-        theme.nsColor("line").setFill()
-        NSRect(x: frames.divider.minX, y: max(dirtyRect.minY, headerHeight), width: frames.divider.width, height: dirtyRect.height).fill()
+        if !isStacked {
+            draw(old, in: pane(.old), offset: horizontalScroll.offset(.old), range: range, theme: theme, context: context)
+        }
+        draw(new, in: pane(.new), offset: horizontalScroll.offset(.new), range: range, theme: theme, context: context)
+        if !isStacked {
+            let divider = DiffPaneSplitGeometry.frames(containerWidth: bounds.width).divider
+            theme.nsColor("line").setFill()
+            NSRect(x: divider.minX, y: max(dirtyRect.minY, headerHeight), width: divider.width, height: dirtyRect.height).fill()
+        }
         context.restoreGState()
 
         if let hunkPath {
