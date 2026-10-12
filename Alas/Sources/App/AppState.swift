@@ -12178,7 +12178,7 @@ final class AppState {
                 guard workspaceOwnershipIsValid else {
                     throw WorktreeRemovalOwnershipChanged()
                 }
-                return try await Self.performRemoveWorktree(
+                return try await WorktreeLifecycle.performRemoveWorktree(
                     repoPath: repoPath,
                     worktree: worktree,
                     deleteBranchIfMerged: deleteBranchIfMerged,
@@ -12189,7 +12189,7 @@ final class AppState {
             }
         } catch is WorktreeRemovalOwnershipChanged {
             return .skipped(reason: "Worktree changed since confirmation")
-        } catch is WorktreeDeleteContentFingerprintMismatch {
+        } catch is WorktreeLifecycle.DeleteContentFingerprintMismatch {
             projectsManager.setOperationState(for: worktree, state: nil)
             return .skipped(reason: Self.changedDeleteRisksMessage)
         } catch let WorktreeService.WorktreeError.gitFailed(stderr) {
@@ -12346,45 +12346,6 @@ final class AppState {
         pendingForceDeleteWorktree = nil
     }
 
-    nonisolated private static func performRemoveWorktree(
-        repoPath: URL,
-        worktree: Worktree,
-        deleteBranchIfMerged: Bool,
-        force: Bool,
-        verifiedMergedBranchSHA: String? = nil,
-        authorizedDeleteContentFingerprint: String? = nil
-    ) async throws -> WorktreeRemovalOutcome {
-        try await Task.detached {
-            if let authorizedDeleteContentFingerprint {
-                let currentFingerprint = try await WorktreeService.worktreeDeleteContentFingerprint(
-                    worktreePath: worktree.path
-                )
-                guard currentFingerprint == authorizedDeleteContentFingerprint else {
-                    throw WorktreeDeleteContentFingerprintMismatch()
-                }
-            }
-
-            if worktree.path.isRemoteAlasPath {
-                try await WorktreeService().remove(
-                    repoPath: repoPath,
-                    worktree: worktree,
-                    deleteBranchIfMerged: deleteBranchIfMerged,
-                    force: force,
-                    verifiedMergedBranchSHA: verifiedMergedBranchSHA
-                )
-                return .synchronous
-            }
-            return try await WorktreeService().removeFastLocal(
-                repoPath: repoPath,
-                worktree: worktree,
-                deleteBranchIfMerged: deleteBranchIfMerged,
-                force: force,
-                verifiedMergedBranchSHA: verifiedMergedBranchSHA,
-                authorizedDeleteContentFingerprint: authorizedDeleteContentFingerprint
-            )
-        }.value
-    }
-
     nonisolated private static func performDeletePreflight(worktreePath: URL) async -> WorktreeDeletePreflight {
         do {
             return try await Task.detached {
@@ -12419,7 +12380,6 @@ final class AppState {
 
     private static let changedDeleteRisksMessage = "Git deletion risks changed since confirmation"
 
-    private struct WorktreeDeleteContentFingerprintMismatch: Error {}
     private struct WorktreeRemovalOwnershipChanged: Error {}
 
     nonisolated static func worktreeDeleteContentFingerprint(worktreePath: URL) async throws -> String {
@@ -14046,15 +14006,7 @@ final class AppState {
     }
 
     private func finishDisposingACPManager(_ manager: ACPSessionManager) async {
-        await manager.flushAllPersistence()
-        await manager.disposeAllLiveSessions()
-        // Release any leases this manager still owns AFTER all runner
-        // connections are shut down (detach above). A freed lease must
-        // not be claimable while an old agent process is still alive.
-        // `detach` already released runner-session leases; this mops up
-        // any remaining pre-runner owned leases (e.g. sessions acquired
-        // a lease but didn't register a runner yet).
-        await manager.releaseAllOwnedLeases()
+        await AlasCoreContext.finishDisposing(manager)
     }
 
     /// Open a new ACP session tab for the given agent in the currently-selected worktree.

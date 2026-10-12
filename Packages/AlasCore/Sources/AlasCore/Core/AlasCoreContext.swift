@@ -239,6 +239,16 @@ public final class AlasCoreContext {
         return coordinator
     }
 
+    /// The asynchronous half of disposing a session manager whose runners are
+    /// stopped: persist what it holds, end its sessions, release its leases.
+    public static func finishDisposing(_ manager: ACPSessionManager) async {
+        await manager.flushAllPersistence()
+        await manager.disposeAllLiveSessions()
+        // Leases go last: a freed lease must not be claimable while an old
+        // agent process is still alive.
+        await manager.releaseAllOwnedLeases()
+    }
+
     /// A manager with its own session database, as the app keeps per owner.
     public static func defaultSessionManager(owner: SessionOwnerID, worktree: Worktree) -> ACPSessionManager {
         ACPSessionManager(

@@ -10,7 +10,13 @@ struct AlasCoreContextTests {
             .appendingPathComponent("alas-core-template-\(UUID().uuidString)")
             .appendingPathComponent("repo")
         try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
-        for args in [["init", "-q", "-b", "main"], ["commit", "-q", "--allow-empty", "-m", "init"]] {
+        // Auto-maintenance would race the per-test copy over maintenance.lock.
+        for args in [
+            ["init", "-q", "-b", "main"],
+            ["config", "maintenance.auto", "false"],
+            ["config", "gc.auto", "0"],
+            ["commit", "-q", "--allow-empty", "-m", "init"]
+        ] {
             let result = try await Process.git(args, cwd: repo)
             guard result.exitCode == 0 else { throw ProcessError.nonZeroExit(result.exitCode, result.stderr) }
         }
