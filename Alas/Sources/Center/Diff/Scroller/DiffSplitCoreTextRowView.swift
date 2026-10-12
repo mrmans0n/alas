@@ -29,6 +29,7 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
     private var new = SideLines()
     private var theme: Theme?
     private var descent: CGFloat = 4
+    private(set) var horizontalScroll = DiffSplitHorizontalScroll()
 
     override var isFlipped: Bool { true }
     override var isOpaque: Bool { false }
@@ -53,7 +54,55 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         descent = ceil(-font.descender)
         old = Self.lines(code: result.oldCode, gutter: result.oldGutter)
         new = Self.lines(code: result.newCode, gutter: result.newGutter)
+        horizontalScroll.oldContentWidth = old.widest + 2 * Self.textInset
+        horizontalScroll.newContentWidth = new.widest + 2 * Self.textInset
+        // New content starts at the leading edge, as the panes do today.
+        horizontalScroll.resetToLeading()
+        updateViewportWidths()
         needsDisplay = true
+    }
+
+    override func layout() {
+        super.layout()
+        updateViewportWidths()
+    }
+
+    private func updateViewportWidths() {
+        let frames = DiffPaneSplitGeometry.frames(containerWidth: bounds.width)
+        horizontalScroll.setViewportWidths(
+            old: frames.oldPane.width - Self.gutterWidth,
+            new: frames.newPane.width - Self.gutterWidth
+        )
+    }
+
+    func side(at point: NSPoint) -> Side {
+        point.x < DiffPaneSplitGeometry.frames(containerWidth: bounds.width).divider.minX ? .old : .new
+    }
+
+    /// The code area of `side`, which scrolls; the gutter beside it does not.
+    private func codeRect(_ side: Side) -> NSRect {
+        let frames = DiffPaneSplitGeometry.frames(containerWidth: bounds.width)
+        let pane = side == .old ? frames.oldPane : frames.newPane
+        return NSRect(x: pane.minX + Self.gutterWidth, y: bounds.minY, width: max(0, pane.width - Self.gutterWidth), height: bounds.height)
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        let location = convert(event.locationInWindow, from: nil)
+        if !scroll(deltaX: event.scrollingDeltaX, deltaY: event.scrollingDeltaY, isPrecise: event.hasPreciseScrollingDeltas, at: location) {
+            nextResponder?.scrollWheel(with: event)
+        }
+    }
+
+    /// Applies a wheel gesture at `point`. Returns false for gestures the
+    /// review should scroll instead: those whose vertical motion dominates.
+    func scroll(deltaX: CGFloat, deltaY: CGFloat, isPrecise: Bool, at point: NSPoint) -> Bool {
+        guard abs(deltaX) >= abs(deltaY), deltaX != 0 else { return false }
+        let side = side(at: point)
+        let delta = -DiffSplitHorizontalScroll.pointDelta(scrollingDeltaX: deltaX, isPrecise: isPrecise, lineHeight: lineHeight)
+        if horizontalScroll.scroll(side, byPoints: delta) {
+            setNeedsDisplay(codeRect(side))
+        }
+        return true
     }
 
     func widestLineWidth(side: Side) -> CGFloat {
@@ -92,13 +141,13 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         guard let theme, let context = NSGraphicsContext.current?.cgContext else { return }
         let frames = DiffPaneSplitGeometry.frames(containerWidth: bounds.width)
         let range = visibleLineRange(in: dirtyRect)
-        draw(old, in: frames.oldPane, range: range, theme: theme, context: context)
-        draw(new, in: frames.newPane, range: range, theme: theme, context: context)
+        draw(old, in: frames.oldPane, offset: horizontalScroll.offset(.old), range: range, theme: theme, context: context)
+        draw(new, in: frames.newPane, offset: horizontalScroll.offset(.new), range: range, theme: theme, context: context)
         theme.nsColor("line").setFill()
         NSRect(x: frames.divider.minX, y: dirtyRect.minY, width: frames.divider.width, height: dirtyRect.height).fill()
     }
 
-    private func draw(_ side: SideLines, in pane: CGRect, range: Range<Int>, theme: Theme, context: CGContext) {
+    private func draw(_ side: SideLines, in pane: CGRect, offset: CGFloat, range: Range<Int>, theme: Theme, context: CGContext) {
         context.saveGState()
         context.clip(to: CGRect(x: pane.minX, y: bounds.minY, width: pane.width, height: bounds.height))
         context.textMatrix = CGAffineTransform(scaleX: 1, y: -1)
@@ -120,8 +169,11 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
                 CTLineDraw(label, context)
             }
             if side.code.indices.contains(index) {
-                context.textPosition = CGPoint(x: pane.minX + Self.gutterWidth + Self.textInset, y: baseline)
+                context.saveGState()
+                context.clip(to: CGRect(x: pane.minX + Self.gutterWidth, y: y, width: max(0, pane.width - Self.gutterWidth), height: lineHeight))
+                context.textPosition = CGPoint(x: pane.minX + Self.gutterWidth + Self.textInset - offset, y: baseline)
                 CTLineDraw(side.code[index], context)
+                context.restoreGState()
             }
         }
         context.restoreGState()

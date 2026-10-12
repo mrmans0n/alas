@@ -88,4 +88,62 @@ import Testing
     func wheelDeltasBecomePoints(delta: CGFloat, precise: Bool, expected: CGFloat) {
         #expect(DiffSplitHorizontalScroll.pointDelta(scrollingDeltaX: delta, isPrecise: precise, lineHeight: 16) == expected)
     }
+
+    private func mountedRow(newLine: String) -> (DiffSplitCoreTextRowView, NSWindow) {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1_000, height: 200), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 1_000, height: 200))
+        window.contentView?.addSubview(view)
+        view.configure(result: result(old: [], new: [newLine]), font: font, theme: theme)
+        view.layoutSubtreeIfNeeded()
+        return (view, window)
+    }
+
+    private final class ForwardingProbe: NSResponder {
+        var forwarded = 0
+        override func scrollWheel(with event: NSEvent) { forwarded += 1 }
+    }
+
+    @Test func horizontalScrollOverTheNewSideMovesOnlyThatSide() {
+        let (view, window) = mountedRow(newLine: String(repeating: "w", count: 300))
+        defer { window.close() }
+        let handled = view.scroll(deltaX: -40, deltaY: 0, isPrecise: true, at: NSPoint(x: 900, y: 20))
+        #expect(handled)
+        #expect(view.horizontalScroll.offset(.new) == 40)
+        #expect(view.horizontalScroll.offset(.old) == 0)
+    }
+
+    @Test func diagonalMostlyVerticalScrollIsNotHandled() {
+        let (view, window) = mountedRow(newLine: String(repeating: "w", count: 300))
+        defer { window.close() }
+        let handled = view.scroll(deltaX: -10, deltaY: -40, isPrecise: true, at: NSPoint(x: 900, y: 20))
+        #expect(!handled)
+        #expect(view.horizontalScroll.offset(.new) == 0)
+    }
+
+    @Test func verticalWheelEventsGoToTheNextResponder() throws {
+        let (view, window) = mountedRow(newLine: String(repeating: "w", count: 300))
+        defer { window.close() }
+        let probe = ForwardingProbe()
+        view.nextResponder = probe
+        let cgEvent = try #require(CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: -40, wheel2: 0, wheel3: 0))
+        view.scrollWheel(with: try #require(NSEvent(cgEvent: cgEvent)))
+        #expect(probe.forwarded == 1)
+    }
+
+    @Test func newContentResetsBothSidesToTheLeadingEdge() {
+        let (view, window) = mountedRow(newLine: String(repeating: "w", count: 300))
+        defer { window.close() }
+        _ = view.scroll(deltaX: -40, deltaY: 0, isPrecise: true, at: NSPoint(x: 900, y: 20))
+        view.configure(result: result(old: [], new: [String(repeating: "v", count: 300)]), font: font, theme: theme)
+        #expect(view.horizontalScroll.offset(.new) == 0)
+        #expect(view.horizontalScroll.offset(.old) == 0)
+    }
+
+    @Test func pointsLeftOfTheDividerBelongToTheOldSide() {
+        let (view, window) = mountedRow(newLine: "x")
+        defer { window.close() }
+        #expect(view.side(at: NSPoint(x: 100, y: 10)) == .old)
+        #expect(view.side(at: NSPoint(x: 900, y: 10)) == .new)
+    }
 }
