@@ -189,6 +189,9 @@ public final class ACPSessionManager: ChangeTracking {
     nonisolated public let remoteHost: String?
     nonisolated public let usesRemoteHostRegistry: Bool
     nonisolated public let persistence: ACPSessionPersistence
+    /// A replacement must not read persisted state or claim leases until the
+    /// previous manager has flushed its writes and shut down its connections.
+    private let previousManagerDisposal: Task<Void, Never>?
     public let changeNotifier: ACPChangeNotifier
     /// Reference-chip caches, one per worktree, shared by composer and transcript.
     public let upstreamReferences = ACPUpstreamReferenceStore.Registry()
@@ -285,7 +288,9 @@ public final class ACPSessionManager: ChangeTracking {
     }
     @Tracked public private(set) var recent: [ACPSessionRow] = []
     /// The open `/btw` side question of each parent session that has one.
-    @Tracked public private(set) var sideQuestions: [ACPSession.ID: ACPSideQuestion] = [:]
+    @Tracked public private(set) var sideQuestions: [ACPSession.ID: ACPSideQuestion] = [:] {
+        willSet { projectRebindingActivity.send() }
+    }
     @Tracked public private(set) var persistenceError: String?
     @Tracked private var persistedRows: [ACPSession.ID: ACPSessionRow] = [:]
     @Tracked private var missingPersistedSessionIds: Set<ACPSession.ID> = []
@@ -295,13 +300,30 @@ public final class ACPSessionManager: ChangeTracking {
     private var draftFlushHandoffSequence: UInt64 = 0
     public private(set) var runners: [ACPSession.ID: ACPSessionRunner] = [:]
     private var elicitationCoordinators: [ACPSession.ID: ACPElicitationCoordinator] = [:]
-    private var autoReconnectTasks: [ACPSession.ID: Task<Void, Never>] = [:]
+    private var autoReconnectTasks: [ACPSession.ID: Task<Void, Never>] = [:] {
+        willSet { sessions.values.forEach { $0.nextPromptActivity.send() } }
+    }
     private var autoReconnectTaskGenerations: [ACPSession.ID: UUID] = [:]
     private var restartingConnections: Set<ACPSession.ID> = []
     private var mergingForks: Set<ACPSession.ID> = []
     private var scheduledReconnectTasks: [ACPSession.ID: (deadline: Date, task: Task<Void, Never>)] = [:]
     private var managerQueuePersistenceCounts: [ACPSession.ID: Int] = [:]
-    private var disposalTasks: [ACPSession.ID: Task<Void, Error>] = [:]
+    public let projectRebindingActivity = ChangeSignal<Void>()
+    private var disposalTasks: [ACPSession.ID: Task<Void, Error>] = [:] {
+        willSet { projectRebindingActivity.send() }
+    }
+    private var activeSideQuestionWorkCount = 0 {
+        willSet { projectRebindingActivity.send() }
+    }
+    private var activeDiscoveryHandles: Set<UUID> = [] {
+        willSet { projectRebindingActivity.send() }
+    }
+    private var activeDiscoveryImportCount = 0 {
+        willSet { projectRebindingActivity.send() }
+    }
+    private var activeSessionDeletionCount = 0 {
+        willSet { projectRebindingActivity.send() }
+    }
     /// Per-session attach counter. The built-in MCP registration grace timer
     /// captures the epoch at attach and only writes the row if it still matches,
     /// so a timer from a superseded attach can never clobber the current state.
@@ -427,10 +449,16 @@ public final class ACPSessionManager: ChangeTracking {
     /// side effect. Cached observations remain suitable for rendering, but are
     /// not authority for actions that cannot be transactionally fenced.
     private func confirmedWriterLease(for sessionId: ACPSession.ID) async -> Bool {
-        guard _ownedLeases.contains(sessionId),
+        guard !isDisposed, _ownedLeases.contains(sessionId),
               let token = ownedLeaseTokens[sessionId]
         else { return false }
+        let session = sessions[sessionId]
+        session?.nextPromptWorkCount += 1
+        defer { session?.nextPromptWorkCount -= 1 }
         do {
+#if DEBUG
+            await beforeLeaseReadForTesting?()
+#endif
             let lease = try await persistence.loadLease(sessionId: sessionId)
             observedLeases[sessionId] = lease
             guard lease?.ownerInstance == instanceId, lease?.token == token else {
@@ -512,10 +540,13 @@ public final class ACPSessionManager: ChangeTracking {
         action: ACPGoalAction,
         objective: String? = nil
     ) async throws {
-        guard let session = sessions[id],
+        guard !isDisposed, let session = sessions[id],
               let capability = session.goalCapability,
-              let runner = runners[id],
-              await confirmedWriterLease(for: id),
+              let runner = runners[id]
+        else { throw ACPGoalControlError.unavailable }
+        session.nextPromptWorkCount += 1
+        defer { session.nextPromptWorkCount -= 1 }
+        guard await confirmedWriterLease(for: id),
               sessions[id] === session,
               runners[id] === runner
         else { throw ACPGoalControlError.unavailable }
@@ -812,11 +843,14 @@ public final class ACPSessionManager: ChangeTracking {
         for id: ACPSession.ID,
         selection: ModelModeSelection
     ) -> Task<Void, Never> {
+        let session = sessions[id]
+        session?.nextPromptWorkCount += 1
         let generation = modelModeSelectionGenerations[id] ?? UUID()
         modelModeSelectionGenerations[id] = generation
         let previousTask = modelModeSelectionTails[id]?.task
         let token = UUID()
         let task = Task { @MainActor [weak self] in
+            defer { session?.nextPromptWorkCount -= 1 }
             await previousTask?.value
             guard let self else { return }
             guard self.modelModeSelectionGenerations[id] == generation else {
@@ -987,7 +1021,7 @@ public final class ACPSessionManager: ChangeTracking {
         configId: String,
         value: ACPConfigValue
     ) -> Task<Void, Never>? {
-        guard let session = sessions[id],
+        guard !isDisposed, let session = sessions[id],
               !isMirror(sessionId: id),
               let index = session.availableConfigOptions.firstIndex(where: { $0.id == configId })
         else { return nil }
@@ -1045,7 +1079,9 @@ public final class ACPSessionManager: ChangeTracking {
         }
 
         persist(session)
+        session.nextPromptWorkCount += 1
         return Task { @MainActor [weak self] in
+            defer { session.nextPromptWorkCount -= 1 }
             guard let self else { return }
             await self.sendConfigOptionUpdate(
                 session: session,
@@ -1477,6 +1513,8 @@ public final class ACPSessionManager: ChangeTracking {
     public var beforePersistenceForTesting: (@MainActor () async -> Void)?
     /// Runs inside `sendPrompt`, just before the writer lease is confirmed.
     public var beforeLeaseConfirmationForTesting: (@MainActor () async -> Void)?
+    public var beforeDiscoveryImportForTesting: (@MainActor () async -> Void)?
+    public var beforeLeaseReadForTesting: (@MainActor () async -> Void)?
     public var afterRunnerRegistrationForTesting: (@MainActor (_ sessionId: ACPSession.ID) async -> Void)?
     public var pendingFreshBrokerNamespacesForTesting: Set<ACPSession.ID> {
         pendingFreshBrokerNamespaces
@@ -1665,7 +1703,9 @@ public final class ACPSessionManager: ChangeTracking {
     /// have observed it. `performAttach` clears `disposingAttachments` as
     /// part of its own cleanup before those waiters resume.
     private var cancelledInFlightAttachments: Set<ACPSession.ID> = []
-    private var teardownCounts: [ACPSession.ID: Int] = [:]
+    private var teardownCounts: [ACPSession.ID: Int] = [:] {
+        willSet { projectRebindingActivity.send() }
+    }
     private var teardownWaiters: [ACPSession.ID: [CheckedContinuation<Void, Never>]] = [:]
     private struct AttachingConnection {
         let connection: ACPConnection
@@ -1748,6 +1788,25 @@ public final class ACPSessionManager: ChangeTracking {
         !runners.isEmpty || !attachingSessions.isEmpty
     }
 
+    public var isIdleForProjectRebinding: Bool {
+        !isDisposed && attachingSessions.isEmpty && restartingConnections.isEmpty
+            && autoReconnectTasks.isEmpty && disposalTasks.isEmpty
+            && activeSessionDeletionCount == 0 && activeDiscoveryImportCount == 0
+            && activeDiscoveryHandles.isEmpty && teardownCounts.isEmpty
+            && sideQuestions.isEmpty && activeSideQuestionWorkCount == 0
+            && runners.values.allSatisfy(\.isIdleForProjectRebinding)
+            && sessions.values.allSatisfy {
+                $0.hydrationState != .loading && $0.agentState != .spawning
+                    && $0.transcript.streamingState == .idle
+                    && !$0.subagents.values.contains { $0.isRunning }
+                    && $0.activeBackgroundTasks.isEmpty
+                    && !$0.holdsPromptsForDelegatedSelection
+                    && $0.nextPromptWorkCount == 0
+                    && $0.pendingQueuePersistenceCount == 0
+                    && !$0.queue.contains { $0.status == .sending }
+            }
+    }
+
     public func activeCheckpointWriterLeaseCount() -> Int {
         do {
             return try ACPSessionStore(path: persistence.path).activeLeaseCount(
@@ -1761,6 +1820,7 @@ public final class ACPSessionManager: ChangeTracking {
 
     public init(worktreeId: String, worktreePath: String, owner: SessionOwnerID? = nil, store: ACPSessionStore? = nil,
          persistence: ACPSessionPersistence? = nil,
+         previousManagerDisposal: Task<Void, Never>? = nil,
          instanceId: String = UUID().uuidString,
          pid: Int64 = Int64(ProcessInfo.processInfo.processIdentifier),
          hydratorPath: String? = nil,
@@ -1820,6 +1880,8 @@ public final class ACPSessionManager: ChangeTracking {
         self.remoteCoordinator = remoteSessionCoordinator
         self.usesRemoteHostRegistry = usesRemoteHostRegistry
         self.persistence = resolvedPersistence
+        self.previousManagerDisposal = previousManagerDisposal
+        self.persistenceTail = previousManagerDisposal
         self.onDirtyCheck = onDirtyCheck
         self.onLiveBufferRead = onLiveBufferRead
         self.onSessionTitleUpdated = onSessionTitleUpdated
@@ -2271,6 +2333,8 @@ public final class ACPSessionManager: ChangeTracking {
     /// during creation makes this call discard its side session.
     @discardableResult
     public func startSideQuestion(parentID: ACPSession.ID, question: String) async throws -> ACPSession {
+        activeSideQuestionWorkCount += 1
+        defer { activeSideQuestionWorkCount -= 1 }
         let entry = ACPSideQuestion(question: question)
         await replaceSideQuestion(parentID: parentID, with: entry)
         let side: ACPSession
@@ -2396,6 +2460,8 @@ public final class ACPSessionManager: ChangeTracking {
     /// it replaces. Installing first lets the latest command win even while
     /// the old session's teardown is still awaited.
     public func replaceSideQuestion(parentID: ACPSession.ID, with entry: ACPSideQuestion) async {
+        activeSideQuestionWorkCount += 1
+        defer { activeSideQuestionWorkCount -= 1 }
         if let previous = sideQuestions.updateValue(entry, forKey: parentID)?.sessionID {
             await discardSideSession(id: previous)
         }
@@ -2410,6 +2476,8 @@ public final class ACPSessionManager: ChangeTracking {
 
     /// Closes the parent's side session and deletes it with its transcript.
     public func dismissSideQuestion(parentID: ACPSession.ID) async {
+        activeSideQuestionWorkCount += 1
+        defer { activeSideQuestionWorkCount -= 1 }
         guard let entry = sideQuestions.removeValue(forKey: parentID),
               let sideID = entry.sessionID
         else { return }
@@ -2452,6 +2520,8 @@ public final class ACPSessionManager: ChangeTracking {
     /// question is still current once the promotion is stored, so a second
     /// Keep, a dismissal, or a newer question in the meantime wins.
     public func promoteSideQuestion(parentID: ACPSession.ID) async throws -> ACPSession? {
+        activeSideQuestionWorkCount += 1
+        defer { activeSideQuestionWorkCount -= 1 }
         guard let entry = sideQuestions[parentID], entry.isSubmitted, !entry.isPromoting,
               let sideID = entry.sessionID, let side = sessions[sideID]
         else { return nil }
@@ -2518,8 +2588,10 @@ public final class ACPSessionManager: ChangeTracking {
     private func loadPersistedRowIfNeeded(id: ACPSession.ID) {
         guard rowLoadTasks[id] == nil else { return }
         let persistence = persistence
+        let previousManagerDisposal = previousManagerDisposal
         rowLoadTasks[id] = Task { @MainActor [weak self] in
             defer { self?.rowLoadTasks[id] = nil }
+            await previousManagerDisposal?.value
             do {
                 guard let row = try await persistence.loadSession(id: id) else {
                     self?.missingPersistedSessionIds.insert(id)
@@ -2542,6 +2614,7 @@ public final class ACPSessionManager: ChangeTracking {
     /// covers rows outside the lazy recent-session cache before a tab title is
     /// chosen.
     public func persistedSessionRow(id: ACPSession.ID) async -> ACPSessionRow? {
+        await previousManagerDisposal?.value
         if let row = persistedRows[id] { return row }
         do {
             guard let row = try await persistence.loadSession(id: id) else { return nil }
@@ -2571,6 +2644,7 @@ public final class ACPSessionManager: ChangeTracking {
     /// in-flight task. No-op when the session is already `.ready` or
     /// `.failed`.
     public func hydrateIfNeeded(id: ACPSession.ID) async {
+        await previousManagerDisposal?.value
         guard let session = sessions[id] else { return }
         guard session.hydrationState == .loading else { return }
         if let existing = inFlightHydrations[id] {
@@ -2925,6 +2999,8 @@ public final class ACPSessionManager: ChangeTracking {
     }
 
     public func deletePersistedSession(id: ACPSession.ID) async throws {
+        activeSessionDeletionCount += 1
+        defer { activeSessionDeletionCount -= 1 }
         // A side session can't outlive its parent; nothing could reach it.
         await dismissSideQuestion(parentID: id)
         try await disposeSession(id: id)
@@ -3654,6 +3730,7 @@ public final class ACPSessionManager: ChangeTracking {
     }
 
     public func refreshRecentNow() async {
+        await previousManagerDisposal?.value
         let persistence = persistence
         do {
             let rows = try await persistence.recentSessions()
@@ -3669,6 +3746,9 @@ public final class ACPSessionManager: ChangeTracking {
     /// Cleans hidden `/btw` sessions left by a crash. SSH rows retain the
     /// agent and conversation identity until fenced native cleanup succeeds.
     public func purgeOrphanedEphemeralSessions() async {
+        guard !isDisposed else { return }
+        activeSessionDeletionCount += 1
+        defer { activeSessionDeletionCount -= 1 }
         await flushPersistence()
         do {
             let rows = try await persistence.orphanedEphemeralSessions(
@@ -3818,6 +3898,15 @@ public final class ACPSessionManager: ChangeTracking {
     }
 
     public func makeSessionDiscoveryHandle(agentId: String) async throws -> ACPSessionDiscoveryHandle {
+        guard !isDisposed else { throw CancellationError() }
+        let activityID = UUID()
+        activeDiscoveryHandles.insert(activityID)
+        var transferredToHandle = false
+        defer {
+            if !transferredToHandle { activeDiscoveryHandles.remove(activityID) }
+        }
+        await previousManagerDisposal?.value
+        guard !isDisposed else { throw CancellationError() }
         guard let spec = ACPLaunchCatalog.spec(for: agentId) else {
             throw ACPSessionDiscoveryError.noLaunchSpec(agentId)
         }
@@ -3835,6 +3924,7 @@ public final class ACPSessionManager: ChangeTracking {
             guard initialized.sessionCapabilities.supportsList else {
                 throw ACPSessionDiscoveryError.listingUnsupported
             }
+            transferredToHandle = true
             return ACPSessionDiscoveryHandle(
                 worktreeId: worktreeId,
                 agentId: agentId,
@@ -3846,7 +3936,8 @@ public final class ACPSessionManager: ChangeTracking {
                     canResume: initialized.sessionCapabilities.supportsResume,
                     canFork: initialized.sessionCapabilities.supportsFork,
                     canDelete: initialized.sessionCapabilities.supportsDelete
-                )
+                ),
+                onClosed: { [weak self] in self?.activeDiscoveryHandles.remove(activityID) }
             )
         } catch {
             await connection.shutdown()
@@ -3857,6 +3948,9 @@ public final class ACPSessionManager: ChangeTracking {
     /// Returns false for local discovery. SSH deletion uses the session's
     /// fenced helper process, never the unfenced listing connection.
     public func deleteCoordinatedAgentHistory(_ discovered: ACPDiscoveredSession) async throws -> Bool {
+        await previousManagerDisposal?.value
+        activeSessionDeletionCount += 1
+        defer { activeSessionDeletionCount -= 1 }
         guard let host = effectiveRemoteHost(), let coordinator = try coordination() else { return false }
         let existing = try await persistence.loadSession(agentId: discovered.agentId, remoteSessionId: discovered.remoteSessionId)
         let sessionId = existing?.id ?? UUID().uuidString
@@ -3928,6 +4022,11 @@ public final class ACPSessionManager: ChangeTracking {
         autoRunDefault: Bool = false,
         origin: ACPSessionOrigin = .agentImported
     ) async -> ACPSessionRow? {
+        guard !isDisposed else { return nil }
+        activeDiscoveryImportCount += 1
+        defer { activeDiscoveryImportCount -= 1 }
+        await previousManagerDisposal?.value
+        guard !isDisposed else { return nil }
         let discoveredCWD = URL(fileURLWithPath: discovered.cwd).standardizedFileURL.path
         let managerCWD = URL(fileURLWithPath: worktreePath).standardizedFileURL.path
         guard discovered.worktreeId == worktreeId, discoveredCWD == managerCWD else { return nil }
@@ -3959,6 +4058,9 @@ public final class ACPSessionManager: ChangeTracking {
             archived: false
         )
         do {
+#if DEBUG
+            await beforeDiscoveryImportForTesting?()
+#endif
             try await persistence.upsertSession(row)
             try await persistence.resolveReplicaRelations()
             persistedRows[row.id] = row
@@ -3975,7 +4077,8 @@ public final class ACPSessionManager: ChangeTracking {
     /// was truncated to save memory. Returns nil if the row is gone or
     /// the payload can't be decoded.
     public func reloadFullToolCallContent(sessionId: ACPSession.ID, toolCallId: String) async -> String? {
-        try? await persistence.loadToolCallContent(sessionId: sessionId, toolCallId: toolCallId)
+        await previousManagerDisposal?.value
+        return try? await persistence.loadToolCallContent(sessionId: sessionId, toolCallId: toolCallId)
     }
 
     private static func makeStdioConnection(
@@ -5195,6 +5298,9 @@ extension ACPSessionManager {
     /// it no longer owns the lease (within ~5s).
     @discardableResult
     public func takeOver(sessionId: ACPSession.ID) async -> Bool {
+        guard !isDisposed, let takeoverSession = sessions[sessionId] else { return false }
+        takeoverSession.nextPromptWorkCount += 1
+        defer { takeoverSession.nextPromptWorkCount -= 1 }
         let takeoverAttemptID = UUID()
         takeoverAttemptIDs[sessionId] = takeoverAttemptID
         let now = Int64(Date().timeIntervalSince1970)
@@ -5233,7 +5339,7 @@ extension ACPSessionManager {
             persistenceError = error.localizedDescription
             return false
         }
-        guard takeoverAttemptIDs[sessionId] == takeoverAttemptID else {
+        guard !isDisposed, takeoverAttemptIDs[sessionId] == takeoverAttemptID else {
             try? await persistence.releaseLease(
                 sessionId: sessionId,
                 instanceId: instanceId,
@@ -5775,6 +5881,7 @@ extension ACPSessionManager {
     /// and calls `session/new` (new sessions) or `session/load` (reopened).
     @discardableResult
     public func attach(to sessionId: ACPSession.ID, freshlyCreated: Bool) async -> UUID? {
+        await previousManagerDisposal?.value
         if let attempt = attachmentAttempts[sessionId] {
             let retryAfterDetachedAttachment = await withCheckedContinuation { continuation in
                 attempt.waiters.append(.init(
@@ -6815,6 +6922,7 @@ extension ACPSessionManager {
                                               guard let self,
                                                     self.connectionOwnerIDs[sessionId] == runnerConnectionOwnerID
                                               else { return }
+                                              self.sessions[sessionId]?.nextPromptActivity.send()
                                               self.onQueueChanged?(sessionId, self.retainedCleanupHasActivePromptWork(for: sessionId))
                                               self.remoteCoordinator?.wake(sessionId: sessionId)
                                           },
@@ -8190,6 +8298,7 @@ extension ACPSessionManager {
     public func bootstrapScheduledQueueSessions(
         onBootstrapped: (@MainActor (ACPSession.ID) -> Void)? = nil
     ) async -> [ACPSession.ID] {
+        await previousManagerDisposal?.value
         let ids: [ACPSession.ID]
         do {
             ids = try await persistence.scheduledQueueSessionIds()
@@ -8230,6 +8339,7 @@ extension ACPSessionManager {
         onBootstrapped: (@MainActor (ACPSession.ID) -> Void)? = nil
     ) async -> [ACPSession.ID] {
         guard continueInterruptedSessions() else { return [] }
+        await previousManagerDisposal?.value
         let ids: [ACPSession.ID]
         do {
             ids = try await persistence.interruptedQueueSessionIds()
@@ -8626,9 +8736,11 @@ extension ACPSessionManager {
         _ selection: ACPDelegatedModelSelection,
         to id: ACPSession.ID
     ) async throws {
-        guard let session = sessions[id], runners[id] != nil, session.agentState == .ready else {
+        guard !isDisposed, let session = sessions[id], runners[id] != nil, session.agentState == .ready else {
             throw ACPDelegatedModelSelectionError.sessionUnavailable
         }
+        session.nextPromptWorkCount += 1
+        defer { session.nextPromptWorkCount -= 1 }
         var modelChanged = false
         if let model = selection.model,
            let step = try ACPSessionOrchestrationPolicy.liveModelStep(
@@ -8916,6 +9028,9 @@ extension ACPSessionManager {
     /// A send that reports failure clears the answer too. A send whose callback
     /// never fires (superseded prompt) keeps the answer.
     public func answerVisualAid(id visualId: UUID, answer: ACPVisualAid.Answer, in sessionId: ACPSession.ID) async -> Bool {
+        guard !isDisposed, let answeringSession = sessions[sessionId] else { return false }
+        answeringSession.nextPromptWorkCount += 1
+        defer { answeringSession.nextPromptWorkCount -= 1 }
         // The wait comes before every guard and before the synchronous mutation below, so two answers
         // that wait together compete for the synchronous mutation; the loser finds the winner's answer.
         guard let firstWriteRunner = runners[sessionId],
@@ -8956,7 +9071,13 @@ extension ACPSessionManager {
                     for: sessionId, text: prompt, attachments: [],
                     isStillWanted: { cancellation.commit() }
                 ) { ok in
-                    if !ok { Task { @MainActor in await self?.rollBackVisualAidAnswer(id: visualId, answer: answer, in: sessionId) } }
+                    if !ok {
+                        answeringSession.nextPromptWorkCount += 1
+                        Task { @MainActor in
+                            defer { answeringSession.nextPromptWorkCount -= 1 }
+                            await self?.rollBackVisualAidAnswer(id: visualId, answer: answer, in: sessionId)
+                        }
+                    }
                 }
             }, timeout: visualAidPromptRegistrationWait)
         } onCancel: {
@@ -9017,6 +9138,8 @@ extension ACPSessionManager {
               }),
               case .visualAid(var current) = session.transcript.messages[index], current.answer == answer
         else { return }
+        session.nextPromptWorkCount += 1
+        defer { session.nextPromptWorkCount -= 1 }
         current.answer = nil
         session.transcript.replaceMessage(at: index, with: .visualAid(current))
         let status = session.visualAidSendStatus(for: visualId)
@@ -9133,7 +9256,7 @@ extension ACPSessionManager {
         onCompleted: @escaping @MainActor (Bool) -> Void,
         onDispatchRegistered: (@Sendable () -> Void)? = nil
     ) -> Bool {
-        guard !mergingForks.contains(sessionId), let session = sessions[sessionId] else { return false }
+        guard !isDisposed, !mergingForks.contains(sessionId), let session = sessions[sessionId] else { return false }
         session.nextPromptActivity.send()
         if case .needsAuth = session.setupState {
             return false

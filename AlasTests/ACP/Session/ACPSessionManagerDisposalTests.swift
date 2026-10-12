@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 import Testing
 @testable import Alas
 
@@ -21,7 +22,8 @@ struct ACPSessionManagerDisposalTests {
         try await manager.disposeSession(id: session.id)
         await manager.flushPersistence()
 
-        #expect(client.sent.map(\.method).filter { $0 == "session/close" }.count == 1)
+        let closeCount = client.sent.filter { $0.method == "session/close" }.count
+        #expect(closeCount == 1)
         #expect(manager.runners[session.id] == nil)
         #expect(try store.loadSession(id: session.id)?.remoteSessionId == "remote")
 
@@ -73,7 +75,8 @@ struct ACPSessionManagerDisposalTests {
         try await first.value
         try await second.value
 
-        #expect(client.sent.map(\.method).filter { $0 == "session/close" }.count == 1)
+        let closeCount = client.sent.filter { $0.method == "session/close" }.count
+        #expect(closeCount == 1)
     }
 
     @Test("failed close still removes the runner and shuts down the connection")
@@ -193,8 +196,19 @@ struct ACPSessionManagerDisposalTests {
     @Test("keeping a side question twice promotes it once")
     func sideQuestionPromotesOnce() async throws {
         let client = ACPMockClient()
-        let (manager, _, parent) = try await attachedManager(client: client, supportsClose: true)
+        let (manager, store, parent) = try await attachedManager(client: client, supportsClose: true)
         let side = try await manager.startSideQuestion(parentID: parent.id, question: "why?")
+        #expect(await awaitCondition {
+            side.transcript.streamingState == .idle
+                && manager.runners.values.allSatisfy { !$0.hasRetainedCleanupPromptWork }
+        })
+        #expect(!manager.isIdleForProjectRebinding)
+        var readiness: Bool?
+        let subscription = manager.projectRebindingReadiness.sink { readiness = $0 }
+        defer { subscription.cancel() }
+        #expect(await awaitCondition(within: .seconds(1)) { readiness == false })
+        await manager.flushPersistence()
+        #expect(try store.loadSession(id: side.id)?.ephemeralParentId == parent.id)
 
         async let first = manager.promoteSideQuestion(parentID: parent.id)
         async let second = manager.promoteSideQuestion(parentID: parent.id)
@@ -202,8 +216,35 @@ struct ACPSessionManagerDisposalTests {
 
         #expect(promoted == [side.id])
         #expect(manager.recent.filter { $0.id == side.id }.count == 1)
+        #expect(try store.loadSession(id: side.id)?.ephemeralParentId == nil)
+        #expect(await awaitCondition { readiness == true })
         await manager.detach(sessionId: side.id)
         await manager.detach(sessionId: parent.id)
+    }
+
+    @Test("goal control stays busy until the agent response completes")
+    func goalControlBlocksProjectRebinding() async throws {
+        let client = ACPMockClient()
+        let started = AsyncStream<Void>.makeStream()
+        let release = AsyncStream<Void>.makeStream()
+        client.scriptAsync(method: "_session/goal") { _ in
+            started.continuation.yield()
+            for await _ in release.stream { break }
+            return Data("{}".utf8)
+        }
+        let (manager, _, session) = try await attachedManager(client: client, supportsClose: true)
+        session.goalCapability = .init(version: 1, controlMethod: "_session/goal", actions: [.set])
+        let control = Task { try await manager.controlGoal(for: session.id, action: .set, objective: "finish") }
+        for await _ in started.stream { break }
+        #expect(!manager.isIdleForProjectRebinding)
+        var readiness: Bool?
+        let subscription = manager.projectRebindingReadiness.sink { readiness = $0 }
+        defer { subscription.cancel() }
+        #expect(await awaitCondition(within: .seconds(1)) { readiness == false })
+        release.continuation.yield()
+        try await control.value
+        #expect(await awaitCondition { readiness == true })
+        await manager.disposeAllLiveSessions()
     }
 
     @Test("unresponsive close times out and still tears down")
@@ -233,7 +274,26 @@ struct ACPSessionManagerDisposalTests {
         #expect(manager.runners[session.id] != nil)
         #expect(!client.sent.contains { $0.method == "session/close" })
 
-        await manager.detach(sessionId: session.id)
+        let runner = try #require(manager.runners[session.id])
+        let writing = AsyncStream<Void>.makeStream()
+        let release = AsyncStream<Void>.makeStream()
+        runner.beforePersistenceForTesting = {
+            writing.continuation.yield()
+            for await _ in release.stream { break }
+        }
+        session.transcript.messages.append(.user(id: UUID(), text: "saved before detach", attachments: []))
+        #expect(runner.persistIndices([0]))
+        for await _ in writing.stream { break }
+        let detaching = Task { await manager.detach(sessionId: session.id) }
+        #expect(await awaitCondition { manager.runners[session.id] == nil })
+        #expect(!manager.isIdleForProjectRebinding)
+        var readiness: Bool?
+        let subscription = manager.projectRebindingReadiness.sink { readiness = $0 }
+        defer { subscription.cancel() }
+        #expect(await awaitCondition(within: .seconds(1)) { readiness == false })
+        release.continuation.yield()
+        await detaching.value
+        #expect(await awaitCondition { readiness == true })
         #expect(manager.liveSession(for: session.id) == nil)
         #expect(!client.sent.contains { $0.method == "session/close" })
     }
@@ -250,19 +310,38 @@ struct ACPSessionManagerDisposalTests {
             remoteSessionId: "remote"
         )
 
-        #expect(client.sent.map(\.method).filter { $0 == "session/close" }.count == 1)
+        let closeCount = client.sent.filter { $0.method == "session/close" }.count
+        #expect(closeCount == 1)
         #expect(manager.runners[session.id] == nil)
     }
 
     @Test("local history deletion disposes an attached session")
     func localHistoryDeletionUsesDisposal() async throws {
         let client = ACPMockClient()
-        client.script(method: "session/close") { _ in Data("{}".utf8) }
+        let closeStarted = AsyncStream<Void>.makeStream()
+        let releaseClose = AsyncStream<Void>.makeStream()
+        client.scriptAsync(method: "session/close") { _ in
+            closeStarted.continuation.yield()
+            for await _ in releaseClose.stream { break }
+            return Data("{}".utf8)
+        }
         let (manager, store, session) = try await attachedManager(client: client, supportsClose: true)
 
-        try await manager.deleteSession(id: session.id)
+        var readiness: Bool?
+        let subscription = manager.projectRebindingReadiness.sink { readiness = $0 }
+        defer { subscription.cancel() }
+        let deletion = Task { @MainActor in try await manager.deleteSession(id: session.id) }
+        for await _ in closeStarted.stream { break }
+        #expect(manager.runners[session.id] == nil)
+        #expect(!manager.isIdleForProjectRebinding)
+        #expect(await awaitCondition(within: .seconds(1)) { readiness == false })
+        #expect(try store.loadSession(id: session.id) != nil)
+        releaseClose.continuation.yield()
+        try await deletion.value
+        #expect(await awaitCondition { readiness == true })
 
-        #expect(client.sent.map(\.method).filter { $0 == "session/close" }.count == 1)
+        let closeCount = client.sent.filter { $0.method == "session/close" }.count
+        #expect(closeCount == 1)
         #expect(manager.runners[session.id] == nil)
         #expect(try store.loadSession(id: session.id) == nil)
     }
@@ -318,7 +397,8 @@ struct ACPSessionManagerDisposalTests {
         releaseProviders.continuation.yield()
         await attach.value
 
-        #expect(client.sent.map(\.method).filter { $0 == "session/close" }.count == 1)
+        let closeCount = client.sent.filter { $0.method == "session/close" }.count
+        #expect(closeCount == 1)
         #expect(client.shutdownCount >= 1)
         #expect(manager.runners[session.id] == nil)
     }
@@ -369,7 +449,8 @@ struct ACPSessionManagerDisposalTests {
         try await disposal.value
         await attach.value
 
-        #expect(client.sent.map(\.method).filter { $0 == "session/close" }.count == 1)
+        let closeCount = client.sent.filter { $0.method == "session/close" }.count
+        #expect(closeCount == 1)
         #expect(client.shutdownCount == 1)
         #expect(client.requestsAfterShutdownCount == 0)
         #expect(manager.runners[session.id] == nil)
@@ -782,7 +863,16 @@ struct ACPSessionManagerDisposalTests {
     func coldManagerPurgesRemoteOrphan(ownerless: Bool) async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }
-        let (manager, store, endpoint, previous, cleanup) = try await remoteOrphanManager(in: folder, idleSeconds: 0)
+        let started = AsyncStream<Void>.makeStream()
+        let release = AsyncStream<Void>.makeStream()
+        let (manager, store, endpoint, previous, cleanup) = try await remoteOrphanManager(
+            in: folder, idleSeconds: 0, beforeCleanupRequest: { method in
+                if method == "proc/kill" {
+                    started.continuation.yield()
+                    for await _ in release.stream { break }
+                }
+            }
+        )
         defer {
             manager.shutdownBackgroundTasks()
             previous.shutdown()
@@ -796,7 +886,17 @@ struct ACPSessionManagerDisposalTests {
         #expect(cleanup.fence(sessionId: "side") == nil)
         #expect(await endpoint.runningProcId == "crashed-side-proc")
 
-        await manager.purgeOrphanedEphemeralSessions()
+        let purging = Task { await manager.purgeOrphanedEphemeralSessions() }
+        for await _ in started.stream { break }
+        #expect(manager.sessions.isEmpty)
+        #expect(!manager.isIdleForProjectRebinding)
+        var readiness: Bool?
+        let subscription = manager.projectRebindingReadiness.sink { readiness = $0 }
+        defer { subscription.cancel() }
+        #expect(await awaitCondition(within: .seconds(1)) { readiness == false })
+        release.continuation.yield()
+        await purging.value
+        #expect(await awaitCondition { readiness == true })
 
         #expect(try store.loadSession(id: "side") == nil)
         #expect(try store.loadSession(id: "parent")?.remoteSessionId == "parent-conversation")
@@ -899,7 +999,10 @@ struct ACPSessionManagerDisposalTests {
         .init(worktreePath: "/work", agentId: "codex", remoteSessionId: "crashed-side-conversation")
     }
 
-    private func remoteOrphanManager(in folder: URL, idleSeconds: Int64 = 100, client: ACPMockClient? = nil) async throws -> (
+    private func remoteOrphanManager(
+        in folder: URL, idleSeconds: Int64 = 100, client: ACPMockClient? = nil,
+        beforeCleanupRequest: @escaping @Sendable (String) async -> Void = { _ in }
+    ) async throws -> (
         ACPSessionManager, ACPSessionStore, ReplicaEndpoint, ACPRemoteSessionCoordinator, ACPRemoteSessionCoordinator
     ) {
         let path = folder.appendingPathComponent("orphan.sqlite").path
@@ -938,7 +1041,9 @@ struct ACPSessionManagerDisposalTests {
                 ]), revision: 0)], status: "busy"
         )))
         let cleanup = ACPRemoteSessionCoordinator(owner: .init(serverId: "mac-b", instanceId: "restarted-instance")) {
-            method, data in try await endpoint.request(method, data)
+            method, data in
+            await beforeCleanupRequest(method)
+            return try await endpoint.request(method, data)
         }
         let manager = ACPSessionManager(
             worktreeId: "wt", worktreePath: "/work", store: store,

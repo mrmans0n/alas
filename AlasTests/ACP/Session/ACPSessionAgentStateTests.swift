@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 import Testing
 @testable import Alas
 
@@ -468,10 +469,13 @@ struct ACPSessionManagerReattachTests {
         session.agentState = .disconnected
         let scheduledAfter = Date()
 
+        var readiness: Bool?
+        let subscription = mgr.projectRebindingReadiness.sink { readiness = $0 }
+        defer { subscription.cancel() }
         mgr.scheduleAutoReconnect(sessionId: session.id)
-        for _ in 0 ..< 50 where session.connectionRecoveryState == .disconnected {
-            try await Task.sleep(nanoseconds: 10_000_000)
-        }
+        #expect(!mgr.isIdleForProjectRebinding)
+        #expect(await awaitCondition { session.connectionRecoveryState != .disconnected })
+        #expect(await awaitCondition(within: .seconds(1)) { readiness == false })
         defer { mgr.closeSession(id: session.id) }
 
         guard case .waiting(let attempt, let maxAttempts, let retryAt) =
@@ -482,6 +486,8 @@ struct ACPSessionManagerReattachTests {
         #expect(attempt == 1)
         #expect(maxAttempts == ACPReconnectPolicy.delays.count)
         #expect(retryAt > scheduledAfter)
+        mgr.closeSession(id: session.id)
+        #expect(await awaitCondition { readiness == true })
     }
 
     @Test("scheduled reconnect retains disconnected session")

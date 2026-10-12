@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 import SQLite3
 import Testing
 @testable import Alas
@@ -39,6 +40,242 @@ struct ACPSessionManagerTests {
             releaseContinuation?.resume()
             releaseContinuation = nil
         }
+    }
+
+    @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+    func replacementReadsWaitForPreviousManagerWrites(afterFlush: Bool) async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rebind-writes-\(UUID()).sqlite")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = try ACPSessionStore(path: url.path)
+        let previous = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        defer { previous.shutdownBackgroundTasks() }
+        let writes = AsyncGate()
+        let disposal = Task { @MainActor in
+            await writes.enterAndWait()
+            _ = previous.createSession(id: "restored", agentId: "claude")
+            previous.renameSession(id: "restored", title: "Flushed title", source: .manual)
+            await previous.flushAllPersistence()
+        }
+        await writes.waitUntilEntered()
+        let replacement = ACPSessionManager(
+            worktreeId: "wt", worktreePath: "/tmp/wt", store: store,
+            previousManagerDisposal: disposal
+        )
+        defer { replacement.shutdownBackgroundTasks() }
+        #expect(replacement.placeholderSession(id: "restored") == nil)
+        let lookup = Task {
+            if afterFlush {
+                await replacement.flushPersistence()
+                return try? await replacement.persistence.loadSession(id: "restored")
+            }
+            return await replacement.persistedSessionRow(id: "restored")
+        }
+        await writes.waitUntilEntered()
+        await writes.release()
+        let row = await lookup.value
+        await disposal.value
+        await replacement.refreshRecentNow()
+        #expect(row?.title == "Flushed title")
+        #expect(!replacement.isKnownMissingSession(id: "restored"))
+        let restored = try #require(replacement.placeholderSession(id: "restored"))
+        await replacement.hydrateIfNeeded(id: restored.id)
+        #expect(restored.title == "Flushed title")
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func replacementDiscoveryWaitsForPreviousImport() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rebind-import-\(UUID()).sqlite")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = try ACPSessionStore(path: url.path)
+        let previous = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        defer { previous.shutdownBackgroundTasks() }
+        let discovered = ACPDiscoveredSession(
+            worktreeId: "wt", agentId: "claude", remoteSessionId: "remote",
+            cwd: "/tmp/wt", title: "Imported", updatedAt: nil,
+            additionalDirectories: [], localSessionId: nil
+        )
+        let writes = AsyncGate()
+        var imported: ACPSessionRow?
+        let disposal = Task { @MainActor in
+            await writes.enterAndWait()
+            imported = await previous.materializeDiscoveredSession(discovered)
+            await previous.flushAllPersistence()
+        }
+        await writes.waitUntilEntered()
+        let replacement = ACPSessionManager(
+            worktreeId: "wt", worktreePath: "/tmp/wt", store: store,
+            previousManagerDisposal: disposal
+        )
+        defer { replacement.shutdownBackgroundTasks() }
+        var completed = false
+        let lookup = Task { @MainActor in
+            let row = await replacement.materializeDiscoveredSession(discovered)
+            completed = true
+            return row
+        }
+        #expect(!(await awaitCondition(within: .seconds(1)) { completed }))
+        await writes.release()
+        let row = try #require(await lookup.value)
+        await disposal.value
+        #expect(row.id == imported?.id)
+        #expect(try store.recentSessions().count == 1)
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func discoveryImportPublishesBusyUntilItsWriteCompletes() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("busy-import-\(UUID()).sqlite")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = try ACPSessionStore(path: url.path)
+        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        defer { manager.shutdownBackgroundTasks() }
+        let writes = AsyncGate()
+        manager.beforeDiscoveryImportForTesting = { await writes.enterAndWait() }
+        var readiness: Bool?
+        let subscription = manager.projectRebindingReadiness.sink { readiness = $0 }
+        defer { subscription.cancel() }
+        let importing = Task { @MainActor in
+            await manager.materializeDiscoveredSession(.init(
+                worktreeId: "wt", agentId: "claude", remoteSessionId: "remote",
+                cwd: "/tmp/wt", title: "Imported", updatedAt: nil,
+                additionalDirectories: [], localSessionId: nil
+            ))
+        }
+        await writes.waitUntilEntered()
+        #expect(!manager.isIdleForProjectRebinding)
+        #expect(await awaitCondition(within: .seconds(1)) { readiness == false })
+        #expect(try store.recentSessions().isEmpty)
+        await writes.release()
+        let row = try #require(await importing.value)
+        #expect(try store.loadSession(id: row.id) != nil)
+        #expect(await awaitCondition { readiness == true })
+        #expect(manager.isIdleForProjectRebinding)
+    }
+
+    @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+    func discoveryHandleKeepsProjectBindingBusyUntilClosed(closeExplicitly: Bool) async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("discovery-binding-\(UUID()).sqlite")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = try ACPSessionStore(path: url.path)
+        let client = ACPMockClient()
+        let initializing = AsyncGate()
+        client.scriptAsync(method: "initialize") { _ in
+            await initializing.enterAndWait()
+            return try JSONEncoder().encode(ACPInitializeResult(
+                protocolVersion: 1,
+                agentCapabilities: .init(sessionCapabilities: .init(list: .init())),
+                authMethods: []
+            ))
+        }
+        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store,
+            setupEvaluator: { _ in .ready }, connectionFactory: { _, _, _ in ACPConnection(client: client) })
+        defer { manager.shutdownBackgroundTasks() }
+        var readiness: Bool?
+        let subscription = manager.projectRebindingReadiness.sink { readiness = $0 }
+        defer { subscription.cancel() }
+        var starting: Task<ACPSessionDiscoveryHandle, Error>? = Task { @MainActor in
+            try await manager.makeSessionDiscoveryHandle(agentId: "claude")
+        }
+        await initializing.waitUntilEntered()
+        #expect(!manager.isIdleForProjectRebinding)
+        #expect(await awaitCondition(within: .seconds(1)) { readiness == false })
+        await initializing.release()
+        var handle = try await starting?.value
+        starting = nil
+        try #require(handle != nil)
+        #expect(!manager.isIdleForProjectRebinding)
+        if closeExplicitly { await handle?.close() }
+        handle = nil
+        #expect(await awaitCondition { manager.isIdleForProjectRebinding && readiness == true })
+        #expect(client.shutdownCount == 1)
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func connectedIdleRunnerCanRebindAfterWorkFinishes() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rebind-\(UUID()).sqlite")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = try ACPSessionStore(path: url.path)
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/new", sessionId: "remote")
+        let manager = ACPSessionManager(
+            worktreeId: "wt", worktreePath: "/tmp/wt", store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in ACPConnection(client: client) }
+        )
+        defer { manager.shutdownBackgroundTasks() }
+        let session = manager.createSession(agentId: "claude")
+        await manager.attach(to: session.id, freshlyCreated: true)
+        let runner = try #require(manager.runners[session.id])
+        #expect(manager.isIdleForProjectRebinding)
+        let cancelled = await withCheckedContinuation { continuation in
+            let accepted = manager.submit(
+                sessionId: session.id, text: "preflight", attachments: [], intent: .auto,
+                onCompleted: { continuation.resume(returning: !$0) }
+            )
+            #expect(accepted)
+            #expect(session.transcript.streamingState == .idle)
+            #expect(!manager.isIdleForProjectRebinding)
+            runner.invalidateActivePrompt()
+        }
+        #expect(cancelled)
+        #expect(manager.isIdleForProjectRebinding)
+        session.transcript.streamingState = .streaming
+        #expect(!manager.isIdleForProjectRebinding)
+        session.transcript.streamingState = .idle
+        session.nextPromptWorkCount += 1
+        #expect(!manager.isIdleForProjectRebinding)
+        session.nextPromptWorkCount -= 1
+        #expect(manager.isIdleForProjectRebinding)
+        session.registerSubagent(.init(subagentSessionId: "child"))
+        #expect(!manager.isIdleForProjectRebinding)
+        session.applySubagentState(.init(subagentSessionId: "child", state: .completed))
+        #expect(manager.isIdleForProjectRebinding)
+        session.applyBackgroundTask(.init(sessionUpdate: "async_task_spawned", asyncTaskId: "task"),
+                                    ownerSessionId: session.id)
+        #expect(!manager.isIdleForProjectRebinding)
+        var readinessSubscription: AnyCancellable?
+        defer { readinessSubscription?.cancel() }
+        var sawBusy = false
+        await withCheckedContinuation { continuation in
+            readinessSubscription = manager.projectRebindingReadiness.sink { ready in
+                if !ready && !sawBusy {
+                    sawBusy = true
+                    session.applyBackgroundTask(
+                        .init(sessionUpdate: "async_task_completed", asyncTaskId: "task", state: "completed"),
+                        ownerSessionId: session.id
+                    )
+                } else if ready && sawBusy {
+                    continuation.resume()
+                }
+            }
+        }
+        readinessSubscription?.cancel()
+        #expect(manager.isIdleForProjectRebinding)
+        session.enqueueScheduled(blocks: [.text("later")], scheduledAt: .distantFuture)
+        #expect(manager.isIdleForProjectRebinding)
+        manager.persistQueue(for: session)
+        await manager.flushAllPersistence()
+        let queueEditGate = AsyncGate()
+        manager.beforeLeaseReadForTesting = { await queueEditGate.enterAndWait() }
+        let scheduledItem = try #require(session.queue.first)
+        let removal = Task { await manager.queueRemove(for: session.id, itemId: scheduledItem.id) }
+        await queueEditGate.waitUntilEntered()
+        #expect(!manager.isIdleForProjectRebinding)
+        var queueEditReadiness: Bool?
+        let queueEditSubscription = manager.projectRebindingReadiness.sink { queueEditReadiness = $0 }
+        defer { queueEditSubscription.cancel() }
+        #expect(await awaitCondition(within: .seconds(1)) { queueEditReadiness == false })
+        manager.beforeLeaseReadForTesting = nil
+        await queueEditGate.release()
+        await removal.value
+        await manager.flushAllPersistence()
+        #expect(session.queue.isEmpty)
+        #expect(try store.loadQueue(sessionId: session.id).isEmpty)
+        #expect(await awaitCondition { queueEditReadiness == true })
+        session.enqueueScheduled(blocks: [.text("later")], scheduledAt: .distantFuture)
+        session.markQueueHeadSending()
+        #expect(!manager.isIdleForProjectRebinding)
+        await manager.disposeAllLiveSessions()
     }
 
     private func scriptInitialize(_ client: ACPMockClient) {
@@ -1976,6 +2213,11 @@ struct ACPSessionManagerTests {
         let otherAnswer = ACPVisualAid.Answer.dismissed(at: Date(timeIntervalSince1970: 2))
         let second = Task { @MainActor in await manager.answerVisualAid(id: visual.id, answer: otherAnswer, in: session.id) }
         #expect(await awaitCondition { runner.visualAidFirstWriteWaiterCountForTesting(id: visual.id) == 2 })
+        #expect(!manager.isIdleForProjectRebinding)
+        var readiness: Bool?
+        let subscription = manager.projectRebindingReadiness.sink { readiness = $0 }
+        defer { subscription.cancel() }
+        #expect(await awaitCondition(within: .seconds(1)) { readiness == false })
         await initialWrite.release()
 
         #expect(await show.value)
@@ -1985,6 +2227,7 @@ struct ACPSessionManagerTests {
         let winningAnswer = firstSucceeded ? answer : otherAnswer
         #expect(session.transcript.visualAid(id: visual.id)?.answer == winningAnswer)
         #expect(try storedVisualAids(store, sessionId: session.id).first?.answer == winningAnswer)
+        #expect(await awaitCondition { readiness == true })
     }
 
     @Test("an answer cancelled while the card's first write is held stores nothing, sends nothing and leaves the card answerable")
@@ -2033,7 +2276,20 @@ struct ACPSessionManagerTests {
         #expect(session.transcript.visualAid(id: visual.id)?.answer == answer)
         #expect(session.visualAidSendStatus(for: visual.id).error == nil)
 
-        await manager.rollBackVisualAidAnswer(id: visual.id, answer: answer, in: session.id)
+        let runner = try #require(manager.runners[session.id])
+        let write = AsyncGate()
+        runner.beforePersistenceForTesting = { await write.enterAndWait() }
+        let rollback = Task { await manager.rollBackVisualAidAnswer(id: visual.id, answer: answer, in: session.id) }
+        await write.waitUntilEntered()
+        #expect(!manager.isIdleForProjectRebinding)
+        var readiness: Bool?
+        let subscription = manager.projectRebindingReadiness.sink { readiness = $0 }
+        defer { subscription.cancel() }
+        #expect(await awaitCondition(within: .seconds(1)) { readiness == false })
+        runner.beforePersistenceForTesting = nil
+        await write.release()
+        await rollback.value
+        #expect(await awaitCondition { readiness == true })
         #expect(session.transcript.visualAid(id: visual.id)?.answer == nil)
         #expect(session.visualAidSendStatus(for: visual.id).error == ACPVisualAidSendStatus.failureMessage)
         #expect(try storedVisualAids(store, sessionId: session.id).first?.answer == nil)

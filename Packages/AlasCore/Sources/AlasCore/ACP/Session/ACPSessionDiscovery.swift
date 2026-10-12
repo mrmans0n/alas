@@ -106,6 +106,7 @@ public final class ACPSessionDiscoveryHandle {
     private let cwd: String
     private let persistence: ACPSessionPersistence
     private let connection: ACPConnection
+    private let onClosed: (@MainActor @Sendable () -> Void)?
     private var nextCursor: String?
     private var hasLoadedPage = false
     private var closed = false
@@ -116,7 +117,8 @@ public final class ACPSessionDiscoveryHandle {
         cwd: String,
         persistence: ACPSessionPersistence,
         connection: ACPConnection,
-        capabilities: ACPSessionDiscoveryCapabilities
+        capabilities: ACPSessionDiscoveryCapabilities,
+        onClosed: (@MainActor @Sendable () -> Void)? = nil
     ) {
         self.worktreeId = worktreeId
         self.agentId = agentId
@@ -124,6 +126,17 @@ public final class ACPSessionDiscoveryHandle {
         self.persistence = persistence
         self.connection = connection
         self.capabilities = capabilities
+        self.onClosed = onClosed
+    }
+
+    deinit {
+        guard !closed else { return }
+        let connection = connection
+        let onClosed = onClosed
+        Task { @MainActor in
+            await connection.shutdown()
+            onClosed?()
+        }
     }
 
     public var canLoadMore: Bool { !hasLoadedPage || nextCursor != nil }
@@ -178,6 +191,7 @@ public final class ACPSessionDiscoveryHandle {
         guard !closed else { return }
         closed = true
         await connection.shutdown()
+        onClosed?()
     }
 }
 

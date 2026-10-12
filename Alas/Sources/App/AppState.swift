@@ -12840,7 +12840,26 @@ final class AppState {
     }
 
     func acpManager(forOwnerKey key: String) -> ACPSessionManager? {
-        acpManagers.first { $0.key.storageKey == key }?.value
+        if let worktree = worktree(withId: key) {
+            return acpManager(for: worktree)
+        }
+        return acpManagers.first { $0.key.storageKey == key }?.value
+    }
+
+    func hydrateAndAttachACP(manager: ACPSessionManager, sessionId: ACPSession.ID) async {
+        await manager.hydrateIfNeeded(id: sessionId)
+        guard let session = manager.liveSession(for: sessionId) else { return }
+        if case .failed = session.hydrationState { return }
+        guard await !checkpointACPAdmissionDisabledAfterDiscovery(owner: manager.owner, fallbackWorktree: nil) else {
+            session.lastError = Self.checkpointRecoveryBlocksACPMessage
+            return
+        }
+        let freshlyCreated = manager.runners[sessionId] == nil
+            && ACPSessionAttachFreshness.isFresh(
+                restoredFromPersistence: session.restoredFromPersistence,
+                remoteSessionId: session.remoteSessionId
+            )
+        await manager.attach(to: sessionId, freshlyCreated: freshlyCreated)
     }
 
     // MARK: Session references
@@ -13007,18 +13026,29 @@ final class AppState {
         )
     }
 
+    /// Mounted tabs can outlive the project claim in their original worktree
+    /// value. Checkout owners keep their independent manager boundary.
+    func acpManagerForMountedTab(worktree: Worktree, owner: SessionOwnerID?) -> ACPSessionManager? {
+        if let owner, owner != .worktree(worktree.id) {
+            return acpManager(for: owner)
+        }
+        return acpManager(for: worktree)
+    }
+
     /// Returns (or lazily creates) the ACP session manager for the given worktree.
     /// Store opening and migration happen lazily on the persistence actor.
     func acpManager(for worktree: Worktree) -> ACPSessionManager? {
+        let worktree = self.worktree(withId: worktree.id) ?? worktree
         let owner = SessionOwnerID.worktree(worktree.id)
+        var previousManagerDisposal: Task<Void, Never>?
         if let existing = acpManagers[owner] {
             // The manager's providers captured the project that owned the
             // directory when it was built. When ownership has moved, replace it
-            // once it is idle; one with running sessions stays until then.
+            // once all turns are idle, even if their runners stay connected.
             guard let builtFor = acpManagerProjectIds[owner], builtFor != worktree.projectId,
-                  existing.runners.isEmpty
+                  existing.isIdleForProjectRebinding
             else { return existing }
-            disposeACPManager(owner: owner)
+            previousManagerDisposal = disposeACPManager(owner: owner)
         }
         let dbURL = Paths.acpSessionsDB(forWorktreeId: worktree.id)
         let persistence = ACPSessionPersistence(path: dbURL.path)
@@ -13026,6 +13056,7 @@ final class AppState {
             worktreeId: worktree.id,
             worktreePath: worktree.path.path,
             persistence: persistence,
+            previousManagerDisposal: previousManagerDisposal,
             instanceId: instanceId,
             pid: Int64(ProcessInfo.processInfo.processIdentifier),
             hydratorPath: dbURL.path,
@@ -13418,7 +13449,13 @@ final class AppState {
         acpManagerProjectIds[owner] = worktree.projectId
         observeNextPromptSessions(mgr, owner: owner)
         acpHarnessBridge.attach(manager: mgr)
-        Task { await mgr.purgeOrphanedEphemeralSessions() }
+        Task {
+            await previousManagerDisposal?.value
+            await mgr.purgeOrphanedEphemeralSessions()
+            if previousManagerDisposal != nil, self.acpManagers[owner] === mgr {
+                await self.bootstrapScheduledACPSessions(owner: owner, manager: mgr)
+            }
+        }
         #if DEBUG
         memoryDiagnostics.attach(manager: mgr)
         #endif
@@ -13861,11 +13898,12 @@ final class AppState {
         disposeACPManager(owner: .worktree(worktreeId))
     }
 
-    private func disposeACPManager(owner: SessionOwnerID) {
-        guard let manager = acpManagers.removeValue(forKey: owner) else { return }
+    @discardableResult
+    private func disposeACPManager(owner: SessionOwnerID) -> Task<Void, Never>? {
+        guard let manager = acpManagers.removeValue(forKey: owner) else { return nil }
         acpManagerProjectIds.removeValue(forKey: owner)
         prepareACPManagerForDisposal(manager, owner: owner)
-        Task { @MainActor in
+        return Task { @MainActor in
             await self.finishDisposingACPManager(manager)
         }
     }

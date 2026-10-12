@@ -214,7 +214,9 @@ public final class ACPSessionRunner {
     private let localTitleGenerator: @Sendable (String) async -> String?
     private var providerTitleRevision = 0
     private var localTitleAttempted = false
-    private var localTitleTask: Task<Void, Never>?
+    private var localTitleTask: Task<Void, Never>? {
+        willSet { session.nextPromptActivity.send() }
+    }
     /// Fires whenever a live update may change what the agent has advertised
     /// as its models or thinking levels — an `availableModelsUpdate`, or a
     /// `sessionConfigOptionsUpdate` — with the normalized chip state. The
@@ -260,7 +262,7 @@ public final class ACPSessionRunner {
     /// `streamingState`; `cancelledPromptIDs` carries explicit
     /// invalidations (steer, userCancel) so a slow `session/cancel`
     /// can't let a stale completion clobber the successor task.
-    private var activePromptID: Int?
+    private var activePromptID: Int? { willSet { session.nextPromptActivity.send() } }
     private var cancelledPromptIDs: Set<Int> = []
     /// Retains the most recently dispatched prompt RPC so steering can wait
     /// for its response after sending the cancellation notification.
@@ -4179,6 +4181,10 @@ extension ACPSessionRunner {
         if lastSteeringThreadStatus == "systemError" { session.lastError = "Steered turn failed." }
         deferCompletedOutputBoundaryUntilUpdatesDrain()
         onPromptWorkChanged?()
+    }
+
+    public var isIdleForProjectRebinding: Bool {
+        !hasRetainedCleanupPromptWork && localTitleTask == nil
     }
 
     public var hasRetainedCleanupPromptWork: Bool {

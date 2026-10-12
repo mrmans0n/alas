@@ -809,6 +809,7 @@ public final class ACPSessionOrchestrationCoordinator {
                   let resolved = environment.manager(worktree) else { return nil }
             manager = resolved
         }
+        await manager.flushPersistence()
         guard let fork = try? await manager.persistence.loadFork(targetSessionID: targetSessionId),
               fork.sourceSessionID == origin.sessionId, fork.phase == .ready,
               await manager.persistedSessionRow(id: targetSessionId) != nil,
