@@ -8,6 +8,7 @@ struct NativePeerSessionView: View {
     @Bindable var client: NativePeerSessions
     var typography: ACPChatTypography = .default
     var collapsesFinishedToolCalls = false
+    var sendOnEnter = true
     var dictationLocale = ""
     var onSelectDictationLocale: (String) -> Void = { _ in }
     @Environment(\.theme) private var theme
@@ -27,7 +28,7 @@ struct NativePeerSessionView: View {
                         NativePeerComposer(
                             client: client, transcript: transcript,
                             typography: typography, contentMaxWidth: contentMaxWidth,
-                            dictationLocale: dictationLocale, onSelectDictationLocale: onSelectDictationLocale
+                            sendOnEnter: sendOnEnter, dictationLocale: dictationLocale, onSelectDictationLocale: onSelectDictationLocale
                         )
                     }
                     .frame(width: proxy.size.width, height: proxy.size.height)
@@ -335,6 +336,7 @@ private struct NativePeerComposer: View {
     let transcript: NativePeerTranscript
     let typography: ACPChatTypography
     let contentMaxWidth: CGFloat
+    let sendOnEnter: Bool
     let dictationLocale: String
     let onSelectDictationLocale: (String) -> Void
     @Environment(\.theme) private var theme
@@ -370,7 +372,7 @@ private struct NativePeerComposer: View {
     private var action: ComposerAction {
         composerAction(
             streamingState: NativePeerComposerState.streamingState(transcript.streamingState),
-            hasText: hasContent, agentState: .ready,
+            hasText: hasContent, agentState: .ready, queueByDefault: sendOnEnter,
             hasCancellableBackgroundWork: transcript.hasCancellableBackgroundWork)
     }
 
@@ -480,9 +482,32 @@ private struct NativePeerComposer: View {
                     .focused($composerFocused)
                     .disabled(!sessionOpen)
                     .accessibilityLabel("Message peer session")
+                    .onKeyPress(keys: ["v"]) { press in
+                        guard press.modifiers == .control || press.modifiers == .command,
+                              acceptsImages, sessionOpen,
+                              let image = NSImage(pasteboard: .general),
+                              let tiff = image.tiffRepresentation,
+                              let bitmap = NSBitmapImageRep(data: tiff),
+                              let data = bitmap.representation(using: .png, properties: [:])
+                        else { return .ignored }
+                        showNotice(client.addAttachment(data, name: "Pasted image"))
+                        return .handled
+                    }
                     .onKeyPress(keys: [.upArrow, .downArrow, .return, .tab, .escape]) { press in
-                        let mention = handleMentionKey(press)
-                        return mention == .handled ? mention : handleSlashKey(press)
+                        if press.key == .escape { dictation.stop() }
+                        if handleMentionKey(press) == .handled { return .handled }
+                        if handleSlashKey(press) == .handled { return .handled }
+                        guard press.key == .return,
+                              let intent = NativePeerComposerState.returnSubmitIntent(
+                                command: press.modifiers.contains(.command),
+                                shift: press.modifiers.contains(.shift),
+                                option: press.modifiers.contains(.option),
+                                insideCodeBlock: MarkdownFenceEditing.block(
+                                    containing: selectedRange.location, in: client.draft) != nil,
+                                sendOnEnter: sendOnEnter)
+                        else { return .ignored }
+                        if sessionOpen, !client.isPromptPending, hasContent { send(intent) }
+                        return .handled
                     }
             }
             .frame(minHeight: 44, maxHeight: 140)
@@ -496,20 +521,6 @@ private struct NativePeerComposer: View {
         }
         .padding(.horizontal, 12).padding(.vertical, 10)
         .acpComposerPill(focused: composerFocused)
-        .background {
-            // Cmd+Return submits only; it must never reach Stop, which
-            // the primary button shows while a turn runs on an empty draft.
-            Button("") {
-                guard sessionOpen, !client.isPromptPending,
-                      let intent = primarySubmitIntent(for: action, optionPressed: false)
-                else { return }
-                send(intent)
-            }
-            .keyboardShortcut(.return, modifiers: .command)
-            .frame(width: 0, height: 0)
-            .opacity(0)
-            .accessibilityHidden(true)
-        }
         .dropDestination(for: URL.self) { urls, _ in
             guard acceptsImages, sessionOpen else { return false }
             attachImages(at: urls)
@@ -860,7 +871,8 @@ private struct NativePeerComposer: View {
                     guard !client.isPromptPending else { return }
                     send(primarySubmitIntent(
                         for: action,
-                        optionPressed: NSApp.currentEvent?.modifierFlags.contains(.option) == true) ?? .auto)
+                        optionPressed: NSApp.currentEvent?.modifierFlags.contains(.option) == true,
+                        queueByDefault: sendOnEnter) ?? .auto)
                 }
             },
             onMenu: { item in
@@ -932,11 +944,11 @@ private struct NativePeerComposer: View {
 
     private var shortcutHint: some View {
         HStack(spacing: 6) {
-            Text("⌘⏎")
+            Text("⏎")
                 .font(.system(size: 10, design: .monospaced))
                 .fontWeight(.semibold)
                 .foregroundStyle(theme.color("fg"))
-            Text("send")
+            Text(sendOnEnter ? "send" : "steer")
                 .font(.system(size: 10.5, weight: .medium))
                 .foregroundStyle(theme.color("fg-muted"))
         }

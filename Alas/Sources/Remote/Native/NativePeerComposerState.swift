@@ -3,6 +3,19 @@ import Foundation
 /// Pure translation from peer wire frames to the local composer's models,
 /// so the peer composer reuses the local chip views and action logic.
 enum NativePeerComposerState {
+    /// Mirrors the local editor: Command always sends, Shift adds a line,
+    /// Option selects the alternate follow-up, and code blocks keep bare Return.
+    static func returnSubmitIntent(
+        command: Bool, shift: Bool, option: Bool, insideCodeBlock: Bool,
+        sendOnEnter: Bool = true
+    ) -> ACPSubmitIntent? {
+        if command { return .auto }
+        if shift { return nil }
+        if option { return sendOnEnter ? .steer : .auto }
+        if insideCodeBlock { return nil }
+        return sendOnEnter ? .auto : .steer
+    }
+
     static func chipState(from config: RemoteSessionConfig) -> ACPChipState {
         guard let chips = config.chips else {
             return ACPChipState(

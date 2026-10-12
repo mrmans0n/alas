@@ -5,6 +5,26 @@ import Testing
 
 @MainActor
 struct NativePeerSessionsTests {
+    @Test(arguments: [
+        (false, false, false, false, true, ACPSubmitIntent.auto),
+        (false, false, true, false, true, ACPSubmitIntent.steer),
+        (false, false, true, true, true, ACPSubmitIntent.steer),
+        (true, false, false, true, true, ACPSubmitIntent.auto),
+        (true, true, true, true, false, ACPSubmitIntent.auto),
+        (false, true, false, false, true, nil),
+        (false, false, false, true, true, nil),
+        (false, false, false, false, false, ACPSubmitIntent.steer),
+        (false, false, true, false, false, ACPSubmitIntent.auto),
+    ])
+    func composerReturnMatchesLocalShortcuts(
+        command: Bool, shift: Bool, option: Bool, insideCodeBlock: Bool,
+        sendOnEnter: Bool, expected: ACPSubmitIntent?
+    ) {
+        #expect(NativePeerComposerState.returnSubmitIntent(
+            command: command, shift: shift, option: option,
+            insideCodeBlock: insideCodeBlock, sendOnEnter: sendOnEnter) == expected)
+    }
+
     private final class FakeLinks: FederatedPeerLinks {
         var sessionCarryingPeers: [FederatedPeerInfo] = []
         var onFederationEvent: (@MainActor (FederatedPeerLinkEvent) -> Void)?
