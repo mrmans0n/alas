@@ -16,6 +16,9 @@ public final class AlasCoreContext {
         public let checkoutName: String
     }
 
+    /// Workspace state could not be read, so ownership cannot be ruled out.
+    public struct WorkspaceOwnershipUnverifiable: Error, Equatable {}
+
     public var projects: ProjectsManager
     /// One session manager per owner (worktree or workspace checkout).
     public var sessionManagers: [SessionOwnerID: ACPSessionManager] = [:]
@@ -272,7 +275,7 @@ public final class AlasCoreContext {
     /// history. A second archive while one is tearing down is refused. Nothing is removed from disk. A failed save throws and
     /// leaves the worktree visible and untouched.
     public func archiveWorktree(_ worktree: Worktree) async throws {
-        if let owner = await activeWorkspaceOwner(of: worktree) {
+        if let owner = try await activeWorkspaceOwner(of: worktree) {
             throw WorktreeOwnedByWorkspaceCheckout(checkoutName: owner.fallbackWorkspaceName)
         }
         guard archivingWorktreeIDs.insert(worktree.id).inserted else { throw WorktreeArchived() }
@@ -298,10 +301,14 @@ public final class AlasCoreContext {
 
     /// The active Workspace checkout managing `worktree`, matched like the
     /// app's worktree-cleanup ownership. Archived and former checkouts no
-    /// longer manage their members. Unreadable Workspace state counts as no
-    /// owner: archiving only hides the worktree and can be undone.
-    private func activeWorkspaceOwner(of worktree: Worktree) async -> WorkspaceCheckout? {
-        guard case .loaded(let state) = await workspaceStore.load() else { return nil }
+    /// longer manage their members. Unreadable Workspace state throws.
+    private func activeWorkspaceOwner(of worktree: Worktree) async throws -> WorkspaceCheckout? {
+        let state: WorkspaceStateFile
+        switch await workspaceStore.load() {
+        case .missing: return nil
+        case .unreadable: throw WorkspaceOwnershipUnverifiable()
+        case .loaded(let loaded): state = loaded
+        }
         let path = worktree.path.standardizedFileURL.path
         return state.checkouts.first { checkout in
             checkout.workspaceID != nil && checkout.archivedAt == nil && checkout.members.contains { member in
