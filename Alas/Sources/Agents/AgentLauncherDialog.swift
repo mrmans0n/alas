@@ -728,25 +728,42 @@ struct AgentLauncherDialog: View {
     }
 
     private func installAdapter(for agent: AgentDefinition) {
-        // The launcher can be reopened elsewhere while npm runs; only the
-        // browser that started the install may react to its result.
         guard installingAdapterAgentID == nil,
-              let origin = discoveryModel,
-              let target = launcherAdapterTarget()
+              let context = currentInstallContext(agentID: agent.id)
         else { return }
         installingAdapterAgentID = agent.id
         adapterInstallError = nil
         Task {
             defer { installingAdapterAgentID = nil }
             do {
-                try await appState.acpAdapterInstallCoordinator.install(target: target, agentID: agent.id)
+                try await appState.acpAdapterInstallCoordinator.install(target: context.target, agentID: agent.id)
             } catch {
-                if discoveryModel === origin { adapterInstallError = error.localizedDescription }
+                if currentInstallContext(agentID: agent.id) == context {
+                    adapterInstallError = error.localizedDescription
+                }
                 return
             }
-            guard discoveryModel === origin else { return }
+            // The launcher can be closed, reopened, or moved to another
+            // checkout while npm runs. Refresh whichever browser now shows
+            // the same agent, owner, and target, and leave others alone.
+            guard currentInstallContext(agentID: agent.id) == context, openingSessionId == nil else { return }
             restartDiscovery(for: agent)
         }
+    }
+
+    private struct AdapterInstallContext: Equatable {
+        let agentID: String
+        let owner: SessionOwnerID
+        let target: ACPAdapterTarget
+    }
+
+    /// The browser's install context, or nil when it isn't showing `agentID`.
+    private func currentInstallContext(agentID: String) -> AdapterInstallContext? {
+        guard chatAgent?.id == agentID,
+              let owner = discoveryOwner,
+              let target = launcherAdapterTarget()
+        else { return nil }
+        return AdapterInstallContext(agentID: agentID, owner: owner, target: target)
     }
 
     /// Where the launcher's agents run: the active workspace checkout's
