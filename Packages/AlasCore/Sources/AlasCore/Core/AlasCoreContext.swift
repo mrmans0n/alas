@@ -200,7 +200,7 @@ public final class AlasCoreContext {
             throw ProjectCreationError.projectNotFound
         }
         guard project.host == nil else { throw RunService.RunError.remoteProjectUnsupported }
-        guard !projects.isWorktreeHidden(projectId: project.id, path: worktree.path) else { throw WorktreeArchived() }
+        guard !isArchivedOrArchiving(worktree) else { throw WorktreeArchived() }
         guard runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status.isActive != true else {
             throw RunService.RunError.alreadyRunning
         }
@@ -268,18 +268,31 @@ public final class AlasCoreContext {
         return coordinator
     }
 
-    /// Hides `worktree` from its project and persists that. Hiding comes
-    /// first, so no new headless run or session manager is admitted while the
-    /// rest happens. Its headless runs are stopped and its agent sessions shut
-    /// down; its other active runs settle as lost. All of them keep their
-    /// history. A second archive while one is tearing down is refused. Nothing is removed from disk. A failed save throws and
-    /// leaves the worktree visible and untouched.
+    /// Hides `worktree` from its project and persists that. Its headless
+    /// runs are stopped and its agent sessions shut down; its other active
+    /// runs settle as lost. All of them keep their history. Nothing is removed
+    /// from disk. The whole archive holds the project's mutation gate, so a
+    /// Workspace checkout cannot change ownership of the worktree meanwhile, and
+    /// no unarchive, second archive, run or session manager is admitted until
+    /// it is done. A failed save throws and leaves the worktree visible and
+    /// untouched.
     public func archiveWorktree(_ worktree: Worktree) async throws {
+        guard archivingWorktreeIDs.insert(worktree.id).inserted else { throw WorktreeArchived() }
+        defer { archivingWorktreeIDs.remove(worktree.id) }
+        try await ProjectMutationGate.shared.withMutation(projectID: worktree.projectId) {
+            try await self.archiveHoldingGate(worktree)
+        }
+    }
+
+    private func isArchivedOrArchiving(_ worktree: Worktree) -> Bool {
+        archivingWorktreeIDs.contains(worktree.id)
+            || projects.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path)
+    }
+
+    private func archiveHoldingGate(_ worktree: Worktree) async throws {
         if let owner = try await activeWorkspaceOwner(of: worktree) {
             throw WorktreeOwnedByWorkspaceCheckout(checkoutName: owner.fallbackWorkspaceName)
         }
-        guard archivingWorktreeIDs.insert(worktree.id).inserted else { throw WorktreeArchived() }
-        defer { archivingWorktreeIDs.remove(worktree.id) }
         try setWorktreeHidden(worktree.path, projectID: worktree.projectId, hidden: true)
         let running = headlessRuns.values.filter { $0.worktreeID == worktree.id }.map(\.task)
         for run in running {
@@ -373,9 +386,7 @@ public final class AlasCoreContext {
     /// handed out for an archived worktree, including while it is being
     /// archived.
     public func sessionManager(for worktree: Worktree) throws -> ACPSessionManager {
-        guard !projects.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path) else {
-            throw WorktreeArchived()
-        }
+        guard !isArchivedOrArchiving(worktree) else { throw WorktreeArchived() }
         let owner = SessionOwnerID.worktree(worktree.id)
         if let manager = sessionManagers[owner] { return manager }
         let manager = makeSessionManager(owner, worktree)

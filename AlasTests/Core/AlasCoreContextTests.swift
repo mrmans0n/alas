@@ -110,6 +110,11 @@ struct AlasCoreContextTests {
         // Yielding lets the archive run up to its first suspension, waiting for
         // the run's process to exit, without giving that process time to do so.
         let archiving = Task { try await context.archiveWorktree(worktree) }
+        // The archive claims the worktree before its first suspension.
+        await Task.yield()
+        #expect(throws: AlasCoreContext.WorktreeArchived.self, "an archive is claimed before it first suspends") {
+            try context.unarchiveWorktree(path: worktree.path, projectID: project.id)
+        }
         while !context.projects.isWorktreeHidden(projectId: project.id, path: worktree.path), ContinuousClock.now < deadline {
             await Task.yield()
         }
