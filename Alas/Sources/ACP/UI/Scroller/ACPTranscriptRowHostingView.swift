@@ -84,6 +84,10 @@ final class ACPTranscriptRowHostingView: NSHostingView<AnyView> {
         // window geometry, re-derived its (always empty) insets, and paid a
         // full SwiftUI layout per row per frame.
         safeAreaRegions = []
+        // The reconciler places every mounted row by frame, and each change
+        // posted a notification no one observes; NotificationCenter still
+        // searches every registered observer per post.
+        postsFrameChangedNotifications = false
     }
 
     @available(*, unavailable)
