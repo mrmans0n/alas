@@ -2384,6 +2384,13 @@ extension WorktreeServiceTests {
         await #expect(throws: WorktreeService.BranchRenameError.published("quiet-otter")) {
             try await svc.renameBranch(worktreePath: repo, from: "quiet-otter", to: "fix-sync", requireUnpublished: true)
         }
+
+        // Pushed without `-u`: only the remote-tracking ref records it.
+        try await Self.checkedGit(["config", "--unset", "branch.quiet-otter.merge"], cwd: repo)
+        try await Self.checkedGit(["update-ref", "refs/remotes/origin/quiet-otter", "HEAD"], cwd: repo)
+        await #expect(throws: WorktreeService.BranchRenameError.published("quiet-otter")) {
+            try await svc.renameBranch(worktreePath: repo, from: "quiet-otter", to: "fix-sync", requireUnpublished: true)
+        }
         #expect(try await Self.checkedGit(["symbolic-ref", "--short", "HEAD"], cwd: repo) == "quiet-otter")
     }
 

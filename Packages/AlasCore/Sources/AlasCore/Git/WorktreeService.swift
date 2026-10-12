@@ -1382,8 +1382,8 @@ public struct WorktreeService: Sendable {
     public enum BranchRenameError: Error, LocalizedError, Equatable, Sendable {
         /// The worktree is no longer on the branch the caller meant to rename.
         case branchChanged(expected: String)
-        /// The branch tracks a remote branch of its own name, so renaming it
-        /// locally would diverge from what was already pushed.
+        /// The branch tracks, or a remote already has, a branch of its own
+        /// name, so renaming it locally would strand what was pushed.
         case published(String)
 
         public var errorDescription: String? {
@@ -1418,6 +1418,15 @@ public struct WorktreeService: Sendable {
             let merge = try await Process.git(["config", "--get", "branch.\(from).merge"], cwd: worktreePath)
             if merge.exitCode == 0,
                merge.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "refs/heads/\(from)" {
+                throw BranchRenameError.published(from)
+            }
+            // `git push origin HEAD` publishes without setting an upstream.
+            let remoteRefs = try await Process.git(
+                ["for-each-ref", "--format=%(refname)", "refs/remotes/*/\(from)"],
+                cwd: worktreePath
+            )
+            if remoteRefs.exitCode == 0,
+               !remoteRefs.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 throw BranchRenameError.published(from)
             }
         }

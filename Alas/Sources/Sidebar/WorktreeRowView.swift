@@ -775,7 +775,9 @@ struct WorktreeRowView: View {
         if !worktree.branch.isEmpty {
             Button("Copy Branch Name", action: onCopyBranch)
         }
-        if let onRenameBranch, !isMain, !worktree.branch.isEmpty, !worktree.isDetached {
+        // An active Workspace checkout records its branch by name for cleanup.
+        if let onRenameBranch, !isMain, !worktree.branch.isEmpty, !worktree.isDetached,
+           workspaceCheckout?.isActive != true {
             Button("Rename Branch…", action: onRenameBranch)
         }
         if !worktree.path.isRemoteAlasPath {
