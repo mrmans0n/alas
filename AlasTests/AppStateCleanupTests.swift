@@ -677,6 +677,42 @@ struct AppStateCleanupTests {
         #expect(state.projectsManager.pendingAutoBranchName(projectId: project.id, worktreeId: failedId) == nil)
     }
 
+    @Test func autoNamingLeavesTheBranchOfAWorktreeBeingDeleted() async throws {
+        let repo = try await makeRepo(name: "auto-name-delete")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let state = AppState()
+        // Name from the request's words, without a model in the loop.
+        state.config.issueWorktreeNameSuggestionsEnabled = false
+        let project = try await state.projectsManager.addProject(
+            path: repo,
+            displayName: "auto-name-delete",
+            color: "#5fb7c4"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        let dest = repo.appendingPathComponent("wt-quiet-otter")
+        let id = await state.createWorktree(
+            projectId: project.id,
+            base: "main",
+            branch: "quiet-otter",
+            destination: dest,
+            runStartup: false,
+            launchSurface: .none,
+            namesBranchFromFirstPrompt: true
+        )
+        try await waitForOperationState(state.projectsManager, id: id, projectId: project.id, equals: nil)
+        #expect(state.projectsManager.pendingAutoBranchName(projectId: project.id, worktreeId: id) == "quiet-otter")
+
+        state.projectsManager.setOperationState(forWorktreeId: id, projectId: project.id, state: .preparingDelete)
+        state.autoNameBranchIfPending(worktreeId: id, prompt: "Fix the offline sync conflicts")
+        for _ in 0..<80 where state.autoNamingWorktreeIds.contains(id) {
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+
+        #expect(!state.autoNamingWorktreeIds.contains(id))
+        let head = try await Process.git(["symbolic-ref", "--short", "HEAD"], cwd: dest)
+        #expect(head.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "quiet-otter")
+    }
+
     @Test func createWorktreeRetryPreservesIssueLaunchMetadata() async throws {
         let repo = try await makeRepo(name: "create-retry-issue")
         defer { try? FileManager.default.removeItem(at: repo) }

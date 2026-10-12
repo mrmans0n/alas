@@ -1429,6 +1429,22 @@ public struct WorktreeService: Sendable {
                !remoteRefs.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 throw BranchRenameError.published(from)
             }
+            // A clone fetching only some branches keeps no tracking ref for a
+            // pushed one, so ask each remote. An unreachable remote leaves the
+            // question open and the rename is not attempted.
+            let remotes = try await Process.git(["remote"], cwd: worktreePath)
+            for remote in remotes.stdout.split(whereSeparator: \.isNewline).map(String.init) {
+                let advertisement = try await Process.git(
+                    ["ls-remote", "--exit-code", "--heads", "--", remote, "refs/heads/\(from)"],
+                    cwd: worktreePath,
+                    timeout: 15
+                )
+                switch advertisement.exitCode {
+                case 0: throw BranchRenameError.published(from)
+                case 2: continue
+                default: throw WorktreeError.gitFailed(advertisement.stderr)
+                }
+            }
         }
         var existing: Set<String> = []
         let refs = try await Process.git(["for-each-ref", "--format=%(refname:short)", "refs/heads/"], cwd: worktreePath)

@@ -2385,9 +2385,16 @@ extension WorktreeServiceTests {
             try await svc.renameBranch(worktreePath: repo, from: "quiet-otter", to: "fix-sync", requireUnpublished: true)
         }
 
-        // Pushed without `-u`: only the remote-tracking ref records it.
+        // Pushed without `-u` from a clone that fetches only main: neither an
+        // upstream nor a tracking ref records it, only the remote does.
         try await Self.checkedGit(["config", "--unset", "branch.quiet-otter.merge"], cwd: repo)
-        try await Self.checkedGit(["update-ref", "refs/remotes/origin/quiet-otter", "HEAD"], cwd: repo)
+        try await Self.checkedGit(["config", "--unset", "branch.quiet-otter.remote"], cwd: repo)
+        let remote = repo.deletingLastPathComponent().appendingPathComponent("alas-wt-remote-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: remote) }
+        try await Self.checkedGit(["init", "-q", "--bare", remote.path], cwd: repo)
+        try await Self.checkedGit(["remote", "add", "-t", "main", "origin", remote.path], cwd: repo)
+        try await Self.checkedGit(["push", "-q", "origin", "HEAD"], cwd: repo)
+        #expect(try await Self.checkedGit(["for-each-ref", "refs/remotes/"], cwd: repo).isEmpty)
         await #expect(throws: WorktreeService.BranchRenameError.published("quiet-otter")) {
             try await svc.renameBranch(worktreePath: repo, from: "quiet-otter", to: "fix-sync", requireUnpublished: true)
         }

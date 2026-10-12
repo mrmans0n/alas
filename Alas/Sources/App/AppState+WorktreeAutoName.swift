@@ -3,6 +3,11 @@ import os
 
 private let autoNameLogger = Logger(subsystem: "io.nlopez.alas", category: "WorktreeAutoName")
 
+/// The worktree has an operation in flight, such as a pending delete.
+private struct WorktreeBusyError: LocalizedError {
+    var errorDescription: String? { "The worktree is busy with another operation." }
+}
+
 extension AppState {
     /// True while `worktree` still sits on the temporary branch it was created
     /// on and waits for a chat prompt to name it.
@@ -38,8 +43,8 @@ extension AppState {
                   self.projectsManager.pendingAutoBranchName(projectId: project.id, worktreeId: worktreeId) == placeholder
             else { return }
             do {
-                let renamed = try await WorktreeService().renameBranch(
-                    worktreePath: worktree.path,
+                let renamed = try await self.renameBranchWhileIdle(
+                    worktree,
                     from: placeholder,
                     to: self.composedBranchName(name, project: project),
                     requireUnpublished: true
@@ -58,8 +63,8 @@ extension AppState {
     /// variant when taken). Returns an error message for the rename sheet.
     func renameWorktreeBranch(_ worktree: Worktree, to branch: String) async -> String? {
         do {
-            let renamed = try await WorktreeService().renameBranch(
-                worktreePath: worktree.path,
+            let renamed = try await renameBranchWhileIdle(
+                worktree,
                 from: worktree.branch,
                 to: branch,
                 requireUnpublished: false
@@ -108,6 +113,7 @@ extension AppState {
     /// Nil when none is selected or available, or when it fails or answers
     /// with anything but a name.
     private func providerBranchName(source: String, worktree: Worktree) async -> String? {
+        guard config.changes.aiToolId != "none" else { return nil }
         await loadAgentAvailability(for: worktree)
         guard let agent = RepositoryAgentSelectionPolicy.selection(
             selectedID: config.changes.aiToolId,
@@ -126,6 +132,28 @@ extension AppState {
         } catch {
             autoNameLogger.warning("Naming a branch with \(agent.id, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
             return nil
+        }
+    }
+
+    /// Serialized with the project's creates and deletes. A worktree with an
+    /// operation in flight keeps its branch: a delete has already captured it.
+    private func renameBranchWhileIdle(
+        _ worktree: Worktree,
+        from: String,
+        to: String,
+        requireUnpublished: Bool
+    ) async throws -> String {
+        try await ProjectMutationGate.shared.withMutation(projectID: worktree.projectId) { [self] in
+            let isIdle = await MainActor.run {
+                projectsManager.operationState(forWorktreeId: worktree.id, projectId: worktree.projectId) == nil
+            }
+            guard isIdle else { throw WorktreeBusyError() }
+            return try await WorktreeService().renameBranch(
+                worktreePath: worktree.path,
+                from: from,
+                to: to,
+                requireUnpublished: requireUnpublished
+            )
         }
     }
 
