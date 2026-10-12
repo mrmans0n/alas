@@ -1120,6 +1120,15 @@ final class NativePeerSessions {
         case .queueEditRestored(let sessionId, _, let text):
             // The edit was requested from the session it names; the reply
             // can land after the user switched away.
+            let submitted = sessionId == selectedSessionId ? pendingPrompt : suspendedPrompts[sessionId]?.prompt
+            let composer = composerState(for: sessionId)
+            // An accepted submit clears the visible editor before its durable
+            // snapshot is confirmed. Queue Edit belongs to the next draft.
+            if let submitted, composer.revision == submitted.composerRevision,
+               composer.draft == submitted.composerDraft {
+                composer.replaceDraft(.empty)
+                if sessionId == selectedSessionId { draft = "" }
+            }
             if sessionId == selectedSessionId {
                 draft = Self.appending(text, to: draft)
             } else {

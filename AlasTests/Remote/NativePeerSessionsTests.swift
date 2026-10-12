@@ -902,6 +902,25 @@ struct NativePeerSessionsTests {
         #expect(completed == !rejected)
     }
 
+    @Test(arguments: [false, true], [false, true])
+    func queueEditDuringPendingSendKeepsOnlyTheNextDraft(whileAway: Bool, edited: Bool) {
+        let (links, client) = drivenClient(canDrive: true)
+        client.draft = "submitted prompt"
+        client.sendPrompt()
+        if edited { client.draft = "next prompt" }
+        client.queueEdit("q")
+        if whileAway { client.clearSelection() }
+        links.receive(.queueEditRestored(sessionId: "s", itemId: "q", text: "restored item"), from: "B")
+        if whileAway { client.select("B:s") }
+        links.receive(.queueState(sessionId: "s", items: [
+            .init(id: "new", text: "submitted prompt", imageCount: 0, resourceCount: 0, status: "pending",
+                  lastError: nil, scheduledAt: nil)
+        ]), from: "B")
+        #expect(client.draft == (edited ? "next prompt\nrestored item" : "restored item"))
+        #expect(client.composerState(for: "B:s").draft.plainText == client.draft)
+        #expect(!client.isPromptPending)
+    }
+
     @Test(arguments: [false, true])
     func identicallyRetypedDraftSurvivesSendConfirmation(whileAway: Bool) {
         let (links, client) = drivenClient(canDrive: true)
