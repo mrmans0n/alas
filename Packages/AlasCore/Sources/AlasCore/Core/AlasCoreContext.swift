@@ -23,6 +23,9 @@ public final class AlasCoreContext {
         case workspaceStateUnreadable
         /// The path now holds a different checkout than the one asked for.
         case replaced
+        /// Git would refuse it without `force`: uncommitted or untracked
+        /// changes, or a lock.
+        case needsForce(Set<WorktreeDeletePreflightReason>)
         /// Remote checkouts carry no lineage to tell a replacement apart, so
         /// only the app's confirmed flow deletes them.
         case remoteUnsupported
@@ -243,8 +246,8 @@ public final class AlasCoreContext {
     }
 
     /// Deletes `worktree` and its branch when merged and `deleteBranchIfMerged`.
-    /// Without `force`, a worktree with uncommitted or untracked changes is
-    /// refused before anything is touched. Otherwise its headless runs and
+    /// Without `force`, a worktree with uncommitted or untracked changes, or a
+    /// locked one, is refused before anything is touched. Otherwise its headless runs and
     /// agent sessions are stopped before its files go, and its runs and run
     /// history are discarded once it is removed. Throws if the project list
     /// cannot be saved afterwards; the worktree is gone by then.
@@ -258,8 +261,9 @@ public final class AlasCoreContext {
         try Self.refuseReplacedCheckout(worktree)
         guard deletingWorktreeIDs.insert(worktree.id).inserted else { throw WorktreeBeingDeleted() }
         defer { deletingWorktreeIDs.remove(worktree.id) }
-        if !force, try await !WorktreeService().isRemovalClean(worktree.path) {
-            throw WorktreeService.WorktreeError.gitFailed(WorktreeService.dirtyWorktreeMessage)
+        if !force {
+            let preflight = try await WorktreeService().deletePreflight(worktreePath: worktree.path)
+            guard !preflight.requiresForce else { throw WorktreeDeletionRefusal.needsForce(preflight.reasons) }
         }
         // Nothing may keep using the checkout while its files go.
         let running = headlessRuns.values.filter { $0.worktreeID == worktree.id }.map(\.task)
@@ -273,6 +277,8 @@ public final class AlasCoreContext {
         let repoPath = URL(fileURLWithPath: project.path)
         let outcome = try await ProjectMutationGate.shared.withMutation(projectID: project.id) {
             try Self.refuseReplacedCheckout(worktree)
+            // Ownership may have changed while runs and sessions stopped.
+            try await self.refuseWorkspaceOwnedDeletion(worktree)
             return try await WorktreeLifecycle.performRemoveWorktree(
                 repoPath: repoPath,
                 worktree: worktree,
