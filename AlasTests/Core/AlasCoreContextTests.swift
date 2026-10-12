@@ -92,6 +92,13 @@ struct AlasCoreContextTests {
             return
         }
         #expect(text.contains("hello from feature"))
+
+        try await context.archiveWorktree(worktree)
+        #expect(!context.projects.visibleWorktrees(projectId: project.id).map(\.id).contains(worktree.id))
+        #expect(context.sessionManagers[.worktree(worktree.id)] == nil)
+        #expect(try await context.runHistory.store?.entry(id: record.id) != nil, "archiving keeps run history")
+        try context.unarchiveWorktree(path: worktree.path, projectID: project.id)
+        #expect(context.projects.visibleWorktrees(projectId: project.id).map(\.id).contains(worktree.id))
     }
 
     /// A script that ran but never reported its exit status still ran, so

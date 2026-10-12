@@ -239,6 +239,46 @@ public final class AlasCoreContext {
         return coordinator
     }
 
+    /// Hides `worktree` from its project and persists that. Its agent
+    /// sessions are shut down, and its active runs settle as lost but keep
+    /// their history. Nothing is removed from disk. A failed save throws and
+    /// leaves the worktree visible and untouched.
+    public func archiveWorktree(_ worktree: Worktree) async throws {
+        try setWorktreeHidden(worktree.path, projectID: worktree.projectId, hidden: true)
+        await disposeSessionManager(owner: .worktree(worktree.id))
+        discardRuns(worktreeID: worktree.id, deletingHistory: false)
+    }
+
+    /// Shows an archived worktree again. Sessions and runs are not restored.
+    public func unarchiveWorktree(path: URL, projectID: String) throws {
+        try setWorktreeHidden(path, projectID: projectID, hidden: false)
+    }
+
+    private func setWorktreeHidden(_ path: URL, projectID: String, hidden: Bool) throws {
+        guard projects.projects.contains(where: { $0.id == projectID }) else {
+            throw ProjectCreationError.projectNotFound
+        }
+        projects.setWorktreeHidden(projectId: projectID, path: path, hidden: hidden)
+        do {
+            try saveProjects()
+        } catch {
+            projects.setWorktreeHidden(projectId: projectID, path: path, hidden: !hidden)
+            throw error
+        }
+    }
+
+    /// Shuts down the owner's agent sessions, persisting what they hold and
+    /// releasing their leases, and forgets the manager.
+    public func disposeSessionManager(owner: SessionOwnerID) async {
+        guard let manager = sessionManagers.removeValue(forKey: owner) else { return }
+        manager.flushPendingDraftWrites()
+        for runner in manager.runners.values {
+            runner.stop()
+        }
+        manager.prepareForDisposal()
+        await Self.finishDisposing(manager)
+    }
+
     /// The asynchronous half of disposing a session manager whose runners are
     /// stopped: persist what it holds, end its sessions, release its leases.
     public static func finishDisposing(_ manager: ACPSessionManager) async {
