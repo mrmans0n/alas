@@ -2942,3 +2942,8 @@ extension Array where Element == DiffPaneTextDocumentBuilder.LineMetadata {
         )
     }
 }
+
+extension DiffPaneCodeTextView: DiffPaneLSPHost {
+    var lspTheme: Theme? { theme }
+    var lspFont: NSFont? { font }
+}

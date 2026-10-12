@@ -260,6 +260,22 @@ import Testing
         #expect(pasteboard.string(forType: .string) == expected)
     }
 
+    @Test func pointerOverNewSideCodeResolvesTheSymbolForLSP() throws {
+        let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 200))
+        view.configure(result: result(old: ["let gamma = 0"], new: ["let alpha = 1"]), font: font, theme: theme)
+        let line = CTLineCreateWithAttributedString(NSAttributedString(string: "let alpha = 1", attributes: [.font: font]))
+        let y = DiffSplitCoreTextRowView.verticalInset + view.lineHeight / 2
+        let textX = { (side: DiffSplitCoreTextRowView.Side, index: Int) in
+            DiffSplitCoreTextRowView.codeColumn(side, containerWidth: 800, stacked: false, gutter: 42).minX
+                + DiffSplitCoreTextRowView.textInset + CTLineGetOffsetForStringIndex(line, index, nil) + 2
+        }
+        let start = try #require(view.lineMetadata.first).range.location
+        #expect(view.characterIndex(at: NSPoint(x: textX(.new, 6), y: y)) == start + 6)
+        #expect(view.symbolRange(at: NSPoint(x: textX(.new, 6), y: y)) == NSRange(location: start + 4, length: 5))
+        #expect(view.characterIndex(at: NSPoint(x: textX(.new, 13) + 40, y: y)) == nil)
+        #expect(view.characterIndex(at: NSPoint(x: textX(.old, 6), y: y)) == nil)
+    }
+
     @Test(arguments: [DiffReviewInlineFeedbackSide.old, .new])
     func lineJumpsLandOnTheLineInsideTheHunk(side: DiffReviewInlineFeedbackSide) throws {
         let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 200))

@@ -168,6 +168,14 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
     private var armedExpansion: (target: ExpansionTarget, optionKey: Bool)?
     private var didSetPointingHand = false
     private var palette: Palette?
+    private var theme: Theme?
+    var hoverHandler: ((NSPoint) -> Void)?
+    var commandClickHandler: ((NSPoint) -> Void)?
+    var flagsChangedHandler: ((NSEvent) -> Void)?
+    var mouseExitedHandler: (() -> Void)?
+    private var lspController: DiffPaneLSPController?
+    /// The new side's code, which LSP offsets index.
+    private var lspDocument: NSString = ""
     /// The documents the lines were built from. The same documents mean the
     /// same lines, so overlays (highlights, chrome) can change without a
     /// rebuild or a horizontal-scroll reset.
@@ -230,9 +238,12 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         chrome: HunkChrome? = nil,
         wraps: Bool = false,
         review: ReviewLines = ReviewLines(),
-        onContextExpansion: @escaping DiffContextExpansionHandler = { _, _, _ in }
+        onContextExpansion: @escaping DiffContextExpansionHandler = { _, _, _ in },
+        lspContext: DiffPaneLSPContext? = nil
     ) {
         let sources = [result.oldCode.attributedString, result.oldGutter, result.newCode.attributedString, result.newGutter]
+        lspDocument = result.newCode.attributedString.string as NSString
+        defer { updateLSP(lspContext, theme: theme) }
         let changed = contentChanged(sources: sources, stacked: false, wraps: wraps, font: font)
         self.onContextExpansion = onContextExpansion
         self.review = review
@@ -253,9 +264,12 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         chrome: HunkChrome? = nil,
         wraps: Bool = false,
         review: ReviewLines = ReviewLines(),
-        onContextExpansion: @escaping DiffContextExpansionHandler = { _, _, _ in }
+        onContextExpansion: @escaping DiffContextExpansionHandler = { _, _, _ in },
+        lspContext: DiffPaneLSPContext? = nil
     ) {
         let changed = contentChanged(sources: [result.code.attributedString, result.gutter], stacked: true, wraps: wraps, font: font)
+        lspDocument = result.code.attributedString.string as NSString
+        defer { updateLSP(lspContext, theme: theme) }
         self.onContextExpansion = onContextExpansion
         self.review = review
         let palette = Palette(theme: theme)
@@ -627,6 +641,10 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
             pressedExpansion = target
             return
         }
+        if event.modifierFlags.contains(.command), let commandClickHandler {
+            commandClickHandler(point)
+            return
+        }
         if beginGutterSelection(at: point) { return }
         if let hit = textHit(at: point) {
             window?.makeFirstResponder(self)
@@ -685,6 +703,7 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         let hit = gutterRow(at: point)
         hoveredGutterRow = hit.flatMap { isCommentable(side: $0.side, row: $0.row) ? $0 : nil }
         hoveredExpansion = expansionTarget(at: point)
+        hoverHandler?(point)
         if hoveredExpansion != nil {
             NSCursor.pointingHand.set()
             didSetPointingHand = true
@@ -701,8 +720,14 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         }
     }
 
+    override func flagsChanged(with event: NSEvent) {
+        super.flagsChanged(with: event)
+        flagsChangedHandler?(event)
+    }
+
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
+        mouseExitedHandler?()
         hoveredGutterRow = nil
         hoveredExpansion = nil
         if didSetPointingHand {
@@ -736,7 +761,7 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
 
     /// The row and offset on `side` nearest `point`. Points above or below
     /// the rows clamp to the first or last line, as a drag past the edge does.
-    func textPosition(at point: NSPoint, side: Side) -> TextSelection.Position? {
+    func textPosition(at point: NSPoint, side: Side, characterUnder: Bool = false) -> TextSelection.Position? {
         let sideLines = lines(side)
         let code = codeRect(side)
         guard !sideLines.code.isEmpty, code.width > 0 else { return nil }
@@ -754,8 +779,15 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
             line = parts[min(max(0, part), parts.count - 1)]
         }
         let x = point.x - code.minX - Self.textInset - (sideLines.indents[row] ?? 0) + (wraps ? 0 : horizontalScroll.offset(side))
-        let index = CTLineGetStringIndexForPosition(line, CGPoint(x: x, y: 0))
+        var index = CTLineGetStringIndexForPosition(line, CGPoint(x: x, y: 0))
         let length = (sideLines.codeStrings[row] as NSString).length
+        if characterUnder {
+            // The glyph the pointer is over, not the nearest caret position;
+            // nothing past the line's last glyph, as the text view requires.
+            guard index != kCFNotFound, x >= 0, x <= CTLineGetTypographicBounds(line, nil, nil, nil) else { return nil }
+            if index > 0, x < CTLineGetOffsetForStringIndex(line, index, nil) { index -= 1 }
+            guard index < length else { return nil }
+        }
         return .init(row: row, index: index == kCFNotFound ? 0 : min(max(0, index), length))
     }
 
@@ -1000,10 +1032,12 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         observedClipView = clipView
         guard let clipView else { return }
         clipView.postsBoundsChangedNotifications = true
-        clipObserver = NotificationCenter.default.addObserver(
-            forName: NSView.boundsDidChangeNotification, object: clipView, queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.requestMissingTiles() }
+        clipObserver = NotificationCenter.default.addMainActorObserver(
+            forName: NSView.boundsDidChangeNotification, object: clipView
+        ) { [weak self] in
+            self?.requestMissingTiles()
+            // Hover and definition popovers anchor to a symbol that just moved.
+            self?.lspController?.notifyScrolled()
         }
     }
 
@@ -1022,6 +1056,7 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
 
     isolated deinit {
         if let clipObserver { NotificationCenter.default.removeObserver(clipObserver) }
+        lspController?.tearDown()
     }
 
     /// AppKit calls this for its own scroll invalidations as well as ours,
@@ -1589,5 +1624,59 @@ private final class TileDelegate: NSObject, @preconcurrency CALayerDelegate {
     /// No implicit fades when tiles appear or change.
     func action(for layer: CALayer, forKey event: String) -> CAAction? {
         NSNull()
+    }
+}
+
+extension DiffSplitCoreTextRowView: DiffPaneLSPHost {
+    /// LSP serves the new side, as it does in the text-view panes; stacked
+    /// rows hold all their lines there.
+    var lineMetadata: [DiffPaneTextDocumentBuilder.LineMetadata] { new.metadata }
+    var lspTheme: Theme? { theme }
+    var lspFont: NSFont? { codeFont }
+
+    fileprivate func updateLSP(_ context: DiffPaneLSPContext?, theme: Theme) {
+        self.theme = theme
+        guard let context else {
+            lspController?.tearDown()
+            lspController = nil
+            return
+        }
+        if lspController == nil {
+            lspController = DiffPaneLSPController(textView: self)
+        }
+        lspController?.update(context: context, allowedSide: .new)
+    }
+
+    func characterIndex(at point: NSPoint) -> Int? {
+        guard side(at: point) == .new, codeRect(.new).contains(point),
+              let position = textPosition(at: point, side: .new, characterUnder: true),
+              new.metadata.indices.contains(position.row)
+        else { return nil }
+        return new.metadata[position.row].range.location + position.index
+    }
+
+    func symbolRange(at point: NSPoint) -> NSRange? {
+        guard let index = characterIndex(at: point) else { return nil }
+        let range = lspDocument.rangeOfWord(at: index)
+        return range.length == 0 ? nil : range
+    }
+
+    /// The first glyph of `range`, where hover panels anchor.
+    func symbolAnchorRect(for range: NSRange) -> NSRect? {
+        guard range.length > 0,
+              let row = new.metadata.firstIndex(where: { NSLocationInRange(range.location, $0.range) })
+        else { return nil }
+        let local = range.location - new.metadata[row].range.location
+        let tops = layout(forWidth: bounds.width).tops
+        var line = new.code[row]
+        var part = 0
+        if wraps, let parts = layout(forWidth: bounds.width).new?[row] {
+            part = parts.lastIndex(where: { CTLineGetStringRange($0).location <= local }) ?? 0
+            line = parts[part]
+        }
+        let originX = codeRect(.new).minX + Self.textInset + (new.indents[row] ?? 0) - (wraps ? 0 : horizontalScroll.offset(.new))
+        let minX = CTLineGetOffsetForStringIndex(line, local, nil)
+        let maxX = CTLineGetOffsetForStringIndex(line, local + 1, nil)
+        return NSRect(x: originX + minX, y: codeTop + tops[row] + CGFloat(part) * lineHeight, width: max(1, maxX - minX), height: lineHeight)
     }
 }
