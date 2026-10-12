@@ -63,7 +63,9 @@ public enum WorktreeOperationState: Equatable, Sendable {
         base: String,
         ggWorktreeMode: GGWorktreeMode,
         launchSurface: WorktreeLaunchSurface,
-        issueAttachment: IssueAttachment?
+        issueAttachment: IssueAttachment?,
+        /// A retry must also refuse existing branches and name it later.
+        namesBranchFromFirstPrompt: Bool = false
     )
     case launchFailed(projectId: String, message: String, launchSurface: WorktreeLaunchSurface)
     case deleteFailed(message: String)
@@ -857,7 +859,7 @@ public final class ProjectsManager {
                 if !liveIds.contains(id) {
                     clearedOperationKeys.append(key)
                 }
-            case .createFailed(_, _, _, let ggWorktreeMode, _, _):
+            case .createFailed(_, _, _, let ggWorktreeMode, _, _, _):
                 if liveIds.contains(id) {
                     // Worktree exists in git — transient failure is resolved; clear state.
                     clearedOperationKeys.append(key)

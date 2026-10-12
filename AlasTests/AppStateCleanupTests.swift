@@ -566,7 +566,7 @@ struct AppStateCleanupTests {
         }
 
         #expect(state.projectsManager.worktrees(projectId: project.id).contains { $0.id == id })
-        if case .createFailed(_, let message, _, _, _, _) = state.projectsManager.operationState(forWorktreeId: id, projectId: project.id) {
+        if case .createFailed(_, let message, _, _, _, _, _) = state.projectsManager.operationState(forWorktreeId: id, projectId: project.id) {
             #expect(!message.isEmpty)
         } else {
             Issue.record("Expected createFailed state")
@@ -607,7 +607,7 @@ struct AppStateCleanupTests {
         )
         #expect(state.ggWorktreeMenuModel(project: project, worktree: failedWorktree).selectedMode == .inherit)
 
-        guard case .createFailed(_, _, let failedBase, let failedMode, _, _) =
+        guard case .createFailed(_, _, let failedBase, let failedMode, _, _, _) =
             state.projectsManager.operationState(forWorktreeId: failedId, projectId: project.id)
         else {
             Issue.record("Expected createFailed state")
@@ -641,6 +641,40 @@ struct AppStateCleanupTests {
         #expect(state.projectsManager.worktrees(projectId: project.id).contains { $0.id == retryId })
         #expect(state.projectsManager.ggWorktreeMode(projectId: project.id, worktreeId: retryId) == mode)
         #expect(state.projects.first(where: { $0.id == project.id })?.ggWorktreeModes[retryId] == mode)
+    }
+
+    @Test func namelessCreateRefusesAnExistingBranchAndItsRetryStaysNameless() async throws {
+        let repo = try await makeRepo(name: "create-nameless")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(
+            path: repo,
+            displayName: "create-nameless",
+            color: "#5fb7c4"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        _ = try await Process.git(["branch", "quiet-otter", "main"], cwd: repo)
+
+        let failedId = await state.createWorktree(
+            projectId: project.id,
+            base: "main",
+            branch: "quiet-otter",
+            destination: repo.appendingPathComponent("wt-quiet-otter"),
+            runStartup: false,
+            launchSurface: .none,
+            namesBranchFromFirstPrompt: true
+        )
+        try await waitForOperationStateMatching(state.projectsManager, id: failedId, projectId: project.id) { state in
+            if case .createFailed = state { return true }
+            return false
+        }
+
+        let retry = SidebarView.retryCreateParameters(
+            operationState: state.projectsManager.operationState(forWorktreeId: failedId, projectId: project.id),
+            defaultBase: state.config.worktrees.baseBranch
+        )
+        #expect(retry.namesBranchFromFirstPrompt)
+        #expect(state.projectsManager.pendingAutoBranchName(projectId: project.id, worktreeId: failedId) == nil)
     }
 
     @Test func createWorktreeRetryPreservesIssueLaunchMetadata() async throws {

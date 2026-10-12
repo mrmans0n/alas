@@ -211,7 +211,8 @@ struct SidebarView: View {
                                                     runStartup: false,
                                                     launchSurface: retry.launchSurface,
                                                     ggWorktreeMode: retry.ggWorktreeMode,
-                                                    issueAttachment: retry.issueAttachment
+                                                    issueAttachment: retry.issueAttachment,
+                                                    namesBranchFromFirstPrompt: retry.namesBranchFromFirstPrompt
                                                 )
                                             }
                                         },
@@ -464,12 +465,15 @@ struct SidebarView: View {
         base: String,
         ggWorktreeMode: GGWorktreeMode,
         launchSurface: WorktreeLaunchSurface,
-        issueAttachment: IssueAttachment?
+        issueAttachment: IssueAttachment?,
+        namesBranchFromFirstPrompt: Bool
     ) {
-        guard case .createFailed(_, _, let base, let ggWorktreeMode, let launchSurface, let issueAttachment) = operationState else {
-            return (defaultBase, .inherit, .none, nil)
+        guard case .createFailed(
+            _, _, let base, let ggWorktreeMode, let launchSurface, let issueAttachment, let namesBranchFromFirstPrompt
+        ) = operationState else {
+            return (defaultBase, .inherit, .none, nil, false)
         }
-        return (base, ggWorktreeMode, launchSurface, issueAttachment)
+        return (base, ggWorktreeMode, launchSurface, issueAttachment, namesBranchFromFirstPrompt)
     }
 
     private func showTransientSpaceTitle() {

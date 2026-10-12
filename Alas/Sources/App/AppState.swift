@@ -4991,7 +4991,8 @@ final class AppState {
                             base: base,
                             ggWorktreeMode: ggWorktreeMode,
                             launchSurface: launchSurface,
-                            issueAttachment: issueAttachment
+                            issueAttachment: issueAttachment,
+                            namesBranchFromFirstPrompt: namesBranchFromFirstPrompt
                         )
                     )
                 }
@@ -5011,7 +5012,8 @@ final class AppState {
                         base: base,
                         ggWorktreeMode: ggWorktreeMode,
                         launchSurface: launchSurface,
-                        issueAttachment: issueAttachment
+                        issueAttachment: issueAttachment,
+                        namesBranchFromFirstPrompt: namesBranchFromFirstPrompt
                     )
                 )
             }
@@ -6530,7 +6532,8 @@ final class AppState {
                 _,
                 _,
                 let launchSurface,
-                let issueAttachment
+                let issueAttachment,
+                let namesBranchFromFirstPrompt
             ) = state,
                 key.projectId == projectId
             else { continue }
@@ -6546,6 +6549,15 @@ final class AppState {
                     projectId: projectId,
                     worktreeId: worktreeId,
                     attachment: issueAttachment
+                )
+                changed = true
+            }
+            if namesBranchFromFirstPrompt,
+               projectsManager.pendingAutoBranchName(projectId: projectId, worktreeId: worktreeId) == nil {
+                projectsManager.setPendingAutoBranchName(
+                    projectId: projectId,
+                    worktreeId: worktreeId,
+                    placeholder: worktree.branch
                 )
                 changed = true
             }

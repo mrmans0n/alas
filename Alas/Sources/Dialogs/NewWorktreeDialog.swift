@@ -721,26 +721,6 @@ struct NewWorktreeDialog: View {
     private func create() {
         guard let project = state.worktreeProjects.first(where: { $0.id == projectId }) else { return }
         cancelNameSuggestion()
-        let issueDraft = issueState.draft
-        guard launchMode != .acp || !openAfterCreate || launchAgentId != "none" else {
-            // Defensive: confirm button should already be disabled.
-            createErrorMessage = "Pick an ACP-capable agent for the chat session."
-            return
-        }
-        let surface = Self.launchSurfaceForCreate(
-            openAfterCreate: openAfterCreate,
-            launchMode: launchMode,
-            launchAgentId: launchAgentId,
-            issueDraft: issueDraft,
-            makePreparedPrompt: { prompt in
-                PreparedWorktreeACPPrompt(
-                    sessionID: UUID().uuidString,
-                    promptID: UUID(),
-                    text: prompt
-                )
-            }
-        )
-        let selectedBase = base
         createTask?.cancel()
         createTask = Task { @MainActor in
             if namesBranchFromFirstPrompt {
@@ -751,13 +731,32 @@ struct NewWorktreeDialog: View {
                     ["for-each-ref", "--format=%(refname:short)", "refs/heads/"],
                     cwd: URL(fileURLWithPath: project.path)
                 )
-                // The dialog stays editable meanwhile; a project switch would
-                // mix its template and destination into this repository.
-                guard !Task.isCancelled, presented, projectId == project.id, base == selectedBase else { return }
+                // The dialog stays editable meanwhile, so every input below is
+                // read after this point, from the same state.
+                guard !Task.isCancelled, presented, projectId == project.id else { return }
                 if let refs, refs.exitCode == 0 {
                     refreshAutoNamePlaceholder(alsoTaken: Set(refs.stdout.split(whereSeparator: \.isNewline).map(String.init)))
                 }
             }
+            let issueDraft = issueState.draft
+            guard launchMode != .acp || !openAfterCreate || launchAgentId != "none" else {
+                // Defensive: confirm button should already be disabled.
+                createErrorMessage = "Pick an ACP-capable agent for the chat session."
+                return
+            }
+            let surface = Self.launchSurfaceForCreate(
+                openAfterCreate: openAfterCreate,
+                launchMode: launchMode,
+                launchAgentId: launchAgentId,
+                issueDraft: issueDraft,
+                makePreparedPrompt: { prompt in
+                    PreparedWorktreeACPPrompt(
+                        sessionID: UUID().uuidString,
+                        promptID: UUID(),
+                        text: prompt
+                    )
+                }
+            )
             let createdBranch = effectiveBranch
             let namesFromFirstPrompt = namesBranchFromFirstPrompt
             let dest = URL(fileURLWithPath: renderedPath)
