@@ -557,6 +557,7 @@ enum AppKitDiffReviewRowPlanBuilder {
         let layoutMode = input.layoutMode
         let wraps = input.wrapLines
         let state = input.state
+        let onContextExpansion = input.loadContextAndExpand
         let review = DiffSplitCoreTextRowView.ReviewLines(
             allowsSelection: input.allowsDraftCommentCreation,
             activeHighlight: input.activeHighlight(for: highlightRows),
@@ -579,13 +580,19 @@ enum AppKitDiffReviewRowPlanBuilder {
                         rows: visibleRows, fileExtension: fileExtension, font: font,
                         showWhitespace: showWhitespace, theme: theme
                     )
-                    view.configure(result: result, font: font, theme: theme, chrome: chrome, wraps: wraps, review: review)
+                    view.configure(
+                        result: result, font: font, theme: theme, chrome: chrome, wraps: wraps,
+                        review: review, onContextExpansion: onContextExpansion
+                    )
                 } else {
                     let result = DiffPaneDocumentCache.shared.stackedResult(
                         rows: visibleRows, fileExtension: fileExtension, font: font,
                         showWhitespace: showWhitespace, theme: theme
                     )
-                    view.configure(stacked: result, font: font, theme: theme, chrome: chrome, wraps: wraps, review: review)
+                    view.configure(
+                        stacked: result, font: font, theme: theme, chrome: chrome, wraps: wraps,
+                        review: review, onContextExpansion: onContextExpansion
+                    )
                 }
             }
         )

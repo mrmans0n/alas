@@ -238,17 +238,22 @@ import Testing
         #expect(DiffSplitCoreTextRowView.row(containing: offset, rowTops: [0, 20, 50]) == row)
     }
 
-    @Test func expansionRowsAreAsTallAsTheirTextKitRow() {
-        let diff = DiffParser.parse("@@ -1,1 +1,1 @@\n-a\n+b\n")
+    private let expansionKey = DiffContextExpansionKey(groupID: "hunk-0", boundary: .above)
+
+    /// A one-line change below a "20 unchanged lines above" expansion row.
+    private func expandableSplit() -> DiffPaneTextDocumentBuilder.SplitResult {
+        let diff = DiffParser.parse("@@ -21,1 +21,1 @@\n-a\n+b\n")
         var rows = DiffDisplayModelBuilder.build(diff: diff, filePath: "Sources/Example.swift").groups.flatMap(\.rows)
-        let key = DiffContextExpansionKey(groupID: "hunk-0", boundary: .above)
         rows.insert(DiffDisplayRow(
             id: "expand", kind: .expandableContext, old: nil, new: nil, collapsedLineCount: 20,
-            contextExpansion: DiffContextExpansionRow(key: key, boundary: .above, remainingLineCount: 20)
+            contextExpansion: DiffContextExpansionRow(key: expansionKey, boundary: .above, remainingLineCount: 20)
         ), at: 0)
-        let split = DiffPaneTextDocumentBuilder.buildSplit(rows: rows, fileExtension: "swift", font: font, showWhitespace: false, theme: theme)
+        return DiffPaneTextDocumentBuilder.buildSplit(rows: rows, fileExtension: "swift", font: font, showWhitespace: false, theme: theme)
+    }
+
+    @Test func expansionRowsAreAsTallAsTheirTextKitRow() {
         let view = DiffSplitCoreTextRowView(frame: .zero)
-        view.configure(result: split, font: font, theme: theme)
+        view.configure(result: expandableSplit(), font: font, theme: theme)
         let expansion = DiffPaneTextDocumentBuilder.expandableContextRowHeight(font: font)
         #expect(expansion > view.lineHeight)
         #expect(view.measuredHeight(forWidth: 800) == expansion + view.lineHeight + 2 * DiffSplitCoreTextRowView.verticalInset)
@@ -294,6 +299,32 @@ import Testing
         #expect(!view.beginGutterSelection(at: NSPoint(x: newPane.midX, y: y)))
         view.configure(result: lines, font: font, theme: theme, review: .init(allowsSelection: false))
         #expect(!view.beginGutterSelection(at: NSPoint(x: newPane.minX + 5, y: y)))
+    }
+
+    @Test(arguments: [(false, false), (false, true), (true, false), (true, true)])
+    func clickingAnExpansionRowExpandsIt(inGutter: Bool, optionKey: Bool) throws {
+        var expanded: [(DiffContextExpansionKey, DiffContextExpansionMode)] = []
+        let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 120))
+        view.configure(result: expandableSplit(), font: font, theme: theme, onContextExpansion: { key, mode, _ in
+            expanded.append((key, mode))
+        })
+        // Split rows put the expansion label in the old column.
+        let oldPane = DiffPaneSplitGeometry.frames(containerWidth: 800).oldPane
+        let rowY = DiffSplitCoreTextRowView.verticalInset + 4
+        let point = inGutter
+            ? NSPoint(x: oldPane.minX + 5, y: rowY)
+            : try #require((Int(oldPane.minX)..<Int(oldPane.maxX)).lazy.map { NSPoint(x: CGFloat($0), y: rowY) }.first { view.expansionTarget(at: $0) != nil })
+        let flags: NSEvent.ModifierFlags = optionKey ? .option : []
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            let event = try #require(NSEvent.mouseEvent(
+                with: type, location: view.convert(point, to: nil), modifierFlags: flags, timestamp: 0, windowNumber: 0,
+                context: nil, eventNumber: 0, clickCount: 1, pressure: 1
+            ))
+            type == .leftMouseDown ? view.mouseDown(with: event) : view.mouseUp(with: event)
+        }
+        #expect(expanded.count == 1)
+        #expect(expanded.first?.0 == expansionKey)
+        #expect(expanded.first?.1 == (optionKey ? .all : .chunk(size: 10)))
     }
 
     @Test func headerButtonsRunTheirActions() {

@@ -94,6 +94,24 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
     }
     /// Row geometry for the last width laid out.
     private var rowLayout: RowLayout?
+    private var codeFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+    private var onContextExpansion: DiffContextExpansionHandler = { _, _, _ in }
+
+    /// An expansion pill: one action on one row of one side.
+    struct ExpansionTarget: Equatable {
+        let side: Side
+        let row: Int
+        let action: DiffPaneTextDocumentBuilder.ContextExpansionAction
+    }
+
+    private var hoveredExpansion: ExpansionTarget? {
+        didSet { if hoveredExpansion != oldValue { needsDisplay = true } }
+    }
+    private var pressedExpansion: ExpansionTarget? {
+        didSet { if pressedExpansion != oldValue { needsDisplay = true } }
+    }
+    private var armedExpansion: (target: ExpansionTarget, optionKey: Bool)?
+    private var didSetPointingHand = false
     private var theme: Theme?
     /// Distance from a line's top to its baseline, as TextKit places it.
     private var baselineOffset: CGFloat = 12
@@ -138,9 +156,11 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         theme: Theme,
         chrome: HunkChrome? = nil,
         wraps: Bool = false,
-        review: ReviewLines = ReviewLines()
+        review: ReviewLines = ReviewLines(),
+        onContextExpansion: @escaping DiffContextExpansionHandler = { _, _, _ in }
     ) {
         isStacked = false
+        self.onContextExpansion = onContextExpansion
         self.wraps = wraps
         self.review = review
         old = Self.lines(code: result.oldCode, gutter: result.oldGutter, font: font, theme: theme)
@@ -154,9 +174,11 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         theme: Theme,
         chrome: HunkChrome? = nil,
         wraps: Bool = false,
-        review: ReviewLines = ReviewLines()
+        review: ReviewLines = ReviewLines(),
+        onContextExpansion: @escaping DiffContextExpansionHandler = { _, _, _ in }
     ) {
         isStacked = true
+        self.onContextExpansion = onContextExpansion
         self.wraps = wraps
         self.review = review
         old = SideLines()
@@ -166,6 +188,10 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
 
     private func applyContent(font: NSFont, theme: Theme, chrome: HunkChrome?) {
         self.theme = theme
+        codeFont = font
+        hoveredExpansion = nil
+        pressedExpansion = nil
+        armedExpansion = nil
         let metrics = Self.textKitMetrics(for: font)
         lineHeight = metrics.lineHeight
         baselineOffset = metrics.baselineOffset
@@ -460,17 +486,38 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        if !beginGutterSelection(at: convert(event.locationInWindow, from: nil)) {
+        let point = convert(event.locationInWindow, from: nil)
+        let optionKey = event.modifierFlags.contains(.option)
+        if expandFromGutter(at: point, optionKey: optionKey) { return }
+        if let target = expansionTarget(at: point) {
+            armedExpansion = (target, optionKey)
+            pressedExpansion = target
+            return
+        }
+        if !beginGutterSelection(at: point) {
             super.mouseDown(with: event)
         }
     }
 
     override func mouseDragged(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        if let armed = armedExpansion {
+            pressedExpansion = expansionTarget(at: point) == armed.target ? armed.target : nil
+            return
+        }
         guard gutterSelection != nil else { return super.mouseDragged(with: event) }
-        extendGutterSelection(to: convert(event.locationInWindow, from: nil))
+        extendGutterSelection(to: point)
     }
 
     override func mouseUp(with event: NSEvent) {
+        if let armed = armedExpansion {
+            armedExpansion = nil
+            pressedExpansion = nil
+            if expansionTarget(at: convert(event.locationInWindow, from: nil)) == armed.target {
+                armed.target.action.invoke(optionKey: armed.optionKey, handler: onContextExpansion)
+            }
+            return
+        }
         guard gutterSelection != nil else { return super.mouseUp(with: event) }
         endGutterSelection()
     }
@@ -486,13 +533,110 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
 
     override func mouseMoved(with event: NSEvent) {
         super.mouseMoved(with: event)
-        let hit = gutterRow(at: convert(event.locationInWindow, from: nil))
+        let point = convert(event.locationInWindow, from: nil)
+        let hit = gutterRow(at: point)
         hoveredGutterRow = hit.flatMap { isCommentable(side: $0.side, row: $0.row) ? $0 : nil }
+        hoveredExpansion = expansionTarget(at: point)
+        if hoveredExpansion != nil {
+            NSCursor.pointingHand.set()
+            didSetPointingHand = true
+        } else if didSetPointingHand {
+            NSCursor.arrow.set()
+            didSetPointingHand = false
+        }
     }
 
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
         hoveredGutterRow = nil
+        hoveredExpansion = nil
+        if didSetPointingHand {
+            NSCursor.arrow.set()
+            didSetPointingHand = false
+        }
+    }
+
+    // MARK: - Context expansion
+
+    /// A gutter click on an expansion row expands it, as the ruler does.
+    private func expandFromGutter(at point: NSPoint, optionKey: Bool) -> Bool {
+        guard let hit = gutterRow(at: point) else { return false }
+        let metadata = lines(hit.side).metadata
+        guard metadata.indices.contains(hit.row), let key = metadata[hit.row].expansionKey else { return false }
+        let edge = metadata[hit.row].expansionEdge
+        let all = optionKey || (key.isShared && edge == nil)
+        onContextExpansion(key, all ? .all : .chunk(size: diffContextExpansionChunkSize), edge)
+        return true
+    }
+
+    func expansionTarget(at point: NSPoint) -> ExpansionTarget? {
+        let side = side(at: point)
+        guard let row = row(at: point.y) else { return nil }
+        return expansionPills(side, row: row).first { $0.pill.contains(point) }.map {
+            ExpansionTarget(side: side, row: row, action: $0.action)
+        }
+    }
+
+    private struct ExpansionPill {
+        let action: DiffPaneTextDocumentBuilder.ContextExpansionAction
+        let pill: NSRect
+        let chevron: NSRect?
+    }
+
+    /// Pill and chevron rects for each expansion action on `row`, from the
+    /// same inputs `DiffPaneCodeTextView` feeds `expandPillRect`.
+    private func expansionPills(_ side: Side, row: Int) -> [ExpansionPill] {
+        let sideLines = lines(side)
+        guard sideLines.metadata.indices.contains(row), sideLines.code.indices.contains(row) else { return [] }
+        let metadata = sideLines.metadata[row]
+        let actions = metadata.contextExpansionActions
+        guard !actions.isEmpty else { return [] }
+        let tops = layout(forWidth: bounds.width).tops
+        let pane = pane(side)
+        let gutter = sideLines.gutterWidth
+        let rowRect = NSRect(x: pane.minX + gutter, y: codeTop + tops[row], width: max(0, pane.width - gutter), height: tops[row + 1] - tops[row])
+        let textX = rowRect.minX + Self.textInset + (sideLines.indents[row] ?? 0) - (wraps ? 0 : horizontalScroll.offset(side))
+        let textHeight = sideLines.customMetrics[row]?.lineHeight ?? lineHeight
+        let line = sideLines.code[row]
+        let label = sideLines.codeStrings[row] as NSString
+        return actions.compactMap { action in
+            let start = action.range.location - metadata.range.location
+            guard action.range.length > 0, start >= 0, start + action.range.length <= label.length,
+                  !label.substring(with: NSRange(location: start, length: action.range.length)).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else { return nil }
+            let minX = CTLineGetOffsetForStringIndex(line, start, nil)
+            let maxX = CTLineGetOffsetForStringIndex(line, start + action.range.length, nil)
+            let textRect = NSRect(x: textX + minX, y: rowRect.minY, width: maxX - minX, height: textHeight)
+            let chevronSize = chevronImage(for: action, color: .textColor)?.size ?? .zero
+            let pill = DiffPaneCodeTextView.expandPillRect(textRect: textRect, firstLineRect: textRect, rowRect: rowRect, chevronSize: chevronSize)
+            let chevron = chevronSize == .zero ? nil : DiffPaneCodeTextView.expandChevronRect(
+                chevronLeftX: textRect.minX - 5 - chevronSize.width, chevronSize: chevronSize, pillRect: pill
+            )
+            return ExpansionPill(action: action, pill: pill, chevron: chevron)
+        }
+    }
+
+    private func chevronImage(for action: DiffPaneTextDocumentBuilder.ContextExpansionAction, color: NSColor) -> NSImage? {
+        DiffPaneCodeTextView.expandChevronImage(boundary: action.boundary, mode: action.mode, font: codeFont, color: color)
+    }
+
+    private func drawExpansionPills(_ side: Side, rows: Range<Int>, theme: Theme) {
+        let tint = theme.nsColor("seg-pill-active-fg")
+        for row in rows {
+            for pill in expansionPills(side, row: row) {
+                let target = ExpansionTarget(side: side, row: row, action: pill.action)
+                let alpha = DiffPaneCodeTextView.expandPillFillAlpha(hovered: hoveredExpansion == target, pressed: pressedExpansion == target)
+                if alpha > 0 {
+                    theme.nsColor("accent").withAlphaComponent(alpha).setFill()
+                    NSBezierPath(roundedRect: pill.pill, xRadius: 6, yRadius: 6).fill()
+                }
+                if let chevron = pill.chevron {
+                    chevronImage(for: pill.action, color: tint)?.draw(
+                        in: chevron, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil
+                    )
+                }
+            }
+        }
     }
 
     // MARK: - Horizontal scrolling
@@ -569,7 +713,7 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         let layout = layout(forWidth: bounds.width)
         for side in isStacked ? [Side.new] : [.old, .new] {
             draw(
-                lines(side), wrapped: side == .old ? layout.old : layout.new, tops: layout.tops,
+                side, wrapped: side == .old ? layout.old : layout.new, tops: layout.tops,
                 in: pane(side), offset: horizontalScroll.offset(side), range: range, theme: theme, context: context
             )
             drawReviewOverlays(side, tops: layout.tops, theme: theme)
@@ -608,9 +752,10 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
     /// the code clipped to its column. When wrapping, `wrapped` holds each
     /// row's visual lines.
     private func draw(
-        _ side: SideLines, wrapped: [[CTLine]]?, tops: [CGFloat],
+        _ which: Side, wrapped: [[CTLine]]?, tops: [CGFloat],
         in pane: CGRect, offset: CGFloat, range: Range<Int>, theme: Theme, context: CGContext
     ) {
+        let side = lines(which)
         let gutter = side.gutterWidth
         context.saveGState()
         context.clip(to: CGRect(x: pane.minX, y: headerHeight, width: pane.width, height: max(0, bounds.height - headerHeight)))
@@ -650,6 +795,8 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
             }
         }
         context.clip(to: CGRect(x: pane.minX + gutter, y: headerHeight, width: max(0, pane.width - gutter), height: max(0, bounds.height - headerHeight)))
+        // Under the labels, as `DiffPaneCodeTextView` draws them with the row backgrounds.
+        drawExpansionPills(which, rows: rows, theme: theme)
         for index in rows {
             let x = pane.minX + gutter + Self.textInset + (side.indents[index] ?? 0)
             let baseline = codeTop + tops[index] + baseline(side, index)

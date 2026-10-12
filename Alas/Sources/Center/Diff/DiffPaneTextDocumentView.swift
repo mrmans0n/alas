@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-private let diffContextExpansionChunkSize = 10
+let diffContextExpansionChunkSize = 10
 
 typealias DiffContextExpansionHandler = (DiffContextExpansionKey, DiffContextExpansionMode, DiffContextExpansionEdge?) -> Void
 
@@ -1827,30 +1827,14 @@ final class DiffPaneCodeTextView: NSTextView {
 
     private func expansionActions(atRow row: Int) -> [DiffPaneTextDocumentBuilder.ContextExpansionAction] {
         guard lineMetadata.indices.contains(row) else { return [] }
-        let metadata = lineMetadata[row]
-        if !metadata.expansionActions.isEmpty {
-            return metadata.expansionActions
-        }
-        guard let key = metadata.expansionKey else { return [] }
-        let mode: DiffPaneTextDocumentBuilder.ContextExpansionActionMode = key.isShared && metadata.expansionEdge == nil ? .all : .chunk
-        return [
-            DiffPaneTextDocumentBuilder.ContextExpansionAction(
-                key: key,
-                boundary: metadata.expansionBoundary ?? key.boundary,
-                edge: metadata.expansionEdge,
-                mode: mode,
-                range: metadata.range
-            ),
-        ]
+        return lineMetadata[row].contextExpansionActions
     }
 
     private func invokeExpansion(
         action: DiffPaneTextDocumentBuilder.ContextExpansionAction,
         optionKey: Bool
     ) {
-        let actionMode: DiffPaneTextDocumentBuilder.ContextExpansionActionMode = optionKey ? .all : action.mode
-        let mode: DiffContextExpansionMode = actionMode == .all ? .all : .chunk(size: diffContextExpansionChunkSize)
-        contextExpansionHandler(action.key, mode, action.edge)
+        action.invoke(optionKey: optionKey, handler: contextExpansionHandler)
     }
 
     private func drawLineBackgrounds(in dirtyRect: NSRect) {
@@ -2135,7 +2119,7 @@ final class DiffPaneCodeTextView: NSTextView {
         )
     }
 
-    private static func expandChevronImage(
+    static func expandChevronImage(
         boundary: DiffContextBoundary?,
         mode: DiffPaneTextDocumentBuilder.ContextExpansionActionMode,
         font: NSFont?,
@@ -2796,6 +2780,35 @@ final class DiffPaneLeadingClipView: NSClipView {
         let maxX = max(documentView.frame.width - bounds.width, 0)
         bounds.origin.x = min(max(bounds.origin.x, 0), maxX)
         return bounds
+    }
+}
+
+extension DiffPaneTextDocumentBuilder.LineMetadata {
+    /// The expansion pills this line shows, each over its label range.
+    var contextExpansionActions: [DiffPaneTextDocumentBuilder.ContextExpansionAction] {
+        if !expansionActions.isEmpty {
+            return expansionActions
+        }
+        guard let key = expansionKey else { return [] }
+        let mode: DiffPaneTextDocumentBuilder.ContextExpansionActionMode = key.isShared && expansionEdge == nil ? .all : .chunk
+        return [
+            DiffPaneTextDocumentBuilder.ContextExpansionAction(
+                key: key,
+                boundary: expansionBoundary ?? key.boundary,
+                edge: expansionEdge,
+                mode: mode,
+                range: range
+            ),
+        ]
+    }
+}
+
+extension DiffPaneTextDocumentBuilder.ContextExpansionAction {
+    /// Expands by a chunk, or everything for `.all` actions and option-clicks.
+    func invoke(optionKey: Bool, handler: DiffContextExpansionHandler) {
+        let actionMode: DiffPaneTextDocumentBuilder.ContextExpansionActionMode = optionKey ? .all : mode
+        let expansion: DiffContextExpansionMode = actionMode == .all ? .all : .chunk(size: diffContextExpansionChunkSize)
+        handler(key, expansion, edge)
     }
 }
 
