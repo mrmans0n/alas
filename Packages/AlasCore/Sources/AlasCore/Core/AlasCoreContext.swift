@@ -88,7 +88,7 @@ public final class AlasCoreContext {
     }
 
     /// Creates a worktree for `branch` from `base` at `destination`, then
-    /// refreshes and persists the project's worktree list.
+    /// refreshes and persists the project's worktree list on a best-effort basis.
     public func createWorktree(
         projectID: String,
         branch: String,
@@ -110,8 +110,12 @@ public final class AlasCoreContext {
             destination: prepared,
             projectId: projectID
         )
-        _ = try await projects.refreshWorktrees(projectId: projectID)
-        try saveProjects()
+        // The worktree now exists on disk, and git is the source of truth for
+        // it: a refresh or save that fails here is left to the next refresh
+        // rather than reported as a failed creation.
+        if (try? await projects.refreshWorktrees(projectId: projectID)) == true {
+            try? saveProjects()
+        }
         return worktree
     }
 
