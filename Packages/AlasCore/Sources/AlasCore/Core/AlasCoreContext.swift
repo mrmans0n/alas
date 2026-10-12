@@ -10,6 +10,12 @@ public final class AlasCoreContext {
     /// The worktree is archived (or being archived), so nothing new starts in it.
     public struct WorktreeArchived: Error, Equatable {}
 
+    /// An active Workspace checkout manages this worktree; archive or delete
+    /// it through the checkout instead.
+    public struct WorktreeOwnedByWorkspaceCheckout: Error, Equatable {
+        public let checkoutName: String
+    }
+
     public var projects: ProjectsManager
     /// One session manager per owner (worktree or workspace checkout).
     public var sessionManagers: [SessionOwnerID: ACPSessionManager] = [:]
@@ -266,6 +272,9 @@ public final class AlasCoreContext {
     /// history. A second archive while one is tearing down is refused. Nothing is removed from disk. A failed save throws and
     /// leaves the worktree visible and untouched.
     public func archiveWorktree(_ worktree: Worktree) async throws {
+        if let owner = await activeWorkspaceOwner(of: worktree) {
+            throw WorktreeOwnedByWorkspaceCheckout(checkoutName: owner.fallbackWorkspaceName)
+        }
         guard archivingWorktreeIDs.insert(worktree.id).inserted else { throw WorktreeArchived() }
         defer { archivingWorktreeIDs.remove(worktree.id) }
         try setWorktreeHidden(worktree.path, projectID: worktree.projectId, hidden: true)
@@ -285,6 +294,26 @@ public final class AlasCoreContext {
     public func unarchiveWorktree(path: URL, projectID: String) throws {
         guard !archivingWorktreeIDs.contains(Worktree.makeId(path: path)) else { throw WorktreeArchived() }
         try setWorktreeHidden(path, projectID: projectID, hidden: false)
+    }
+
+    /// The active Workspace checkout managing `worktree`, matched like the
+    /// app's worktree-cleanup ownership. Archived and former checkouts no
+    /// longer manage their members. Unreadable Workspace state counts as no
+    /// owner: archiving only hides the worktree and can be undone.
+    private func activeWorkspaceOwner(of worktree: Worktree) async -> WorkspaceCheckout? {
+        guard case .loaded(let state) = await workspaceStore.load() else { return nil }
+        let path = worktree.path.standardizedFileURL.path
+        return state.checkouts.first { checkout in
+            checkout.workspaceID != nil && checkout.archivedAt == nil && checkout.members.contains { member in
+                guard member.projectID == worktree.projectId,
+                      URL(fileURLWithPath: checkout.inAppWorktreePath(member.worktreePath)).standardizedFileURL.path == path
+                else { return false }
+                if let memberLineage = member.gitLineageID, let lineage = worktree.lineageID, memberLineage != lineage {
+                    return false
+                }
+                return !(member.availability == .explicitlyDeleted && member.cleanup?.worktreeRemoved == true)
+            }
+        }
     }
 
     private func setWorktreeHidden(_ path: URL, projectID: String, hidden: Bool) throws {
