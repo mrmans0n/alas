@@ -327,7 +327,6 @@ public struct AppConfig: Codable, Equatable, Sendable {
         /// notice immediately. 0 disables escalation. Default: 30.
         public var acpDelegatedBlockerEscalationSeconds: Int
         public var dismissedHookInstallNudges: [String]
-        public var dismissedACPSetupNudges: [String]
         public var confirmCloseChatTabs: Bool
         /// When true (default): ⏎ submits with .auto intent, ⌥⏎ steers.
         /// When false: ⏎ steers and ⌥⏎ queues. The busy send button follows
@@ -362,7 +361,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
 
         public enum CodingKeys: String, CodingKey, Sendable {
             case notifyOnFinish, notifyOnAwaiting, acpDelegatedBlockerEscalationSeconds,
-                 dismissedHookInstallNudges, dismissedACPSetupNudges,
+                 dismissedHookInstallNudges,
                  confirmCloseChatTabs, acpSendOnEnter, acpAutoRunByDefault, acpLocalTitlesEnabled, acpShowMinimap,
                  acpAutoResumeAfterUsageLimit, acpContinueInterruptedSessions, acpCollapseFinishedToolCalls,
                  exposeAlasMCP, alasMCPTransport, acpDictationLocale
@@ -371,7 +370,6 @@ public struct AppConfig: Codable, Equatable, Sendable {
         public init(notifyOnFinish: Bool = true, notifyOnAwaiting: Bool = true,
              acpDelegatedBlockerEscalationSeconds: Int = 30,
              dismissedHookInstallNudges: [String] = [],
-             dismissedACPSetupNudges: [String] = [],
              confirmCloseChatTabs: Bool = false,
              acpSendOnEnter: Bool = true,
              acpAutoRunByDefault: Bool = false,
@@ -388,7 +386,6 @@ public struct AppConfig: Codable, Equatable, Sendable {
             self.notifyOnAwaiting = notifyOnAwaiting
             self.acpDelegatedBlockerEscalationSeconds = acpDelegatedBlockerEscalationSeconds
             self.dismissedHookInstallNudges = dismissedHookInstallNudges
-            self.dismissedACPSetupNudges = dismissedACPSetupNudges
             self.confirmCloseChatTabs = confirmCloseChatTabs
             self.acpSendOnEnter = acpSendOnEnter
             self.acpAutoRunByDefault = acpAutoRunByDefault
@@ -409,7 +406,6 @@ public struct AppConfig: Codable, Equatable, Sendable {
             acpDelegatedBlockerEscalationSeconds =
                 (try? c.decode(Int.self, forKey: .acpDelegatedBlockerEscalationSeconds)) ?? 30
             dismissedHookInstallNudges = (try? c.decode([String].self, forKey: .dismissedHookInstallNudges)) ?? []
-            dismissedACPSetupNudges = (try? c.decode([String].self, forKey: .dismissedACPSetupNudges)) ?? []
             confirmCloseChatTabs = (try? c.decode(Bool.self, forKey: .confirmCloseChatTabs)) ?? false
             acpSendOnEnter = (try? c.decode(Bool.self, forKey: .acpSendOnEnter)) ?? true
             acpAutoRunByDefault = (try? c.decode(Bool.self, forKey: .acpAutoRunByDefault)) ?? false

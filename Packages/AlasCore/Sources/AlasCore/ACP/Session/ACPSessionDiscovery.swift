@@ -203,6 +203,8 @@ public final class ACPSessionDiscoveryModel {
         case loading
         case ready
         case unsupported
+        /// The agent's adapter is missing or unusable; the reason says why.
+        case needsSetup(String)
         case failed(String)
     }
 
@@ -297,6 +299,8 @@ public final class ACPSessionDiscoveryModel {
             phase = .ready
         } catch ACPSessionDiscoveryError.listingUnsupported {
             phase = .unsupported
+        } catch ACPSessionDiscoveryError.setupRequired(let reason) {
+            phase = .needsSetup(reason)
         } catch {
             phase = .failed(error.localizedDescription)
         }

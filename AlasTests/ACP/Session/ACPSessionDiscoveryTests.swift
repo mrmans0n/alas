@@ -30,6 +30,23 @@ struct ACPSessionDiscoveryTests {
     }
 
     @MainActor
+    @Test("a missing adapter reports setup instead of a generic failure")
+    func missingAdapterNeedsSetup() async throws {
+        let store = try temporaryStore()
+        let client = discoveryClient(deleteCapability: false)
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .missing(reason: "adapter missing") },
+            connectionFactory: { _, _, _ in ACPConnection(client: client) }
+        )
+        let model = ACPSessionDiscoveryModel()
+        await model.start(manager: manager, agentId: "claude")
+        #expect(model.phase == .needsSetup("adapter missing"))
+    }
+
+    @MainActor
     @Test("remote deletion uses the discovered wire id and refreshes discovery")
     func remoteDeletionRefreshes() async throws {
         let store = try temporaryStore()

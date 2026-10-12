@@ -25,6 +25,8 @@ struct AgentLauncherDialog: View {
     @State private var openingError: String?
     @State private var deletionRequest: ACPSessionDeletionRequest?
     @State private var deletionError: String?
+    @State private var installingAdapterAgentID: String?
+    @State private var adapterInstallError: String?
 
     private let agentTileSize: CGFloat = 64
     private let sessionStageTileSize: CGFloat = 36
@@ -560,6 +562,8 @@ struct AgentLauncherDialog: View {
             return "Loading sessions…"
         case .unsupported:
             return "No session history available"
+        case .needsSetup:
+            return "Adapter not installed"
         case .failed:
             return "Couldn't load sessions"
         case .ready:
@@ -612,7 +616,10 @@ struct AgentLauncherDialog: View {
             launcherStatusRow("Loading agent sessions…", progress: true)
         case .unsupported:
             launcherStatusRow("This agent does not expose session history.")
-        case .failed(let message):
+        case .needsSetup(let reason)
+            where ACPManagedAdapterDescriptor.descriptor(for: agent.id) != nil:
+            adapterInstallRow(agent: agent, reason: reason)
+        case .needsSetup(let message), .failed(let message):
             HStack(spacing: 8) {
                 Text(message).lineLimit(2)
                 Spacer()
@@ -696,6 +703,46 @@ struct AgentLauncherDialog: View {
             if let openingError {
                 launcherStatusRow(openingError)
             }
+        }
+    }
+
+    private func adapterInstallRow(agent: AgentDefinition, reason: String) -> some View {
+        let installing = installingAdapterAgentID == agent.id
+        return HStack(spacing: 8) {
+            if installing { ProgressView().controlSize(.small) }
+            Text(installing
+                 ? "Installing \(agent.displayName) adapter…"
+                 : adapterInstallError.map { "Install failed: \($0)" } ?? reason)
+                .lineLimit(2)
+            Spacer()
+            if installingAdapterAgentID == nil {
+                Button(adapterInstallError == nil ? "Install" : "Retry") { installAdapter(for: agent) }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(theme.color("accent"))
+            }
+        }
+        .font(.system(size: 11))
+        .foregroundStyle(theme.color("fg-faint"))
+        .padding(.horizontal, 14)
+        .frame(minHeight: 38)
+    }
+
+    private func installAdapter(for agent: AgentDefinition) {
+        guard installingAdapterAgentID == nil, let worktree = selectedWorktree() else { return }
+        let target: ACPAdapterTarget = RemoteHostRegistry.shared.host(forPath: worktree.path.path)
+            .map { .ssh(host: $0) } ?? .local
+        installingAdapterAgentID = agent.id
+        adapterInstallError = nil
+        Task {
+            defer { installingAdapterAgentID = nil }
+            do {
+                try await appState.acpAdapterInstallCoordinator.install(target: target, agentID: agent.id)
+            } catch {
+                if chatAgent?.id == agent.id { adapterInstallError = error.localizedDescription }
+                return
+            }
+            guard chatAgent?.id == agent.id else { return }
+            startDiscovery(for: agent)
         }
     }
 
@@ -899,6 +946,7 @@ struct AgentLauncherDialog: View {
     ) {
         let prior = discoveryModel
         let model = ACPSessionDiscoveryModel()
+        adapterInstallError = nil
         discoveryModel = model
         discoveryOwner = manager.owner
         discoveryProjectId = projectId

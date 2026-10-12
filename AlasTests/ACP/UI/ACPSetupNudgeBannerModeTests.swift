@@ -31,20 +31,6 @@ struct ACPSetupNudgeBannerModeTests {
         ) == "Codex adapter installed on mini.lan — connecting…")
     }
 
-    @Test("setup dismissals are isolated by adapter target")
-    func targetAwareDismissals() {
-        let local = ACPAdapterUpdateKey(target: .local, agentID: "codex")
-        let hostA = ACPAdapterUpdateKey(target: .ssh(host: "host-a"), agentID: "codex")
-        let hostB = ACPAdapterUpdateKey(target: .ssh(host: "host-b"), agentID: "codex")
-
-        let values = [ACPSetupNudgeDismissal.storageKey(for: hostA)]
-        #expect(ACPSetupNudgeDismissal.isDismissed(values, key: hostA))
-        #expect(!ACPSetupNudgeDismissal.isDismissed(values, key: hostB))
-        #expect(!ACPSetupNudgeDismissal.isDismissed(values, key: local))
-        #expect(ACPSetupNudgeDismissal.isDismissed(["codex"], key: local))
-        #expect(!ACPSetupNudgeDismissal.isDismissed(["codex"], key: hostA))
-    }
-
     @Test("update mode idle copy shows both versions")
     func updateIdleCopy() {
         let copy = ACPSetupNudgeBannerCopy.idleMessage(

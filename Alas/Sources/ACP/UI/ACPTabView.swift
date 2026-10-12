@@ -180,6 +180,10 @@ private struct ACPSessionView: View {
     @State private var pendingComposerDrops = 0
     @State private var updateState: AdapterUpdateState?
     @State private var dismissedLatest: String?
+    /// Hides the install nudge for this view only. Never persisted: without
+    /// the adapter the tab cannot run, so a lasting dismissal would leave no
+    /// way to install it.
+    @State private var isSetupNudgeDismissed = false
     /// Update state of the agent CLI itself when Alas detected it on PATH
     /// instead of installing it (omp, opencode, the pi CLI under pi-acp).
     @State private var agentUpdateState: AdapterUpdateState?
@@ -1003,13 +1007,6 @@ private struct ACPSessionView: View {
         )
     }
 
-    private var isSetupNudgeDismissed: Bool {
-        ACPSetupNudgeDismissal.isDismissed(
-            state.config.harness.dismissedACPSetupNudges,
-            key: adapterUpdateKey
-        )
-    }
-
     private var showsGenericFailureBanner: Bool {
         ACPAdapterUpdateBannerDecider.showsGenericFailure(
             setupState: session.setupState,
@@ -1178,13 +1175,7 @@ private struct ACPSessionView: View {
     }
 
     private func dismissNudge() {
-        var dismissed = state.config.harness.dismissedACPSetupNudges
-        let key = adapterUpdateKey
-        if !ACPSetupNudgeDismissal.isDismissed(dismissed, key: key) {
-            dismissed.append(ACPSetupNudgeDismissal.storageKey(for: key))
-            state.config.harness.dismissedACPSetupNudges = dismissed
-            _ = state.saveConfig()
-        }
+        isSetupNudgeDismissed = true
     }
 
     private func dismissUpdate(latest: String) {
@@ -1475,19 +1466,6 @@ private struct ACPSessionView: View {
         .overlay(alignment: .bottom) {
             Rectangle().fill(theme.color("warn").opacity(0.3)).frame(height: 0.5)
         }
-    }
-}
-
-enum ACPSetupNudgeDismissal {
-    static func storageKey(for key: ACPAdapterUpdateKey) -> String {
-        key.storageKey
-    }
-
-    static func isDismissed(_ values: [String], key: ACPAdapterUpdateKey) -> Bool {
-        if values.contains(storageKey(for: key)) { return true }
-        // Existing agent-only values predate target identity and therefore
-        // retain their old behavior only for local ACP sessions.
-        return key.target == .local && values.contains(key.agentID)
     }
 }
 
