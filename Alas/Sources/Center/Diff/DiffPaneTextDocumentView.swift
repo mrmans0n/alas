@@ -1023,6 +1023,24 @@ final class DiffPaneTextScrollView: NSScrollView {
             shouldResetHorizontalOrigin = false
         }
         (verticalRulerView as? DiffPaneLineNumberRulerView)?.rowHeight = lineHeight()
+        Self.pinToEightBitContents(textView.layer)
+        Self.pinToEightBitContents(verticalRulerView?.layer)
+    }
+
+    /// AppKit gives the code and ruler views' content layers an automatic
+    /// format, which on a wide-gamut display is 16 bits per channel. Every
+    /// strip exposed by scrolling is then rasterized and color-matched into
+    /// that deeper store on the main thread. Everything these views draw is
+    /// sRGB, so 8 bits loses nothing. Runs on every layout (which AppKit
+    /// already does on each scroll tick) to catch layers AppKit adds later;
+    /// layers already pinned are left alone, since changing the format
+    /// discards their contents.
+    private static func pinToEightBitContents(_ layer: CALayer?) {
+        guard let layer else { return }
+        if layer.contentsFormat != .RGBA8Uint {
+            layer.contentsFormat = .RGBA8Uint
+        }
+        layer.sublayers?.forEach(pinToEightBitContents)
     }
 
     override func tile() {
