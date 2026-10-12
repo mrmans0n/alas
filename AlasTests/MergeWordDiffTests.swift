@@ -86,4 +86,16 @@ struct MergeWordDiffTests {
         #expect(result.local[2].isEmpty)
         #expect(result.remote[3].isEmpty)
     }
+
+    @Test func hunkStopsMarkingOnceItsWorkBudgetIsSpent() {
+        let line = String(repeating: "word ", count: 60)
+        let local = Array(repeating: line + "a", count: 20)
+        let remote = Array(repeating: line + "b", count: 20)
+
+        let result = MergeWordDiff.hunk(local: local, remote: remote, mode: .words)
+
+        let marked = result.local.filter { !$0.isEmpty }.count
+        #expect(marked > 0)
+        #expect(marked < local.count)
+    }
 }
