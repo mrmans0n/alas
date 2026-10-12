@@ -43,6 +43,16 @@ public final class AlasCoreContext {
     @ObservationIgnored private var deletingWorktreeIDs: Set<String> = []
     /// Headless runs in flight, so deleting their worktree can stop them.
     @ObservationIgnored private var headlessRuns: [String: (worktreeID: String, task: Task<RunScriptCompletion, Error>)] = [:]
+    /// Durable Workspace definitions and checkouts.
+    @ObservationIgnored public let workspaceStore: WorkspaceStore
+    /// Stops everything running in a checkout before a lifecycle operation
+    /// touches it. The app installs one that closes its terminals and agent
+    /// sessions; without one, nothing is stopped.
+    @ObservationIgnored public var stopWorkspaceCheckoutSessions: @MainActor (WorkspaceCheckout) async throws -> Void
+    /// Approves and prepares a member's repository hook. Without one, hooks
+    /// are skipped.
+    @ObservationIgnored public var resolveWorkspaceRepoHook: WorkspaceRepoHookResolving = { _ in nil }
+    @ObservationIgnored private var workspaceCheckoutCoordinator: WorkspaceCheckoutCoordinator?
 
     @ObservationIgnored private let store: any PersistenceStoreProtocol
     @ObservationIgnored private let projectsFile: URL
@@ -55,6 +65,7 @@ public final class AlasCoreContext {
         projectsFile: URL = Paths.projectsFile,
         runs: RunService = RunService(),
         runHistoryStore: RunHistoryStore? = try? RunHistoryStore(),
+        workspaceStore: WorkspaceStore = WorkspaceStore(),
         runScheduler: RunScheduler? = nil,
         runCompletionWaiter: @escaping RunCompletionWaiter = { try await RunScriptCompletionMonitor.wait(for: $0) },
         makeSessionManager: @escaping @MainActor (SessionOwnerID, Worktree) -> ACPSessionManager = AlasCoreContext.defaultSessionManager
@@ -64,6 +75,8 @@ public final class AlasCoreContext {
         self.runScheduler = runScheduler ?? RunScheduler(store: store)
         self.runCompletionWaiter = runCompletionWaiter
         self.runHistory = RunHistory(store: runHistoryStore)
+        self.workspaceStore = workspaceStore
+        self.stopWorkspaceCheckoutSessions = { _ in }
         self.store = store
         self.projectsFile = projectsFile
         self.makeSessionManager = makeSessionManager
@@ -74,6 +87,7 @@ public final class AlasCoreContext {
         loadingFrom store: any PersistenceStoreProtocol = PersistenceStore(),
         projectsFile: URL = Paths.projectsFile,
         runHistoryStore: RunHistoryStore? = try? RunHistoryStore(),
+        workspaceStore: WorkspaceStore = WorkspaceStore(),
         makeSessionManager: @escaping @MainActor (SessionOwnerID, Worktree) -> ACPSessionManager = AlasCoreContext.defaultSessionManager
     ) throws {
         let file = try store.readIfExists(ProjectsFile.self, from: projectsFile) ?? ProjectsFile(projects: [])
@@ -82,6 +96,7 @@ public final class AlasCoreContext {
             store: store,
             projectsFile: projectsFile,
             runHistoryStore: runHistoryStore,
+            workspaceStore: workspaceStore,
             makeSessionManager: makeSessionManager
         )
     }
@@ -213,9 +228,10 @@ public final class AlasCoreContext {
     }
 
     /// Deletes `worktree` and its branch when merged and `deleteBranchIfMerged`.
-    /// Its headless runs are stopped first; once it is removed, its agent
-    /// sessions are shut down and its runs and run history discarded. Git refusing the removal (uncommitted changes without
-    /// `force`, say) throws and leaves everything in place.
+    /// Once it is removed, its headless runs are stopped, its agent sessions
+    /// shut down and its runs and run history discarded. Git refusing the
+    /// removal (uncommitted changes without `force`, say) throws and leaves
+    /// everything in place.
     public func deleteWorktree(_ worktree: Worktree, force: Bool = false, deleteBranchIfMerged: Bool = false) async throws {
         guard let project = projects.projects.first(where: { $0.id == worktree.projectId }) else {
             throw ProjectCreationError.projectNotFound
@@ -223,14 +239,6 @@ public final class AlasCoreContext {
         guard deletingWorktreeIDs.insert(worktree.id).inserted else { throw WorktreeBeingDeleted() }
         defer { deletingWorktreeIDs.remove(worktree.id) }
         let repoPath = URL(fileURLWithPath: project.path)
-        // Nothing may keep running inside the checkout once its files go.
-        let running = headlessRuns.values.filter { $0.worktreeID == worktree.id }.map(\.task)
-        for run in running {
-            run.cancel()
-        }
-        for run in running {
-            _ = try? await run.value
-        }
         let outcome = try await ProjectMutationGate.shared.withMutation(projectID: project.id) {
             try await WorktreeLifecycle.performRemoveWorktree(
                 repoPath: repoPath,
@@ -238,6 +246,14 @@ public final class AlasCoreContext {
                 deleteBranchIfMerged: deleteBranchIfMerged,
                 force: force
             )
+        }
+        // Nothing may keep running inside the checkout once its files are cleaned up.
+        let running = headlessRuns.values.filter { $0.worktreeID == worktree.id }.map(\.task)
+        for run in running {
+            run.cancel()
+        }
+        for run in running {
+            _ = try? await run.value
         }
         await disposeSessionManager(owner: .worktree(worktree.id))
         await discardRuns(worktreeID: worktree.id, deletingHistory: true)?.value
@@ -288,6 +304,26 @@ public final class AlasCoreContext {
         await manager.releaseAllOwnedLeases()
     }
 
+    /// The one coordinator for Workspace checkout lifecycles. It reads the
+    /// authoritative store, never a display cache, when deciding which
+    /// sessions to stop.
+    public func workspaceCoordinator() -> WorkspaceCheckoutCoordinator {
+        if let workspaceCheckoutCoordinator { return workspaceCheckoutCoordinator }
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: workspaceStore,
+            sessions: WorkspaceCheckoutSessionStopper(
+                store: workspaceStore,
+                stop: { [weak self] checkout in try await self?.stopWorkspaceCheckoutSessions(checkout) }
+            ),
+            resolveRepoHook: { [weak self] request in
+                guard let resolve = await self?.resolveWorkspaceRepoHook else { return nil }
+                return try await resolve(request)
+            }
+        )
+        workspaceCheckoutCoordinator = coordinator
+        return coordinator
+    }
+
     /// A manager with its own session database, as the app keeps per owner.
     public static func defaultSessionManager(owner: SessionOwnerID, worktree: Worktree) -> ACPSessionManager {
         ACPSessionManager(
@@ -301,9 +337,9 @@ public final class AlasCoreContext {
     /// The session manager for `worktree`, created on first use. None is
     /// created for a worktree that is being deleted.
     public func sessionManager(for worktree: Worktree) throws -> ACPSessionManager {
+        guard !deletingWorktreeIDs.contains(worktree.id) else { throw WorktreeBeingDeleted() }
         let owner = SessionOwnerID.worktree(worktree.id)
         if let manager = sessionManagers[owner] { return manager }
-        guard !deletingWorktreeIDs.contains(worktree.id) else { throw WorktreeBeingDeleted() }
         let manager = makeSessionManager(owner, worktree)
         sessionManagers[owner] = manager
         return manager

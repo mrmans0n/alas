@@ -10,7 +10,13 @@ struct AlasCoreContextTests {
             .appendingPathComponent("alas-core-template-\(UUID().uuidString)")
             .appendingPathComponent("repo")
         try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
-        for args in [["init", "-q", "-b", "main"], ["commit", "-q", "--allow-empty", "-m", "init"]] {
+        // Auto-maintenance would race the per-test copy over maintenance.lock.
+        for args in [
+            ["init", "-q", "-b", "main"],
+            ["config", "maintenance.auto", "false"],
+            ["config", "gc.auto", "0"],
+            ["commit", "-q", "--allow-empty", "-m", "init"]
+        ] {
             let result = try await Process.git(args, cwd: repo)
             guard result.exitCode == 0 else { throw ProcessError.nonZeroExit(result.exitCode, result.stderr) }
         }
@@ -98,6 +104,17 @@ struct AlasCoreContextTests {
         while context.runRecords.record(worktreeID: worktree.id, scriptKey: long.key) == nil, ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(20))
         }
+
+        let dirt = worktree.path.appendingPathComponent("untracked.txt")
+        try "dirt".write(to: dirt, atomically: true, encoding: .utf8)
+        await #expect(throws: WorktreeService.WorktreeError.self, "a dirty worktree is not removed without force") {
+            try await context.deleteWorktree(worktree)
+        }
+        #expect(
+            context.runRecords.record(worktreeID: worktree.id, scriptKey: long.key)?.status == .running,
+            "a refused deletion leaves headless runs alone"
+        )
+        try FileManager.default.removeItem(at: dirt)
 
         try await context.deleteWorktree(worktree)
         await #expect(throws: CancellationError.self, "deleting the worktree stops its headless runs") {

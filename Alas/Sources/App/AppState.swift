@@ -343,10 +343,9 @@ final class AppState {
     private var centerGitMutationCounts: [String: Int] = [:]
     var spacesManager: SpacesManager
     var workspacesManager: WorkspacesManager
-    @ObservationIgnored private let workspaceStore: WorkspaceStore
+    private var workspaceStore: WorkspaceStore { core.workspaceStore }
     @ObservationIgnored private let workspaceRemoteTransport: WorkspaceRemoteTransport
     @ObservationIgnored private let checkpointWriterLeases = CheckpointWriterLeaseStore()
-    @ObservationIgnored private var workspaceCheckoutCoordinator: WorkspaceCheckoutCoordinator?
     /// Session candidates for each peer-viewed session's `@` picker, loaded
     /// when the picker opens and reused while its query changes.
     @ObservationIgnored private var remoteMentionSessions: [String: [ACPSessionMentionCandidate]] = [:]
@@ -1550,7 +1549,6 @@ final class AppState {
         self.localTextInferenceOverride = localTextInference
         self.nextPromptInferenceOverride = nextPromptInference
         self.localTextSupported = localTextSupported
-        self.workspaceStore = workspaceStore
         self.workspaceRemoteTransport = workspaceRemoteTransport
         self.attentionStore = attentionStore ?? AttentionStore()
         self.attentionNavigationEnvironment = attentionNavigationEnvironment
@@ -1593,6 +1591,7 @@ final class AppState {
             projects: ProjectsManager(persistedProjects: projectsFile.projects),
             store: store,
             runHistoryStore: runHistoryStore,
+            workspaceStore: workspaceStore,
             runScheduler: runScheduler,
             runCompletionWaiter: runScriptCompletionWaiter
         )
@@ -1709,6 +1708,13 @@ final class AppState {
             self?.persistenceErrorHandler("Schedules Save Failed", message)
         }
         core.launchWorktreeCleanup = worktreeCleanupLauncher
+        core.stopWorkspaceCheckoutSessions = { [weak self] checkout in
+            try await self?.stopWorkspaceCheckoutSessions(checkout)
+        }
+        core.resolveWorkspaceRepoHook = { [weak self] request in
+            guard let self else { return nil }
+            return try await self.preparedWorkspaceRepoHook(request)
+        }
         core.runHistory.onFailure = { [weak self] message in
             self?.showFileActionError(title: "Run History Failed", message: message)
         }
@@ -3747,24 +3753,8 @@ final class AppState {
         return tabs.tabs(for: owner).first(where: { $0.id == tabID })
     }
 
-    /// The App owns one coordinator and one authoritative state-file actor.
-    /// Lifecycle operations therefore never consult the manager's read-only
-    /// display cache when deciding which location-qualified sessions to stop.
     func workspaceCoordinator() -> WorkspaceCheckoutCoordinator {
-        if let workspaceCheckoutCoordinator { return workspaceCheckoutCoordinator }
-        let coordinator = WorkspaceCheckoutCoordinator(
-            store: workspaceStore,
-            sessions: WorkspaceCheckoutSessionStopper(
-                store: workspaceStore,
-                stop: { [weak self] checkout in try await self?.stopWorkspaceCheckoutSessions(checkout) }
-            ),
-            resolveRepoHook: { [weak self] request in
-                guard let self else { return nil }
-                return try await self.preparedWorkspaceRepoHook(request)
-            }
-        )
-        workspaceCheckoutCoordinator = coordinator
-        return coordinator
+        core.workspaceCoordinator()
     }
 
     /// Definition changes are intentionally independent of checkout snapshots:
