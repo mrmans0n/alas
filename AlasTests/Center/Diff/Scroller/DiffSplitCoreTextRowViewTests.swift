@@ -250,6 +250,36 @@ import Testing
         #expect(view.visibleLineRange(in: wholeRow) == 0..<1)
     }
 
+    @Test func draggingDownTheGutterSelectsThoseLinesOnThatSide() throws {
+        var selected: [DiffReviewLineAnchor] = []
+        let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 200))
+        view.configure(
+            result: result(old: ["a", "b", "c"], new: ["x", "y", "z"]), font: font, theme: theme,
+            review: .init(onSelect: { selected.append($0) })
+        )
+        let gutterX = DiffPaneSplitGeometry.frames(containerWidth: 800).newPane.minX + 5
+        let rowY = { (row: Int) in DiffSplitCoreTextRowView.verticalInset + (CGFloat(row) + 0.5) * view.lineHeight }
+        #expect(view.beginGutterSelection(at: NSPoint(x: gutterX, y: rowY(0))))
+        view.extendGutterSelection(to: NSPoint(x: 10, y: rowY(2)))
+        view.endGutterSelection()
+        let anchor = try #require(selected.first)
+        #expect(anchor.side == .new)
+        #expect(anchor.line == 1)
+        #expect(anchor.endLine == 3)
+        #expect(view.gutterSelection == nil)
+    }
+
+    @Test func gutterSelectionNeedsTheGutterAndPermission() {
+        let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 200))
+        let lines = result(old: [], new: ["x", "y"])
+        let y = DiffSplitCoreTextRowView.verticalInset + view.lineHeight / 2
+        let newPane = DiffPaneSplitGeometry.frames(containerWidth: 800).newPane
+        view.configure(result: lines, font: font, theme: theme)
+        #expect(!view.beginGutterSelection(at: NSPoint(x: newPane.midX, y: y)))
+        view.configure(result: lines, font: font, theme: theme, review: .init(allowsSelection: false))
+        #expect(!view.beginGutterSelection(at: NSPoint(x: newPane.minX + 5, y: y)))
+    }
+
     @Test func headerButtonsRunTheirActions() {
         var pressed: [String] = []
         let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 200))

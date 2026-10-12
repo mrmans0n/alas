@@ -1775,48 +1775,7 @@ final class DiffPaneCodeTextView: NSTextView {
     }
 
     func reviewLineAnchor(fromRow startRow: Int, toRow endRow: Int) -> DiffReviewLineAnchor? {
-        let lowerRow = min(startRow, endRow)
-        let upperRow = max(startRow, endRow)
-        guard lineMetadata.indices.contains(lowerRow),
-              lineMetadata.indices.contains(upperRow)
-        else { return nil }
-
-        var resolvedAnchors: [DiffReviewLineAnchor] = []
-        for rowIndex in lowerRow...upperRow {
-            let metadata = lineMetadata[rowIndex]
-            if let anchor = metadata.reviewLineAnchor(rowIndex: rowIndex) {
-                resolvedAnchors.append(anchor)
-            } else if metadata.tone != .placeholder {
-                return nil
-            }
-        }
-        guard !resolvedAnchors.isEmpty,
-              let first = resolvedAnchors.first,
-              resolvedAnchors.allSatisfy({ $0.path == first.path })
-        else { return nil }
-        guard resolvedAnchors.count > 1 else { return first }
-
-        let side = resolvedAnchors.allSatisfy({ $0.side == first.side }) ? first.side : .unknown
-        let lineNumbers = resolvedAnchors.flatMap { anchor -> [Int] in
-            if let endLine = anchor.endLine {
-                return [anchor.line, endLine]
-            }
-            return [anchor.line]
-        }
-        guard let startLine = lineNumbers.min(),
-              let endLine = lineNumbers.max()
-        else { return nil }
-
-        return DiffReviewLineAnchor(
-            path: first.path,
-            side: side,
-            line: startLine,
-            endLine: endLine,
-            rowIndex: first.rowIndex,
-            endRowIndex: resolvedAnchors.last?.rowIndex ?? first.rowIndex,
-            selectedLines: resolvedAnchors.flatMap(\.selectedLines),
-            selectedText: resolvedAnchors.map(\.selectedText).joined(separator: "\n")
-        )
+        lineMetadata.reviewLineAnchor(fromRow: startRow, toRow: endRow)
     }
 
     func reviewLineAnchor(at point: NSPoint) -> DiffReviewLineAnchor? {
@@ -2918,5 +2877,55 @@ extension Array where Element == NSRect {
             }
         }
         return low
+    }
+}
+
+extension Array where Element == DiffPaneTextDocumentBuilder.LineMetadata {
+    /// One anchor covering rows `startRow` through `endRow` (either order),
+    /// skipping placeholders; nil when the range crosses a non-code row or
+    /// files.
+    func reviewLineAnchor(fromRow startRow: Int, toRow endRow: Int) -> DiffReviewLineAnchor? {
+        let lowerRow = Swift.min(startRow, endRow)
+        let upperRow = Swift.max(startRow, endRow)
+        guard indices.contains(lowerRow),
+              indices.contains(upperRow)
+        else { return nil }
+
+        var resolvedAnchors: [DiffReviewLineAnchor] = []
+        for rowIndex in lowerRow...upperRow {
+            let metadata = self[rowIndex]
+            if let anchor = metadata.reviewLineAnchor(rowIndex: rowIndex) {
+                resolvedAnchors.append(anchor)
+            } else if metadata.tone != .placeholder {
+                return nil
+            }
+        }
+        guard !resolvedAnchors.isEmpty,
+              let first = resolvedAnchors.first,
+              resolvedAnchors.allSatisfy({ $0.path == first.path })
+        else { return nil }
+        guard resolvedAnchors.count > 1 else { return first }
+
+        let side = resolvedAnchors.allSatisfy({ $0.side == first.side }) ? first.side : .unknown
+        let lineNumbers = resolvedAnchors.flatMap { anchor -> [Int] in
+            if let endLine = anchor.endLine {
+                return [anchor.line, endLine]
+            }
+            return [anchor.line]
+        }
+        guard let startLine = lineNumbers.min(),
+              let endLine = lineNumbers.max()
+        else { return nil }
+
+        return DiffReviewLineAnchor(
+            path: first.path,
+            side: side,
+            line: startLine,
+            endLine: endLine,
+            rowIndex: first.rowIndex,
+            endRowIndex: resolvedAnchors.last?.rowIndex ?? first.rowIndex,
+            selectedLines: resolvedAnchors.flatMap(\.selectedLines),
+            selectedText: resolvedAnchors.map(\.selectedText).joined(separator: "\n")
+        )
     }
 }

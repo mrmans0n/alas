@@ -31,6 +31,21 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         var actions: [Action] = []
     }
 
+    /// Commenting on lines: what the gutter may select, and the comment
+    /// whose lines are highlighted.
+    struct ReviewLines {
+        var allowsSelection = true
+        var activeHighlight: DiffReviewCommentHighlight?
+        var onSelect: @MainActor (DiffReviewLineAnchor) -> Void = { _ in }
+    }
+
+    /// A gutter drag in progress, in rows of one side.
+    struct GutterSelection: Equatable {
+        let side: Side
+        let start: Int
+        var current: Int
+    }
+
     static let verticalInset: CGFloat = 8
     static let textInset: CGFloat = 10
     static let headerVerticalPadding: CGFloat = 8
@@ -55,6 +70,7 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         var codeStrings: [String] = []
         var labels: [CTLine?] = []
         var tones: [DiffPaneLineTone] = []
+        var metadata: [DiffPaneTextDocumentBuilder.LineMetadata] = []
         var widest: CGFloat = 0
         /// Line-number gutter width, as `DiffPaneLineNumberRulerView` sizes it.
         var gutterWidth: CGFloat = 42
@@ -64,6 +80,13 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
     private var new = SideLines()
     private(set) var isStacked = false
     private(set) var wraps = false
+    private var review = ReviewLines()
+    private(set) var gutterSelection: GutterSelection? {
+        didSet { if gutterSelection != oldValue { needsDisplay = true } }
+    }
+    private var hoveredGutterRow: (side: Side, row: Int)? {
+        didSet { if hoveredGutterRow?.side != oldValue?.side || hoveredGutterRow?.row != oldValue?.row { needsDisplay = true } }
+    }
     /// Wrapped lines for the last width laid out; nil when not wrapping.
     private var wrapLayout: WrapLayout?
     private var theme: Theme?
@@ -109,10 +132,12 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         font: NSFont,
         theme: Theme,
         chrome: HunkChrome? = nil,
-        wraps: Bool = false
+        wraps: Bool = false,
+        review: ReviewLines = ReviewLines()
     ) {
         isStacked = false
         self.wraps = wraps
+        self.review = review
         old = Self.lines(code: result.oldCode, gutter: result.oldGutter, theme: theme)
         new = Self.lines(code: result.newCode, gutter: result.newGutter, theme: theme)
         applyContent(font: font, theme: theme, chrome: chrome)
@@ -123,10 +148,12 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         font: NSFont,
         theme: Theme,
         chrome: HunkChrome? = nil,
-        wraps: Bool = false
+        wraps: Bool = false,
+        review: ReviewLines = ReviewLines()
     ) {
         isStacked = true
         self.wraps = wraps
+        self.review = review
         old = SideLines()
         new = Self.lines(code: result.code, gutter: result.gutter, theme: theme)
         applyContent(font: font, theme: theme, chrome: chrome)
@@ -138,6 +165,8 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         lineHeight = metrics.lineHeight
         baselineOffset = metrics.baselineOffset
         wrapLayout = nil
+        gutterSelection = nil
+        hoveredGutterRow = nil
         // Wrapped lines fit their pane, so there is nothing to scroll sideways.
         horizontalScroll.oldContentWidth = isStacked || wraps ? 0 : old.widest + 2 * Self.textInset
         horizontalScroll.newContentWidth = wraps ? 0 : new.widest + 2 * Self.textInset
@@ -355,6 +384,95 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         )
     }
 
+    // MARK: - Review line selection
+
+    /// The side and row whose line-number gutter contains `point`.
+    func gutterRow(at point: NSPoint) -> (side: Side, row: Int)? {
+        let side = side(at: point)
+        let pane = pane(side)
+        let gutter = side == .old ? old.gutterWidth : new.gutterWidth
+        guard point.x >= pane.minX, point.x < pane.minX + gutter, let row = row(at: point.y) else { return nil }
+        return (side, row)
+    }
+
+    private func row(at y: CGFloat) -> Int? {
+        guard lineCount > 0, lineHeight > 0, y >= codeTop else { return nil }
+        let visual = Int(floor((y - codeTop) / lineHeight))
+        let row = wraps ? Self.row(containingVisualLine: visual, rowStarts: layout(forWidth: bounds.width).rowStarts) : visual
+        return row < lineCount ? row : nil
+    }
+
+    private func lines(_ side: Side) -> SideLines { side == .old ? old : new }
+
+    private func isCommentable(side: Side, row: Int) -> Bool {
+        review.allowsSelection && lines(side).metadata.reviewLineAnchor(fromRow: row, toRow: row) != nil
+    }
+
+    /// Starts a gutter drag; returns false when `point` is not on a gutter row.
+    func beginGutterSelection(at point: NSPoint) -> Bool {
+        guard review.allowsSelection, let hit = gutterRow(at: point) else { return false }
+        gutterSelection = GutterSelection(side: hit.side, start: hit.row, current: hit.row)
+        return true
+    }
+
+    /// Extends the drag to the row level with `point`, staying on its side.
+    func extendGutterSelection(to point: NSPoint) {
+        guard var selection = gutterSelection else { return }
+        let last = lines(selection.side).metadata.count - 1
+        guard last >= 0 else { return }
+        if let row = row(at: point.y) {
+            selection.current = min(row, last)
+        } else {
+            selection.current = point.y < codeTop ? 0 : last
+        }
+        gutterSelection = selection
+    }
+
+    /// Ends the drag, reporting the selected lines when they form an anchor.
+    func endGutterSelection() {
+        guard let selection = gutterSelection else { return }
+        gutterSelection = nil
+        if let anchor = lines(selection.side).metadata.reviewLineAnchor(fromRow: selection.start, toRow: selection.current) {
+            review.onSelect(anchor)
+        }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if !beginGutterSelection(at: convert(event.locationInWindow, from: nil)) {
+            super.mouseDown(with: event)
+        }
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard gutterSelection != nil else { return super.mouseDragged(with: event) }
+        extendGutterSelection(to: convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard gutterSelection != nil else { return super.mouseUp(with: event) }
+        endGutterSelection()
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if trackingAreas.isEmpty {
+            addTrackingArea(NSTrackingArea(
+                rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect], owner: self
+            ))
+        }
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        let hit = gutterRow(at: convert(event.locationInWindow, from: nil))
+        hoveredGutterRow = hit.flatMap { isCommentable(side: $0.side, row: $0.row) ? $0 : nil }
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        hoveredGutterRow = nil
+    }
+
     // MARK: - Horizontal scrolling
 
     func scrollerForTesting(_ side: Side) -> NSScroller {
@@ -427,10 +545,13 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         drawHeader(theme: theme, context: context, dirtyRect: dirtyRect)
         let range = visibleLineRange(in: dirtyRect)
         let wrapped = wraps ? layout(forWidth: bounds.width) : nil
-        if !isStacked {
-            draw(old, wrapped: wrapped?.old, rowStarts: wrapped?.rowStarts, in: pane(.old), offset: horizontalScroll.offset(.old), range: range, theme: theme, context: context)
+        for side in isStacked ? [Side.new] : [.old, .new] {
+            draw(
+                lines(side), wrapped: side == .old ? wrapped?.old : wrapped?.new, rowStarts: wrapped?.rowStarts,
+                in: pane(side), offset: horizontalScroll.offset(side), range: range, theme: theme, context: context
+            )
+            drawReviewOverlays(side, rowStarts: wrapped?.rowStarts, theme: theme)
         }
-        draw(new, wrapped: wrapped?.new, rowStarts: wrapped?.rowStarts, in: pane(.new), offset: horizontalScroll.offset(.new), range: range, theme: theme, context: context)
         if !isStacked {
             let divider = DiffPaneSplitGeometry.frames(containerWidth: bounds.width).divider
             theme.nsColor("line").setFill()
@@ -516,6 +637,57 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
             }
         }
         context.restoreGState()
+    }
+
+    /// The rows' rect within the code area or the gutter of `side`.
+    private func rowsRect(_ rows: ClosedRange<Int>, side: Side, rowStarts: [Int]?) -> NSRect {
+        let top = codeTop + CGFloat(rowStarts?[rows.lowerBound] ?? rows.lowerBound) * lineHeight
+        let bottom = codeTop + CGFloat(rowStarts?[rows.upperBound + 1] ?? rows.upperBound + 1) * lineHeight
+        let pane = pane(side)
+        return NSRect(x: pane.minX, y: top, width: pane.width, height: bottom - top)
+    }
+
+    /// The active comment's lines, the gutter drag outline, and the hover
+    /// "+" affordance, as `DiffPaneCodeTextView` and the ruler draw them.
+    private func drawReviewOverlays(_ side: Side, rowStarts: [Int]?, theme: Theme) {
+        let sideLines = lines(side)
+        let gutter = sideLines.gutterWidth
+        let accent = theme.nsColor("accent")
+        if let rows = review.activeHighlight?.highlightedRowRange(in: sideLines.metadata) {
+            let rect = rowsRect(rows, side: side, rowStarts: rowStarts)
+            accent.withAlphaComponent(0.18).setFill()
+            NSRect(x: rect.minX, y: rect.minY, width: gutter, height: rect.height).fill()
+            let code = NSRect(x: rect.minX + gutter + 4, y: rect.minY, width: max(rect.width - gutter - 8, 1), height: rect.height)
+            accent.withAlphaComponent(0.12).setFill()
+            NSBezierPath(roundedRect: code, xRadius: 4, yRadius: 4).fill()
+            accent.withAlphaComponent(0.82).setStroke()
+            let stroke = NSBezierPath(roundedRect: code.insetBy(dx: 0.5, dy: 0.5), xRadius: 4, yRadius: 4)
+            stroke.lineWidth = 1
+            stroke.stroke()
+        }
+        if let selection = gutterSelection, selection.side == side {
+            let rect = rowsRect(min(selection.start, selection.current)...max(selection.start, selection.current), side: side, rowStarts: rowStarts)
+            let outline = NSRect(x: rect.minX + 4, y: rect.minY, width: max(gutter - 8, 1), height: rect.height)
+            accent.setStroke()
+            let path = NSBezierPath(roundedRect: outline.insetBy(dx: 0.5, dy: 0.5), xRadius: 5, yRadius: 5)
+            path.lineWidth = 1.5
+            path.stroke()
+        }
+        if let hover = hoveredGutterRow, hover.side == side, gutterSelection == nil {
+            let row = rowsRect(hover.row...hover.row, side: side, rowStarts: rowStarts)
+            let rect = DiffPaneLineNumberRulerView.reviewAffordanceRect(
+                in: NSRect(x: 0, y: row.minY, width: gutter, height: min(row.height, lineHeight)), ruleThickness: gutter
+            ).offsetBy(dx: row.minX, dy: 0)
+            accent.setFill()
+            NSBezierPath(roundedRect: rect, xRadius: 8, yRadius: 8).fill()
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: NSFont.systemFont(ofSize: 12, weight: .bold),
+                .foregroundColor: theme.nsColor("bg-1"),
+            ]
+            let plus = "+" as NSString
+            let size = plus.size(withAttributes: attributes)
+            plus.draw(at: NSPoint(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2 - 0.5), withAttributes: attributes)
+        }
     }
 
     /// The review's file-card border: the sides always, top and bottom with
@@ -677,6 +849,7 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
             let label = labels.indices.contains(index) ? labels[index] : ""
             let tone = metadata.tone ?? DiffPaneLineTone(label: label, rowKind: metadata.kind)
             side.tones.append(tone)
+            side.metadata.append(metadata)
             side.labels.append(label.isEmpty ? nil : CTLineCreateWithAttributedString(NSAttributedString(
                 string: label,
                 attributes: [.font: DiffPaneLineNumberGutterGeometry.labelFont, .foregroundColor: labelColor(label, tone: tone, theme: theme)]
