@@ -87,4 +87,29 @@ struct AlasCoreContextTests {
         }
         #expect(text.contains("hello from feature"))
     }
+
+    /// A script that ran but never reported its exit status still ran, so
+    /// its run is recorded with an unknown outcome instead of being undone.
+    @Test func runThatExecutedWithoutReportingKeepsAnUnknownRecord() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-core-\(UUID().uuidString)")
+        let project = ProjectConfig(id: "p", name: "p", path: root.path, color: "blue", addedAt: Date())
+        let worktree = Worktree(
+            id: root.path, projectId: "p", name: "main", branch: "main", path: root,
+            status: .clean, lastActivity: Date()
+        )
+        let script = RunScript(
+            scope: .repo, fileName: "noop.sh", fileURL: root.appendingPathComponent("noop.sh"),
+            displayName: "Noop", onExit: .close, cwd: nil, isExecutable: false
+        )
+        let context = AlasCoreContext(
+            projects: ProjectsManager(persistedProjects: [project]),
+            runs: RunService(launch: { _, _ in 7 }),
+            runHistoryStore: nil
+        )
+
+        await #expect(throws: RunService.RunError.completionNotPublished(exitCode: 7)) {
+            try await context.runScript(script, in: worktree)
+        }
+        #expect(context.runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status == .finished(.unknown))
+    }
 }

@@ -504,7 +504,7 @@ extension AppState {
     }
 
     private func persistedRunOutput(runID: String) async -> RunHistoryOutput? {
-        await runHistory.flush()
+        await runHistory.flush(runID: runID)
         return try? await runHistoryStore?.entry(id: runID)?.output
     }
 

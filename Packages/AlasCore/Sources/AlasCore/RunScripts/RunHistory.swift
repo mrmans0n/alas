@@ -168,6 +168,11 @@ public final class RunHistory {
         persistenceTasks[runID] != nil
     }
 
+    /// Waits for the run's save, if one is in flight.
+    public func flush(runID: String) async {
+        await persistenceTasks[runID]?.task.value
+    }
+
     /// Waits for the saves in flight, for one worktree or all of them.
     public func flush(worktreeID: String? = nil) async {
         let tasks = persistenceTasks.values.filter { worktreeID == nil || $0.worktreeID == worktreeID }

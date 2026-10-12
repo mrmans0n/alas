@@ -130,7 +130,8 @@ public final class AlasCoreContext {
 
     /// Runs `script` in `worktree` without a terminal, recording it and
     /// archiving its output like a terminal run. A run that never started
-    /// leaves the previous record in place.
+    /// leaves the previous record in place; one whose exit status was never
+    /// observed finishes as `unknown`.
     @discardableResult
     public func runScript(_ script: RunScript, in worktree: Worktree) async throws -> RunOutcome {
         guard let project = projects.projects.first(where: { $0.id == worktree.projectId }) else {
@@ -157,6 +158,10 @@ public final class AlasCoreContext {
         } catch is CancellationError {
             runHistory.archive(runRecords.finish(runID: runID, outcome: .stopped, at: Date()), capture: .unavailable)
             throw CancellationError()
+        } catch where error is RunService.RunError || error is RunScriptCompletionMonitor.MonitorError {
+            // The command ran but its exit status was never observed.
+            runHistory.archive(runRecords.markLostObservation(runID: runID, at: Date()), capture: .unavailable)
+            throw error
         } catch {
             runRecords.rollback(runID: runID, to: displaced)
             throw error
