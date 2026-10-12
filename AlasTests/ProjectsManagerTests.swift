@@ -7,12 +7,21 @@ import Foundation
 @Suite(.serialized)
 @MainActor
 struct ProjectsManagerTests {
-    private func makeRepo(name: String) async throws -> URL {
+    /// A `main` branch with one empty commit, built once per test process.
+    /// It has no tracked files, so a copy's index is never stat-dirty.
+    private static let repoTemplate = Task { () throws -> URL in
         let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("alas-pm-\(name)-\(UUID().uuidString)")
+            .appendingPathComponent("alas-pm-template-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         _ = try await Process.git(["init", "-q", "-b", "main"], cwd: dir)
         _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "init"], cwd: dir)
+        return dir
+    }
+
+    private func makeRepo(name: String) async throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-pm-\(name)-\(UUID().uuidString)")
+        try FileManager.default.copyItem(at: try await Self.repoTemplate.value, to: dir)
         return dir
     }
 
