@@ -217,6 +217,49 @@ import Testing
         #expect(lines.allSatisfy { CTLineGetTypographicBounds($0, nil, nil, nil) - CTLineGetTrailingWhitespaceWidth($0) <= 200 })
     }
 
+    typealias Position = DiffSplitCoreTextRowView.TextSelection.Position
+
+    @Test(arguments: [
+        // Within a line, in either drag direction.
+        (Position(row: 0, index: 4), Position(row: 0, index: 9), "alpha"),
+        (Position(row: 0, index: 9), Position(row: 0, index: 4), "alpha"),
+        // Across lines: the tail of the first, the head of the last, joined by a newline.
+        (Position(row: 0, index: 10), Position(row: 1, index: 3), "= 1\nlet"),
+        // Offsets past a line's end clamp to it.
+        (Position(row: 1, index: 8), Position(row: 1, index: 99), " = 2"),
+        (Position(row: 0, index: 2), Position(row: 0, index: 2), ""),
+    ])
+    func selectionsCopyTheTextBetweenTheirEnds(anchor: Position, focus: Position, expected: String) {
+        let selection = DiffSplitCoreTextRowView.TextSelection(side: .new, anchor: anchor, focus: focus)
+        #expect(selection.text(in: ["let alpha = 1", "let beta = 2"]) == expected)
+    }
+
+    private func click(_ view: NSView, _ type: NSEvent.EventType, at point: NSPoint, count: Int = 1) throws -> NSEvent {
+        try #require(NSEvent.mouseEvent(
+            with: type, location: view.convert(point, to: nil), modifierFlags: [], timestamp: 0, windowNumber: 0,
+            context: nil, eventNumber: 0, clickCount: count, pressure: 1
+        ))
+    }
+
+    @Test(arguments: [(1, "let alpha = 1\nlet beta = 2"), (3, "let beta = 2")])
+    func draggingOrTripleClickingCodeCopiesIt(clickCount: Int, expected: String) throws {
+        let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 200))
+        view.configure(result: result(old: [], new: ["let alpha = 1", "let beta = 2"]), font: font, theme: theme)
+        let code = DiffSplitCoreTextRowView.codeColumn(.new, containerWidth: 800, stacked: false, gutter: 42)
+        let rowY = { (row: Int) in DiffSplitCoreTextRowView.verticalInset + (CGFloat(row) + 0.5) * view.lineHeight }
+        if clickCount == 1 {
+            view.mouseDown(with: try click(view, .leftMouseDown, at: NSPoint(x: code.minX + DiffSplitCoreTextRowView.textInset, y: rowY(0))))
+            view.mouseDragged(with: try click(view, .leftMouseDragged, at: NSPoint(x: code.minX + code.width - 5, y: rowY(1))))
+        } else {
+            view.mouseDown(with: try click(view, .leftMouseDown, at: NSPoint(x: code.minX + 30, y: rowY(1)), count: clickCount))
+        }
+        view.mouseUp(with: try click(view, .leftMouseUp, at: NSPoint(x: code.minX + 30, y: rowY(1)), count: clickCount))
+        let pasteboard = NSPasteboard(name: .init("diff-coretext-\(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+        #expect(view.copySelection(to: pasteboard))
+        #expect(pasteboard.string(forType: .string) == expected)
+    }
+
     @Test(arguments: [DiffReviewInlineFeedbackSide.old, .new])
     func lineJumpsLandOnTheLineInsideTheHunk(side: DiffReviewInlineFeedbackSide) throws {
         let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 200))
