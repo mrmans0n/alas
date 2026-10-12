@@ -124,10 +124,13 @@ struct MergeActionGutter: NSViewRepresentable {
             for (index, range) in conflictRanges.enumerated() where index < buttons.count {
                 let ends = endpoints(for: range)
                 let anchor = side == .localToResult ? ends.left : ends.right
-                let x: CGFloat = side == .localToResult ? 2 : bounds.width - 18
-                let y = anchor.lowerBound + 1
-                buttons[index].accept.frame = NSRect(x: x, y: y, width: 16, height: 16)
-                buttons[index].reject.frame = NSRect(x: x, y: y + 17, width: 16, height: 16)
+                // Both controls share the hunk's first row, accept nearest its
+                // side pane, so adjacent one-line hunks never overlap.
+                let y = anchor.lowerBound + (rowHeight - 16) / 2
+                let acceptX: CGFloat = side == .localToResult ? 2 : bounds.width - 18
+                let rejectX: CGFloat = side == .localToResult ? 18 : bounds.width - 34
+                buttons[index].accept.frame = NSRect(x: acceptX, y: y, width: 16, height: 16)
+                buttons[index].reject.frame = NSRect(x: rejectX, y: y, width: 16, height: 16)
                 let tint = palette?.color(for: side == .localToResult ? .local : .remote) ?? .controlAccentColor
                 buttons[index].accept.contentTintColor = tint
                 buttons[index].reject.contentTintColor = rejectTint

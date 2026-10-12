@@ -115,11 +115,24 @@ private final class MergeRulerScrollView: NSScrollView {
         guard rulersVisible, let ruler = verticalRulerView else { return }
         let rulerWidth = ruler.ruleThickness
         var clipFrame = contentView.frame
-        guard clipFrame.minX < rulerWidth - 0.5 else { return }
-        clipFrame.origin.x = rulerWidth
-        clipFrame.size.width = max(bounds.width - rulerWidth, 1)
-        contentView.frame = clipFrame
-        ruler.frame = NSRect(x: 0, y: clipFrame.minY, width: rulerWidth, height: clipFrame.height)
+        if clipFrame.minX < rulerWidth - 0.5 {
+            clipFrame.origin.x = rulerWidth
+            clipFrame.size.width = max(bounds.width - rulerWidth, 1)
+            contentView.frame = clipFrame
+            ruler.frame = NSRect(x: 0, y: clipFrame.minY, width: rulerWidth, height: clipFrame.height)
+        }
+        // Shrinking the clip autoresizes the text view narrower than it, and
+        // AppKit then offsets the bounds origin to a negative x, opening a
+        // gap after the ruler. Keep the document at least clip-wide.
+        if let textView = documentView as? NSTextView {
+            textView.minSize = NSSize(width: clipFrame.width, height: 0)
+            if textView.frame.width < clipFrame.width {
+                textView.setFrameSize(NSSize(width: clipFrame.width, height: textView.frame.height))
+            }
+        }
+        if contentView.bounds.origin.x < 0 {
+            contentView.setBoundsOrigin(NSPoint(x: 0, y: contentView.bounds.origin.y))
+        }
     }
 }
 

@@ -14,7 +14,13 @@ final class MergeScrollCoordinator {
 
     /// All three panes use the same font and a fixed line height, so a
     /// single row height maps rows to pixels in every pane.
-    var rowHeight: CGFloat = 16
+    var rowHeight: CGFloat = 16 {
+        didSet {
+            // Offsets were computed with the old metric (font family or size
+            // changed): re-align once the panes have relaid their text.
+            if abs(rowHeight - oldValue) > 0.01 { scheduleReanchor() }
+        }
+    }
     var contentTopInset: CGFloat = 6
     private(set) var viewportHeight: CGFloat = 0
     var layout: MergeRegionVisualLayout.Layout?
@@ -86,6 +92,19 @@ final class MergeScrollCoordinator {
 
     func removeScrollObserver(_ id: UUID) {
         scrollObservers.removeValue(forKey: id)
+    }
+
+    private var reanchorScheduled = false
+
+    private func scheduleReanchor() {
+        guard !reanchorScheduled else { return }
+        reanchorScheduled = true
+        Task { @MainActor [weak self] in
+            await Task.yield()
+            guard let self else { return }
+            reanchorScheduled = false
+            broadcast(from: .result)
+        }
     }
 
     private func broadcast(from source: Source) {
