@@ -7,11 +7,10 @@ struct MergeConflictTabView: View {
     let onStartupRecoveryReady: () -> Void
 
     @State private var model: MergeConflictTabModel
-    /// Conflict keys dismissed from the annotation strip. Lifted out of
-    /// `MergeConflictAnnotationStrip` so dismissal survives navigating
-    /// to a conflict that has no cached annotation (which would unmount
-    /// the strip and otherwise reset its local @State).
-    @State private var dismissedAnnotationKeys: Set<String> = []
+    /// Whether the explanation bar shows each side's intent. Lifted out of
+    /// `MergeConflictAnnotationStrip` so the choice survives navigating
+    /// between conflicts.
+    @State private var explanationExpanded = true
     @Environment(\.theme) var theme
 
     init(
@@ -69,12 +68,6 @@ struct MergeConflictTabView: View {
                     agentBusy: model.agentBusy,
                     hasAgent: resolvedAgent != nil,
                     hasPendingProposal: model.agentProposal != nil,
-                    explainAvailable: explainer.isAvailable,
-                    canExplain: model.conflictedFile?.isBinary == false && currentBlock.map { block in
-                        model.explanation(for: block) == nil
-                            || dismissedAnnotationKeys.contains(MergeConflictTabModel.conflictKey(for: block))
-                    } == true,
-                    isExplaining: model.explainingKey != nil && model.explainingKey == currentBlockKey,
                     showBase: showBaseBinding,
                     wordDiffMode: Binding(
                         get: { model.wordDiffMode },
@@ -83,13 +76,6 @@ struct MergeConflictTabView: View {
                     baseAvailable: model.hasBase,
                     onPrevious: { model.previousConflict() },
                     onNext: { model.nextConflict() },
-                    onExplain: {
-                        if let key = currentBlockKey {
-                            dismissedAnnotationKeys.remove(key)
-                        }
-                        let explainer = explainer
-                        Task { await model.explainCurrentConflict(using: explainer) }
-                    },
                     onAskAgentResolve: {
                         guard let agent = resolvedAgent else { return }
                         let template = state.config.changes.mergeSingleResolvePrompt
@@ -123,9 +109,9 @@ struct MergeConflictTabView: View {
                 )
                 if let block = currentBlock,
                    let ordinal = model.currentConflictIndex,
-                   let explanation = model.explanation(for: block) {
+                   let status = explanationStatus(for: block) {
                     MergeConflictAnnotationStrip(
-                        explanation: explanation,
+                        status: status,
                         citation: MergeConflictExplanationPolicy.citation(
                             conflictNumber: ordinal + 1,
                             conflictCount: model.conflictCount,
@@ -133,8 +119,11 @@ struct MergeConflictTabView: View {
                         ),
                         localLabel: block.localLabel,
                         remoteLabel: block.remoteLabel,
-                        conflictKey: MergeConflictTabModel.conflictKey(for: block),
-                        dismissedKeys: $dismissedAnnotationKeys
+                        onRetry: {
+                            let explainer = explainer
+                            Task { await model.explainCurrentConflict(using: explainer, retry: true) }
+                        },
+                        isExpanded: $explanationExpanded
                     )
                 }
                 content
@@ -165,7 +154,38 @@ struct MergeConflictTabView: View {
             await model.load()
             onStartupRecoveryReady()
         }
+        .task(id: autoExplainID) {
+            await explainCurrentConflictAutomatically()
+        }
         .onDisappear { model.cancelExplanation() }
+    }
+
+    /// Changes whenever a different hunk becomes current (or the model
+    /// becomes available), restarting the automatic explanation.
+    private var autoExplainID: String {
+        "\(currentBlockKey ?? "")\u{0000}\(explainer.isAvailable)"
+    }
+
+    private func explainCurrentConflictAutomatically() async {
+        guard model.conflictedFile?.isBinary == false,
+              currentBlockKey != nil,
+              explainer.isAvailable
+        else { return }
+        // Let quick prev/next navigation settle before spending a model run.
+        try? await Task.sleep(for: .milliseconds(250))
+        guard !Task.isCancelled else { return }
+        await model.explainCurrentConflict(using: explainer)
+    }
+
+    /// Nil hides the bar: no on-device model, or nothing requested yet.
+    private func explanationStatus(for block: ConflictBlock) -> MergeConflictAnnotationStrip.Status? {
+        if let explanation = model.explanation(for: block) {
+            return .explained(explanation)
+        }
+        guard explainer.isAvailable, model.conflictedFile?.isBinary == false else { return nil }
+        let key = MergeConflictTabModel.conflictKey(for: block)
+        if model.failedExplanationKeys.contains(key) { return .failed }
+        return .explaining
     }
 
     @ViewBuilder
