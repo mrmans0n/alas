@@ -901,7 +901,7 @@ struct ReviewChangesTabViewTests {
         controller.view.layoutSubtreeIfNeeded()
 
         #expect(subview(withAccessibilityIdentifier: "diff-review-file-section-\(file.id.rawValue)", in: controller.view) != nil)
-        #expect(allSubviews(of: controller.view).contains { $0 is DiffPaneTextScrollView })
+        #expect(allSubviews(of: controller.view).contains { $0 is DiffPaneTextScrollView || $0 is DiffSplitCoreTextRowView })
         #expect(subview(withAccessibilityIdentifier: "diff-pane-toolbar", in: controller.view) == nil)
         #expect(subview(withAccessibilityIdentifier: "diff-review-open-file-\(file.id.rawValue)", in: controller.view) == nil)
         #expect(accessibilityLabel(in: controller.view, containing: "UNSTAGED") != nil)
@@ -924,9 +924,9 @@ struct ReviewChangesTabViewTests {
         let controller = renderFileSection(file: providerBackedFile(provider: DiffReviewContextProvider {
             try await probe.snapshot()
         }))
-        let ruler = try #require(allSubviews(of: controller.view).compactMap { $0 as? DiffPaneLineNumberRulerView }.first)
+        let expand = try #require(expansionInvoker(in: controller.view))
 
-        ruler.invokeExpansionForTesting(row: 0, optionKey: false)
+        expand(0, false)
 
         let text = try await waitForRenderedText(in: controller.view, containing: "old 1")
         #expect(text.contains("old 2"))
@@ -939,11 +939,11 @@ struct ReviewChangesTabViewTests {
         let controller = renderFileSection(file: providerBackedFile(provider: DiffReviewContextProvider {
             try await probe.snapshot()
         }))
-        let ruler = try #require(allSubviews(of: controller.view).compactMap { $0 as? DiffPaneLineNumberRulerView }.first)
+        let expand = try #require(expansionInvoker(in: controller.view))
 
-        ruler.invokeExpansionForTesting(row: 0, optionKey: false)
+        expand(0, false)
         try await waitForLoadCount(1, probe: probe)
-        ruler.invokeExpansionForTesting(row: 2, optionKey: false)
+        expand(2, false)
         await probe.resolve(DiffReviewFileContextSnapshot(
             old: .available((1...8).map { "old \($0)" }),
             new: .available((1...8).map { "new \($0)" })
@@ -964,8 +964,8 @@ struct ReviewChangesTabViewTests {
         let controller = renderAnyFileSection(file: providerBackedFile(provider: DiffReviewContextProvider {
             try await staleProbe.snapshot()
         }))
-        let staleRuler = try #require(allSubviews(of: controller.view).compactMap { $0 as? DiffPaneLineNumberRulerView }.first)
-        staleRuler.invokeExpansionForTesting(row: 0, optionKey: false)
+        let expandStale = try #require(expansionInvoker(in: controller.view))
+        expandStale(0, false)
         try await waitForLoadCount(1, probe: staleProbe)
 
         // A different path here (not the same file re-rendered) is deliberate:
@@ -986,8 +986,8 @@ struct ReviewChangesTabViewTests {
         ))
         controller.view.layoutSubtreeIfNeeded()
 
-        let freshRuler = try #require(allSubviews(of: controller.view).compactMap { $0 as? DiffPaneLineNumberRulerView }.first)
-        freshRuler.invokeExpansionForTesting(row: 2, optionKey: false)
+        let expandFresh = try #require(expansionInvoker(in: controller.view))
+        expandFresh(2, false)
         try await waitForLoadCount(1, probe: freshProbe)
 
         await staleProbe.resolve(DiffReviewFileContextSnapshot(
@@ -1015,9 +1015,9 @@ struct ReviewChangesTabViewTests {
         let controller = renderFileSection(file: providerBackedFile(provider: DiffReviewContextProvider {
             throw ContextProviderTestError.failed
         }))
-        let ruler = try #require(allSubviews(of: controller.view).compactMap { $0 as? DiffPaneLineNumberRulerView }.first)
+        let expand = try #require(expansionInvoker(in: controller.view))
 
-        ruler.invokeExpansionForTesting(row: 0, optionKey: false)
+        expand(0, false)
 
         let label = try await waitForAccessibilityLabel(
             in: controller.view,
@@ -1108,10 +1108,25 @@ struct ReviewChangesTabViewTests {
         )
     }
 
+    /// Text the review renders, from text views or CoreText rows.
     private func renderedText(in view: NSView) -> String {
         allSubviews(of: view)
-            .compactMap { ($0 as? NSTextView)?.string }
+            .compactMap { ($0 as? NSTextView)?.string ?? ($0 as? DiffSplitCoreTextRowView)?.renderedTextForTesting() }
             .joined(separator: "\n")
+    }
+
+    /// Expands context from the first rendered hunk's gutter, through its
+    /// ruler or its CoreText row.
+    private func expansionInvoker(in view: NSView) -> ((Int, Bool) -> Void)? {
+        for subview in allSubviews(of: view) {
+            if let ruler = subview as? DiffPaneLineNumberRulerView {
+                return { ruler.invokeExpansionForTesting(row: $0, optionKey: $1) }
+            }
+            if let row = subview as? DiffSplitCoreTextRowView {
+                return { row.invokeExpansionForTesting(row: $0, optionKey: $1) }
+            }
+        }
+        return nil
     }
 
     private func waitForRenderedText(in view: NSView, containing needle: String) async throws -> String {

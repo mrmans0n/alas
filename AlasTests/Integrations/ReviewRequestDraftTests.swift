@@ -367,14 +367,15 @@ struct ReviewRequestDraftTests {
         await Task.yield()
         controller.view.layoutSubtreeIfNeeded()
 
-        let visibleTextScrollViews = allSubviews(of: controller.view)
-            .compactMap { $0 as? DiffPaneTextScrollView }
+        // Split hunks render as two text panes, or as one CoreText row with both sides.
+        let visibleCodeViews = allSubviews(of: controller.view)
+            .filter { $0 is DiffPaneTextScrollView || $0 is DiffSplitCoreTextRowView }
             .filter(isEffectivelyVisible)
-        let visibleText = visibleTextScrollViews
-            .compactMap { ($0.documentView as? NSTextView)?.string }
+        let visibleText = visibleCodeViews
+            .compactMap { (($0 as? DiffPaneTextScrollView)?.documentView as? NSTextView)?.string ?? ($0 as? DiffSplitCoreTextRowView)?.renderedTextForTesting() }
             .joined(separator: "\n")
 
-        #expect(visibleTextScrollViews.count == 2)
+        #expect(!visibleCodeViews.isEmpty)
         #expect(visibleText.contains("let value = 1"))
         #expect(visibleText.contains("let value = 2"))
     }

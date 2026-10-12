@@ -260,6 +260,37 @@ import Testing
         #expect(pasteboard.string(forType: .string) == expected)
     }
 
+    /// The new side's code column and line `row`'s vertical middle, in a row 800pt wide.
+    private func newCodePoint(_ view: DiffSplitCoreTextRowView, x: (NSRect) -> CGFloat, row: Int) -> NSPoint {
+        let code = DiffSplitCoreTextRowView.codeColumn(.new, containerWidth: 800, stacked: false, gutter: 42)
+        let rect = NSRect(x: code.minX + DiffSplitCoreTextRowView.textInset, y: 0, width: code.width, height: 0)
+        return NSPoint(x: x(rect), y: DiffSplitCoreTextRowView.verticalInset + (CGFloat(row) + 0.5) * view.lineHeight)
+    }
+
+    @Test(arguments: [(0, "alpha"), (1, "")])
+    func doubleClickingSelectsTheWordUnderThePointer(row: Int, expected: String) throws {
+        let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 200))
+        view.configure(result: result(old: [], new: ["let alpha = 1", ""]), font: font, theme: theme)
+        let line = CTLineCreateWithAttributedString(NSAttributedString(string: "let alpha = 1", attributes: [.font: font]))
+        // The right half of alpha's last character: the nearest caret falls after the word.
+        let x = CTLineGetOffsetForStringIndex(line, 9, nil) - 1
+        let point = newCodePoint(view, x: { $0.minX + x }, row: row)
+        view.mouseDown(with: try click(view, .leftMouseDown, at: point, count: 2))
+        view.mouseUp(with: try click(view, .leftMouseUp, at: point, count: 2))
+        #expect(view.selectedText() == expected)
+    }
+
+    @Test func escapeClearsTheSelection() throws {
+        let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 200))
+        view.configure(result: result(old: [], new: ["let alpha = 1"]), font: font, theme: theme)
+        let point = newCodePoint(view, x: { $0.minX + 20 }, row: 0)
+        view.mouseDown(with: try click(view, .leftMouseDown, at: point, count: 3))
+        view.mouseUp(with: try click(view, .leftMouseUp, at: point, count: 3))
+        #expect(!view.selectedText().isEmpty)
+        view.cancelOperation(nil)
+        #expect(view.selectedText().isEmpty)
+    }
+
     @Test func pointerOverNewSideCodeResolvesTheSymbolForLSP() throws {
         let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 200))
         view.configure(result: result(old: ["let gamma = 0"], new: ["let alpha = 1"]), font: font, theme: theme)
@@ -276,11 +307,17 @@ import Testing
         #expect(view.characterIndex(at: NSPoint(x: textX(.old, 6), y: y)) == nil)
     }
 
-    @Test func eachSideReadsItsCodeToAccessibility() {
+    @Test func eachSideReadsItsCodeToAccessibility() throws {
         let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 200))
         view.configure(result: result(old: ["let a = 0"], new: ["let a = 1", "let b = 2"]), font: font, theme: theme)
-        let values = view.codeAccessibilityElements().map { "\($0.accessibilityLabel() ?? ""): \($0.accessibilityValue() as? String ?? "")" }
+        let elements = view.codeAccessibilityElements()
+        let values = elements.map { "\($0.accessibilityLabel() ?? ""): \($0.accessibilityValue() as? String ?? "")" }
         #expect(values == ["Old code: let a = 0\n ", "New code: let a = 1\nlet b = 2"])
+        // Stable identity, so VoiceOver keeps its place, and navigable by line.
+        #expect(zip(elements, view.codeAccessibilityElements()).allSatisfy { $0 === $1 })
+        let new = try #require(elements.last)
+        #expect(new.accessibilityString(for: new.accessibilityRange(forLine: 1)) == "let b = 2")
+        #expect(new.accessibilityLine(for: 11) == 1)
     }
 
     @Test(arguments: [DiffReviewInlineFeedbackSide.old, .new])
