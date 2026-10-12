@@ -180,4 +180,34 @@ struct AlasCoreContextTests {
         }
         #expect(context.runRecords.record(worktreeID: worktree.id, scriptKey: script.key) == running)
     }
+
+    /// The removal cannot be undone, so a project list that cannot be saved
+    /// afterwards is reported rather than left to restore the deleted row.
+    @Test func deletionThatCannotSaveTheProjectListThrows() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-core-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let repo = root.appendingPathComponent("repo")
+        try FileManager.default.copyItem(at: try await Self.repoTemplate.value, to: repo)
+        let store = TestPersistenceStore()
+        let context = AlasCoreContext(
+            projects: ProjectsManager(persistedProjects: []),
+            store: store,
+            projectsFile: root.appendingPathComponent("projects.json"),
+            runHistoryStore: nil
+        )
+        let project = try await context.addProject(path: repo, displayName: "repo", icon: .default(color: "blue"))
+        let worktree = try await context.createWorktree(
+            projectID: project.id,
+            branch: "feature",
+            base: "main",
+            destination: root.appendingPathComponent("feature")
+        )
+        store.writeError = CocoaError(.fileWriteOutOfSpace)
+
+        await #expect(throws: CocoaError.self) {
+            try await context.deleteWorktree(worktree)
+        }
+        #expect(!context.projects.worktrees(projectId: project.id).map(\.id).contains(worktree.id))
+    }
 }

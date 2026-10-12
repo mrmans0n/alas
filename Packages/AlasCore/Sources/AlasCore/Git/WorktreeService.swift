@@ -1534,7 +1534,7 @@ public struct WorktreeService: Sendable {
     /// files from the superproject's status; only a `submodule foreach` with
     /// explicit flags sees them. Without it a force-remove would silently
     /// delete files the user never saw reported.
-    private func isRemovalClean(
+    public func isRemovalClean(
         _ path: URL,
         gitDirectory: URL? = nil,
         usesRemoteHostRegistry: Bool = true
