@@ -46,6 +46,9 @@ public final class AlasCoreContext {
     @ObservationIgnored public var resolveWorkspaceRepoHook: WorkspaceRepoHookResolving = { _ in nil }
     @ObservationIgnored private var workspaceCheckoutCoordinator: WorkspaceCheckoutCoordinator?
 
+    /// Attention items and the gate observations pass through to reach them.
+    public let attention: AttentionIntake
+
     @ObservationIgnored private let store: any PersistenceStoreProtocol
     @ObservationIgnored private let projectsFile: URL
     @ObservationIgnored private let makeSessionManager: @MainActor (SessionOwnerID, Worktree) -> ACPSessionManager
@@ -61,6 +64,7 @@ public final class AlasCoreContext {
         runScheduler: RunScheduler? = nil,
         localTextModelStore: LocalTextModelStore = LocalTextModelStore(),
         localText: (any LocalTextGenerating)? = nil,
+        attentionStore: AttentionStore? = nil,
         runCompletionWaiter: @escaping RunCompletionWaiter = { try await RunScriptCompletionMonitor.wait(for: $0) },
         makeSessionManager: @escaping @MainActor (SessionOwnerID, Worktree) -> ACPSessionManager = AlasCoreContext.defaultSessionManager
     ) {
@@ -69,6 +73,7 @@ public final class AlasCoreContext {
         self.runScheduler = runScheduler ?? RunScheduler(store: store)
         self.runCompletionWaiter = runCompletionWaiter
         self.runHistory = RunHistory(store: runHistoryStore)
+        self.attention = AttentionIntake(store: attentionStore ?? AttentionStore())
         self.localTextModelStore = localTextModelStore
         self.localTextOverride = localText
         self.workspaceStore = workspaceStore
