@@ -677,7 +677,8 @@ struct AppStateCleanupTests {
         #expect(state.projectsManager.pendingAutoBranchName(projectId: project.id, worktreeId: failedId) == nil)
     }
 
-    @Test func autoNamingLeavesTheBranchOfAWorktreeBeingDeleted() async throws {
+    @Test(arguments: [true, false])
+    func autoNamingRenamesOnlyWorktreesNotBeingDeleted(beingDeleted: Bool) async throws {
         let repo = try await makeRepo(name: "auto-name-delete")
         defer { try? FileManager.default.removeItem(at: repo) }
         let state = AppState()
@@ -702,7 +703,13 @@ struct AppStateCleanupTests {
         try await waitForOperationState(state.projectsManager, id: id, projectId: project.id, equals: nil)
         #expect(state.projectsManager.pendingAutoBranchName(projectId: project.id, worktreeId: id) == "quiet-otter")
 
-        state.projectsManager.setOperationState(forWorktreeId: id, projectId: project.id, state: .preparingDelete)
+        state.projectsManager.setOperationState(
+            forWorktreeId: id,
+            projectId: project.id,
+            state: beingDeleted
+                ? .preparingDelete
+                : .launchFailed(projectId: project.id, message: "No agent", launchSurface: .none)
+        )
         state.autoNameBranchIfPending(worktreeId: id, prompt: "Fix the offline sync conflicts")
         for _ in 0..<80 where state.autoNamingWorktreeIds.contains(id) {
             try await Task.sleep(nanoseconds: 100_000_000)
@@ -710,7 +717,12 @@ struct AppStateCleanupTests {
 
         #expect(!state.autoNamingWorktreeIds.contains(id))
         let head = try await Process.git(["symbolic-ref", "--short", "HEAD"], cwd: dest)
-        #expect(head.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "quiet-otter")
+        let branch = head.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        if beingDeleted {
+            #expect(branch == "quiet-otter")
+        } else {
+            #expect(branch.hasSuffix("fix-offline-sync-conflicts"))
+        }
     }
 
     @Test func createWorktreeRetryPreservesIssueLaunchMetadata() async throws {

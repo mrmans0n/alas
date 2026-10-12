@@ -135,8 +135,9 @@ extension AppState {
         }
     }
 
-    /// Serialized with the project's creates and deletes. A worktree with an
-    /// operation in flight keeps its branch: a delete has already captured it.
+    /// Serialized with the project's creates and deletes. A worktree being
+    /// created or deleted keeps its branch: a delete has already captured it.
+    /// Failure states are settled and do not block a rename.
     private func renameBranchWhileIdle(
         _ worktree: Worktree,
         from: String,
@@ -145,7 +146,10 @@ extension AppState {
     ) async throws -> String {
         try await ProjectMutationGate.shared.withMutation(projectID: worktree.projectId) { [self] in
             let isIdle = await MainActor.run {
-                projectsManager.operationState(forWorktreeId: worktree.id, projectId: worktree.projectId) == nil
+                switch projectsManager.operationState(forWorktreeId: worktree.id, projectId: worktree.projectId) {
+                case .creating, .preparingDelete, .deleting: false
+                case nil, .createFailed, .launchFailed, .deleteFailed: true
+                }
             }
             guard isIdle else { throw WorktreeBusyError() }
             return try await WorktreeService().renameBranch(
