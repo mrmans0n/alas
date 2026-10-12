@@ -391,6 +391,7 @@ struct RootView: View {
                         fontSize: state.config.agents.chatFontSize
                     ),
                     collapsesFinishedToolCalls: state.config.harness.acpCollapseFinishedToolCalls,
+                    sendOnEnter: state.config.harness.acpSendOnEnter,
                     dictationLocale: state.config.harness.acpDictationLocale,
                     onSelectDictationLocale: { [state] identifier in
                         state.config.harness.acpDictationLocale = identifier

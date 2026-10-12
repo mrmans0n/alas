@@ -14,7 +14,9 @@ typealias ACPComposerSubmitHandler = (
 ) -> Bool
 
 struct ACPInputField: NSViewRepresentable {
-    @ObservedObject var session: ACPSession
+    let streamingState: ACPSession.StreamingState
+    let canSteerRunningTurn: Bool
+    let promptSuggestions: [ACPPromptSuggestion]
     @ObservedObject var composer: ACPComposerState
     let worktreeRoot: URL
     let actions: ACPComposerActions
@@ -45,6 +47,10 @@ struct ACPInputField: NSViewRepresentable {
     /// falls back to a synchronous `FileManager` enumerator.
     let filesProvider: (@Sendable () async -> [URL])?
 
+    var usesExternalMentionPicker = false
+    var acceptsImages = true
+    var onEditorSelectionChange: () -> Void = {}
+    var onEditorKeyDown: (NSEvent) -> Bool = { _ in false }
     var nextPromptOffer: String? = nil
     var takeNextPromptOffer: () -> String? = { nil }
     var dismissNextPromptOffer: () -> Void = {}
@@ -84,6 +90,7 @@ struct ACPInputField: NSViewRepresentable {
         context.coordinator.restoreInitialDraft(into: textView)
         context.coordinator.attachUpstreamReferences(upstreamReferences)
         configureNextPrompt(textView)
+        configureExternalEditor(textView)
         // Publish the submit closure so the SwiftUI send button can fire
         // the same code path as ⏎.
         let coord = context.coordinator
@@ -102,6 +109,13 @@ struct ACPInputField: NSViewRepresentable {
         actions.cancelDictationRegion = { [weak coord] in
             guard let coord, let tv = coord.textView as? ACPNSTextView else { return }
             tv.cancelDictationRegion()
+        }
+        actions.selectionSnapshot = { [weak textView] in
+            guard let textView else { return nil }
+            return (textView.string, textView.selectedRange())
+        }
+        actions.insertMention = { [weak textView] name, uri, tokenStart in
+            textView?.insertExternalMention(displayName: name, uri: uri, tokenStart: tokenStart) ?? false
         }
         actions.insertQuote = { [weak coord] message in
             guard let coord, let textView = coord.textView else { return }
@@ -134,7 +148,7 @@ struct ACPInputField: NSViewRepresentable {
         // takeover re-attaches via session/load), or to replace/clear an
         // already-open panel's list. reconcileSlashPanel only runs on
         // keystrokes, so without this the panel would miss all of that.
-        let suggestions = ACPAlasSlashCommand.suggestions(alas: alasCommands, agent: session.promptSuggestions)
+        let suggestions = ACPAlasSlashCommand.suggestions(alas: alasCommands, agent: promptSuggestions)
         let suggestionsChanged = context.coordinator.promptSuggestions != suggestions
         context.coordinator.promptSuggestions = suggestions
         context.coordinator.theme = context.environment.theme
@@ -158,6 +172,7 @@ struct ACPInputField: NSViewRepresentable {
                 tv.dismissFloatingPanels()
             }
             configureNextPrompt(tv)
+            configureExternalEditor(tv)
             let baseFont = typography.appKitFont()
             let style = Self.codeBlockStyle(
                 theme: context.environment.theme,
@@ -169,8 +184,8 @@ struct ACPInputField: NSViewRepresentable {
             context.coordinator.codeBlockStyle = style
             tv.applyChatTypography(typography)
             tv.placeholderText = isEnabled
-                ? Self.placeholder(for: session.transcript.streamingState, sendOnEnter: sendOnEnter,
-                                   nativeSteering: session.canSteerRunningTurn)
+                ? Self.placeholder(for: streamingState, sendOnEnter: sendOnEnter,
+                                   nativeSteering: canSteerRunningTurn)
                 : "Read only until you take over"
             tv.needsDisplay = true
             context.coordinator.syncPersistedDraft(composer.draft, into: tv)
@@ -187,6 +202,13 @@ struct ACPInputField: NSViewRepresentable {
             tv.onNextPromptStateChange(tv.nextPromptInputState)
             tv.refreshNextPromptLayout()
         }
+    }
+
+    private func configureExternalEditor(_ textView: ACPNSTextView) {
+        textView.usesExternalMentionPicker = usesExternalMentionPicker
+        textView.acceptsImages = acceptsImages
+        textView.onExternalKeyDown = onEditorKeyDown
+        textView.coordinator?.onSelectionChange = onEditorSelectionChange
     }
 
     private func configureNextPrompt(_ textView: ACPNSTextView) {
@@ -301,6 +323,7 @@ struct ACPInputField: NSViewRepresentable {
         var symbolMentions: ACPSymbolMentionSource?
         let dropRouter: ACPComposerDropRouter
         var promptSuggestions: [ACPPromptSuggestion] = []
+        var onSelectionChange: () -> Void = {}
         private(set) var upstreamReferences: ACPUpstreamReferenceStore?
         private var upstreamObservations: Set<AnyCancellable> = []
         private var presenceObservers: [NSObjectProtocol] = []
@@ -404,6 +427,10 @@ struct ACPInputField: NSViewRepresentable {
             self.filesProvider = filesProvider
             self.dropRouter = dropRouter
             self.upstreamReferences = upstreamReferences
+        }
+
+        func textViewDidChangeSelection(_ notification: Notification) {
+            onSelectionChange()
         }
 
         func textDidBeginEditing(_ notification: Notification) {
@@ -567,6 +594,8 @@ struct ACPInputField: NSViewRepresentable {
                 // Durable draft finalization lives with the submit owner, so
                 // tab switches can outlive this coordinator.
             }) {
+                // A newly typed owner draft may not have reached updateNSView yet.
+                lastAppliedComposerDraft = lastSyncedDraft
                 if case .schedule = intent {
                     pendingScheduledSubmitIDs.insert(submitID)
                 }
@@ -639,6 +668,13 @@ struct ACPInputField: NSViewRepresentable {
             if currentDraft == draft {
                 lastSyncedDraft = currentDraft
                 lastAppliedComposerDraft = draft
+                return
+            }
+            if pendingSubmitID != nil, draft != lastAppliedComposerDraft {
+                // Queue Edit and other owner updates are edits too. A late
+                // rejection must not replace them with the submitted snapshot.
+                pendingSubmitID = nil
+                restore(draft, into: textView)
                 return
             }
             guard draft != lastAppliedComposerDraft,
@@ -1567,12 +1603,17 @@ final class ACPNSTextView: PairedDelimiterTextView {
         dismissImageChipHover()
     }
 
+    var usesExternalMentionPicker = false
+    var acceptsImages = true
+    var onExternalKeyDown: (NSEvent) -> Bool = { _ in false }
+
     override func keyDown(with event: NSEvent) {
         guard isEditable else {
             super.keyDown(with: event)
             return
         }
         typingAttributes = baseTypingAttributes
+        if !hasMarkedText(), onExternalKeyDown(event) { return }
 
         // ⌃V parity with agent CLIs — paste an image when one is on the
         // clipboard. Only intercept when there IS an image, so Cocoa's
@@ -1674,7 +1715,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
 
     private func presentMentionPopover() {
         invalidateNextPromptSuggestion()
-        guard let coord = coordinator else { return }
+        guard !usesExternalMentionPicker, let coord = coordinator else { return }
         closeMentionPanel()
         let panel = ACPMentionPanel(
             worktreeRoot: coord.worktreeRoot,
@@ -2035,7 +2076,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
 
     @discardableResult
     private func insertImage(data: Data, worktreeId: String, replacementRange: NSRange) -> Bool {
-        guard isEditable else { return false }
+        guard isEditable, acceptsImages else { return false }
         invalidateNextPromptSuggestion()
         guard currentImageChipCount() < Self.maxImagesPerMessage else {
             coordinator?.reportImageError(.tooManyImages)
@@ -2073,6 +2114,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
     }
 
     func presentImagePicker() {
+        guard acceptsImages else { return }
         guard isEditable else { return }
         invalidateNextPromptSuggestion()
         imagePickerPresented = true
@@ -2099,6 +2141,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
     /// header + size of image file URLs, so hovering a huge file during a drag
     /// (or a ⌃V availability check) doesn't allocate the whole file.
     private func hasImage(in pb: NSPasteboard) -> Bool {
+        guard acceptsImages else { return false }
         let types = pb.types ?? []
         if types.contains(.png) || types.contains(.tiff) { return true }
         if let urls = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] {
@@ -2166,6 +2209,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
     /// data (already in memory) is handled inline.
     @discardableResult
     private func insertImages(from pb: NSPasteboard) -> Bool {
+        guard acceptsImages else { return false }
         for type in [NSPasteboard.PasteboardType.png, .tiff] {
             if let data = pb.data(forType: type) {
                 if type == .tiff, let rep = NSBitmapImageRep(data: data),
@@ -2482,7 +2526,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
     /// overflow even though it would have fit.
     private func capImages(in draft: ACPComposerDraft, replacementRange: NSRange) -> ACPComposerDraft {
         let existing = currentImageChipCount() - imageChipCount(in: replacementRange)
-        var budget = Self.maxImagesPerMessage - existing
+        var budget = acceptsImages ? Self.maxImagesPerMessage - existing : 0
         var overflowed = false
         let segments = draft.segments.filter { segment in
             guard case .image(let uri, _) = segment else { return true }
@@ -2864,6 +2908,12 @@ final class ACPNSTextView: PairedDelimiterTextView {
         let inserted = insertMention(displayName: target.displayName, uri: ACPSymbolReference.uri(for: target))
         if inserted { recheckSymbolPresence() }
         return inserted
+    }
+
+    @discardableResult
+    func insertExternalMention(displayName: String, uri: String, tokenStart: Int) -> Bool {
+        mentionStart = tokenStart
+        return insertMention(displayName: displayName, uri: uri)
     }
 
     @discardableResult

@@ -397,7 +397,9 @@ struct ACPComposer: View {
                     .help("These plugins add text to every prompt you send. The agent sees it; the transcript doesn't.")
             }
             ACPInputField(
-                session: session,
+                streamingState: session.transcript.streamingState,
+                canSteerRunningTurn: session.canSteerRunningTurn,
+                promptSuggestions: session.promptSuggestions,
                 composer: composer,
                 worktreeRoot: worktreeRoot,
                 actions: actions,

@@ -28,6 +28,7 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
     let leadingRows: [NativePeerTranscriptExtraRow]
     let trailingRows: [NativePeerTranscriptExtraRow]
     let fetchOlder: () -> Void
+    var onQuote: (String) -> Void = { _ in }
 
     @Environment(\.theme) private var theme
     @Environment(\.openURL) private var openURL
@@ -273,7 +274,7 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
                         let content = NativePeerRowView(
                             row: row, stableId: stableId, rowCache: rowCache,
                             contentMaxWidth: host.contentMaxWidth, typography: host.typography,
-                            isPlanActive: isPlanActive
+                            isPlanActive: isPlanActive, onQuote: host.onQuote
                         )
                         if inGroup {
                             ACPToolCallGroupMemberRow { content }
@@ -490,6 +491,7 @@ private struct NativePeerRowView: View {
     let contentMaxWidth: CGFloat
     let typography: ACPChatTypography
     let isPlanActive: Bool
+    var onQuote: (String) -> Void = { _ in }
 
     var body: some View {
         switch row {
@@ -501,6 +503,7 @@ private struct NativePeerRowView: View {
                     .frame(maxWidth: contentMaxWidth * 0.75, alignment: .trailing)
             }
             .frame(maxWidth: .infinity)
+            .contextMenu { messageMenu(text) }
         case .agent(let text):
             ACPMarkdownText(
                 raw: text,
@@ -508,6 +511,7 @@ private struct NativePeerRowView: View {
                 typography: typography
             )
             .frame(maxWidth: .infinity, alignment: .leading)
+            .contextMenu { messageMenu(text) }
         case .thought(let text):
             ACPThoughtView(buffer: rowCache.thoughtBuffer(for: stableId, seed: text))
         case .toolCall(let call):
@@ -520,6 +524,16 @@ private struct NativePeerRowView: View {
             ACPPlanChecklist(items: items, isTurnActive: isPlanActive)
         case .systemNotice(let text):
             ACPSystemNoticeView(text: text)
+        }
+    }
+    @ViewBuilder
+    private func messageMenu(_ text: String) -> some View {
+        Button("Copy") {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+        }
+        if ACPMessageQuote.canQuote(text) {
+            Button("Quote") { onQuote(text) }
         }
     }
 }

@@ -11,6 +11,7 @@ final class NativePeerSessions {
     /// versa, so the center pane shows exactly one peer surface.
     let consoles: NativePeerConsoles?
     @ObservationIgnored private var downstream: FederatedDownstream?
+    @ObservationIgnored private var promptCompletion: (@MainActor (Bool) -> Void)?
     @ObservationIgnored private var pendingPromptExpectedIndex: Int?
     private(set) var isFetchingOlderMessages = false
     private(set) var pendingPrompt: PendingPrompt?
@@ -18,11 +19,38 @@ final class NativePeerSessions {
     /// item (not a re-pushed older duplicate) confirms the send.
     @ObservationIgnored private var pendingPromptPriorQueueIds: Set<String> = []
 
+    @ObservationIgnored private var suspendedPrompts: [String: SuspendedPrompt] = [:]
+    @ObservationIgnored private var composerErrors: [String: String] = [:]
+
+    private struct SuspendedPrompt {
+        let prompt: PendingPrompt
+        let expectedIndex: Int?
+        let priorQueueIds: Set<String>
+        var replayEpoch: Int?
+        var needsResubscribe = false
+        let completion: (@MainActor (Bool) -> Void)?
+
+        func isConfirmed(by message: RemoteServerMessage) -> Bool {
+            switch message {
+            case .queueState(_, let items):
+                return items.contains { prompt.matches($0) && !priorQueueIds.contains($0.id) }
+            case .transcriptSnapshot(_, _, _, let rows, _, _, _, _, _),
+                 .transcriptDelta(_, _, _, let rows, _, _, _):
+                guard let expectedIndex else { return false }
+                return rows.contains { prompt.matches($0) && $0.index >= expectedIndex }
+            default: return false
+            }
+        }
+    }
+
     /// A sent prompt awaiting the host's confirmation, as the host will
     /// echo it back in a queue item or a transcript user row.
     struct PendingPrompt: Equatable {
         let text: String
         let attachments: [NativePeerAttachment]
+        let composerDraft: ACPComposerDraft
+        let composerRevision: Int
+        let epoch: Int?
         var mentions: [RemoteMention] = []
 
         func matches(_ item: RemoteQueuedPrompt) -> Bool {
@@ -56,7 +84,31 @@ final class NativePeerSessions {
     /// has a viewer.
     private(set) var selectedSessionId: String?
     private(set) var transcript: NativePeerTranscript?
-    var draft = ""
+    @ObservationIgnored private var composerStates: [String: ACPComposerState] = [:]
+
+    func composerState(for sessionId: String) -> ACPComposerState {
+        // Federated session IDs already include their peer's identity.
+        let key = sessionId
+        if let state = composerStates[key] { return state }
+        let state = ACPComposerState()
+        composerStates[key] = state
+        return state
+    }
+
+    var draft = "" {
+        didSet {
+            guard let selectedSessionId else { return }
+            let composer = composerState(for: selectedSessionId)
+            let current = composer.draft
+            guard current.plainText != draft else { return }
+            if !current.isEmpty, draft.hasPrefix(current.plainText) {
+                let suffix = String(draft.dropFirst(current.plainText.count))
+                composer.replaceDraft(.init(segments: current.segments + [.text(suffix)]))
+            } else {
+                composer.replaceDraft(.init(segments: draft.isEmpty ? [] : [.text(draft)]))
+            }
+        }
+    }
     /// Images staged for the next prompt. Kept, like the draft, until the
     /// host confirms the send.
     private(set) var attachments: [NativePeerAttachment] = []
@@ -316,7 +368,11 @@ final class NativePeerSessions {
         attachments = []
         resetMentions()
         restoredDrafts = [:]
+        composerStates = [:]
+        suspendedPrompts = [:]
+        composerErrors = [:]
         pendingPrompt = nil
+        promptCompletion = nil
         pendingPromptExpectedIndex = nil
         isFetchingOlderMessages = false
         deliveryError = nil
@@ -336,9 +392,24 @@ final class NativePeerSessions {
         fileTreeRequestInFlight = false
     }
 
+    private func resubscribeSuspendedPrompts() {
+        guard let downstream else { return }
+        for sessionId in Array(suspendedPrompts.keys) {
+            guard suspendedPrompts[sessionId]?.needsResubscribe == true,
+                  snapshot.groups.contains(where: { group in
+                      group.state.carriesSessions && group.sessions.contains { $0.id == sessionId && $0.isActive }
+                  }) else { continue }
+            suspendedPrompts[sessionId]?.needsResubscribe = false
+            if !federation.route(.subscribe(sessionId: sessionId), from: downstream) {
+                suspendedPrompts[sessionId]?.needsResubscribe = true
+            }
+        }
+    }
+
     func refresh() {
         guard downstream != nil else { return }
         rebuildSnapshot()
+        resubscribeSuspendedPrompts()
         consoles?.peersChanged(online: Set(snapshot.groups.filter(\.state.carriesSessions).map(\.serverId)))
         reconcileNewSession()
         if let pending = pendingSessionId,
@@ -360,8 +431,8 @@ final class NativePeerSessions {
             // The provider discarded subscriptions when this peer went away.
             // Its new transcript may also have a lower epoch after a restart.
             transcript = NativePeerTranscript(sessionId: selectedSessionId)
-            pendingPrompt = nil
-            pendingPromptExpectedIndex = nil
+            // Keep delivery markers: the re-subscription replays the host's
+            // transcript and queue and can still confirm a routed prompt.
             isFetchingOlderMessages = false
             _ = federation.route(.subscribe(sessionId: selectedSessionId), from: downstream)
             // Preserved across the reset below: losing it would silently
@@ -400,9 +471,17 @@ final class NativePeerSessions {
         clearSelection()
         noteSelected(.session(sessionId), serverId: peer.serverId)
         selectedSessionId = sessionId
-        draft = restoredDrafts.removeValue(forKey: sessionId) ?? ""
-        attachments = []
+        let saved = composerState(for: sessionId).draft.plainText
+        draft = restoredDrafts.removeValue(forKey: sessionId).map { Self.appending($0, to: saved) } ?? saved
+        let suspended = suspendedPrompts.removeValue(forKey: sessionId)
+        pendingPrompt = suspended?.prompt
+        pendingPromptExpectedIndex = suspended?.expectedIndex
+        pendingPromptPriorQueueIds = suspended?.priorQueueIds ?? []
+        promptCompletion = suspended?.completion
+        deliveryError = composerErrors.removeValue(forKey: sessionId)
+        attachments = suspended?.prompt.attachments ?? []
         resetMentions()
+        mentions = suspended?.prompt.mentions ?? []
         transcript = NativePeerTranscript(sessionId: sessionId)
         _ = federation.route(.subscribe(sessionId: sessionId), from: downstream)
         reloadWorkspace()
@@ -420,7 +499,14 @@ final class NativePeerSessions {
         selectedWorktree = nil
         selectedWorktreeTabs = []
         consoles?.clearSelection()
-        if let selectedSessionId, let downstream {
+        if let selectedSessionId, let pendingPrompt {
+            suspendedPrompts[selectedSessionId] = SuspendedPrompt(
+                prompt: pendingPrompt, expectedIndex: pendingPromptExpectedIndex,
+                priorQueueIds: pendingPromptPriorQueueIds, replayEpoch: transcript?.epoch ?? pendingPrompt.epoch,
+                needsResubscribe: transcript?.isClosed != false,
+                completion: promptCompletion)
+        }
+        if let selectedSessionId, let downstream, pendingPrompt == nil {
             _ = federation.route(.unsubscribe(sessionId: selectedSessionId), from: downstream)
         }
         selectedSessionId = nil
@@ -432,6 +518,7 @@ final class NativePeerSessions {
         attachments = []
         resetMentions()
         pendingPrompt = nil
+        promptCompletion = nil
         pendingPromptExpectedIndex = nil
         isFetchingOlderMessages = false
         deliveryError = nil
@@ -446,12 +533,31 @@ final class NativePeerSessions {
         fileTreeRequestInFlight = false
     }
 
+    /// The shared rich editor stages chips locally; only their wire payloads
+    /// are installed here after the whole prompt has passed validation.
+    func sendComposerPrompt(
+        images: [NativePeerAttachment], mentions: [RemoteMention], intent: ACPSubmitIntent,
+        completion: @escaping @MainActor (Bool) -> Void = { _ in }
+    ) -> Bool {
+        guard !isPromptPending else { return false }
+        attachments = images
+        self.mentions = mentions
+        promptCompletion = completion
+        sendPrompt(intent: intent)
+        if !isPromptPending { promptCompletion = nil }
+        return isPromptPending
+    }
+
     func sendPrompt(intent: ACPSubmitIntent = .auto) {
         guard pendingPrompt == nil else { return }
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let mentions = NativePeerComposerState.liveMentions(mentions, in: text)
         guard !text.isEmpty || !attachments.isEmpty else { return }
-        let pending = PendingPrompt(text: text, attachments: attachments, mentions: mentions)
+        let pending = PendingPrompt(
+            text: text, attachments: attachments,
+            composerDraft: selectedSessionId.map { composerState(for: $0).draft } ?? .empty,
+            composerRevision: selectedSessionId.map { composerState(for: $0).revision } ?? 0,
+            epoch: transcript?.epoch, mentions: mentions)
         pendingPrompt = pending
         pendingPromptExpectedIndex = transcript?.totalCount ?? 0
         pendingPromptPriorQueueIds = Set((transcript?.queue ?? []).filter(pending.matches).map(\.id))
@@ -463,6 +569,7 @@ final class NativePeerSessions {
             deliveryError = nil
         } else {
             pendingPrompt = nil
+            promptCompletion = nil
             pendingPromptExpectedIndex = nil
             deliveryError = Self.peerUnavailableMessage + " Your draft was kept."
         }
@@ -940,6 +1047,75 @@ final class NativePeerSessions {
         draft.isEmpty ? text : draft + "\n" + text
     }
 
+    private static let unconfirmedDeliveryMessage = "Peer session changed before delivery could be confirmed. Your draft was kept."
+
+    /// Pending sends keep their subscription until delivery settles, even
+    /// when another session is selected. Re-selection also replays the queue.
+    private func handleSuspendedPrompt(_ message: RemoteServerMessage) -> Bool {
+        guard let sessionId = message.sessionId, sessionId != selectedSessionId,
+              var suspended = suspendedPrompts[sessionId] else { return false }
+        switch message {
+        case .transcriptSnapshot(_, _, _, _, _, _, let epoch, _, _),
+             .transcriptDelta(_, _, _, _, let epoch, _, _):
+            suspended.replayEpoch = epoch
+        case .sessionClosed:
+            suspended.needsResubscribe = true
+        default: break
+        }
+        let rejected: Bool = if case .promptRejected = message { true } else { false }
+        let confirmed = suspended.isConfirmed(by: message)
+        let superseded: Bool
+        if case .queueState = message, let epoch = suspended.replayEpoch, let sentEpoch = suspended.prompt.epoch {
+            superseded = epoch != sentEpoch
+        } else {
+            superseded = false
+        }
+        guard rejected || confirmed || superseded else {
+            suspendedPrompts[sessionId] = suspended
+            return false
+        }
+        suspendedPrompts.removeValue(forKey: sessionId)
+        if confirmed {
+            let composer = composerState(for: sessionId)
+            if composer.revision == suspended.prompt.composerRevision,
+               composer.draft == suspended.prompt.composerDraft { composer.replaceDraft(.empty) }
+        } else {
+            composerErrors[sessionId] = superseded ? Self.unconfirmedDeliveryMessage : "Prompt was not delivered. Your draft was kept."
+        }
+        if let downstream { _ = federation.route(.unsubscribe(sessionId: sessionId), from: downstream) }
+        if confirmed {
+            suspended.completion?(true)
+        } else {
+            restoreRejectedPrompt(suspended.prompt, sessionId: sessionId, completion: suspended.completion)
+        }
+        return true
+    }
+
+    private func restoreRejectedPrompt(
+        _ submitted: PendingPrompt, sessionId: String, completion: (@MainActor (Bool) -> Void)?
+    ) {
+        let composer = composerState(for: sessionId)
+        let nextDraft = composer.revision == submitted.composerRevision ? ACPComposerDraft.empty : composer.draft
+        let restored = submitted.composerDraft.appending(nextDraft)
+        // Settle the mounted editor first; its callback may restore the submitted
+        // snapshot. The session owner then preserves both durable drafts.
+        completion?(false)
+        composer.replaceDraft(restored)
+        if selectedSessionId == sessionId { draft = restored.plainText }
+    }
+
+    private func rejectPendingPrompt(message: String) {
+        let completion = promptCompletion
+        let submitted = pendingPrompt
+        pendingPrompt = nil
+        promptCompletion = nil
+        pendingPromptExpectedIndex = nil
+        deliveryError = message
+        if let submitted, let selectedSessionId {
+            restoreRejectedPrompt(submitted, sessionId: selectedSessionId, completion: completion)
+        }
+    }
+
     private func receive(_ message: RemoteServerMessage) {
         // Tab actions answer for any session, not just the selected one. A
         // reply to a request the user has since moved on from, or retried,
@@ -964,6 +1140,15 @@ final class NativePeerSessions {
         case .queueEditRestored(let sessionId, _, let text):
             // The edit was requested from the session it names; the reply
             // can land after the user switched away.
+            let submitted = sessionId == selectedSessionId ? pendingPrompt : suspendedPrompts[sessionId]?.prompt
+            let composer = composerState(for: sessionId)
+            // An accepted submit clears the visible editor before its durable
+            // snapshot is confirmed. Queue Edit belongs to the next draft.
+            if let submitted, composer.revision == submitted.composerRevision,
+               composer.draft == submitted.composerDraft {
+                composer.replaceDraft(.empty)
+                if sessionId == selectedSessionId { draft = "" }
+            }
             if sessionId == selectedSessionId {
                 draft = Self.appending(text, to: draft)
             } else {
@@ -973,6 +1158,7 @@ final class NativePeerSessions {
         default:
             break
         }
+        if handleSuspendedPrompt(message) { return }
         guard let selectedSessionId, message.sessionId == selectedSessionId else { return }
         switch message {
         case .transcriptSnapshot, .transcriptPage:
@@ -988,9 +1174,7 @@ final class NativePeerSessions {
             return
         }
         if case .promptRejected = message {
-            pendingPrompt = nil
-            pendingPromptExpectedIndex = nil
-            deliveryError = "Prompt was not delivered. Your draft was kept."
+            rejectPendingPrompt(message: "Prompt was not delivered. Your draft was kept.")
             return
         }
         let isChangesReply: Bool = switch message {
@@ -1056,17 +1240,32 @@ final class NativePeerSessions {
         if let pendingPrompt, let expectedIndex = pendingPromptExpectedIndex,
            promptConfirmationRows.contains(where: { pendingPrompt.matches($0) && $0.index >= expectedIndex }) {
             confirm(pendingPrompt)
+            return
+        }
+        if case .queueState = message, let pendingPrompt,
+           let epoch = transcript?.epoch, epoch != pendingPrompt.epoch {
+            // Wait for both the transcript and queue replay before deciding
+            // that an older epoch can no longer acknowledge its prompt.
+            rejectPendingPrompt(message: Self.unconfirmedDeliveryMessage)
         }
     }
 
     /// Clears what was sent from the composer, leaving anything the user
     /// changed since.
     private func confirm(_ sent: PendingPrompt) {
-        if draft.trimmingCharacters(in: .whitespacesAndNewlines) == sent.text { draft = "" }
+        let completion = promptCompletion
+        let unchanged = selectedSessionId.map {
+            let composer = composerState(for: $0)
+            return composer.revision == sent.composerRevision && composer.draft == sent.composerDraft
+        } ?? true
+        if unchanged, let selectedSessionId { composerState(for: selectedSessionId).replaceDraft(.empty) }
+        if unchanged, draft.trimmingCharacters(in: .whitespacesAndNewlines) == sent.text { draft = "" }
         if attachments == sent.attachments { attachments = [] }
         mentions = NativePeerComposerState.liveMentions(mentions, in: draft)
         pendingPrompt = nil
+        promptCompletion = nil
         pendingPromptExpectedIndex = nil
+        completion?(true)
     }
 }
 
