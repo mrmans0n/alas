@@ -54,6 +54,7 @@ struct DiffReviewFrameRateBenchmark {
         )
         defer { bench.close() }
         try await bench.settle()
+        FrameRateBenchmark.placePointer(over: bench.scroller, in: bench.window)
 
         let down = await bench.fling(direction: 1)
         let up = await bench.fling(direction: -1)

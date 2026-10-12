@@ -66,6 +66,27 @@ enum FrameRateBenchmark {
         }
     }
 
+    /// Moves `window`, keeping it on screen, so the pointer rests over
+    /// `view`. AppKit hit-tests the view under the pointer on every display
+    /// cycle to update the cursor, so where the pointer happens to be (over a
+    /// SwiftUI sidebar, say) otherwise changes each run's cost. Scrolling
+    /// happens under the pointer, so `view` is what a person scrolls.
+    static func placePointer(over view: NSView, in window: NSWindow) {
+        guard let screen = window.screen?.visibleFrame else { return }
+        let pointer = NSEvent.mouseLocation
+        let target = view.convert(view.bounds, to: nil).insetBy(dx: 20, dy: 20)
+        let size = window.frame.size
+        // Window origins that keep it on screen, intersected with those that
+        // put the pointer inside `target`.
+        let minX = max(screen.minX, pointer.x - target.maxX), maxX = min(screen.maxX - size.width, pointer.x - target.minX)
+        let minY = max(screen.minY, pointer.y - target.maxY), maxY = min(screen.maxY - size.height, pointer.y - target.minY)
+        guard minX <= maxX, minY <= maxY else {
+            print("FRAME-BENCH pointer \(pointer) cannot rest over \(target) of a \(size) window on \(screen); results include whatever it hovers")
+            return
+        }
+        window.setFrameOrigin(NSPoint(x: (minX + maxX) / 2, y: (minY + maxY) / 2))
+    }
+
     static func find<T: NSView>(_ type: T.Type, in view: NSView) -> T? {
         if let match = view as? T { return match }
         for subview in view.subviews {
