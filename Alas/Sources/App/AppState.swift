@@ -6780,6 +6780,10 @@ final class AppState {
     func deleteAllArchivedWorktrees() async {
         guard !isDeletingArchivedWorktrees else { return }
         let archived = projects.flatMap { projectsManager.archivedWorktrees(projectId: $0.id) }
+        // A worktree id is its path: one local checkout archived under two
+        // projects must be a single target, or the batch's per-id snapshots
+        // trap on the duplicate key.
+        var seenIds: Set<String> = []
         let deletable = workspacesManager.canMutate
             ? archived.filter { worktree in
                 // The batch skips any claimed worktree; a failed delete is
@@ -6792,6 +6796,7 @@ final class AppState {
                 return operationAllowsBatch
                     && !worktree.path.isRemoteAlasPath
                     && worktreeCleanupWorkspaceOwners(for: worktree).isEmpty
+                    && seenIds.insert(worktree.id).inserted
             }
             : []
         guard !archived.isEmpty else { return }
@@ -6813,7 +6818,7 @@ final class AppState {
         var message = deleteBranches
             ? "This removes their files from disk. Local branches will be deleted if merged."
             : "This removes their files from disk. Local branches will be kept."
-        if deletable.count < archived.count {
+        if deletable.count < Set(archived.map(\.id)).count {
             message += " Remote, busy, or Workspace-referenced worktrees are skipped; delete them individually."
         }
         alert.informativeText = message
