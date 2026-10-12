@@ -536,5 +536,4 @@ private struct NativePeerRowView: View {
             Button("Quote") { onQuote(text) }
         }
     }
-
 }
