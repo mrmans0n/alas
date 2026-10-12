@@ -162,12 +162,10 @@ final class AppState {
     /// session-lease layer so two running Alas builds don't fight over a
     /// shared per-worktree database.
     let instanceId: String = UUID().uuidString
-    @ObservationIgnored let localTextModelStore: LocalTextModelStore
+    var localTextModelStore: LocalTextModelStore { core.localTextModelStore }
     @ObservationIgnored let localTextReadModelState: @Sendable () async -> LocalTextModelState
-    @ObservationIgnored private let localTextInferenceOverride: (any LocalTextGenerating)?
     @ObservationIgnored let nextPromptInferenceOverride: (any NextPromptRuntime)?
-    @ObservationIgnored lazy var localTextInference: any LocalTextGenerating =
-        localTextInferenceOverride ?? LocalTextInferenceEngine(store: localTextModelStore, observeMemoryPressure: false)
+    var localTextInference: any LocalTextGenerating { core.localText }
     @ObservationIgnored lazy var nextPromptInference: any NextPromptRuntime = makeNextPromptInference()
     private func makeNextPromptInference() -> any NextPromptRuntime {
         if let nextPromptInferenceOverride { return nextPromptInferenceOverride }
@@ -186,7 +184,7 @@ final class AppState {
     @ObservationIgnored lazy var nextPromptCoordinator = NextPromptCoordinator(engine: nextPromptInference) { [weak self] turn in
         self?.nextPromptSnapshot(for: turn)
     }
-    @ObservationIgnored lazy var sessionSummaryCoordinator = SessionSummaryCoordinator(engine: localTextInference)
+    var sessionSummaryCoordinator: SessionSummaryCoordinator { core.sessionSummaries }
     @ObservationIgnored let localTextObservers = LocalTextObservers()
     @ObservationIgnored let qwenTitleRequests = ACPQwenTitleRequests()
     @ObservationIgnored private var worktreeExplainerStoreInstance: WorktreeExplainerStore?
@@ -1547,9 +1545,7 @@ final class AppState {
         )
         self.store = store
         let suggestionStore = localTextModelStore ?? LocalTextModelStore()
-        self.localTextModelStore = suggestionStore
         self.localTextReadModelState = localTextReadModelState ?? { await suggestionStore.state }
-        self.localTextInferenceOverride = localTextInference
         self.nextPromptInferenceOverride = nextPromptInference
         self.localTextSupported = localTextSupported
         self.workspaceStore = workspaceStore
@@ -1597,6 +1593,8 @@ final class AppState {
             store: store,
             runHistoryStore: runHistoryStore,
             runScheduler: runScheduler,
+            localTextModelStore: suggestionStore,
+            localText: localTextInference,
             runCompletionWaiter: runScriptCompletionWaiter
         )
         let spacesManager = spacesFile.map(SpacesManager.init(file:))

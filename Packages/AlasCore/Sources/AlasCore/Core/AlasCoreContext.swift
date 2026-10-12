@@ -28,6 +28,14 @@ public final class AlasCoreContext {
     /// ones that never produced an archivable record.
     @ObservationIgnored public var runSettlementHandlers: [String: (worktreeID: String, notify: (RunScriptSettlement) -> Void)] = [:]
 
+    /// The on-device text model's files and state.
+    @ObservationIgnored public let localTextModelStore: LocalTextModelStore
+    /// The on-device text engine every local-text feature shares.
+    @ObservationIgnored public private(set) lazy var localText: any LocalTextGenerating =
+        localTextOverride ?? LocalTextEngine.make(localTextModelStore)
+    @ObservationIgnored public private(set) lazy var sessionSummaries = SessionSummaryCoordinator(engine: localText)
+    @ObservationIgnored private let localTextOverride: (any LocalTextGenerating)?
+
     @ObservationIgnored private let store: any PersistenceStoreProtocol
     @ObservationIgnored private let projectsFile: URL
     @ObservationIgnored private let makeSessionManager: @MainActor (SessionOwnerID, Worktree) -> ACPSessionManager
@@ -40,6 +48,8 @@ public final class AlasCoreContext {
         runs: RunService = RunService(),
         runHistoryStore: RunHistoryStore? = try? RunHistoryStore(),
         runScheduler: RunScheduler? = nil,
+        localTextModelStore: LocalTextModelStore = LocalTextModelStore(),
+        localText: (any LocalTextGenerating)? = nil,
         runCompletionWaiter: @escaping RunCompletionWaiter = { try await RunScriptCompletionMonitor.wait(for: $0) },
         makeSessionManager: @escaping @MainActor (SessionOwnerID, Worktree) -> ACPSessionManager = AlasCoreContext.defaultSessionManager
     ) {
@@ -48,6 +58,8 @@ public final class AlasCoreContext {
         self.runScheduler = runScheduler ?? RunScheduler(store: store)
         self.runCompletionWaiter = runCompletionWaiter
         self.runHistory = RunHistory(store: runHistoryStore)
+        self.localTextModelStore = localTextModelStore
+        self.localTextOverride = localText
         self.store = store
         self.projectsFile = projectsFile
         self.makeSessionManager = makeSessionManager
