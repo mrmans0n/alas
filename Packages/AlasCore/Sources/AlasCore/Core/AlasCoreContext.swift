@@ -13,6 +13,18 @@ public final class AlasCoreContext {
     /// The worktree is being deleted, so nothing new can start in it.
     public struct WorktreeBeingDeleted: Error, Equatable {}
 
+    /// Why `deleteWorktree` refused, before touching anything.
+    public enum WorktreeDeletionRefusal: Error, Equatable {
+        /// The project's main checkout is never deleted.
+        case mainWorktree
+        /// An active Workspace checkout manages this worktree; delete it there.
+        case ownedByWorkspaceCheckout(name: String)
+        /// Workspace ownership could not be read, so it cannot be ruled out.
+        case workspaceStateUnreadable
+        /// The path now holds a different checkout than the one asked for.
+        case replaced
+    }
+
     public var projects: ProjectsManager
     /// One session manager per owner (worktree or workspace checkout).
     public var sessionManagers: [SessionOwnerID: ACPSessionManager] = [:]
@@ -237,6 +249,9 @@ public final class AlasCoreContext {
         guard let project = projects.projects.first(where: { $0.id == worktree.projectId }) else {
             throw ProjectCreationError.projectNotFound
         }
+        guard !projects.isMain(worktree, in: project) else { throw WorktreeDeletionRefusal.mainWorktree }
+        try await refuseWorkspaceOwnedDeletion(worktree)
+        try Self.refuseReplacedCheckout(worktree)
         guard deletingWorktreeIDs.insert(worktree.id).inserted else { throw WorktreeBeingDeleted() }
         defer { deletingWorktreeIDs.remove(worktree.id) }
         if !force, try await !WorktreeService().isRemovalClean(worktree.path) {
@@ -253,7 +268,8 @@ public final class AlasCoreContext {
         await disposeSessionManager(owner: .worktree(worktree.id))
         let repoPath = URL(fileURLWithPath: project.path)
         let outcome = try await ProjectMutationGate.shared.withMutation(projectID: project.id) {
-            try await WorktreeLifecycle.performRemoveWorktree(
+            try Self.refuseReplacedCheckout(worktree)
+            return try await WorktreeLifecycle.performRemoveWorktree(
                 repoPath: repoPath,
                 worktree: worktree,
                 deleteBranchIfMerged: deleteBranchIfMerged,
@@ -286,6 +302,40 @@ public final class AlasCoreContext {
         }
         if changed {
             try saveProjects()
+        }
+    }
+
+    /// Only an active Workspace checkout owns a member's deletion; archived
+    /// and former ones no longer manage it.
+    private func refuseWorkspaceOwnedDeletion(_ worktree: Worktree) async throws {
+        let state: WorkspaceStateFile
+        switch await workspaceStore.load() {
+        case .missing: return
+        case .unreadable: throw WorktreeDeletionRefusal.workspaceStateUnreadable
+        case .loaded(let loaded): state = loaded
+        }
+        let path = worktree.path.standardizedFileURL.path
+        let owner = state.checkouts.first { checkout in
+            checkout.workspaceID != nil && checkout.archivedAt == nil && checkout.members.contains { member in
+                guard member.projectID == worktree.projectId,
+                      URL(fileURLWithPath: checkout.inAppWorktreePath(member.worktreePath)).standardizedFileURL.path == path
+                else { return false }
+                if let memberLineage = member.gitLineageID, let lineage = worktree.lineageID, memberLineage != lineage {
+                    return false
+                }
+                return !(member.availability == .explicitlyDeleted && member.cleanup?.worktreeRemoved == true)
+            }
+        }
+        if let owner { throw WorktreeDeletionRefusal.ownedByWorkspaceCheckout(name: owner.fallbackWorkspaceName) }
+    }
+
+    /// A checkout recreated at the same path carries a different lineage
+    /// marker, or none. ponytail: local only; remote checkouts are not
+    /// compared until their lineage can be read over SSH.
+    private nonisolated static func refuseReplacedCheckout(_ worktree: Worktree) throws {
+        guard let expected = worktree.lineageID, !worktree.path.isRemoteAlasPath else { return }
+        guard WorktreeService.existingLocalLineageID(forWorktreeAt: worktree.path) == expected else {
+            throw WorktreeDeletionRefusal.replaced
         }
     }
 

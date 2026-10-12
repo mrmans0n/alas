@@ -210,4 +210,32 @@ struct AlasCoreContextTests {
         }
         #expect(!context.projects.worktrees(projectId: project.id).map(\.id).contains(worktree.id))
     }
+
+    /// A checkout recreated at the deleted one's path is someone else's work,
+    /// so a stale `Worktree` must not remove it, even with `force`.
+    @Test func refusesToDeleteACheckoutRecreatedAtTheSamePath() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-core-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let repo = root.appendingPathComponent("repo")
+        try FileManager.default.copyItem(at: try await Self.repoTemplate.value, to: repo)
+        let context = AlasCoreContext(
+            projects: ProjectsManager(persistedProjects: []),
+            store: TestPersistenceStore(),
+            projectsFile: root.appendingPathComponent("projects.json"),
+            runHistoryStore: nil
+        )
+        let project = try await context.addProject(path: repo, displayName: "repo", icon: .default(color: "blue"))
+        let destination = root.appendingPathComponent("feature")
+        let stale = try await context.createWorktree(projectID: project.id, branch: "feature", base: "main", destination: destination)
+        for args in [["worktree", "remove", "--force", destination.path], ["worktree", "add", "-q", "-b", "other", destination.path, "main"]] {
+            let result = try await Process.git(args, cwd: repo)
+            #expect(result.exitCode == 0, "\(result.stderr)")
+        }
+
+        await #expect(throws: AlasCoreContext.WorktreeDeletionRefusal.replaced) {
+            try await context.deleteWorktree(stale, force: true)
+        }
+        #expect(FileManager.default.fileExists(atPath: destination.path))
+    }
 }
