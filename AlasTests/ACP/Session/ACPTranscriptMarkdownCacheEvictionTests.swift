@@ -13,17 +13,17 @@ struct ACPTranscriptMarkdownCacheEvictionTests {
         }
         let ids = t.messages.map(\.stableId)
         for id in ids {
-            t.markdownCache(forMessage: id).update(with: "body for \(id)")
+            ACPTranscriptRenderCaches.of(t).cache(forMessage: id).update(with: "body for \(id)")
         }
-        #expect(t.markdownCacheCountForTests == 10)
+        #expect(ACPTranscriptRenderCaches.of(t).countForTests == 10)
 
         t.setVisibleHead(5)
-        #expect(t.markdownCacheCountForTests == 5)
+        #expect(ACPTranscriptRenderCaches.of(t).countForTests == 5)
         for id in ids[0..<5] {
-            #expect(!t.hasMarkdownCacheForTests(messageId: id))
+            #expect(!ACPTranscriptRenderCaches.of(t).hasCacheForTests(messageId: id))
         }
         for id in ids[5..<10] {
-            #expect(t.hasMarkdownCacheForTests(messageId: id))
+            #expect(ACPTranscriptRenderCaches.of(t).hasCacheForTests(messageId: id))
         }
     }
 
@@ -39,12 +39,12 @@ struct ACPTranscriptMarkdownCacheEvictionTests {
         let t = ACPTranscript()
         for i in 0..<4 { t.messages.append(.systemNotice(id: UUID(), text: "\(i)")) }
         for id in t.messages.map(\.stableId) {
-            t.markdownCache(forMessage: id).update(with: id)
+            ACPTranscriptRenderCaches.of(t).cache(forMessage: id).update(with: id)
         }
         t.setVisibleHead(2)
-        let countAfterFirst = t.markdownCacheCountForTests
+        let countAfterFirst = ACPTranscriptRenderCaches.of(t).countForTests
         t.setVisibleHead(2)
-        #expect(t.markdownCacheCountForTests == countAfterFirst)
+        #expect(ACPTranscriptRenderCaches.of(t).countForTests == countAfterFirst)
     }
 
     @Test("setVisibleHead does not drop caches above the head")
@@ -52,12 +52,12 @@ struct ACPTranscriptMarkdownCacheEvictionTests {
         let t = ACPTranscript()
         for i in 0..<6 { t.messages.append(.systemNotice(id: UUID(), text: "\(i)")) }
         for id in t.messages.map(\.stableId) {
-            t.markdownCache(forMessage: id).update(with: id)
+            ACPTranscriptRenderCaches.of(t).cache(forMessage: id).update(with: id)
         }
         t.setVisibleHead(2)
-        let after = t.markdownCacheCountForTests
+        let after = ACPTranscriptRenderCaches.of(t).countForTests
         t.setVisibleHead(0)
-        #expect(t.markdownCacheCountForTests == after)
+        #expect(ACPTranscriptRenderCaches.of(t).countForTests == after)
     }
 
     @Test("resetWindowToTail drops caches outside the tail window")
@@ -66,18 +66,18 @@ struct ACPTranscriptMarkdownCacheEvictionTests {
         for i in 0..<50 { t.messages.append(.systemNotice(id: UUID(), text: "\(i)")) }
         let ids = t.messages.map(\.stableId)
         for id in ids {
-            t.markdownCache(forMessage: id).update(with: id)
+            ACPTranscriptRenderCaches.of(t).cache(forMessage: id).update(with: id)
         }
 
         t.resetWindowToTail()
 
         #expect(t.visibleHead == 20)
-        #expect(t.markdownCacheCountForTests == ACPTranscript.tailWindow)
+        #expect(ACPTranscriptRenderCaches.of(t).countForTests == ACPTranscript.tailWindow)
         for id in ids[0..<20] {
-            #expect(!t.hasMarkdownCacheForTests(messageId: id))
+            #expect(!ACPTranscriptRenderCaches.of(t).hasCacheForTests(messageId: id))
         }
         for id in ids[20..<50] {
-            #expect(t.hasMarkdownCacheForTests(messageId: id))
+            #expect(ACPTranscriptRenderCaches.of(t).hasCacheForTests(messageId: id))
         }
     }
 
@@ -87,7 +87,7 @@ struct ACPTranscriptMarkdownCacheEvictionTests {
         for i in 0..<200 { t.messages.append(.systemNotice(id: UUID(), text: "\(i)")) }
         let ids = t.messages.map(\.stableId)
         for id in ids {
-            t.markdownCache(forMessage: id).update(with: id)
+            ACPTranscriptRenderCaches.of(t).cache(forMessage: id).update(with: id)
         }
 
         t.setVisibleWindow(containing: 110)
@@ -96,17 +96,17 @@ struct ACPTranscriptMarkdownCacheEvictionTests {
         #expect(t.visibleHead == 80)
         #expect(t.visibleTail == 170)
         for id in ids[170..<200] {
-            #expect(!t.hasMarkdownCacheForTests(messageId: id))
+            #expect(!ACPTranscriptRenderCaches.of(t).hasCacheForTests(messageId: id))
         }
     }
 
-    @Test("resetMarkdownCaches empties the cache map")
+    @Test("discardRenderState empties the cache map")
     func resetClears() {
         let t = ACPTranscript()
         t.messages.append(.systemNotice(id: UUID(), text: "x"))
-        t.markdownCache(forMessage: t.messages[0].stableId).update(with: "x")
-        #expect(t.markdownCacheCountForTests == 1)
-        t.resetMarkdownCaches()
-        #expect(t.markdownCacheCountForTests == 0)
+        ACPTranscriptRenderCaches.of(t).cache(forMessage: t.messages[0].stableId).update(with: "x")
+        #expect(ACPTranscriptRenderCaches.of(t).countForTests == 1)
+        t.discardRenderState()
+        #expect(ACPTranscriptRenderCaches.of(t).countForTests == 0)
     }
 }
