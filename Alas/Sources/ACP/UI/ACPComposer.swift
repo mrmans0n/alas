@@ -1613,7 +1613,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
             return
         }
         typingAttributes = baseTypingAttributes
-        if onExternalKeyDown(event) { return }
+        if !hasMarkedText(), onExternalKeyDown(event) { return }
 
         // ⌃V parity with agent CLIs — paste an image when one is on the
         // clipboard. Only intercept when there IS an image, so Cocoa's

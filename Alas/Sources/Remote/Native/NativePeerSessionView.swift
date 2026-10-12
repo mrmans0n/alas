@@ -358,9 +358,12 @@ private struct NativePeerComposer: View {
     @State private var installedDictationLocales: [String] = []
     private var online: Bool { client.selectedPeer?.state.carriesSessions == true }
     private var canDrive: Bool { online && transcript.canDrive }
-    private var config: RemoteSessionConfig? { transcript.config }
+    private var editorContext: NativePeerComposerState.EditorContext {
+        .init(client: client, sessionId: transcript.sessionId)
+    }
+    private var config: RemoteSessionConfig? { editorContext.config }
     private var chipState: ACPChipState? { config.map(NativePeerComposerState.chipState(from:)) }
-    private var sessionOpen: Bool { online && transcript.epoch != nil && !transcript.isClosed }
+    private var sessionOpen: Bool { editorContext.isOpen }
     private var acceptsImages: Bool { config?.acceptsImages == true }
     private var hasContent: Bool {
         composer.draft.hasContent
@@ -408,7 +411,7 @@ private struct NativePeerComposer: View {
             // A closed picker answers at once; a keystroke waits briefly so
             // typing a path doesn't send a search per character.
             if mentionQuery != nil { try? await Task.sleep(for: .milliseconds(120)) }
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, client.selectedSessionId == transcript.sessionId else { return }
             client.searchMentions(mentionQuery)
         }
         .onChange(of: composerFocused) { _, focused in
@@ -456,6 +459,7 @@ private struct NativePeerComposer: View {
                 sendOnEnter: sendOnEnter, typography: typography,
                 onDraftChange: { draft in
                     composer.replaceDraft(draft)
+                    guard client.selectedSessionId == transcript.sessionId else { return }
                     client.draft = draft.plainText
                     reconcileMentionPicker()
                 },

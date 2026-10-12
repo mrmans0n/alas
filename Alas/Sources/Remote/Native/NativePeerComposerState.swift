@@ -3,6 +3,23 @@ import Foundation
 /// Pure translation from peer wire frames to the local composer's models,
 /// so the peer composer reuses the local chip views and action logic.
 enum NativePeerComposerState {
+    @MainActor
+    struct EditorContext {
+        let client: NativePeerSessions
+        let sessionId: String
+
+        var config: RemoteSessionConfig? {
+            client.selectedSessionId == sessionId ? client.transcript?.config : nil
+        }
+
+        var isOpen: Bool {
+            client.selectedSessionId == sessionId
+                && client.selectedPeer?.state.carriesSessions == true
+                && client.transcript?.epoch != nil
+                && client.transcript?.isClosed == false
+        }
+    }
+
     private struct PeerMention: Codable {
         let peerId: String
         let mention: RemoteMention

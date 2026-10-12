@@ -8,6 +8,20 @@ import Testing
 @MainActor
 @Suite("ACP composer draft bridge")
 struct ACPComposerDraftBridgeTests {
+    @Test("marked input keeps Return in the input method instead of the peer picker")
+    func markedInputBypassesExternalPickerKeys() throws {
+        let (editor, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        var picked = false
+        editor.onExternalKeyDown = { _ in picked = true
+        return true }
+        editor.setMarkedText("é", selectedRange: NSRange(location: 1, length: 0),
+                             replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(editor.hasMarkedText())
+        editor.keyDown(with: try keyEvent(keyCode: 36, modifiers: []))
+        #expect(!picked)
+    }
+
     @Test("restoring a draft flags a symbol badge whose declaration is gone, and only that one")
     func restoredDraftFlagsMissingSymbolBadges() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("presence-\(UUID().uuidString)")

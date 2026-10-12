@@ -850,19 +850,27 @@ struct NativePeerSessionsTests {
         #expect(client.deliveryError != nil)
     }
 
-    @Test func richPeerDraftSurvivesNavigationAndQueueEditKeepsItsChips() {
+    @Test(arguments: [
+        ACPComposerDraft(segments: [.pastedText(ordinal: 1, content: "pasted context")]),
+        ACPComposerDraft(segments: [.image(uri: "file:///tmp/selected.png", mimeType: "image/png")]),
+    ], [true, false])
+    func richPeerDraftSurvivesNavigationAndQueueEditKeepsItsChips(rich: ACPComposerDraft, restoredWhileAway: Bool) {
         let (links, client) = drivenClient(canDrive: true)
         let state = client.composerState(for: "B:s")
-        let rich = ACPComposerDraft(segments: [.pastedText(ordinal: 1, content: "pasted context")])
         state.replaceDraft(rich)
         client.draft = rich.plainText
+        client.queueEdit("q")
         client.clearSelection()
+        let restore = RemoteServerMessage.queueEditRestored(sessionId: "s", itemId: "q", text: "follow up")
+        if restoredWhileAway { links.receive(restore, from: "B") }
         client.select("B:s")
         #expect(client.composerState(for: "B:s") === state)
-        #expect(state.draft == rich)
-        #expect(client.draft == rich.plainText)
-        links.receive(.queueEditRestored(sessionId: "s", itemId: "q", text: "follow up"), from: "B")
-        #expect(state.draft.segments == rich.segments + [.text("\nfollow up")])
+        if !restoredWhileAway {
+            #expect(state.draft == rich)
+            #expect(client.draft == rich.plainText)
+            links.receive(restore, from: "B")
+        }
+        #expect(state.draft.segments == rich.segments + [.text(rich.plainText.isEmpty ? "follow up" : "\nfollow up")])
     }
 
     @Test(arguments: [(true, false), (false, false), (false, true)])
@@ -892,6 +900,96 @@ struct NativePeerSessionsTests {
         #expect(!client.isPromptPending)
         #expect(state.draft == (rejected || edited ? current : .empty))
         #expect(completed == !rejected)
+    }
+
+    @Test(arguments: [(true, false, false), (false, false, false), (true, true, false), (true, true, true)])
+    func pendingSendIsConfirmedAfterNavigatingBack(
+        confirmationWhileAway: Bool, reconnect: Bool, disconnectedBeforeNavigation: Bool
+    ) {
+        let (links, client) = drivenClient(canDrive: true)
+        links.receive(.sessionList(sessions: [row("s"), row("t")]), from: "B")
+        client.draft = "submitted"
+        client.sendPrompt()
+        if disconnectedBeforeNavigation {
+            links.offline("B")
+            #expect(client.transcript?.isClosed == true)
+            client.clearSelection()
+            links.online("B", name: "Mac B")
+            links.receive(.sessionList(sessions: [row("s"), row("t")]), from: "B")
+        }
+        client.select("B:t")
+        client.draft = "other session"
+        if reconnect, !disconnectedBeforeNavigation {
+            links.offline("B")
+            links.online("B", name: "Mac B")
+            links.receive(.sessionList(sessions: [row("s"), row("t")]), from: "B")
+        }
+        let confirmation = RemoteServerMessage.queueState(sessionId: "s", items: [
+            .init(id: "new", text: "submitted", imageCount: 0, resourceCount: 0, status: "pending",
+                  lastError: nil, scheduledAt: nil)
+        ])
+        if confirmationWhileAway {
+            links.receive(confirmation, from: "B")
+            #expect(client.draft == "other session")
+        }
+        client.select("B:s")
+        if !confirmationWhileAway {
+            #expect(client.isPromptPending)
+            links.receive(confirmation, from: "B")
+        }
+        #expect(client.draft.isEmpty)
+        #expect(client.composerState(for: "B:s").draft.isEmpty)
+        #expect(!client.isPromptPending)
+    }
+
+    @Test func editorContextTracksConnectionAndCapabilitiesWithoutRemounting() {
+        let (links, client) = drivenClient(canDrive: true)
+        let context = NativePeerComposerState.EditorContext(client: client, sessionId: "B:s")
+        #expect(context.isOpen)
+        var config = RemoteSessionConfig(sessionId: "s", models: [], modes: [], autoRunEnabled: false, acceptsImages: false)
+        links.receive(.sessionConfig(config), from: "B")
+        #expect(context.config?.acceptsImages == false)
+        config = RemoteSessionConfig(sessionId: "s", models: [], modes: [], autoRunEnabled: false, acceptsImages: true)
+        links.receive(.sessionConfig(config), from: "B")
+        #expect(context.config?.acceptsImages == true)
+        client.clearSelection()
+        #expect(!context.isOpen)
+        #expect(context.config == nil)
+        client.select("B:s")
+        #expect(!context.isOpen)
+        links.receive(.transcriptSnapshot(sessionId: "s", streamingState: "idle", canDrive: true,
+                                          messages: [], firstIndex: 0, totalCount: 0, epoch: 2, revision: 0), from: "B")
+        #expect(context.isOpen)
+    }
+
+    @Test(arguments: [(1, false), (2, false), (2, true)])
+    func hostReplaySettlesPendingDeliveryWhenItsEpochChanged(epoch: Int, queued: Bool) {
+        let (links, client) = drivenClient(canDrive: true)
+        client.draft = "submitted"
+        var completed: Bool?
+        let accepted = client.sendComposerPrompt(images: [], mentions: [], intent: .auto, completion: { completed = $0 })
+        #expect(accepted)
+        links.receive(.transcriptSnapshot(sessionId: "s", streamingState: "idle", canDrive: true,
+                                          messages: [], firstIndex: 0, totalCount: 0, epoch: epoch, revision: 1), from: "B")
+        let queue: [RemoteQueuedPrompt] = queued ? [
+            .init(id: "new", text: "submitted", imageCount: 0, resourceCount: 0, status: "pending",
+                  lastError: nil, scheduledAt: nil)
+        ] : []
+        links.receive(.queueState(sessionId: "s", items: queue), from: "B")
+        if queued {
+            #expect(!client.isPromptPending)
+            #expect(completed == true)
+            #expect(client.draft.isEmpty)
+        } else if epoch == 1 {
+            #expect(client.isPromptPending)
+            #expect(completed == nil)
+        } else {
+            #expect(!client.isPromptPending)
+            #expect(completed == false)
+            #expect(client.draft == "submitted")
+            client.sendPrompt()
+            #expect(client.isPromptPending)
+        }
     }
 
     private func drivenClient(canDrive: Bool) -> (FakeLinks, NativePeerSessions) {

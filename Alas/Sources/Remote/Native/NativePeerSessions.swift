@@ -19,12 +19,37 @@ final class NativePeerSessions {
     /// item (not a re-pushed older duplicate) confirms the send.
     @ObservationIgnored private var pendingPromptPriorQueueIds: Set<String> = []
 
+    @ObservationIgnored private var suspendedPrompts: [String: SuspendedPrompt] = [:]
+    @ObservationIgnored private var composerErrors: [String: String] = [:]
+
+    private struct SuspendedPrompt {
+        let prompt: PendingPrompt
+        let expectedIndex: Int?
+        let priorQueueIds: Set<String>
+        var replayEpoch: Int?
+        var needsResubscribe = false
+        let completion: (@MainActor (Bool) -> Void)?
+
+        func isConfirmed(by message: RemoteServerMessage) -> Bool {
+            switch message {
+            case .queueState(_, let items):
+                return items.contains { prompt.matches($0) && !priorQueueIds.contains($0.id) }
+            case .transcriptSnapshot(_, _, _, let rows, _, _, _, _, _),
+                 .transcriptDelta(_, _, _, let rows, _, _, _):
+                guard let expectedIndex else { return false }
+                return rows.contains { prompt.matches($0) && $0.index >= expectedIndex }
+            default: return false
+            }
+        }
+    }
+
     /// A sent prompt awaiting the host's confirmation, as the host will
     /// echo it back in a queue item or a transcript user row.
     struct PendingPrompt: Equatable {
         let text: String
         let attachments: [NativePeerAttachment]
         let composerDraft: ACPComposerDraft
+        let epoch: Int?
         var mentions: [RemoteMention] = []
 
         func matches(_ item: RemoteQueuedPrompt) -> Bool {
@@ -75,7 +100,7 @@ final class NativePeerSessions {
             let composer = composerState(for: selectedSessionId)
             let current = composer.draft
             guard current.plainText != draft else { return }
-            if !current.plainText.isEmpty, draft.hasPrefix(current.plainText) {
+            if !current.isEmpty, draft.hasPrefix(current.plainText) {
                 let suffix = String(draft.dropFirst(current.plainText.count))
                 composer.replaceDraft(.init(segments: current.segments + [.text(suffix)]))
             } else {
@@ -343,6 +368,8 @@ final class NativePeerSessions {
         resetMentions()
         restoredDrafts = [:]
         composerStates = [:]
+        suspendedPrompts = [:]
+        composerErrors = [:]
         pendingPrompt = nil
         promptCompletion = nil
         pendingPromptExpectedIndex = nil
@@ -364,9 +391,24 @@ final class NativePeerSessions {
         fileTreeRequestInFlight = false
     }
 
+    private func resubscribeSuspendedPrompts() {
+        guard let downstream else { return }
+        for sessionId in Array(suspendedPrompts.keys) {
+            guard suspendedPrompts[sessionId]?.needsResubscribe == true,
+                  snapshot.groups.contains(where: { group in
+                      group.state.carriesSessions && group.sessions.contains { $0.id == sessionId && $0.isActive }
+                  }) else { continue }
+            suspendedPrompts[sessionId]?.needsResubscribe = false
+            if !federation.route(.subscribe(sessionId: sessionId), from: downstream) {
+                suspendedPrompts[sessionId]?.needsResubscribe = true
+            }
+        }
+    }
+
     func refresh() {
         guard downstream != nil else { return }
         rebuildSnapshot()
+        resubscribeSuspendedPrompts()
         consoles?.peersChanged(online: Set(snapshot.groups.filter(\.state.carriesSessions).map(\.serverId)))
         reconcileNewSession()
         if let pending = pendingSessionId,
@@ -388,11 +430,8 @@ final class NativePeerSessions {
             // The provider discarded subscriptions when this peer went away.
             // Its new transcript may also have a lower epoch after a restart.
             transcript = NativePeerTranscript(sessionId: selectedSessionId)
-            let completion = promptCompletion
-            pendingPrompt = nil
-            promptCompletion = nil
-            pendingPromptExpectedIndex = nil
-            completion?(false)
+            // Keep delivery markers: the re-subscription replays the host's
+            // transcript and queue and can still confirm a routed prompt.
             isFetchingOlderMessages = false
             _ = federation.route(.subscribe(sessionId: selectedSessionId), from: downstream)
             // Preserved across the reset below: losing it would silently
@@ -433,8 +472,15 @@ final class NativePeerSessions {
         selectedSessionId = sessionId
         let saved = composerState(for: sessionId).draft.plainText
         draft = restoredDrafts.removeValue(forKey: sessionId).map { Self.appending($0, to: saved) } ?? saved
-        attachments = []
+        let suspended = suspendedPrompts.removeValue(forKey: sessionId)
+        pendingPrompt = suspended?.prompt
+        pendingPromptExpectedIndex = suspended?.expectedIndex
+        pendingPromptPriorQueueIds = suspended?.priorQueueIds ?? []
+        promptCompletion = suspended?.completion
+        deliveryError = composerErrors.removeValue(forKey: sessionId)
+        attachments = suspended?.prompt.attachments ?? []
         resetMentions()
+        mentions = suspended?.prompt.mentions ?? []
         transcript = NativePeerTranscript(sessionId: sessionId)
         _ = federation.route(.subscribe(sessionId: sessionId), from: downstream)
         reloadWorkspace()
@@ -452,7 +498,14 @@ final class NativePeerSessions {
         selectedWorktree = nil
         selectedWorktreeTabs = []
         consoles?.clearSelection()
-        if let selectedSessionId, let downstream {
+        if let selectedSessionId, let pendingPrompt {
+            suspendedPrompts[selectedSessionId] = SuspendedPrompt(
+                prompt: pendingPrompt, expectedIndex: pendingPromptExpectedIndex,
+                priorQueueIds: pendingPromptPriorQueueIds, replayEpoch: transcript?.epoch ?? pendingPrompt.epoch,
+                needsResubscribe: transcript?.isClosed != false,
+                completion: promptCompletion)
+        }
+        if let selectedSessionId, let downstream, pendingPrompt == nil {
             _ = federation.route(.unsubscribe(sessionId: selectedSessionId), from: downstream)
         }
         selectedSessionId = nil
@@ -502,7 +555,7 @@ final class NativePeerSessions {
         let pending = PendingPrompt(
             text: text, attachments: attachments,
             composerDraft: selectedSessionId.map { composerState(for: $0).draft } ?? .empty,
-            mentions: mentions)
+            epoch: transcript?.epoch, mentions: mentions)
         pendingPrompt = pending
         pendingPromptExpectedIndex = transcript?.totalCount ?? 0
         pendingPromptPriorQueueIds = Set((transcript?.queue ?? []).filter(pending.matches).map(\.id))
@@ -992,6 +1045,54 @@ final class NativePeerSessions {
         draft.isEmpty ? text : draft + "\n" + text
     }
 
+    private static let unconfirmedDeliveryMessage = "Peer session changed before delivery could be confirmed. Your draft was kept."
+
+    /// Pending sends keep their subscription until delivery settles, even
+    /// when another session is selected. Re-selection also replays the queue.
+    private func handleSuspendedPrompt(_ message: RemoteServerMessage) -> Bool {
+        guard let sessionId = message.sessionId, sessionId != selectedSessionId,
+              var suspended = suspendedPrompts[sessionId] else { return false }
+        switch message {
+        case .transcriptSnapshot(_, _, _, _, _, _, let epoch, _, _),
+             .transcriptDelta(_, _, _, _, let epoch, _, _):
+            suspended.replayEpoch = epoch
+        case .sessionClosed:
+            suspended.needsResubscribe = true
+        default: break
+        }
+        let rejected: Bool = if case .promptRejected = message { true } else { false }
+        let confirmed = suspended.isConfirmed(by: message)
+        let superseded: Bool
+        if case .queueState = message, let epoch = suspended.replayEpoch, let sentEpoch = suspended.prompt.epoch {
+            superseded = epoch != sentEpoch
+        } else {
+            superseded = false
+        }
+        guard rejected || confirmed || superseded else {
+            suspendedPrompts[sessionId] = suspended
+            return false
+        }
+        suspendedPrompts.removeValue(forKey: sessionId)
+        if confirmed {
+            let composer = composerState(for: sessionId)
+            if composer.draft == suspended.prompt.composerDraft { composer.replaceDraft(.empty) }
+        } else {
+            composerErrors[sessionId] = superseded ? Self.unconfirmedDeliveryMessage : "Prompt was not delivered. Your draft was kept."
+        }
+        if let downstream { _ = federation.route(.unsubscribe(sessionId: sessionId), from: downstream) }
+        suspended.completion?(confirmed)
+        return true
+    }
+
+    private func rejectPendingPrompt(message: String) {
+        let completion = promptCompletion
+        pendingPrompt = nil
+        promptCompletion = nil
+        pendingPromptExpectedIndex = nil
+        deliveryError = message
+        completion?(false)
+    }
+
     private func receive(_ message: RemoteServerMessage) {
         // Tab actions answer for any session, not just the selected one. A
         // reply to a request the user has since moved on from, or retried,
@@ -1025,6 +1126,7 @@ final class NativePeerSessions {
         default:
             break
         }
+        if handleSuspendedPrompt(message) { return }
         guard let selectedSessionId, message.sessionId == selectedSessionId else { return }
         switch message {
         case .transcriptSnapshot, .transcriptPage:
@@ -1040,12 +1142,7 @@ final class NativePeerSessions {
             return
         }
         if case .promptRejected = message {
-            let completion = promptCompletion
-            pendingPrompt = nil
-            promptCompletion = nil
-            pendingPromptExpectedIndex = nil
-            deliveryError = "Prompt was not delivered. Your draft was kept."
-            completion?(false)
+            rejectPendingPrompt(message: "Prompt was not delivered. Your draft was kept.")
             return
         }
         let isChangesReply: Bool = switch message {
@@ -1111,6 +1208,13 @@ final class NativePeerSessions {
         if let pendingPrompt, let expectedIndex = pendingPromptExpectedIndex,
            promptConfirmationRows.contains(where: { pendingPrompt.matches($0) && $0.index >= expectedIndex }) {
             confirm(pendingPrompt)
+            return
+        }
+        if case .queueState = message, let pendingPrompt,
+           let epoch = transcript?.epoch, epoch != pendingPrompt.epoch {
+            // Wait for both the transcript and queue replay before deciding
+            // that an older epoch can no longer acknowledge its prompt.
+            rejectPendingPrompt(message: Self.unconfirmedDeliveryMessage)
         }
     }
 
