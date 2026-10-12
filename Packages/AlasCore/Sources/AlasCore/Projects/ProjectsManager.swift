@@ -170,6 +170,11 @@ public final class ProjectsManager {
                               userInfo: [NSLocalizedDescriptionKey: "Not a git repository: \(path.path)"])
             }
         }
+        // Validation suspended, so another add may have taken this id since
+        // the caller last looked.
+        guard !projects.contains(where: { $0.id == id }) else {
+            throw ProjectCreationError.projectAlreadyExists
+        }
         // Worktree ids are paths, so two projects at one directory would
         // share row ids that selection, tabs, and sessions key on. Remote ids
         // are namespaced per host, so only projects on the same host (or both

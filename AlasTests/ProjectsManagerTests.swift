@@ -16,6 +16,28 @@ struct ProjectsManagerTests {
         return dir
     }
 
+    /// Validation suspends, so two adds with one explicit id can both pass any
+    /// check made before it; the id must be checked again once validated.
+    @Test func concurrentAddsWithOneIDKeepOnlyOneProject() async throws {
+        let first = try await makeRepo(name: "id-a")
+        let second = try await makeRepo(name: "id-b")
+        defer {
+            try? FileManager.default.removeItem(at: first)
+            try? FileManager.default.removeItem(at: second)
+        }
+        let mgr = ProjectsManager(persistedProjects: [])
+
+        func add(_ path: URL) async -> Bool {
+            (try? await mgr.addProject(path: path, displayName: path.lastPathComponent, icon: .default(color: "blue"), id: "same")) != nil
+        }
+        async let a = add(first)
+        async let b = add(second)
+        let added = await [a, b]
+
+        #expect(added.filter { $0 }.count == 1)
+        #expect(mgr.projects.filter { $0.id == "same" }.count == 1)
+    }
+
     /// A worktree id is its path, so two projects (typically one per SSH host)
     /// can hold a checkout at the same path. Claims are keyed by project *and*
     /// id, so a claim opened for one project never suppresses the other's row
