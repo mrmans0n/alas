@@ -148,7 +148,10 @@ enum MergeWordDiff {
         for index in s.indices {
             let ch = s[index]
             if ch.isWhitespace {
-                if let st = start { result.append(s[st ..< index]); start = nil }
+                if let st = start {
+                    result.append(s[st ..< index])
+                    start = nil
+                }
                 continue
             }
             let isWord = ch.isLetter || ch.isNumber || ch == "_"

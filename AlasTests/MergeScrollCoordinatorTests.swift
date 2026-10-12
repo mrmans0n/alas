@@ -26,8 +26,14 @@ struct MergeScrollCoordinatorTests {
         let coord = Self.coordinator()
         var result: [CGFloat] = []
         var remote: [CGFloat] = []
-        coord.register(.result) { result.append($0); return $0 }
-        coord.register(.remote) { remote.append($0); return $0 }
+        coord.register(.result) { y in
+            result.append(y)
+            return y
+        }
+        coord.register(.remote) { y in
+            remote.append(y)
+            return y
+        }
 
         // Row 2 of LOCAL is halfway through its 2-row hunk.
         coord.applyPaneY(20, source: .local)
@@ -63,7 +69,10 @@ struct MergeScrollCoordinatorTests {
         let coord = Self.coordinator()
         var resultCalls = 0
         var observed = 0
-        coord.register(.result) { resultCalls += 1; return $0 }
+        coord.register(.result) { y in
+            resultCalls += 1
+            return y
+        }
         let id = coord.addScrollObserver { observed += 1 }
 
         coord.applyPaneY(10, source: .local)
