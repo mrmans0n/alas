@@ -57,7 +57,10 @@ struct AppKitDiffRowHostingPoolTests {
         var onIntrinsicSizeInvalidated: ((String) -> Void)?
         var lastMeasuredWidth: CGFloat?
         var configured = 0
-        func measuredHeight(forWidth width: CGFloat) -> CGFloat { lastMeasuredWidth = width; return 10 }
+        func measuredHeight(forWidth width: CGFloat) -> CGFloat {
+            lastMeasuredWidth = width
+            return 10
+        }
         func attach(to documentView: NSView) { documentView.addSubview(self) }
         func suppressNextLayoutForStableScroll() {}
     }

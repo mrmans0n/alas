@@ -789,7 +789,6 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
 
     // MARK: - Drawing
 
-
     override func draw(_ requestedRect: NSRect) {
         // AppKit asks every row to redraw the strip a scroll step exposes,
         // even rows the strip misses; those draws would still record every
