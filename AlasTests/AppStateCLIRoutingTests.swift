@@ -341,6 +341,11 @@ struct AppStateCLIRoutingTests {
         )
         #expect(scheduled)
         await manager.flushPersistence()
+        let resumeLookup = AsyncStream<Void>.makeStream()
+        let suspendedLookup = Task { @MainActor in
+            for await _ in resumeLookup.stream { break }
+            return state.acpManager(for: worktree)
+        }
         let moved = Worktree(
             id: worktree.id, projectId: repository.id, name: worktree.name,
             branch: "main", path: worktree.path, status: .clean,
@@ -387,6 +392,10 @@ struct AppStateCLIRoutingTests {
             if case .acpSession(let tab) = $0 { return tab.sessionId == scheduledSession.id }
             return false
         })
+        #expect(await awaitCondition { rebound.isIdleForProjectRebinding })
+        resumeLookup.continuation.yield()
+        #expect(await suspendedLookup.value === rebound)
+        #expect(state.acpManagerForMountedTab(worktree: worktree, owner: owner) === rebound)
         let remotes = try await rebound.upstreamReferences.environment.remotes(path)
         #expect(Set(remotes.map(\.name)) == ["origin"])
         let accepted = manager.submit(sessionId: session.id, text: "later turn", attachments: [],

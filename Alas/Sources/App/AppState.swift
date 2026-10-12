@@ -13152,12 +13152,13 @@ final class AppState {
         if let owner, owner != .worktree(worktree.id) {
             return acpManager(for: owner)
         }
-        return acpManager(for: self.worktree(withId: worktree.id) ?? worktree)
+        return acpManager(for: worktree)
     }
 
     /// Returns (or lazily creates) the ACP session manager for the given worktree.
     /// Store opening and migration happen lazily on the persistence actor.
     func acpManager(for worktree: Worktree) -> ACPSessionManager? {
+        let worktree = self.worktree(withId: worktree.id) ?? worktree
         let owner = SessionOwnerID.worktree(worktree.id)
         var previousManagerDisposal: Task<Void, Never>?
         if let existing = acpManagers[owner] {
