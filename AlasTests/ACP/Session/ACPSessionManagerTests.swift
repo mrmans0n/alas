@@ -151,6 +151,44 @@ struct ACPSessionManagerTests {
         #expect(manager.isIdleForProjectRebinding)
     }
 
+    @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+    func discoveryHandleKeepsProjectBindingBusyUntilClosed(closeExplicitly: Bool) async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("discovery-binding-\(UUID()).sqlite")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = try ACPSessionStore(path: url.path)
+        let client = ACPMockClient()
+        let initializing = AsyncGate()
+        client.scriptAsync(method: "initialize") { _ in
+            await initializing.enterAndWait()
+            return try JSONEncoder().encode(ACPInitializeResult(
+                protocolVersion: 1,
+                agentCapabilities: .init(sessionCapabilities: .init(list: .init())),
+                authMethods: []
+            ))
+        }
+        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store,
+            setupEvaluator: { _ in .ready }, connectionFactory: { _, _, _ in ACPConnection(client: client) })
+        defer { manager.shutdownBackgroundTasks() }
+        var readiness: Bool?
+        let subscription = manager.projectRebindingReadiness.sink { readiness = $0 }
+        defer { subscription.cancel() }
+        var starting: Task<ACPSessionDiscoveryHandle, Error>? = Task { @MainActor in
+            try await manager.makeSessionDiscoveryHandle(agentId: "claude")
+        }
+        await initializing.waitUntilEntered()
+        #expect(!manager.isIdleForProjectRebinding)
+        #expect(await awaitCondition(within: .seconds(1)) { readiness == false })
+        await initializing.release()
+        var handle = try await starting?.value
+        starting = nil
+        try #require(handle != nil)
+        #expect(!manager.isIdleForProjectRebinding)
+        if closeExplicitly { await handle?.close() }
+        handle = nil
+        #expect(await awaitCondition { manager.isIdleForProjectRebinding && readiness == true })
+        #expect(client.shutdownCount == 1)
+    }
+
     @Test(.timeLimit(.minutes(1)))
     func connectedIdleRunnerCanRebindAfterWorkFinishes() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rebind-\(UUID()).sqlite")

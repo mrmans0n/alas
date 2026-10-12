@@ -315,6 +315,9 @@ public final class ACPSessionManager: ChangeTracking {
     private var activeSideQuestionWorkCount = 0 {
         willSet { projectRebindingActivity.send() }
     }
+    private var activeDiscoveryHandles: Set<UUID> = [] {
+        willSet { projectRebindingActivity.send() }
+    }
     private var activeDiscoveryImportCount = 0 {
         willSet { projectRebindingActivity.send() }
     }
@@ -1788,7 +1791,8 @@ public final class ACPSessionManager: ChangeTracking {
     public var isIdleForProjectRebinding: Bool {
         !isDisposed && attachingSessions.isEmpty && restartingConnections.isEmpty
             && autoReconnectTasks.isEmpty && disposalTasks.isEmpty
-            && activeSessionDeletionCount == 0 && activeDiscoveryImportCount == 0 && teardownCounts.isEmpty
+            && activeSessionDeletionCount == 0 && activeDiscoveryImportCount == 0
+            && activeDiscoveryHandles.isEmpty && teardownCounts.isEmpty
             && sideQuestions.isEmpty && activeSideQuestionWorkCount == 0
             && runners.values.allSatisfy(\.isIdleForProjectRebinding)
             && sessions.values.allSatisfy {
@@ -3894,7 +3898,15 @@ public final class ACPSessionManager: ChangeTracking {
     }
 
     public func makeSessionDiscoveryHandle(agentId: String) async throws -> ACPSessionDiscoveryHandle {
+        guard !isDisposed else { throw CancellationError() }
+        let activityID = UUID()
+        activeDiscoveryHandles.insert(activityID)
+        var transferredToHandle = false
+        defer {
+            if !transferredToHandle { activeDiscoveryHandles.remove(activityID) }
+        }
         await previousManagerDisposal?.value
+        guard !isDisposed else { throw CancellationError() }
         guard let spec = ACPLaunchCatalog.spec(for: agentId) else {
             throw ACPSessionDiscoveryError.noLaunchSpec(agentId)
         }
@@ -3912,6 +3924,7 @@ public final class ACPSessionManager: ChangeTracking {
             guard initialized.sessionCapabilities.supportsList else {
                 throw ACPSessionDiscoveryError.listingUnsupported
             }
+            transferredToHandle = true
             return ACPSessionDiscoveryHandle(
                 worktreeId: worktreeId,
                 agentId: agentId,
@@ -3923,7 +3936,8 @@ public final class ACPSessionManager: ChangeTracking {
                     canResume: initialized.sessionCapabilities.supportsResume,
                     canFork: initialized.sessionCapabilities.supportsFork,
                     canDelete: initialized.sessionCapabilities.supportsDelete
-                )
+                ),
+                onClosed: { [weak self] in self?.activeDiscoveryHandles.remove(activityID) }
             )
         } catch {
             await connection.shutdown()
