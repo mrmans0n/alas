@@ -17,7 +17,6 @@ struct MergeScrollCoordinatorTests {
         let coord = MergeScrollCoordinator()
         coord.rowHeight = 10
         coord.contentTopInset = 0
-        coord.viewportHeight = 0
         coord.layout = MergeRegionVisualLayout.compute(regions: [.text("a\n"), .conflict(block), .text("b\n")])
         return coord
     }
@@ -87,10 +86,30 @@ struct MergeScrollCoordinatorTests {
 
     @Test func mappingAnchorsOnTheViewportCenter() {
         let coord = Self.coordinator()
-        coord.viewportHeight = 20
+        coord.setViewportHeight(20)
         // LOCAL at y = 10 has row 2 (mid-hunk) at its center, which maps to
         // RESULT row 2.5; RESULT must put that row at its own center.
         #expect(coord.mappedOffset(10, from: .local, to: .result) == 15)
         #expect(coord.mappedOffset(0, from: .local, to: .result) == 0)
+    }
+
+    @Test func viewportResizeRealignsSidePanesOnResult() {
+        let coord = Self.coordinator()
+        var local: [CGFloat] = []
+        coord.register(.local) { y in
+            local.append(y)
+            return y
+        }
+        coord.register(.result) { $0 }
+        coord.scroll(.result, toY: 25)
+        local.removeAll()
+
+        // The new center is RESULT row 3.5, five sixths into its 3-row
+        // hunk, which maps to LOCAL row 1 + 2 * 5/6.
+        coord.setViewportHeight(20)
+        coord.setViewportHeight(20)
+
+        #expect(local.count == 1)
+        #expect(abs((local.first ?? 0) - (CGFloat(1 + 2.0 * 5 / 6) * 10 - 10)) < 0.001)
     }
 }

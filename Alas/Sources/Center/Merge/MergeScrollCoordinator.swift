@@ -16,7 +16,7 @@ final class MergeScrollCoordinator {
     /// single row height maps rows to pixels in every pane.
     var rowHeight: CGFloat = 16
     var contentTopInset: CGFloat = 6
-    var viewportHeight: CGFloat = 0
+    private(set) var viewportHeight: CGFloat = 0
     var layout: MergeRegionVisualLayout.Layout?
 
     private(set) var offsets: [Source: CGFloat] = [:]
@@ -57,6 +57,14 @@ final class MergeScrollCoordinator {
     func scroll(_ source: Source, toY y: CGFloat) {
         sync(max(0, y), to: source)
         broadcast(from: source)
+    }
+
+    /// Mapping anchors on the viewport center, so a height change moves the
+    /// anchor: re-align the other panes on RESULT.
+    func setViewportHeight(_ height: CGFloat) {
+        guard abs(height - viewportHeight) > 0.25 else { return }
+        viewportHeight = height
+        broadcast(from: .result)
     }
 
     /// Pixel offset `target` needs so it shows the content that sits at
@@ -125,9 +133,9 @@ final class MergePaneScrollBridge {
             object: clip
         ) { [weak clip] in
             guard let clip else { return }
-            coordinator.viewportHeight = clip.bounds.height
+            coordinator.setViewportHeight(clip.bounds.height)
         })
-        coordinator.viewportHeight = clip.bounds.height
+        coordinator.setViewportHeight(clip.bounds.height)
         // Weak scroll: handlers live on `coordinator`, which outlives any
         // single pane instance.
         coordinator.register(source) { [weak scroll] y in
