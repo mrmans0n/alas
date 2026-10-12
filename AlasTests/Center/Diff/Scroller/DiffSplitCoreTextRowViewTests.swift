@@ -159,6 +159,20 @@ import Testing
     }
 
     @Test(arguments: [
+        // Within one tile, and straddling a tile edge.
+        (CGFloat(0), CGFloat(100), 0..<1),
+        (500, 600, 0..<2),
+        // Clamped to the row: the last tile is short, and nothing lies beyond it.
+        (1100, 5000, 2..<3),
+        (-1000, -10, 0..<0),
+        (1200, 1300, 0..<0),
+    ])
+    func rectsTouchTheTilesUnderThem(minY: CGFloat, maxY: CGFloat, expected: Range<Int>) {
+        let rect = NSRect(x: 0, y: minY, width: 800, height: maxY - minY)
+        #expect(DiffSplitCoreTextRowView.tileRange(covering: rect, height: 1200, tileHeight: 512) == expected)
+    }
+
+    @Test(arguments: [
         (DiffSplitCoreTextRowView.Side.old, false),
         (.new, false),
         (.old, true),

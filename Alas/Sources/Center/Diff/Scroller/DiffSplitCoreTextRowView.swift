@@ -60,7 +60,7 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
     private(set) var lastMeasuredWidth: CGFloat?
     private(set) var lineHeight: CGFloat = 16
     var cardEdges = CardEdges.middle {
-        didSet { if cardEdges != oldValue { needsDisplay = true } }
+        didSet { if cardEdges != oldValue { invalidateTiles() } }
     }
 
     /// A line number, measured once.
@@ -97,10 +97,10 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
     private(set) var wraps = false
     private var review = ReviewLines()
     private(set) var gutterSelection: GutterSelection? {
-        didSet { if gutterSelection != oldValue { needsDisplay = true } }
+        didSet { if gutterSelection != oldValue { invalidateTiles() } }
     }
     private var hoveredGutterRow: (side: Side, row: Int)? {
-        didSet { if hoveredGutterRow?.side != oldValue?.side || hoveredGutterRow?.row != oldValue?.row { needsDisplay = true } }
+        didSet { if hoveredGutterRow?.side != oldValue?.side || hoveredGutterRow?.row != oldValue?.row { invalidateTiles() } }
     }
     /// Row geometry for the last width laid out.
     private var rowLayout: RowLayout?
@@ -115,10 +115,10 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
     }
 
     private var hoveredExpansion: ExpansionTarget? {
-        didSet { if hoveredExpansion != oldValue { needsDisplay = true } }
+        didSet { if hoveredExpansion != oldValue { invalidateTiles() } }
     }
     private var pressedExpansion: ExpansionTarget? {
-        didSet { if pressedExpansion != oldValue { needsDisplay = true } }
+        didSet { if pressedExpansion != oldValue { invalidateTiles() } }
     }
     private var armedExpansion: (target: ExpansionTarget, optionKey: Bool)?
     private var didSetPointingHand = false
@@ -162,7 +162,18 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        layer?.contentsFormat = .RGBA8Uint
+        updateTileScale()
+        observeClipView()
+    }
+
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        observeClipView()
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        updateTileScale()
     }
 
     // MARK: - Content
@@ -249,7 +260,7 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         applyChrome(chrome, palette: palette)
         updateViewportWidths()
         layoutSubviewsForContent()
-        needsDisplay = true
+        invalidateTiles()
     }
 
     func widestLineWidth(side: Side) -> CGFloat {
@@ -439,15 +450,15 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
     }
 
     /// The scroller sets frames directly after measuring, without a layout
-    /// pass, so a resize redraws and re-lays out here rather than stretching
-    /// the old layer contents.
+    /// pass, so a resize redraws and re-lays out here.
     override func setFrameSize(_ newSize: NSSize) {
         let changed = newSize != frame.size
         super.setFrameSize(newSize)
         guard changed else { return }
         updateViewportWidths()
         layoutSubviewsForContent()
-        needsDisplay = true
+        layoutTiles()
+        invalidateTiles()
     }
 
     private func layoutSubviewsForContent() {
@@ -729,7 +740,7 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
     @objc private func scrollerDidMove(_ sender: NSScroller) {
         let side: Side = sender === oldScroller ? .old : .new
         if horizontalScroll.scroll(side, toFraction: CGFloat(sender.doubleValue)) {
-            setNeedsDisplay(codeRect(side))
+            invalidateTiles(codeRect(side))
         }
         updateScroller(side)
     }
@@ -781,7 +792,7 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         }
         let delta = -DiffSplitHorizontalScroll.pointDelta(scrollingDeltaX: deltaX, isPrecise: isPrecise, lineHeight: lineHeight)
         if horizontalScroll.scroll(side, byPoints: delta) {
-            setNeedsDisplay(codeRect(side))
+            invalidateTiles(codeRect(side))
             updateScroller(side)
         }
         return true
@@ -789,10 +800,150 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
 
     // MARK: - Drawing
 
-    override func draw(_ requestedRect: NSRect) {
-        // AppKit asks every row to redraw the strip a scroll step exposes,
-        // even rows the strip misses; those draws would still record every
-        // clip and stroke for Core Animation to replay.
+    override func draw(_ dirtyRect: NSRect) {
+        drawContent(dirtyRect)
+    }
+
+    // MARK: - Tiles
+
+    /// Rows draw into tile layers of this height. Each tile draws once when
+    /// it nears the viewport and again only when content under it changes.
+    /// With one backing store per row, AppKit redrew a strip of every tall
+    /// row on each scroll step, which cost a vsync in about one frame in
+    /// twelve.
+    static let tileHeight: CGFloat = 512
+
+    private var tiles: [Int: CALayer] = [:]
+    private lazy var tileDelegate = TileDelegate(view: self)
+
+    override var wantsUpdateLayer: Bool { true }
+
+    private var observedClipView: NSClipView?
+    private var clipObserver: NSObjectProtocol?
+
+    /// Scrolling reveals rows without invalidating them, so each row watches
+    /// the clip view and asks for tiles it has not drawn yet.
+    private func observeClipView() {
+        let clipView = window == nil ? nil : enclosingScrollView?.contentView
+        guard clipView !== observedClipView else { return }
+        if let clipObserver { NotificationCenter.default.removeObserver(clipObserver) }
+        clipObserver = nil
+        observedClipView = clipView
+        guard let clipView else { return }
+        clipView.postsBoundsChangedNotifications = true
+        clipObserver = NotificationCenter.default.addObserver(
+            forName: NSView.boundsDidChangeNotification, object: clipView, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.requestMissingTiles() }
+        }
+    }
+
+    private func requestMissingTiles() {
+        guard bounds.height > 0 else { return }
+        if wantedTiles().contains(where: { tiles[$0] == nil }) {
+            needsDisplay = true
+        }
+    }
+
+    /// The tiles to have drawn: the visible part plus a viewport each way.
+    private func wantedTiles() -> Range<Int> {
+        let margin = max(visibleRect.height, enclosingScrollView?.contentView.bounds.height ?? 0)
+        return Self.tileRange(covering: visibleRect.insetBy(dx: 0, dy: -margin), height: bounds.height, tileHeight: Self.tileHeight)
+    }
+
+    isolated deinit {
+        if let clipObserver { NotificationCenter.default.removeObserver(clipObserver) }
+    }
+
+    /// AppKit calls this for its own scroll invalidations as well as ours,
+    /// so it only adds tiles that are missing; existing ones redraw only
+    /// through `invalidateTiles`.
+    override func updateLayer() {
+        guard let layer, bounds.height > 0 else { return }
+        for index in wantedTiles() where tiles[index] == nil {
+            let tile = CALayer()
+            tile.delegate = tileDelegate
+            tile.contentsFormat = .RGBA8Uint
+            tile.contentsScale = window?.backingScaleFactor ?? 2
+            tile.isOpaque = false
+            tile.setValue(index, forKey: "tileIndex")
+            tile.frame = convertToLayer(tileFrame(index))
+            layer.insertSublayer(tile, at: 0)
+            tile.setNeedsDisplay()
+            tiles[index] = tile
+        }
+    }
+
+    /// The tiles a rect touches, in a row `height` tall.
+    static func tileRange(covering rect: NSRect, height: CGFloat, tileHeight: CGFloat) -> Range<Int> {
+        let count = Int(ceil(height / tileHeight))
+        let clipped = rect.intersection(NSRect(x: rect.minX, y: 0, width: max(rect.width, 1), height: height))
+        guard count > 0, !clipped.isNull, clipped.height > 0 else { return 0..<0 }
+        let first = max(0, Int(floor(clipped.minY / tileHeight)))
+        let last = min(count, Int(ceil(clipped.maxY / tileHeight)))
+        return first..<max(first, last)
+    }
+
+    private func tileRect(_ index: Int) -> NSRect {
+        let minY = CGFloat(index) * Self.tileHeight
+        return NSRect(x: 0, y: minY, width: bounds.width, height: min(Self.tileHeight, bounds.height - minY))
+    }
+
+    /// A tile's layer frame: its rect plus a point of overlap with each
+    /// neighbor. Rows sit at fractional positions, so tile edges fall
+    /// mid-pixel; overlapping identical content keeps them from blending
+    /// into a visible seam.
+    private func tileFrame(_ index: Int) -> NSRect {
+        tileRect(index).insetBy(dx: 0, dy: -1).intersection(bounds)
+    }
+
+    /// Redraws the tiles under `rect`, or every tile, and lets
+    /// `updateLayer` add any that are now needed.
+    private func invalidateTiles(_ rect: NSRect? = nil) {
+        for (index, tile) in tiles where rect.map({ tileRect(index).intersects($0) }) ?? true {
+            tile.setNeedsDisplay()
+        }
+        needsDisplay = true
+    }
+
+    /// Fits tiles to a new size: drops those past the end and reframes the rest.
+    private func layoutTiles() {
+        let count = Int(ceil(max(0, bounds.height) / Self.tileHeight))
+        for (index, tile) in tiles {
+            if index >= count {
+                tile.removeFromSuperlayer()
+                tiles[index] = nil
+            } else {
+                tile.frame = convertToLayer(tileFrame(index))
+            }
+        }
+    }
+
+    private func updateTileScale() {
+        let scale = window?.backingScaleFactor ?? 2
+        for tile in tiles.values where tile.contentsScale != scale {
+            tile.contentsScale = scale
+            tile.setNeedsDisplay()
+        }
+    }
+
+    fileprivate func drawTile(_ tile: CALayer, in context: CGContext) {
+        guard let index = tile.value(forKey: "tileIndex") as? Int else { return }
+        let rect = tileFrame(index)
+        context.saveGState()
+        if !tile.contentsAreFlipped() {
+            context.translateBy(x: 0, y: tile.bounds.height)
+            context.scaleBy(x: 1, y: -1)
+        }
+        context.translateBy(x: -rect.minX, y: -rect.minY)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
+        drawContent(rect)
+        NSGraphicsContext.restoreGraphicsState()
+        context.restoreGState()
+    }
+
+    private func drawContent(_ requestedRect: NSRect) {
         let dirtyRect = requestedRect.intersection(bounds)
         guard !dirtyRect.isEmpty, let palette, let context = NSGraphicsContext.current?.cgContext else { return }
         let cardRect = NSRect(x: 0, y: 0, width: bounds.width, height: max(0, bounds.height - bottomPadding))
@@ -1218,5 +1369,25 @@ extension DiffSplitCoreTextRowView: AppKitDiffScrollLineTargetProviding {
                 && sourceLine.highlightLineNumber(for: target.side) == target.line
         }) else { return nil }
         return rowCenterY(row)
+    }
+}
+
+/// Draws a row's tiles; layers hold their delegate weakly. Core Animation
+/// displays these layers during the main-thread commit.
+@MainActor
+private final class TileDelegate: NSObject, @preconcurrency CALayerDelegate {
+    weak var view: DiffSplitCoreTextRowView?
+
+    init(view: DiffSplitCoreTextRowView) {
+        self.view = view
+    }
+
+    func draw(_ layer: CALayer, in context: CGContext) {
+        view?.drawTile(layer, in: context)
+    }
+
+    /// No implicit fades when tiles appear or change.
+    func action(for layer: CALayer, forKey event: String) -> CAAction? {
+        NSNull()
     }
 }
