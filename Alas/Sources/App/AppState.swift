@@ -6766,14 +6766,15 @@ final class AppState {
     }
 
     /// Delete every archived worktree across all projects after one
-    /// confirmation. Worktrees referenced by any Workspace checkout are left
-    /// for the single-item flow (the batch path refuses them), and anything
+    /// confirmation. Remote worktrees and those referenced by any Workspace
+    /// checkout are left for the single-item flow (the batch path's local
+    /// branch and ownership re-checks refuse them), and anything
     /// git refuses without `--force` is reported so the user can delete it
     /// individually.
     func deleteAllArchivedWorktrees() async {
         let archived = projects.flatMap { projectsManager.archivedWorktrees(projectId: $0.id) }
         let deletable = workspacesManager.canMutate
-            ? archived.filter { worktreeCleanupWorkspaceOwners(for: $0).isEmpty }
+            ? archived.filter { !$0.path.isRemoteAlasPath && worktreeCleanupWorkspaceOwners(for: $0).isEmpty }
             : []
         guard !deletable.isEmpty else { return }
 
@@ -6786,7 +6787,7 @@ final class AppState {
             ? "This removes their files from disk. Local branches will be deleted if merged."
             : "This removes their files from disk. Local branches will be kept."
         if deletable.count < archived.count {
-            message += " Worktrees referenced by a Workspace checkout are skipped; delete them individually."
+            message += " Remote worktrees and those referenced by a Workspace checkout are skipped; delete them individually."
         }
         alert.informativeText = message
         alert.alertStyle = .warning
