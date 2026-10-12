@@ -14,7 +14,11 @@ enum FrameRateBenchmark {
     /// Display-link intervals are vsync-quantized: a dropped frame reads as
     /// ~33ms, an on-time one as ~16.7ms plus jitter. A p95 under 1.25 frames
     /// therefore means fewer than 5% of frames dropped, i.e. 60fps at p95.
-    static let budgetMs = 1.25 * 1000.0 / 60.0
+    static let budgetMs = budgetMs(fps: 60)
+
+    /// The p95 budget for `fps`: 1.25 frames, the same allowance for vsync
+    /// quantization as the 60fps budget.
+    static func budgetMs(fps: Double) -> Double { 1.25 * 1000 / fps }
 
     /// Orders `window` front and active. A covered window gets no
     /// display-link ticks.
