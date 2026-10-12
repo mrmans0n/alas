@@ -155,7 +155,6 @@ final class AppState {
     typealias CloseTabConfirmer = @MainActor (CloseTabConfirmationPolicy.Prompt) -> Bool
     typealias ACPDetachRunner = @MainActor (ACPSessionManager, ACPSession.ID) async -> Void
     typealias RemoteAccelerationPreparer = @MainActor (ProjectConfig) async -> Void
-    typealias RunScriptCompletionWaiter = @Sendable (RunScriptCaptureLocation) async throws -> RunScriptCompletion
     typealias WorktreeCleanupLauncher = @MainActor (WorktreeTrashCleanupTicket) throws -> Void
     static let piMCPGeneratedConfigExcludePath = ".pi/mcp.json"
 
@@ -297,8 +296,6 @@ final class AppState {
     @ObservationIgnored var attentionAliasRetryTask: Task<Void, Never>?
     @ObservationIgnored var attentionAliasRetryAttempts = 0
     @ObservationIgnored var attentionAliasRetryNotBefore: Date?
-    @ObservationIgnored var runScriptCompletionTasks: [String: (worktreeID: String, sessionID: String, location: RunScriptCaptureLocation, task: Task<Void, Never>)] = [:]
-    @ObservationIgnored let runScriptCompletionWaiter: RunScriptCompletionWaiter
     /// How long a local run-script completion monitor outlives its exited or
     /// closed terminal before it is cancelled. Injectable so tests don't wait
     /// out the production grace.
@@ -306,11 +303,6 @@ final class AppState {
     /// The same grace for every monitor, remote ones included; remote
     /// captures can land well after the terminal is gone.
     @ObservationIgnored let runScriptMonitorGrace: Duration
-    /// Told exactly once when a run settles, keyed by run ID. Only the
-    /// scheduler registers here; manual runs are observed through `runRecords`.
-    /// The worktree is carried so a worktree teardown can settle every run it
-    /// owns, including ones that never produced an archivable record.
-    @ObservationIgnored var runScriptSettlementHandlers: [String: (worktreeID: String, notify: (RunScriptSettlement) -> Void)] = [:]
     /// Decides when scheduled runs start. Execution is delegated back here so
     /// a scheduled run is a manual run with a different trigger.
     let runScheduler: RunScheduler
@@ -1505,7 +1497,7 @@ final class AppState {
         remoteAccelerationPreparer: RemoteAccelerationPreparer? = nil,
         projectGitWatcherFactory: @escaping @MainActor (URL) -> ProjectGitWatcher = { ProjectGitWatcher(repoPath: $0) },
         ggStackCache: GGStackCache = .shared,
-        runScriptCompletionWaiter: @escaping RunScriptCompletionWaiter = { try await RunScriptCompletionMonitor.wait(for: $0) },
+        runScriptCompletionWaiter: @escaping RunCompletionWaiter = { try await RunScriptCompletionMonitor.wait(for: $0) },
         runScriptLocalMonitorGrace: Duration = .seconds(2),
         runScriptMonitorGrace: Duration = .seconds(30),
         runHistoryStore: RunHistoryStore? = try? RunHistoryStore(),
@@ -1584,7 +1576,6 @@ final class AppState {
         self.worktreeStatusScan = worktreeStatusScan
         self.projectGitWatcherFactory = projectGitWatcherFactory
         self.ggStackCache = ggStackCache
-        self.runScriptCompletionWaiter = runScriptCompletionWaiter
         self.runScriptLocalMonitorGrace = runScriptLocalMonitorGrace
         self.runScriptMonitorGrace = runScriptMonitorGrace
         self.usageHistory = usageHistory
@@ -1605,7 +1596,8 @@ final class AppState {
         self.core = AlasCoreContext(
             projects: ProjectsManager(persistedProjects: projectsFile.projects),
             store: store,
-            runHistoryStore: runHistoryStore
+            runHistoryStore: runHistoryStore,
+            runCompletionWaiter: runScriptCompletionWaiter
         )
         let spacesManager = spacesFile.map(SpacesManager.init(file:))
             ?? SpacesManager.migrating(projects: projectsFile.projects)

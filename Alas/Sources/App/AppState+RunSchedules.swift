@@ -3,14 +3,6 @@ import os
 
 private let runScheduleLogger = Logger(subsystem: "io.nlopez.alas", category: "RunSchedules")
 
-/// How a launched script settled. Delivered exactly once per run ID to
-/// whoever asked to be told, which today is only the scheduler.
-enum RunScriptSettlement: Equatable, Sendable {
-    case finished(RunOutcome)
-    /// The command never started (terminal failed to open, shell rejected).
-    case launchFailed(String)
-}
-
 extension AppState {
     // MARK: - Wiring
 
@@ -426,7 +418,7 @@ extension AppState {
                     runID: runID,
                     scriptName: script.displayName
                 )
-                awaitRunScriptSettlement(runID: runID, worktreeID: worktree.id) {
+                core.awaitRunSettlement(runID: runID, worktreeID: worktree.id) {
                     continuation.resume(returning: $0)
                 }
             case .alreadyStarting:
