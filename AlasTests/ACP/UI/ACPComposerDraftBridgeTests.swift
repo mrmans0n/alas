@@ -8,6 +8,20 @@ import Testing
 @MainActor
 @Suite("ACP composer draft bridge")
 struct ACPComposerDraftBridgeTests {
+    @Test("marked input keeps Return in the input method instead of the peer picker")
+    func markedInputBypassesExternalPickerKeys() throws {
+        let (editor, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        var picked = false
+        editor.onExternalKeyDown = { _ in picked = true
+        return true }
+        editor.setMarkedText("é", selectedRange: NSRange(location: 1, length: 0),
+                             replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(editor.hasMarkedText())
+        editor.keyDown(with: try keyEvent(keyCode: 36, modifiers: []))
+        #expect(!picked)
+    }
+
     @Test("restoring a draft flags a symbol badge whose declaration is gone, and only that one")
     func restoredDraftFlagsMissingSymbolBadges() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("presence-\(UUID().uuidString)")
@@ -388,8 +402,8 @@ struct ACPComposerDraftBridgeTests {
         #expect(ACPInputField.Coordinator.draft(from: textView.attributedString()) == newerDraft)
     }
 
-    @Test("failed completion does not restore submitted draft after intervening edit")
-    func failedCompletionDoesNotRestoreSubmittedDraftAfterInterveningEdit() {
+    @Test("failed completion does not restore submitted draft after newer typing or owner updates", arguments: [false, true])
+    func failedCompletionDoesNotRestoreSubmittedDraftAfterInterveningEdit(ownerUpdate: Bool) {
         let submittedDraft = ACPComposerDraft(segments: [.text("hello")])
         let newerDraft = ACPComposerDraft(segments: [
             .text("new "),
@@ -417,12 +431,16 @@ struct ACPComposerDraftBridgeTests {
         coordinator.textView = textView
 
         coordinator.submit(textView)
-        textView.textStorage?.setAttributedString(ACPInputField.Coordinator.attributedString(from: newerDraft))
-        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        if ownerUpdate {
+            coordinator.syncPersistedDraft(newerDraft, into: textView)
+        } else {
+            textView.textStorage?.setAttributedString(ACPInputField.Coordinator.attributedString(from: newerDraft))
+            coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        }
         coordinator.flushPendingRestyleNow()
         completion?(false)
 
-        #expect(changedDrafts == [newerDraft])
+        #expect(changedDrafts == (ownerUpdate ? [] : [newerDraft]))
         #expect(clearCount == 0)
         #expect(ACPInputField.Coordinator.draft(from: textView.attributedString()) == newerDraft)
     }

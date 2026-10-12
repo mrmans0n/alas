@@ -3,14 +3,6 @@ import os
 
 private let runScheduleLogger = Logger(subsystem: "io.nlopez.alas", category: "RunSchedules")
 
-/// How a launched script settled. Delivered exactly once per run ID to
-/// whoever asked to be told, which today is only the scheduler.
-enum RunScriptSettlement: Equatable, Sendable {
-    case finished(RunOutcome)
-    /// The command never started (terminal failed to open, shell rejected).
-    case launchFailed(String)
-}
-
 extension AppState {
     // MARK: - Wiring
 
@@ -95,7 +87,7 @@ extension AppState {
     /// selecting an archived id would empty the centre pane and strand the tab.
     /// The entry is still named in that case; it is just not a link.
     func canOpenScheduleFiringRun(_ run: RunScheduleFiring.RunReference) -> Bool {
-        hasRunReport(worktreeID: run.worktreeID, runID: run.runID)
+        runHistory.hasReport(worktreeID: run.worktreeID, runID: run.runID)
             && visibleProjectForWorktree(run.worktreeID) != nil
     }
 
@@ -145,8 +137,8 @@ extension AppState {
     /// entry is always worth one query.
     func primeScheduleRunReportIDs(_ worktreeIDs: [String]) async {
         for worktreeID in worktreeIDs
-            where durableRunReportIDsByWorktreeID[worktreeID]?.isEmpty != false {
-            await reloadDurableRunReportIDs(worktreeID: worktreeID)
+            where runHistory.durableReportIDsByWorktreeID[worktreeID]?.isEmpty != false {
+            await runHistory.reloadDurableReportIDs(worktreeID: worktreeID)
         }
     }
 
@@ -426,7 +418,7 @@ extension AppState {
                     runID: runID,
                     scriptName: script.displayName
                 )
-                awaitRunScriptSettlement(runID: runID, worktreeID: worktree.id) {
+                core.awaitRunSettlement(runID: runID, worktreeID: worktree.id) {
                     continuation.resume(returning: $0)
                 }
             case .alreadyStarting:

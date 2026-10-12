@@ -155,7 +155,6 @@ final class AppState {
     typealias CloseTabConfirmer = @MainActor (CloseTabConfirmationPolicy.Prompt) -> Bool
     typealias ACPDetachRunner = @MainActor (ACPSessionManager, ACPSession.ID) async -> Void
     typealias RemoteAccelerationPreparer = @MainActor (ProjectConfig) async -> Void
-    typealias RunScriptCompletionWaiter = @Sendable (RunScriptCaptureLocation) async throws -> RunScriptCompletion
     typealias WorktreeCleanupLauncher = @MainActor (WorktreeTrashCleanupTicket) throws -> Void
     static let piMCPGeneratedConfigExcludePath = ".pi/mcp.json"
 
@@ -163,12 +162,10 @@ final class AppState {
     /// session-lease layer so two running Alas builds don't fight over a
     /// shared per-worktree database.
     let instanceId: String = UUID().uuidString
-    @ObservationIgnored let localTextModelStore: LocalTextModelStore
+    var localTextModelStore: LocalTextModelStore { core.localTextModelStore }
     @ObservationIgnored let localTextReadModelState: @Sendable () async -> LocalTextModelState
-    @ObservationIgnored private let localTextInferenceOverride: (any LocalTextGenerating)?
     @ObservationIgnored let nextPromptInferenceOverride: (any NextPromptRuntime)?
-    @ObservationIgnored lazy var localTextInference: any LocalTextGenerating =
-        localTextInferenceOverride ?? LocalTextInferenceEngine(store: localTextModelStore, observeMemoryPressure: false)
+    var localTextInference: any LocalTextGenerating { core.localText }
     @ObservationIgnored lazy var nextPromptInference: any NextPromptRuntime = makeNextPromptInference()
     private func makeNextPromptInference() -> any NextPromptRuntime {
         if let nextPromptInferenceOverride { return nextPromptInferenceOverride }
@@ -187,7 +184,7 @@ final class AppState {
     @ObservationIgnored lazy var nextPromptCoordinator = NextPromptCoordinator(engine: nextPromptInference) { [weak self] turn in
         self?.nextPromptSnapshot(for: turn)
     }
-    @ObservationIgnored lazy var sessionSummaryCoordinator = SessionSummaryCoordinator(engine: localTextInference)
+    var sessionSummaryCoordinator: SessionSummaryCoordinator { core.sessionSummaries }
     @ObservationIgnored let localTextObservers = LocalTextObservers()
     @ObservationIgnored let qwenTitleRequests = ACPQwenTitleRequests()
     @ObservationIgnored private var worktreeExplainerStoreInstance: WorktreeExplainerStore?
@@ -260,21 +257,20 @@ final class AppState {
     /// Observed command lifecycles, keyed by worktree then script. Deliberately
     /// separate from `tabs`: a run's outcome outlives its terminal shell, and a
     /// live shell never implies a live command.
-    var runRecords = RunRecordStore()
+    var runRecords: RunRecordStore {
+        get { core.runRecords }
+        set { core.runRecords = newValue }
+    }
+    var runHistory: RunHistory { core.runHistory }
     /// Immutable completed-run history. A missing store keeps the live Run
     /// tab functional when Application Support cannot be opened.
-    @ObservationIgnored let runHistoryStore: RunHistoryStore?
+    var runHistoryStore: RunHistoryStore? { core.runHistory.store }
     /// Token, cost and usage-limit history of every agent turn; nil when Application Support cannot be opened.
     @ObservationIgnored let usageHistory: UsageHistoryStore?
     /// Records each session's turns in completion order.
     @ObservationIgnored let usageRecording = KeyedSerialQueue()
-    var runHistoryRevision = 0
-    var runHistoryRevisionsByWorktreeID: [String: Int] = [:]
-    var runHistoryError: String?
-    @ObservationIgnored var transientRunReports: [String: RunHistoryEntry] = [:]
-    var durableRunReportIDsByWorktreeID: [String: Set<String>] = [:]
-    @ObservationIgnored var runHistoryPersistenceTasks: [String: Task<Void, Never>] = [:]
-    @ObservationIgnored var runHistoryPersistenceTaskWorktreeIDs: [String: String] = [:]
+    /// Worktrees whose branch is being named from their first chat prompt.
+    var autoNamingWorktreeIds: Set<String> = []
     /// Follow-up composers outlive the conditional Agent pane and worktree navigation.
     var agentSidebarFollowUps: [String: [ACPSession.ID: AgentSidebarFollowUpDraft]] = [:]
     let attentionStore: AttentionStore
@@ -300,8 +296,6 @@ final class AppState {
     @ObservationIgnored var attentionAliasRetryTask: Task<Void, Never>?
     @ObservationIgnored var attentionAliasRetryAttempts = 0
     @ObservationIgnored var attentionAliasRetryNotBefore: Date?
-    @ObservationIgnored var runScriptCompletionTasks: [String: (worktreeID: String, sessionID: String, location: RunScriptCaptureLocation, task: Task<Void, Never>)] = [:]
-    @ObservationIgnored let runScriptCompletionWaiter: RunScriptCompletionWaiter
     /// How long a local run-script completion monitor outlives its exited or
     /// closed terminal before it is cancelled. Injectable so tests don't wait
     /// out the production grace.
@@ -309,14 +303,9 @@ final class AppState {
     /// The same grace for every monitor, remote ones included; remote
     /// captures can land well after the terminal is gone.
     @ObservationIgnored let runScriptMonitorGrace: Duration
-    /// Told exactly once when a run settles, keyed by run ID. Only the
-    /// scheduler registers here; manual runs are observed through `runRecords`.
-    /// The worktree is carried so a worktree teardown can settle every run it
-    /// owns, including ones that never produced an archivable record.
-    @ObservationIgnored var runScriptSettlementHandlers: [String: (worktreeID: String, notify: (RunScriptSettlement) -> Void)] = [:]
     /// Decides when scheduled runs start. Execution is delegated back here so
     /// a scheduled run is a manual run with a different trigger.
-    let runScheduler: RunScheduler
+    var runScheduler: RunScheduler { core.runScheduler }
     /// Scheduled chat sessions whose first turn a firing is waiting on.
     let scheduledAgentTurns = ScheduledAgentTurns()
     /// The models each ACP agent last advertised, for surfaces that configure
@@ -354,10 +343,9 @@ final class AppState {
     private var centerGitMutationCounts: [String: Int] = [:]
     var spacesManager: SpacesManager
     var workspacesManager: WorkspacesManager
-    @ObservationIgnored private let workspaceStore: WorkspaceStore
+    private var workspaceStore: WorkspaceStore { core.workspaceStore }
     @ObservationIgnored private let workspaceRemoteTransport: WorkspaceRemoteTransport
     @ObservationIgnored private let checkpointWriterLeases = CheckpointWriterLeaseStore()
-    @ObservationIgnored private var workspaceCheckoutCoordinator: WorkspaceCheckoutCoordinator?
     /// Session candidates for each peer-viewed session's `@` picker, loaded
     /// when the picker opens and reused while its query changes.
     @ObservationIgnored private var remoteMentionSessions: [String: [ACPSessionMentionCandidate]] = [:]
@@ -1508,7 +1496,7 @@ final class AppState {
         remoteAccelerationPreparer: RemoteAccelerationPreparer? = nil,
         projectGitWatcherFactory: @escaping @MainActor (URL) -> ProjectGitWatcher = { ProjectGitWatcher(repoPath: $0) },
         ggStackCache: GGStackCache = .shared,
-        runScriptCompletionWaiter: @escaping RunScriptCompletionWaiter = { try await RunScriptCompletionMonitor.wait(for: $0) },
+        runScriptCompletionWaiter: @escaping RunCompletionWaiter = { try await RunScriptCompletionMonitor.wait(for: $0) },
         runScriptLocalMonitorGrace: Duration = .seconds(2),
         runScriptMonitorGrace: Duration = .seconds(30),
         runHistoryStore: RunHistoryStore? = try? RunHistoryStore(),
@@ -1558,12 +1546,9 @@ final class AppState {
         )
         self.store = store
         let suggestionStore = localTextModelStore ?? LocalTextModelStore()
-        self.localTextModelStore = suggestionStore
         self.localTextReadModelState = localTextReadModelState ?? { await suggestionStore.state }
-        self.localTextInferenceOverride = localTextInference
         self.nextPromptInferenceOverride = nextPromptInference
         self.localTextSupported = localTextSupported
-        self.workspaceStore = workspaceStore
         self.workspaceRemoteTransport = workspaceRemoteTransport
         self.attentionStore = attentionStore ?? AttentionStore()
         self.attentionNavigationEnvironment = attentionNavigationEnvironment
@@ -1587,12 +1572,9 @@ final class AppState {
         self.worktreeStatusScan = worktreeStatusScan
         self.projectGitWatcherFactory = projectGitWatcherFactory
         self.ggStackCache = ggStackCache
-        self.runScriptCompletionWaiter = runScriptCompletionWaiter
         self.runScriptLocalMonitorGrace = runScriptLocalMonitorGrace
         self.runScriptMonitorGrace = runScriptMonitorGrace
-        self.runHistoryStore = runHistoryStore
         self.usageHistory = usageHistory
-        self.runScheduler = runScheduler ?? RunScheduler(store: store)
         self.acpModelCatalog = acpModelCatalog ?? ACPAgentModelCatalog(store: store)
         let workspaceBridge = workspaceSpacePersistenceBridge ?? WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore)
         self.workspacesManager = workspacesManager ?? WorkspacesManager(bridge: workspaceBridge)
@@ -1606,7 +1588,16 @@ final class AppState {
         // Restored ACP sessions of registry agents attach before the first
         // agent rescan, so their launch specs must be known from the start.
         ACPLaunchCatalog.publishRegistryAgents(config.agents.registry)
-        self.core = AlasCoreContext(projects: ProjectsManager(persistedProjects: projectsFile.projects), store: store)
+        self.core = AlasCoreContext(
+            projects: ProjectsManager(persistedProjects: projectsFile.projects),
+            store: store,
+            runHistoryStore: runHistoryStore,
+            workspaceStore: workspaceStore,
+            runScheduler: runScheduler,
+            localTextModelStore: suggestionStore,
+            localText: localTextInference,
+            runCompletionWaiter: runScriptCompletionWaiter
+        )
         let spacesManager = spacesFile.map(SpacesManager.init(file:))
             ?? SpacesManager.migrating(projects: projectsFile.projects)
         var spacesChanged = spacesManager.pruneMissingProjects(validProjectIds: Set(projectsFile.projects.map(\.id)))
@@ -1718,6 +1709,16 @@ final class AppState {
         }
         self.runScheduler.persistenceErrorHandler = { [weak self] message in
             self?.persistenceErrorHandler("Schedules Save Failed", message)
+        }
+        core.stopWorkspaceCheckoutSessions = { [weak self] checkout in
+            try await self?.stopWorkspaceCheckoutSessions(checkout)
+        }
+        core.resolveWorkspaceRepoHook = { [weak self] request in
+            guard let self else { return nil }
+            return try await self.preparedWorkspaceRepoHook(request)
+        }
+        core.runHistory.onFailure = { [weak self] message in
+            self?.showFileActionError(title: "Run History Failed", message: message)
         }
         installRunScheduleRunner()
         startLocalTextObservers()
@@ -3754,24 +3755,8 @@ final class AppState {
         return tabs.tabs(for: owner).first(where: { $0.id == tabID })
     }
 
-    /// The App owns one coordinator and one authoritative state-file actor.
-    /// Lifecycle operations therefore never consult the manager's read-only
-    /// display cache when deciding which location-qualified sessions to stop.
     func workspaceCoordinator() -> WorkspaceCheckoutCoordinator {
-        if let workspaceCheckoutCoordinator { return workspaceCheckoutCoordinator }
-        let coordinator = WorkspaceCheckoutCoordinator(
-            store: workspaceStore,
-            sessions: WorkspaceCheckoutSessionStopper(
-                store: workspaceStore,
-                stop: { [weak self] checkout in try await self?.stopWorkspaceCheckoutSessions(checkout) }
-            ),
-            resolveRepoHook: { [weak self] request in
-                guard let self else { return nil }
-                return try await self.preparedWorkspaceRepoHook(request)
-            }
-        )
-        workspaceCheckoutCoordinator = coordinator
-        return coordinator
+        core.workspaceCoordinator()
     }
 
     /// Definition changes are intentionally independent of checkout snapshots:
@@ -4796,7 +4781,8 @@ final class AppState {
         launchSurface: WorktreeLaunchSurface,
         ggWorktreeMode: GGWorktreeMode = .inherit,
         issueAttachment: IssueAttachment? = nil,
-        destinationAlreadyPrepared: Bool = false
+        destinationAlreadyPrepared: Bool = false,
+        namesBranchFromFirstPrompt: Bool = false
     ) async -> String {
         guard let project = projects.first(where: { $0.id == projectId }), !project.isFolder else {
             // Should not happen if the dialog validated the project; fail silently.
@@ -4888,9 +4874,22 @@ final class AppState {
                 }
                 let newWorktree = try await WorktreeLifecycle.performCreateWorktree(
                     repoPath: repoPath,
-                    base: base, branch: branch, destination: canonicalDestination, projectId: projectId
+                    base: base, branch: branch, destination: canonicalDestination, projectId: projectId,
+                    // A temporary name must never check out an existing branch:
+                    // the first prompt would rename that branch.
+                    requiresNewBranch: namesBranchFromFirstPrompt
                 )
                 guard projects.contains(where: { $0.id == projectId }) else { return }
+                // Recorded as soon as the branch exists: a later step failing
+                // must not strand the worktree on its temporary name.
+                if namesBranchFromFirstPrompt {
+                    projectsManager.setPendingAutoBranchName(
+                        projectId: project.id,
+                        worktreeId: newWorktree.id,
+                        placeholder: newWorktree.branch
+                    )
+                    saveProjects()
+                }
                 let repoStartupScript = try await self.preparedRepoHook(
                     event: .worktreeCreate,
                     project: project,
@@ -4951,7 +4950,6 @@ final class AppState {
                         )
                         saveProjects()
                     }
-
                     if launchSurface != .delegated {
                         selectWorktree(id: newWorktree.id)
                     }
@@ -4981,7 +4979,8 @@ final class AppState {
                             base: base,
                             ggWorktreeMode: ggWorktreeMode,
                             launchSurface: launchSurface,
-                            issueAttachment: issueAttachment
+                            issueAttachment: issueAttachment,
+                            namesBranchFromFirstPrompt: namesBranchFromFirstPrompt
                         )
                     )
                 }
@@ -5001,7 +5000,8 @@ final class AppState {
                         base: base,
                         ggWorktreeMode: ggWorktreeMode,
                         launchSurface: launchSurface,
-                        issueAttachment: issueAttachment
+                        issueAttachment: issueAttachment,
+                        namesBranchFromFirstPrompt: namesBranchFromFirstPrompt
                     )
                 )
             }
@@ -6520,7 +6520,8 @@ final class AppState {
                 _,
                 _,
                 let launchSurface,
-                let issueAttachment
+                let issueAttachment,
+                let namesBranchFromFirstPrompt
             ) = state,
                 key.projectId == projectId
             else { continue }
@@ -6536,6 +6537,15 @@ final class AppState {
                     projectId: projectId,
                     worktreeId: worktreeId,
                     attachment: issueAttachment
+                )
+                changed = true
+            }
+            if namesBranchFromFirstPrompt,
+               projectsManager.pendingAutoBranchName(projectId: projectId, worktreeId: worktreeId) == nil {
+                projectsManager.setPendingAutoBranchName(
+                    projectId: projectId,
+                    worktreeId: worktreeId,
+                    placeholder: worktree.branch
                 )
                 changed = true
             }
@@ -6764,6 +6774,96 @@ final class AppState {
             Self.canonicalWorktreePath($0.path.path) == Self.canonicalWorktreePath(path.path)
         }) {
             rescanWorktreeStatus(worktreeId: restored.id)
+        }
+    }
+
+    /// Delete every archived worktree across all projects after one
+    /// confirmation. Remote worktrees and those referenced by any Workspace
+    /// checkout are left for the single-item flow (the batch path's local
+    /// branch and ownership re-checks refuse them), and anything
+    /// git refuses without `--force` is reported so the user can delete it
+    /// individually.
+    ///
+    /// The batch re-checks sessions, buffers, branch, and ownership but not
+    /// whether a target is still archived, so the Settings pane (the only
+    /// unarchive entry point) locks its archived rows while this runs.
+    private(set) var isDeletingArchivedWorktrees = false
+
+    /// One target per id, and none for an id any representation rejects. A
+    /// worktree id is its path, so one local checkout archived under two
+    /// projects appears twice: ownership is checked per project, so an
+    /// unowned alias must not delete a checkout the other one owns, and a
+    /// duplicate id would trap the batch's per-id snapshots.
+    nonisolated static func bulkDeleteTargets<T>(
+        _ candidates: [T],
+        id: (T) -> String,
+        isEligible: (T) -> Bool
+    ) -> [T] {
+        let blocked = Set(candidates.filter { !isEligible($0) }.map(id))
+        var seen: Set<String> = []
+        return candidates.filter { !blocked.contains(id($0)) && seen.insert(id($0)).inserted }
+    }
+
+    func deleteAllArchivedWorktrees() async {
+        guard !isDeletingArchivedWorktrees else { return }
+        let archived = projects.flatMap { projectsManager.archivedWorktrees(projectId: $0.id) }
+        let deletable = workspacesManager.canMutate
+            ? Self.bulkDeleteTargets(archived, id: \.id) { worktree in
+                // The batch skips any claimed worktree; a failed delete is
+                // released below so this run retries it.
+                let operationAllowsBatch: Bool
+                switch projectsManager.operationState(for: worktree) {
+                case nil, .deleteFailed: operationAllowsBatch = true
+                default: operationAllowsBatch = false
+                }
+                return operationAllowsBatch
+                    && !worktree.path.isRemoteAlasPath
+                    && worktreeCleanupWorkspaceOwners(for: worktree).isEmpty
+            }
+            : []
+        guard !archived.isEmpty else { return }
+        guard !deletable.isEmpty else {
+            showFileActionError(
+                title: "Nothing to Delete",
+                message: workspacesManager.canMutate
+                    ? "Remote, busy, or Workspace-referenced worktrees can't be deleted in bulk. Delete them individually."
+                    : "Workspace Checkout ownership could not be verified. Try again once Workspace storage is available."
+            )
+            return
+        }
+
+        let alert = NSAlert()
+        alert.messageText = "Delete \(deletable.count) archived \(deletable.count == 1 ? "worktree" : "worktrees")?"
+        // Frozen here: the batch re-reads the setting per item, and the
+        // confirmation must stay true if it is toggled mid-batch.
+        let deleteBranches = config.worktrees.deleteBranchOnRemove
+        var message = deleteBranches
+            ? "This removes their files from disk. Local branches will be deleted if merged."
+            : "This removes their files from disk. Local branches will be kept."
+        if deletable.count < Set(archived.map(\.id)).count {
+            message += " Remote, busy, or Workspace-referenced worktrees are skipped; delete them individually."
+        }
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        let deleteButton = alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        deleteButton.hasDestructiveAction = true
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        isDeletingArchivedWorktrees = true
+        defer { isDeletingArchivedWorktrees = false }
+        for worktree in deletable {
+            if case .deleteFailed = projectsManager.operationState(for: worktree) {
+                projectsManager.setOperationState(for: worktree, state: nil)
+            }
+        }
+        let results = await batchDeleteWorktrees(deletable, keepBranch: !deleteBranches)
+        if results.contains(where: { $0.outcome != .deleted }) {
+            showFileActionError(
+                title: "Some Worktrees Were Not Deleted",
+                message: WorktreeCleanupModel.summary(for: results)
+                    + ". Delete the remaining ones individually."
+            )
         }
     }
 
@@ -12078,7 +12178,7 @@ final class AppState {
                 guard workspaceOwnershipIsValid else {
                     throw WorktreeRemovalOwnershipChanged()
                 }
-                return try await Self.performRemoveWorktree(
+                return try await WorktreeLifecycle.performRemoveWorktree(
                     repoPath: repoPath,
                     worktree: worktree,
                     deleteBranchIfMerged: deleteBranchIfMerged,
@@ -12089,7 +12189,7 @@ final class AppState {
             }
         } catch is WorktreeRemovalOwnershipChanged {
             return .skipped(reason: "Worktree changed since confirmation")
-        } catch is WorktreeDeleteContentFingerprintMismatch {
+        } catch is WorktreeLifecycle.DeleteContentFingerprintMismatch {
             projectsManager.setOperationState(for: worktree, state: nil)
             return .skipped(reason: Self.changedDeleteRisksMessage)
         } catch let WorktreeService.WorktreeError.gitFailed(stderr) {
@@ -12246,45 +12346,6 @@ final class AppState {
         pendingForceDeleteWorktree = nil
     }
 
-    nonisolated private static func performRemoveWorktree(
-        repoPath: URL,
-        worktree: Worktree,
-        deleteBranchIfMerged: Bool,
-        force: Bool,
-        verifiedMergedBranchSHA: String? = nil,
-        authorizedDeleteContentFingerprint: String? = nil
-    ) async throws -> WorktreeRemovalOutcome {
-        try await Task.detached {
-            if let authorizedDeleteContentFingerprint {
-                let currentFingerprint = try await WorktreeService.worktreeDeleteContentFingerprint(
-                    worktreePath: worktree.path
-                )
-                guard currentFingerprint == authorizedDeleteContentFingerprint else {
-                    throw WorktreeDeleteContentFingerprintMismatch()
-                }
-            }
-
-            if worktree.path.isRemoteAlasPath {
-                try await WorktreeService().remove(
-                    repoPath: repoPath,
-                    worktree: worktree,
-                    deleteBranchIfMerged: deleteBranchIfMerged,
-                    force: force,
-                    verifiedMergedBranchSHA: verifiedMergedBranchSHA
-                )
-                return .synchronous
-            }
-            return try await WorktreeService().removeFastLocal(
-                repoPath: repoPath,
-                worktree: worktree,
-                deleteBranchIfMerged: deleteBranchIfMerged,
-                force: force,
-                verifiedMergedBranchSHA: verifiedMergedBranchSHA,
-                authorizedDeleteContentFingerprint: authorizedDeleteContentFingerprint
-            )
-        }.value
-    }
-
     nonisolated private static func performDeletePreflight(worktreePath: URL) async -> WorktreeDeletePreflight {
         do {
             return try await Task.detached {
@@ -12319,7 +12380,6 @@ final class AppState {
 
     private static let changedDeleteRisksMessage = "Git deletion risks changed since confirmation"
 
-    private struct WorktreeDeleteContentFingerprintMismatch: Error {}
     private struct WorktreeRemovalOwnershipChanged: Error {}
 
     nonisolated static func worktreeDeleteContentFingerprint(worktreePath: URL) async throws -> String {
@@ -13072,6 +13132,9 @@ final class AppState {
                     sessionId: sessionId,
                     title: title
                 )
+            },
+            onUserPromptRecorded: { [weak self] _, text in
+                self?.autoNameBranchIfPending(worktreeId: worktree.id, prompt: text)
             },
             localTitlesEnabled: { [weak self] in
                 self?.config.harness.acpLocalTitlesEnabled ?? false
@@ -13943,15 +14006,7 @@ final class AppState {
     }
 
     private func finishDisposingACPManager(_ manager: ACPSessionManager) async {
-        await manager.flushAllPersistence()
-        await manager.disposeAllLiveSessions()
-        // Release any leases this manager still owns AFTER all runner
-        // connections are shut down (detach above). A freed lease must
-        // not be claimable while an old agent process is still alive.
-        // `detach` already released runner-session leases; this mops up
-        // any remaining pre-runner owned leases (e.g. sessions acquired
-        // a lease but didn't register a runner yet).
-        await manager.releaseAllOwnedLeases()
+        await AlasCoreContext.finishDisposing(manager)
     }
 
     /// Open a new ACP session tab for the given agent in the currently-selected worktree.

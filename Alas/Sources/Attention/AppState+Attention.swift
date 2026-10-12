@@ -56,10 +56,10 @@ struct AttentionNavigationEnvironment {
                     output = body.hasSuffix(marker)
                         ? .available(text: String(body.dropLast(marker.count)), truncated: true)
                         : .available(text: body, truncated: false)
-                } else if appState.hasRunReport(worktreeID: worktree.id, runID: runID) {
+                } else if appState.runHistory.hasReport(worktreeID: worktree.id, runID: runID) {
                     appState.openRunReport(worktreeID: worktree.id, runID: runID)
                     return true
-                } else if await appState.hasPersistedRunReport(worktreeID: worktree.id, runID: runID) {
+                } else if await appState.runHistory.hasPersistedReport(worktreeID: worktree.id, runID: runID) {
                     appState.openRunReport(worktreeID: worktree.id, runID: runID)
                     return true
                 } else {

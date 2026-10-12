@@ -3,6 +3,9 @@ import Foundation
 @testable import Alas
 
 struct RemoteQueueProjectionTests {
+    /// Distinctive enough that a projected UUID can never contain it.
+    private static let imageBytes = "c2VjcmV0LWltYWdlLWJ5dGVz"
+
     private func item(
         text: String? = nil,
         imageURIs: [String] = [],
@@ -13,7 +16,7 @@ struct RemoteQueueProjectionTests {
         var blocks: [ACPContentBlock] = []
         if let text { blocks.append(.text(text)) }
         for uri in imageURIs {
-            blocks.append(.image(data: "AAAA", uri: uri, mimeType: "image/png"))
+            blocks.append(.image(data: Self.imageBytes, uri: uri, mimeType: "image/png"))
         }
         return QueuedPrompt(blocks: blocks, scheduledAt: scheduledAt, status: status, lastError: lastError)
     }
@@ -111,7 +114,7 @@ struct RemoteQueueProjectionTests {
         let encoded = try JSONEncoder().encode(RemoteQueueProjection.project([queued]))
         let json = String(data: encoded, encoding: .utf8)!
 
-        #expect(!json.contains("AAAA"))
+        #expect(!json.contains(Self.imageBytes))
         #expect(!json.contains("secret.png"))
     }
 

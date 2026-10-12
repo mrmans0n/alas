@@ -29,6 +29,8 @@ enum PlatformServices {
                 return String(decoding: UnsafeBufferPointer(start: bytes, count: length), as: UTF8.self)
             }
         )
+        RunScheduler.wakeNotification = (NSWorkspace.shared.notificationCenter, NSWorkspace.didWakeNotification)
+        LocalTextEngine.make = { LocalTextInferenceEngine(store: $0, observeMemoryPressure: false) }
         ACPImageEncoding.encoder = { ACPImageEncoding.appKitInlineBase64(fileURL: $0, maxDimension: $1) }
         URLOpening.shared = URLOpening(
             launchHandler: { url in

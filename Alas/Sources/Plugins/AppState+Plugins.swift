@@ -209,7 +209,7 @@ extension AppState {
         // script has since replaced in the records.
         for worktreeID in worktreeIDs { await flushRunHistoryPersistence(worktreeID: worktreeID) }
         let entry: RunHistoryEntry?
-        if let transient = worktreeIDs.lazy.compactMap({ self.transientRunReport(worktreeID: $0, runID: runID) }).first {
+        if let transient = worktreeIDs.lazy.compactMap({ self.runHistory.transientReport(worktreeID: $0, runID: runID) }).first {
             entry = transient
         } else {
             entry = try? await runHistoryStore?.entry(id: runID)

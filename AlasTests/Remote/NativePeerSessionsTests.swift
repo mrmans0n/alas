@@ -5,6 +5,15 @@ import Testing
 
 @MainActor
 struct NativePeerSessionsTests {
+    @Test(arguments: [RemoteMention.file, RemoteMention.session, RemoteMention.symbol])
+    func richMentionRoundTripsOnlyForItsPeer(kind: String) {
+        let mention = RemoteMention(kind: kind, value: "src/Café.swift#run", name: "Café.run")
+        let uri = NativePeerComposerState.mentionURI(mention, peerId: "host-a")
+        #expect(NativePeerComposerState.mention(from: uri, peerId: "host-a") == mention)
+        #expect(NativePeerComposerState.mention(from: uri, peerId: "host-b") == nil)
+        #expect(NativePeerComposerState.mention(from: "file:///tmp/local.swift", peerId: "host-a") == nil)
+    }
+
     private final class FakeLinks: FederatedPeerLinks {
         var sessionCarryingPeers: [FederatedPeerInfo] = []
         var onFederationEvent: (@MainActor (FederatedPeerLinkEvent) -> Void)?
@@ -841,6 +850,194 @@ struct NativePeerSessionsTests {
         #expect(client.deliveryError != nil)
     }
 
+    @Test(arguments: [
+        ACPComposerDraft(segments: [.pastedText(ordinal: 1, content: "pasted context")]),
+        ACPComposerDraft(segments: [.image(uri: "file:///tmp/selected.png", mimeType: "image/png")]),
+    ], [true, false])
+    func richPeerDraftSurvivesNavigationAndQueueEditKeepsItsChips(rich: ACPComposerDraft, restoredWhileAway: Bool) {
+        let (links, client) = drivenClient(canDrive: true)
+        let state = client.composerState(for: "B:s")
+        state.replaceDraft(rich)
+        client.draft = rich.plainText
+        client.queueEdit("q")
+        client.clearSelection()
+        let restore = RemoteServerMessage.queueEditRestored(sessionId: "s", itemId: "q", text: "follow up")
+        if restoredWhileAway { links.receive(restore, from: "B") }
+        client.select("B:s")
+        #expect(client.composerState(for: "B:s") === state)
+        if !restoredWhileAway {
+            #expect(state.draft == rich)
+            #expect(client.draft == rich.plainText)
+            links.receive(restore, from: "B")
+        }
+        #expect(state.draft.segments == rich.segments + [.text(rich.plainText.isEmpty ? "follow up" : "\nfollow up")])
+    }
+
+    @Test(arguments: [(true, false), (false, false), (false, true)])
+    func imageOnlyRichDraftClearsOnlyAfterHostConfirmationWithoutNewEdits(rejected: Bool, edited: Bool) {
+        let (links, client) = drivenClient(canDrive: true)
+        let state = client.composerState(for: "B:s")
+        let draft = ACPComposerDraft(segments: [.image(uri: "file:///tmp/selected.png", mimeType: "image/png")])
+        state.replaceDraft(draft)
+        var completed: Bool?
+        let accepted = client.sendComposerPrompt(
+            images: [.init(name: "selected.png", mimeType: "image/png", data: png)],
+            mentions: [], intent: .auto, completion: { completed = $0 })
+        #expect(accepted)
+        #expect(state.draft == draft)
+        let current = edited
+            ? ACPComposerDraft(segments: [.image(uri: "file:///tmp/replacement.png", mimeType: "image/png")])
+            : draft
+        if edited { state.replaceDraft(current) }
+        if rejected {
+            links.receive(.promptRejected(sessionId: "s"), from: "B")
+        } else {
+            links.receive(.queueState(sessionId: "s", items: [
+                .init(id: "new", text: "", imageCount: 1, resourceCount: 0, status: "pending",
+                      lastError: nil, scheduledAt: nil)
+            ]), from: "B")
+        }
+        #expect(!client.isPromptPending)
+        #expect(state.draft == (rejected || edited ? current : .empty))
+        #expect(completed == !rejected)
+    }
+
+    @Test(arguments: [
+        (false, false, false), (false, true, false), (true, false, false), (true, true, false),
+        (false, false, true), (false, true, true), (true, false, true), (true, true, true),
+    ])
+    func queueEditDuringPendingSendKeepsBothDraftsOnRejection(whileAway: Bool, edited: Bool, rejected: Bool) {
+        let (links, client) = drivenClient(canDrive: true)
+        client.draft = "submitted prompt"
+        client.sendPrompt()
+        if edited { client.draft = "next prompt" }
+        client.queueEdit("q")
+        if whileAway { client.clearSelection() }
+        links.receive(.queueEditRestored(sessionId: "s", itemId: "q", text: "restored item"), from: "B")
+        if whileAway && !rejected { client.select("B:s") }
+        if rejected {
+            links.receive(.promptRejected(sessionId: "s"), from: "B")
+        } else {
+        links.receive(.queueState(sessionId: "s", items: [
+            .init(id: "new", text: "submitted prompt", imageCount: 0, resourceCount: 0, status: "pending",
+                  lastError: nil, scheduledAt: nil)
+        ]), from: "B")
+        }
+        if whileAway && rejected { client.select("B:s") }
+        let next = edited ? "next prompt\nrestored item" : "restored item"
+        #expect(client.draft == (rejected ? "submitted prompt\n" + next : next))
+        #expect(client.composerState(for: "B:s").draft.plainText == client.draft)
+        #expect(!client.isPromptPending)
+    }
+
+    @Test(arguments: [false, true])
+    func identicallyRetypedDraftSurvivesSendConfirmation(whileAway: Bool) {
+        let (links, client) = drivenClient(canDrive: true)
+        client.draft = "continue"
+        client.sendPrompt()
+        client.draft = ""
+        client.draft = "continue"
+        if whileAway { client.clearSelection() }
+        links.receive(.queueState(sessionId: "s", items: [
+            .init(id: "new", text: "continue", imageCount: 0, resourceCount: 0, status: "pending",
+                  lastError: nil, scheduledAt: nil)
+        ]), from: "B")
+        if whileAway { client.select("B:s") }
+        #expect(!client.isPromptPending)
+        #expect(client.draft == "continue")
+        #expect(client.composerState(for: "B:s").draft.plainText == "continue")
+    }
+
+    @Test(arguments: [(true, false, false), (false, false, false), (true, true, false), (true, true, true)])
+    func pendingSendIsConfirmedAfterNavigatingBack(
+        confirmationWhileAway: Bool, reconnect: Bool, disconnectedBeforeNavigation: Bool
+    ) {
+        let (links, client) = drivenClient(canDrive: true)
+        links.receive(.sessionList(sessions: [row("s"), row("t")]), from: "B")
+        client.draft = "submitted"
+        client.sendPrompt()
+        if disconnectedBeforeNavigation {
+            links.offline("B")
+            #expect(client.transcript?.isClosed == true)
+            client.clearSelection()
+            links.online("B", name: "Mac B")
+            links.receive(.sessionList(sessions: [row("s"), row("t")]), from: "B")
+        }
+        client.select("B:t")
+        client.draft = "other session"
+        if reconnect, !disconnectedBeforeNavigation {
+            links.offline("B")
+            links.online("B", name: "Mac B")
+            links.receive(.sessionList(sessions: [row("s"), row("t")]), from: "B")
+        }
+        let confirmation = RemoteServerMessage.queueState(sessionId: "s", items: [
+            .init(id: "new", text: "submitted", imageCount: 0, resourceCount: 0, status: "pending",
+                  lastError: nil, scheduledAt: nil)
+        ])
+        if confirmationWhileAway {
+            links.receive(confirmation, from: "B")
+            #expect(client.draft == "other session")
+        }
+        client.select("B:s")
+        if !confirmationWhileAway {
+            #expect(client.isPromptPending)
+            links.receive(confirmation, from: "B")
+        }
+        #expect(client.draft.isEmpty)
+        #expect(client.composerState(for: "B:s").draft.isEmpty)
+        #expect(!client.isPromptPending)
+    }
+
+    @Test func editorContextTracksConnectionAndCapabilitiesWithoutRemounting() {
+        let (links, client) = drivenClient(canDrive: true)
+        let context = NativePeerComposerState.EditorContext(client: client, sessionId: "B:s")
+        #expect(context.isOpen)
+        var config = RemoteSessionConfig(sessionId: "s", models: [], modes: [], autoRunEnabled: false, acceptsImages: false)
+        links.receive(.sessionConfig(config), from: "B")
+        #expect(context.config?.acceptsImages == false)
+        config = RemoteSessionConfig(sessionId: "s", models: [], modes: [], autoRunEnabled: false, acceptsImages: true)
+        links.receive(.sessionConfig(config), from: "B")
+        #expect(context.config?.acceptsImages == true)
+        client.clearSelection()
+        #expect(!context.isOpen)
+        #expect(context.config == nil)
+        client.select("B:s")
+        #expect(!context.isOpen)
+        links.receive(.transcriptSnapshot(sessionId: "s", streamingState: "idle", canDrive: true,
+                                          messages: [], firstIndex: 0, totalCount: 0, epoch: 2, revision: 0), from: "B")
+        #expect(context.isOpen)
+    }
+
+    @Test(arguments: [(1, false), (2, false), (2, true)])
+    func hostReplaySettlesPendingDeliveryWhenItsEpochChanged(epoch: Int, queued: Bool) {
+        let (links, client) = drivenClient(canDrive: true)
+        client.draft = "submitted"
+        var completed: Bool?
+        let accepted = client.sendComposerPrompt(images: [], mentions: [], intent: .auto, completion: { completed = $0 })
+        #expect(accepted)
+        links.receive(.transcriptSnapshot(sessionId: "s", streamingState: "idle", canDrive: true,
+                                          messages: [], firstIndex: 0, totalCount: 0, epoch: epoch, revision: 1), from: "B")
+        let queue: [RemoteQueuedPrompt] = queued ? [
+            .init(id: "new", text: "submitted", imageCount: 0, resourceCount: 0, status: "pending",
+                  lastError: nil, scheduledAt: nil)
+        ] : []
+        links.receive(.queueState(sessionId: "s", items: queue), from: "B")
+        if queued {
+            #expect(!client.isPromptPending)
+            #expect(completed == true)
+            #expect(client.draft.isEmpty)
+        } else if epoch == 1 {
+            #expect(client.isPromptPending)
+            #expect(completed == nil)
+        } else {
+            #expect(!client.isPromptPending)
+            #expect(completed == false)
+            #expect(client.draft == "submitted")
+            client.sendPrompt()
+            #expect(client.isPromptPending)
+        }
+    }
+
     private func drivenClient(canDrive: Bool) -> (FakeLinks, NativePeerSessions) {
         let links = FakeLinks()
         links.online("B", name: "Mac B")
@@ -975,7 +1172,7 @@ struct NativePeerSessionsTests {
         #expect(client.draft == "fix this")
         client.select("B:t")
         client.select("B:s")
-        #expect(client.draft.isEmpty)
+        #expect(client.draft == "fix this")
     }
 
     private func queued(canRemove: Bool? = nil, images: Int = 0, resources: Int = 0) -> RemoteQueuedPrompt {
@@ -1038,20 +1235,6 @@ struct NativePeerSessionsTests {
     }
 
     @Test(arguments: [
-        ("/re", 0, 3, "/review ", 8),
-        ("please /re now", 7, 10, "please /review  now", 15),
-        ("🙂 /", 3, 4, "🙂 /review ", 11),
-    ])
-    func pickingASlashCommandReplacesTheTypedToken(
-        text: String, start: Int, caret: Int, expected: String, expectedCaret: Int
-    ) {
-        let completed = NativePeerComposerState.completingToken(
-            "/review", in: text, tokenStart: start, caret: caret)
-        #expect(completed.text == expected)
-        #expect(completed.caret == expectedCaret)
-    }
-
-    @Test(arguments: [
         ("@", 1, 0, ""), ("see @Alas/Sources/App.swift", 27, 4, "Alas/Sources/App.swift"),
         ("@App.swift#run", 14, 0, "App.swift#run"), ("mail a@b", 8, nil, nil), ("@done next", 10, nil, nil),
         ("x\n@a", 4, 2, "a"),
@@ -1109,27 +1292,6 @@ struct NativePeerSessionsTests {
         #expect(client.isPromptPending)
         links.receive(queue(resources: 1), from: "B")
         #expect(!client.isPromptPending)
-    }
-
-    @Test(arguments: [
-        // No span: the update replaces the selection.
-        ("fix  bug", nil, NSRange(location: 4, length: 0), "the", false, "fix the bug", NSRange(location: 4, length: 3), 7),
-        ("fix old bug", nil, NSRange(location: 4, length: 3), "the", true, "fix the bug", nil, 7),
-        // A volatile correction replaces the open span, wherever the caret is.
-        ("fix teh bug", NSRange(location: 4, length: 3), NSRange(location: 0, length: 0), "the", false,
-         "fix the bug", NSRange(location: 4, length: 3), 7),
-        // A final update commits the span; the next one starts after it.
-        ("🙂 hel", NSRange(location: 3, length: 3), NSRange(location: 6, length: 0), "hello", true, "🙂 hello", nil, 8),
-        // A span the draft no longer covers is clamped, not trapped on.
-        ("ab", NSRange(location: 1, length: 9), NSRange(location: 2, length: 0), "c", false, "ac", NSRange(location: 1, length: 1), 2),
-    ] as [(String, NSRange?, NSRange, String, Bool, String, NSRange?, Int)])
-    func dictationReplacesItsSpanOrTheSelection(
-        text: String, span: NSRange?, selection: NSRange, transcript: String, isFinal: Bool,
-        expected: String, expectedSpan: NSRange?, expectedCaret: Int
-    ) {
-        let edit = NativePeerComposerState.applyingDictation(
-            transcript, isFinal: isFinal, to: text, span: span, selection: selection)
-        #expect(edit == .init(text: expected, span: expectedSpan, caret: expectedCaret))
     }
 
     @Test func queueRowsMoveByTheLocalRulesAndRouteMoveAndPromote() {

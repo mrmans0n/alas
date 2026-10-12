@@ -2353,4 +2353,67 @@ extension WorktreeServiceTests {
         let listed = try await svc.list(repoPath: repo, projectId: "p")
         #expect(listed.count == 2)
     }
+
+    @Test func renameBranchMovesTheCheckedOutBranchAndSuffixesATakenName() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try await Self.checkedGit(["branch", "feature/fix-sync"], cwd: repo)
+        // Cut from a base it tracks, as `-b <name> origin/main` sets up.
+        try await Self.checkedGit(["checkout", "-q", "-b", "quiet-otter", "--track", "main"], cwd: repo)
+
+        let renamed = try await WorktreeService().renameBranch(
+            worktreePath: repo, from: "quiet-otter", to: "feature/fix-sync", requireUnpublished: true
+        )
+
+        #expect(renamed == "feature/fix-sync-2")
+        #expect(try await Self.checkedGit(["symbolic-ref", "--short", "HEAD"], cwd: repo) == "feature/fix-sync-2")
+    }
+
+    @Test func renameBranchLeavesPublishedOrSwitchedBranchesAlone() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let svc = WorktreeService()
+
+        await #expect(throws: WorktreeService.BranchRenameError.branchChanged(expected: "quiet-otter")) {
+            try await svc.renameBranch(worktreePath: repo, from: "quiet-otter", to: "fix-sync", requireUnpublished: true)
+        }
+
+        try await Self.checkedGit(["checkout", "-q", "-b", "quiet-otter"], cwd: repo)
+        try await Self.checkedGit(["config", "branch.quiet-otter.remote", "origin"], cwd: repo)
+        try await Self.checkedGit(["config", "branch.quiet-otter.merge", "refs/heads/quiet-otter"], cwd: repo)
+        await #expect(throws: WorktreeService.BranchRenameError.published("quiet-otter")) {
+            try await svc.renameBranch(worktreePath: repo, from: "quiet-otter", to: "fix-sync", requireUnpublished: true)
+        }
+
+        // Pushed without `-u` from a clone that fetches only main: neither an
+        // upstream nor a tracking ref records it, only the remote does.
+        try await Self.checkedGit(["config", "--unset", "branch.quiet-otter.merge"], cwd: repo)
+        try await Self.checkedGit(["config", "--unset", "branch.quiet-otter.remote"], cwd: repo)
+        let remote = repo.deletingLastPathComponent().appendingPathComponent("alas-wt-remote-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: remote) }
+        try await Self.checkedGit(["init", "-q", "--bare", remote.path], cwd: repo)
+        try await Self.checkedGit(["remote", "add", "-t", "main", "origin", remote.path], cwd: repo)
+        try await Self.checkedGit(["push", "-q", "origin", "HEAD"], cwd: repo)
+        #expect(try await Self.checkedGit(["for-each-ref", "refs/remotes/"], cwd: repo).isEmpty)
+        await #expect(throws: WorktreeService.BranchRenameError.published("quiet-otter")) {
+            try await svc.renameBranch(worktreePath: repo, from: "quiet-otter", to: "fix-sync", requireUnpublished: true)
+        }
+        #expect(try await Self.checkedGit(["symbolic-ref", "--short", "HEAD"], cwd: repo) == "quiet-otter")
+    }
+
+    @Test func addRefusesAnExistingBranchWhenANewOneIsRequired() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let dest = repo.deletingLastPathComponent().appendingPathComponent("alas-wt-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dest) }
+        try await Self.checkedGit(["branch", "quiet-otter"], cwd: repo)
+
+        await #expect(throws: WorktreeService.WorktreeError.self) {
+            try await WorktreeService().add(
+                repoPath: repo, base: "main", branch: "quiet-otter",
+                destination: dest, projectId: "p", requiresNewBranch: true
+            )
+        }
+        #expect(!FileManager.default.fileExists(atPath: dest.path))
+    }
 }

@@ -84,12 +84,34 @@ struct WorktreesPane: View {
 
                 if hasAnyArchived {
                     SettingsGroup(title: "Archived worktrees") {
+                        HStack(alignment: .top, spacing: SettingsRowLayout.columnSpacing) {
+                            Text("Hidden from the sidebar but still on disk. Unarchive to restore, or delete to remove their files.")
+                                .font(.system(size: 11.5))
+                                .foregroundColor(theme.color("fg-dim"))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            AlasButton(title: "Delete all", style: .subtle) {
+                                Task { await state.deleteAllArchivedWorktrees() }
+                            }
+                            .disabled(state.isDeletingArchivedWorktrees)
+                        }
+                        .padding(.bottom, 8)
                         ForEach(state.projects) { project in
                             let archived = state.projectsManager.archivedWorktrees(projectId: project.id)
                             if !archived.isEmpty {
-                                ArchivedProjectSection(project: project, archived: archived) { wt in
-                                    state.unarchiveWorktree(projectId: project.id, path: wt.path)
-                                }
+                                ArchivedProjectSection(
+                                    project: project,
+                                    archived: archived,
+                                    onUnarchive: { wt in state.unarchiveWorktree(projectId: project.id, path: wt.path) },
+                                    onDelete: { wt in state.deleteWorktree(wt) },
+                                    isPending: { wt in
+                                        // Failed states stay actionable so the user can retry.
+                                        if state.isDeletingArchivedWorktrees { return true }
+                                        switch state.projectsManager.operationState(for: wt) {
+                                        case .creating, .preparingDelete, .deleting: return true
+                                        default: return false
+                                        }
+                                    }
+                                )
                             }
                         }
                     }
@@ -186,6 +208,8 @@ private struct ArchivedProjectSection: View {
     let project: ProjectConfig
     let archived: [Worktree]
     let onUnarchive: (Worktree) -> Void
+    let onDelete: (Worktree) -> Void
+    let isPending: (Worktree) -> Bool
     @Environment(\.theme) var theme
 
     var body: some View {
@@ -195,7 +219,7 @@ private struct ArchivedProjectSection: View {
                 .foregroundColor(theme.color("fg-muted"))
                 .padding(.top, 4)
             ForEach(archived) { wt in
-                HStack(alignment: .center, spacing: 12) {
+                HStack(alignment: .center, spacing: SettingsRowLayout.columnSpacing) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(wt.branch)
                             .font(.system(size: 12, weight: .medium, design: .monospaced))
@@ -206,10 +230,15 @@ private struct ArchivedProjectSection: View {
                             .lineLimit(1)
                             .truncationMode(.middle)
                     }
-                    Spacer(minLength: 0)
-                    AlasButton(title: "Unarchive", style: .normal) { onUnarchive(wt) }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    HStack(spacing: 8) {
+                        AlasButton(title: "Delete", style: .subtle) { onDelete(wt) }
+                        AlasButton(title: "Unarchive") { onUnarchive(wt) }
+                    }
+                    .disabled(isPending(wt))
                 }
-                .padding(.vertical, 6)
+                .padding(.vertical, 10)
+                .overlay(Divider().opacity(0.5), alignment: .top)
             }
         }
     }

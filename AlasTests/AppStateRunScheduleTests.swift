@@ -162,7 +162,7 @@ struct AppStateRunScheduleTests {
         #expect(archived?.outcome == .failed(exitCode: 7))
         #expect(archived?.output == .available(text: "out\n", truncated: false))
         // Nothing to wait on afterwards: the settlement handler was consumed.
-        #expect(fixture.state.runScriptSettlementHandlers.isEmpty)
+        #expect(fixture.state.core.runSettlementHandlers.isEmpty)
     }
 
     @Test func projectTargetResolvesToTheMainWorktreeAndSucceeds() async throws {
@@ -306,11 +306,11 @@ struct AppStateRunScheduleTests {
 
         // As after a relaunch: the report exists, but nothing has loaded the
         // ids for its worktree yet.
-        fixture.state.durableRunReportIDsByWorktreeID = [:]
-        #expect(!fixture.state.hasRunReport(worktreeID: reference.worktreeID, runID: reference.runID))
+        fixture.state.runHistory.durableReportIDsByWorktreeID = [:]
+        #expect(!fixture.state.runHistory.hasReport(worktreeID: reference.worktreeID, runID: reference.runID))
 
         await fixture.state.primeScheduleRunReportIDs([reference.worktreeID])
-        #expect(fixture.state.hasRunReport(worktreeID: reference.worktreeID, runID: reference.runID))
+        #expect(fixture.state.runHistory.hasReport(worktreeID: reference.worktreeID, runID: reference.runID))
     }
 
     /// "Pause <project>" has to stop an all-projects schedule from running in
@@ -424,13 +424,13 @@ struct AppStateRunScheduleTests {
             await Task.yield()
         }
         #expect(fixture.state.runRecords.record(worktreeID: "wt-1", scriptKey: "repo:dev.sh")?.status == .running)
-        #expect(!fixture.state.runScriptSettlementHandlers.isEmpty)
+        #expect(!fixture.state.core.runSettlementHandlers.isEmpty)
 
         fixture.state.cleanupRunScriptState(worktreeID: "wt-1")
 
         let outcome = await run.value
         #expect(outcome == .unknown)
-        #expect(fixture.state.runScriptSettlementHandlers.isEmpty)
+        #expect(fixture.state.core.runSettlementHandlers.isEmpty)
     }
 
     // MARK: - Composition
@@ -632,7 +632,7 @@ struct AppStateRunScheduleTests {
         // `cleanupWorktreeState(purgeRunHistory: false)` while the rows stay
         // in the database. Unarchiving restores the worktree but reloads
         // nothing, so priming has to.
-        state.durableRunReportIDsByWorktreeID[run.worktreeID] = []
+        state.runHistory.durableReportIDsByWorktreeID[run.worktreeID] = []
         #expect(!state.canOpenScheduleFiringRun(run))
 
         await state.primeScheduleRunReportIDs([run.worktreeID])
@@ -665,7 +665,7 @@ struct AppStateRunScheduleTests {
         state.projectsManager.setWorktreeHidden(projectId: project.id, path: created.path, hidden: true)
 
         // The report itself is deliberately still there...
-        #expect(state.hasRunReport(worktreeID: run.worktreeID, runID: run.runID))
+        #expect(state.runHistory.hasReport(worktreeID: run.worktreeID, runID: run.runID))
         // ...but nothing can render it, so the row must not pretend otherwise.
         #expect(!state.canOpenScheduleFiringRun(run))
         #expect(state.visibleProjectForWorktree(run.worktreeID) == nil)

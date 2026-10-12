@@ -566,7 +566,7 @@ struct AppStateCleanupTests {
         }
 
         #expect(state.projectsManager.worktrees(projectId: project.id).contains { $0.id == id })
-        if case .createFailed(_, let message, _, _, _, _) = state.projectsManager.operationState(forWorktreeId: id, projectId: project.id) {
+        if case .createFailed(_, let message, _, _, _, _, _) = state.projectsManager.operationState(forWorktreeId: id, projectId: project.id) {
             #expect(!message.isEmpty)
         } else {
             Issue.record("Expected createFailed state")
@@ -607,7 +607,7 @@ struct AppStateCleanupTests {
         )
         #expect(state.ggWorktreeMenuModel(project: project, worktree: failedWorktree).selectedMode == .inherit)
 
-        guard case .createFailed(_, _, let failedBase, let failedMode, _, _) =
+        guard case .createFailed(_, _, let failedBase, let failedMode, _, _, _) =
             state.projectsManager.operationState(forWorktreeId: failedId, projectId: project.id)
         else {
             Issue.record("Expected createFailed state")
@@ -641,6 +641,88 @@ struct AppStateCleanupTests {
         #expect(state.projectsManager.worktrees(projectId: project.id).contains { $0.id == retryId })
         #expect(state.projectsManager.ggWorktreeMode(projectId: project.id, worktreeId: retryId) == mode)
         #expect(state.projects.first(where: { $0.id == project.id })?.ggWorktreeModes[retryId] == mode)
+    }
+
+    @Test func namelessCreateRefusesAnExistingBranchAndItsRetryStaysNameless() async throws {
+        let repo = try await makeRepo(name: "create-nameless")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(
+            path: repo,
+            displayName: "create-nameless",
+            color: "#5fb7c4"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        _ = try await Process.git(["branch", "quiet-otter", "main"], cwd: repo)
+
+        let failedId = await state.createWorktree(
+            projectId: project.id,
+            base: "main",
+            branch: "quiet-otter",
+            destination: repo.appendingPathComponent("wt-quiet-otter"),
+            runStartup: false,
+            launchSurface: .none,
+            namesBranchFromFirstPrompt: true
+        )
+        try await waitForOperationStateMatching(state.projectsManager, id: failedId, projectId: project.id) { state in
+            if case .createFailed = state { return true }
+            return false
+        }
+
+        let retry = SidebarView.retryCreateParameters(
+            operationState: state.projectsManager.operationState(forWorktreeId: failedId, projectId: project.id),
+            defaultBase: state.config.worktrees.baseBranch
+        )
+        #expect(retry.namesBranchFromFirstPrompt)
+        #expect(state.projectsManager.pendingAutoBranchName(projectId: project.id, worktreeId: failedId) == nil)
+    }
+
+    @Test(arguments: [true, false])
+    func autoNamingRenamesOnlyWorktreesNotBeingDeleted(beingDeleted: Bool) async throws {
+        let repo = try await makeRepo(name: "auto-name-delete")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let state = AppState()
+        // Name from the request's words, without a model in the loop.
+        state.config.issueWorktreeNameSuggestionsEnabled = false
+        let project = try await state.projectsManager.addProject(
+            path: repo,
+            displayName: "auto-name-delete",
+            color: "#5fb7c4"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        let dest = repo.appendingPathComponent("wt-quiet-otter")
+        let id = await state.createWorktree(
+            projectId: project.id,
+            base: "main",
+            branch: "quiet-otter",
+            destination: dest,
+            runStartup: false,
+            launchSurface: .none,
+            namesBranchFromFirstPrompt: true
+        )
+        try await waitForOperationState(state.projectsManager, id: id, projectId: project.id, equals: nil)
+        #expect(state.projectsManager.pendingAutoBranchName(projectId: project.id, worktreeId: id) == "quiet-otter")
+
+        state.projectsManager.setOperationState(
+            forWorktreeId: id,
+            projectId: project.id,
+            state: beingDeleted
+                ? .preparingDelete
+                : .launchFailed(projectId: project.id, message: "No agent", launchSurface: .none)
+        )
+        state.autoNameBranchIfPending(worktreeId: id, prompt: "Fix the offline sync conflicts")
+        for _ in 0..<80 where state.autoNamingWorktreeIds.contains(id) {
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+
+        #expect(!state.autoNamingWorktreeIds.contains(id))
+        let head = try await Process.git(["symbolic-ref", "--short", "HEAD"], cwd: dest)
+        let branch = head.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        if beingDeleted {
+            #expect(branch == "quiet-otter")
+        } else {
+            #expect(branch.hasSuffix("fix-offline-sync-conflicts"))
+        }
     }
 
     @Test func createWorktreeRetryPreservesIssueLaunchMetadata() async throws {
@@ -1075,12 +1157,11 @@ struct AppStateCleanupTests {
             portConflict: nil,
             output: .available(text: "late\n", truncated: false)
         )
-        state.runHistoryPersistenceTaskWorktreeIDs[entry.id] = worktree.id
-        state.runHistoryPersistenceTasks[entry.id] = Task { @MainActor [history] in
+        state.runHistory.track(runID: entry.id, worktreeID: worktree.id, Task { @MainActor [history] in
             try? await Task.sleep(for: .seconds(1))
             _ = try? await history.append(entry)
             appendFinished = true
-        }
+        })
 
         #expect(await state.cliDeleteWorktree(worktree, force: true, keepBranch: true) == .ok)
         try await waitForOperationState(state.projectsManager, id: worktree.id, projectId: project.id, equals: nil)
