@@ -349,7 +349,7 @@ struct AttentionStoreTests {
     }
 
     @Test func registeringAliasesPersistsBatchOnce() throws {
-        let persistence = CountingPersistenceStore()
+        let persistence = TestPersistenceStore()
         let fixture = try Fixture(persistence: persistence)
         let otherLegacyOwner = AttentionWorktreeIdentity(
             projectID: "project",
@@ -363,7 +363,7 @@ struct AttentionStoreTests {
             (from: otherLegacyOwner, to: fixture.lineageOwner)
         ])
 
-        #expect(persistence.writeCount == 1)
+        #expect(persistence.writes.count == 1)
         #expect(fixture.store.document.aliases[fixture.legacyOwner] == fixture.lineageOwner)
         #expect(fixture.store.document.aliases[otherLegacyOwner] == fixture.lineageOwner)
     }
@@ -627,17 +627,5 @@ private final class FailingThenSucceedingPersistenceStore: PersistenceStoreProto
 
     private enum TestError: Error {
         case writeFailed
-    }
-}
-
-private final class CountingPersistenceStore: PersistenceStoreProtocol {
-    private(set) var writeCount = 0
-
-    func write<T: Encodable>(_: T, to _: URL) throws {
-        writeCount += 1
-    }
-
-    func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? {
-        nil
     }
 }

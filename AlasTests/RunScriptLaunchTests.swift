@@ -366,11 +366,6 @@ struct RunScriptLaunchTests {
         #expect(try String(contentsOfFile: capture.completion, encoding: .utf8).hasPrefix("1\t"))
     }
 
-    private struct MemoryStore: PersistenceStoreProtocol {
-        func write<T: Encodable>(_: T, to _: URL) throws {}
-        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
-    }
-
     /// `runOrFocusScript` checks `runningScriptTab` synchronously, but the
     /// tab it looks for is only registered once `launchScript`'s async Task
     /// finishes. Calling it twice back-to-back (no `await` in between,
@@ -395,7 +390,7 @@ struct RunScriptLaunchTests {
 
         var openCount = 0
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
                 openCount += 1
                 return AppState.OpenedTerminalSession(id: "session-\(openCount)", foregroundPid: { nil })
@@ -430,7 +425,7 @@ struct RunScriptLaunchTests {
 
         var openCount = 0
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
                 openCount += 1
                 return AppState.OpenedTerminalSession(id: "session-\(openCount)", foregroundPid: { nil })
@@ -684,7 +679,7 @@ struct RunScriptLaunchTests {
 
     @MainActor
     @Test func closingSplitRunScriptPanePreservesRemoteMonitorAfterLocalGrace() async throws {
-        let state = AppState(store: MemoryStore(), runScriptLocalMonitorGrace: Self.localMonitorGrace)
+        let state = AppState(store: TestPersistenceStore(), runScriptLocalMonitorGrace: Self.localMonitorGrace)
         let project = ProjectConfig(id: "project", name: "Project", path: "/repo", color: "blue", addedAt: Date())
         let worktree = Worktree(
             id: "wt",
@@ -772,7 +767,7 @@ struct RunScriptLaunchTests {
 
     @MainActor
     @Test func processExitDoesNotCancelRemoteMonitorAfterLocalGrace() async throws {
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         let runID = UUID().uuidString
         state.runScriptCompletionTasks[runID] = (
             worktreeID: "wt",
@@ -790,7 +785,7 @@ struct RunScriptLaunchTests {
 
     @MainActor
     @Test func processExitEventuallyCancelsRemoteMonitor() async throws {
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         let runID = UUID().uuidString
         state.runScriptCompletionTasks[runID] = (
             worktreeID: "wt",
@@ -816,7 +811,7 @@ struct RunScriptLaunchTests {
         for path in [paths.transcript, paths.completion, "\(paths.completion).tmp", "\(paths.completion).status"] {
             FileManager.default.createFile(atPath: path, contents: Data("x".utf8))
         }
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         let runID = UUID().uuidString
         state.runScriptCompletionTasks[runID] = (
             worktreeID: "wt",
@@ -921,7 +916,7 @@ struct RunScriptLaunchTests {
 
     @MainActor
     @Test func staleRunScriptTabWithoutLiveSessionIsNotRunning() throws {
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         let runScript = script(executable: false)
         let project = ProjectConfig(
             id: "project",
@@ -1096,7 +1091,7 @@ struct RunScriptLaunchTests {
             return AppState.OpenedTerminalSession(id: "session-\(openCount)", foregroundPid: { nil })
         }
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             fileActionErrorHandler: { _, _ in },
             terminalSessionOpener: opener,
             runScriptCompletionWaiter: waiter,

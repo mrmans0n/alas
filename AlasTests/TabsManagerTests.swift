@@ -19,7 +19,7 @@ struct TabsManagerTests {
             path: "File.swift", anchor: .file, bodyMarkdown: "Keep this note",
             state: .active, createdAt: .now, updatedAt: .now
         ))
-        let manager = TabsManager(store: RestoreMemoryStore(), draftCommentStore: comments)
+        let manager = TabsManager(store: TestPersistenceStore(), draftCommentStore: comments)
         let remote = CodeHostRemote(kind: .github, host: "github.com", owner: "owner", repository: "repo", remoteName: "origin", webURL: URL(string: "https://github.com/owner/repo")!)
         let local = ReviewLoopLocalState(branchName: "feature", headSHA: "abc", baseBranch: "main", hasWorkingTreeChanges: false, hasStagedChanges: false, aheadCommitCount: 0, hasUpstream: true, needsPush: false)
         let missing = ReviewLoopSnapshot(local: local, remote: remote, reviewRequest: nil, providerAvailable: true, providerAuthenticated: true, providerCapabilities: .githubCLI, errorMessage: nil)
@@ -59,7 +59,7 @@ struct TabsManagerTests {
             path: "File.swift", anchor: .file, bodyMarkdown: "Keep A",
             state: .active, createdAt: .now, updatedAt: .now
         ))
-        let manager = TabsManager(store: RestoreMemoryStore(), draftCommentStore: comments)
+        let manager = TabsManager(store: TestPersistenceStore(), draftCommentStore: comments)
         let remote = CodeHostRemote(kind: .github, host: "github.com", owner: "owner", repository: "repo", remoteName: "origin", webURL: URL(string: "https://github.com/owner/repo")!)
         let localA = ReviewLoopLocalState(branchName: "feature-a", headSHA: "aaa", baseBranch: "main", hasWorkingTreeChanges: false, hasStagedChanges: false, aheadCommitCount: 0, hasUpstream: true, needsPush: false)
         let localB = ReviewLoopLocalState(branchName: "feature-b", headSHA: "bbb", baseBranch: "main", hasWorkingTreeChanges: false, hasStagedChanges: false, aheadCommitCount: 0, hasUpstream: true, needsPush: false)
@@ -96,7 +96,7 @@ struct TabsManagerTests {
             path: "File.swift", anchor: .file, bodyMarkdown: "Keep A",
             state: .active, createdAt: .now, updatedAt: .now
         ))
-        let manager = TabsManager(store: RestoreMemoryStore(), draftCommentStore: comments)
+        let manager = TabsManager(store: TestPersistenceStore(), draftCommentStore: comments)
         let remote = CodeHostRemote(kind: .github, host: "github.com", owner: "owner", repository: "repo", remoteName: "origin", webURL: URL(string: "https://github.com/owner/repo")!)
         let localA = ReviewLoopLocalState(branchName: "feature-a", headSHA: "aaa", baseBranch: "main", hasWorkingTreeChanges: false, hasStagedChanges: false, aheadCommitCount: 0, hasUpstream: true, needsPush: false)
         let localB = ReviewLoopLocalState(branchName: "feature-b", headSHA: "bbb", baseBranch: "main", hasWorkingTreeChanges: false, hasStagedChanges: false, aheadCommitCount: 0, hasUpstream: true, needsPush: false)
@@ -117,7 +117,7 @@ struct TabsManagerTests {
     }
 
     @Test func createdReviewReplacesItsDraftAfterLaterRefreshWithoutStealingAnotherTab() throws {
-        let manager = TabsManager(store: RestoreMemoryStore())
+        let manager = TabsManager(store: TestPersistenceStore())
         let worktreeId = "created-review"
         let remote = CodeHostRemote(kind: .github, host: "github.com", owner: "owner", repository: "repo", remoteName: "origin", webURL: URL(string: "https://github.com/owner/repo")!)
         let local = ReviewLoopLocalState(branchName: "feature", headSHA: "abc", baseBranch: "main", hasWorkingTreeChanges: false, hasStagedChanges: false, aheadCommitCount: 0, hasUpstream: true, upstreamAheadCommitCount: 0, needsPush: false)
@@ -149,7 +149,7 @@ struct TabsManagerTests {
     }
 
     @Test func delayedDraftDiscoveryUsesCreationRemoteAfterRemoteChanges() throws {
-        let manager = TabsManager(store: RestoreMemoryStore())
+        let manager = TabsManager(store: TestPersistenceStore())
         let worktreeId = "created-review-remote-switch"
         let upstream = CodeHostRemote(kind: .github, host: "github.com", owner: "upstream", repository: "repo", remoteName: "upstream", webURL: URL(string: "https://github.com/upstream/repo")!)
         let origin = CodeHostRemote(kind: .github, host: "github.com", owner: "fork", repository: "repo", remoteName: "origin", webURL: URL(string: "https://github.com/fork/repo")!)
@@ -209,7 +209,7 @@ struct TabsManagerTests {
 
     @Test(arguments: [CodeHostKind.github, .gitlab])
     func legacyPendingDraftRecoversCreationRemoteFromSavedURL(provider: CodeHostKind) throws {
-        let manager = TabsManager(store: RestoreMemoryStore())
+        let manager = TabsManager(store: TestPersistenceStore())
         let worktreeId = "legacy-created-review-\(provider.rawValue)"
         let host = provider == .github ? "github.com" : "gitlab.example.com"
         let owner = provider == .github ? "upstream" : "group/subgroup"
@@ -236,7 +236,7 @@ struct TabsManagerTests {
     }
 
     @Test func directMatchStillLeavesOtherCreatedReviewsForLookup() throws {
-        let manager = TabsManager(store: RestoreMemoryStore())
+        let manager = TabsManager(store: TestPersistenceStore())
         let worktreeId = "multiple-created-reviews"
         let remote = CodeHostRemote(kind: .github, host: "github.com", owner: "owner", repository: "repo", remoteName: "origin", webURL: URL(string: "https://github.com/owner/repo")!)
         let localA = ReviewLoopLocalState(branchName: "feature-a", headSHA: "aaa", baseBranch: "main", hasWorkingTreeChanges: false, hasStagedChanges: false, aheadCommitCount: 0, hasUpstream: true, needsPush: false)
@@ -263,7 +263,7 @@ struct TabsManagerTests {
     }
 
     @Test func createdReviewReplacesCompletedCommitEditorAfterLaterRefresh() async throws {
-        let manager = TabsManager(store: RestoreMemoryStore())
+        let manager = TabsManager(store: TestPersistenceStore())
         let worktreeId = "published-review"
         let remote = CodeHostRemote(kind: .gitlab, host: "gitlab.com", owner: "owner", repository: "repo", remoteName: "origin", webURL: URL(string: "https://gitlab.com/owner/repo")!)
         let local = ReviewLoopLocalState(branchName: "feature", headSHA: "abc", baseBranch: "main", hasWorkingTreeChanges: false, hasStagedChanges: false, aheadCommitCount: 0, hasUpstream: true, upstreamAheadCommitCount: 0, needsPush: false)
@@ -329,7 +329,7 @@ struct TabsManagerTests {
 
     @Test func restoreInsertsAtAnchoredPositionAndActivates() {
         let worktreeID = "tabs-manager-restore-position"
-        let manager = TabsManager(store: RestoreMemoryStore())
+        let manager = TabsManager(store: TestPersistenceStore())
         let first = manager.appendTerminal(worktreeId: worktreeID, title: "a", sessionId: "a")
         let restored = Tab.terminal(.init(id: "b", title: "b", sessionId: "b"))
         let third = manager.appendTerminal(worktreeId: worktreeID, title: "c", sessionId: "c")
@@ -379,7 +379,7 @@ struct TabsManagerTests {
     }
 
     @Test func hiddenTerminalStaysInactiveUntilActivated() {
-        let mgr = TabsManager(store: RestoreMemoryStore())
+        let mgr = TabsManager(store: TestPersistenceStore())
         let visible = mgr.appendTerminal(worktreeId: "wt", title: "zsh", sessionId: "s1")
         let hidden = mgr.appendTerminal(
             worktreeId: "wt", title: "dev", sessionId: "s2", runScriptKey: "repo:dev.sh", isHidden: true
@@ -394,7 +394,7 @@ struct TabsManagerTests {
     }
 
     @Test func closingTheActiveTabNeverSelectsAHiddenTab() {
-        let mgr = TabsManager(store: RestoreMemoryStore())
+        let mgr = TabsManager(store: TestPersistenceStore())
         let left = mgr.appendTerminal(worktreeId: "wt", title: "a", sessionId: "a")
         _ = mgr.appendTerminal(worktreeId: "wt", title: "dev", sessionId: "dev", runScriptKey: "repo:dev.sh", isHidden: true)
         let closing = mgr.appendTerminal(worktreeId: "wt", title: "b", sessionId: "b")
@@ -699,7 +699,7 @@ struct TabsManagerTests {
     }
 
     @Test func openWebPreviewReusesOneTabPerOwnerAndUpdatesURL() {
-        let manager = TabsManager(store: RestoreMemoryStore())
+        let manager = TabsManager(store: TestPersistenceStore())
         let firstURL = URL(string: "http://127.0.0.1:3000")!
         let secondURL = URL(string: "http://127.0.0.1:5173/app")!
 
@@ -726,7 +726,7 @@ struct TabsManagerTests {
     }
 
     @Test func webPreviewURLUpdatePreservesRemoteHostAndActiveSelection() {
-        let manager = TabsManager(store: RestoreMemoryStore())
+        let manager = TabsManager(store: TestPersistenceStore())
         let ownerKey = "owner-a"
         let preview = manager.openWebPreview(
             worktreeId: ownerKey,
@@ -752,7 +752,7 @@ struct TabsManagerTests {
     }
 
     @Test func explicitLocalPreviewTargetClearsRemoteHostAndReplacesBrowser() throws {
-        let manager = TabsManager(store: RestoreMemoryStore())
+        let manager = TabsManager(store: TestPersistenceStore())
         let original = manager.openWebPreview(worktreeId: "owner-a", remoteHost: "devbox")
         let remote = manager.webPreviewBrowser(ownerKey: "owner-a", remoteHost: "devbox")
         remote.onNavigate = { _ in }
@@ -773,7 +773,7 @@ struct TabsManagerTests {
     }
 
     @Test func webPreviewBrowserIsReusedUntilRemoteHostChangesOrTabCloses() {
-        let manager = TabsManager(store: RestoreMemoryStore())
+        let manager = TabsManager(store: TestPersistenceStore())
         let tab = manager.openWebPreview(worktreeId: "owner-a", remoteHost: "devbox")
         let first = manager.webPreviewBrowser(ownerKey: "owner-a", remoteHost: "devbox")
         let second = manager.webPreviewBrowser(ownerKey: "owner-a", remoteHost: "devbox")
@@ -984,7 +984,7 @@ struct TabsManagerTests {
     @Test func navigationTargetWithMatchingRemoteHostOpensWorktreeRelativeEditor() {
         let root = URL(fileURLWithPath: RemotePath.virtual(host: "devbox", realPath: "/srv/navigation-target"))
         let worktreeID = "navigation-remote-worktree"
-        let manager = TabsManager(store: RestoreMemoryStore())
+        let manager = TabsManager(store: TestPersistenceStore())
         let target = EditorNavigationTarget(
             document: EditorDocumentID(
                 host: "devbox",
@@ -1505,11 +1505,6 @@ struct TabsManagerTests {
         #expect(manager.tabs(forWorktree: worktreeId).map(\.id) == [fixed.id])
         #expect(manager.activeTabId(forWorktree: worktreeId) == fixed.id)
     }
-}
-
-private struct RestoreMemoryStore: PersistenceStoreProtocol {
-    func write<T: Encodable>(_: T, to _: URL) throws {}
-    func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
 }
 
 // MARK: - Pane tree mutations

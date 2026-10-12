@@ -5,22 +5,6 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct ReviewLoopHandoffRoutingTests {
-    private struct MemoryStore: PersistenceStoreProtocol {
-        let projectsFile: ProjectsFile
-
-        func write<T: Encodable>(_: T, to _: URL) throws {}
-
-        func readIfExists<T: Decodable>(_ type: T.Type, from _: URL) throws -> T? {
-            if type == ProjectsFile.self {
-                return projectsFile as? T
-            }
-            if type == AppConfig.self {
-                return AppConfig.defaults as? T
-            }
-            return nil
-        }
-    }
-
     @Test func handoffReusesActiveACPChatWithEmptyComposer() async throws {
         let state = makeState()
         state.openNewACPSession(agentID: "test-agent")
@@ -258,7 +242,7 @@ struct ReviewLoopHandoffRoutingTests {
             color: "blue",
             addedAt: Date()
         )
-        let state = AppState(store: MemoryStore(projectsFile: ProjectsFile(projects: [project])))
+        let state = AppState(store: TestPersistenceStore(ProjectsFile(projects: [project]), AppConfig.defaults))
         let worktree = Worktree(
             id: UUID().uuidString,
             projectId: project.id,

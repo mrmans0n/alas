@@ -4,11 +4,6 @@ import Testing
 
 @MainActor
 struct NativePeerNavigationTests {
-    private struct MemoryStore: PersistenceStoreProtocol {
-        func write<T: Encodable>(_: T, to _: URL) throws {}
-        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
-    }
-
     private final class FakeLinks: FederatedPeerLinks {
         var sessionCarryingPeers: [FederatedPeerInfo] = [.init(serverId: "B", name: "Mac B")]
         var onFederationEvent: (@MainActor (FederatedPeerLinkEvent) -> Void)?
@@ -29,7 +24,7 @@ struct NativePeerNavigationTests {
     }
 
     @Test func peerSelectionOverlaysLocalSelectionAndLocalClickClosesIt() {
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         let localSelection = state.selectedWorktreeId
         let links = FakeLinks()
         let client = NativePeerSessions(federation: FederatedSessionsProvider(links: links), peers: {
@@ -52,7 +47,7 @@ struct NativePeerNavigationTests {
     }
 
     @Test func localCenterTabActivationClosesPeerOverlay() {
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         let localTab = state.tabs.appendEditor(worktreeId: "local", title: "Local file", relativePath: "a.txt")
         let links = FakeLinks()
         let client = NativePeerSessions(federation: FederatedSessionsProvider(links: links), peers: {
@@ -75,7 +70,7 @@ struct NativePeerNavigationTests {
         let repo = try await makeRepo(name: "open-file")
         defer { try? FileManager.default.removeItem(at: repo) }
 
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         let project = try await state.projectsManager.addProject(
             path: repo, displayName: "test", color: "#000000"
         )
@@ -102,7 +97,7 @@ struct NativePeerNavigationTests {
         let repo = try await makeRepo(name: "open-conflict")
         defer { try? FileManager.default.removeItem(at: repo) }
 
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         let project = try await state.projectsManager.addProject(
             path: repo, displayName: "test", color: "#000000"
         )

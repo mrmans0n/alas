@@ -133,11 +133,6 @@ struct AppStateRunRecordTests {
         #expect(fixture.errors().isEmpty)
     }
 
-    private struct MemoryStore: PersistenceStoreProtocol {
-        func write<T: Encodable>(_: T, to _: URL) throws {}
-        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
-    }
-
     private struct Fixture {
         let state: AppState
         let history: RunHistoryStore
@@ -202,7 +197,7 @@ struct AppStateRunRecordTests {
             )
         }
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             fileActionErrorHandler: { title, message in errors.append((title, message)) },
             terminalSessionOpener: opener,
             runScriptCompletionWaiter: waiter,

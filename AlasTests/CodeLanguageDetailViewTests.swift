@@ -95,17 +95,12 @@ struct CodeLanguageDetailViewTests {
     }
 
     @Test func codePaneRefreshesInstalledStatusWithoutChangingTabs() async throws {
-        struct MemoryStore: PersistenceStoreProtocol {
-            func write<T: Encodable>(_: T, to _: URL) throws {}
-            func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
-        }
-
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let command = directory.appendingPathComponent("test-language-server").path
         let language = "test-language-\(UUID().uuidString)"
-        let state = AppState(store: MemoryStore(), restoreActiveTabsOnStartup: false)
+        let state = AppState(store: TestPersistenceStore(), restoreActiveTabsOnStartup: false)
         state.config.code.languageServers = [
             LanguageServerConfig(
                 language: language, extensions: ["testlang"], command: command,

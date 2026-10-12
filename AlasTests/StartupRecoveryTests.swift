@@ -5,18 +5,6 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct StartupRecoveryTests {
-    private struct MemoryStore: PersistenceStoreProtocol {
-        var projectsFile: ProjectsFile
-
-        func write<T: Encodable>(_ value: T, to url: URL) throws {}
-
-        func readIfExists<T: Decodable>(_ type: T.Type, from url: URL) throws -> T? {
-            if type == ProjectsFile.self { return projectsFile as? T }
-            if type == AppConfig.self { return AppConfig.defaults as? T }
-            return nil
-        }
-    }
-
     @Test func detectsAnUnfinishedPreviousLaunch() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-startup-recovery-\(UUID().uuidString)")
@@ -258,7 +246,7 @@ struct StartupRecoveryTests {
         )
         var watchedPaths: [String] = []
         let state = AppState(
-            store: MemoryStore(projectsFile: ProjectsFile(projects: [localProject, remoteProject])),
+            store: TestPersistenceStore(ProjectsFile(projects: [localProject, remoteProject]), AppConfig.defaults),
             projectGitWatcherFactory: { path in
                 watchedPaths.append(path.path)
                 return ProjectGitWatcher(
@@ -289,7 +277,7 @@ struct StartupRecoveryTests {
             id: "folder", name: "Folder", path: dir.path, color: "#5fb7c4", addedAt: Date(), kind: .folder)
         var watchedPaths: [String] = []
         let state = AppState(
-            store: MemoryStore(projectsFile: ProjectsFile(projects: [folder])),
+            store: TestPersistenceStore(ProjectsFile(projects: [folder]), AppConfig.defaults),
             projectGitWatcherFactory: { path in
                 watchedPaths.append(path.path)
                 return ProjectGitWatcher(

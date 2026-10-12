@@ -4,13 +4,8 @@ import Testing
 
 @MainActor
 struct AppStateOverlayTests {
-    private struct MemoryStore: PersistenceStoreProtocol {
-        func write<T: Encodable>(_: T, to _: URL) throws {}
-        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
-    }
-
     @Test func openingSearchClosesAgentLauncher() {
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         state.isAgentLauncherOpen = true
         state.agentLauncher.query = "codex"
         state.agentLauncher.selectedIndex = 2
@@ -25,7 +20,7 @@ struct AppStateOverlayTests {
     }
 
     @Test func openingRepoSelectorClosesAgentLauncher() {
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         state.isAgentLauncherOpen = true
         state.agentLauncher.query = "codex"
         state.agentLauncher.selectedIndex = 2
@@ -40,7 +35,7 @@ struct AppStateOverlayTests {
     }
 
     @Test func togglingRepoSelectorClosedLeavesAgentLauncherClosed() {
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         state.isRepoSelectorOpen = true
         state.isAgentLauncherOpen = true
         state.agentLauncher.query = "codex"
@@ -53,7 +48,7 @@ struct AppStateOverlayTests {
     }
 
     @Test func openingAgentLauncherWithExplicitTerminalModeOverridesDefault() {
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         state.config.agents.defaultLauncherMode = .acp
         state.isSearchOpen = true
         state.isRepoSelectorOpen = true
@@ -72,7 +67,7 @@ struct AppStateOverlayTests {
     }
 
     @Test func openingAgentLauncherWithExplicitChatModeOverridesDefault() {
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         state.config.agents.defaultLauncherMode = .terminal
 
         state.openAgentLauncherOverlay(mode: .acp)
@@ -83,7 +78,7 @@ struct AppStateOverlayTests {
     }
 
     @Test func openingAgentLauncherWithoutModeUsesConfiguredDefault() {
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         state.config.agents.defaultLauncherMode = .acp
 
         state.openAgentLauncherOverlay(mode: nil)
@@ -93,7 +88,7 @@ struct AppStateOverlayTests {
     }
 
     @Test func lockedChatRequestPinsModeRegardlessOfDefault() {
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         state.config.agents.defaultLauncherMode = .terminal
 
         state.openAgentLauncherOverlay(.locked(.acp))
@@ -104,7 +99,7 @@ struct AppStateOverlayTests {
     }
 
     @Test func lockedTerminalRequestPinsModeRegardlessOfDefault() {
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         state.config.agents.defaultLauncherMode = .acp
 
         state.openAgentLauncherOverlay(.locked(.terminal))
@@ -114,7 +109,7 @@ struct AppStateOverlayTests {
     }
 
     @Test func pickerRequestUsesConfiguredDefaultUnlocked() {
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         state.config.agents.defaultLauncherMode = .acp
 
         state.openAgentLauncherOverlay(.picker)
@@ -124,7 +119,7 @@ struct AppStateOverlayTests {
     }
 
     @Test func closingLockedLauncherClearsTheLock() {
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         state.openAgentLauncherOverlay(.locked(.acp))
 
         state.openSearchOverlay()
@@ -134,7 +129,7 @@ struct AppStateOverlayTests {
     }
 
     @Test func openingRunScriptPaletteWhileOpenKeepsLoadedScripts() {
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         let script = RunScript(
             scope: .repo,
             fileName: "build.sh",
@@ -163,7 +158,7 @@ struct AppStateOverlayTests {
     }
 
     @Test func openingRunScriptPaletteCanPrepareEditMode() {
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
 
         state.openRunScriptPaletteOverlay(mode: .edit)
 

@@ -28,7 +28,7 @@ struct WorkspaceACPSessionTests {
         let workspacesManager = WorkspacesManager(
             bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore), observer: AvailableMemberObserver()
         )
-        let state = AppState(store: MemoryStore(), workspacesManager: workspacesManager, workspaceStore: workspaceStore)
+        let state = AppState(store: TestPersistenceStore(), workspacesManager: workspacesManager, workspaceStore: workspaceStore)
         state.projectsManager = ProjectsManager(persistedProjects: [project])
         state.projectsManager.insertOptimisticWorktree(worktree)
         state.agentRegistry = AgentRegistry(
@@ -193,7 +193,7 @@ struct WorkspaceACPSessionTests {
 
     @MainActor
     @Test func checkoutLaunchSpecPreservesAdapterCommandWithoutBinaryOverride() throws {
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         state.config.agents.builtinState["claude"] = .init(isEnabled: true, binaryOverride: nil, extraTerminalArgs: nil)
         let spec = try #require(ACPLaunchCatalog.spec(for: "claude"))
 
@@ -205,7 +205,7 @@ struct WorkspaceACPSessionTests {
 
     @MainActor
     @Test func checkoutLaunchSpecPreservesManagedAdapterCommandWithBinaryOverride() throws {
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         state.config.agents.builtinState["claude"] = .init(
             isEnabled: true,
             binaryOverride: "/opt/bin/claude",
@@ -222,7 +222,7 @@ struct WorkspaceACPSessionTests {
 
     @MainActor
     @Test func checkoutLaunchSpecAppliesNativeACPBinaryOverride() throws {
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         state.config.agents.builtinState["gemini"] = .init(
             isEnabled: true,
             binaryOverride: "/opt/tools/gemini",
@@ -242,7 +242,7 @@ struct WorkspaceACPSessionTests {
 
     @MainActor
     @Test func checkoutLaunchSpecExpandsHomeRelativeLocalOverride() throws {
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         state.config.agents.builtinState["gemini"] = .init(
             isEnabled: true,
             binaryOverride: "~/bin/gemini",
@@ -257,7 +257,7 @@ struct WorkspaceACPSessionTests {
 
     @MainActor
     @Test func checkoutLaunchSpecExpandsHomeRelativeRemoteOverride() throws {
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         state.config.agents.builtinState["gemini"] = .init(
             isEnabled: true,
             binaryOverride: "~/bin/gemini",
@@ -276,7 +276,7 @@ struct WorkspaceACPSessionTests {
 
     @MainActor
     @Test func checkoutLaunchSpecPreservesHomeRelativeRemoteOverrideWithoutRemoteHome() throws {
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         state.config.agents.builtinState["gemini"] = .init(
             isEnabled: true,
             binaryOverride: "~/bin/gemini",
@@ -301,7 +301,7 @@ struct WorkspaceACPSessionTests {
 
     @MainActor
     @Test func copilotLaunchSpecIncludesExtraArgsAsSpawnTimeFlags() throws {
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         state.config.agents.builtinState["copilot"] = .init(
             isEnabled: true,
             binaryOverride: nil,
@@ -316,7 +316,7 @@ struct WorkspaceACPSessionTests {
 
     @MainActor
     @Test func extraTerminalArgsDoesNotLeakIntoNonCopilotACPLaunches() throws {
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         state.config.agents.builtinState["claude"] = .init(
             isEnabled: true,
             binaryOverride: nil,
@@ -343,7 +343,7 @@ struct WorkspaceACPSessionTests {
             members: []
         )
         try writeManifest(for: checkout)
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         guard case let .ready(manager) = await state.workspaceACPManager(for: checkout) else {
             Issue.record("Expected checkout manager")
             return
@@ -385,7 +385,7 @@ struct WorkspaceACPSessionTests {
         )
         try writeManifest(for: checkout)
         let owner = SessionOwnerID.workspaceCheckout(checkout.id, .local)
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         guard case let .ready(manager) = await state.workspaceACPManager(for: checkout) else {
             Issue.record("Expected checkout manager")
             return
@@ -417,7 +417,7 @@ struct WorkspaceACPSessionTests {
         defer { try? FileManager.default.removeItem(at: dbURL) }
         var detached: [(SessionOwnerID, ACPSession.ID)] = []
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             acpDetachRunner: { manager, sessionID in
                 detached.append((manager.owner, sessionID))
             }
@@ -463,7 +463,7 @@ struct WorkspaceACPSessionTests {
         try await workspaceStore.checkpoint(.init(checkouts: [checkout]))
         let workspacesManager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore))
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             workspacesManager: workspacesManager,
             workspaceStore: workspaceStore
         )
@@ -511,7 +511,7 @@ struct WorkspaceACPSessionTests {
         try await workspaceStore.checkpoint(.init(checkouts: [archived]))
         let workspacesManager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore))
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             workspacesManager: workspacesManager,
             workspaceStore: workspaceStore
         )
@@ -546,7 +546,7 @@ struct WorkspaceACPSessionTests {
         _ = tabs.append(acpSession: .init(sessionId: "saved-acp", title: "Saved ACP"), to: owner)
         let workspacesManager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore))
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             tabsManager: tabs,
             restoreActiveTabsOnStartup: false,
             workspacesManager: workspacesManager,
@@ -585,7 +585,7 @@ struct WorkspaceACPSessionTests {
         try await workspaceStore.checkpoint(.init(checkouts: [checkout]))
         let workspacesManager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore))
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             workspacesManager: workspacesManager,
             workspaceStore: workspaceStore,
             workspaceRemoteTransport: .init(runner: { _, _, _ in
@@ -640,7 +640,7 @@ struct WorkspaceACPSessionTests {
             rootPath: replacedRoot.path,
             members: []
         )
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
 
         guard case .pendingRootOrLocation = await state.workspaceACPManager(for: replaced) else {
             Issue.record("Expected copied manifest with a different root to stay pending")
@@ -661,7 +661,7 @@ struct WorkspaceACPSessionTests {
         )
         let runner = CountingRemoteProbeRunner()
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             workspaceRemoteTransport: .init(runner: { executable, args, timeout in
                 await runner.run(executable: executable, args: args, timeout: timeout)
             })
@@ -704,7 +704,7 @@ struct WorkspaceACPSessionTests {
         try await workspaceStore.checkpoint(.init(checkouts: [checkout]))
         let workspacesManager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore))
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             workspacesManager: workspacesManager,
             workspaceStore: workspaceStore
         )
@@ -760,7 +760,7 @@ struct WorkspaceACPSessionTests {
         let tabs = TabsManager(store: PersistenceStore(), tabsDirectory: tabsDirectory)
         let workspacesManager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore))
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             tabsManager: tabs,
             restoreActiveTabsOnStartup: false,
             workspacesManager: workspacesManager,
@@ -805,7 +805,7 @@ struct WorkspaceACPSessionTests {
         let tabs = TabsManager(store: PersistenceStore(), tabsDirectory: tabsDirectory)
         let workspacesManager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore))
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             tabsManager: tabs,
             restoreActiveTabsOnStartup: false,
             workspacesManager: workspacesManager,
@@ -878,7 +878,7 @@ struct WorkspaceACPSessionTests {
         try await workspaceStore.checkpoint(.init(checkouts: [checkout]))
         let workspacesManager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore))
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             workspacesManager: workspacesManager,
             workspaceStore: workspaceStore
         )
@@ -958,7 +958,7 @@ struct WorkspaceACPSessionTests {
         try await workspaceStore.checkpoint(.init(checkouts: [checkout]))
         let workspacesManager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore))
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             workspacesManager: workspacesManager,
             workspaceStore: workspaceStore
         )
@@ -976,11 +976,6 @@ struct WorkspaceACPSessionTests {
         let externalProvider = try #require(manager.externalMCPStatusProvider)
         let external = await externalProvider(root.path)
         #expect(external.userServerNames == ["frozen-linear"])
-    }
-
-    private struct MemoryStore: PersistenceStoreProtocol {
-        func write<T: Encodable>(_: T, to _: URL) throws {}
-        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
     }
 
     private func writeManifest(for checkout: WorkspaceCheckout) throws {

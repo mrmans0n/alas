@@ -4,15 +4,10 @@ import Testing
 
 @MainActor
 struct RightPaneStateReviewLoopPushTests {
-    private struct MemoryStore: PersistenceStoreProtocol {
-        func write<T: Encodable>(_: T, to _: URL) throws {}
-        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
-    }
-
     @Test func createReviewRequestActionOpensDraftTab() {
         let worktreeId = "wt-review-request-draft-action"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
-        let appState = AppState(store: MemoryStore())
+        let appState = AppState(store: TestPersistenceStore())
         let worktree = Worktree(
             id: worktreeId,
             projectId: "p1",
@@ -37,7 +32,7 @@ struct RightPaneStateReviewLoopPushTests {
     @Test func failedLegacyBranchVerificationKeepsCreatedDraftForRetry() async {
         let worktreeId = "wt-review-request-legacy-verification-failure"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
-        let appState = AppState(store: MemoryStore())
+        let appState = AppState(store: TestPersistenceStore())
         let worktree = Worktree(
             id: worktreeId, projectId: "p1", name: "branch-b", branch: "branch-b",
             path: URL(fileURLWithPath: "/tmp/repo"), status: .clean,
@@ -66,7 +61,7 @@ struct RightPaneStateReviewLoopPushTests {
     @Test func createReviewRequestActionNoopsWhileReviewActionIsInFlight() {
         let worktreeId = "wt-review-request-draft-action-in-flight"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
-        let appState = AppState(store: MemoryStore())
+        let appState = AppState(store: TestPersistenceStore())
         let worktree = Worktree(
             id: worktreeId,
             projectId: "p1",
@@ -89,7 +84,7 @@ struct RightPaneStateReviewLoopPushTests {
     @Test func failedPushLeavesReviewRequestDraftClosed() async {
         let worktreeId = "wt-push-and-create-failure"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
-        let appState = AppState(store: MemoryStore())
+        let appState = AppState(store: TestPersistenceStore())
         let worktree = Worktree(
             id: worktreeId, projectId: "p1", name: "feature/review-loop",
             branch: "feature/review-loop", path: URL(fileURLWithPath: "/tmp/repo"),
@@ -117,7 +112,7 @@ struct RightPaneStateReviewLoopPushTests {
     func reviewRequestDraftWaitsForSuccessfulRefresh(_ refreshed: Bool) async {
         let worktreeId = "wt-push-and-create-refresh-\(refreshed)"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
-        let appState = AppState(store: MemoryStore())
+        let appState = AppState(store: TestPersistenceStore())
         let worktree = Worktree(
             id: worktreeId, projectId: "p1", name: "feature/review-loop",
             branch: "feature/review-loop", path: URL(fileURLWithPath: "/tmp/repo"),
@@ -155,7 +150,7 @@ struct RightPaneStateReviewLoopPushTests {
     @Test func inspectReviewEvidenceActionNoopsWithoutReviewRequest() {
         let worktreeId = "wt-review-evidence-no-request"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
-        let appState = AppState(store: MemoryStore())
+        let appState = AppState(store: TestPersistenceStore())
         let worktree = Worktree(
             id: worktreeId,
             projectId: "p1",
@@ -176,7 +171,7 @@ struct RightPaneStateReviewLoopPushTests {
     @Test func mergeActionNoopsWithoutReviewRequest() {
         let worktreeId = "wt-merge-no-request"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
-        let appState = AppState(store: MemoryStore())
+        let appState = AppState(store: TestPersistenceStore())
         let worktree = Worktree(
             id: worktreeId,
             projectId: "p1",

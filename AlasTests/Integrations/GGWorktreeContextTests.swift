@@ -262,16 +262,6 @@ struct ProjectsManagerGGWorktreeModeTests {
 @MainActor
 @Suite(.serialized)
 struct AppStateGGACPWorktreeContextTests {
-    private struct MemoryStore: PersistenceStoreProtocol {
-        let projectsFile: ProjectsFile
-
-        func write<T: Encodable>(_: T, to _: URL) throws {}
-
-        func readIfExists<T: Decodable>(_ type: T.Type, from _: URL) throws -> T? {
-            type == ProjectsFile.self ? projectsFile as? T : nil
-        }
-    }
-
     @Test func topologyBranchChangeClearsCachedSidebarSummary() {
         let project = ProjectConfig(
             id: "project",
@@ -280,7 +270,7 @@ struct AppStateGGACPWorktreeContextTests {
             color: "teal",
             addedAt: .now
         )
-        let state = AppState(store: MemoryStore(projectsFile: ProjectsFile(projects: [project])))
+        let state = AppState(store: TestPersistenceStore(ProjectsFile(projects: [project])))
         let path = URL(fileURLWithPath: "/tmp/alas-summary-linked")
         let worktree = Worktree(
             id: Worktree.makeId(path: path),
@@ -311,7 +301,7 @@ struct AppStateGGACPWorktreeContextTests {
             color: "teal",
             addedAt: .now
         )
-        let state = AppState(store: MemoryStore(projectsFile: ProjectsFile(projects: [project])))
+        let state = AppState(store: TestPersistenceStore(ProjectsFile(projects: [project])))
         let changedPath = URL(fileURLWithPath: "/tmp/alas-detached-summary-changed")
         let unchangedPath = URL(fileURLWithPath: "/tmp/alas-detached-summary-unchanged")
         for path in [changedPath, unchangedPath] {
@@ -350,7 +340,7 @@ struct AppStateGGACPWorktreeContextTests {
         defer { try? FileManager.default.removeItem(at: repo) }
         _ = try await Process.git(["init", "-q", "-b", "main"], cwd: repo)
         _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "init"], cwd: repo)
-        let state = AppState(store: MemoryStore(projectsFile: ProjectsFile(projects: [])))
+        let state = AppState(store: TestPersistenceStore(ProjectsFile(projects: [])))
         let project = try await state.projectsManager.addProject(
             path: repo,
             displayName: "topology",
@@ -388,7 +378,7 @@ struct AppStateGGACPWorktreeContextTests {
             addedAt: .now,
             ggMode: .off
         )
-        let state = AppState(store: MemoryStore(projectsFile: ProjectsFile(projects: [project])))
+        let state = AppState(store: TestPersistenceStore(ProjectsFile(projects: [project])))
         let path = root.appendingPathComponent("linked")
         let topologyWorktree = Worktree(
             id: Worktree.makeId(path: path),
@@ -496,7 +486,7 @@ struct AppStateGGACPWorktreeContextTests {
             addedAt: .now,
             ggMode: .off
         )
-        let state = AppState(store: MemoryStore(projectsFile: ProjectsFile(projects: [project])))
+        let state = AppState(store: TestPersistenceStore(ProjectsFile(projects: [project])))
         let path = root.appendingPathComponent("linked")
         let worktree = Worktree(
             id: Worktree.makeId(path: path),
@@ -565,7 +555,7 @@ struct AppStateGGACPWorktreeContextTests {
             addedAt: .now,
             ggMode: .off
         )
-        let state = AppState(store: MemoryStore(projectsFile: ProjectsFile(projects: [project])))
+        let state = AppState(store: TestPersistenceStore(ProjectsFile(projects: [project])))
         let changedPath = root.appendingPathComponent("changed")
         let unchangedPath = root.appendingPathComponent("unchanged")
         let changedWorktree = Worktree(

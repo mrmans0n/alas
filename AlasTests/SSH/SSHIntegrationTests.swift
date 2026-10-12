@@ -5,22 +5,6 @@ import Testing
 /// Enable with ALAS_SSH_INTEGRATION=1 and key-authenticated ssh localhost.
 @Suite(.disabled(if: ProcessInfo.processInfo.environment["ALAS_SSH_INTEGRATION"] != "1"))
 struct SSHIntegrationTests {
-    private struct ProjectMemoryStore: PersistenceStoreProtocol {
-        let projectsFile: ProjectsFile
-
-        func write<T: Encodable>(_: T, to _: URL) throws {}
-
-        func readIfExists<T: Decodable>(_ type: T.Type, from _: URL) throws -> T? {
-            if type == ProjectsFile.self {
-                return projectsFile as? T
-            }
-            if type == AppConfig.self {
-                return AppConfig.defaults as? T
-            }
-            return nil
-        }
-    }
-
     private var enabled: Bool {
         ProcessInfo.processInfo.environment["ALAS_SSH_INTEGRATION"] == "1"
     }
@@ -66,9 +50,7 @@ struct SSHIntegrationTests {
             addedAt: Date(),
             host: "localhost"
         )
-        let state = AppState(store: ProjectMemoryStore(
-            projectsFile: ProjectsFile(projects: [project])
-        ))
+        let state = AppState(store: TestPersistenceStore(ProjectsFile(projects: [project]), AppConfig.defaults))
 
         let result = await state.remoteBranches(projectId: project.id)
 
@@ -106,9 +88,7 @@ struct SSHIntegrationTests {
             addedAt: Date(),
             host: "localhost"
         )
-        let state = AppState(store: ProjectMemoryStore(
-            projectsFile: ProjectsFile(projects: [project])
-        ))
+        let state = AppState(store: TestPersistenceStore(ProjectsFile(projects: [project]), AppConfig.defaults))
         state.config.worktrees.rootPath = worktreeRoot.path
         state.config.worktrees.pathTemplate = "{worktreeRoot}/{repo}-{branch}"
         state.agentRegistry = AgentRegistry(
@@ -374,7 +354,7 @@ struct SSHIntegrationTests {
         let byteCount = RemoteWorktreeFileAccess.maxFileBytes + 1
         try String(repeating: "x", count: byteCount).write(to: file, atomically: true, encoding: .utf8)
 
-        let state = AppState(store: ProjectMemoryStore(projectsFile: ProjectsFile(projects: [])))
+        let state = AppState(store: TestPersistenceStore(ProjectsFile(projects: []), AppConfig.defaults))
         let outcome = await state.readRemoteWorktreeFileRaw(
             host: "localhost", worktreeRoot: directory.path, relativePath: "huge.txt")
 

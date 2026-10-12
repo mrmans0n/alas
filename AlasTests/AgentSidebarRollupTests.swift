@@ -562,14 +562,9 @@ struct AgentSidebarRollupTests {
         #expect(pane?.followUps.wrappedValue["session"]?.delivery == .failed)
     }
 
-    private struct MemoryStore: PersistenceStoreProtocol {
-        func write<T: Encodable>(_: T, to _: URL) throws {}
-        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
-    }
-
     @MainActor
     private func makeAppFixture() -> (AppState, Worktree, Worktree) {
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         let fixtureID = UUID().uuidString
         let project = ProjectConfig(
             id: fixtureID, name: "Agent Sidebar", path: "/tmp/\(fixtureID)",

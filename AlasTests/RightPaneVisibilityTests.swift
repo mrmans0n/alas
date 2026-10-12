@@ -4,13 +4,8 @@ import Testing
 
 @MainActor
 struct RightPaneVisibilityTests {
-    private struct MemoryStore: PersistenceStoreProtocol {
-        func write<T: Encodable>(_: T, to _: URL) throws {}
-        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
-    }
-
     @Test func toggleRightPaneVisibilityHidesAndShowsAgain() {
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         #expect(state.config.rightPaneVisible)
 
         state.toggleRightPaneVisibility()

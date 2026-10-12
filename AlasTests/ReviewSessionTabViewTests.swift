@@ -118,7 +118,7 @@ struct ReviewSessionTabViewTests {
             updatedAt: .init(timeIntervalSince1970: 1)
         )
         let store = ReviewSessionStore(
-            store: FailingPersistenceStore(error: TestPersistenceError()),
+            store: TestPersistenceStore(writeError: TestPersistenceError()),
             url: URL(fileURLWithPath: "/tmp/review-sessions.json")
         )
 
@@ -1528,18 +1528,6 @@ struct ReviewSessionTabViewTests {
 
     private struct TestPersistenceError: LocalizedError {
         var errorDescription: String? { "save failed" }
-    }
-
-    private struct FailingPersistenceStore: PersistenceStoreProtocol {
-        let error: Error
-
-        func write<T: Encodable>(_ value: T, to url: URL) throws {
-            throw error
-        }
-
-        func readIfExists<T: Decodable>(_ type: T.Type, from url: URL) throws -> T? {
-            nil
-        }
     }
 }
 

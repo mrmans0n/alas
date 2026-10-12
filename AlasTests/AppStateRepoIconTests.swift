@@ -5,11 +5,6 @@ import Testing
 @Suite("AppState repo icons")
 @MainActor
 struct AppStateRepoIconTests {
-    private struct MemoryStore: PersistenceStoreProtocol {
-        func write<T: Encodable>(_: T, to _: URL) throws {}
-        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
-    }
-
     /// PNG magic bytes are all the staging pipeline inspects, so these stand in
     /// for a real image while staying obviously not one.
     private static let pngBytes = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
@@ -50,7 +45,7 @@ struct AppStateRepoIconTests {
     }
 
     private func state(staging: URL) -> AppState {
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         state.repoIconStagingRoot = staging
         return state
     }
@@ -210,7 +205,7 @@ struct AppStateRepoIconTests {
         let fixture = try Fixture()
         try fixture.writeConfig(#"{"version": 1, "defaultAgent": "unknown-agent"}"#)
         let local = project(path: fixture.checkout.path)
-        let state = AppState(store: SeededStore(projects: ProjectsFile(projects: [local])))
+        let state = AppState(store: TestPersistenceStore(ProjectsFile(projects: [local])))
         state.repoIconStagingRoot = fixture.staging
         state.config.agents.worktreeAutoLaunch.agentId = "global-agent"
 
@@ -222,7 +217,7 @@ struct AppStateRepoIconTests {
     @Test("an SSH project never defaults to a registry agent installed on this Mac")
     func remoteProjectDropsLocalOnlyRegistryDefault() {
         let remote = project(path: "/srv/repo", host: "devbox")
-        let state = AppState(store: SeededStore(projects: ProjectsFile(projects: [remote])))
+        let state = AppState(store: TestPersistenceStore(ProjectsFile(projects: [remote])))
         let local = ACPRegistryInstalledAgent(
             registryID: "goose", displayName: "goose", version: "1.0.0",
             command: "/Users/me/Library/Application Support/Alas/acp-agents/goose/goose",
@@ -253,7 +248,7 @@ struct AppStateRepoIconTests {
         // re-approved from here.
         let fixture = try Fixture()
         let local = project(path: fixture.checkout.path)
-        let state = AppState(store: SeededStore(projects: ProjectsFile(projects: [local])))
+        let state = AppState(store: TestPersistenceStore(ProjectsFile(projects: [local])))
         state.repoIconStagingRoot = fixture.staging
 
         let declinedConfig = #"{"version": 1, "mcpServers": [{"name": "linear", "transport": {"kind": "http", "url": "https://mcp.example/approved", "headers": []}}]}"#
@@ -283,12 +278,4 @@ struct AppStateRepoIconTests {
 
     /// Store stub whose read returns the seeded projects file, so an
     /// AppState boots with the projects under test without touching disk.
-    private struct SeededStore: PersistenceStoreProtocol {
-        let projects: ProjectsFile
-
-        func write<T: Encodable>(_: T, to _: URL) throws {}
-        func readIfExists<T: Decodable>(_ type: T.Type, from _: URL) throws -> T? {
-            type == ProjectsFile.self ? (projects as? T) : nil
-        }
-    }
 }

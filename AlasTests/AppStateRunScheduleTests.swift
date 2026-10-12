@@ -9,11 +9,6 @@ import UserNotifications
 @Suite(.serialized)
 @MainActor
 struct AppStateRunScheduleTests {
-    private struct MemoryStore: PersistenceStoreProtocol {
-        func write<T: Encodable>(_: T, to _: URL) throws {}
-        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
-    }
-
     private struct Fixture {
         let state: AppState
         let history: RunHistoryStore
@@ -62,7 +57,7 @@ struct AppStateRunScheduleTests {
         let locations = LocationBox()
         var openCount = 0
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             fileActionErrorHandler: { title, message in errors.append((title, message)) },
             terminalSessionOpener: terminalSessionOpener ?? { _, _, _, _, _, _, _, _, _ in
                 openCount += 1
@@ -80,7 +75,7 @@ struct AppStateRunScheduleTests {
             },
             runHistoryStore: history,
             runScheduler: RunScheduler(
-                store: MemoryStore(),
+                store: TestPersistenceStore(),
                 fileURL: directory.appendingPathComponent("run-schedules.json")
             ),
             attentionStore: AttentionStore(url: directory.appendingPathComponent("attention-events.json"))
@@ -139,7 +134,7 @@ struct AppStateRunScheduleTests {
         // Aborts rather than falling through to the call below, so a broken
         // guard is a reported failure instead of a fresh hang.
         try #require(AppState.isRunningUnitTests)
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         state.showFileActionError(title: "Run History Failed", message: "Could not save run history.")
     }
 
@@ -459,7 +454,7 @@ struct AppStateRunScheduleTests {
         let locations = LocationBox()
         var openCount = 0
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             // Without this the default handler is `NSAlert.runModal`, which in
             // a headless test blocks the main thread forever: the run stops
             // dead at whichever test raised the error, with no failure and no
@@ -476,7 +471,7 @@ struct AppStateRunScheduleTests {
                 return RunScriptCompletion(exitCode: 0, transcript: nil, truncated: false)
             },
             runHistoryStore: try RunHistoryStore(path: repo.appendingPathComponent("history.sqlite").path),
-            runScheduler: RunScheduler(store: MemoryStore(), fileURL: repo.appendingPathComponent("schedules.json")),
+            runScheduler: RunScheduler(store: TestPersistenceStore(), fileURL: repo.appendingPathComponent("schedules.json")),
             attentionStore: AttentionStore(url: repo.appendingPathComponent("attention-events.json"))
         )
         state.config.worktrees.rootPath = repo.deletingLastPathComponent().appendingPathComponent("wts-\(UUID().uuidString)").path

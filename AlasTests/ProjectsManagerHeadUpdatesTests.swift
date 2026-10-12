@@ -4,18 +4,6 @@ import Foundation
 
 @MainActor
 struct ProjectsManagerHeadUpdatesTests {
-    private struct MemoryStore: PersistenceStoreProtocol {
-        var projectsFile: ProjectsFile
-
-        func write<T: Encodable>(_ value: T, to url: URL) throws {}
-
-        func readIfExists<T: Decodable>(_ type: T.Type, from url: URL) throws -> T? {
-            if type == ProjectsFile.self { return projectsFile as? T }
-            if type == AppConfig.self { return AppConfig.defaults as? T }
-            return nil
-        }
-    }
-
     private func makeManager() -> (ProjectsManager, ProjectConfig) {
         let project = ProjectConfig(
             id: "p1",
@@ -189,7 +177,7 @@ struct ProjectsManagerHeadUpdatesTests {
             color: "blue",
             addedAt: Date()
         )
-        let state = AppState(store: MemoryStore(projectsFile: ProjectsFile(projects: [project])))
+        let state = AppState(store: TestPersistenceStore(ProjectsFile(projects: [project]), AppConfig.defaults))
         let main = wt(path: "/repo", branch: "main")
         let linked = wt(path: "/wts/feature", branch: "feature")
         seed(state.projectsManager, projectId: project.id, [main, linked])
@@ -217,7 +205,7 @@ struct ProjectsManagerHeadUpdatesTests {
             color: "blue",
             addedAt: Date()
         )
-        let state = AppState(store: MemoryStore(projectsFile: ProjectsFile(projects: [project])))
+        let state = AppState(store: TestPersistenceStore(ProjectsFile(projects: [project]), AppConfig.defaults))
         let main = wt(path: "/repo", branch: "main")
         seed(state.projectsManager, projectId: project.id, [main])
 
@@ -258,7 +246,7 @@ struct ProjectsManagerHeadUpdatesTests {
         )
         let cache = GGStackCache()
         let state = AppState(
-            store: MemoryStore(projectsFile: ProjectsFile(projects: [project])),
+            store: TestPersistenceStore(ProjectsFile(projects: [project]), AppConfig.defaults),
             projectGitWatcherFactory: { _ in watcher },
             ggStackCache: cache
         )
@@ -323,7 +311,7 @@ struct ProjectsManagerHeadUpdatesTests {
         )
         let cache = GGStackCache()
         let state = AppState(
-            store: MemoryStore(projectsFile: ProjectsFile(projects: [project])),
+            store: TestPersistenceStore(ProjectsFile(projects: [project]), AppConfig.defaults),
             projectGitWatcherFactory: { _ in watcher },
             ggStackCache: cache
         )
@@ -398,7 +386,7 @@ struct ProjectsManagerHeadUpdatesTests {
         )
         let recorder = StatusScanRecorder()
         let state = AppState(
-            store: MemoryStore(projectsFile: ProjectsFile(projects: [project, otherProject])),
+            store: TestPersistenceStore(ProjectsFile(projects: [project, otherProject]), AppConfig.defaults),
             projectGitWatcherFactory: { _ in watcher },
             worktreeStatusScan: { paths in
                 await recorder.record(paths: paths)

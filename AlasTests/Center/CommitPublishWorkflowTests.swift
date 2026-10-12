@@ -214,7 +214,7 @@ struct CommitPublishWorkflowTests {
     }
 
     @Test func tabsManagerStopsBeforeRemoteMutationWhenCheckpointCannotPersist() async throws {
-        let manager = TabsManager(store: FailingTabsStore())
+        let manager = TabsManager(store: TestPersistenceStore(writeError: NSError(domain: "CommitPublishWorkflowTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "write rejected"])))
         let draft = manager.openOrFocusDraftCommit(worktreeId: "checkpoint-persist-failure")
         var calls: [String] = []
         let operations = CommitPublishOperations(
@@ -1113,15 +1113,6 @@ struct CommitPublishWorkflowTests {
 
         #expect(harness.checkpointWasClearedBeforeRefresh)
     }
-}
-
-private struct FailingTabsStore: PersistenceStoreProtocol {
-    func write<T: Encodable>(_: T, to _: URL) throws {
-        throw NSError(domain: "CommitPublishWorkflowTests", code: 1,
-            userInfo: [NSLocalizedDescriptionKey: "write rejected"])
-    }
-
-    func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
 }
 
 private final class FlakyCommitPublishTabsStore: PersistenceStoreProtocol, @unchecked Sendable {

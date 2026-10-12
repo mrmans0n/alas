@@ -11,27 +11,6 @@ struct AppStatePersistenceTests {
         repositorySlug: "acme/alas"
     )
 
-    private struct MemoryStore: PersistenceStoreProtocol {
-        func write<T: Encodable>(_: T, to _: URL) throws {}
-        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
-    }
-
-    private struct FailingStore: PersistenceStoreProtocol {
-        let error = NSError(
-            domain: "AppStatePersistenceTests",
-            code: 1,
-            userInfo: [NSLocalizedDescriptionKey: "write rejected"]
-        )
-
-        func write<T: Encodable>(_: T, to _: URL) throws {
-            throw error
-        }
-
-        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? {
-            nil
-        }
-    }
-
     private final class RecordingStore: PersistenceStoreProtocol, @unchecked Sendable {
         let initialProjectsFile: ProjectsFile
         var writtenConfig: AppConfig?
@@ -218,7 +197,7 @@ struct AppStatePersistenceTests {
 
     @Test func saveConfigReportsWriteFailure() {
         var reports: [(title: String, message: String)] = []
-        let state = AppState(store: FailingStore()) { title, message in
+        let state = AppState(store: TestPersistenceStore(writeError: NSError(domain: "AppStatePersistenceTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "write rejected"]))) { title, message in
             reports.append((title, message))
         }
 
@@ -231,7 +210,7 @@ struct AppStatePersistenceTests {
 
     @Test func saveProjectsReportsWriteFailure() {
         var reports: [(title: String, message: String)] = []
-        let state = AppState(store: FailingStore()) { title, message in
+        let state = AppState(store: TestPersistenceStore(writeError: NSError(domain: "AppStatePersistenceTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "write rejected"]))) { title, message in
             reports.append((title, message))
         }
 
@@ -253,7 +232,7 @@ struct AppStatePersistenceTests {
         _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "init"], cwd: repo)
 
         var reports: [(title: String, message: String)] = []
-        let state = AppState(store: FailingStore()) { title, message in
+        let state = AppState(store: TestPersistenceStore(writeError: NSError(domain: "AppStatePersistenceTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "write rejected"]))) { title, message in
             reports.append((title, message))
         }
 
@@ -327,7 +306,7 @@ struct AppStatePersistenceTests {
     }
 
     @Test func shortcutOverridesPersistThroughSaveAndReload() throws {
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         state.setShortcut(ShortcutBinding(key: "o", modifiers: [.command]), for: .searchFiles)
         state.setShortcut(nil, for: .switchRepository)
         // Reload by encoding/decoding via AppConfig (mirrors what disk does).

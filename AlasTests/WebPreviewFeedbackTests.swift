@@ -6,10 +6,6 @@ import Testing
 
 @Suite("Web preview feedback")
 struct WebPreviewFeedbackTests {
-    private struct MemoryStore: PersistenceStoreProtocol {
-        func write<T: Encodable>(_: T, to _: URL) throws {}
-        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
-    }
     @Test func promptFramesCaptureMetadataAndConsoleAsUntrustedContext() throws {
         let capture = WebPreviewCapture(
             id: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
@@ -318,7 +314,7 @@ struct WebPreviewFeedbackTests {
     private static func makeFixture() async throws -> Fixture {
         let matchingOwnerKey = "preview-\(UUID().uuidString)"
         let otherOwnerKey = "preview-other-\(UUID().uuidString)"
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         let matchingWorktree = Worktree(
             id: matchingOwnerKey,
             projectId: "project",
@@ -382,7 +378,7 @@ struct WebPreviewFeedbackTests {
         try await workspaceStore.checkpoint(.init(checkouts: [checkout]))
         let workspacesManager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore))
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             workspacesManager: workspacesManager,
             workspaceStore: workspaceStore
         )

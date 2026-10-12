@@ -27,7 +27,7 @@ struct ReviewSessionLoaderTests {
             scope: .all
         )
         let loader = ReviewSessionLoader.production(
-            appState: AppState(store: MemoryStore()),
+            appState: AppState(store: TestPersistenceStore()),
             worktree: worktree
         )
 
@@ -210,7 +210,7 @@ struct ReviewSessionLoaderTests {
             title: "Review HEAD"
         )
         let loader = ReviewSessionLoader.production(
-            appState: AppState(store: MemoryStore()),
+            appState: AppState(store: TestPersistenceStore()),
             worktree: worktree
         )
 
@@ -269,7 +269,7 @@ struct ReviewSessionLoaderTests {
             """
         )
         let loader = ReviewSessionLoader.production(
-            appState: AppState(store: MemoryStore()),
+            appState: AppState(store: TestPersistenceStore()),
             worktree: worktree,
             providerRegistry: CodeHostProviderRegistry(providers: [.github: provider])
         )
@@ -301,14 +301,6 @@ struct ReviewSessionLoaderTests {
         let target = ReviewSessionTarget.branch(worktreeID: "wt", repositoryPath: path, base: "main", head: "HEAD")
         await #expect(throws: ReviewSessionLoaderError.unsupportedTarget) {
             _ = try await loader.load(target: target)
-        }
-    }
-
-    private struct MemoryStore: PersistenceStoreProtocol {
-        func write<T: Encodable>(_ value: T, to url: URL) throws {}
-
-        func readIfExists<T: Decodable>(_ type: T.Type, from url: URL) throws -> T? {
-            nil
         }
     }
 

@@ -74,7 +74,7 @@ import Testing
             SpaceConfig(id: "space", name: "Default", emoji: "folder", projectIds: [], lastSelectedWorktreeId: nil, createdAt: .distantPast)
         ]))
         let state = AppState(
-            store: WorkspaceConfirmationMemoryStore(),
+            store: TestPersistenceStore(),
             workspacesManager: manager,
             workspaceStore: store
         )
@@ -184,12 +184,4 @@ import Testing
             branchOwnership: branchOwnership
         )
     }
-}
-
-private final class WorkspaceConfirmationMemoryStore: PersistenceStoreProtocol {
-    func readIfExists<T>(_ type: T.Type, from url: URL) throws -> T? where T: Decodable {
-        nil
-    }
-
-    func write<T>(_ value: T, to url: URL) throws where T: Encodable {}
 }

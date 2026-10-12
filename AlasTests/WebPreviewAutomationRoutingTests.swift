@@ -5,11 +5,6 @@ import WebKit
 
 @MainActor
 struct WebPreviewAutomationRoutingTests {
-    private struct MemoryStore: PersistenceStoreProtocol {
-        func write<T: Encodable>(_: T, to _: URL) throws {}
-        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
-    }
-
     @Test func sessionOwnerWinsOverDifferentCwd() async {
         let worktree = Worktree(id: "b", projectId: "p", name: "b", branch: "b",
                                 path: URL(fileURLWithPath: "/b"), status: .clean, lastActivity: .now)
@@ -31,7 +26,7 @@ struct WebPreviewAutomationRoutingTests {
     }
 
     @Test func listIsOwnerScopedAndDoesNotLoadPageOrFocus() async throws {
-        let tabs = TabsManager(store: MemoryStore())
+        let tabs = TabsManager(store: TestPersistenceStore())
         let owner = SessionOwnerID.workspaceCheckout(UUID(), .local)
         _ = tabs.openWebPreview(owner: owner, url: URL(string: "https://example.com"))
         _ = tabs.openWebPreview(worktreeId: "other")
@@ -50,7 +45,7 @@ struct WebPreviewAutomationRoutingTests {
     }
 
     @Test func closedAndReopenedPreviewRejectsOldHandle() async throws {
-        let tabs = TabsManager(store: MemoryStore())
+        let tabs = TabsManager(store: TestPersistenceStore())
         let owner = SessionOwnerID.worktree("owner")
         _ = tabs.openWebPreview(owner: owner)
         let old = tabs.webPreviewBrowser(ownerKey: owner.storageKey, remoteHost: nil)
@@ -68,7 +63,7 @@ struct WebPreviewAutomationRoutingTests {
     }
 
     @Test func revokedAuthorizationDuringEndpointLookupDoesNotOpenTab() async {
-        let tabs = TabsManager(store: MemoryStore())
+        let tabs = TabsManager(store: TestPersistenceStore())
         var allowed = true
         let service = WebPreviewAutomationService(
             tabs: tabs, owner: .worktree("owner"), isAuthorized: { allowed },
@@ -83,7 +78,7 @@ struct WebPreviewAutomationRoutingTests {
     }
 
     @Test func remoteLoopbackEndpointDoesNotCreateBrowser() async {
-        let tabs = TabsManager(store: MemoryStore())
+        let tabs = TabsManager(store: TestPersistenceStore())
         let service = WebPreviewAutomationService(
             tabs: tabs, owner: .worktree("remote"), isAuthorized: { true },
             resolveOpen: { _ in .init(url: URL(string: "http://127.0.0.1:3000"), remoteHost: "devbox") },
@@ -94,7 +89,7 @@ struct WebPreviewAutomationRoutingTests {
     }
 
     @Test func busyOpenDoesNotChangePersistedURLOrBrowserHost() async throws {
-        let tabs = TabsManager(store: MemoryStore())
+        let tabs = TabsManager(store: TestPersistenceStore())
         let owner = SessionOwnerID.worktree("busy-owner")
         let originalURL = URL(string: "https://example.com/original")!
         let tab = tabs.openWebPreview(owner: owner, url: originalURL)
@@ -118,7 +113,7 @@ struct WebPreviewAutomationRoutingTests {
     }
 
     @Test func backgroundNavigationPersistsURLWithoutActivatingPreview() throws {
-        let tabs = TabsManager(store: MemoryStore())
+        let tabs = TabsManager(store: TestPersistenceStore())
         let owner = SessionOwnerID.worktree("background-owner")
         _ = tabs.openWebPreview(owner: owner)
         let browser = tabs.webPreviewBrowser(ownerKey: owner.storageKey, remoteHost: nil)
@@ -135,7 +130,7 @@ struct WebPreviewAutomationRoutingTests {
     }
 
     @Test func remoteDNSAliasIsRejectedBeforeTabCreation() async {
-        let tabs = TabsManager(store: MemoryStore())
+        let tabs = TabsManager(store: TestPersistenceStore())
         let service = WebPreviewAutomationService(
             tabs: tabs, owner: .worktree("remote"), isAuthorized: { true },
             resolveOpen: { _ in .init(url: URL(string: "http://local-alias:3000"), remoteHost: "devbox") },

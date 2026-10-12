@@ -5,11 +5,6 @@ import Testing
 @MainActor
 @Suite("ACPSessionManager fork attach")
 struct ACPSessionForkAttachTests {
-    private struct MemoryStore: PersistenceStoreProtocol {
-        func write<T: Encodable>(_: T, to _: URL) throws {}
-        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
-    }
-
     @Test("negotiating fork uses native ACP and persists the returned remote session")
     func negotiatingForkUsesNativeACP() async throws {
         let store = try seededForkStore()
@@ -231,7 +226,7 @@ struct ACPSessionForkAttachTests {
         #expect(source.queue.count == 1)
         #expect(submitCompleted == true)
         #expect(
-            AppState(store: MemoryStore()).retainedACPSessionCleanupDelayForTesting(
+            AppState(store: TestPersistenceStore()).retainedACPSessionCleanupDelayForTesting(
                 manager: manager,
                 sessionId: source.id
             ) == .seconds(30)
