@@ -111,6 +111,7 @@ final class AppKitDiffScrollerReconciler {
         }
 
         let previousScrollY = scrollView.scrollY
+        pool.discardParked(notIn: Set(ids))
         specsByID = nextSpecs
         orderedIDs = ids
         pinnedRowIDs = nextPinnedRowIDs
@@ -318,7 +319,7 @@ final class AppKitDiffScrollerReconciler {
                 let result = pool.view(for: spec)
                 let view = result.view
                 if view.superview !== scrollView.flippedDocumentView {
-                    scrollView.flippedDocumentView.addSubview(view)
+                    view.attach(to: scrollView.flippedDocumentView)
                 }
                 let shouldMeasure = result.contentChanged
                     || view.lastMeasuredWidth != contentWidth

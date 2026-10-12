@@ -151,4 +151,40 @@ struct DiffReviewScrollSpyTests {
         #expect(changed == last)
         #expect(unchanged == nil)
     }
+
+    @Test @MainActor func scrollSpySelectionWaitsForScrollingToSettle() async throws {
+        let spy = DiffReviewScrollSpySelection(settleInterval: 0.1)
+        var settled: [DiffReviewFileID] = []
+        spy.onSettle = { settled.append($0) }
+        let first = DiffReviewFileID(namespace: "commit", path: "a.swift")
+        let second = DiffReviewFileID(namespace: "commit", path: "b.swift")
+
+        spy.report(first)
+        spy.report(second)
+        // Keep scrolling past the settle interval: nothing reaches the binding.
+        let movingUntil = ContinuousClock.now + .milliseconds(250)
+        while ContinuousClock.now < movingUntil {
+            spy.userDidScroll()
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(settled.isEmpty)
+        #expect(spy.liveFileID == second)
+
+        try await eventually("scroll spy to settle") { !settled.isEmpty }
+        #expect(settled == [second])
+        #expect(spy.liveFileID == nil)
+    }
+
+    @Test @MainActor func scrollSpySelectionSettlesImmediatelyOnRequest() {
+        let spy = DiffReviewScrollSpySelection()
+        var settled: [DiffReviewFileID] = []
+        spy.onSettle = { settled.append($0) }
+        let file = DiffReviewFileID(namespace: "commit", path: "a.swift")
+
+        spy.report(file)
+        spy.settle()
+        spy.settle()
+
+        #expect(settled == [file])
+    }
 }

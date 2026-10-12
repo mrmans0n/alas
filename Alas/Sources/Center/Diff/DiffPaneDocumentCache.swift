@@ -16,7 +16,10 @@ import AppKit
 /// (`NSAttributedString` plus value-type metadata); text views copy the
 /// attributed string into their own storage on set, so sharing is safe.
 final class DiffPaneDocumentCache: @unchecked Sendable {
-    static let shared = DiffPaneDocumentCache()
+    /// Sized for a whole review: `DiffHighlightPrewarmer` warms every hunk
+    /// up front, so a limit below the review's hunk count evicts the hunks
+    /// the user reaches first and their rows tokenize on the scroll path.
+    static let shared = DiffPaneDocumentCache(entryLimit: 1024)
 
     private let lock = NSLock()
     private var splitStorage: [Int: SplitEntry] = [:]

@@ -439,6 +439,25 @@ struct AppKitDiffScrollerReconcilerTests {
         #expect(stack.tiling.row(withID: "row")?.height == 80)
     }
 
+    @Test("a row scrolled back into view keeps its host and measurement")
+    func rowScrolledBackIntoViewKeepsHostAndMeasurement() throws {
+        let stack = makeStack()
+        stack.reconciler.apply(plan: plan(), contentWidth: stack.scrollView.contentWidth)
+        stack.window.layoutIfNeeded()
+        let host = try #require(stack.pool.mountedView(id: "row-0"))
+        let measures = host.measureCountForTests
+
+        for target in ["row-150", "row-0"] {
+            stack.reconciler.scroll(to: .init(
+                targetID: target, fallbackID: nil, alignment: .top, animated: false, generation: 1
+            ))
+            stack.window.layoutIfNeeded()
+        }
+
+        #expect(stack.pool.mountedView(id: "row-0") === host)
+        #expect(host.measureCountForTests == measures)
+    }
+
     @Test("height-only resize lays out a new band without a full apply")
     func heightOnlyResizeRelayoutsBand() {
         let stack = makeStack()

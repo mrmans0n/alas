@@ -592,8 +592,8 @@ struct AppKitDiffReviewRowPlanTests {
         let groupRowID = plan.corePlan.rows.first { $0.id.contains(":group:") }?.id
 
         #expect(groupRowID != nil)
-        #expect(plan.lineTargetByKey[AppKitDiffReviewRowID.lineKey(fileID: file.id, side: .old, line: 1)] == groupRowID)
-        #expect(plan.lineTargetByKey[AppKitDiffReviewRowID.lineKey(fileID: file.id, side: .new, line: 1)] == groupRowID)
+        #expect(plan.lineTargets.rowID(fileID: file.id, side: .old, line: 1) == groupRowID)
+        #expect(plan.lineTargets.rowID(fileID: file.id, side: .new, line: 1) == groupRowID)
     }
 
     @Test func lineTargetsIncludeExpandedCollapsedContextRows() throws {
@@ -607,7 +607,7 @@ struct AppKitDiffReviewRowPlanTests {
         let plan = AppKitDiffReviewRowPlanBuilder.build(inputs: [input])
         let groupRowID = try #require(plan.corePlan.rows.first { $0.id.contains(":group:") }?.id)
 
-        #expect(plan.lineTargetByKey[AppKitDiffReviewRowID.lineKey(fileID: file.id, side: .new, line: 8)] == groupRowID)
+        #expect(plan.lineTargets.rowID(fileID: file.id, side: .new, line: 8) == groupRowID)
     }
 
     @Test func expandedCollapsedContextLinesTargetTheirSegmentWhenLocalAccessoriesExist() throws {
@@ -623,7 +623,7 @@ struct AppKitDiffReviewRowPlanTests {
         let input = AppKitDiffReviewRowInput(file: file, draftComments: [comment], state: state, theme: theme)
 
         let plan = AppKitDiffReviewRowPlanBuilder.build(inputs: [input])
-        let target = plan.lineTargetByKey[AppKitDiffReviewRowID.lineKey(fileID: file.id, side: .new, line: 8)]
+        let target = plan.lineTargets.rowID(fileID: file.id, side: .new, line: 8)
 
         #expect(target?.contains(":segment:") == true)
         #expect(plan.corePlan.rows.contains { $0.id == target })
@@ -635,8 +635,8 @@ struct AppKitDiffReviewRowPlanTests {
         let input = AppKitDiffReviewRowInput(file: file, draftComments: [draft], state: AppKitDiffReviewFileState(), theme: theme)
 
         let plan = AppKitDiffReviewRowPlanBuilder.build(inputs: [input])
-        let newTarget = plan.lineTargetByKey[AppKitDiffReviewRowID.lineKey(fileID: file.id, side: .new, line: 1)]
-        let oldTarget = plan.lineTargetByKey[AppKitDiffReviewRowID.lineKey(fileID: file.id, side: .old, line: 1)]
+        let newTarget = plan.lineTargets.rowID(fileID: file.id, side: .new, line: 1)
+        let oldTarget = plan.lineTargets.rowID(fileID: file.id, side: .old, line: 1)
 
         #expect(newTarget?.contains(":segment:") == true)
         #expect(oldTarget?.contains(":segment:") == true)

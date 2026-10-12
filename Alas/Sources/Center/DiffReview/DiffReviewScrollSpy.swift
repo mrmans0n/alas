@@ -1,4 +1,6 @@
+import Combine
 import CoreGraphics
+import Foundation
 
 struct DiffReviewSectionFrame: Equatable {
     let id: DiffReviewFileID
@@ -172,5 +174,64 @@ enum DiffReviewFileSectionHeightEstimator {
         }
 
         return max(minimumHeight, fileHeaderHeight + bodyHeight)
+    }
+}
+
+/// The file the scroll spy reports while the user scrolls a review.
+///
+/// Writing the surface's selected-file binding re-renders the whole review
+/// (row plan, rail, and the owning tab, which may persist the selection), and
+/// a fling crosses file boundaries a few times a second. Only the rail needs
+/// to follow along live, so it alone observes `liveFileID`; the binding gets
+/// the final file once scrolling has been still for `settleInterval`.
+@MainActor
+final class DiffReviewScrollSpySelection: ObservableObject {
+    @Published private(set) var liveFileID: DiffReviewFileID?
+    /// Writes the settled file to the selection binding.
+    var onSettle: (DiffReviewFileID) -> Void = { _ in }
+    private let settleInterval: TimeInterval
+    private var lastMotion: TimeInterval = 0
+    private var isSettleCheckScheduled = false
+
+    init(settleInterval: TimeInterval = 0.3) {
+        self.settleInterval = settleInterval
+    }
+
+    func report(_ fileID: DiffReviewFileID) {
+        if liveFileID != fileID { liveFileID = fileID }
+        userDidScroll()
+    }
+
+    /// Called on every user scroll tick; postpones the settle while moving.
+    func userDidScroll() {
+        lastMotion = ProcessInfo.processInfo.systemUptime
+        guard liveFileID != nil, !isSettleCheckScheduled else { return }
+        scheduleSettleCheck(after: settleInterval)
+    }
+
+    /// Hands any pending file to the binding now, e.g. when the surface goes away.
+    func settle() {
+        guard let fileID = liveFileID else { return }
+        liveFileID = nil
+        onSettle(fileID)
+    }
+
+    /// Drops a pending file the binding has been set past.
+    func discard() {
+        if liveFileID != nil { liveFileID = nil }
+    }
+
+    private func scheduleSettleCheck(after delay: TimeInterval) {
+        isSettleCheckScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self else { return }
+            isSettleCheckScheduled = false
+            let still = ProcessInfo.processInfo.systemUptime - lastMotion
+            if still >= settleInterval {
+                settle()
+            } else if liveFileID != nil {
+                scheduleSettleCheck(after: settleInterval - still)
+            }
+        }
     }
 }

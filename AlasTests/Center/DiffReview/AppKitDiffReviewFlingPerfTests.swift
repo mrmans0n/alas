@@ -5,8 +5,8 @@ import Testing
 
 /// Guards the two costs that made fling-scrolling a multi-file review hitch:
 /// syntax tokenization on the row-mount path, and a full row-height re-walk
-/// every time the row plan is rebuilt (which happens on every file-boundary
-/// crossing, because the active file changing re-renders the review surface).
+/// every time the row plan is rebuilt (which happens whenever the review
+/// surface re-renders, e.g. when the scroll spy's file settles).
 ///
 /// These assert on work avoided rather than wall-clock time so they stay
 /// meaningful on a loaded CI machine.
@@ -41,6 +41,29 @@ struct AppKitDiffReviewFlingPerfTests {
         let stats = HighlightSpanCache.shared.statisticsForTests
         #expect(stats.hits > 0)
         #expect(stats.misses == 0)
+    }
+
+    @Test func prewarmingAWholeReviewKeepsEveryHunkCached() throws {
+        let theme = try ThemeStore().current
+        let font = CenterTypography.resolveCodeFont(family: "SF Mono", size: 13)
+        // More hunks than the document cache used to hold: the prewarm then
+        // evicted the hunks a reader reaches first.
+        let groups = try (0..<20).flatMap { try #require(makeFile(index: $0, salt: "whole-review").displayModel?.groups) }
+        #expect(groups.count > 64)
+        DiffHighlightPrewarmer.prewarmSynchronously(
+            groups: groups, expandedCollapsedRowIDs: [], layoutMode: .split,
+            fileExtension: "swift", font: font, showWhitespace: false, theme: theme
+        )
+
+        DiffPaneDocumentCache.shared.resetStatisticsForTests()
+        for group in groups {
+            _ = DiffPaneDocumentCache.shared.splitResult(
+                rows: DiffPaneRowProjection.visibleRows(in: group, expandedCollapsedRowIDs: []),
+                fileExtension: "swift", font: font, showWhitespace: false, theme: theme
+            )
+        }
+
+        #expect(DiffPaneDocumentCache.shared.statisticsForTests.misses == 0)
     }
 
     @Test func rebuildingTheRowPlanDoesNotRewalkRowHeights() throws {

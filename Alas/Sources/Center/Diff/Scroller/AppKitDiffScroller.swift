@@ -6,6 +6,8 @@ struct AppKitDiffScroller: NSViewRepresentable {
     let plan: AppKitDiffRowPlan
     let scrollRequest: AppKitDiffScrollRequest?
     let onActiveOwnerChange: (String?) -> Void
+    /// Called on every user-driven viewport change.
+    var onUserScroll: () -> Void = {}
     let onScrollRequestCompletion: (Int) -> Void
     /// Drops the vertical scroller control. Scrolling itself is unaffected —
     /// wheel and trackpad still work — this only removes the chrome, for hosts
@@ -30,6 +32,7 @@ struct AppKitDiffScroller: NSViewRepresentable {
             plan: plan,
             scrollRequest: scrollRequest,
             onActiveOwnerChange: onActiveOwnerChange,
+            onUserScroll: onUserScroll,
             onScrollRequestCompletion: onScrollRequestCompletion
         )
     }
@@ -50,6 +53,7 @@ struct AppKitDiffScroller: NSViewRepresentable {
         private var activeScrollRequestGeneration: Int?
         private var latestActiveOwner: String?
         private var onActiveOwnerChange: ((String?) -> Void)?
+        private var onUserScroll: () -> Void = {}
         private var onScrollRequestCompletion: ((Int) -> Void)?
 
         #if DEBUG
@@ -88,10 +92,12 @@ struct AppKitDiffScroller: NSViewRepresentable {
             plan: AppKitDiffRowPlan,
             scrollRequest: AppKitDiffScrollRequest?,
             onActiveOwnerChange: @escaping (String?) -> Void,
+            onUserScroll: @escaping () -> Void = {},
             onScrollRequestCompletion: @escaping (Int) -> Void = { _ in }
         ) {
             mostRecentPlan = plan
             self.onActiveOwnerChange = onActiveOwnerChange
+            self.onUserScroll = onUserScroll
             self.onScrollRequestCompletion = onScrollRequestCompletion
             if let scrollRequest,
                scrollRequest.generation != lastConsumedRequestGeneration {
@@ -147,6 +153,7 @@ struct AppKitDiffScroller: NSViewRepresentable {
         private func userViewportDidChange() {
             guard let scrollView else { return }
             reconciler?.layoutVisibleRows()
+            onUserScroll()
             let owner = tiling.activeOwnerID(
                 viewportMinY: scrollView.scrollY,
                 viewportHeight: scrollView.viewportHeight
