@@ -709,8 +709,8 @@ struct AgentLauncherDialog: View {
     }
 
     private func adapterInstallRow(agent: AgentDefinition, reason: String) -> some View {
-        let installing = currentInstallContext(agentID: agent.id)
-            .map { installingAdapters.contains($0.key) } ?? false
+        let installing = currentAdapterKey(agentID: agent.id)
+            .map { installingAdapters.contains($0) } ?? false
         return HStack(spacing: 8) {
             if installing { ProgressView().controlSize(.small) }
             Text(installing
@@ -731,44 +731,33 @@ struct AgentLauncherDialog: View {
     }
 
     private func installAdapter(for agent: AgentDefinition) {
-        guard let context = currentInstallContext(agentID: agent.id),
-              !installingAdapters.contains(context.key)
+        guard let key = currentAdapterKey(agentID: agent.id),
+              !installingAdapters.contains(key)
         else { return }
-        installingAdapters.insert(context.key)
+        installingAdapters.insert(key)
         adapterInstallError = nil
         Task {
-            defer { installingAdapters.remove(context.key) }
+            defer { installingAdapters.remove(key) }
             do {
-                try await appState.acpAdapterInstallCoordinator.install(target: context.target, agentID: agent.id)
+                try await appState.acpAdapterInstallCoordinator.install(target: key.target, agentID: key.agentID)
             } catch {
-                if currentInstallContext(agentID: agent.id) == context {
+                if currentAdapterKey(agentID: agent.id) == key {
                     adapterInstallError = error.localizedDescription
                 }
                 return
             }
-            // The launcher can be closed, reopened, or moved to another
-            // checkout while npm runs. Refresh whichever browser now shows
-            // the same agent, owner, and target, and leave others alone.
-            guard currentInstallContext(agentID: agent.id) == context, openingSessionId == nil else { return }
+            // The launcher can be closed, reopened, or moved while npm runs.
+            // The adapter belongs to the agent and target, so refresh
+            // whichever browser now shows them, whatever its owner.
+            guard currentAdapterKey(agentID: agent.id) == key, openingSessionId == nil else { return }
             restartDiscovery(for: agent)
         }
     }
 
-    private struct AdapterInstallContext: Equatable {
-        let agentID: String
-        let owner: SessionOwnerID
-        let target: ACPAdapterTarget
-
-        var key: ACPAdapterUpdateKey { ACPAdapterUpdateKey(target: target, agentID: agentID) }
-    }
-
-    /// The browser's install context, or nil when it isn't showing `agentID`.
-    private func currentInstallContext(agentID: String) -> AdapterInstallContext? {
-        guard chatAgent?.id == agentID,
-              let owner = discoveryOwner,
-              let target = launcherAdapterTarget()
-        else { return nil }
-        return AdapterInstallContext(agentID: agentID, owner: owner, target: target)
+    /// The browser's adapter key, or nil when it isn't showing `agentID`.
+    private func currentAdapterKey(agentID: String) -> ACPAdapterUpdateKey? {
+        guard chatAgent?.id == agentID, let target = launcherAdapterTarget() else { return nil }
+        return ACPAdapterUpdateKey(target: target, agentID: agentID)
     }
 
     /// Where the launcher's agents run: the active workspace checkout's
