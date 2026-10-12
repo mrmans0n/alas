@@ -68,6 +68,7 @@ public final class AlasCoreContext {
         loadingFrom store: any PersistenceStoreProtocol = PersistenceStore(),
         projectsFile: URL = Paths.projectsFile,
         runHistoryStore: RunHistoryStore? = try? RunHistoryStore(),
+        workspaceStore: WorkspaceStore = WorkspaceStore(),
         makeSessionManager: @escaping @MainActor (SessionOwnerID, Worktree) -> ACPSessionManager = AlasCoreContext.defaultSessionManager
     ) throws {
         let file = try store.readIfExists(ProjectsFile.self, from: projectsFile) ?? ProjectsFile(projects: [])
@@ -76,6 +77,7 @@ public final class AlasCoreContext {
             store: store,
             projectsFile: projectsFile,
             runHistoryStore: runHistoryStore,
+            workspaceStore: workspaceStore,
             makeSessionManager: makeSessionManager
         )
     }
