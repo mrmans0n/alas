@@ -305,7 +305,7 @@ final class AppState {
     @ObservationIgnored let runScriptMonitorGrace: Duration
     /// Decides when scheduled runs start. Execution is delegated back here so
     /// a scheduled run is a manual run with a different trigger.
-    let runScheduler: RunScheduler
+    var runScheduler: RunScheduler { core.runScheduler }
     /// Scheduled chat sessions whose first turn a firing is waiting on.
     let scheduledAgentTurns = ScheduledAgentTurns()
     /// The models each ACP agent last advertised, for surfaces that configure
@@ -1577,7 +1577,6 @@ final class AppState {
         self.runScriptLocalMonitorGrace = runScriptLocalMonitorGrace
         self.runScriptMonitorGrace = runScriptMonitorGrace
         self.usageHistory = usageHistory
-        self.runScheduler = runScheduler ?? RunScheduler(store: store)
         self.acpModelCatalog = acpModelCatalog ?? ACPAgentModelCatalog(store: store)
         let workspaceBridge = workspaceSpacePersistenceBridge ?? WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore)
         self.workspacesManager = workspacesManager ?? WorkspacesManager(bridge: workspaceBridge)
@@ -1596,6 +1595,7 @@ final class AppState {
             store: store,
             runHistoryStore: runHistoryStore,
             workspaceStore: workspaceStore,
+            runScheduler: runScheduler,
             runCompletionWaiter: runScriptCompletionWaiter
         )
         let spacesManager = spacesFile.map(SpacesManager.init(file:))

@@ -17,6 +17,8 @@ public final class AlasCoreContext {
     public let runHistory: RunHistory
     /// Runs project scripts without a terminal.
     @ObservationIgnored public let runs: RunService
+    /// Decides when scheduled runs start; its runner decides how.
+    public let runScheduler: RunScheduler
     /// Waits for a run's completion file. Injectable so tests can settle runs.
     @ObservationIgnored public let runCompletionWaiter: RunCompletionWaiter
     /// Runs whose completion is being waited for, keyed by run ID.
@@ -49,11 +51,13 @@ public final class AlasCoreContext {
         runs: RunService = RunService(),
         runHistoryStore: RunHistoryStore? = try? RunHistoryStore(),
         workspaceStore: WorkspaceStore = WorkspaceStore(),
+        runScheduler: RunScheduler? = nil,
         runCompletionWaiter: @escaping RunCompletionWaiter = { try await RunScriptCompletionMonitor.wait(for: $0) },
         makeSessionManager: @escaping @MainActor (SessionOwnerID, Worktree) -> ACPSessionManager = AlasCoreContext.defaultSessionManager
     ) {
         self.projects = projects
         self.runs = runs
+        self.runScheduler = runScheduler ?? RunScheduler(store: store)
         self.runCompletionWaiter = runCompletionWaiter
         self.runHistory = RunHistory(store: runHistoryStore)
         self.workspaceStore = workspaceStore
