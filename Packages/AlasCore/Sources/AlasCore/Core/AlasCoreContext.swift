@@ -46,6 +46,9 @@ public final class AlasCoreContext {
     @ObservationIgnored public var resolveWorkspaceRepoHook: WorkspaceRepoHookResolving = { _ in nil }
     @ObservationIgnored private var workspaceCheckoutCoordinator: WorkspaceCheckoutCoordinator?
 
+    /// Headless runs in flight, so archiving their worktree can stop them.
+    @ObservationIgnored private var headlessRuns: [String: (worktreeID: String, task: Task<RunScriptCompletion, Error>)] = [:]
+
     @ObservationIgnored private let store: any PersistenceStoreProtocol
     @ObservationIgnored private let projectsFile: URL
     @ObservationIgnored private let makeSessionManager: @MainActor (SessionOwnerID, Worktree) -> ACPSessionManager
@@ -199,7 +202,10 @@ public final class AlasCoreContext {
         ))
         let completion: RunScriptCompletion
         do {
-            completion = try await runs.run(script, in: worktree, project: project, runID: runID)
+            let run = Task { try await runs.run(script, in: worktree, project: project, runID: runID) }
+            headlessRuns[runID] = (worktree.id, run)
+            defer { headlessRuns.removeValue(forKey: runID) }
+            completion = try await withTaskCancellationHandler { try await run.value } onCancel: { run.cancel() }
         } catch is CancellationError {
             finalizeRun(runRecords.finish(runID: runID, outcome: .stopped, at: Date()), capture: .unavailable)
             throw CancellationError()
@@ -239,12 +245,19 @@ public final class AlasCoreContext {
         return coordinator
     }
 
-    /// Hides `worktree` from its project and persists that. Its agent
-    /// sessions are shut down, and its active runs settle as lost but keep
-    /// their history. Nothing is removed from disk. A failed save throws and
+    /// Hides `worktree` from its project and persists that. Its headless
+    /// runs are stopped and its agent sessions shut down; its other active
+    /// runs settle as lost. All of them keep their history. Nothing is removed from disk. A failed save throws and
     /// leaves the worktree visible and untouched.
     public func archiveWorktree(_ worktree: Worktree) async throws {
         try setWorktreeHidden(worktree.path, projectID: worktree.projectId, hidden: true)
+        let running = headlessRuns.values.filter { $0.worktreeID == worktree.id }.map(\.task)
+        for run in running {
+            run.cancel()
+        }
+        for run in running {
+            _ = try? await run.value
+        }
         await disposeSessionManager(owner: .worktree(worktree.id))
         discardRuns(worktreeID: worktree.id, deletingHistory: false)
     }
@@ -258,11 +271,12 @@ public final class AlasCoreContext {
         guard projects.projects.contains(where: { $0.id == projectID }) else {
             throw ProjectCreationError.projectNotFound
         }
+        let wasHidden = projects.isWorktreeHidden(projectId: projectID, path: path)
         projects.setWorktreeHidden(projectId: projectID, path: path, hidden: hidden)
         do {
             try saveProjects()
         } catch {
-            projects.setWorktreeHidden(projectId: projectID, path: path, hidden: !hidden)
+            projects.setWorktreeHidden(projectId: projectID, path: path, hidden: wasHidden)
             throw error
         }
     }

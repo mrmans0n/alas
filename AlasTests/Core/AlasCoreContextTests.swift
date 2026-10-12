@@ -93,7 +93,25 @@ struct AlasCoreContextTests {
         }
         #expect(text.contains("hello from feature"))
 
+        let longURL = root.appendingPathComponent("long.sh")
+        try "sleep 300\n".write(to: longURL, atomically: true, encoding: .utf8)
+        let long = RunScript(
+            scope: .repo, fileName: "long.sh", fileURL: longURL,
+            displayName: "Long", onExit: .close, cwd: nil, isExecutable: false
+        )
+        let longRun = Task { try await context.runScript(long, in: worktree) }
+        let deadline = ContinuousClock.now + .seconds(30)
+        while context.runRecords.record(worktreeID: worktree.id, scriptKey: long.key) == nil, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let longID = try #require(context.runRecords.record(worktreeID: worktree.id, scriptKey: long.key)?.id)
+
         try await context.archiveWorktree(worktree)
+        await #expect(throws: CancellationError.self, "archiving stops the worktree's headless runs") {
+            _ = try await longRun.value
+        }
+        await context.runHistory.flush()
+        #expect(try await context.runHistory.store?.entry(id: longID)?.outcome == .stopped, "the stopped run keeps its history")
         #expect(!context.projects.visibleWorktrees(projectId: project.id).map(\.id).contains(worktree.id))
         #expect(context.sessionManagers[.worktree(worktree.id)] == nil)
         #expect(try await context.runHistory.store?.entry(id: record.id) != nil, "archiving keeps run history")
