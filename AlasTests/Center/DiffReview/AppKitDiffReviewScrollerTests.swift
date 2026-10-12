@@ -92,13 +92,13 @@ struct AppKitDiffReviewScrollerTests {
 
     @Test func lineCommandsTargetTheExactRowWhenTheLineIsRendered() {
         let fileID = fileID()
-        let key = AppKitDiffReviewRowID.lineKey(fileID: fileID, side: .new, line: 42)
+        let key = AppKitDiffReviewLineTargets.Key(fileID: fileID, side: .new, line: 42)
         let rowID = "file:\(fileID.rawValue):segment:seg:rows:block"
         let command = DiffReviewLineScrollCommand(fileID: fileID, side: .new, line: 42, generation: 1)
 
         let request = AppKitDiffReviewScrollRequestResolver.request(
             fileCommand: nil, inlineFeedbackCommand: nil, draftCommentCommand: nil,
-            lineCommand: command, plan: plan(fileID: fileID, lineTargetByKey: [key: rowID])
+            lineCommand: command, plan: plan(fileID: fileID, lineTargets: [key: rowID])
         )
 
         #expect(request?.targetID == rowID)
@@ -110,12 +110,12 @@ struct AppKitDiffReviewScrollerTests {
         let fileID = fileID()
         let rowID = "file:\(fileID.rawValue):segment:seg:rows:block"
         for side in [DiffReviewInlineFeedbackSide.new, .old] {
-            let key = AppKitDiffReviewRowID.lineKey(fileID: fileID, side: side, line: 42)
+            let key = AppKitDiffReviewLineTargets.Key(fileID: fileID, side: side, line: 42)
             let command = DiffReviewLineScrollCommand(fileID: fileID, side: .unknown, line: 42, generation: 1)
 
             let request = AppKitDiffReviewScrollRequestResolver.request(
                 fileCommand: nil, inlineFeedbackCommand: nil, draftCommentCommand: nil,
-                lineCommand: command, plan: plan(fileID: fileID, lineTargetByKey: [key: rowID])
+                lineCommand: command, plan: plan(fileID: fileID, lineTargets: [key: rowID])
             )
 
             #expect(request?.targetID == rowID)
@@ -138,12 +138,12 @@ struct AppKitDiffReviewScrollerTests {
 
     @Test func lineCommandsWithNoLineTargetTheFileHeaderDirectly() {
         let fileID = fileID()
-        let key = AppKitDiffReviewRowID.lineKey(fileID: fileID, side: .new, line: 42)
+        let key = AppKitDiffReviewLineTargets.Key(fileID: fileID, side: .new, line: 42)
         let command = DiffReviewLineScrollCommand(fileID: fileID, side: .new, line: nil, generation: 1)
 
         let request = AppKitDiffReviewScrollRequestResolver.request(
             fileCommand: nil, inlineFeedbackCommand: nil, draftCommentCommand: nil,
-            lineCommand: command, plan: plan(fileID: fileID, lineTargetByKey: [key: "should-not-be-used"])
+            lineCommand: command, plan: plan(fileID: fileID, lineTargets: [key: "should-not-be-used"])
         )
 
         #expect(request?.targetID == AppKitDiffReviewRowID.header(fileID: fileID))
@@ -195,14 +195,14 @@ struct AppKitDiffReviewScrollerTests {
         headerID: String? = nil,
         fallbackByTargetID: [String: String] = [:],
         placeholderByFileID: [DiffReviewFileID: String] = [:],
-        lineTargetByKey: [String: String] = [:]
+        lineTargets: [AppKitDiffReviewLineTargets.Key: String] = [:]
     ) -> AppKitDiffReviewRowPlan {
         .init(
             corePlan: .init(rows: []),
             fallbackByTargetID: fallbackByTargetID,
             headerByFileID: [fileID: headerID ?? AppKitDiffReviewRowID.header(fileID: fileID)],
             placeholderByFileID: placeholderByFileID,
-            lineTargetByKey: lineTargetByKey
+            lineTargets: .init(entries: lineTargets)
         )
     }
 }

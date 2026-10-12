@@ -36,9 +36,25 @@ struct AppKitDiffRowHostingPoolTests {
         #expect(builds == 2)
     }
 
-    @Test("released hosts are reused for a different row")
-    func reuse() {
+    @Test("released rows come back with their content")
+    func releasedRowsKeepTheirContent() {
         let pool = AppKitDiffRowHostingPool()
+        let first = pool.view(for: spec(id: "a", token: 1)).view
+        pool.release(id: "a")
+
+        let unchanged = pool.view(for: spec(id: "a", token: 1))
+        pool.release(id: "a")
+        let changed = pool.view(for: spec(id: "a", token: 2))
+
+        #expect(unchanged.view === first)
+        #expect(!unchanged.contentChanged)
+        #expect(changed.view === first)
+        #expect(changed.contentChanged)
+    }
+
+    @Test("released hosts are reused for a different row once the park is full")
+    func reuse() {
+        let pool = AppKitDiffRowHostingPool(maximumParkedHosts: 0)
         let first = pool.view(for: spec(id: "a", token: "a")).view
         pool.release(id: "a")
         let second = pool.view(for: spec(id: "b", token: "b")).view
@@ -47,7 +63,7 @@ struct AppKitDiffRowHostingPoolTests {
 
     @Test("reused hosts route intrinsic-size invalidation to their new row")
     func reusedHostRoutesInvalidationToNewID() {
-        let pool = AppKitDiffRowHostingPool()
+        let pool = AppKitDiffRowHostingPool(maximumParkedHosts: 0)
         var invalidatedIDs: [String] = []
         pool.onRowIntrinsicSizeInvalidated = { invalidatedIDs.append($0) }
         let view = pool.view(for: spec(id: "a", token: 1)).view

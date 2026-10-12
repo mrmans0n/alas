@@ -213,10 +213,24 @@ struct DiffPaneSegmentView: NSViewRepresentable {
 }
 
 final class DiffPaneTextDocumentContainerView: NSView, AppKitDiffScrollLineTargetProviding {
-    private let oldPane = DiffPaneTextScrollView()
-    private let newPane = DiffPaneTextScrollView()
-    private let stackedPane = DiffPaneTextScrollView()
+    // Panes are created on first use: a split row never needs the stacked
+    // pane and a stacked row never needs the old/new pair. Every pane of a
+    // mounted row lays out on each scroll tick, hidden or not.
+    private var builtOldPane: DiffPaneTextScrollView?
+    private var builtNewPane: DiffPaneTextScrollView?
+    private var builtStackedPane: DiffPaneTextScrollView?
     private let dividerView = NSView()
+    private var oldPane: DiffPaneTextScrollView { pane(\.builtOldPane) }
+    private var newPane: DiffPaneTextScrollView { pane(\.builtNewPane) }
+    private var stackedPane: DiffPaneTextScrollView { pane(\.builtStackedPane) }
+    private var builtPanes: [DiffPaneTextScrollView] {
+        [builtOldPane, builtNewPane, builtStackedPane].compactMap { $0 }
+    }
+
+    private var allowsReviewLineSelection = true
+    private var onReviewLineSelected: (DiffReviewLineAnchor) -> Void = { _ in }
+    private var onContextExpansion: DiffContextExpansionHandler = { _, _, _ in }
+    private var activeCommentHighlight: DiffReviewCommentHighlight?
 
     private var layoutMode: DiffLayoutMode = .split
     private var measuredHeight: CGFloat = 0
@@ -256,10 +270,48 @@ final class DiffPaneTextDocumentContainerView: NSView, AppKitDiffScrollLineTarge
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        addSubview(oldPane)
-        addSubview(newPane)
-        addSubview(stackedPane)
         addSubview(dividerView)
+    }
+
+    private func pane(_ slot: ReferenceWritableKeyPath<DiffPaneTextDocumentContainerView, DiffPaneTextScrollView?>) -> DiffPaneTextScrollView {
+        if let pane = self[keyPath: slot] { return pane }
+        let pane = DiffPaneTextScrollView()
+        pane.allowsReviewLineSelection = allowsReviewLineSelection
+        pane.onReviewLineSelected = onReviewLineSelected
+        pane.onContextExpansion = onContextExpansion
+        pane.activeCommentHighlight = activeCommentHighlight
+        pane.isHidden = !paneIsVisible(slot)
+        addSubview(pane, positioned: .below, relativeTo: dividerView)
+        self[keyPath: slot] = pane
+        return pane
+    }
+
+    private func applyInteraction(
+        allowsReviewLineSelection: Bool,
+        onReviewLineSelected: @escaping (DiffReviewLineAnchor) -> Void,
+        onContextExpansion: @escaping DiffContextExpansionHandler,
+        activeCommentHighlight: DiffReviewCommentHighlight?
+    ) {
+        self.allowsReviewLineSelection = allowsReviewLineSelection
+        self.onReviewLineSelected = onReviewLineSelected
+        self.onContextExpansion = onContextExpansion
+        let highlightChanged = self.activeCommentHighlight != activeCommentHighlight
+        self.activeCommentHighlight = activeCommentHighlight
+        for pane in builtPanes {
+            pane.allowsReviewLineSelection = allowsReviewLineSelection
+            pane.onReviewLineSelected = onReviewLineSelected
+            pane.onContextExpansion = onContextExpansion
+            if highlightChanged {
+                pane.activeCommentHighlight = activeCommentHighlight
+            }
+        }
+    }
+
+    private func paneIsVisible(_ slot: ReferenceWritableKeyPath<DiffPaneTextDocumentContainerView, DiffPaneTextScrollView?>) -> Bool {
+        switch layoutMode {
+        case .split: slot != \.builtStackedPane
+        case .stacked: slot == \.builtStackedPane
+        }
     }
 
     required init?(coder: NSCoder) {
@@ -281,20 +333,12 @@ final class DiffPaneTextDocumentContainerView: NSView, AppKitDiffScrollLineTarge
         onReviewLineSelected: @escaping (DiffReviewLineAnchor) -> Void = { _ in },
         onContextExpansion: @escaping DiffContextExpansionHandler = { _, _, _ in }
     ) {
-        oldPane.allowsReviewLineSelection = allowsReviewLineSelection
-        newPane.allowsReviewLineSelection = allowsReviewLineSelection
-        stackedPane.allowsReviewLineSelection = allowsReviewLineSelection
-        oldPane.onReviewLineSelected = onReviewLineSelected
-        newPane.onReviewLineSelected = onReviewLineSelected
-        stackedPane.onReviewLineSelected = onReviewLineSelected
-        oldPane.onContextExpansion = onContextExpansion
-        newPane.onContextExpansion = onContextExpansion
-        stackedPane.onContextExpansion = onContextExpansion
-        if oldPane.activeCommentHighlight != activeCommentHighlight {
-            oldPane.activeCommentHighlight = activeCommentHighlight
-            newPane.activeCommentHighlight = activeCommentHighlight
-            stackedPane.activeCommentHighlight = activeCommentHighlight
-        }
+        applyInteraction(
+            allowsReviewLineSelection: allowsReviewLineSelection,
+            onReviewLineSelected: onReviewLineSelected,
+            onContextExpansion: onContextExpansion,
+            activeCommentHighlight: activeCommentHighlight
+        )
 
         let signature = UpdateSignature(
             groupID: group.id,
@@ -353,7 +397,7 @@ final class DiffPaneTextDocumentContainerView: NSView, AppKitDiffScrollLineTarge
                 allowedLSPSide: .new,
                 onContextExpansion: onContextExpansion
             )
-            stackedPane.clearLSPContext()
+            builtStackedPane?.clearLSPContext()
             measuredHeight = max(oldPane.documentHeight, newPane.documentHeight)
         case .stacked:
             let result = DiffPaneDocumentCache.shared.stackedResult(
@@ -373,8 +417,8 @@ final class DiffPaneTextDocumentContainerView: NSView, AppKitDiffScrollLineTarge
                 allowedLSPSide: .new,
                 onContextExpansion: onContextExpansion
             )
-            oldPane.clearLSPContext()
-            newPane.clearLSPContext()
+            builtOldPane?.clearLSPContext()
+            builtNewPane?.clearLSPContext()
             measuredHeight = stackedPane.documentHeight
         }
 
@@ -463,10 +507,10 @@ final class DiffPaneTextDocumentContainerView: NSView, AppKitDiffScrollLineTarge
 
     private func updateVisibility() {
         let split = layoutMode == .split
-        oldPane.isHidden = !split
-        newPane.isHidden = !split
+        builtOldPane?.isHidden = !split
+        builtNewPane?.isHidden = !split
         dividerView.isHidden = !split
-        stackedPane.isHidden = split
+        builtStackedPane?.isHidden = split
     }
 
     private func lineLabels(from attributedString: NSAttributedString) -> [String] {
@@ -488,20 +532,12 @@ final class DiffPaneTextDocumentContainerView: NSView, AppKitDiffScrollLineTarge
         onReviewLineSelected: @escaping (DiffReviewLineAnchor) -> Void = { _ in },
         onContextExpansion: @escaping DiffContextExpansionHandler = { _, _, _ in }
     ) {
-        oldPane.allowsReviewLineSelection = allowsReviewLineSelection
-        newPane.allowsReviewLineSelection = allowsReviewLineSelection
-        stackedPane.allowsReviewLineSelection = allowsReviewLineSelection
-        oldPane.onReviewLineSelected = onReviewLineSelected
-        newPane.onReviewLineSelected = onReviewLineSelected
-        stackedPane.onReviewLineSelected = onReviewLineSelected
-        oldPane.onContextExpansion = onContextExpansion
-        newPane.onContextExpansion = onContextExpansion
-        stackedPane.onContextExpansion = onContextExpansion
-        if oldPane.activeCommentHighlight != activeCommentHighlight {
-            oldPane.activeCommentHighlight = activeCommentHighlight
-            newPane.activeCommentHighlight = activeCommentHighlight
-            stackedPane.activeCommentHighlight = activeCommentHighlight
-        }
+        applyInteraction(
+            allowsReviewLineSelection: allowsReviewLineSelection,
+            onReviewLineSelected: onReviewLineSelected,
+            onContextExpansion: onContextExpansion,
+            activeCommentHighlight: activeCommentHighlight
+        )
 
         let signature = RowsUpdateSignature(
             rowsSignature: rowsSignature ?? DiffDisplayRowsSignature(rows),
@@ -552,7 +588,7 @@ final class DiffPaneTextDocumentContainerView: NSView, AppKitDiffScrollLineTarge
                 allowedLSPSide: .new,
                 onContextExpansion: onContextExpansion
             )
-            stackedPane.clearLSPContext()
+            builtStackedPane?.clearLSPContext()
             measuredHeight = max(oldPane.documentHeight, newPane.documentHeight)
         case .stacked:
             let result = DiffPaneDocumentCache.shared.stackedResult(
@@ -573,8 +609,8 @@ final class DiffPaneTextDocumentContainerView: NSView, AppKitDiffScrollLineTarge
                 allowedLSPSide: .new,
                 onContextExpansion: onContextExpansion
             )
-            oldPane.clearLSPContext()
-            newPane.clearLSPContext()
+            builtOldPane?.clearLSPContext()
+            builtNewPane?.clearLSPContext()
             measuredHeight = stackedPane.documentHeight
         }
 
@@ -987,6 +1023,24 @@ final class DiffPaneTextScrollView: NSScrollView {
             shouldResetHorizontalOrigin = false
         }
         (verticalRulerView as? DiffPaneLineNumberRulerView)?.rowHeight = lineHeight()
+        Self.pinToEightBitContents(textView.layer)
+        Self.pinToEightBitContents(verticalRulerView?.layer)
+    }
+
+    /// AppKit gives the code and ruler views' content layers an automatic
+    /// format, which on a wide-gamut display is 16 bits per channel. Every
+    /// strip exposed by scrolling is then rasterized and color-matched into
+    /// that deeper store on the main thread. Everything these views draw is
+    /// sRGB, so 8 bits loses nothing. Runs on every layout (which AppKit
+    /// already does on each scroll tick) to catch layers AppKit adds later;
+    /// layers already pinned are left alone, since changing the format
+    /// discards their contents.
+    private static func pinToEightBitContents(_ layer: CALayer?) {
+        guard let layer else { return }
+        if layer.contentsFormat != .RGBA8Uint {
+            layer.contentsFormat = .RGBA8Uint
+        }
+        layer.sublayers?.forEach(pinToEightBitContents)
     }
 
     override func tile() {

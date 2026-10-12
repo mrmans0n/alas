@@ -52,8 +52,8 @@ struct DiffReviewSurfaceTests {
 
             scroller.contentView.scroll(to: NSPoint(x: 0, y: 250))
             scroller.reflectScrolledClipView(scroller.contentView)
-            await drainSwiftUI(controller.view)
-            #expect(model.selected == files[2].id)
+            // The scroll spy hands the file to the binding once scrolling settles.
+            try await eventually("scrolled file to become the selection") { model.selected == files[2].id }
 
             model.inlineFeedbackCommand = .init(feedbackID: "feedback", fileID: files[3].id, generation: 1)
             pumpMainRunLoop(seconds: 0.2)

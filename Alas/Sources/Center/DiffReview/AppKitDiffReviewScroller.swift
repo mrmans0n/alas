@@ -151,8 +151,7 @@ enum AppKitDiffReviewScrollRequestResolver {
         let exactTarget = command.line.flatMap { line -> (rowID: String, side: DiffReviewInlineFeedbackSide, line: Int)? in
             let sides: [DiffReviewInlineFeedbackSide] = command.side == .unknown ? [.new, .old] : [command.side]
             for side in sides {
-                let key = AppKitDiffReviewRowID.lineKey(fileID: command.fileID, side: side, line: line)
-                if let rowID = plan.lineTargetByKey[key] {
+                if let rowID = plan.lineTargets.rowID(fileID: command.fileID, side: side, line: line) {
                     return (rowID, side, line)
                 }
             }
@@ -204,6 +203,8 @@ struct AppKitDiffReviewScroller: View {
     var lineCommand: DiffReviewLineScrollCommand? = nil
     let onNavigationFile: (DiffReviewFileID, Int) -> Void
     let onActiveFileChange: (DiffReviewFileID) -> Void
+    /// Called on every user scroll tick.
+    var onUserScroll: () -> Void = {}
     let onProgrammaticScrollCompletion: (Int) -> Void
     var onDraftCommentReveal: (DiffReviewDraftCommentScrollCommand, Bool) -> Void = { _, _ in }
     /// Rows appended after the last file section, e.g. the inline draft
@@ -225,6 +226,7 @@ struct AppKitDiffReviewScroller: View {
                 else { return }
                 onActiveFileChange(fileID)
             },
+            onUserScroll: onUserScroll,
             onScrollRequestCompletion: { generation in
                 onProgrammaticScrollCompletion(generation)
                 guard let pending = pendingCommentReveal, pending.generation == generation else { return }

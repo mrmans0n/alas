@@ -105,14 +105,11 @@ struct DiffReviewSurface: View {
     @State private var scrollCommand: DiffReviewScrollCommand?
     @State private var appKitProgrammaticScroll: AppKitDiffReviewProgrammaticScroll?
     @State private var appKitScrollCompletionGate = AppKitDiffReviewScrollCompletionGate()
+    /// Held, not observed: only the rail re-renders as the scroll spy moves.
+    @State private var scrollSpy = DiffReviewScrollSpySelection()
     @State private var contextExpandedFileIDs: Set<DiffReviewFileID> = []
     @State private var synchronizedFileSetKey: String?
     @StateObject private var appKitPresentationStore = AppKitDiffReviewPresentationStore()
-    /// The file the scrollspy last reported as scrolled into view. Used to tell
-    /// cross-file comment navigation (file section not yet realized → needs a
-    /// two-phase scroll) from same-file navigation (section already realized →
-    /// a direct scroll suffices and avoids a detour through the file header).
-    @State private var scrollSpyActiveFileID: DiffReviewFileID?
 
     init(
         session: DiffReviewLoadedSession,
@@ -279,6 +276,9 @@ struct DiffReviewSurface: View {
         .onAppear {
             synchronizeSelectionWithSession()
         }
+        .onDisappear {
+            scrollSpy.settle()
+        }
         .onChange(of: fileSetKey) { _, _ in
             synchronizeSelectionWithSession()
         }
@@ -288,24 +288,33 @@ struct DiffReviewSurface: View {
         firstFileID: DiffReviewFileID,
         summaryPlacement: DiffReviewSummaryPlacement
     ) -> some View {
-        let selectedBinding = Binding<DiffReviewFileID>(
-            get: { selectedFileID ?? firstFileID },
-            set: { selectedFileID = $0 }
-        )
+        let scrollSpy = scrollSpy
+        let selection = $selectedFileID
+        scrollSpy.onSettle = { fileID in
+            if selection.wrappedValue != fileID { selection.wrappedValue = fileID }
+        }
 
         return HStack(spacing: 0) {
-            DiffReviewRail(
-                session: session.summary,
-                selectedFileID: selectedBinding,
-                collapsed: $railCollapsed,
-                displayControls: showsRailDisplayControls ? DiffReviewDisplayControlBindings(
-                    layoutMode: $layoutMode,
-                    wrapLines: $wrapLines,
-                    showWhitespace: $showWhitespace
-                ) : nil,
-                threads: threads,
-                onSelectFile: scrollToFile
-            )
+            DiffReviewScrollSpyRail(scrollSpy: scrollSpy) { liveFileID in
+                DiffReviewRail(
+                    session: session.summary,
+                    selectedFileID: Binding(
+                        get: { liveFileID ?? selection.wrappedValue ?? firstFileID },
+                        set: {
+                            scrollSpy.discard()
+                            selection.wrappedValue = $0
+                        }
+                    ),
+                    collapsed: $railCollapsed,
+                    displayControls: showsRailDisplayControls ? DiffReviewDisplayControlBindings(
+                        layoutMode: $layoutMode,
+                        wrapLines: $wrapLines,
+                        showWhitespace: $showWhitespace
+                    ) : nil,
+                    threads: threads,
+                    onSelectFile: scrollToFile
+                )
+            }
             appKitMainReviewStream(session, trailingRows: inlineSummaryRows(for: summaryPlacement))
             if shouldShowReviewSummaryRail, summaryPlacement == .rail {
                 ReviewDraftSummaryRail(
@@ -341,6 +350,7 @@ struct DiffReviewSurface: View {
             lineCommand: lineScrollCommand,
             onNavigationFile: selectAppKitNavigationFile,
             onActiveFileChange: updateSelectedFileFromAppKitViewport,
+            onUserScroll: { scrollSpy.userDidScroll() },
             onProgrammaticScrollCompletion: finishAppKitProgrammaticScroll,
             onDraftCommentReveal: onDraftCommentReveal,
             trailingRows: trailingRows
@@ -533,6 +543,7 @@ struct DiffReviewSurface: View {
 
     private func synchronizeSelectionWithSession() {
         let previousFileSetKey = synchronizedFileSetKey
+        scrollSpy.discard()
         let previousSelection = selectedFileID
         let result = DiffReviewSurfaceSelectionSync.synchronize(
             current: previousSelection,
@@ -557,24 +568,24 @@ struct DiffReviewSurface: View {
     }
 
     private func scrollToFile(_ id: DiffReviewFileID) {
+        scrollSpy.discard()
         selectedFileID = id
         queueProgrammaticFileScroll(to: id)
     }
 
     private func queueProgrammaticFileScroll(to id: DiffReviewFileID) {
-        scrollSpyActiveFileID = id
         scrollCommand = scrollCommandController.command(to: id)
     }
 
     private func updateSelectedFileFromAppKitViewport(_ fileID: DiffReviewFileID) {
-        guard programmaticScroll.acceptsScrollSpyUpdate(for: fileID), fileID != selectedFileID else { return }
-        selectedFileID = fileID
-        scrollSpyActiveFileID = fileID
+        guard programmaticScroll.acceptsScrollSpyUpdate(for: fileID) else { return }
+        guard fileID != (scrollSpy.liveFileID ?? selectedFileID) else { return }
+        scrollSpy.report(fileID)
     }
 
     private func selectAppKitNavigationFile(_ fileID: DiffReviewFileID, requestGeneration: Int) {
+        scrollSpy.discard()
         selectedFileID = fileID
-        scrollSpyActiveFileID = fileID
         let token = programmaticScroll.beginProgrammaticScroll(to: fileID)
         appKitProgrammaticScroll = .init(requestGeneration: requestGeneration, token: token)
         appKitScrollCompletionGate.begin(requestGeneration: requestGeneration)
@@ -711,5 +722,15 @@ extension DiffReviewFileSectionHeightEstimator {
         }
 
         return estimatedHeight(for: file) + fileLevelHeight + groupHeights + draftFileLevelHeight + draftGroupHeights
+    }
+}
+
+/// Re-renders only the rail when the scroll spy's live file changes.
+private struct DiffReviewScrollSpyRail<Content: View>: View {
+    @ObservedObject var scrollSpy: DiffReviewScrollSpySelection
+    @ViewBuilder let content: (DiffReviewFileID?) -> Content
+
+    var body: some View {
+        content(scrollSpy.liveFileID)
     }
 }

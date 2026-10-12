@@ -23,11 +23,6 @@ enum AppKitDiffReviewRowID {
 
     static func thread(fileID: DiffReviewFileID, threadID: String) -> String { "file:\(fileID.rawValue):thread:\(threadID)" }
     static func annotation(fileID: DiffReviewFileID, annotationID: String) -> String { "file:\(fileID.rawValue):annotation:\(annotationID)" }
-    /// Lookup key (not a row id) for `AppKitDiffReviewRowPlan.lineTargetByKey`,
-    /// mapping a raw file/side/line to whichever row currently renders it.
-    static func lineKey(fileID: DiffReviewFileID, side: DiffReviewInlineFeedbackSide, line: Int) -> String {
-        "file:\(fileID.rawValue):line:\(side.rawValue):\(line)"
-    }
     /// The draft review summary appended after the diff stack when the
     /// surface is too narrow for the trailing rail.
     static let reviewSummary = "review:summary"
@@ -360,9 +355,55 @@ struct AppKitDiffReviewRowPlan {
     let fallbackByTargetID: [String: String]
     let headerByFileID: [DiffReviewFileID: String]
     let placeholderByFileID: [DiffReviewFileID: String]
-    /// Maps `AppKitDiffReviewRowID.lineKey(...)` to the row rendering that
-    /// line, when the file's diff is expanded and the line is visible.
-    var lineTargetByKey: [String: String] = [:]
+    /// The row rendering each line, when the file's diff is expanded and the
+    /// line is visible.
+    var lineTargets = AppKitDiffReviewLineTargets()
+}
+
+/// Which row renders a given file line, resolved when a line scroll asks.
+///
+/// The plan is rebuilt on every scroll-spy file change, and keying every
+/// line of every file up front was half of that rebuild. Recording each
+/// row's visible lines costs nothing; only the rare lookup scans them.
+struct AppKitDiffReviewLineTargets {
+    struct Key: Hashable {
+        let fileID: DiffReviewFileID
+        let side: DiffReviewInlineFeedbackSide
+        let line: Int
+    }
+
+    private struct Span {
+        let fileID: DiffReviewFileID
+        let rowID: String
+        let rows: [DiffDisplayRow]
+    }
+
+    private var spans: [Span] = []
+    private var entries: [Key: String] = [:]
+
+    init(entries: [Key: String] = [:]) {
+        self.entries = entries
+    }
+
+    mutating func append(_ rows: [DiffDisplayRow], fileID: DiffReviewFileID, rowID: String) {
+        spans.append(.init(fileID: fileID, rowID: rowID, rows: rows))
+    }
+
+    /// The last row recorded for the line wins, matching plan order.
+    func rowID(fileID: DiffReviewFileID, side: DiffReviewInlineFeedbackSide, line: Int) -> String? {
+        if let rowID = entries[Key(fileID: fileID, side: side, line: line)] { return rowID }
+        for span in spans.reversed() where span.fileID == fileID {
+            let rendersLine = span.rows.contains { row in
+                switch side {
+                case .old: row.old?.lineNumber == line
+                case .new: row.new?.lineNumber == line
+                case .unknown: false
+                }
+            }
+            if rendersLine { return span.rowID }
+        }
+        return nil
+    }
 }
 
 @MainActor
@@ -390,7 +431,7 @@ enum AppKitDiffReviewRowPlanBuilder {
         var fallbackByTargetID: [String: String] = [:]
         var headerByFileID: [DiffReviewFileID: String] = [:]
         var placeholderByFileID: [DiffReviewFileID: String] = [:]
-        var lineTargetByKey: [String: String] = [:]
+        var lineTargets = AppKitDiffReviewLineTargets()
         let eligibility = DiffReviewRenderEligibility.renderRows(
             ordered: inputs.map(\.file.id),
             renderedRowCounts: inputs.map { $0.file.displayModel.map(DiffReviewRenderBudget.renderedRowCount) },
@@ -474,7 +515,7 @@ enum AppKitDiffReviewRowPlanBuilder {
                 mapTargetsDirectly(input, into: &fallbackByTargetID)
             } else if let context = renderContext(for: input) {
                 appendFileAccessories(input, context: context, rows: &rows, fallbacks: &fallbackByTargetID)
-                appendTextRows(context, input: input, into: &rows, fallbacks: &fallbackByTargetID, lineTargets: &lineTargetByKey)
+                appendTextRows(context, input: input, into: &rows, fallbacks: &fallbackByTargetID, lineTargets: &lineTargets)
             }
 
             let fileRowEndIndex = rows.count
@@ -490,7 +531,7 @@ enum AppKitDiffReviewRowPlanBuilder {
         return AppKitDiffReviewRowPlan(
             corePlan: .init(rows: rows), fallbackByTargetID: fallbackByTargetID,
             headerByFileID: headerByFileID, placeholderByFileID: placeholderByFileID,
-            lineTargetByKey: lineTargetByKey
+            lineTargets: lineTargets
         )
     }
 
@@ -567,7 +608,7 @@ enum AppKitDiffReviewRowPlanBuilder {
         input: AppKitDiffReviewRowInput,
         into rows: inout [AppKitDiffRowSpec],
         fallbacks: inout [String: String],
-        lineTargets: inout [String: String]
+        lineTargets: inout AppKitDiffReviewLineTargets
     ) {
         let fusions = DiffReviewHunkFusionResolver.states(for: context.groups)
         for (groupIndex, group) in context.groups.enumerated() {
@@ -585,7 +626,7 @@ enum AppKitDiffReviewRowPlanBuilder {
                     in: group.displayGroup,
                     expandedCollapsedRowIDs: input.state.expandedCollapsedRowIDs
                 )
-                mapLines(visibleRows, fileID: input.file.id, to: groupID, into: &lineTargets)
+                lineTargets.append(visibleRows, fileID: input.file.id, rowID: groupID)
                 let rowInput = hunkInput(group: group, context: context, input: input, fusion: fusions[groupIndex])
                 let hunkPlan = DiffPaneRowPlanBuilder.build(input: rowInput, state: input.state.hunkPresentationState)
                 guard let hunk = hunkPlan.rows.first else { continue }
@@ -617,7 +658,7 @@ enum AppKitDiffReviewRowPlanBuilder {
                             in: rowBlock.rows,
                             expandedCollapsedRowIDs: input.state.expandedCollapsedRowIDs
                         )
-                        mapLines(visibleRows, fileID: input.file.id, to: blockID, into: &lineTargets)
+                        lineTargets.append(visibleRows, fileID: input.file.id, rowID: blockID)
                     case let .thread(thread):
                         let threadID = AppKitDiffReviewRowID.thread(fileID: input.file.id, threadID: thread.id)
                         append(
@@ -818,22 +859,6 @@ enum AppKitDiffReviewRowPlanBuilder {
     /// Called once per hunk with the coarse group row, then again per
     /// segment block when the group also renders granular blocks — the
     /// later, finer-grained call overwrites the coarser mapping.
-    private static func mapLines(
-        _ displayRows: [DiffDisplayRow],
-        fileID: DiffReviewFileID,
-        to rowID: String,
-        into lineTargets: inout [String: String]
-    ) {
-        for row in displayRows {
-            if let line = row.old?.lineNumber {
-                lineTargets[AppKitDiffReviewRowID.lineKey(fileID: fileID, side: .old, line: line)] = rowID
-            }
-            if let line = row.new?.lineNumber {
-                lineTargets[AppKitDiffReviewRowID.lineKey(fileID: fileID, side: .new, line: line)] = rowID
-            }
-        }
-    }
-
     private static func append(
         _ rows: inout [AppKitDiffRowSpec], id: String, input: AppKitDiffReviewRowInput,
         signature: Int, height: CGFloat, retention: AppKitDiffRowRetention = .recyclable,

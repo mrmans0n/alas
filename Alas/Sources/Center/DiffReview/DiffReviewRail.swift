@@ -301,95 +301,21 @@ struct DiffReviewRail: View {
         name: String,
         threadCounts: DiffReviewRailThreadCounts
     ) -> some View {
-        let selected = selectedFileID == file.id
-        return Button {
+        // Equatable so a selection change, which the scroll spy makes a few
+        // times a second while the review scrolls, re-renders only the two
+        // rows whose highlight flips instead of every row's platform views.
+        DiffReviewRailFileRow(
+            file: file,
+            depth: depth,
+            name: name,
+            openThreadCount: threadCounts.openCount(forPath: file.path),
+            isSelected: selectedFileID == file.id,
+            theme: theme
+        ) {
             selectedFileID = file.id
             onSelectFile(file.id)
-        } label: {
-            HStack(spacing: 6) {
-                FileTypeIconView(filename: name, size: 16)
-                    .frame(width: 16, height: 16)
-                    .background(
-                        DiffReviewAccessibilityMarker(
-                            identifier: "diff-review-rail-row-icon-\(file.id.rawValue)",
-                            label: name
-                        )
-                    )
-                ReviewDraftCommentActionPressMarker(
-                    identifier: "diff-review-rail-row-\(file.id.rawValue)",
-                    label: file.path
-                ) {
-                    selectedFileID = file.id
-                    onSelectFile(file.id)
-                }
-                .frame(width: 1, height: 1)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(name)
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(selected ? theme.color("fg") : theme.color("fg-muted"))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    if let directory = file.directory {
-                        Text(directory)
-                            .font(.system(size: 10))
-                            .foregroundColor(theme.color("fg-faint"))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                }
-                Spacer(minLength: 4)
-                let openCount = threadCounts.openCount(forPath: file.path)
-                if openCount > 0 {
-                    threadBadge(openCount)
-                }
-                changeSummary(file)
-            }
-            .padding(
-                .leading,
-                CGFloat(depth) * DiffReviewRailSelectedRowStyle.fileDepthIndent
-                    + DiffReviewRailSelectedRowStyle.contentLeadingPadding
-            )
-            .padding(.trailing, 6)
-            .frame(height: 34)
-            .background(alignment: .leading) {
-                if selected {
-                    ZStack(alignment: .leading) {
-                        RoundedRectangle(cornerRadius: DiffReviewRailSelectedRowStyle.cornerRadius)
-                            .fill(theme.color(DiffReviewRailSelectedRowStyle.backgroundToken))
-                        Rectangle()
-                            .fill(theme.color("accent"))
-                            .frame(
-                                width: DiffReviewRailSelectedRowStyle.accentRailWidth,
-                                height: DiffReviewRailSelectedRowStyle.accentRailHeight
-                            )
-                            .cornerRadius(DiffReviewRailSelectedRowStyle.accentRailCornerRadius)
-                            .offset(x: DiffReviewRailSelectedRowStyle.accentRailXOffset)
-                    }
-                }
-            }
         }
-        .buttonStyle(.plain)
-        .id(file.id.rawValue)
-        .accessibilityIdentifier("diff-review-rail-row-\(file.id.rawValue)")
-        .background(
-            ZStack {
-                DiffReviewAccessibilityMarker(
-                    identifier: "diff-review-rail-row-\(file.id.rawValue)",
-                    label: file.path
-                )
-                DiffReviewAccessibilityMarker(
-                    identifier: "diff-review-rail-row-scroll-id-\(file.id.rawValue)",
-                    label: file.id.rawValue
-                )
-                if selected {
-                    DiffReviewAccessibilityMarker(
-                        identifier: "diff-review-rail-row-selected-\(file.id.rawValue)",
-                        label: file.path
-                    )
-                }
-            }
-        )
-        .help(DiffReviewRailTooltip.text(for: file))
+        .equatable()
     }
 
     private func collapsedMarker(for file: DiffReviewFileSummary) -> some View {
@@ -439,6 +365,122 @@ struct DiffReviewRail: View {
         .help(DiffReviewRailTooltip.text(for: file))
     }
 
+    private func statusColor(_ status: DiffReviewFileStatus) -> Color {
+        switch status {
+        case .added:
+            theme.color("add")
+        case .deleted:
+            theme.color("del")
+        case .renamed, .copied:
+            theme.color("accent")
+        case .conflicted:
+            theme.color("warn")
+        case .modified, .unknown:
+            theme.color("fg-dim")
+        }
+    }
+}
+
+private struct DiffReviewRailFileRow: View, Equatable {
+    let file: DiffReviewFileSummary
+    let depth: Int
+    let name: String
+    let openThreadCount: Int
+    let isSelected: Bool
+    let theme: Theme
+    let select: () -> Void
+
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.file == rhs.file && lhs.depth == rhs.depth && lhs.name == rhs.name
+            && lhs.openThreadCount == rhs.openThreadCount && lhs.isSelected == rhs.isSelected
+            && lhs.theme == rhs.theme
+    }
+
+    var body: some View {
+        Button(action: select) {
+            HStack(spacing: 6) {
+                FileTypeIconView(filename: name, size: 16)
+                    .frame(width: 16, height: 16)
+                    .background(
+                        DiffReviewAccessibilityMarker(
+                            identifier: "diff-review-rail-row-icon-\(file.id.rawValue)",
+                            label: name
+                        )
+                    )
+                ReviewDraftCommentActionPressMarker(
+                    identifier: "diff-review-rail-row-\(file.id.rawValue)",
+                    label: file.path,
+                    action: select
+                )
+                .frame(width: 1, height: 1)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(name)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(isSelected ? theme.color("fg") : theme.color("fg-muted"))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    if let directory = file.directory {
+                        Text(directory)
+                            .font(.system(size: 10))
+                            .foregroundColor(theme.color("fg-faint"))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+                Spacer(minLength: 4)
+                if openThreadCount > 0 {
+                    threadBadge(openThreadCount)
+                }
+                changeSummary(file)
+            }
+            .padding(
+                .leading,
+                CGFloat(depth) * DiffReviewRailSelectedRowStyle.fileDepthIndent
+                    + DiffReviewRailSelectedRowStyle.contentLeadingPadding
+            )
+            .padding(.trailing, 6)
+            .frame(height: 34)
+            .background(alignment: .leading) {
+                if isSelected {
+                    ZStack(alignment: .leading) {
+                        RoundedRectangle(cornerRadius: DiffReviewRailSelectedRowStyle.cornerRadius)
+                            .fill(theme.color(DiffReviewRailSelectedRowStyle.backgroundToken))
+                        Rectangle()
+                            .fill(theme.color("accent"))
+                            .frame(
+                                width: DiffReviewRailSelectedRowStyle.accentRailWidth,
+                                height: DiffReviewRailSelectedRowStyle.accentRailHeight
+                            )
+                            .cornerRadius(DiffReviewRailSelectedRowStyle.accentRailCornerRadius)
+                            .offset(x: DiffReviewRailSelectedRowStyle.accentRailXOffset)
+                    }
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .id(file.id.rawValue)
+        .accessibilityIdentifier("diff-review-rail-row-\(file.id.rawValue)")
+        .background(
+            ZStack {
+                DiffReviewAccessibilityMarker(
+                    identifier: "diff-review-rail-row-\(file.id.rawValue)",
+                    label: file.path
+                )
+                DiffReviewAccessibilityMarker(
+                    identifier: "diff-review-rail-row-scroll-id-\(file.id.rawValue)",
+                    label: file.id.rawValue
+                )
+                if isSelected {
+                    DiffReviewAccessibilityMarker(
+                        identifier: "diff-review-rail-row-selected-\(file.id.rawValue)",
+                        label: file.path
+                    )
+                }
+            }
+        )
+        .help(DiffReviewRailTooltip.text(for: file))
+    }
+
     private func threadBadge(_ count: Int) -> some View {
         Label("\(count)", systemImage: "bubble.left")
             .font(.system(size: 10, weight: .medium))
@@ -458,21 +500,6 @@ struct DiffReviewRail: View {
             }
         }
         .font(.system(size: 10, weight: .medium, design: .monospaced))
-    }
-
-    private func statusColor(_ status: DiffReviewFileStatus) -> Color {
-        switch status {
-        case .added:
-            theme.color("add")
-        case .deleted:
-            theme.color("del")
-        case .renamed, .copied:
-            theme.color("accent")
-        case .conflicted:
-            theme.color("warn")
-        case .modified, .unknown:
-            theme.color("fg-dim")
-        }
     }
 }
 
