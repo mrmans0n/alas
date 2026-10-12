@@ -403,12 +403,13 @@ struct NewWorktreeDialog: View {
     /// Keeps the temporary name unless it now collides with a branch, a
     /// worktree, or a directory: `git worktree add` would otherwise check out
     /// that existing branch instead of creating a fresh one.
-    private func refreshAutoNamePlaceholder() {
+    private func refreshAutoNamePlaceholder(alsoTaken localBranches: Set<String> = []) {
         let projectWorktrees = state.projectsManager.worktrees(projectId: projectId)
         let isLocal = state.worktreeProjects.first(where: { $0.id == projectId })?.host == nil
         func isTaken(_ name: String) -> Bool {
             let candidate = composedBranch(name: name)
-            if branches.contains(candidate) || projectWorktrees.contains(where: { $0.branch == candidate }) {
+            if branches.contains(candidate) || localBranches.contains(candidate)
+                || projectWorktrees.contains(where: { $0.branch == candidate }) {
                 return true
             }
             return isLocal && FileManager.default.fileExists(atPath: renderedPath(branch: candidate))
@@ -716,9 +717,6 @@ struct NewWorktreeDialog: View {
     private func create() {
         guard let project = state.worktreeProjects.first(where: { $0.id == projectId }) else { return }
         cancelNameSuggestion()
-        let createdBranch = effectiveBranch
-        let namesFromFirstPrompt = namesBranchFromFirstPrompt
-        let dest = URL(fileURLWithPath: renderedPath)
         let issueDraft = issueState.draft
         guard launchMode != .acp || !openAfterCreate || launchAgentId != "none" else {
             // Defensive: confirm button should already be disabled.
@@ -739,6 +737,21 @@ struct NewWorktreeDialog: View {
             }
         )
         Task { @MainActor in
+            if namesBranchFromFirstPrompt {
+                // The picker's branch list loads asynchronously and may be
+                // stale; recheck against Git so a collision picks another
+                // temporary name rather than failing the create.
+                let refs = try? await Process.git(
+                    ["for-each-ref", "--format=%(refname:short)", "refs/heads/"],
+                    cwd: URL(fileURLWithPath: project.path)
+                )
+                if let refs, refs.exitCode == 0 {
+                    refreshAutoNamePlaceholder(alsoTaken: Set(refs.stdout.split(whereSeparator: \.isNewline).map(String.init)))
+                }
+            }
+            let createdBranch = effectiveBranch
+            let namesFromFirstPrompt = namesBranchFromFirstPrompt
+            let dest = URL(fileURLWithPath: renderedPath)
             let id = await state.createWorktree(
                 projectId: project.id,
                 base: base,

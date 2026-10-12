@@ -4886,7 +4886,10 @@ final class AppState {
                 }
                 let newWorktree = try await WorktreeLifecycle.performCreateWorktree(
                     repoPath: repoPath,
-                    base: base, branch: branch, destination: canonicalDestination, projectId: projectId
+                    base: base, branch: branch, destination: canonicalDestination, projectId: projectId,
+                    // A temporary name must never check out an existing branch:
+                    // the first prompt would rename that branch.
+                    requiresNewBranch: namesBranchFromFirstPrompt
                 )
                 guard projects.contains(where: { $0.id == projectId }) else { return }
                 let repoStartupScript = try await self.preparedRepoHook(
