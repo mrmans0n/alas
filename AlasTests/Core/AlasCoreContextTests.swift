@@ -64,7 +64,7 @@ struct AlasCoreContextTests {
         _ = try await reloaded.projects.refreshWorktrees(projectId: project.id)
         #expect(reloaded.projects.worktrees(projectId: project.id).map(\.id).contains(worktree.id))
 
-        let sessions = context.sessionManager(for: worktree)
+        let sessions = try context.sessionManager(for: worktree)
         defer { sessions.shutdownBackgroundTasks() }
         let session = sessions.createSession(agentId: "gemini")
         await sessions.attach(to: session.id, freshlyCreated: true)
@@ -112,6 +112,10 @@ struct AlasCoreContextTests {
         }
         await context.runHistory.flush()
         #expect(try await context.runHistory.store?.entry(id: longID)?.outcome == .stopped, "the stopped run keeps its history")
+        await #expect(throws: AlasCoreContext.WorktreeArchived.self, "nothing new runs in an archived worktree") {
+            try await context.runScript(script, in: worktree)
+        }
+        #expect(throws: AlasCoreContext.WorktreeArchived.self) { try context.sessionManager(for: worktree) }
         #expect(!context.projects.visibleWorktrees(projectId: project.id).map(\.id).contains(worktree.id))
         #expect(context.sessionManagers[.worktree(worktree.id)] == nil)
         #expect(try await context.runHistory.store?.entry(id: record.id) != nil, "archiving keeps run history")

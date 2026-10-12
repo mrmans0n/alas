@@ -7,6 +7,9 @@ import Observation
 @MainActor
 @Observable
 public final class AlasCoreContext {
+    /// The worktree is archived (or being archived), so nothing new starts in it.
+    public struct WorktreeArchived: Error, Equatable {}
+
     public var projects: ProjectsManager
     /// One session manager per owner (worktree or workspace checkout).
     public var sessionManagers: [SessionOwnerID: ACPSessionManager] = [:]
@@ -182,6 +185,7 @@ public final class AlasCoreContext {
             throw ProjectCreationError.projectNotFound
         }
         guard project.host == nil else { throw RunService.RunError.remoteProjectUnsupported }
+        guard !projects.isWorktreeHidden(projectId: project.id, path: worktree.path) else { throw WorktreeArchived() }
         guard runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status.isActive != true else {
             throw RunService.RunError.alreadyRunning
         }
@@ -245,9 +249,11 @@ public final class AlasCoreContext {
         return coordinator
     }
 
-    /// Hides `worktree` from its project and persists that. Its headless
-    /// runs are stopped and its agent sessions shut down; its other active
-    /// runs settle as lost. All of them keep their history. Nothing is removed from disk. A failed save throws and
+    /// Hides `worktree` from its project and persists that. Hiding comes
+    /// first, so no new headless run or session manager is admitted while the
+    /// rest happens. Its headless runs are stopped and its agent sessions shut
+    /// down; its other active runs settle as lost. All of them keep their
+    /// history. Nothing is removed from disk. A failed save throws and
     /// leaves the worktree visible and untouched.
     public func archiveWorktree(_ worktree: Worktree) async throws {
         try setWorktreeHidden(worktree.path, projectID: worktree.projectId, hidden: true)
@@ -313,8 +319,13 @@ public final class AlasCoreContext {
         )
     }
 
-    /// The session manager for `worktree`, created on first use.
-    public func sessionManager(for worktree: Worktree) -> ACPSessionManager {
+    /// The session manager for `worktree`, created on first use. None is
+    /// handed out for an archived worktree, including while it is being
+    /// archived.
+    public func sessionManager(for worktree: Worktree) throws -> ACPSessionManager {
+        guard !projects.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path) else {
+            throw WorktreeArchived()
+        }
         let owner = SessionOwnerID.worktree(worktree.id)
         if let manager = sessionManagers[owner] { return manager }
         let manager = makeSessionManager(owner, worktree)
