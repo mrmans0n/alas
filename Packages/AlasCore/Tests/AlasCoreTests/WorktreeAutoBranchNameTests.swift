@@ -11,6 +11,11 @@ struct WorktreeAutoBranchNameTests {
 
         let numbered = WorktreeAutoBranchName.placeholder(isTaken: { !$0.hasSuffix("-3") }, using: &generator)
         #expect(numbered.hasSuffix("-3"))
+
+        // A destination that ignores the name rejects every pick; the search
+        // must still end.
+        let exhausted = WorktreeAutoBranchName.placeholder(isTaken: { _ in true }, using: &generator)
+        #expect(exhausted.split(separator: "-").count == 2)
     }
 
     @Test(arguments: [

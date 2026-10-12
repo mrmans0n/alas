@@ -36,7 +36,9 @@ public enum WorktreeAutoBranchName: Sendable {
 
     /// A temporary `adjective-animal` name that `isTaken` rejects neither as
     /// is nor once composed by the caller. Falls back to a numbered name when
-    /// the random picks keep colliding.
+    /// the random picks keep colliding. The search is bounded: when nothing
+    /// is free (a destination that ignores the name already exists), the last
+    /// pick is returned and creation reports the collision.
     public static func placeholder(
         isTaken: (String) -> Bool,
         using generator: inout some RandomNumberGenerator
@@ -47,7 +49,7 @@ public enum WorktreeAutoBranchName: Sendable {
             if !isTaken(name) { return name }
             last = name
         }
-        return uniqueName(last, isTaken: isTaken)
+        return (2...99).lazy.map { "\(last)-\($0)" }.first { !isTaken($0) } ?? last
     }
 
     public static func placeholder(isTaken: (String) -> Bool) -> String {

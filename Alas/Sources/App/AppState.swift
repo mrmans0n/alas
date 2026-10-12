@@ -4892,6 +4892,16 @@ final class AppState {
                     requiresNewBranch: namesBranchFromFirstPrompt
                 )
                 guard projects.contains(where: { $0.id == projectId }) else { return }
+                // Recorded as soon as the branch exists: a later step failing
+                // must not strand the worktree on its temporary name.
+                if namesBranchFromFirstPrompt {
+                    projectsManager.setPendingAutoBranchName(
+                        projectId: project.id,
+                        worktreeId: newWorktree.id,
+                        placeholder: newWorktree.branch
+                    )
+                    saveProjects()
+                }
                 let repoStartupScript = try await self.preparedRepoHook(
                     event: .worktreeCreate,
                     project: project,
@@ -4952,15 +4962,6 @@ final class AppState {
                         )
                         saveProjects()
                     }
-                    if namesBranchFromFirstPrompt {
-                        projectsManager.setPendingAutoBranchName(
-                            projectId: project.id,
-                            worktreeId: newWorktree.id,
-                            placeholder: newWorktree.branch
-                        )
-                        saveProjects()
-                    }
-
                     if launchSurface != .delegated {
                         selectWorktree(id: newWorktree.id)
                     }

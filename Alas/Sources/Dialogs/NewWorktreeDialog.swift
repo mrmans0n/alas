@@ -30,6 +30,9 @@ struct NewWorktreeDialog: View {
     /// Temporary name used when the branch field is left empty; the first
     /// chat prompt renames the branch.
     @State private var autoNamePlaceholder: String = ""
+    /// The create in flight; cancelled when the dialog goes away so a slow
+    /// branch recheck cannot create a worktree after Cancel.
+    @State private var createTask: Task<Void, Never>?
     @State private var branchTemplateDate = Date()
     @State private var runStartup: Bool = true
     @State private var ggMode: GGWorktreeMode
@@ -214,6 +217,7 @@ struct NewWorktreeDialog: View {
         .onDisappear {
             cancelNameSuggestion()
             namePrewarm.cancel()
+            createTask?.cancel()
         }
         .onChange(of: projectId) { _, newProjectId in
             let shouldApplyLaunchDefaults = Self.appliesLaunchDefaultsAfterProjectChange(
@@ -737,7 +741,8 @@ struct NewWorktreeDialog: View {
             }
         )
         let selectedBase = base
-        Task { @MainActor in
+        createTask?.cancel()
+        createTask = Task { @MainActor in
             if namesBranchFromFirstPrompt {
                 // The picker's branch list loads asynchronously and may be
                 // stale; recheck against Git so a collision picks another
@@ -748,7 +753,7 @@ struct NewWorktreeDialog: View {
                 )
                 // The dialog stays editable meanwhile; a project switch would
                 // mix its template and destination into this repository.
-                guard projectId == project.id, base == selectedBase else { return }
+                guard !Task.isCancelled, presented, projectId == project.id, base == selectedBase else { return }
                 if let refs, refs.exitCode == 0 {
                     refreshAutoNamePlaceholder(alsoTaken: Set(refs.stdout.split(whereSeparator: \.isNewline).map(String.init)))
                 }
