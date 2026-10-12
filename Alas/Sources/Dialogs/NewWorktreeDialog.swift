@@ -736,6 +736,7 @@ struct NewWorktreeDialog: View {
                 )
             }
         )
+        let selectedBase = base
         Task { @MainActor in
             if namesBranchFromFirstPrompt {
                 // The picker's branch list loads asynchronously and may be
@@ -745,6 +746,9 @@ struct NewWorktreeDialog: View {
                     ["for-each-ref", "--format=%(refname:short)", "refs/heads/"],
                     cwd: URL(fileURLWithPath: project.path)
                 )
+                // The dialog stays editable meanwhile; a project switch would
+                // mix its template and destination into this repository.
+                guard projectId == project.id, base == selectedBase else { return }
                 if let refs, refs.exitCode == 0 {
                     refreshAutoNamePlaceholder(alsoTaken: Set(refs.stdout.split(whereSeparator: \.isNewline).map(String.init)))
                 }

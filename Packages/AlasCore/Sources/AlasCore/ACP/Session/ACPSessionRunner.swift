@@ -3904,6 +3904,9 @@ extension ACPSessionRunner {
                     guard !self.stopped, self.isConnectionCurrent(), self.nativeSteeringGeneration == generation
                     else { throw CancellationError() }
                     if self.session.title != titleBefore { self.persistFallbackTitleIfStoredPlaceholder() }
+                    if delegatedSource == nil {
+                        self.onUserPromptRecorded?(promptText)
+                    }
                 } else {
                     if let recordedMessageID,
                        let index = self.session.replaceSymbolSnapshots(inUserMessage: recordedMessageID, from: symbolExpansion) {
