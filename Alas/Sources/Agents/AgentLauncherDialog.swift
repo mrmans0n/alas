@@ -623,7 +623,7 @@ struct AgentLauncherDialog: View {
             HStack(spacing: 8) {
                 Text(message).lineLimit(2)
                 Spacer()
-                Button("Retry") { startDiscovery(for: agent) }
+                Button("Retry") { restartDiscovery(for: agent) }
                     .buttonStyle(.plain)
                     .foregroundStyle(theme.color("accent"))
             }
@@ -728,9 +728,7 @@ struct AgentLauncherDialog: View {
     }
 
     private func installAdapter(for agent: AgentDefinition) {
-        guard installingAdapterAgentID == nil, let worktree = selectedWorktree() else { return }
-        let target: ACPAdapterTarget = RemoteHostRegistry.shared.host(forPath: worktree.path.path)
-            .map { .ssh(host: $0) } ?? .local
+        guard installingAdapterAgentID == nil, let target = launcherAdapterTarget() else { return }
         installingAdapterAgentID = agent.id
         adapterInstallError = nil
         Task {
@@ -742,8 +740,32 @@ struct AgentLauncherDialog: View {
                 return
             }
             guard chatAgent?.id == agent.id else { return }
-            startDiscovery(for: agent)
+            restartDiscovery(for: agent)
         }
+    }
+
+    /// Where the launcher's agents run: the active workspace checkout's
+    /// location, else the selected worktree's host.
+    private func launcherAdapterTarget() -> ACPAdapterTarget? {
+        let executionTarget: AgentExecutionTarget
+        if let checkout = selectedWorkspaceCheckout() {
+            executionTarget = checkout.executionLocation.agentExecutionTarget
+        } else if let worktree = selectedWorktree() {
+            executionTarget = appState.agentExecutionTarget(for: worktree)
+        } else {
+            return nil
+        }
+        switch executionTarget {
+        case .local: return .local
+        case .ssh(let host): return .ssh(host: host)
+        }
+    }
+
+    /// Reloads the current agent's sessions with the manager that produced
+    /// the current list, so a checkout browser stays scoped to the checkout.
+    private func restartDiscovery(for agent: AgentDefinition) {
+        guard let manager = selectedACPManagerForLauncher() else { return }
+        startDiscovery(for: agent, manager: manager, projectId: discoveryProjectId)
     }
 
     private func launcherStatusRow(_ text: String, progress: Bool = false) -> some View {
