@@ -152,8 +152,20 @@ struct DiffReviewScrollSpyTests {
         #expect(unchanged == nil)
     }
 
-    @Test @MainActor func scrollSpySelectionWaitsForScrollingToSettle() async throws {
-        let spy = DiffReviewScrollSpySelection(settleInterval: 0.1)
+    @Test @MainActor func scrollSpySelectionWaitsForScrollingToSettle() {
+        var clock: TimeInterval = 0
+        var pending: [(at: TimeInterval, work: @MainActor () -> Void)] = []
+        func advance(to time: TimeInterval) {
+            clock = time
+            while let next = pending.firstIndex(where: { $0.at <= clock }) {
+                pending.remove(at: next).work()
+            }
+        }
+        let spy = DiffReviewScrollSpySelection(
+            settleInterval: 0.3,
+            now: { clock },
+            schedule: { delay, work in pending.append((clock + delay, work)) }
+        )
         var settled: [DiffReviewFileID] = []
         spy.onSettle = { settled.append($0) }
         let first = DiffReviewFileID(namespace: "commit", path: "a.swift")
@@ -161,16 +173,17 @@ struct DiffReviewScrollSpyTests {
 
         spy.report(first)
         spy.report(second)
-        // Keep scrolling past the settle interval: nothing reaches the binding.
-        let movingUntil = ContinuousClock.now + .milliseconds(250)
-        while ContinuousClock.now < movingUntil {
+        // Keep scrolling well past the settle interval: nothing reaches the binding.
+        for tick in 1...60 {
+            advance(to: Double(tick) / 60)
             spy.userDidScroll()
-            try await Task.sleep(for: .milliseconds(20))
         }
         #expect(settled.isEmpty)
         #expect(spy.liveFileID == second)
 
-        try await eventually("scroll spy to settle") { !settled.isEmpty }
+        advance(to: 1.0 + 0.29)
+        #expect(settled.isEmpty)
+        advance(to: 1.0 + 0.3)
         #expect(settled == [second])
         #expect(spy.liveFileID == nil)
     }

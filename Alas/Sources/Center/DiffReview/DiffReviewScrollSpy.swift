@@ -189,12 +189,26 @@ final class DiffReviewScrollSpySelection: ObservableObject {
     @Published private(set) var liveFileID: DiffReviewFileID?
     /// Writes the settled file to the selection binding.
     var onSettle: (DiffReviewFileID) -> Void = { _ in }
+    typealias Scheduler = (_ delay: TimeInterval, _ work: @escaping @MainActor () -> Void) -> Void
+
     private let settleInterval: TimeInterval
+    private let now: () -> TimeInterval
+    private let schedule: Scheduler
     private var lastMotion: TimeInterval = 0
     private var isSettleCheckScheduled = false
 
-    init(settleInterval: TimeInterval = 0.3) {
+    init(
+        settleInterval: TimeInterval = 0.3,
+        now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+        schedule: @escaping Scheduler = { delay, work in
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                MainActor.assumeIsolated { work() }
+            }
+        }
+    ) {
         self.settleInterval = settleInterval
+        self.now = now
+        self.schedule = schedule
     }
 
     func report(_ fileID: DiffReviewFileID) {
@@ -204,7 +218,7 @@ final class DiffReviewScrollSpySelection: ObservableObject {
 
     /// Called on every user scroll tick; postpones the settle while moving.
     func userDidScroll() {
-        lastMotion = ProcessInfo.processInfo.systemUptime
+        lastMotion = now()
         guard liveFileID != nil, !isSettleCheckScheduled else { return }
         scheduleSettleCheck(after: settleInterval)
     }
@@ -223,10 +237,10 @@ final class DiffReviewScrollSpySelection: ObservableObject {
 
     private func scheduleSettleCheck(after delay: TimeInterval) {
         isSettleCheckScheduled = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+        schedule(delay) { [weak self] in
             guard let self else { return }
             isSettleCheckScheduled = false
-            let still = ProcessInfo.processInfo.systemUptime - lastMotion
+            let still = now() - lastMotion
             if still >= settleInterval {
                 settle()
             } else if liveFileID != nil {
