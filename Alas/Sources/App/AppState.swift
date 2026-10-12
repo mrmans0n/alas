@@ -6781,14 +6781,25 @@ final class AppState {
         guard !isDeletingArchivedWorktrees else { return }
         let archived = projects.flatMap { projectsManager.archivedWorktrees(projectId: $0.id) }
         let deletable = workspacesManager.canMutate
-            ? archived.filter { !$0.path.isRemoteAlasPath && worktreeCleanupWorkspaceOwners(for: $0).isEmpty }
+            ? archived.filter { worktree in
+                // The batch skips any claimed worktree; a failed delete is
+                // released below so this run retries it.
+                let operationAllowsBatch: Bool
+                switch projectsManager.operationState(for: worktree) {
+                case nil, .deleteFailed: operationAllowsBatch = true
+                default: operationAllowsBatch = false
+                }
+                return operationAllowsBatch
+                    && !worktree.path.isRemoteAlasPath
+                    && worktreeCleanupWorkspaceOwners(for: worktree).isEmpty
+            }
             : []
         guard !archived.isEmpty else { return }
         guard !deletable.isEmpty else {
             showFileActionError(
                 title: "Nothing to Delete",
                 message: workspacesManager.canMutate
-                    ? "Remote worktrees and those referenced by a Workspace checkout can't be deleted in bulk. Delete them individually."
+                    ? "Remote, busy, or Workspace-referenced worktrees can't be deleted in bulk. Delete them individually."
                     : "Workspace Checkout ownership could not be verified. Try again once Workspace storage is available."
             )
             return
@@ -6796,14 +6807,14 @@ final class AppState {
 
         let alert = NSAlert()
         alert.messageText = "Delete \(deletable.count) archived \(deletable.count == 1 ? "worktree" : "worktrees")?"
-        var message = Self.resolveDeleteBranchIfMerged(
-            globalDeleteOnRemove: config.worktrees.deleteBranchOnRemove,
-            keepBranch: false
-        )
+        // Frozen here: the batch re-reads the setting per item, and the
+        // confirmation must stay true if it is toggled mid-batch.
+        let deleteBranches = config.worktrees.deleteBranchOnRemove
+        var message = deleteBranches
             ? "This removes their files from disk. Local branches will be deleted if merged."
             : "This removes their files from disk. Local branches will be kept."
         if deletable.count < archived.count {
-            message += " Remote worktrees and those referenced by a Workspace checkout are skipped; delete them individually."
+            message += " Remote, busy, or Workspace-referenced worktrees are skipped; delete them individually."
         }
         alert.informativeText = message
         alert.alertStyle = .warning
@@ -6814,7 +6825,12 @@ final class AppState {
 
         isDeletingArchivedWorktrees = true
         defer { isDeletingArchivedWorktrees = false }
-        let results = await batchDeleteWorktrees(deletable, keepBranch: false)
+        for worktree in deletable {
+            if case .deleteFailed = projectsManager.operationState(for: worktree) {
+                projectsManager.setOperationState(for: worktree, state: nil)
+            }
+        }
+        let results = await batchDeleteWorktrees(deletable, keepBranch: !deleteBranches)
         if results.contains(where: { $0.outcome != .deleted }) {
             showFileActionError(
                 title: "Some Worktrees Were Not Deleted",
