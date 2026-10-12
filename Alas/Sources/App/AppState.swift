@@ -6766,19 +6766,29 @@ final class AppState {
     }
 
     /// Delete every archived worktree across all projects after one
-    /// confirmation. Workspace-owned checkouts are left alone (they must be
-    /// deleted from their checkout), and anything git refuses without
-    /// `--force` is reported so the user can delete it individually.
+    /// confirmation. Worktrees referenced by any Workspace checkout are left
+    /// for the single-item flow (the batch path refuses them), and anything
+    /// git refuses without `--force` is reported so the user can delete it
+    /// individually.
     func deleteAllArchivedWorktrees() async {
         let archived = projects.flatMap { projectsManager.archivedWorktrees(projectId: $0.id) }
-        let deletable = archived.filter { workspaceOwnershipDeletionRefusal(for: $0) == nil }
+        let deletable = workspacesManager.canMutate
+            ? archived.filter { worktreeCleanupWorkspaceOwners(for: $0).isEmpty }
+            : []
         guard !deletable.isEmpty else { return }
 
         let alert = NSAlert()
         alert.messageText = "Delete \(deletable.count) archived \(deletable.count == 1 ? "worktree" : "worktrees")?"
-        alert.informativeText = deletable.count == archived.count
-            ? "This removes their files from disk."
-            : "This removes their files from disk. Worktrees owned by a Workspace checkout are skipped."
+        var message = Self.resolveDeleteBranchIfMerged(
+            globalDeleteOnRemove: config.worktrees.deleteBranchOnRemove,
+            keepBranch: false
+        )
+            ? "This removes their files from disk. Local branches will be deleted if merged."
+            : "This removes their files from disk. Local branches will be kept."
+        if deletable.count < archived.count {
+            message += " Worktrees referenced by a Workspace checkout are skipped; delete them individually."
+        }
+        alert.informativeText = message
         alert.alertStyle = .warning
         let deleteButton = alert.addButton(withTitle: "Delete")
         alert.addButton(withTitle: "Cancel")
