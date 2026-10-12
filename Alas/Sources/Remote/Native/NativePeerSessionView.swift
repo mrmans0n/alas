@@ -550,6 +550,10 @@ private struct NativePeerComposer: View {
         return snapshot.range.location
     }
 
+    private var offeredMentionScopes: [MentionScope] {
+        MentionScope.offered(symbols: false, sessions: true)
+    }
+
     private var scopedMentionCandidates: [RemoteMention] {
         client.mentionCandidates.filter { mention in
             switch mentionScope {
@@ -564,7 +568,7 @@ private struct NativePeerComposer: View {
     private var mentionPickerList: some View {
         VStack(spacing: 4) {
             HStack(spacing: 4) {
-                ForEach(MentionScope.allCases) { scope in
+                ForEach(offeredMentionScopes) { scope in
                     Button { mentionScope = scope } label: {
                         Text(scope.title)
                             .font(.system(size: 10.5, weight: .medium))
@@ -650,8 +654,8 @@ private struct NativePeerComposer: View {
         guard mentionTokenStart != nil else { return false }
         let modifiers = event.modifierFlags.intersection([.shift, .control, .option, .command])
         if modifiers == .command, let character = event.charactersIgnoringModifiers,
-           let number = Int(character), MentionScope.allCases.indices.contains(number - 1) {
-            mentionScope = MentionScope.allCases[number - 1]
+           let number = Int(character), offeredMentionScopes.indices.contains(number - 1) {
+            mentionScope = offeredMentionScopes[number - 1]
             return true
         }
         guard let key = MentionPickerKey(keyCode: event.keyCode, modifiers: event.modifierFlags) else { return false }
@@ -662,8 +666,8 @@ private struct NativePeerComposer: View {
         case .cancel:
             dictation.stop()
             closeMentionPicker()
-        case .nextScope: mentionScope = mentionScope.cycled(by: 1, in: MentionScope.allCases)
-        case .previousScope: mentionScope = mentionScope.cycled(by: -1, in: MentionScope.allCases)
+        case .nextScope: mentionScope = mentionScope.cycled(by: 1, in: offeredMentionScopes)
+        case .previousScope: mentionScope = mentionScope.cycled(by: -1, in: offeredMentionScopes)
         case .insert(let includeCode):
             if !candidates.isEmpty {
                 pickMention(candidates[min(mentionHighlight, candidates.count - 1)], includeCode: includeCode)
