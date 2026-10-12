@@ -6771,7 +6771,14 @@ final class AppState {
     /// branch and ownership re-checks refuse them), and anything
     /// git refuses without `--force` is reported so the user can delete it
     /// individually.
+    ///
+    /// The batch re-checks sessions, buffers, branch, and ownership but not
+    /// whether a target is still archived, so the Settings pane (the only
+    /// unarchive entry point) locks its archived rows while this runs.
+    private(set) var isDeletingArchivedWorktrees = false
+
     func deleteAllArchivedWorktrees() async {
+        guard !isDeletingArchivedWorktrees else { return }
         let archived = projects.flatMap { projectsManager.archivedWorktrees(projectId: $0.id) }
         let deletable = workspacesManager.canMutate
             ? archived.filter { !$0.path.isRemoteAlasPath && worktreeCleanupWorkspaceOwners(for: $0).isEmpty }
@@ -6780,7 +6787,9 @@ final class AppState {
         guard !deletable.isEmpty else {
             showFileActionError(
                 title: "Nothing to Delete",
-                message: "Remote worktrees and those referenced by a Workspace checkout can't be deleted in bulk. Delete them individually."
+                message: workspacesManager.canMutate
+                    ? "Remote worktrees and those referenced by a Workspace checkout can't be deleted in bulk. Delete them individually."
+                    : "Workspace Checkout ownership could not be verified. Try again once Workspace storage is available."
             )
             return
         }
@@ -6803,6 +6812,8 @@ final class AppState {
         deleteButton.hasDestructiveAction = true
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
+        isDeletingArchivedWorktrees = true
+        defer { isDeletingArchivedWorktrees = false }
         let results = await batchDeleteWorktrees(deletable, keepBranch: false)
         if results.contains(where: { $0.outcome != .deleted }) {
             showFileActionError(

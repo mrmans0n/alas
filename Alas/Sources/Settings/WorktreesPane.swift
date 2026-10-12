@@ -92,6 +92,7 @@ struct WorktreesPane: View {
                             AlasButton(title: "Delete all", style: .subtle) {
                                 Task { await state.deleteAllArchivedWorktrees() }
                             }
+                            .disabled(state.isDeletingArchivedWorktrees)
                         }
                         .padding(.bottom, 8)
                         ForEach(state.projects) { project in
@@ -104,6 +105,7 @@ struct WorktreesPane: View {
                                     onDelete: { wt in state.deleteWorktree(wt) },
                                     isPending: { wt in
                                         // Failed states stay actionable so the user can retry.
+                                        if state.isDeletingArchivedWorktrees { return true }
                                         switch state.projectsManager.operationState(for: wt) {
                                         case .creating, .preparingDelete, .deleting: return true
                                         default: return false
