@@ -163,6 +163,13 @@ struct MergeView3Way: View {
         .clipped()
         .onChange(of: layout, initial: true) { _, newLayout in
             coordinator.layout = newLayout
+            // Accepting or editing a hunk changes the row mapping without a
+            // scroll; re-anchor the other panes on RESULT once the panes
+            // have laid out the new text.
+            Task { @MainActor in
+                await Task.yield()
+                coordinator.scroll(.result, toY: coordinator.offset(for: .result))
+            }
         }
         .onChange(of: model.currentConflictIndex, initial: true) { _, _ in
             // Defer one turn so a freshly loaded document is laid out

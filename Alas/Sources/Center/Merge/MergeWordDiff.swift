@@ -117,6 +117,10 @@ enum MergeWordDiff {
     /// don't look similar just because they share common letters.
     /// Returns nil once `budget` can't cover the comparison.
     private static func similarity(_ a: String, _ b: String, budget: inout Int) -> Double? {
+        // Same length cap as `diff`: longer lines (minified or generated
+        // code) never get marks, so don't spend a tokenizing pass on them.
+        // `utf8.count` is O(1) for native strings.
+        guard a.utf8.count <= 4 * 1024, b.utf8.count <= 4 * 1024 else { return 0 }
         let ta = tokens(a), tb = tokens(b)
         let total = ta.count + tb.count
         guard total > 0 else { return 1 }
