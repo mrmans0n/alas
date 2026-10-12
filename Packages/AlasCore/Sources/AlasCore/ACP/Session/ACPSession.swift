@@ -221,6 +221,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
     /// whole session's usage.
     @Tracked public private(set) var sessionQuotaTotal: ACPPromptQuota?
     @Tracked public var currentMode: String?
+    @Tracked public var goalDraft: String = ""
     /// Summaries read the objective, status, and budget, so only those changes reach the
     /// activity observers; telemetry (tokens, time, iterations) must not consume a suggestion.
     @Tracked public var currentGoal: ACPGoalState? {

@@ -98,6 +98,29 @@ struct ACPSessionManagerRetentionTests {
         #expect(mgr.sessions[id] == nil)
     }
 
+    @Test("reopening a goal draft before its save finishes keeps the text")
+    func goalDraftSurvivesReopeningBeforePersistence() async throws {
+        let manager = makeManager()
+        let session = manager.createSession(agentId: "claude")
+        await manager.flushPersistence()
+        let started = AsyncStream<Void>.makeStream()
+        let release = AsyncStream<Void>.makeStream()
+        defer { release.continuation.finish() }
+        manager.beforePersistenceForTesting = {
+            started.continuation.yield()
+            for await _ in release.stream { break }
+        }
+        manager.persistGoalDraft("unfinished goal", for: session)
+        for await _ in started.stream { break }
+        manager.retainSession(id: session.id)
+        manager.releaseSession(id: session.id)
+        let reopened = try #require(manager.placeholderSession(id: session.id))
+        await manager.hydrateIfNeeded(id: session.id)
+        #expect(reopened.goalDraft == "unfinished goal")
+        release.continuation.finish()
+        await manager.flushPersistence()
+    }
+
     @Test("evicting a session flushes its pending composer draft")
     func evictionFlushesDraft() async throws {
         let mgr = makeManager()
