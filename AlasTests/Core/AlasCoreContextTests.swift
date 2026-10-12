@@ -94,19 +94,29 @@ struct AlasCoreContextTests {
         #expect(text.contains("hello from feature"))
 
         let longURL = root.appendingPathComponent("long.sh")
-        try "sleep 300\n".write(to: longURL, atomically: true, encoding: .utf8)
+        let started = root.appendingPathComponent("started")
+        try "touch \(started.path)\nsleep 300\n".write(to: longURL, atomically: true, encoding: .utf8)
         let long = RunScript(
             scope: .repo, fileName: "long.sh", fileURL: longURL,
             displayName: "Long", onExit: .close, cwd: nil, isExecutable: false
         )
         let longRun = Task { try await context.runScript(long, in: worktree) }
         let deadline = ContinuousClock.now + .seconds(30)
-        while context.runRecords.record(worktreeID: worktree.id, scriptKey: long.key) == nil, ContinuousClock.now < deadline {
+        while !FileManager.default.fileExists(atPath: started.path), ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(20))
         }
         let longID = try #require(context.runRecords.record(worktreeID: worktree.id, scriptKey: long.key)?.id)
 
-        try await context.archiveWorktree(worktree)
+        // Yielding lets the archive run up to its first suspension, waiting for
+        // the run's process to exit, without giving that process time to do so.
+        let archiving = Task { try await context.archiveWorktree(worktree) }
+        while !context.projects.isWorktreeHidden(projectId: project.id, path: worktree.path), ContinuousClock.now < deadline {
+            await Task.yield()
+        }
+        #expect(throws: AlasCoreContext.WorktreeArchived.self, "an archive still tearing down cannot be undone") {
+            try context.unarchiveWorktree(path: worktree.path, projectID: project.id)
+        }
+        try await archiving.value
         await #expect(throws: CancellationError.self, "archiving stops the worktree's headless runs") {
             _ = try await longRun.value
         }

@@ -50,7 +50,9 @@ public final class AlasCoreContext {
     @ObservationIgnored private var workspaceCheckoutCoordinator: WorkspaceCheckoutCoordinator?
 
     /// Headless runs in flight, so archiving their worktree can stop them.
-    @ObservationIgnored private var headlessRuns: [String: (worktreeID: String, task: Task<RunScriptCompletion, Error>)] = [:]
+    @ObservationIgnored private var headlessRuns: [String: (worktreeID: String, task: Task<RunOutcome, Error>)] = [:]
+    /// Worktrees whose archive is still tearing down; unarchiving waits.
+    @ObservationIgnored private var archivingWorktreeIDs: Set<String> = []
 
     @ObservationIgnored private let store: any PersistenceStoreProtocol
     @ObservationIgnored private let projectsFile: URL
@@ -204,29 +206,33 @@ public final class AlasCoreContext {
             status: .running,
             startedAt: Date()
         ))
-        let completion: RunScriptCompletion
-        do {
-            let run = Task { try await runs.run(script, in: worktree, project: project, runID: runID) }
-            headlessRuns[runID] = (worktree.id, run)
-            defer { headlessRuns.removeValue(forKey: runID) }
-            completion = try await withTaskCancellationHandler { try await run.value } onCancel: { run.cancel() }
-        } catch is CancellationError {
-            finalizeRun(runRecords.finish(runID: runID, outcome: .stopped, at: Date()), capture: .unavailable)
-            throw CancellationError()
-        } catch where error is RunService.RunError || error is RunScriptCompletionMonitor.MonitorError {
-            // The command ran but its exit status was never observed.
-            finalizeRun(runRecords.markLostObservation(runID: runID, at: Date()), capture: .unavailable)
-            throw error
-        } catch {
-            runRecords.rollback(runID: runID, to: displaced)
-            throw error
+        // The task covers the whole run, finalization included, so archiving
+        // can wait for the record to settle before discarding run state.
+        let lifecycle = Task { () throws -> RunOutcome in
+            let completion: RunScriptCompletion
+            do {
+                completion = try await runs.run(script, in: worktree, project: project, runID: runID)
+            } catch is CancellationError {
+                finalizeRun(runRecords.finish(runID: runID, outcome: .stopped, at: Date()), capture: .unavailable)
+                throw CancellationError()
+            } catch where error is RunService.RunError || error is RunScriptCompletionMonitor.MonitorError {
+                // The command ran but its exit status was never observed.
+                finalizeRun(runRecords.markLostObservation(runID: runID, at: Date()), capture: .unavailable)
+                throw error
+            } catch {
+                runRecords.rollback(runID: runID, to: displaced)
+                throw error
+            }
+            let outcome: RunOutcome = completion.exitCode == 0 ? .succeeded : .failed(exitCode: completion.exitCode)
+            finalizeRun(
+                runRecords.finish(runID: runID, outcome: outcome, at: completion.completedAt),
+                capture: .completion(completion)
+            )
+            return outcome
         }
-        let outcome: RunOutcome = completion.exitCode == 0 ? .succeeded : .failed(exitCode: completion.exitCode)
-        finalizeRun(
-            runRecords.finish(runID: runID, outcome: outcome, at: completion.completedAt),
-            capture: .completion(completion)
-        )
-        return outcome
+        headlessRuns[runID] = (worktree.id, lifecycle)
+        defer { headlessRuns.removeValue(forKey: runID) }
+        return try await withTaskCancellationHandler { try await lifecycle.value } onCancel: { lifecycle.cancel() }
     }
 
     /// The one coordinator for Workspace checkout lifecycles. It reads the
@@ -257,6 +263,8 @@ public final class AlasCoreContext {
     /// leaves the worktree visible and untouched.
     public func archiveWorktree(_ worktree: Worktree) async throws {
         try setWorktreeHidden(worktree.path, projectID: worktree.projectId, hidden: true)
+        archivingWorktreeIDs.insert(worktree.id)
+        defer { archivingWorktreeIDs.remove(worktree.id) }
         let running = headlessRuns.values.filter { $0.worktreeID == worktree.id }.map(\.task)
         for run in running {
             run.cancel()
@@ -269,7 +277,9 @@ public final class AlasCoreContext {
     }
 
     /// Shows an archived worktree again. Sessions and runs are not restored.
+    /// Refused while its archive is still tearing down.
     public func unarchiveWorktree(path: URL, projectID: String) throws {
+        guard !archivingWorktreeIDs.contains(Worktree.makeId(path: path)) else { throw WorktreeArchived() }
         try setWorktreeHidden(path, projectID: projectID, hidden: false)
     }
 
