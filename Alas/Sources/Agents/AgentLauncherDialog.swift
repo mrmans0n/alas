@@ -25,7 +25,9 @@ struct AgentLauncherDialog: View {
     @State private var openingError: String?
     @State private var deletionRequest: ACPSessionDeletionRequest?
     @State private var deletionError: String?
-    @State private var installingAdapterAgentID: String?
+    /// Installs in flight, keyed like the install coordinator so another
+    /// agent or host stays installable meanwhile.
+    @State private var installingAdapters: Set<ACPAdapterUpdateKey> = []
     @State private var adapterInstallError: String?
 
     private let agentTileSize: CGFloat = 64
@@ -707,7 +709,8 @@ struct AgentLauncherDialog: View {
     }
 
     private func adapterInstallRow(agent: AgentDefinition, reason: String) -> some View {
-        let installing = installingAdapterAgentID == agent.id
+        let installing = currentInstallContext(agentID: agent.id)
+            .map { installingAdapters.contains($0.key) } ?? false
         return HStack(spacing: 8) {
             if installing { ProgressView().controlSize(.small) }
             Text(installing
@@ -715,7 +718,7 @@ struct AgentLauncherDialog: View {
                  : adapterInstallError.map { "Install failed: \($0)" } ?? reason)
                 .lineLimit(2)
             Spacer()
-            if installingAdapterAgentID == nil {
+            if !installing {
                 Button(adapterInstallError == nil ? "Install" : "Retry") { installAdapter(for: agent) }
                     .buttonStyle(.plain)
                     .foregroundStyle(theme.color("accent"))
@@ -728,13 +731,13 @@ struct AgentLauncherDialog: View {
     }
 
     private func installAdapter(for agent: AgentDefinition) {
-        guard installingAdapterAgentID == nil,
-              let context = currentInstallContext(agentID: agent.id)
+        guard let context = currentInstallContext(agentID: agent.id),
+              !installingAdapters.contains(context.key)
         else { return }
-        installingAdapterAgentID = agent.id
+        installingAdapters.insert(context.key)
         adapterInstallError = nil
         Task {
-            defer { installingAdapterAgentID = nil }
+            defer { installingAdapters.remove(context.key) }
             do {
                 try await appState.acpAdapterInstallCoordinator.install(target: context.target, agentID: agent.id)
             } catch {
@@ -755,6 +758,8 @@ struct AgentLauncherDialog: View {
         let agentID: String
         let owner: SessionOwnerID
         let target: ACPAdapterTarget
+
+        var key: ACPAdapterUpdateKey { ACPAdapterUpdateKey(target: target, agentID: agentID) }
     }
 
     /// The browser's install context, or nil when it isn't showing `agentID`.
