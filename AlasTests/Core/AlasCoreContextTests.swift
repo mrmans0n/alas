@@ -58,7 +58,7 @@ struct AlasCoreContextTests {
         _ = try await reloaded.projects.refreshWorktrees(projectId: project.id)
         #expect(reloaded.projects.worktrees(projectId: project.id).map(\.id).contains(worktree.id))
 
-        let sessions = context.sessionManager(for: worktree)
+        let sessions = try context.sessionManager(for: worktree)
         defer { sessions.shutdownBackgroundTasks() }
         let session = sessions.createSession(agentId: "gemini")
         await sessions.attach(to: session.id, freshlyCreated: true)

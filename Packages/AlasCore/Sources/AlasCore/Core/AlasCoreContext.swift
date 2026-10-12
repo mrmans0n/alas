@@ -10,6 +10,9 @@ private let contextLogger = Logger(subsystem: "io.nlopez.alas", category: "AlasC
 @MainActor
 @Observable
 public final class AlasCoreContext {
+    /// The worktree is being deleted, so nothing new can start in it.
+    public struct WorktreeBeingDeleted: Error, Equatable {}
+
     public var projects: ProjectsManager
     /// One session manager per owner (worktree or workspace checkout).
     public var sessionManagers: [SessionOwnerID: ACPSessionManager] = [:]
@@ -36,6 +39,8 @@ public final class AlasCoreContext {
         try WorktreeTrashCleaner.launch($0)
     }
 
+    /// Worktrees being deleted. Nothing new may start in them meanwhile.
+    @ObservationIgnored private var deletingWorktreeIDs: Set<String> = []
     /// Headless runs in flight, so deleting their worktree can stop them.
     @ObservationIgnored private var headlessRuns: [String: (worktreeID: String, task: Task<RunScriptCompletion, Error>)] = [:]
 
@@ -163,6 +168,7 @@ public final class AlasCoreContext {
             throw ProjectCreationError.projectNotFound
         }
         guard project.host == nil else { throw RunService.RunError.remoteProjectUnsupported }
+        guard !deletingWorktreeIDs.contains(worktree.id) else { throw WorktreeBeingDeleted() }
         guard runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status.isActive != true else {
             throw RunService.RunError.alreadyRunning
         }
@@ -214,6 +220,8 @@ public final class AlasCoreContext {
         guard let project = projects.projects.first(where: { $0.id == worktree.projectId }) else {
             throw ProjectCreationError.projectNotFound
         }
+        guard deletingWorktreeIDs.insert(worktree.id).inserted else { throw WorktreeBeingDeleted() }
+        defer { deletingWorktreeIDs.remove(worktree.id) }
         let repoPath = URL(fileURLWithPath: project.path)
         // Nothing may keep running inside the checkout once its files go.
         let running = headlessRuns.values.filter { $0.worktreeID == worktree.id }.map(\.task)
@@ -290,10 +298,12 @@ public final class AlasCoreContext {
         )
     }
 
-    /// The session manager for `worktree`, created on first use.
-    public func sessionManager(for worktree: Worktree) -> ACPSessionManager {
+    /// The session manager for `worktree`, created on first use. None is
+    /// created for a worktree that is being deleted.
+    public func sessionManager(for worktree: Worktree) throws -> ACPSessionManager {
         let owner = SessionOwnerID.worktree(worktree.id)
         if let manager = sessionManagers[owner] { return manager }
+        guard !deletingWorktreeIDs.contains(worktree.id) else { throw WorktreeBeingDeleted() }
         let manager = makeSessionManager(owner, worktree)
         sessionManagers[owner] = manager
         return manager
