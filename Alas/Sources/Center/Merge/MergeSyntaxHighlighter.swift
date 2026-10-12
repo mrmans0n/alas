@@ -40,29 +40,45 @@ final class MergeSyntaxHighlighter {
 
     var hasResults: Bool { revision > 0 }
 
-    /// Parses `input` unless it was already parsed. Runs the tree-sitter
-    /// work on a background task; cancellation drops the result.
+    @ObservationIgnored private var pendingInput: Input?
+    @ObservationIgnored private var isParsing = false
+
+    /// Parses `input` unless it was already parsed. At most one parse runs
+    /// at a time: inputs that arrive meanwhile are coalesced and only the
+    /// newest one is parsed next, so fast typing can't pile up full-file
+    /// parses (the detached work can't be cancelled mid-parse).
     func update(_ input: Input) async {
         guard input != lastInput else { return }
-        let parsed = await Task.detached(priority: .userInitiated) {
-            (
-                local: Self.lineSpans(rows: input.local, fileExtension: input.fileExtension),
-                remote: Self.lineSpans(rows: input.remote, fileExtension: input.fileExtension),
-                base: input.base.isEmpty ? [] : Self.lineSpans(rows: input.base, fileExtension: input.fileExtension)
-            )
-        }.value
-        guard !Task.isCancelled else { return }
+        pendingInput = input
+        guard !isParsing else { return }
+        isParsing = true
+        defer { isParsing = false }
+        while let next = pendingInput {
+            pendingInput = nil
+            guard next != lastInput else { continue }
+            let parsed = await Task.detached(priority: .userInitiated) {
+                (
+                    local: Self.lineSpans(rows: next.local, fileExtension: next.fileExtension),
+                    remote: Self.lineSpans(rows: next.remote, fileExtension: next.fileExtension),
+                    base: next.base.isEmpty ? [] : Self.lineSpans(rows: next.base, fileExtension: next.fileExtension)
+                )
+            }.value
+            apply(next, local: parsed.local, remote: parsed.remote, base: parsed.base)
+        }
+    }
+
+    private func apply(_ input: Input, local: [[LineSpan]], remote: [[LineSpan]], base: [[LineSpan]]) {
         lastInput = input
         var next = Snapshot()
         next.rows[.local] = input.local
         next.rows[.remote] = input.remote
         next.rows[nil] = input.base
-        next.lines[.local] = parsed.local
-        next.lines[.remote] = parsed.remote
-        next.lines[nil] = parsed.base
+        next.lines[.local] = local
+        next.lines[.remote] = remote
+        next.lines[nil] = base
         snapshot = next
         var byContent: [String: [LineSpan]] = [:]
-        for (rows, lines) in [(input.local, parsed.local), (input.remote, parsed.remote), (input.base, parsed.base)] {
+        for (rows, lines) in [(input.local, local), (input.remote, remote), (input.base, base)] {
             for (row, spans) in zip(rows, lines) where byContent[row] == nil {
                 byContent[row] = spans
             }
