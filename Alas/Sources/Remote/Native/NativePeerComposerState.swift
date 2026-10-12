@@ -3,17 +3,27 @@ import Foundation
 /// Pure translation from peer wire frames to the local composer's models,
 /// so the peer composer reuses the local chip views and action logic.
 enum NativePeerComposerState {
-    /// Mirrors the local editor: Command always sends, Shift adds a line,
-    /// Option selects the alternate follow-up, and code blocks keep bare Return.
-    static func returnSubmitIntent(
-        command: Bool, shift: Bool, option: Bool, insideCodeBlock: Bool,
-        sendOnEnter: Bool = true
-    ) -> ACPSubmitIntent? {
-        if command { return .auto }
-        if shift { return nil }
-        if option { return sendOnEnter ? .steer : .auto }
-        if insideCodeBlock { return nil }
-        return sendOnEnter ? .auto : .steer
+    private struct PeerMention: Codable {
+        let peerId: String
+        let mention: RemoteMention
+    }
+
+    /// Remote resources must retain their host identity when copied as chips.
+    /// A local file URI or a chip from another peer cannot name a host resource.
+    static func mentionURI(_ mention: RemoteMention, peerId: String) -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        guard let data = try? encoder.encode(PeerMention(peerId: peerId, mention: mention)) else { return "" }
+        return "alas-peer-mention:" + data.base64EncodedString()
+    }
+
+    static func mention(from uri: String, peerId: String) -> RemoteMention? {
+        let prefix = "alas-peer-mention:"
+        guard uri.hasPrefix(prefix),
+              let data = Data(base64Encoded: String(uri.dropFirst(prefix.count))),
+              let resource = try? JSONDecoder().decode(PeerMention.self, from: data),
+              resource.peerId == peerId else { return nil }
+        return resource.mention
     }
 
     static func chipState(from config: RemoteSessionConfig) -> ACPChipState {
@@ -97,19 +107,6 @@ enum NativePeerComposerState {
         }
     }
 
-    /// Replaces the `/` or `@` token being typed with the pick and a
-    /// trailing space, as the local picker does. Offsets are UTF-16, the
-    /// unit `ACPSlashCommand.activeToken` and text selections share.
-    static func completingToken(
-        _ pick: String, in text: String, tokenStart: Int, caret: Int
-    ) -> (text: String, caret: Int) {
-        let string = text as NSString
-        let replacement = pick + " "
-        let range = NSRange(location: tokenStart, length: max(0, caret - tokenStart))
-        return (string.replacingCharacters(in: range, with: replacement),
-                tokenStart + (replacement as NSString).length)
-    }
-
     /// The `@` token the caret is in: an `@` at the start or after
     /// whitespace, then no whitespace up to the caret. Paths and
     /// `File.swift#name` drill-downs are single tokens.
@@ -186,31 +183,6 @@ enum NativePeerComposerState {
             if starts && endsToken(at: end) { ranges.append(found) }
             search = NSRange(location: end, length: text.length - end)
         }
-    }
-
-    struct DictationEdit: Equatable {
-        var text: String
-        /// The volatile span the next update replaces; nil once committed.
-        var span: NSRange?
-        var caret: Int
-    }
-
-    /// Applies a dictation update the way the local text view does: a
-    /// volatile update replaces the previous volatile span in place, a final
-    /// one commits it, and with no span open the update replaces the
-    /// selection. Ranges are UTF-16.
-    static func applyingDictation(
-        _ transcript: String, isFinal: Bool, to text: String, span: NSRange?, selection: NSRange
-    ) -> DictationEdit {
-        let string = text as NSString
-        let base = span ?? selection
-        let location = min(base.location, string.length)
-        let target = NSRange(location: location, length: min(base.length, string.length - location))
-        let inserted = NSRange(location: location, length: (transcript as NSString).length)
-        return DictationEdit(
-            text: string.replacingCharacters(in: target, with: transcript),
-            span: isFinal ? nil : inserted,
-            caret: NSMaxRange(inserted))
     }
 
     /// The local context ring's inputs, rebuilt from the host's reduced

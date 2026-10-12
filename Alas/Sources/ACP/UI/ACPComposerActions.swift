@@ -19,6 +19,8 @@ enum ACPMessageQuote {
 @MainActor
 final class ACPComposerActions: ObservableObject {
     var submitWithIntent: ((ACPSubmitIntent) -> Void)?
+    var selectionSnapshot: (() -> (text: String, range: NSRange)?)?
+    var insertMention: ((_ name: String, _ uri: String, _ tokenStart: Int) -> Bool)?
     var insertQuote: ((String) -> Void)?
     /// Published by the coordinator; opens an image picker and inserts the
     /// chosen files as chips.

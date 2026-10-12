@@ -388,8 +388,8 @@ struct ACPComposerDraftBridgeTests {
         #expect(ACPInputField.Coordinator.draft(from: textView.attributedString()) == newerDraft)
     }
 
-    @Test("failed completion does not restore submitted draft after intervening edit")
-    func failedCompletionDoesNotRestoreSubmittedDraftAfterInterveningEdit() {
+    @Test("failed completion does not restore submitted draft after newer typing or owner updates", arguments: [false, true])
+    func failedCompletionDoesNotRestoreSubmittedDraftAfterInterveningEdit(ownerUpdate: Bool) {
         let submittedDraft = ACPComposerDraft(segments: [.text("hello")])
         let newerDraft = ACPComposerDraft(segments: [
             .text("new "),
@@ -417,12 +417,16 @@ struct ACPComposerDraftBridgeTests {
         coordinator.textView = textView
 
         coordinator.submit(textView)
-        textView.textStorage?.setAttributedString(ACPInputField.Coordinator.attributedString(from: newerDraft))
-        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        if ownerUpdate {
+            coordinator.syncPersistedDraft(newerDraft, into: textView)
+        } else {
+            textView.textStorage?.setAttributedString(ACPInputField.Coordinator.attributedString(from: newerDraft))
+            coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        }
         coordinator.flushPendingRestyleNow()
         completion?(false)
 
-        #expect(changedDrafts == [newerDraft])
+        #expect(changedDrafts == (ownerUpdate ? [] : [newerDraft]))
         #expect(clearCount == 0)
         #expect(ACPInputField.Coordinator.draft(from: textView.attributedString()) == newerDraft)
     }
