@@ -516,6 +516,8 @@ final class AppState {
     private let acpDetachRunner: ACPDetachRunner?
     @ObservationIgnored
     private let remoteAccelerationPreparer: RemoteAccelerationPreparer?
+    @ObservationIgnored
+    private let worktreeCleanupLauncher: WorktreeCleanupLauncher
     typealias WorktreeStatusScan = @Sendable ([URL]) async -> Void
 
     @ObservationIgnored
@@ -1566,6 +1568,7 @@ final class AppState {
         self.closeTabConfirmer = closeTabConfirmer
         self.acpDetachRunner = acpDetachRunner
         self.remoteAccelerationPreparer = remoteAccelerationPreparer
+        self.worktreeCleanupLauncher = worktreeCleanupLauncher
         self.worktreeStatusScan = worktreeStatusScan
         self.projectGitWatcherFactory = projectGitWatcherFactory
         self.ggStackCache = ggStackCache
@@ -1707,7 +1710,6 @@ final class AppState {
         self.runScheduler.persistenceErrorHandler = { [weak self] message in
             self?.persistenceErrorHandler("Schedules Save Failed", message)
         }
-        core.launchWorktreeCleanup = worktreeCleanupLauncher
         core.stopWorkspaceCheckoutSessions = { [weak self] checkout in
             try await self?.stopWorkspaceCheckoutSessions(checkout)
         }
@@ -12244,7 +12246,7 @@ final class AppState {
         await runHistoryPurgeTask?.value
         if case .staged(let ticket) = outcome {
             do {
-                try core.launchWorktreeCleanup(ticket)
+                try worktreeCleanupLauncher(ticket)
             } catch {
                 Self.logger.error(
                     "Could not launch worktree cleanup for \(ticket.stagedPath.path, privacy: .public): \(error.localizedDescription, privacy: .public)"

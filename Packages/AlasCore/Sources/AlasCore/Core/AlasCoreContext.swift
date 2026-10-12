@@ -1,8 +1,5 @@
 import Foundation
 import Observation
-import os
-
-private let contextLogger = Logger(subsystem: "io.nlopez.alas", category: "AlasCoreContext")
 
 /// The headless composition root: the projects Alas manages, their worktrees,
 /// and the session managers that run agents in them. Nothing here needs the
@@ -10,31 +7,6 @@ private let contextLogger = Logger(subsystem: "io.nlopez.alas", category: "AlasC
 @MainActor
 @Observable
 public final class AlasCoreContext {
-    /// The worktree is being deleted, so nothing new can start in it.
-    public struct WorktreeBeingDeleted: Error, Equatable {}
-
-    /// Why `deleteWorktree` refused, before touching anything.
-    public enum WorktreeDeletionRefusal: Error, Equatable {
-        /// The project's main checkout is never deleted.
-        case mainWorktree
-        /// An active Workspace checkout manages this worktree; delete it there.
-        case ownedByWorkspaceCheckout(name: String)
-        /// Workspace ownership could not be read, so it cannot be ruled out.
-        case workspaceStateUnreadable
-        /// The path now holds a different checkout than the one asked for.
-        case replaced
-        /// The worktree carries no lineage, so a replacement could not be told apart.
-        case unknownIdentity
-        /// An interrupted checkpoint restore must be recovered first.
-        case checkpointRecoveryPending
-        /// Git would refuse it without `force`: uncommitted or untracked
-        /// changes, or a lock.
-        case needsForce(Set<WorktreeDeletePreflightReason>)
-        /// Remote checkouts carry no lineage to tell a replacement apart, so
-        /// only the app's confirmed flow deletes them.
-        case remoteUnsupported
-    }
-
     public var projects: ProjectsManager
     /// One session manager per owner (worktree or workspace checkout).
     public var sessionManagers: [SessionOwnerID: ACPSessionManager] = [:]
@@ -55,16 +27,6 @@ public final class AlasCoreContext {
     /// carried so a worktree teardown can settle every run it owns, including
     /// ones that never produced an archivable record.
     @ObservationIgnored public var runSettlementHandlers: [String: (worktreeID: String, notify: (RunScriptSettlement) -> Void)] = [:]
-
-    /// Starts background cleanup of a removed worktree's staged files.
-    @ObservationIgnored public var launchWorktreeCleanup: @MainActor (WorktreeTrashCleanupTicket) throws -> Void = {
-        try WorktreeTrashCleaner.launch($0)
-    }
-
-    /// Worktrees being deleted. Nothing new may start in them meanwhile.
-    @ObservationIgnored private var deletingWorktreeIDs: Set<String> = []
-    /// Headless runs in flight, so deleting their worktree can stop them.
-    @ObservationIgnored private var headlessRuns: [String: (worktreeID: String, task: Task<RunScriptCompletion, Error>)] = [:]
 
     /// The on-device text model's files and state.
     @ObservationIgnored public let localTextModelStore: LocalTextModelStore
@@ -217,7 +179,6 @@ public final class AlasCoreContext {
             throw ProjectCreationError.projectNotFound
         }
         guard project.host == nil else { throw RunService.RunError.remoteProjectUnsupported }
-        guard !deletingWorktreeIDs.contains(worktree.id) else { throw WorktreeBeingDeleted() }
         guard runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status.isActive != true else {
             throw RunService.RunError.alreadyRunning
         }
@@ -238,10 +199,7 @@ public final class AlasCoreContext {
         ))
         let completion: RunScriptCompletion
         do {
-            let run = Task { try await runs.run(script, in: worktree, project: project, runID: runID) }
-            headlessRuns[runID] = (worktree.id, run)
-            defer { headlessRuns.removeValue(forKey: runID) }
-            completion = try await withTaskCancellationHandler { try await run.value } onCancel: { run.cancel() }
+            completion = try await runs.run(script, in: worktree, project: project, runID: runID)
         } catch is CancellationError {
             finalizeRun(runRecords.finish(runID: runID, outcome: .stopped, at: Date()), capture: .unavailable)
             throw CancellationError()
@@ -259,141 +217,6 @@ public final class AlasCoreContext {
             capture: .completion(completion)
         )
         return outcome
-    }
-
-    /// Deletes `worktree` and its branch when merged and `deleteBranchIfMerged`.
-    /// Without `force`, a worktree with uncommitted or untracked changes, or a
-    /// locked one, is refused before anything is touched. Otherwise its headless runs and
-    /// agent sessions are stopped before its files go, and its runs and run
-    /// history are discarded once it is removed. Throws if the project list
-    /// cannot be saved afterwards; the worktree is gone by then.
-    public func deleteWorktree(_ worktree: Worktree, force: Bool = false, deleteBranchIfMerged: Bool = false) async throws {
-        guard let project = projects.projects.first(where: { $0.id == worktree.projectId }) else {
-            throw ProjectCreationError.projectNotFound
-        }
-        guard !worktree.path.isRemoteAlasPath else { throw WorktreeDeletionRefusal.remoteUnsupported }
-        guard !projects.isMain(worktree, in: project) else { throw WorktreeDeletionRefusal.mainWorktree }
-        try await refuseWorkspaceOwnedDeletion(worktree)
-        try Self.refuseReplacedCheckout(worktree)
-        try await Self.refusePendingCheckpointRecovery(worktree)
-        guard deletingWorktreeIDs.insert(worktree.id).inserted else { throw WorktreeBeingDeleted() }
-        defer { deletingWorktreeIDs.remove(worktree.id) }
-        if !force {
-            let preflight = try await WorktreeService().deletePreflight(worktreePath: worktree.path)
-            guard !preflight.requiresForce else { throw WorktreeDeletionRefusal.needsForce(preflight.reasons) }
-        }
-        // Nothing may keep using the checkout while its files go.
-        let running = headlessRuns.values.filter { $0.worktreeID == worktree.id }.map(\.task)
-        for run in running {
-            run.cancel()
-        }
-        for run in running {
-            _ = try? await run.value
-        }
-        await disposeSessionManager(owner: .worktree(worktree.id))
-        let repoPath = URL(fileURLWithPath: project.path)
-        let outcome = try await ProjectMutationGate.shared.withMutation(projectID: project.id) {
-            try Self.refuseReplacedCheckout(worktree)
-            // Ownership may have changed while runs and sessions stopped.
-            try await self.refuseWorkspaceOwnedDeletion(worktree)
-            return try await WorktreeLifecycle.performRemoveWorktree(
-                repoPath: repoPath,
-                worktree: worktree,
-                deleteBranchIfMerged: deleteBranchIfMerged,
-                force: force
-            )
-        }
-        await discardRuns(worktreeID: worktree.id, deletingHistory: true)?.value
-        if case .staged(let ticket) = outcome {
-            do {
-                try launchWorktreeCleanup(ticket)
-            } catch {
-                contextLogger.error(
-                    "Could not launch worktree cleanup for \(ticket.stagedPath.path, privacy: .public): \(error.localizedDescription, privacy: .public)"
-                )
-            }
-            // Also covers a cleanup that could not be launched.
-            let cleanupProjects = projects.projects
-            Task.detached(priority: .utility) {
-                WorktreeTrashCleaner.sweep(projects: cleanupProjects)
-            }
-        }
-        let changed: Bool
-        do {
-            changed = try await projects.refreshWorktrees(projectId: project.id)
-        } catch {
-            // The removal succeeded, so the row must not survive a failed
-            // refresh, in memory or on disk.
-            projects.dropRemovedWorktree(id: worktree.id, projectId: project.id)
-            changed = true
-        }
-        if changed {
-            try saveProjects()
-        }
-    }
-
-    /// Only an active Workspace checkout owns a member's deletion; archived
-    /// and former ones no longer manage it.
-    private func refuseWorkspaceOwnedDeletion(_ worktree: Worktree) async throws {
-        let state: WorkspaceStateFile
-        switch await workspaceStore.load() {
-        case .missing: return
-        case .unreadable: throw WorktreeDeletionRefusal.workspaceStateUnreadable
-        case .loaded(let loaded): state = loaded
-        }
-        let path = worktree.path.standardizedFileURL.path
-        let owner = state.checkouts.first { checkout in
-            checkout.workspaceID != nil && checkout.archivedAt == nil && checkout.members.contains { member in
-                guard member.projectID == worktree.projectId,
-                      URL(fileURLWithPath: checkout.inAppWorktreePath(member.worktreePath)).standardizedFileURL.path == path
-                else { return false }
-                if let memberLineage = member.gitLineageID, let lineage = worktree.lineageID, memberLineage != lineage {
-                    return false
-                }
-                return !(member.availability == .explicitlyDeleted && member.cleanup?.worktreeRemoved == true)
-            }
-        }
-        if let owner { throw WorktreeDeletionRefusal.ownedByWorkspaceCheckout(name: owner.fallbackWorkspaceName) }
-    }
-
-    /// A checkout recreated at the same path carries a different lineage
-    /// marker, or none.
-    private nonisolated static func refuseReplacedCheckout(_ worktree: Worktree) throws {
-        guard let expected = worktree.lineageID else { throw WorktreeDeletionRefusal.unknownIdentity }
-        guard WorktreeService.existingLocalLineageID(forWorktreeAt: worktree.path) == expected else {
-            throw WorktreeDeletionRefusal.replaced
-        }
-    }
-
-    /// Recovery state from an interrupted restore references the checkout,
-    /// so it must not disappear underneath it. An unreadable journal store
-    /// refuses too.
-    private nonisolated static func refusePendingCheckpointRecovery(_ worktree: Worktree) async throws {
-        guard let lineageID = worktree.lineageID else { throw WorktreeDeletionRefusal.unknownIdentity }
-        guard try await WorktreeCheckpointStore().recoverableJournals(lineageID: lineageID).isEmpty else {
-            throw WorktreeDeletionRefusal.checkpointRecoveryPending
-        }
-    }
-
-    /// Shuts down the owner's agent sessions, persisting what they hold and
-    /// releasing their leases, and forgets the manager.
-    public func disposeSessionManager(owner: SessionOwnerID) async {
-        guard let manager = sessionManagers.removeValue(forKey: owner) else { return }
-        manager.flushPendingDraftWrites()
-        for runner in manager.runners.values {
-            runner.stop()
-        }
-        manager.prepareForDisposal()
-        await Self.finishDisposing(manager)
-    }
-
-    /// The asynchronous half of disposing a manager whose runners are stopped.
-    public static func finishDisposing(_ manager: ACPSessionManager) async {
-        await manager.flushAllPersistence()
-        await manager.disposeAllLiveSessions()
-        // Leases go last: a freed lease must not be claimable while an old
-        // agent process is still alive.
-        await manager.releaseAllOwnedLeases()
     }
 
     /// The one coordinator for Workspace checkout lifecycles. It reads the
@@ -416,6 +239,16 @@ public final class AlasCoreContext {
         return coordinator
     }
 
+    /// The asynchronous half of disposing a session manager whose runners are
+    /// stopped: persist what it holds, end its sessions, release its leases.
+    public static func finishDisposing(_ manager: ACPSessionManager) async {
+        await manager.flushAllPersistence()
+        await manager.disposeAllLiveSessions()
+        // Leases go last: a freed lease must not be claimable while an old
+        // agent process is still alive.
+        await manager.releaseAllOwnedLeases()
+    }
+
     /// A manager with its own session database, as the app keeps per owner.
     public static func defaultSessionManager(owner: SessionOwnerID, worktree: Worktree) -> ACPSessionManager {
         ACPSessionManager(
@@ -426,10 +259,8 @@ public final class AlasCoreContext {
         )
     }
 
-    /// The session manager for `worktree`, created on first use. None is
-    /// created for a worktree that is being deleted.
-    public func sessionManager(for worktree: Worktree) throws -> ACPSessionManager {
-        guard !deletingWorktreeIDs.contains(worktree.id) else { throw WorktreeBeingDeleted() }
+    /// The session manager for `worktree`, created on first use.
+    public func sessionManager(for worktree: Worktree) -> ACPSessionManager {
         let owner = SessionOwnerID.worktree(worktree.id)
         if let manager = sessionManagers[owner] { return manager }
         let manager = makeSessionManager(owner, worktree)

@@ -453,11 +453,7 @@ public struct WorktreeService: Sendable {
 
         let result = try await Process.git(args, cwd: repoPath)
         if result.exitCode == 0 {
-            var worktree = makeWorktree(destination: destination, branch: branch, projectId: projectId)
-            if !repoPath.isRemoteAlasPath {
-                worktree.lineageID = Self.localLineageID(forWorktreeAt: destination)
-            }
-            return worktree
+            return makeWorktree(destination: destination, branch: branch, projectId: projectId)
         }
 
         guard Self.looksLikeMissingLFS(result.stderr) else {
