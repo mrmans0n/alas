@@ -1356,6 +1356,7 @@
 		C51451EC8E103EB5FEF82EFE /* ACPSessionLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EB39DE3614B5BEC4D3EBF13 /* ACPSessionLifecycleTests.swift */; };
 		C51D65D3D40F801BC94ABBDD /* TabsManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A218B5125FC963339E40605E /* TabsManager.swift */; };
 		C533E936D5BB793DBA80D09D /* WelcomeSky.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF4175CC7D75C908087A6824 /* WelcomeSky.swift */; };
+		C536752BA874E9DF12EA346D /* TestPersistenceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55679A09CB104CCA1530EEB6 /* TestPersistenceStore.swift */; };
 		C55B79DC0AAE96CFA14BE76F /* CommitFilesListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27E7E4823B42BBA6EA7610DB /* CommitFilesListView.swift */; };
 		C5644E1144140B99E8676064 /* ACPSlashPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93C3F02ECEA5D545FA268DB8 /* ACPSlashPicker.swift */; };
 		C57BECCAC94025DB94D752B8 /* MergedReviewRequestTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1002ED416A96D64EC80B7AF /* MergedReviewRequestTests.swift */; };
@@ -2373,6 +2374,7 @@
 		547176E79C529DBFE2086B88 /* ACPSessionRunnerQueueTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSessionRunnerQueueTests.swift; sourceTree = "<group>"; };
 		54897710493742A6DFD6ABF3 /* ACPToolCallContentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPToolCallContentTests.swift; sourceTree = "<group>"; };
 		54E2352120FF28D84337D848 /* CheckpointRows.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CheckpointRows.swift; sourceTree = "<group>"; };
+		55679A09CB104CCA1530EEB6 /* TestPersistenceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestPersistenceStore.swift; sourceTree = "<group>"; };
 		557D2AF77FB6A2FD7D662B20 /* AppStateRunScheduleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateRunScheduleTests.swift; sourceTree = "<group>"; };
 		55DE02E1672044B68F9DE0B1 /* EditorFindController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorFindController.swift; sourceTree = "<group>"; };
 		55E7D627F1E84F5E2CCBD020 /* MinimapView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MinimapView.swift; sourceTree = "<group>"; };
@@ -4113,6 +4115,7 @@
 				606DD97D8F66AC2B5883F984 /* TerminalIntegrationActionsTests.swift */,
 				68B6937D50514C34A2C14BE1 /* TerminalServiceZmxTests.swift */,
 				71BFAD7D324EEAE4DA5D402E /* TerminalTabStateCodableTests.swift */,
+				55679A09CB104CCA1530EEB6 /* TestPersistenceStore.swift */,
 				50737099AA490FAC6BD9F612 /* TextEditCoordinatesTests.swift */,
 				B70ED4990428C46B69784970 /* ThemeSidebarContrastTests.swift */,
 				1003EEEA51DA385A0DD57CA0 /* ThemeStoreTests.swift */,
@@ -8324,6 +8327,7 @@
 				CAE149AF78F3A62AC985EA2D /* TerminalIntegrationActionsTests.swift in Sources */,
 				C10B2726FF5606A3786ED3B4 /* TerminalServiceZmxTests.swift in Sources */,
 				42502D6356225A4304C93818 /* TerminalTabStateCodableTests.swift in Sources */,
+				C536752BA874E9DF12EA346D /* TestPersistenceStore.swift in Sources */,
 				7445A58BBCAC1DA8EDB0946B /* TextEditCoordinatesTests.swift in Sources */,
 				BB565B8EE9BA20EE961B32FB /* ThemeSidebarContrastTests.swift in Sources */,
 				59AFC96BD543D2520DBE7BB0 /* ThemeStoreTests.swift in Sources */,

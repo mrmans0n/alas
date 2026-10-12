@@ -237,7 +237,7 @@ struct WorkspaceLoadingTests {
             bridge: WorkspaceSpacePersistenceBridge(workspaceStore: WorkspaceStore(url: url))
         )
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             persistenceErrorHandler: { _, _ in },
             workspacesManager: manager
         )
@@ -256,7 +256,7 @@ struct WorkspaceLoadingTests {
             bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore)
         )
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             persistenceErrorHandler: { _, _ in },
             restoreActiveTabsOnStartup: false,
             workspacesManager: manager,
@@ -310,11 +310,6 @@ struct WorkspaceLoadingTests {
 
         #expect(persistence.spacesWriteCount == 0)
         #expect(state.spacesManager.activeSpace?.members == [.project("project"), .workspace(workspaceID)])
-    }
-
-    private struct MemoryStore: PersistenceStoreProtocol {
-        func write<T: Encodable>(_: T, to _: URL) throws {}
-        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
     }
 
     private final class RecordingSpacesStore: PersistenceStoreProtocol, @unchecked Sendable {

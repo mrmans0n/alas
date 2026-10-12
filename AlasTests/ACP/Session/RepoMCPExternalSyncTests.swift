@@ -5,15 +5,6 @@ import Testing
 @MainActor
 @Suite("Repo servers in the external adapter sync")
 struct RepoMCPExternalSyncTests {
-    private struct SeededStore: PersistenceStoreProtocol {
-        let projects: ProjectsFile
-
-        func write<T: Encodable>(_: T, to _: URL) throws {}
-        func readIfExists<T: Decodable>(_ type: T.Type, from _: URL) throws -> T? {
-            type == ProjectsFile.self ? (projects as? T) : nil
-        }
-    }
-
     private func writeConfig(_ json: String, to root: URL) throws {
         let config = root.appendingPathComponent(RepoConfig.relativePath)
         try FileManager.default.createDirectory(
@@ -58,7 +49,7 @@ struct RepoMCPExternalSyncTests {
             path: root, status: .clean, lastActivity: Date()
         )
 
-        let state = AppState(store: SeededStore(projects: ProjectsFile(projects: [project])))
+        let state = AppState(store: TestPersistenceStore(ProjectsFile(projects: [project])))
         let manager = try #require(state.acpManager(for: worktree))
         let provider = try #require(manager.externalMCPStatusProvider)
 
@@ -92,7 +83,7 @@ struct RepoMCPExternalSyncTests {
             path: root, status: .clean, lastActivity: Date()
         )
 
-        let state = AppState(store: SeededStore(projects: ProjectsFile(projects: [project])))
+        let state = AppState(store: TestPersistenceStore(ProjectsFile(projects: [project])))
         let manager = try #require(state.acpManager(for: worktree))
         let provider = try #require(manager.externalMCPStatusProvider)
 

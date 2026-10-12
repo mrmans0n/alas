@@ -797,13 +797,8 @@ struct NewWorktreeDialogTests {
 @Suite(.serialized)
 @MainActor
 struct NewWorktreeDialogPresentationTests {
-    private struct MemoryStore: PersistenceStoreProtocol {
-        func write<T: Encodable>(_: T, to _: URL) throws {}
-        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
-    }
-
     @Test func worktreeDialogOwnsRuntimeHookApprovalPresentation() async throws {
-        let state = AppState(store: MemoryStore(), restoreActiveTabsOnStartup: false)
+        let state = AppState(store: TestPersistenceStore(), restoreActiveTabsOnStartup: false)
         let dialog = NewWorktreeDialog(state: state, presented: .constant(true), presetProjectId: "project")
         let theme = try ThemeStore().current
         let controller = NSHostingController(rootView: dialog.environment(\.theme, theme))

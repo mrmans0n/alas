@@ -9,18 +9,6 @@ struct AppStateCreateWorktreeLaunchSurfaceTests {
         var errorDescription: String? { "Terminal failed to open" }
     }
 
-    private struct FailingStore: PersistenceStoreProtocol {
-        func write<T: Encodable>(_: T, to _: URL) throws {
-            throw NSError(
-                domain: "AppStateCreateWorktreeLaunchSurfaceTests",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "write rejected"]
-            )
-        }
-
-        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
-    }
-
     private func makeRepo(name: String) async throws -> URL {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-launchsurface-\(name)-\(UUID().uuidString)")
@@ -105,7 +93,7 @@ struct AppStateCreateWorktreeLaunchSurfaceTests {
         defer { try? FileManager.default.removeItem(at: repo) }
 
         let state = AppState(
-            store: FailingStore(),
+            store: TestPersistenceStore(writeError: NSError(domain: "AppStateCreateWorktreeLaunchSurfaceTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "write rejected"])),
             persistenceErrorHandler: { _, _ in }
         )
         let project = try await state.projectsManager.addProject(

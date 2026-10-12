@@ -20,7 +20,7 @@ struct PairedAuthoredContentSurfaceTests {
     }
 
     @Test func terminalStartupScriptBindingWrapsSelectedCommand() async throws {
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         state.config.terminal.startupScript = "terminal command"
         let controller = NSHostingController(rootView: TerminalPane(state: state)
             .environment(\.theme, try! ThemeStore().current))
@@ -130,19 +130,6 @@ private struct ProjectStartupScriptHarness: View {
     var body: some View {
         ProjectStartupScriptEditor(text: $model.text, minHeight: 60)
             .environment(\.theme, try! ThemeStore().current)
-    }
-}
-
-private struct MemoryStore: PersistenceStoreProtocol {
-    var projectsFile: ProjectsFile? = nil
-
-    func write<T: Encodable>(_: T, to _: URL) throws {}
-
-    func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? {
-        if T.self == ProjectsFile.self {
-            return projectsFile as? T
-        }
-        return nil
     }
 }
 

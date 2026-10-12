@@ -133,7 +133,7 @@ struct AttentionNavigationTests {
         let target = ReviewSessionTarget.localChanges(worktreeID: "worktree", repositoryPath: URL(fileURLWithPath: "/repo"), scope: .all)
         let fileID = DiffReviewFileID(namespace: "unstaged", path: "file.swift")
         let record = ReviewSessionRecord(id: .init(rawValue: "review-record"), target: target, selectedFileID: fileID, focusedCommentID: "comment2", createdAt: Date(), updatedAt: Date())
-        let tabs = TabsManager(store: MemoryStore())
+        let tabs = TabsManager(store: TestPersistenceStore())
         let first = tabs.openOrFocusReviewSession(worktreeId: "worktree", record: record)
         let second = tabs.openOrFocusReviewSession(worktreeId: "worktree", record: record)
         guard case .reviewSession(let initial) = first, case .reviewSession(let repeated) = second else {
@@ -432,11 +432,6 @@ struct AttentionNavigationTests {
         #expect(fixture.state.attentionStore.acknowledgments[item.eventID] != nil)
     }
 
-    private struct MemoryStore: PersistenceStoreProtocol {
-        func write<T: Encodable>(_: T, to _: URL) throws {}
-        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
-    }
-
     private static func reviewSnapshot(errorMessage: String? = nil) -> ReviewLoopSnapshot {
         let remote = CodeHostRemote(
             kind: .github,
@@ -492,9 +487,9 @@ struct AttentionNavigationTests {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             history = try RunHistoryStore(path: directory.appendingPathComponent("run-history.sqlite").path)
             state = AppState(
-                store: MemoryStore(),
+                store: TestPersistenceStore(),
                 runHistoryStore: history,
-                tabsManager: TabsManager(store: MemoryStore()),
+                tabsManager: TabsManager(store: TestPersistenceStore()),
                 attentionStore: AttentionStore(url: directory.appendingPathComponent("attention.json"))
             )
             let project = ProjectConfig(id: "project", name: "Project", path: "/repo", color: "blue", addedAt: Date())

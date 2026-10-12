@@ -39,11 +39,6 @@ struct ClosedTabAppStateTests {
         }
     }
 
-    private struct MemoryStore: PersistenceStoreProtocol {
-        func write<T: Encodable>(_: T, to _: URL) throws {}
-        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
-    }
-
     private final class Fixture {
         let state: AppState
         let first: Worktree
@@ -63,7 +58,7 @@ struct ClosedTabAppStateTests {
     }
 
     private func makeFixture(
-        state: AppState = AppState(store: MemoryStore())
+        state: AppState = AppState(store: TestPersistenceStore())
     ) -> Fixture {
         let tempRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-closed-tabs-\(UUID().uuidString)", isDirectory: true)
@@ -163,7 +158,7 @@ struct ClosedTabAppStateTests {
             color: "blue",
             addedAt: Date(timeIntervalSince1970: 0)
         )
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         state.projectsManager = ProjectsManager(persistedProjects: [deletingProject, ownProject])
         let own = Worktree(
             id: sharedID,
@@ -295,7 +290,7 @@ struct ClosedTabAppStateTests {
         let gate = AsyncGate()
         var detachCalls = 0
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             acpDetachRunner: { _, _ in
                 detachCalls += 1
                 await gate.enterAndWait()
@@ -331,7 +326,7 @@ struct ClosedTabAppStateTests {
     @Test func completedACPDetachIsDroppedEvenWithoutReopen() async {
         let gate = AsyncGate()
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             acpDetachRunner: { _, _ in
                 await gate.enterAndWait()
             }
@@ -358,7 +353,7 @@ struct ClosedTabAppStateTests {
     @Test func closedACPSessionWithScheduledPromptDetachesAfterQueueDrains() async throws {
         let gate = AsyncGate()
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             acpDetachRunner: { _, sessionId in
                 #expect(sessionId == "scheduled-close")
                 await gate.enterAndWait()
@@ -395,7 +390,7 @@ struct ClosedTabAppStateTests {
     @Test func closedACPSessionWithOrdinarySendingPromptDetachesImmediately() async throws {
         let gate = AsyncGate()
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             acpDetachRunner: { _, sessionId in
                 #expect(sessionId == "ordinary-sending-close")
                 await gate.enterAndWait()
@@ -532,7 +527,7 @@ struct ClosedTabAppStateTests {
     @Test func openExistingACPSessionWaitsForPendingDetach() async throws {
         let gate = AsyncGate()
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             acpDetachRunner: { _, _ in await gate.enterAndWait() }
         )
         let fixture = makeFixture(state: state)
@@ -562,7 +557,7 @@ struct ClosedTabAppStateTests {
     @Test func openExistingOwnedACPSessionWaitsForPendingDetach() async throws {
         let gate = AsyncGate()
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             acpDetachRunner: { _, _ in await gate.enterAndWait() }
         )
         let fixture = makeFixture(state: state)
@@ -593,7 +588,7 @@ struct ClosedTabAppStateTests {
     @Test func closedACPSessionWithFailedQueueHeadDetachesImmediately() async throws {
         let gate = AsyncGate()
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             acpDetachRunner: { _, sessionId in
                 #expect(sessionId == "failed-head-close")
                 await gate.enterAndWait()
@@ -691,7 +686,7 @@ struct ClosedTabAppStateTests {
     @Test func reopeningACPSessionDoesNotRestoreAfterWorktreeCleanupDuringDetach() async {
         let gate = AsyncGate()
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             acpDetachRunner: { _, _ in
                 await gate.enterAndWait()
             }
@@ -738,7 +733,7 @@ struct ClosedTabAppStateTests {
             status: .clean,
             lastActivity: Date(timeIntervalSince1970: 0)
         )
-        let state = AppState(store: MemoryStore(), closeTabConfirmer: { _ in false })
+        let state = AppState(store: TestPersistenceStore(), closeTabConfirmer: { _ in false })
         state.config.terminal.confirmCloseTabs = true
         state.projectsManager = ProjectsManager(persistedProjects: [project])
         state.projectsManager.insertOptimisticWorktree(worktree)
@@ -754,7 +749,7 @@ struct ClosedTabAppStateTests {
         var openedCwds: [String?] = []
         var openedIDs = ["fresh-1", "fresh-2"]
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             terminalSessionOpener: { _, _, _, _, forcedCwd, startupScriptSuffix, includeUserStartupScript, environmentOverrides, environmentRemovals in
                 openedCwds.append(forcedCwd?.path)
                 #expect(startupScriptSuffix == nil)
@@ -814,7 +809,7 @@ struct ClosedTabAppStateTests {
     @Test func reopeningTerminalWaitsForRepoHookApproval() async {
         var openCount = 0
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
                 openCount += 1
                 return .init(id: "fresh-session-\(openCount)", foregroundPid: { nil })
@@ -915,7 +910,7 @@ struct ClosedTabAppStateTests {
     @Test func reopeningManuallyRestoredTerminalDoesNotOpenDuplicateSessions() async {
         var openAttempts = 0
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
                 openAttempts += 1
                 return .init(id: "unexpected-session", foregroundPid: { nil })
@@ -947,7 +942,7 @@ struct ClosedTabAppStateTests {
         var openAttempts = 0
         var errorTitle: String?
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             fileActionErrorHandler: { title, _ in errorTitle = title },
             terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
                 openAttempts += 1
@@ -990,7 +985,7 @@ struct ClosedTabAppStateTests {
         let gate = AsyncGate()
         var openAttempts = 0
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
                 openAttempts += 1
                 return .init(id: "unexpected-session", foregroundPid: { nil })

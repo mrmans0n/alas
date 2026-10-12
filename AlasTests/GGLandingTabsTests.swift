@@ -5,7 +5,7 @@ import Testing
 @MainActor
 struct GGLandingTabsTests {
     @Test func openOrFocusLandingDedupesByProject() {
-        let manager = TabsManager(store: LandingMemoryStore())
+        let manager = TabsManager(store: TestPersistenceStore())
         let first = manager.openOrFocusGGLanding(worktreeId: "w", projectId: "p", stackName: "feature")
         _ = manager.appendTerminal(worktreeId: "w", title: "shell", sessionId: "s")
         let second = manager.openOrFocusGGLanding(worktreeId: "w", projectId: "p", stackName: "feature")
@@ -35,7 +35,7 @@ struct GGLandingTabsTests {
     }
 
     @Test func nextSessionMovesProjectTabToItsInitiatingWorktree() {
-        let manager = TabsManager(store: LandingMemoryStore())
+        let manager = TabsManager(store: TestPersistenceStore())
         _ = manager.openOrFocusGGLanding(worktreeId: "old", projectId: "p", stackName: "first")
         let next = manager.openOrFocusGGLanding(worktreeId: "new", projectId: "p", stackName: "second")
         #expect(manager.tabs(forWorktree: "old").isEmpty)
@@ -45,9 +45,4 @@ struct GGLandingTabsTests {
         #expect(renamed.title == "Land · third")
         #expect(manager.tabs(forWorktree: "new").count == 1)
     }
-}
-
-private struct LandingMemoryStore: PersistenceStoreProtocol {
-    func readIfExists<T: Decodable>(_ type: T.Type, from url: URL) throws -> T? { nil }
-    func write<T: Encodable>(_ value: T, to url: URL) throws {}
 }

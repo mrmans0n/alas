@@ -4,16 +4,6 @@ import Testing
 
 @MainActor
 struct AppStateFollowStackEntryTests {
-    private struct MemoryStore: PersistenceStoreProtocol {
-        let projects: ProjectsFile
-
-        func write<T: Encodable>(_: T, to _: URL) throws {}
-
-        func readIfExists<T: Decodable>(_ type: T.Type, from _: URL) throws -> T? {
-            type == ProjectsFile.self ? projects as? T : nil
-        }
-    }
-
     @Test func noPrefillRoutesToTheExpressionPrompt() {
         #expect(FollowRevisionPromptRoute.route(prefill: nil, stackEntrySupported: true)
             == .expressionPrompt(prefill: nil, isEditing: false))
@@ -103,7 +93,7 @@ struct AppStateFollowStackEntryTests {
             status: .clean,
             lastActivity: .distantPast
         )
-        let state = AppState(store: MemoryStore(projects: .init(projects: [project])))
+        let state = AppState(store: TestPersistenceStore(ProjectsFile(projects: [project])))
         state.projectsManager.insertOptimisticWorktree(worktree)
         let rightPaneState = state.rightPaneStore.state(
             for: worktree,

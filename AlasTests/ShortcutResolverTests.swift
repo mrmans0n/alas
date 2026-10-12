@@ -6,13 +6,9 @@ import SwiftUI
 struct ShortcutResolverTests {
     /// An in-memory store that never touches disk, so tests don't
     /// clobber the user's real config file.
-    private struct MemoryStore: PersistenceStoreProtocol {
-        func write<T: Encodable>(_: T, to _: URL) throws {}
-        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
-    }
 
     private func makeState() -> AppState {
-        AppState(store: MemoryStore())
+        AppState(store: TestPersistenceStore())
     }
 
     @Test func returnsDefaultWhenNoOverride() async {

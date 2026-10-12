@@ -7,11 +7,6 @@ import Testing
 @MainActor
 @Suite("ACPSessionManager")
 struct ACPSessionManagerTests {
-    private struct MemoryStore: PersistenceStoreProtocol {
-        func write<T: Encodable>(_: T, to _: URL) throws {}
-        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
-    }
-
     private actor AsyncGate {
         private var entered = false
         private var entryWaiters: [CheckedContinuation<Void, Never>] = []
@@ -1017,7 +1012,7 @@ struct ACPSessionManagerTests {
         session.agentState = .disconnected
 
         #expect(
-            AppState(store: MemoryStore()).retainedACPSessionCleanupDelayForTesting(
+            AppState(store: TestPersistenceStore()).retainedACPSessionCleanupDelayForTesting(
                 manager: mgr,
                 sessionId: session.id
             ) == .milliseconds(250)

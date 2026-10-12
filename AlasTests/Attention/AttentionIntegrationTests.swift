@@ -11,7 +11,7 @@ struct AttentionIntegrationTests {
         defer { fixture.cleanup() }
         let url = fixture.directory.appendingPathComponent("events.json")
         try Data("broken history".utf8).write(to: url)
-        let state = AppState(store: MemoryStore(), attentionStore: AttentionStore(url: url))
+        let state = AppState(store: TestPersistenceStore(), attentionStore: AttentionStore(url: url))
         state.projectsManager = fixture.state.projectsManager
         let failed = review()
         let initial = ReviewLoopSnapshot(local: failed.local, remote: failed.remote, reviewRequest: nil,
@@ -142,7 +142,7 @@ struct AttentionIntegrationTests {
         for event in fixture.state.attentionStore.events {
             fixture.state.attentionStore.acknowledge(eventID: event.id, at: Date())
         }
-        let relaunched = AppState(store: MemoryStore(), attentionStore: AttentionStore(url: fixture.directory.appendingPathComponent("events.json")))
+        let relaunched = AppState(store: TestPersistenceStore(), attentionStore: AttentionStore(url: fixture.directory.appendingPathComponent("events.json")))
         relaunched.projectsManager = fixture.state.projectsManager
         let hosts = RemoteHostStatusStore()
         hosts.onStatusTransition = { host, offline, date in
@@ -220,11 +220,6 @@ struct AttentionIntegrationTests {
         return ReviewLoopSnapshot(local: ReviewLoopLocalState(branchName: "feature", headSHA: "head", baseBranch: "main", hasWorkingTreeChanges: false, hasStagedChanges: false, aheadCommitCount: 0, hasUpstream: true, upstreamAheadCommitCount: upstreamAhead, needsPush: needsPush), remote: remote, reviewRequest: request, providerAvailable: true, providerAuthenticated: true, providerCapabilities: .githubCLI, errorMessage: nil)
     }
 
-    private struct MemoryStore: PersistenceStoreProtocol {
-        func write<T: Encodable>(_: T, to _: URL) throws {}
-        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
-    }
-
     @MainActor
     private struct Fixture {
         let state: AppState
@@ -232,7 +227,7 @@ struct AttentionIntegrationTests {
         init(host: String? = nil) throws {
             directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            state = AppState(store: MemoryStore(), attentionStore: AttentionStore(url: directory.appendingPathComponent("events.json")))
+            state = AppState(store: TestPersistenceStore(), attentionStore: AttentionStore(url: directory.appendingPathComponent("events.json")))
             var project = ProjectConfig(id: "project", name: "Project", path: "/repo", color: "blue", addedAt: Date())
             project.host = host
             state.projectsManager = ProjectsManager(persistedProjects: [project])

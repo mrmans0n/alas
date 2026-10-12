@@ -15,7 +15,7 @@ struct WorkspacePresentationTests {
         checkout.workspaceID = workspace.id
         checkout.branch = "feature/a-long-branch-name-for-coordinated-changes"
         try await store.checkpoint(.init(workspaces: [workspace], checkouts: [checkout]))
-        let state = AppState(store: MemoryStore(), restoreActiveTabsOnStartup: false, workspaceStore: store)
+        let state = AppState(store: TestPersistenceStore(), restoreActiveTabsOnStartup: false, workspaceStore: store)
         await state.loadWorkspaces()
         state.spacesManager.setTypedMembers([.workspace(workspace.id)], forSpace: state.spacesManager.activeSpaceId)
         state.selectWorkspaceCheckout(id: checkout.id)
@@ -46,7 +46,7 @@ struct WorkspacePresentationTests {
     }
 
     @Test func definitionDialogsKeepRepositoryListsWithinSheetBounds() throws {
-        let state = AppState(store: MemoryStore(), restoreActiveTabsOnStartup: false)
+        let state = AppState(store: TestPersistenceStore(), restoreActiveTabsOnStartup: false)
         let newSize = try render(
             NewWorkspaceDialog(state: state, presented: .constant(true)),
             named: "workspace-new"
@@ -79,7 +79,7 @@ struct WorkspacePresentationTests {
     }
 
     @Test func workspaceCheckoutDialogOwnsWorkspaceHookApprovalPresentation() async throws {
-        let state = AppState(store: MemoryStore(), restoreActiveTabsOnStartup: false)
+        let state = AppState(store: TestPersistenceStore(), restoreActiveTabsOnStartup: false)
         let workspace = Workspace(name: "Release", executionLocation: .local, members: [])
         let dialog = CreateWorkspaceCheckoutDialog(state: state, workspace: workspace, presented: .constant(true))
         let theme = try ThemeStore().current
@@ -114,7 +114,7 @@ struct WorkspacePresentationTests {
     }
 
     @Test func checkoutInspectorOwnsRuntimeHookApprovalPresentation() async throws {
-        let state = AppState(store: MemoryStore(), restoreActiveTabsOnStartup: false)
+        let state = AppState(store: TestPersistenceStore(), restoreActiveTabsOnStartup: false)
         let inspector = WorkspaceCheckoutInspector(state: state, checkout: checkout(memberCount: 2))
         let theme = try ThemeStore().current
         let controller = NSHostingController(rootView: inspector.environment(\.theme, theme))
@@ -149,7 +149,7 @@ struct WorkspacePresentationTests {
     }
 
     @Test func deletionConfirmationSheetOwnsRuntimeHookApprovalPresentation() async throws {
-        let state = AppState(store: MemoryStore(), restoreActiveTabsOnStartup: false)
+        let state = AppState(store: TestPersistenceStore(), restoreActiveTabsOnStartup: false)
         let sheet = WorkspaceDeletionConfirmationSheet(
             model: .checkoutDeletion(risks: ["Uncommitted changes"]),
             approvalQueue: state.repoHookApprovalQueue
@@ -184,7 +184,7 @@ struct WorkspacePresentationTests {
     }
 
     @Test func definitionDialogOwnsRuntimeHookApprovalPresentation() async throws {
-        let state = AppState(store: MemoryStore(), restoreActiveTabsOnStartup: false)
+        let state = AppState(store: TestPersistenceStore(), restoreActiveTabsOnStartup: false)
         let dialog = NewWorkspaceDialog(state: state, presented: .constant(true))
         let theme = try ThemeStore().current
         let controller = NSHostingController(rootView: dialog.environment(\.theme, theme))
@@ -288,10 +288,5 @@ struct WorkspacePresentationTests {
                 )
             }
         )
-    }
-
-    private struct MemoryStore: PersistenceStoreProtocol {
-        func write<T: Encodable>(_: T, to _: URL) throws {}
-        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
     }
 }

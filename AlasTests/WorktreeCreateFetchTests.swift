@@ -152,7 +152,7 @@ struct WorktreeCreateFetchTests {
         _ = try await Process.git(["commit", "-q", "-am", "remote update"], cwd: remoteClone)
         _ = try await Process.git(["push", "-q", "origin", "main"], cwd: remoteClone)
 
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         state.config.worktrees.fetchRemoteBeforeCreate = true
         let project = try await state.projectsManager.addProject(path: repo, displayName: "test", color: "#5fb7c4")
         try await state.projectsManager.refreshWorktrees(projectId: project.id)
@@ -183,7 +183,7 @@ struct WorktreeCreateFetchTests {
             try? FileManager.default.removeItem(at: remote)
         }
 
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         state.config.worktrees.fetchRemoteBeforeCreate = true
         let project = try await state.projectsManager.addProject(path: repo, displayName: "test", color: "#5fb7c4")
         try await state.projectsManager.refreshWorktrees(projectId: project.id)
@@ -215,7 +215,7 @@ struct WorktreeCreateFetchTests {
         // Break the remote URL so subsequent fetch fails, but the local ref remains.
         _ = try await Process.git(["remote", "set-url", "origin", "/dev/null/nonexistent"], cwd: repo)
 
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         state.config.worktrees.fetchRemoteBeforeCreate = true
         let project = try await state.projectsManager.addProject(path: repo, displayName: "test", color: "#5fb7c4")
         try await state.projectsManager.refreshWorktrees(projectId: project.id)
@@ -243,7 +243,7 @@ struct WorktreeCreateFetchTests {
             try? FileManager.default.removeItem(at: remote)
         }
 
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         state.config.worktrees.fetchRemoteBeforeCreate = false
         let project = try await state.projectsManager.addProject(path: repo, displayName: "test", color: "#5fb7c4")
         try await state.projectsManager.refreshWorktrees(projectId: project.id)
@@ -262,10 +262,5 @@ struct WorktreeCreateFetchTests {
         try await waitForOperationToClear(state.projectsManager, id: id, projectId: project.id)
         #expect(state.projectsManager.operationState(forWorktreeId: id, projectId: project.id) == nil)
         #expect(state.projectsManager.worktrees(projectId: project.id).contains { $0.id == id })
-    }
-
-    private struct MemoryStore: PersistenceStoreProtocol {
-        func write<T: Encodable>(_: T, to _: URL) throws {}
-        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { return nil }
     }
 }

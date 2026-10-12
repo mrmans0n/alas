@@ -4,11 +4,6 @@ import Testing
 
 @MainActor
 struct AppStateRunScriptCreationTests {
-    private struct MemoryStore: PersistenceStoreProtocol {
-        func write<T: Encodable>(_: T, to _: URL) throws {}
-        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
-    }
-
     private func fixture() throws -> (AppState, ProjectConfig, Worktree, URL) {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -29,7 +24,7 @@ struct AppStateRunScriptCreationTests {
             status: .clean,
             lastActivity: Date()
         )
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         state.projectsManager = ProjectsManager(persistedProjects: [project])
         state.projectsManager.insertOptimisticWorktree(worktree)
         return (state, project, worktree, root)

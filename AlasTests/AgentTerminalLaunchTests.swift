@@ -45,13 +45,8 @@ struct AgentTerminalLaunchTests {
             .appendingPathComponent("alas-notify.json", isDirectory: false)
     }
 
-    private struct MemoryStore: PersistenceStoreProtocol {
-        func write<T: Encodable>(_: T, to _: URL) throws {}
-        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
-    }
-
     @Test func globalBypassAddsAgentFlag() {
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         state.config.agents.worktreeAutoLaunch.useBypassPermissions = true
         let command = state.agentStartupCommand(
             for: agent(),
@@ -61,7 +56,7 @@ struct AgentTerminalLaunchTests {
     }
 
     @Test func disabledProjectModeOmitsBypassFlag() {
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         state.config.agents.worktreeAutoLaunch.useBypassPermissions = true
         let command = state.agentStartupCommand(
             for: agent(),
@@ -71,7 +66,7 @@ struct AgentTerminalLaunchTests {
     }
 
     @Test func projectOverrideBypassWinsOverGlobal() {
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         state.config.agents.worktreeAutoLaunch.useBypassPermissions = false
         let command = state.agentStartupCommand(
             for: agent(),
@@ -81,7 +76,7 @@ struct AgentTerminalLaunchTests {
     }
 
     @Test func missingBypassFlagCannotBeAppended() {
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         state.config.agents.worktreeAutoLaunch.useBypassPermissions = true
         let command = state.agentStartupCommand(
             for: agent(flag: nil),
@@ -93,7 +88,7 @@ struct AgentTerminalLaunchTests {
     @Test func binaryPathIsShellQuoted() {
         var custom = agent()
         custom.binaryOverride = "/Applications/Test Agent/bin/agent"
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         let command = state.agentStartupCommand(
             for: custom,
             project: project(mode: .disabled, useBypass: false)
@@ -106,7 +101,7 @@ struct AgentTerminalLaunchTests {
         custom.binaryOverride = "/opt/Test Agent/bin/agent"
         var remoteProject = project(mode: .disabled, useBypass: false)
         remoteProject.host = "build-host"
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
 
         let command = state.agentStartupCommand(for: custom, project: remoteProject)
 
@@ -118,7 +113,7 @@ struct AgentTerminalLaunchTests {
         custom.binaryOverride = "~/bin/Test Agent"
         var remoteProject = project(mode: .disabled, useBypass: false)
         remoteProject.host = "build-host"
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
 
         let command = state.agentStartupCommand(for: custom, project: remoteProject)
 
@@ -126,7 +121,7 @@ struct AgentTerminalLaunchTests {
     }
 
     @Test func missingAgentIdDoesNotLaunch() {
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         let project = project(mode: .useGlobal, useBypass: false)
         state.projectsManager = ProjectsManager(persistedProjects: [project])
         let worktree = Worktree(
@@ -145,7 +140,7 @@ struct AgentTerminalLaunchTests {
     }
 
     @Test func missingProjectDoesNotLaunch() {
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         state.agentRegistry = AgentRegistry(
             builtinState: [:],
             customs: [agent()],
@@ -182,7 +177,7 @@ struct AgentTerminalLaunchTests {
             lastActivity: Date()
         )
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             terminalSessionOpener: { _, _, _, _, _, startupScriptSuffix, includeUserStartupScript, environmentOverrides, environmentRemovals in
                 capturedSuffix = startupScriptSuffix
                 capturedIncludeUserStartupScript = includeUserStartupScript
@@ -227,7 +222,7 @@ struct AgentTerminalLaunchTests {
             lineageID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
         )
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             fileActionErrorHandler: { _, _ in },
             terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
                 openCount += 1
@@ -281,7 +276,7 @@ struct AgentTerminalLaunchTests {
             lastActivity: Date()
         )
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             terminalSessionOpener: { _, _, terminalConfig, _, _, startupScriptSuffix, includeUserStartupScript, environmentOverrides, environmentRemovals in
                 capturedSuffix = startupScriptSuffix
                 capturedInheritParentEnv = terminalConfig.inheritParentEnv
@@ -331,7 +326,7 @@ struct AgentTerminalLaunchTests {
             lastActivity: Date()
         )
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
                 openerCalled = true
                 return AppState.OpenedTerminalSession(id: "auth-session", foregroundPid: { nil })
@@ -368,7 +363,7 @@ struct AgentTerminalLaunchTests {
             lastActivity: Date()
         )
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
                 AppState.OpenedTerminalSession(id: "auth-session", foregroundPid: { nil })
             }
@@ -403,7 +398,7 @@ struct AgentTerminalLaunchTests {
             lastActivity: Date()
         )
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
                 AppState.OpenedTerminalSession(id: "auth-session", foregroundPid: { nil })
             }
@@ -438,7 +433,7 @@ struct AgentTerminalLaunchTests {
             lastActivity: Date()
         )
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
                 AppState.OpenedTerminalSession(id: "auth-session", foregroundPid: { nil })
             }
@@ -477,7 +472,7 @@ struct AgentTerminalLaunchTests {
         let hookURL = copilotHookURL(in: dir)
         var hookExistedBeforeOpen = false
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
                 hookExistedBeforeOpen = FileManager.default.fileExists(atPath: hookURL.path)
                 return AppState.OpenedTerminalSession(id: "session-1", foregroundPid: { nil })
@@ -511,7 +506,7 @@ struct AgentTerminalLaunchTests {
         )
         var openerCalled = false
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
                 openerCalled = true
                 return AppState.OpenedTerminalSession(id: "session-1", foregroundPid: { nil })
@@ -545,7 +540,7 @@ struct AgentTerminalLaunchTests {
             lastActivity: Date()
         )
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
                 AppState.OpenedTerminalSession(id: "session-1", foregroundPid: { nil })
             }
@@ -585,7 +580,7 @@ struct AgentTerminalLaunchTests {
         var openerCalled = false
         var launchErrorTitle: String?
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             fileActionErrorHandler: { title, _ in
                 launchErrorTitle = title
             },
@@ -610,7 +605,7 @@ struct AgentTerminalLaunchTests {
     }
 
     @Test func extraTerminalArgsInsertedBeforeBypassFlag() {
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         state.config.agents.worktreeAutoLaunch.useBypassPermissions = true
         let command = state.agentStartupCommand(
             for: agent(extraArgs: ["--model", "sonnet"]),
@@ -620,7 +615,7 @@ struct AgentTerminalLaunchTests {
     }
 
     @Test func extraTerminalArgsNilDoesNotChangeCommand() {
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         state.config.agents.worktreeAutoLaunch.useBypassPermissions = true
         let command = state.agentStartupCommand(
             for: agent(),
@@ -630,7 +625,7 @@ struct AgentTerminalLaunchTests {
     }
 
     @Test func extraTerminalArgsAloneWithoutBypass() {
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         let command = state.agentStartupCommand(
             for: agent(flag: nil, extraArgs: ["--verbose"]),
             project: project(mode: .disabled, useBypass: false)

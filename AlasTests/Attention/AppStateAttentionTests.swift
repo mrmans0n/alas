@@ -616,7 +616,7 @@ struct AppStateAttentionTests {
         fixture.store.acknowledge(eventID: oldEvent.id, at: fixture.now)
         let tabs = TabsManager(store: PersistenceStore(), tabsDirectory: tabsDirectory)
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             tabsManager: tabs,
             workspacesManager: workspacesManager,
             workspaceStore: workspaceStore,
@@ -757,7 +757,7 @@ struct AppStateAttentionTests {
         try await workspaceStore.checkpoint(WorkspaceStateFile(checkouts: [checkout]))
         _ = await workspacesManager.load(spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             workspacesManager: workspacesManager,
             workspaceStore: workspaceStore,
             attentionStore: AttentionStore(url: fixture.url),
@@ -822,7 +822,7 @@ struct AppStateAttentionTests {
         try await workspaceStore.checkpoint(WorkspaceStateFile(checkouts: [checkout]))
         _ = await workspacesManager.load(spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             workspacesManager: workspacesManager,
             workspaceStore: workspaceStore,
             attentionStore: AttentionStore(url: fixture.url)
@@ -899,7 +899,7 @@ struct AppStateAttentionTests {
         try await workspaceStore.checkpoint(WorkspaceStateFile(checkouts: [checkout]))
         _ = await workspacesManager.load(spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             workspacesManager: workspacesManager,
             workspaceStore: workspaceStore,
             attentionStore: AttentionStore(url: fixture.url)
@@ -987,7 +987,7 @@ struct AppStateAttentionTests {
         defer { fixture.cleanup() }
         let scans = SelectionScans()
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             worktreeStatusScan: { await scans.record($0) },
             attentionStore: AttentionStore(url: fixture.url),
             attentionNavigationEnvironment: AttentionNavigationEnvironment(
@@ -1031,7 +1031,7 @@ struct AppStateAttentionTests {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
         let state = AppState(
-            store: MemoryStore(),
+            store: TestPersistenceStore(),
             remoteAccelerationPreparer: { _ in },
             attentionStore: AttentionStore(url: fixture.url),
             harnessAttentionSettleInterval: 0
@@ -1198,7 +1198,7 @@ struct AppStateAttentionTests {
         defer { fixture.cleanup() }
         let persistence = AlwaysFailingPersistenceStore()
         let store = AttentionStore(url: fixture.url, persistence: persistence)
-        let state = AppState(store: MemoryStore(), attentionStore: store)
+        let state = AppState(store: TestPersistenceStore(), attentionStore: store)
         state.attentionStore.appendHistory(fixture.history(fingerprint: "finished"), at: fixture.now)
         #expect(state.attentionStore.writeError != nil)
         let host = "online-\(UUID().uuidString)"
@@ -1251,7 +1251,7 @@ struct AppStateAttentionTests {
         defer { fixture.cleanup() }
         let persistence = FailingThenSucceedingPersistenceStore()
         let store = AttentionStore(url: fixture.url, persistence: persistence)
-        let state = AppState(store: MemoryStore(), attentionStore: store)
+        let state = AppState(store: TestPersistenceStore(), attentionStore: store)
         let project = ProjectConfig(id: "project", name: "Project", path: "/repo", color: "blue", addedAt: fixture.now)
         let worktree = Worktree(id: "worktree", projectId: project.id, name: "main", branch: "main",
                                 path: URL(fileURLWithPath: "/repo"), status: .clean, lastActivity: fixture.now, lineageID: "lineage")
@@ -1272,7 +1272,7 @@ struct AppStateAttentionTests {
         defer { fixture.cleanup() }
         let persistence = FailingThenSucceedingPersistenceStore(failures: 2)
         let store = AttentionStore(url: fixture.url, persistence: persistence)
-        let state = AppState(store: MemoryStore(), attentionStore: store)
+        let state = AppState(store: TestPersistenceStore(), attentionStore: store)
         let project = ProjectConfig(id: "project", name: "Project", path: "/repo", color: "blue", addedAt: fixture.now)
         let deletedWorktree = Worktree(id: "deleted", projectId: project.id, name: "main", branch: "main",
                                        path: URL(fileURLWithPath: "/repo"), status: .clean, lastActivity: fixture.now, lineageID: "deleted-lineage")
@@ -1304,7 +1304,7 @@ struct AppStateAttentionTests {
         defer { fixture.cleanup() }
         let persistence = AlwaysFailingPersistenceStore()
         let store = AttentionStore(url: fixture.url, persistence: persistence)
-        let state = AppState(store: MemoryStore(), attentionStore: store)
+        let state = AppState(store: TestPersistenceStore(), attentionStore: store)
         let project = ProjectConfig(id: "project", name: "Project", path: "/repo", color: "blue", addedAt: fixture.now)
         let worktree = Worktree(id: "worktree", projectId: project.id, name: "main", branch: "main",
                                 path: URL(fileURLWithPath: "/repo"), status: .clean, lastActivity: fixture.now, lineageID: "lineage")
@@ -1324,11 +1324,6 @@ struct AppStateAttentionTests {
 
         #expect(persistence.writeCount == writeCountAfterRetry)
         #expect(state.attentionAliasRetryNotBefore != nil)
-    }
-
-    private struct MemoryStore: PersistenceStoreProtocol {
-        func write<T: Encodable>(_: T, to _: URL) throws {}
-        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
     }
 
     private final class FailingThenSucceedingPersistenceStore: PersistenceStoreProtocol {
@@ -1785,7 +1780,7 @@ struct AppStateAttentionTests {
 
         func makeState(attentionSettleInterval: TimeInterval = 0) -> AppState {
             AppState(
-                store: MemoryStore(),
+                store: TestPersistenceStore(),
                 attentionStore: AttentionStore(url: url),
                 harnessAttentionSettleInterval: attentionSettleInterval
             )
@@ -1796,7 +1791,7 @@ struct AppStateAttentionTests {
             attentionSettleInterval: TimeInterval = 0
         ) -> AppState {
             let state = AppState(
-                store: MemoryStore(),
+                store: TestPersistenceStore(),
                 attentionStore: AttentionStore(url: url, maxEvents: maxEvents),
                 harnessAttentionSettleInterval: attentionSettleInterval
             )

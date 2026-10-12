@@ -5,24 +5,8 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct AppStateFocusMainWorktreeTests {
-    private struct MemoryStore: PersistenceStoreProtocol {
-        let projectsFile: ProjectsFile
-
-        func write<T: Encodable>(_: T, to _: URL) throws {}
-
-        func readIfExists<T: Decodable>(_ type: T.Type, from url: URL) throws -> T? {
-            if type == ProjectsFile.self {
-                return projectsFile as? T
-            }
-            if type == AppConfig.self {
-                return AppConfig.defaults as? T
-            }
-            return nil
-        }
-    }
-
     private func makeState(project: ProjectConfig) -> AppState {
-        AppState(store: MemoryStore(projectsFile: ProjectsFile(projects: [project])))
+        AppState(store: TestPersistenceStore(ProjectsFile(projects: [project]), AppConfig.defaults))
     }
 
     private func worktree(path: String, branch: String, projectId: String = "p1") -> Worktree {
@@ -230,7 +214,7 @@ struct AppStateFocusMainWorktreeTests {
             color: "blue",
             addedAt: Date()
         )
-        let state = AppState(store: MemoryStore(projectsFile: ProjectsFile(projects: [project])))
+        let state = AppState(store: TestPersistenceStore(ProjectsFile(projects: [project]), AppConfig.defaults))
         let main = gitWorktree(path: clone.path, branch: "main")
         state.projectsManager.insertOptimisticWorktree(main)
         // Selecting the pulled worktree is the sidebar flow being exercised —

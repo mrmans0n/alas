@@ -24,20 +24,6 @@ struct WorkspaceSpaceMigrationTests {
         )
     }
 
-    private struct AppStateStore: PersistenceStoreProtocol {
-        let projectsFile: ProjectsFile
-        let spacesFile: SpacesFile
-
-        func write<T: Encodable>(_ value: T, to url: URL) throws {}
-
-        func readIfExists<T: Decodable>(_ type: T.Type, from url: URL) throws -> T? {
-            if type == ProjectsFile.self { return projectsFile as? T }
-            if type == SpacesFile.self { return spacesFile as? T }
-            if type == AppConfig.self { return AppConfig.defaults as? T }
-            return nil
-        }
-    }
-
     private func project(_ id: String) -> ProjectConfig {
         ProjectConfig(
             id: id,
@@ -151,10 +137,7 @@ struct WorkspaceSpaceMigrationTests {
         ]))
         let appState = await MainActor.run {
             AppState(
-                store: AppStateStore(
-                    projectsFile: ProjectsFile(projects: [project("p2"), project("p3")]),
-                    spacesFile: SpacesFile(activeSpaceId: "work", spaces: [space("work", projects: ["p2", "p3"])])
-                ),
+                store: TestPersistenceStore(ProjectsFile(projects: [project("p2"), project("p3")]), SpacesFile(activeSpaceId: "work", spaces: [space("work", projects: ["p2", "p3"])]), AppConfig.defaults),
                 workspaceSpacePersistenceBridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore)
             )
         }

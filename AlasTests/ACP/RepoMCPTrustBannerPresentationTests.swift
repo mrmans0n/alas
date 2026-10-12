@@ -7,13 +7,8 @@ import Testing
 @Suite("Repo MCP trust banner presentation")
 @MainActor
 struct RepoMCPTrustBannerPresentationTests {
-    private struct MemoryStore: PersistenceStoreProtocol {
-        func write<T: Encodable>(_: T, to _: URL) throws {}
-        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
-    }
-
     @Test func reviewSheetOwnsRuntimeHookApprovals() async throws {
-        let state = AppState(store: MemoryStore(), restoreActiveTabsOnStartup: false)
+        let state = AppState(store: TestPersistenceStore(), restoreActiveTabsOnStartup: false)
         let server = ProjectMCPServer(
             id: "repo:linear",
             name: "linear",

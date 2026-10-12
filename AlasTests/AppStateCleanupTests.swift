@@ -19,23 +19,6 @@ struct AppStateCleanupTests {
         case clearProjectsWithoutWorktrees
     }
 
-    private struct MemoryStore: PersistenceStoreProtocol {
-        var config: AppConfig? = nil
-        var projectsFile: ProjectsFile? = nil
-
-        func write<T: Encodable>(_: T, to _: URL) throws {}
-
-        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? {
-            if T.self == AppConfig.self {
-                return config as? T
-            }
-            if T.self == ProjectsFile.self {
-                return projectsFile as? T
-            }
-            return nil
-        }
-    }
-
     private final class RecordingStore: PersistenceStoreProtocol, @unchecked Sendable {
         var writtenProjectsFile: ProjectsFile?
 
@@ -107,7 +90,7 @@ struct AppStateCleanupTests {
     @Test func topologyRefreshReevaluatesCachedGGGateAfterPromotingRecoveredMode() async throws {
         let repo = try await makeRepo(name: "recovered-gg-gate")
         defer { try? FileManager.default.removeItem(at: repo) }
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         let project = try await state.projectsManager.addProject(
             path: repo,
             displayName: "recovered-gg-gate",
@@ -190,7 +173,7 @@ struct AppStateCleanupTests {
             color: "#5fb7c4",
             addedAt: .now
         )
-        let state = AppState(store: MemoryStore(projectsFile: ProjectsFile(projects: [project, duplicate])))
+        let state = AppState(store: TestPersistenceStore(ProjectsFile(projects: [project, duplicate])))
 
         #expect(state.projects.count == 1)
         await state.refreshProjectTopology(projectId: project.id)
@@ -356,7 +339,7 @@ struct AppStateCleanupTests {
         )
         var watchedPaths: [URL] = []
         let state = AppState(
-            store: MemoryStore(projectsFile: ProjectsFile(projects: [project])),
+            store: TestPersistenceStore(ProjectsFile(projects: [project])),
             projectGitWatcherFactory: { path in
                 watchedPaths.append(path.standardizedFileURL)
                 return ProjectGitWatcher(
@@ -903,7 +886,7 @@ struct AppStateCleanupTests {
             addedAt: .distantPast,
             host: "other-host"
         )
-        let store = MemoryStore(projectsFile: ProjectsFile(projects: [otherProject]))
+        let store = TestPersistenceStore(ProjectsFile(projects: [otherProject]))
         let state = AppState(store: store)
         let project = try await state.projectsManager.addProject(
             path: repo,
@@ -1488,7 +1471,7 @@ struct AppStateCleanupTests {
             try? FileManager.default.removeItem(at: repoB)
         }
 
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         let projectA = try await state.projectsManager.addProject(
             path: repoA, displayName: "clearA", color: "#5fb7c4"
         )
@@ -1531,7 +1514,7 @@ struct AppStateCleanupTests {
             addedAt: Date()
         )
         let state = AppState(
-            store: MemoryStore(projectsFile: ProjectsFile(projects: [liveProject, staleProject]))
+            store: TestPersistenceStore(ProjectsFile(projects: [liveProject, staleProject]))
         )
 
         let removed = await state.clearProjectsWithoutWorktrees()
@@ -1552,7 +1535,7 @@ struct AppStateCleanupTests {
             addedAt: Date()
         )
         let state = AppState(
-            store: MemoryStore(projectsFile: ProjectsFile(projects: [staleProject]))
+            store: TestPersistenceStore(ProjectsFile(projects: [staleProject]))
         )
         let staleWorktree = Worktree(
             id: Worktree.makeId(path: missing),
@@ -1586,7 +1569,7 @@ struct AppStateCleanupTests {
             addedAt: Date()
         )
         let state = AppState(
-            store: MemoryStore(projectsFile: ProjectsFile(projects: [project]))
+            store: TestPersistenceStore(ProjectsFile(projects: [project]))
         )
 
         let removed = await state.clearProjectsWithoutWorktrees()
@@ -1605,7 +1588,7 @@ struct AppStateCleanupTests {
             host: "localhost"
         )
         let state = AppState(
-            store: MemoryStore(projectsFile: ProjectsFile(projects: [project]))
+            store: TestPersistenceStore(ProjectsFile(projects: [project]))
         )
 
         let removed = await state.clearProjectsWithoutWorktrees()

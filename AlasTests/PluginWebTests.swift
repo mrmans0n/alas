@@ -192,10 +192,6 @@ struct PluginWebTests {
     @MainActor
     @Test(.timeLimit(.minutes(1)))
     func aWebTabOpensAndDrawsItsPageInThePluginTabView() async throws {
-        struct MemoryStore: PersistenceStoreProtocol {
-            func write<T: Encodable>(_: T, to _: URL) throws {}
-            func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
-        }
         let root = FileManager.default.temporaryDirectory.appending(path: "plugin-web-tab-\(UUID().uuidString)")
         let folder = root.appending(path: Self.id)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -214,7 +210,7 @@ struct PluginWebTests {
             directory: root, approvals: PluginApprovalStore(defaults: defaults), projects: { [project] }, actions: { _ in .inert })
         await manager.reload()
         await manager.approve(try #require(manager.plugin(id: Self.id)))
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: TestPersistenceStore())
         state.pluginManager = manager
         let worktree = Worktree(
             id: "wt", projectId: "proj", name: "main", branch: "main", path: URL(fileURLWithPath: "/tmp/proj"), status: .clean,
