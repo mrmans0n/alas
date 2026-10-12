@@ -26,6 +26,17 @@ public final class AlasCoreContext {
     /// ones that never produced an archivable record.
     @ObservationIgnored public var runSettlementHandlers: [String: (worktreeID: String, notify: (RunScriptSettlement) -> Void)] = [:]
 
+    /// Durable Workspace definitions and checkouts.
+    @ObservationIgnored public let workspaceStore: WorkspaceStore
+    /// Stops everything running in a checkout before a lifecycle operation
+    /// touches it. The app installs one that closes its terminals and agent
+    /// sessions; without one, nothing is stopped.
+    @ObservationIgnored public var stopWorkspaceCheckoutSessions: @MainActor (WorkspaceCheckout) async throws -> Void
+    /// Approves and prepares a member's repository hook. Without one, hooks
+    /// are skipped.
+    @ObservationIgnored public var resolveWorkspaceRepoHook: WorkspaceRepoHookResolving = { _ in nil }
+    @ObservationIgnored private var workspaceCheckoutCoordinator: WorkspaceCheckoutCoordinator?
+
     @ObservationIgnored private let store: any PersistenceStoreProtocol
     @ObservationIgnored private let projectsFile: URL
     @ObservationIgnored private let makeSessionManager: @MainActor (SessionOwnerID, Worktree) -> ACPSessionManager
@@ -37,6 +48,7 @@ public final class AlasCoreContext {
         projectsFile: URL = Paths.projectsFile,
         runs: RunService = RunService(),
         runHistoryStore: RunHistoryStore? = try? RunHistoryStore(),
+        workspaceStore: WorkspaceStore = WorkspaceStore(),
         runCompletionWaiter: @escaping RunCompletionWaiter = { try await RunScriptCompletionMonitor.wait(for: $0) },
         makeSessionManager: @escaping @MainActor (SessionOwnerID, Worktree) -> ACPSessionManager = AlasCoreContext.defaultSessionManager
     ) {
@@ -44,6 +56,8 @@ public final class AlasCoreContext {
         self.runs = runs
         self.runCompletionWaiter = runCompletionWaiter
         self.runHistory = RunHistory(store: runHistoryStore)
+        self.workspaceStore = workspaceStore
+        self.stopWorkspaceCheckoutSessions = { _ in }
         self.store = store
         self.projectsFile = projectsFile
         self.makeSessionManager = makeSessionManager
@@ -186,6 +200,26 @@ public final class AlasCoreContext {
             capture: .completion(completion)
         )
         return outcome
+    }
+
+    /// The one coordinator for Workspace checkout lifecycles. It reads the
+    /// authoritative store, never a display cache, when deciding which
+    /// sessions to stop.
+    public func workspaceCoordinator() -> WorkspaceCheckoutCoordinator {
+        if let workspaceCheckoutCoordinator { return workspaceCheckoutCoordinator }
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: workspaceStore,
+            sessions: WorkspaceCheckoutSessionStopper(
+                store: workspaceStore,
+                stop: { [weak self] checkout in try await self?.stopWorkspaceCheckoutSessions(checkout) }
+            ),
+            resolveRepoHook: { [weak self] request in
+                guard let resolve = await self?.resolveWorkspaceRepoHook else { return nil }
+                return try await resolve(request)
+            }
+        )
+        workspaceCheckoutCoordinator = coordinator
+        return coordinator
     }
 
     /// A manager with its own session database, as the app keeps per owner.
