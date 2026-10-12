@@ -60,20 +60,6 @@ enum WorkspaceDefinitionSaveError: LocalizedError {
     }
 }
 
-enum ProjectCreationError: LocalizedError, Equatable {
-    case projectPersistenceFailed
-    case projectAlreadyExists
-
-    var errorDescription: String? {
-        switch self {
-        case .projectPersistenceFailed:
-            "Could not save the new project."
-        case .projectAlreadyExists:
-            "A project with this ID already exists."
-        }
-    }
-}
-
 struct PendingRunScriptLaunch: Equatable {
     let id: UUID
     let worktreeID: String
@@ -250,7 +236,12 @@ final class AppState {
     @ObservationIgnored var nextPromptComposerEnvironment = NextPromptEligibilitySnapshot.Environment()
     var config: AppConfig
     var themeStore: ThemeStore
-    var projectsManager: ProjectsManager
+    /// The headless core: projects, worktrees and session managers.
+    let core: AlasCoreContext
+    var projectsManager: ProjectsManager {
+        get { core.projects }
+        set { core.projects = newValue }
+    }
     let worktreeUpstreamStatusStore = WorktreeUpstreamStatusStore()
     /// Repo-local `.alas/` config, read per worktree with its own change cache.
     let repoConfigStore = RepoConfigStore()
@@ -1615,7 +1606,7 @@ final class AppState {
         // Restored ACP sessions of registry agents attach before the first
         // agent rescan, so their launch specs must be known from the start.
         ACPLaunchCatalog.publishRegistryAgents(config.agents.registry)
-        self.projectsManager = ProjectsManager(persistedProjects: projectsFile.projects)
+        self.core = AlasCoreContext(projects: ProjectsManager(persistedProjects: projectsFile.projects), store: store)
         let spacesManager = spacesFile.map(SpacesManager.init(file:))
             ?? SpacesManager.migrating(projects: projectsFile.projects)
         var spacesChanged = spacesManager.pruneMissingProjects(validProjectIds: Set(projectsFile.projects.map(\.id)))
@@ -3137,7 +3128,7 @@ final class AppState {
     @discardableResult
     func saveProjects() -> Bool {
         do {
-            try store.write(ProjectsFile(projects: projectsManager.projects), to: Paths.projectsFile)
+            try core.saveProjects()
             return true
         } catch {
             persistenceErrorHandler("Projects Save Failed", error.localizedDescription)
@@ -4826,7 +4817,7 @@ final class AppState {
             canonicalDestination = destination
         } else {
             do {
-                canonicalDestination = try await Self.preparedCreateWorktreeDestination(
+                canonicalDestination = try await WorktreeLifecycle.preparedCreateWorktreeDestination(
                     repoPath: repoPath,
                     destination: destination
                 )
@@ -4895,7 +4886,7 @@ final class AppState {
                         }
                     }
                 }
-                let newWorktree = try await Self.performCreateWorktree(
+                let newWorktree = try await WorktreeLifecycle.performCreateWorktree(
                     repoPath: repoPath,
                     base: base, branch: branch, destination: canonicalDestination, projectId: projectId
                 )
@@ -5228,16 +5219,7 @@ final class AppState {
         }
     }
 
-    enum ACPAuthTerminalLaunchError: LocalizedError, Equatable {
-        case invalidEnvKey(String)
-
-        var errorDescription: String? {
-            switch self {
-            case .invalidEnvKey(let key):
-                return "Invalid auth environment variable name: \(key)"
-            }
-        }
-    }
+    typealias ACPAuthTerminalLaunchError = AlasCore.ACPAuthTerminalLaunchError
 
     enum TerminalLaunchError: LocalizedError, Equatable {
         case checkpointRecoveryRequired
@@ -5448,7 +5430,7 @@ final class AppState {
         command: ACPAuthTerminalCommand,
         onExit: @escaping () -> Void
     ) throws -> Tab {
-        let startupScriptSuffix = try Self.shellCommand(
+        let startupScriptSuffix = try RunScriptCommand.shellCommand(
             command: command.command,
             args: command.args,
             env: command.env,
@@ -5475,7 +5457,7 @@ final class AppState {
         command: ACPAuthTerminalCommand,
         onExit: @escaping () -> Void
     ) async throws -> Tab {
-        let startupScriptSuffix = try Self.shellCommand(
+        let startupScriptSuffix = try RunScriptCommand.shellCommand(
             command: command.command,
             args: command.args,
             env: command.env,
@@ -5546,132 +5528,8 @@ final class AppState {
         }
     }
 
-    nonisolated static func shellCommand(
-        command: String,
-        args: [String],
-        env: [String: String],
-        exitOnCompletion: Bool = false
-    ) throws -> String {
-        for key in env.keys where !isValidShellAssignmentName(key) {
-            throw ACPAuthTerminalLaunchError.invalidEnvKey(key)
-        }
-        let envPrefix = env
-            .sorted { $0.key < $1.key }
-            .map { "\($0.key)=\(shellQuote($0.value))" }
-        let commandLine = (envPrefix + [shellQuote(command)] + args.map(shellQuote)).joined(separator: " ")
-        guard exitOnCompletion else { return commandLine }
-        return "\(commandLine)\nexit_code=$?\nexit \"$exit_code\""
-    }
-
-    nonisolated private static func isValidShellAssignmentName(_ key: String) -> Bool {
-        key.range(
-            of: #"^[A-Za-z_][A-Za-z0-9_]*$"#,
-            options: .regularExpression
-        ) != nil
-    }
-
     nonisolated static func shellQuote(_ s: String) -> String {
         ShellQuoting.quote(s)
-    }
-
-    nonisolated private static func performCreateWorktree(
-        repoPath: URL,
-        base: String,
-        branch: String,
-        destination: URL,
-        projectId: String
-    ) async throws -> Worktree {
-        try await ProjectMutationGate.shared.withMutation(projectID: projectId) {
-            try await Task.detached {
-                if !repoPath.isRemoteAlasPath {
-                    try FileManager.default.createDirectory(
-                        at: destination.deletingLastPathComponent(),
-                        withIntermediateDirectories: true
-                    )
-                }
-                return try await WorktreeService().add(
-                    repoPath: repoPath,
-                    base: base,
-                    branch: branch,
-                    destination: destination,
-                    projectId: projectId
-                )
-            }.value
-        }
-    }
-
-    nonisolated static func preparedCreateWorktreeDestination(repoPath: URL, destination: URL) async throws -> URL {
-        let isRemote = repoPath.isRemoteAlasPath
-        let preparedDestination: URL
-        if isRemote,
-           let host = RemoteHostRegistry.shared.host(forPath: repoPath.path) {
-            let remoteHome = try await Self.remoteHomeDirectory(host: host)
-            // The home swap works on the real remote path; the result goes back
-            // to the virtual form the rest of the app keys worktrees by.
-            preparedDestination = try await RemotePath.resolvedWorktreeDestination(
-                Self.destinationPathReplacingLocalHome(destination.path, remoteHome: remoteHome),
-                anchor: repoPath.path,
-                runCommand: { command in
-                    try await RemoteExec.run(host: host, cwd: nil, command: command, timeout: 10)
-                }
-            )
-        } else {
-            guard !RemotePath.isReserved(destination.path) else { throw RemotePath.reservedForRemoteError(destination.path) }
-            preparedDestination = destination
-        }
-        if isRemote {
-            return preparedDestination
-        }
-        return preparedDestination
-            .deletingLastPathComponent()
-            .resolvingSymlinksInPath()
-            .appendingPathComponent(preparedDestination.lastPathComponent)
-    }
-
-    /// The destination persisted for a `.new` delegation, in the form the
-    /// created worktree's path will have so startup recovery can find it:
-    /// virtual for remote projects, parent-symlink-resolved for local ones.
-    /// The remote home swap needs an ssh round trip and is not applied here.
-    nonisolated static func delegatedWorktreeDestination(rendered: URL, projectPath: String) -> URL {
-        guard !URL(fileURLWithPath: projectPath).isRemoteAlasPath else {
-            return URL(fileURLWithPath: RemotePath.virtualizing(rendered.path, like: projectPath))
-        }
-        return rendered
-            .deletingLastPathComponent()
-            .resolvingSymlinksInPath()
-            .appendingPathComponent(rendered.lastPathComponent)
-    }
-
-    nonisolated static func destinationPathReplacingLocalHome(
-        _ path: String,
-        localHome: String = NSHomeDirectory(),
-        remoteHome: String
-    ) -> String {
-        let normalizedLocalHome = localHome.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        let localHomePath = "/\(normalizedLocalHome)"
-        guard path == localHomePath || path.hasPrefix("\(localHomePath)/") else { return path }
-        let suffix = path.dropFirst(localHomePath.count)
-        return remoteHome.trimmingCharacters(in: CharacterSet(charactersIn: "/")).isEmpty
-            ? path
-            : "/\(remoteHome.trimmingCharacters(in: CharacterSet(charactersIn: "/")))\(suffix)"
-    }
-
-    nonisolated private static func remoteHomeDirectory(host: String) async throws -> String {
-        let result = try await RemoteExec.run(
-            host: host,
-            cwd: nil,
-            command: "printf '%s' \"$HOME\"",
-            timeout: 10
-        )
-        let home = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard result.exitCode == 0, !home.isEmpty else {
-            throw NSError(
-                domain: "RemoteHomeDirectory",
-                code: Int(result.exitCode),
-                userInfo: [NSLocalizedDescriptionKey: "Could not resolve remote home directory for \(host)."]
-            )
-        }
-        return home
     }
 
     func removeFailedOptimisticWorktree(id: String, projectId: String) {
@@ -7464,7 +7322,7 @@ final class AppState {
                     guard let self,
                           let project = self.projects.first(where: { $0.id == projectId })
                     else { return nil }
-                    return Self.delegatedWorktreeDestination(
+                    return WorktreeLifecycle.delegatedWorktreeDestination(
                         rendered: WorktreePathTemplateRenderer.render(
                             template: self.config.worktrees.pathTemplate,
                             worktreeRoot: self.config.worktrees.rootPath,
@@ -12651,7 +12509,10 @@ final class AppState {
     /// source-compatible through the accessors below; checkout UUID/location
     /// pairs cannot collide with them or with each other.
     @ObservationIgnored
-    private var acpManagers: [SessionOwnerID: ACPSessionManager] = [:]
+    private var acpManagers: [SessionOwnerID: ACPSessionManager] {
+        get { core.sessionManagers }
+        set { core.sessionManagers = newValue }
+    }
     /// The project each worktree manager was built for, to notice a directory
     /// that later moved to another project.
     private var acpManagerProjectIds: [SessionOwnerID: String] = [:]
@@ -13607,7 +13468,7 @@ final class AppState {
             let needsRemoteHome = configuredAgents.contains {
                 $0.binaryOverride?.trimmingCharacters(in: .whitespaces).hasPrefix("~/") == true
             }
-            if let remoteHome = try? await Self.remoteHomeDirectory(host: pinnedRemoteHost),
+            if let remoteHome = try? await WorktreeLifecycle.remoteHomeDirectory(host: pinnedRemoteHost),
                remoteHome.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
                 launchSpecRemoteHome = remoteHome
             } else if needsRemoteHome {
@@ -15704,7 +15565,7 @@ extension AppState: RemoteSessionsProvider {
         let destination = if let remoteWorktreeDestinationPreparer {
             try await remoteWorktreeDestinationPreparer(repoPath, rendered)
         } else {
-            try await Self.preparedCreateWorktreeDestination(repoPath: repoPath, destination: rendered)
+            try await WorktreeLifecycle.preparedCreateWorktreeDestination(repoPath: repoPath, destination: rendered)
         }
         return (destination, rendered, try await creationDestinationExists(project: project, destination: destination))
     }

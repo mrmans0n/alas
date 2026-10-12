@@ -7,13 +7,44 @@ import Foundation
 @Suite(.serialized)
 @MainActor
 struct ProjectsManagerTests {
-    private func makeRepo(name: String) async throws -> URL {
+    /// A `main` branch with one empty commit, built once per test process.
+    /// It has no tracked files, so a copy's index is never stat-dirty.
+    private static let repoTemplate = Task { () throws -> URL in
         let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("alas-pm-\(name)-\(UUID().uuidString)")
+            .appendingPathComponent("alas-pm-template-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         _ = try await Process.git(["init", "-q", "-b", "main"], cwd: dir)
         _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "init"], cwd: dir)
         return dir
+    }
+
+    private func makeRepo(name: String) async throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-pm-\(name)-\(UUID().uuidString)")
+        try FileManager.default.copyItem(at: try await Self.repoTemplate.value, to: dir)
+        return dir
+    }
+
+    /// Validation suspends, so two adds with one explicit id can both pass any
+    /// check made before it; the id must be checked again once validated.
+    @Test func concurrentAddsWithOneIDKeepOnlyOneProject() async throws {
+        let first = try await makeRepo(name: "id-a")
+        let second = try await makeRepo(name: "id-b")
+        defer {
+            try? FileManager.default.removeItem(at: first)
+            try? FileManager.default.removeItem(at: second)
+        }
+        let mgr = ProjectsManager(persistedProjects: [])
+
+        func add(_ path: URL) async -> Bool {
+            (try? await mgr.addProject(path: path, displayName: path.lastPathComponent, icon: .default(color: "blue"), id: "same")) != nil
+        }
+        async let a = add(first)
+        async let b = add(second)
+        let added = await [a, b]
+
+        #expect(added.filter { $0 }.count == 1)
+        #expect(mgr.projects.filter { $0.id == "same" }.count == 1)
     }
 
     /// A worktree id is its path, so two projects (typically one per SSH host)

@@ -36,7 +36,7 @@ struct RunScriptLaunchTests {
     // "/wt" or "/repo" and bare words like "main"/"alas" are emitted
     // unquoted. Only the script filename (which has a space) gets quoted.
     @Test func executableScriptRunsDirectlyWithEnvAndCd() throws {
-        let suffix = try AppState.runScriptStartupScript(
+        let suffix = try RunScriptCommand.runScriptStartupScript(
             script: script(executable: true),
             worktreeRoot: URL(fileURLWithPath: "/wt"),
             branch: "main", projectName: "alas", repoRoot: "/repo"
@@ -51,7 +51,7 @@ struct RunScriptLaunchTests {
     }
 
     @Test func nonExecutableScriptRunsViaSh() throws {
-        let suffix = try AppState.runScriptStartupScript(
+        let suffix = try RunScriptCommand.runScriptStartupScript(
             script: script(executable: false),
             worktreeRoot: URL(fileURLWithPath: "/wt"),
             branch: "main", projectName: "alas", repoRoot: "/repo"
@@ -60,7 +60,7 @@ struct RunScriptLaunchTests {
     }
 
     @Test func closeOnExitAppendsExit() throws {
-        let suffix = try AppState.runScriptStartupScript(
+        let suffix = try RunScriptCommand.runScriptStartupScript(
             script: script(executable: true, onExit: .close),
             worktreeRoot: URL(fileURLWithPath: "/wt"),
             branch: "main", projectName: "alas", repoRoot: "/repo"
@@ -69,7 +69,7 @@ struct RunScriptLaunchTests {
     }
 
     @Test func capturedRunContainsBothHostRecorderForms() throws {
-        let suffix = try AppState.runScriptStartupScript(
+        let suffix = try RunScriptCommand.runScriptStartupScript(
             script: script(executable: true, onExit: .close),
             worktreeRoot: URL(fileURLWithPath: "/wt"),
             branch: "main", projectName: "alas", repoRoot: "/repo", capturePaths: capture
@@ -95,7 +95,7 @@ struct RunScriptLaunchTests {
     }
 
     @Test func capturedRemoteHomePathsExpandAtRuntime() throws {
-        let suffix = try AppState.runScriptStartupScript(
+        let suffix = try RunScriptCommand.runScriptStartupScript(
             script: script(executable: true, onExit: .close),
             worktreeRoot: URL(fileURLWithPath: "/wt"),
             branch: "main", projectName: "alas", repoRoot: "/repo",
@@ -119,7 +119,7 @@ struct RunScriptLaunchTests {
         let scriptURL = dir.appendingPathComponent("exit-42.sh")
         try "#!/bin/sh\nprintf 'stdout-line\\n'\nprintf 'stderr-line\\n' >&2\nprintf 'script=%s\\n' \"${SCRIPT-unset}\"\nprintf 'cwd=%s\\n' \"$PWD\"\nprintf 'branch=%s\\n' \"$ALAS_BRANCH\"\nexit 42\n".write(to: scriptURL, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
-        let suffix = try AppState.runScriptStartupScript(
+        let suffix = try RunScriptCommand.runScriptStartupScript(
             script: RunScript(scope: .repo, fileName: scriptURL.lastPathComponent, fileURL: scriptURL, displayName: "Exit 42", onExit: .close, cwd: nil, isExecutable: true),
             worktreeRoot: dir, branch: "main", projectName: "alas", repoRoot: dir.path, capturePaths: capture
         )
@@ -145,7 +145,7 @@ struct RunScriptLaunchTests {
         let scriptURL = dir.appendingPathComponent("exit-42.sh")
         try "#!/bin/sh\nexit 42\n".write(to: scriptURL, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
-        let suffix = try AppState.runScriptStartupScript(
+        let suffix = try RunScriptCommand.runScriptStartupScript(
             script: RunScript(scope: .repo, fileName: scriptURL.lastPathComponent, fileURL: scriptURL, displayName: "Exit 42", onExit: .keep, cwd: nil, isExecutable: true),
             worktreeRoot: dir, branch: "main", projectName: "alas", repoRoot: dir.path, capturePaths: capture
         )
@@ -175,7 +175,7 @@ struct RunScriptLaunchTests {
         let marker = dir.appendingPathComponent("marker")
         try "#!/bin/sh\nprintf ran > \(AppState.shellQuote(marker.path))\nexit 42\n".write(to: scriptURL, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
-        let suffix = try AppState.runScriptStartupScript(
+        let suffix = try RunScriptCommand.runScriptStartupScript(
             script: RunScript(scope: .repo, fileName: scriptURL.lastPathComponent, fileURL: scriptURL, displayName: "Exit 42", onExit: .close, cwd: nil, isExecutable: true),
             worktreeRoot: dir, branch: "main", projectName: "alas", repoRoot: dir.path, capturePaths: capture
         )
@@ -198,7 +198,7 @@ struct RunScriptLaunchTests {
         let scriptURL = dir.appendingPathComponent("exit-42.sh")
         try "#!/bin/sh\nexit 42\n".write(to: scriptURL, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
-        let suffix = try AppState.runScriptStartupScript(
+        let suffix = try RunScriptCommand.runScriptStartupScript(
             script: RunScript(scope: .repo, fileName: scriptURL.lastPathComponent, fileURL: scriptURL, displayName: "Exit 42", onExit: .close, cwd: nil, isExecutable: true),
             worktreeRoot: dir, branch: "main", projectName: "alas", repoRoot: dir.path, capturePaths: capture
         )
@@ -220,7 +220,7 @@ struct RunScriptLaunchTests {
         let scriptURL = dir.appendingPathComponent("exit-42.sh")
         try "#!/bin/sh\nrm -rf \(AppState.shellQuote(completionDir.path))\nexit 42\n".write(to: scriptURL, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
-        let suffix = try AppState.runScriptStartupScript(
+        let suffix = try RunScriptCommand.runScriptStartupScript(
             script: RunScript(scope: .repo, fileName: scriptURL.lastPathComponent, fileURL: scriptURL, displayName: "Exit 42", onExit: .keep, cwd: nil, isExecutable: true),
             worktreeRoot: dir, branch: "main", projectName: "alas", repoRoot: dir.path, capturePaths: capture
         )
@@ -242,7 +242,7 @@ struct RunScriptLaunchTests {
         let scriptURL = dir.appendingPathComponent("exit-42.sh")
         try "#!/bin/sh\nexit 42\n".write(to: scriptURL, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
-        let suffix = try AppState.runScriptStartupScript(
+        let suffix = try RunScriptCommand.runScriptStartupScript(
             script: RunScript(scope: .repo, fileName: scriptURL.lastPathComponent, fileURL: scriptURL, displayName: "Exit 42", onExit: .keep, cwd: nil, isExecutable: true),
             worktreeRoot: dir, branch: "main", projectName: "alas", repoRoot: dir.path, capturePaths: capture
         )
@@ -269,7 +269,7 @@ struct RunScriptLaunchTests {
             scope: .repo, fileName: scriptURL.lastPathComponent, fileURL: scriptURL,
             displayName: "Exit 42", onExit: .close, cwd: nil, isExecutable: true
         )
-        let suffix = try AppState.runScriptStartupScript(
+        let suffix = try RunScriptCommand.runScriptStartupScript(
             script: run, worktreeRoot: dir,
             branch: "main", projectName: "alas", repoRoot: dir.path
         )
@@ -327,7 +327,7 @@ struct RunScriptLaunchTests {
     }
 
     @Test func cwdJoinsWorktreeRoot() throws {
-        let suffix = try AppState.runScriptStartupScript(
+        let suffix = try RunScriptCommand.runScriptStartupScript(
             script: script(executable: true, cwd: "apps/web"),
             worktreeRoot: URL(fileURLWithPath: "/wt"),
             branch: "main", projectName: "alas", repoRoot: "/repo"
@@ -336,7 +336,7 @@ struct RunScriptLaunchTests {
     }
 
     @Test func cdFailureStopsTheRunInsteadOfFallingThrough() throws {
-        let suffix = try AppState.runScriptStartupScript(
+        let suffix = try RunScriptCommand.runScriptStartupScript(
             script: script(executable: true, cwd: "missing"),
             worktreeRoot: URL(fileURLWithPath: "/wt"),
             branch: "main", projectName: "alas", repoRoot: "/repo"
@@ -355,7 +355,7 @@ struct RunScriptLaunchTests {
         let scriptURL = dir.appendingPathComponent("exit-42.sh")
         try "#!/bin/sh\nexit 42\n".write(to: scriptURL, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
-        let suffix = try AppState.runScriptStartupScript(
+        let suffix = try RunScriptCommand.runScriptStartupScript(
             script: RunScript(scope: .repo, fileName: scriptURL.lastPathComponent, fileURL: scriptURL, displayName: "Exit 42", onExit: .close, cwd: "missing", isExecutable: true),
             worktreeRoot: dir, branch: "main", projectName: "alas", repoRoot: dir.path, capturePaths: capture
         )
