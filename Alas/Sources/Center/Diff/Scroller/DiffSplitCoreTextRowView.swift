@@ -603,6 +603,22 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         review.allowsSelection && lines(side).metadata.reviewLineAnchor(fromRow: row, toRow: row) != nil
     }
 
+    var allowsReviewLineSelection: Bool { review.allowsSelection }
+
+    /// Rows a gutter press could comment on, old side first, as the rulers
+    /// list them.
+    func commentableRowsForTesting() -> [(side: Side, row: Int)] {
+        (isStacked ? [Side.new] : [.old, .new]).flatMap { side in
+            lines(side).metadata.indices.filter { isCommentable(side: side, row: $0) }.map { (side, $0) }
+        }
+    }
+
+    func selectReviewLineForTesting(side: Side, row: Int) {
+        if let anchor = lines(side).metadata.reviewLineAnchor(fromRow: row, toRow: row) {
+            review.onSelect(anchor)
+        }
+    }
+
     /// Starts a gutter drag; returns false when `point` is not on a gutter row.
     func beginGutterSelection(at point: NSPoint) -> Bool {
         guard review.allowsSelection, let hit = gutterRow(at: point) else { return false }

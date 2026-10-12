@@ -408,8 +408,9 @@ struct AppKitDiffReviewLineTargets {
 
 @MainActor
 enum AppKitDiffReviewRowPlanBuilder {
-    /// Spike: draws hunks and comment segments with `DiffSplitCoreTextRowView`.
-    static var usesCoreTextRows = ProcessInfo.processInfo.environment["ALAS_DIFF_CORETEXT"] == "1"
+    /// Draws hunks and comment segments with `DiffSplitCoreTextRowView`.
+    /// `ALAS_DIFF_CORETEXT=0` falls back to the text-view rows.
+    static var usesCoreTextRows = ProcessInfo.processInfo.environment["ALAS_DIFF_CORETEXT"] != "0"
 
     static func build(
         inputs: [AppKitDiffReviewRowInput],

@@ -588,8 +588,9 @@ struct AppKitDiffReviewRowPlanTests {
     // main-actor and the tests are synchronous.
     @Test(arguments: [DiffLayoutMode.split, .stacked], [false, true])
     func coreTextHunkRowsCarryTheirHeaderAndCardEdges(layout: DiffLayoutMode, wrap: Bool) throws {
+        let usedCoreText = AppKitDiffReviewRowPlanBuilder.usesCoreTextRows
         AppKitDiffReviewRowPlanBuilder.usesCoreTextRows = true
-        defer { AppKitDiffReviewRowPlanBuilder.usesCoreTextRows = false }
+        defer { AppKitDiffReviewRowPlanBuilder.usesCoreTextRows = usedCoreText }
         let input = AppKitDiffReviewRowInput(
             file: textFile(), state: AppKitDiffReviewFileState(), theme: theme, layoutMode: layout, wrapLines: wrap
         )
@@ -603,8 +604,9 @@ struct AppKitDiffReviewRowPlanTests {
     }
 
     @Test func coreTextSegmentRowsAroundCommentsMountNativelyWithoutAHeader() throws {
+        let usedCoreText = AppKitDiffReviewRowPlanBuilder.usesCoreTextRows
         AppKitDiffReviewRowPlanBuilder.usesCoreTextRows = true
-        defer { AppKitDiffReviewRowPlanBuilder.usesCoreTextRows = false }
+        defer { AppKitDiffReviewRowPlanBuilder.usesCoreTextRows = usedCoreText }
         let file = textFile()
         let input = AppKitDiffReviewRowInput(
             file: file, draftComments: [draftComment(fileID: file.id)], state: AppKitDiffReviewFileState(), theme: theme, layoutMode: .split
