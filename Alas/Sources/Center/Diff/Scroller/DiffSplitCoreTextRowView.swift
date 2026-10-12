@@ -755,8 +755,6 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         }
     }
 
-
-
     override func flagsChanged(with event: NSEvent) {
         super.flagsChanged(with: event)
         flagsChangedHandler?(event)
