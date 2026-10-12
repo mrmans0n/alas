@@ -315,6 +315,9 @@ public final class ACPSessionManager: ChangeTracking {
     private var activeSideQuestionWorkCount = 0 {
         willSet { projectRebindingActivity.send() }
     }
+    private var activeDiscoveryImportCount = 0 {
+        willSet { projectRebindingActivity.send() }
+    }
     private var activeSessionDeletionCount = 0 {
         willSet { projectRebindingActivity.send() }
     }
@@ -1507,6 +1510,7 @@ public final class ACPSessionManager: ChangeTracking {
     public var beforePersistenceForTesting: (@MainActor () async -> Void)?
     /// Runs inside `sendPrompt`, just before the writer lease is confirmed.
     public var beforeLeaseConfirmationForTesting: (@MainActor () async -> Void)?
+    public var beforeDiscoveryImportForTesting: (@MainActor () async -> Void)?
     public var beforeLeaseReadForTesting: (@MainActor () async -> Void)?
     public var afterRunnerRegistrationForTesting: (@MainActor (_ sessionId: ACPSession.ID) async -> Void)?
     public var pendingFreshBrokerNamespacesForTesting: Set<ACPSession.ID> {
@@ -1784,7 +1788,7 @@ public final class ACPSessionManager: ChangeTracking {
     public var isIdleForProjectRebinding: Bool {
         !isDisposed && attachingSessions.isEmpty && restartingConnections.isEmpty
             && autoReconnectTasks.isEmpty && disposalTasks.isEmpty
-            && activeSessionDeletionCount == 0 && teardownCounts.isEmpty
+            && activeSessionDeletionCount == 0 && activeDiscoveryImportCount == 0 && teardownCounts.isEmpty
             && sideQuestions.isEmpty && activeSideQuestionWorkCount == 0
             && runners.values.allSatisfy(\.isIdleForProjectRebinding)
             && sessions.values.allSatisfy {
@@ -4004,7 +4008,11 @@ public final class ACPSessionManager: ChangeTracking {
         autoRunDefault: Bool = false,
         origin: ACPSessionOrigin = .agentImported
     ) async -> ACPSessionRow? {
+        guard !isDisposed else { return nil }
+        activeDiscoveryImportCount += 1
+        defer { activeDiscoveryImportCount -= 1 }
         await previousManagerDisposal?.value
+        guard !isDisposed else { return nil }
         let discoveredCWD = URL(fileURLWithPath: discovered.cwd).standardizedFileURL.path
         let managerCWD = URL(fileURLWithPath: worktreePath).standardizedFileURL.path
         guard discovered.worktreeId == worktreeId, discoveredCWD == managerCWD else { return nil }
@@ -4036,6 +4044,9 @@ public final class ACPSessionManager: ChangeTracking {
             archived: false
         )
         do {
+#if DEBUG
+            await beforeDiscoveryImportForTesting?()
+#endif
             try await persistence.upsertSession(row)
             try await persistence.resolveReplicaRelations()
             persistedRows[row.id] = row

@@ -12979,7 +12979,26 @@ final class AppState {
     }
 
     func acpManager(forOwnerKey key: String) -> ACPSessionManager? {
-        acpManagers.first { $0.key.storageKey == key }?.value
+        if let worktree = worktree(withId: key) {
+            return acpManager(for: worktree)
+        }
+        return acpManagers.first { $0.key.storageKey == key }?.value
+    }
+
+    func hydrateAndAttachACP(manager: ACPSessionManager, sessionId: ACPSession.ID) async {
+        await manager.hydrateIfNeeded(id: sessionId)
+        guard let session = manager.liveSession(for: sessionId) else { return }
+        if case .failed = session.hydrationState { return }
+        guard await !checkpointACPAdmissionDisabledAfterDiscovery(owner: manager.owner, fallbackWorktree: nil) else {
+            session.lastError = Self.checkpointRecoveryBlocksACPMessage
+            return
+        }
+        let freshlyCreated = manager.runners[sessionId] == nil
+            && ACPSessionAttachFreshness.isFresh(
+                restoredFromPersistence: session.restoredFromPersistence,
+                remoteSessionId: session.remoteSessionId
+            )
+        await manager.attach(to: sessionId, freshlyCreated: freshlyCreated)
     }
 
     // MARK: Session references

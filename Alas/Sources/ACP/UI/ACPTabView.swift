@@ -1276,18 +1276,7 @@ private struct ACPSessionView: View {
     /// `.task(id:)` and the failure banner's Retry button so a successful
     /// retry doesn't leave the session unattached with a disabled composer.
     private func hydrateAndAttach() async {
-        await manager.hydrateIfNeeded(id: sessionId)
-        if case .failed = session.hydrationState { return }
-        guard await !state.checkpointACPAdmissionDisabledAfterDiscovery(owner: owner, fallbackWorktree: worktree) else {
-            session.lastError = AppState.checkpointRecoveryBlocksACPMessage
-            return
-        }
-        let freshlyCreated = manager.runners[sessionId] == nil
-            && ACPSessionAttachFreshness.isFresh(
-                restoredFromPersistence: session.restoredFromPersistence,
-                remoteSessionId: session.remoteSessionId
-            )
-        await manager.attach(to: sessionId, freshlyCreated: freshlyCreated)
+        await state.hydrateAndAttachACP(manager: manager, sessionId: sessionId)
     }
 
     /// After attach: if the adapter is ready, ask the store for the cached

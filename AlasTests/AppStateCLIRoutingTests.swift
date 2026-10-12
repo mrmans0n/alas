@@ -310,8 +310,8 @@ struct AppStateCLIRoutingTests {
         })
     }
 
-    @Test(.timeLimit(.minutes(1)), arguments: [false, true])
-    func movedDirectoryKeepsBusyManagerUntilEverySessionIsIdle(explicitOwner: Bool) async throws {
+    @Test(.timeLimit(.minutes(1)), arguments: ["implicit", "explicit", "visual"])
+    func movedDirectoryKeepsBusyManagerUntilEverySessionIsIdle(surface: String) async throws {
         let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: path, withIntermediateDirectories: true)
         let folder = ProjectConfig(id: "folder", name: "Folder", path: path.path,
@@ -326,8 +326,17 @@ struct AppStateCLIRoutingTests {
             try? FileManager.default.removeItem(at: path)
         }
         state.projectsManager.insertOptimisticWorktree(worktree)
-        let owner: SessionOwnerID? = explicitOwner ? .worktree(worktree.id) : nil
-        let manager = try #require(state.acpManagerForMountedTab(worktree: worktree, owner: owner))
+        let owner: SessionOwnerID? = surface == "explicit" ? .worktree(worktree.id) : nil
+        func mountedManager() -> ACPSessionManager? {
+            if surface == "visual" {
+                return state.acpManager(forOwnerKey: SessionOwnerID.worktree(worktree.id).storageKey)
+            }
+            return state.acpManagerForMountedTab(worktree: worktree, owner: owner)
+        }
+        if surface == "visual" {
+            _ = state.acpManager(for: worktree)
+        }
+        let manager = try #require(mountedManager())
         let session = manager.createSession(agentId: "pi")
         manager.renameSession(id: session.id, title: "Moved session", source: .manual)
         session.transcript.streamingState = .streaming
@@ -357,7 +366,7 @@ struct AppStateCLIRoutingTests {
         #expect(try await manager.upstreamReferences.environment.remotes(path).isEmpty)
         state.projectsManager.insertOptimisticWorktree(moved)
         #expect(state.worktree(withId: worktree.id)?.projectId == repository.id)
-        #expect(state.acpManagerForMountedTab(worktree: worktree, owner: owner) === manager)
+        #expect(mountedManager() === manager)
         var readinessSubscription: AnyCancellable?
         defer { readinessSubscription?.cancel() }
         let busy = await withCheckedContinuation { continuation in
@@ -367,10 +376,10 @@ struct AppStateCLIRoutingTests {
         }
         #expect(busy == false)
         session.transcript.streamingState = .idle
-        #expect(state.acpManagerForMountedTab(worktree: worktree, owner: owner) === manager)
+        #expect(mountedManager() === manager)
         otherSession.nextPromptWorkCount += 1
         otherSession.transcript.streamingState = .idle
-        #expect(state.acpManagerForMountedTab(worktree: worktree, owner: owner) === manager)
+        #expect(mountedManager() === manager)
         let idle = await withCheckedContinuation { continuation in
             readinessSubscription = manager.projectRebindingReadiness
                 .filter { $0 }.prefix(1)
@@ -378,9 +387,9 @@ struct AppStateCLIRoutingTests {
             otherSession.nextPromptWorkCount -= 1
         }
         #expect(idle == true)
-        let rebound = try #require(state.acpManagerForMountedTab(worktree: worktree, owner: owner))
+        let rebound = try #require(mountedManager())
         #expect(rebound !== manager)
-        #expect(state.acpManagerForMountedTab(worktree: worktree, owner: owner) === rebound)
+        #expect(mountedManager() === rebound)
         _ = await rebound.persistedSessionRow(id: session.id)
         let restored = try #require(rebound.placeholderSession(id: session.id))
         await rebound.hydrateIfNeeded(id: session.id)
@@ -395,12 +404,57 @@ struct AppStateCLIRoutingTests {
         #expect(await awaitCondition { rebound.isIdleForProjectRebinding })
         resumeLookup.continuation.yield()
         #expect(await suspendedLookup.value === rebound)
-        #expect(state.acpManagerForMountedTab(worktree: worktree, owner: owner) === rebound)
+        #expect(mountedManager() === rebound)
         let remotes = try await rebound.upstreamReferences.environment.remotes(path)
         #expect(Set(remotes.map(\.name)) == ["origin"])
         let accepted = manager.submit(sessionId: session.id, text: "later turn", attachments: [],
                                       intent: .schedule(.distantFuture), onCompleted: { _ in })
         #expect(!accepted)
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func restoredVisualOnlySessionCanAnswerAfterManagerHandoff() async throws {
+        let (state, _, worktree) = try await makeStateWithWorktree(name: "visual-rebind")
+        defer { try? FileManager.default.removeItem(at: worktree.path) }
+        let store = try ACPSessionStore(path: worktree.path.appendingPathComponent("sessions.sqlite").path)
+        func makeManager() -> ACPSessionManager {
+            let client = ACPMockClient()
+            client.script(method: "initialize") { _ in
+                try JSONEncoder().encode(ACPInitializeResult(
+                    protocolVersion: 1, agentCapabilities: .init(loadSession: true), authMethods: []
+                ))
+            }
+            for method in ["session/new", "session/load"] {
+                client.script(method: method) { _ in
+                    try JSONEncoder().encode(ACPSessionNewResult(
+                        sessionId: "remote", availableModels: [], availableModes: [],
+                        currentModel: nil, currentMode: nil, promptSuggestions: []
+                    ))
+                }
+            }
+            return ACPSessionManager(worktreeId: worktree.id, worktreePath: worktree.path.path, store: store,
+                setupEvaluator: { _ in .ready }, connectionFactory: { _, _, _ in ACPConnection(client: client) })
+        }
+        let previous = makeManager()
+        defer { previous.shutdownBackgroundTasks() }
+        let session = previous.createSession(agentId: "codex")
+        await previous.attach(to: session.id, freshlyCreated: true)
+        let visual = ACPVisualAid(
+            id: UUID(), title: "Choice", html: "<p>Choose</p>",
+            question: .init(prompt: "Which?", options: [.init(id: "a", label: "One")], allowMultiple: false),
+            answer: nil, createdAt: Date()
+        )
+        #expect(await previous.showVisualAid(visual, in: session.id))
+        try await previous.disposeSession(id: session.id)
+        await previous.flushAllPersistence()
+        let replacement = makeManager()
+        defer { replacement.shutdownBackgroundTasks() }
+        _ = await replacement.persistedSessionRow(id: session.id)
+        _ = replacement.placeholderSession(id: session.id)
+        await state.hydrateAndAttachACP(manager: replacement, sessionId: session.id)
+        let answer = ACPVisualAid.Answer.dismissed(at: Date())
+        #expect(await replacement.answerVisualAid(id: visual.id, answer: answer, in: session.id))
+        #expect(replacement.liveSession(for: session.id)?.transcript.visualAid(id: visual.id)?.answer == answer)
     }
 
     @Test func harnessSessionLocationResolvesLiveACPSession() async throws {

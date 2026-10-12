@@ -122,6 +122,36 @@ struct ACPSessionManagerTests {
     }
 
     @Test(.timeLimit(.minutes(1)))
+    func discoveryImportPublishesBusyUntilItsWriteCompletes() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("busy-import-\(UUID()).sqlite")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = try ACPSessionStore(path: url.path)
+        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        defer { manager.shutdownBackgroundTasks() }
+        let writes = AsyncGate()
+        manager.beforeDiscoveryImportForTesting = { await writes.enterAndWait() }
+        var readiness: Bool?
+        let subscription = manager.projectRebindingReadiness.sink { readiness = $0 }
+        defer { subscription.cancel() }
+        let importing = Task { @MainActor in
+            await manager.materializeDiscoveredSession(.init(
+                worktreeId: "wt", agentId: "claude", remoteSessionId: "remote",
+                cwd: "/tmp/wt", title: "Imported", updatedAt: nil,
+                additionalDirectories: [], localSessionId: nil
+            ))
+        }
+        await writes.waitUntilEntered()
+        #expect(!manager.isIdleForProjectRebinding)
+        #expect(await awaitCondition(within: .seconds(1)) { readiness == false })
+        #expect(try store.recentSessions().isEmpty)
+        await writes.release()
+        let row = try #require(await importing.value)
+        #expect(try store.loadSession(id: row.id) != nil)
+        #expect(await awaitCondition { readiness == true })
+        #expect(manager.isIdleForProjectRebinding)
+    }
+
+    @Test(.timeLimit(.minutes(1)))
     func connectedIdleRunnerCanRebindAfterWorkFinishes() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rebind-\(UUID()).sqlite")
         defer { try? FileManager.default.removeItem(at: url) }

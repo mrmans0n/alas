@@ -5,12 +5,23 @@ struct VisualAidTabView: View {
     let state: AppState
     let tab: VisualAidTabState
 
+    @State private var managerRebindingGeneration = 0
+
     var body: some View {
-        if let manager = state.acpManager(forOwnerKey: tab.ownerKey) {
-            VisualAidManagedTabView(manager: manager, tab: tab)
-        } else {
-            VisualAidUnavailableView()
+        Group {
+            if let manager = state.acpManager(forOwnerKey: tab.ownerKey) {
+                VisualAidManagedTabView(state: state, manager: manager, tab: tab)
+                    .id(ObjectIdentifier(manager))
+                    .onReceive(manager.projectRebindingReadiness.filter { $0 }) { _ in
+                        if state.acpManager(forOwnerKey: tab.ownerKey) !== manager {
+                            managerRebindingGeneration += 1
+                        }
+                    }
+            } else {
+                VisualAidUnavailableView()
+            }
         }
+        .id(managerRebindingGeneration)
     }
 }
 
@@ -18,6 +29,7 @@ struct VisualAidTabView: View {
 /// shown so releasing the ACP tab view cannot evict it, and observes the
 /// manager so closure or eviction updates the content.
 private struct VisualAidManagedTabView: View {
+    let state: AppState
     @ObservedObject var manager: ACPSessionManager
     let tab: VisualAidTabState
 
@@ -29,6 +41,9 @@ private struct VisualAidManagedTabView: View {
                 tab: tab,
                 actions: .driven(by: manager, session: session, popOut: { _ in })
             )
+            .task {
+                await state.hydrateAndAttachACP(manager: manager, sessionId: tab.sessionId)
+            }
             .onAppear {
                 manager.retainSession(id: tab.sessionId)
                 manager.markSessionVisible(id: tab.sessionId)
