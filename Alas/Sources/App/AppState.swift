@@ -6777,15 +6777,26 @@ final class AppState {
     /// unarchive entry point) locks its archived rows while this runs.
     private(set) var isDeletingArchivedWorktrees = false
 
+    /// One target per id, and none for an id any representation rejects. A
+    /// worktree id is its path, so one local checkout archived under two
+    /// projects appears twice: ownership is checked per project, so an
+    /// unowned alias must not delete a checkout the other one owns, and a
+    /// duplicate id would trap the batch's per-id snapshots.
+    nonisolated static func bulkDeleteTargets<T>(
+        _ candidates: [T],
+        id: (T) -> String,
+        isEligible: (T) -> Bool
+    ) -> [T] {
+        let blocked = Set(candidates.filter { !isEligible($0) }.map(id))
+        var seen: Set<String> = []
+        return candidates.filter { !blocked.contains(id($0)) && seen.insert(id($0)).inserted }
+    }
+
     func deleteAllArchivedWorktrees() async {
         guard !isDeletingArchivedWorktrees else { return }
         let archived = projects.flatMap { projectsManager.archivedWorktrees(projectId: $0.id) }
-        // A worktree id is its path: one local checkout archived under two
-        // projects must be a single target, or the batch's per-id snapshots
-        // trap on the duplicate key.
-        var seenIds: Set<String> = []
         let deletable = workspacesManager.canMutate
-            ? archived.filter { worktree in
+            ? Self.bulkDeleteTargets(archived, id: \.id) { worktree in
                 // The batch skips any claimed worktree; a failed delete is
                 // released below so this run retries it.
                 let operationAllowsBatch: Bool
@@ -6796,7 +6807,6 @@ final class AppState {
                 return operationAllowsBatch
                     && !worktree.path.isRemoteAlasPath
                     && worktreeCleanupWorkspaceOwners(for: worktree).isEmpty
-                    && seenIds.insert(worktree.id).inserted
             }
             : []
         guard !archived.isEmpty else { return }
