@@ -23,6 +23,9 @@ public final class AlasCoreContext {
         case workspaceStateUnreadable
         /// The path now holds a different checkout than the one asked for.
         case replaced
+        /// Remote checkouts carry no lineage to tell a replacement apart, so
+        /// only the app's confirmed flow deletes them.
+        case remoteUnsupported
     }
 
     public var projects: ProjectsManager
@@ -249,6 +252,7 @@ public final class AlasCoreContext {
         guard let project = projects.projects.first(where: { $0.id == worktree.projectId }) else {
             throw ProjectCreationError.projectNotFound
         }
+        guard !worktree.path.isRemoteAlasPath else { throw WorktreeDeletionRefusal.remoteUnsupported }
         guard !projects.isMain(worktree, in: project) else { throw WorktreeDeletionRefusal.mainWorktree }
         try await refuseWorkspaceOwnedDeletion(worktree)
         try Self.refuseReplacedCheckout(worktree)
@@ -330,10 +334,9 @@ public final class AlasCoreContext {
     }
 
     /// A checkout recreated at the same path carries a different lineage
-    /// marker, or none. ponytail: local only; remote checkouts are not
-    /// compared until their lineage can be read over SSH.
+    /// marker, or none.
     private nonisolated static func refuseReplacedCheckout(_ worktree: Worktree) throws {
-        guard let expected = worktree.lineageID, !worktree.path.isRemoteAlasPath else { return }
+        guard let expected = worktree.lineageID else { return }
         guard WorktreeService.existingLocalLineageID(forWorktreeAt: worktree.path) == expected else {
             throw WorktreeDeletionRefusal.replaced
         }
