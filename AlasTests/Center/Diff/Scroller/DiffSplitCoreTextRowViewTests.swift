@@ -225,17 +225,33 @@ import Testing
     }
 
     @Test(arguments: [
-        ([1, 3], [2, 1], [0, 2, 5]),
-        ([], [1, 2], [0, 1, 3]),
-        ([0], [0], [0, 1]),
-    ])
-    func wrappedRowsAreAsTallAsTheirTallerSide(old: [Int], new: [Int], expected: [Int]) {
-        #expect(DiffSplitCoreTextRowView.rowStarts(oldLineCounts: old, newLineCounts: new) == expected)
+        ([10, 30], [20, 10], [0, 20, 50]),
+        ([], [10, 20], [0, 10, 30]),
+        ([0], [0], [0, 10]),
+    ] as [([CGFloat], [CGFloat], [CGFloat])])
+    func rowsAreAsTallAsTheirTallerSide(old: [CGFloat], new: [CGFloat], expected: [CGFloat]) {
+        #expect(DiffSplitCoreTextRowView.rowTops(oldHeights: old, newHeights: new, minimum: 10) == expected)
     }
 
-    @Test(arguments: [(0, 0), (1, 0), (2, 1), (4, 1), (9, 1)])
-    func visualLinesMapToTheirRow(line: Int, row: Int) {
-        #expect(DiffSplitCoreTextRowView.row(containingVisualLine: line, rowStarts: [0, 2, 5]) == row)
+    @Test(arguments: [(CGFloat(0), 0), (19.5, 0), (20, 1), (49, 1), (90, 1), (-5, 0)])
+    func offsetsMapToTheirRow(offset: CGFloat, row: Int) {
+        #expect(DiffSplitCoreTextRowView.row(containing: offset, rowTops: [0, 20, 50]) == row)
+    }
+
+    @Test func expansionRowsAreAsTallAsTheirTextKitRow() {
+        let diff = DiffParser.parse("@@ -1,1 +1,1 @@\n-a\n+b\n")
+        var rows = DiffDisplayModelBuilder.build(diff: diff, filePath: "Sources/Example.swift").groups.flatMap(\.rows)
+        let key = DiffContextExpansionKey(groupID: "hunk-0", boundary: .above)
+        rows.insert(DiffDisplayRow(
+            id: "expand", kind: .expandableContext, old: nil, new: nil, collapsedLineCount: 20,
+            contextExpansion: DiffContextExpansionRow(key: key, boundary: .above, remainingLineCount: 20)
+        ), at: 0)
+        let split = DiffPaneTextDocumentBuilder.buildSplit(rows: rows, fileExtension: "swift", font: font, showWhitespace: false, theme: theme)
+        let view = DiffSplitCoreTextRowView(frame: .zero)
+        view.configure(result: split, font: font, theme: theme)
+        let expansion = DiffPaneTextDocumentBuilder.expandableContextRowHeight(font: font)
+        #expect(expansion > view.lineHeight)
+        #expect(view.measuredHeight(forWidth: 800) == expansion + view.lineHeight + 2 * DiffSplitCoreTextRowView.verticalInset)
     }
 
     @Test func wrappingGrowsTheRowInsteadOfScrollingSideways() {
