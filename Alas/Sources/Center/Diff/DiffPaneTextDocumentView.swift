@@ -51,7 +51,7 @@ extension DiffReviewInlineFeedbackSide {
     }
 }
 
-private extension DiffDisplayLine {
+extension DiffDisplayLine {
     func highlightLineNumber(for side: DiffReviewInlineFeedbackSide) -> Int? {
         switch side {
         case .old:

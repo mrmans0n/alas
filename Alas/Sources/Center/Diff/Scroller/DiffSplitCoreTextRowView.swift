@@ -293,10 +293,15 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
     /// The rows (logical lines) that intersect `rect`.
     func visibleLineRange(in rect: NSRect) -> Range<Int> {
         guard lineCount > 0 else { return 0..<0 }
-        let tops = layout(forWidth: bounds.width).tops
-        guard rect.maxY > codeTop, rect.minY < codeTop + (tops.last ?? 0) else { return 0..<0 }
-        let first = Self.row(containing: rect.minY - codeTop, rowTops: tops)
-        let last = Self.row(containing: rect.maxY - codeTop - 0.001, rowTops: tops) + 1
+        return Self.visibleRows(from: rect.minY - codeTop, to: rect.maxY - codeTop, rowTops: layout(forWidth: bounds.width).tops)
+    }
+
+    /// The rows a span covers, in offsets below the first code line,
+    /// including rows it only partly covers.
+    static func visibleRows(from minY: CGFloat, to maxY: CGFloat, rowTops: [CGFloat]) -> Range<Int> {
+        guard rowTops.count > 1, maxY > 0, minY < rowTops[rowTops.count - 1] else { return 0..<0 }
+        let first = row(containing: minY, rowTops: rowTops)
+        let last = row(containing: maxY - 0.001, rowTops: rowTops) + 1
         return first < last ? first..<last : first..<first
     }
 
@@ -342,8 +347,8 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         var oldLines: [[CTLine]]?
         var newLines: [[CTLine]]?
         if wraps {
-            let oldWidth = isStacked ? 0 : pane(.old, width: width).width - old.gutterWidth - 2 * Self.textInset
-            let newWidth = pane(.new, width: width).width - new.gutterWidth - 2 * Self.textInset
+            let oldWidth = Self.codeColumn(.old, containerWidth: width, stacked: isStacked, gutter: old.gutterWidth).width - 2 * Self.textInset
+            let newWidth = Self.codeColumn(.new, containerWidth: width, stacked: isStacked, gutter: new.gutterWidth).width - 2 * Self.textInset
             oldLines = isStacked ? [] : wrappedLines(old, width: oldWidth)
             newLines = wrappedLines(new, width: newWidth)
         }
@@ -373,7 +378,7 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
 
     /// Breaks `line` at word boundaries to fit `width`, as TextKit's default
     /// paragraph style does.
-    private static func wrapped(_ line: NSAttributedString, width: CGFloat) -> [CTLine] {
+    static func wrapped(_ line: NSAttributedString, width: CGFloat) -> [CTLine] {
         let typesetter = CTTypesetterCreateWithAttributedString(line)
         guard line.length > 0, width > 1 else { return [CTTypesetterCreateLine(typesetter, CFRange(location: 0, length: line.length))] }
         var lines: [CTLine] = []
@@ -457,20 +462,33 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
 
     private func updateViewportWidths() {
         horizontalScroll.setViewportWidths(
-            old: isStacked ? 0 : pane(.old).width - old.gutterWidth,
-            new: pane(.new).width - new.gutterWidth
+            old: Self.codeColumn(.old, containerWidth: bounds.width, stacked: isStacked, gutter: old.gutterWidth).width,
+            new: Self.codeColumn(.new, containerWidth: bounds.width, stacked: isStacked, gutter: new.gutterWidth).width
         )
     }
 
     /// The column `side` draws in: a split half, or the full width for the
     /// new side of a stacked hunk.
     private func pane(_ side: Side, width: CGFloat? = nil) -> NSRect {
-        let width = width ?? bounds.width
-        if isStacked {
-            return side == .new ? NSRect(x: 0, y: 0, width: width, height: bounds.height) : .zero
-        }
-        let frames = DiffPaneSplitGeometry.frames(containerWidth: width)
-        return side == .old ? frames.oldPane : frames.newPane
+        let column = Self.paneColumn(side, containerWidth: width ?? bounds.width, stacked: isStacked)
+        return NSRect(x: column.minX, y: 0, width: column.width, height: bounds.height)
+    }
+
+    /// The x-span `side` draws in: split halves as the text-view panes use,
+    /// or the full width for the new side of a stacked hunk.
+    static func paneColumn(_ side: Side, containerWidth: CGFloat, stacked: Bool) -> (minX: CGFloat, width: CGFloat) {
+        if stacked { return side == .new ? (0, containerWidth) : (0, 0) }
+        let frames = DiffPaneSplitGeometry.frames(containerWidth: containerWidth)
+        let pane = side == .old ? frames.oldPane : frames.newPane
+        return (pane.minX, pane.width)
+    }
+
+    /// The x-span of `side`'s code, right of its line-number gutter. This is
+    /// the viewport its lines scroll through sideways.
+    static func codeColumn(_ side: Side, containerWidth: CGFloat, stacked: Bool, gutter: CGFloat) -> (minX: CGFloat, width: CGFloat) {
+        let pane = paneColumn(side, containerWidth: containerWidth, stacked: stacked)
+        guard pane.width > 0 else { return (0, 0) }
+        return (pane.minX + gutter, max(0, pane.width - gutter))
     }
 
     func side(at point: NSPoint) -> Side {
@@ -480,13 +498,9 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
 
     /// The code area of `side`, which scrolls; the gutter beside it does not.
     private func codeRect(_ side: Side) -> NSRect {
-        if isStacked, side == .old { return .zero }
-        let pane = pane(side)
-        let gutter = side == .old ? old.gutterWidth : new.gutterWidth
-        return NSRect(
-            x: pane.minX + gutter, y: headerHeight,
-            width: max(0, pane.width - gutter), height: max(0, bounds.height - headerHeight - bottomPadding)
-        )
+        let column = Self.codeColumn(side, containerWidth: bounds.width, stacked: isStacked, gutter: lines(side).gutterWidth)
+        guard column.width > 0 else { return .zero }
+        return NSRect(x: column.minX, y: headerHeight, width: column.width, height: max(0, bounds.height - headerHeight - bottomPadding))
     }
 
     // MARK: - Review line selection
@@ -507,6 +521,11 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
     }
 
     private func lines(_ side: Side) -> SideLines { side == .old ? old : new }
+
+    private func rowCenterY(_ row: Int) -> CGFloat {
+        let tops = layout(forWidth: bounds.width).tops
+        return codeTop + (tops[row] + tops[row + 1]) / 2
+    }
 
     private func isCommentable(side: Side, row: Int) -> Bool {
         review.allowsSelection && lines(side).metadata.reviewLineAnchor(fromRow: row, toRow: row) != nil
@@ -769,6 +788,7 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
     }
 
     // MARK: - Drawing
+
 
     override func draw(_ requestedRect: NSRect) {
         // AppKit asks every row to redraw the strip a scroll step exposes,
@@ -1133,6 +1153,18 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         return metrics
     }
 
+    /// Height, baseline and indent for a line whose paragraph style sets its
+    /// own (the context-expansion rows), as TextKit lays it out; nil for
+    /// lines that use the code line metrics.
+    static func ownMetrics(of line: NSAttributedString, font: NSFont) -> (lineHeight: CGFloat, baselineOffset: CGFloat, indent: CGFloat)? {
+        guard line.length > 0,
+              let style = line.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle,
+              style.minimumLineHeight > 0 || style.maximumLineHeight > 0 || style.firstLineHeadIndent > 0
+        else { return nil }
+        let metrics = textKitMetrics(for: line.attribute(.font, at: 0, effectiveRange: nil) as? NSFont ?? font, style: style)
+        return (metrics.lineHeight, metrics.baselineOffset, style.firstLineHeadIndent)
+    }
+
     private static func lines(
         code document: DiffPaneTextDocumentBuilder.CodeDocument,
         gutter: NSAttributedString,
@@ -1150,11 +1182,9 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
             if line.string.hasSuffix("\n") {
                 line = line.attributedSubstring(from: NSRange(location: 0, length: line.length - 1))
             }
-            if line.length > 0, let style = line.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle,
-               style.minimumLineHeight > 0 || style.maximumLineHeight > 0 || style.firstLineHeadIndent > 0 {
-                let lineFont = line.attribute(.font, at: 0, effectiveRange: nil) as? NSFont ?? font
-                side.customMetrics[side.code.count] = textKitMetrics(for: lineFont, style: style)
-                if style.firstLineHeadIndent > 0 { side.indents[side.code.count] = style.firstLineHeadIndent }
+            if let own = ownMetrics(of: line, font: font) {
+                side.customMetrics[side.code.count] = TextKitMetrics(lineHeight: own.lineHeight, baselineOffset: own.baselineOffset)
+                if own.indent > 0 { side.indents[side.code.count] = own.indent }
             }
             let ctLine = CTLineCreateWithAttributedString(line)
             side.code.append(ctLine)
@@ -1175,5 +1205,19 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
             ))))
         }
         return side
+    }
+}
+
+extension DiffSplitCoreTextRowView: AppKitDiffScrollLineTargetProviding {
+    /// The target line's center, so line jumps land on the line rather than
+    /// centering the whole hunk. Same lookup as the text-view panes.
+    func scrollTargetCenterY(for target: AppKitDiffScrollLineTarget) -> CGFloat? {
+        let side: Side = isStacked || target.side != .old ? .new : .old
+        guard let row = lines(side).metadata.firstIndex(where: { metadata in
+            guard let sourceLine = metadata.sourceLine else { return false }
+            return target.side.matches(sourceLine.anchor.side)
+                && sourceLine.highlightLineNumber(for: target.side) == target.line
+        }) else { return nil }
+        return rowCenterY(row)
     }
 }

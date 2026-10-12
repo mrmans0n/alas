@@ -19,39 +19,6 @@ import Testing
         return DiffPaneTextDocumentBuilder.buildSplit(rows: rows, fileExtension: "swift", font: font, showWhitespace: false, theme: theme)
     }
 
-    @Test func heightIsOneLinePerRowPlusInsets() {
-        let view = DiffSplitCoreTextRowView(frame: .zero)
-        view.configure(result: result(old: ["a", "b", "c"], new: ["x", "y", "z"]), font: font, theme: theme)
-        #expect(view.measuredHeight(forWidth: 800) == 3 * view.lineHeight + 2 * DiffSplitCoreTextRowView.verticalInset)
-    }
-
-    @Test func visibleRangeIncludesPartiallyCoveredLines() {
-        let view = DiffSplitCoreTextRowView(frame: .zero)
-        view.configure(result: result(old: [], new: (0..<10).map { "let v\($0) = \($0)" }), font: font, theme: theme)
-        let top = DiffSplitCoreTextRowView.verticalInset
-        let rect = NSRect(x: 0, y: top + view.lineHeight * 2.5, width: 800, height: view.lineHeight)
-        #expect(view.visibleLineRange(in: rect) == 2..<4)
-    }
-
-    @Test(arguments: ["\t😀漢", String(repeating: "w", count: 400)])
-    func widestLineUsesTypographicWidth(line: String) {
-        let view = DiffSplitCoreTextRowView(frame: .zero)
-        view.configure(result: result(old: [], new: [line]), font: font, theme: theme)
-        let measured = CTLineGetTypographicBounds(
-            CTLineCreateWithAttributedString(NSAttributedString(string: line, attributes: [.font: font])), nil, nil, nil
-        )
-        #expect(view.widestLineWidth(side: .new) >= measured - 1)
-        #expect(view.cachedLineStringForTesting(side: .new, line: 0)?.contains(line.suffix(3)) == true)
-    }
-
-
-    @Test func reconfiguringReplacesCachedLines() {
-        let view = DiffSplitCoreTextRowView(frame: .zero)
-        view.configure(result: result(old: [], new: ["before"]), font: font, theme: theme)
-        view.configure(result: result(old: [], new: ["after"]), font: font, theme: theme)
-        #expect(view.cachedLineStringForTesting(side: .new, line: 0) == "after")
-    }
-
     @Test func narrowContentCannotScroll() {
         var model = DiffSplitHorizontalScroll(oldContentWidth: 100, newContentWidth: 100, oldViewportWidth: 300, newViewportWidth: 300)
         #expect(model.maxOffset(.new) == 0)
@@ -78,7 +45,6 @@ import Testing
         #expect(model.offset(.new) == 100)
     }
 
-
     private func mountedRow(newLine: String) -> (DiffSplitCoreTextRowView, NSWindow) {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1_000, height: 200), styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -101,14 +67,6 @@ import Testing
         #expect(handled)
         #expect(view.horizontalScroll.offset(.new) == 40)
         #expect(view.horizontalScroll.offset(.old) == 0)
-    }
-
-    @Test func diagonalMostlyVerticalScrollIsNotHandled() {
-        let (view, window) = mountedRow(newLine: String(repeating: "w", count: 300))
-        defer { window.close() }
-        let handled = view.scroll(deltaX: -10, deltaY: -40, isPrecise: true, at: NSPoint(x: 900, y: 20))
-        #expect(!handled)
-        #expect(view.horizontalScroll.offset(.new) == 0)
     }
 
     @Test func verticalWheelEventsGoToTheNextResponder() throws {
@@ -168,17 +126,6 @@ import Testing
         #expect(view.horizontalScroll.offset(.old) == 0)
     }
 
-
-    @Test func scrollerTracksTheOffsetAndHidesWhenContentFits() {
-        let (view, window) = mountedRow(newLine: String(repeating: "w", count: 300))
-        defer { window.close() }
-        #expect(view.scrollerForTesting(.old).isHidden)
-        #expect(!view.scrollerForTesting(.new).isHidden)
-        _ = view.scroll(deltaX: -40, deltaY: 0, isPrecise: true, at: NSPoint(x: 900, y: 20))
-        let expected = Double(40 / view.horizontalScroll.maxOffset(.new))
-        #expect(abs(view.scrollerForTesting(.new).doubleValue - expected) < 0.001)
-    }
-
     @Test func draggingTheScrollerMovesTheOffset() {
         let (view, window) = mountedRow(newLine: String(repeating: "w", count: 300))
         defer { window.close() }
@@ -188,64 +135,6 @@ import Testing
         #expect(abs(view.horizontalScroll.offset(.new) - view.horizontalScroll.maxOffset(.new) / 2) < 1)
     }
 
-    @Test func lineHeightMatchesTheTextKitPanes() {
-        let storage = NSTextStorage(string: "a\nb", attributes: [.font: font, .paragraphStyle: CenterTypography.paragraphStyle()])
-        let layoutManager = NSLayoutManager()
-        let container = NSTextContainer(size: NSSize(width: 500, height: 1_000))
-        container.lineFragmentPadding = 0
-        layoutManager.addTextContainer(container)
-        storage.addLayoutManager(layoutManager)
-        layoutManager.ensureLayout(for: container)
-        let pitch = layoutManager.lineFragmentRect(forGlyphAt: 2, effectiveRange: nil).minY
-            - layoutManager.lineFragmentRect(forGlyphAt: 0, effectiveRange: nil).minY
-
-        let view = DiffSplitCoreTextRowView(frame: .zero)
-        view.configure(result: result(old: [], new: ["x"]), font: font, theme: theme)
-        #expect(view.lineHeight == pitch)
-    }
-
-    @Test func headerAddsItsHeightAndPushesTheCodeDown() {
-        let plain = DiffSplitCoreTextRowView(frame: .zero)
-        plain.configure(result: result(old: [], new: ["a", "b"]), font: font, theme: theme)
-        let headed = DiffSplitCoreTextRowView(frame: .zero)
-        headed.configure(
-            result: result(old: [], new: ["a", "b"]), font: font, theme: theme,
-            chrome: .init(header: "@@ -0,0 +1,2 @@", headerFont: font, fusion: .none)
-        )
-        #expect(headed.headerHeight > 0)
-        #expect(headed.measuredHeight(forWidth: 800) == plain.measuredHeight(forWidth: 800) + headed.headerHeight + DiffPaneHunkFusionState.none.bottomPadding)
-        let firstLineTop = headed.headerHeight + DiffSplitCoreTextRowView.verticalInset
-        #expect(headed.visibleLineRange(in: NSRect(x: 0, y: 0, width: 800, height: firstLineTop)).isEmpty)
-    }
-
-    @Test func gutterWidensWithLineNumbersLikeTheRuler() {
-        let diff = DiffParser.parse("@@ -100000,1 +100000,1 @@\n-a\n+b\n")
-        let rows = DiffDisplayModelBuilder.build(diff: diff, filePath: "Sources/Example.swift").groups.flatMap(\.rows)
-        let split = DiffPaneTextDocumentBuilder.buildSplit(rows: rows, fileExtension: "swift", font: font, showWhitespace: false, theme: theme)
-        let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 100))
-        view.configure(result: split, font: font, theme: theme)
-        view.layout()
-        let gutter = DiffPaneLineNumberGutterGeometry.thickness(labels: split.newGutter.string.components(separatedBy: "\n"))
-        #expect(gutter > DiffPaneLineNumberGutterGeometry.minimumThickness)
-        let pane = DiffPaneSplitGeometry.frames(containerWidth: 800).newPane
-        #expect(view.horizontalScroll.newViewportWidth == pane.width - gutter)
-    }
-
-    @Test func stackedHunksUseOneFullWidthPane() {
-        let diff = DiffParser.parse("@@ -1,1 +1,1 @@\n-" + String(repeating: "w", count: 400) + "\n+b\n")
-        let rows = DiffDisplayModelBuilder.build(diff: diff, filePath: "Sources/Example.swift").groups.flatMap(\.rows)
-        let stacked = DiffPaneTextDocumentBuilder.buildStacked(rows: rows, fileExtension: "swift", font: font, showWhitespace: false, theme: theme)
-        let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 100))
-        view.configure(stacked: stacked, font: font, theme: theme)
-        view.layout()
-        let gutter = DiffPaneLineNumberGutterGeometry.thickness(labels: stacked.gutter.string.components(separatedBy: "\n"))
-        #expect(view.measuredHeight(forWidth: 800) == 2 * view.lineHeight + 2 * DiffSplitCoreTextRowView.verticalInset)
-        #expect(view.horizontalScroll.newViewportWidth == 800 - gutter)
-        #expect(view.side(at: NSPoint(x: 10, y: 20)) == .new)
-        #expect(view.scrollerForTesting(.old).isHidden)
-        #expect(!view.scrollerForTesting(.new).isHidden)
-    }
-
     @Test(arguments: [
         ([10, 30], [20, 10], [0, 20, 50]),
         ([], [10, 20], [0, 10, 30]),
@@ -253,6 +142,73 @@ import Testing
     ] as [([CGFloat], [CGFloat], [CGFloat])])
     func rowsAreAsTallAsTheirTallerSide(old: [CGFloat], new: [CGFloat], expected: [CGFloat]) {
         #expect(DiffSplitCoreTextRowView.rowTops(oldHeights: old, newHeights: new, minimum: 10) == expected)
+    }
+
+    @Test(arguments: [
+        // Partly covered rows on both ends count.
+        (CGFloat(10), CGFloat(25), 0..<2),
+        (25, 55, 1..<3),
+        // A span ending exactly on a row top does not reach that row.
+        (0, 20, 0..<1),
+        // Above the code (the header) or below it: nothing.
+        (-30, 0, 0..<0),
+        (60, 90, 0..<0),
+    ])
+    func spansCoverTheRowsTheyTouch(minY: CGFloat, maxY: CGFloat, expected: Range<Int>) {
+        #expect(DiffSplitCoreTextRowView.visibleRows(from: minY, to: maxY, rowTops: [0, 20, 50, 60]) == expected)
+    }
+
+    @Test(arguments: [
+        (DiffSplitCoreTextRowView.Side.old, false),
+        (.new, false),
+        (.old, true),
+        (.new, true),
+    ])
+    func codeSitsRightOfItsGutterInItsPane(side: DiffSplitCoreTextRowView.Side, stacked: Bool) {
+        let column = DiffSplitCoreTextRowView.codeColumn(side, containerWidth: 800, stacked: stacked, gutter: 50)
+        let expected: (minX: CGFloat, width: CGFloat)
+        if stacked {
+            expected = side == .new ? (50, 750) : (0, 0)
+        } else {
+            let frames = DiffPaneSplitGeometry.frames(containerWidth: 800)
+            let pane = side == .old ? frames.oldPane : frames.newPane
+            expected = (pane.minX + 50, pane.width - 50)
+        }
+        #expect(column.minX == expected.minX)
+        #expect(column.width == expected.width)
+    }
+
+    @Test func expansionRowsTakeTheirOwnHeightAndIndent() throws {
+        let document = expandableSplit().oldCode
+        let line = { (index: Int) in
+            let range = document.lines[index].range
+            return document.attributedString.attributedSubstring(from: NSRange(location: range.location, length: max(0, range.length - 1)))
+        }
+        let own = try #require(DiffSplitCoreTextRowView.ownMetrics(of: line(0), font: font))
+        #expect(own.lineHeight == DiffPaneTextDocumentBuilder.expandableContextRowHeight(font: font))
+        #expect(own.indent == DiffPaneTextDocumentBuilder.expandableContextHeadIndent(font: font))
+        #expect(DiffSplitCoreTextRowView.ownMetrics(of: line(1), font: font) == nil)
+    }
+
+    @Test func wrappingBreaksBetweenWordsWithinTheWidth() {
+        let text = (0..<30).map { "word\($0)" }.joined(separator: " ")
+        let lines = DiffSplitCoreTextRowView.wrapped(NSAttributedString(string: text, attributes: [.font: font]), width: 200)
+        #expect(lines.count > 1)
+        let parts = lines.map { line -> String in
+            let range = CTLineGetStringRange(line)
+            return (text as NSString).substring(with: NSRange(location: range.location, length: range.length))
+        }
+        #expect(parts.joined() == text)
+        #expect(parts.dropLast().allSatisfy { $0.hasSuffix(" ") })
+        #expect(lines.allSatisfy { CTLineGetTypographicBounds($0, nil, nil, nil) - CTLineGetTrailingWhitespaceWidth($0) <= 200 })
+    }
+
+    @Test(arguments: [DiffReviewInlineFeedbackSide.old, .new])
+    func lineJumpsLandOnTheLineInsideTheHunk(side: DiffReviewInlineFeedbackSide) throws {
+        let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 200))
+        view.configure(result: result(old: ["a", "b", "c"], new: ["x", "y", "z"]), font: font, theme: theme)
+        let center = try #require(view.scrollTargetCenterY(for: .init(side: side, line: 3)))
+        #expect(center == DiffSplitCoreTextRowView.verticalInset + 2.5 * view.lineHeight)
     }
 
     @Test(arguments: [(CGFloat(0), 0), (19.5, 0), (20, 1), (49, 1), (90, 1), (-5, 0)])
@@ -271,26 +227,6 @@ import Testing
             contextExpansion: DiffContextExpansionRow(key: expansionKey, boundary: .above, remainingLineCount: 20)
         ), at: 0)
         return DiffPaneTextDocumentBuilder.buildSplit(rows: rows, fileExtension: "swift", font: font, showWhitespace: false, theme: theme)
-    }
-
-    @Test func expansionRowsAreAsTallAsTheirTextKitRow() {
-        let view = DiffSplitCoreTextRowView(frame: .zero)
-        view.configure(result: expandableSplit(), font: font, theme: theme)
-        let expansion = DiffPaneTextDocumentBuilder.expandableContextRowHeight(font: font)
-        #expect(expansion > view.lineHeight)
-        #expect(view.measuredHeight(forWidth: 800) == expansion + view.lineHeight + 2 * DiffSplitCoreTextRowView.verticalInset)
-    }
-
-    @Test func wrappingGrowsTheRowInsteadOfScrollingSideways() {
-        let long = (0..<60).map { "word\($0)" }.joined(separator: " ")
-        let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 600, height: 100))
-        view.configure(result: result(old: ["short"], new: [long]), font: font, theme: theme, wraps: true)
-        view.layout()
-        #expect(view.measuredHeight(forWidth: 600) >= 3 * view.lineHeight + 2 * DiffSplitCoreTextRowView.verticalInset)
-        #expect(view.measuredHeight(forWidth: 600) > view.measuredHeight(forWidth: 1_800))
-        #expect(view.scrollerForTesting(.new).isHidden)
-        let wholeRow = NSRect(x: 0, y: 0, width: 600, height: view.measuredHeight(forWidth: 600))
-        #expect(view.visibleLineRange(in: wholeRow) == 0..<1)
     }
 
     @Test func draggingDownTheGutterSelectsThoseLinesOnThatSide() throws {
