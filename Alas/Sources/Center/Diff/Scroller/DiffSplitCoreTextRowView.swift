@@ -843,6 +843,29 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         return menu
     }
 
+    // MARK: - Accessibility
+
+    /// A read-only text area per side holding its code, so VoiceOver reads
+    /// what the text-view panes expose, next to the header buttons and
+    /// scrollers this view already contains.
+    override func accessibilityChildren() -> [Any]? {
+        (super.accessibilityChildren() ?? []) + codeAccessibilityElements()
+    }
+
+    func codeAccessibilityElements() -> [NSAccessibilityElement] {
+        (isStacked ? [Side.new] : [.old, .new]).compactMap { side in
+            let code = codeRect(side)
+            guard code.width > 0 else { return nil }
+            let label = isStacked ? "Code" : side == .old ? "Old code" : "New code"
+            let element = NSAccessibilityElement.element(
+                withRole: .textArea, frame: .zero, label: label, parent: self
+            ) as? NSAccessibilityElement
+            element?.setAccessibilityFrameInParentSpace(code)
+            element?.setAccessibilityValue(lines(side).codeStrings.joined(separator: "\n"))
+            return element
+        }
+    }
+
     // MARK: - Context expansion
 
     /// A gutter click on an expansion row expands it, as the ruler does.

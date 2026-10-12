@@ -276,6 +276,13 @@ import Testing
         #expect(view.characterIndex(at: NSPoint(x: textX(.old, 6), y: y)) == nil)
     }
 
+    @Test func eachSideReadsItsCodeToAccessibility() {
+        let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 200))
+        view.configure(result: result(old: ["let a = 0"], new: ["let a = 1", "let b = 2"]), font: font, theme: theme)
+        let values = view.codeAccessibilityElements().map { "\($0.accessibilityLabel() ?? ""): \($0.accessibilityValue() as? String ?? "")" }
+        #expect(values == ["Old code: let a = 0\n ", "New code: let a = 1\nlet b = 2"])
+    }
+
     @Test(arguments: [DiffReviewInlineFeedbackSide.old, .new])
     func lineJumpsLandOnTheLineInsideTheHunk(side: DiffReviewInlineFeedbackSide) throws {
         let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 200))
