@@ -73,6 +73,7 @@ public enum ACPSessionRestorePolicy: Sendable {
 public enum ACPSessionDiscoveryError: LocalizedError, Equatable, Sendable {
     case noLaunchSpec(String)
     case setupRequired(String)
+    case setupFailed(String)
     case listingUnsupported
     case deletionUnsupported
 
@@ -80,7 +81,7 @@ public enum ACPSessionDiscoveryError: LocalizedError, Equatable, Sendable {
         switch self {
         case .noLaunchSpec(let agentId):
             return "No ACP launch configuration is available for \(agentId)."
-        case .setupRequired(let reason):
+        case .setupRequired(let reason), .setupFailed(let reason):
             return reason
         case .listingUnsupported:
             return "This agent does not support session browsing."

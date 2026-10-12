@@ -30,20 +30,23 @@ struct ACPSessionDiscoveryTests {
     }
 
     @MainActor
-    @Test("a missing adapter reports setup instead of a generic failure")
-    func missingAdapterNeedsSetup() async throws {
+    @Test("only a missing adapter reports installable setup", arguments: [
+        (ACPSetupResult.missing(reason: "adapter missing"), ACPSessionDiscoveryModel.Phase.needsSetup("adapter missing")),
+        (ACPSetupResult.error(message: "host unreachable"), ACPSessionDiscoveryModel.Phase.failed("host unreachable")),
+    ])
+    func setupResultPhase(setup: ACPSetupResult, expected: ACPSessionDiscoveryModel.Phase) async throws {
         let store = try temporaryStore()
         let client = discoveryClient(deleteCapability: false)
         let manager = ACPSessionManager(
             worktreeId: "wt",
             worktreePath: "/tmp/wt",
             store: store,
-            setupEvaluator: { _ in .missing(reason: "adapter missing") },
+            setupEvaluator: { _ in setup },
             connectionFactory: { _, _, _ in ACPConnection(client: client) }
         )
         let model = ACPSessionDiscoveryModel()
         await model.start(manager: manager, agentId: "claude")
-        #expect(model.phase == .needsSetup("adapter missing"))
+        #expect(model.phase == expected)
     }
 
     @MainActor
