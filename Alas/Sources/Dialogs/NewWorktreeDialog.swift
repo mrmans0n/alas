@@ -27,6 +27,9 @@ struct NewWorktreeDialog: View {
     @State private var base: String = ""
     @State private var branch: String = ""
     @State private var stackName: String = ""
+    /// Temporary name used when the branch field is left empty; the first
+    /// chat prompt renames the branch.
+    @State private var autoNamePlaceholder: String = ""
     @State private var branchTemplateDate = Date()
     @State private var runStartup: Bool = true
     @State private var ggMode: GGWorktreeMode
@@ -128,6 +131,7 @@ struct NewWorktreeDialog: View {
                 DialogField(label: createsGGStack ? "Stack name" : "Branch name") {
                     AlasField(
                         text: activeNameBinding,
+                        placeholder: allowsNamingFromFirstPrompt ? "Leave empty to name it from your first chat message" : "",
                         monospaced: true,
                         focusOnAppear: true,
                         onSubmit: submitCreate,
@@ -175,7 +179,7 @@ struct NewWorktreeDialog: View {
             onConfirm: create,
             confirmEnabled: Self.canCreate(
                 projectsEmpty: state.worktreeProjects.isEmpty,
-                branchEmpty: activeName.isEmpty,
+                branchEmpty: activeName.isEmpty && !namesBranchFromFirstPrompt,
                 branchValidation: branchValidationMessage,
                 ggConfigurationMissing: ggConfigurationMissing,
                 requiresAcpAgent: openAfterCreate && launchMode == .acp,
@@ -199,6 +203,10 @@ struct NewWorktreeDialog: View {
             }
             applyLaunchDefaults(for: projectId)
             loadBranchesForSelectedProject()
+            refreshAutoNamePlaceholder()
+        }
+        .onChange(of: branches) { _, _ in
+            refreshAutoNamePlaceholder()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             refreshClipboardTicket()
@@ -222,6 +230,7 @@ struct NewWorktreeDialog: View {
             // refines it (guarded: it skips pinned bases and user edits).
             base = stackPinnedBase ?? state.config.worktrees.baseBranch
             loadBranchesForSelectedProject()
+            refreshAutoNamePlaceholder()
         }
         .onChange(of: branch) { _, _ in
             createErrorMessage = nil
@@ -293,7 +302,7 @@ struct NewWorktreeDialog: View {
     /// Validates the branch after applying the template, prefix or gg naming
     /// convention, since that is the ref git will be asked to create.
     private var branchValidationMessage: String? {
-        guard !activeName.isEmpty else { return nil }
+        guard !activeName.isEmpty || namesBranchFromFirstPrompt else { return nil }
         switch GitNameValidator.validateBranchName(effectiveBranch) {
         case .valid:
             return nil
@@ -306,6 +315,9 @@ struct NewWorktreeDialog: View {
     /// no longer typed stays visible. Hidden while the name is empty or the
     /// composition cannot be resolved (gg enabled without a branch username).
     private var branchPreviewText: String? {
+        if namesBranchFromFirstPrompt {
+            return Self.branchPreview(branch: effectiveBranch, base: nil) + ", renamed after your first chat message"
+        }
         guard !activeName.isEmpty else { return nil }
         if createsGGStack {
             guard case .enabled = ggStackAvailability else { return nil }
@@ -364,14 +376,46 @@ struct NewWorktreeDialog: View {
         if createsGGStack, case .enabled(let username) = ggStackAvailability {
             return GGConfigReader.composeStackBranch(username: username, stackName: stackName)
         }
+        return composedBranch(name: namesBranchFromFirstPrompt ? autoNamePlaceholder : branch)
+    }
+
+    private func composedBranch(name: String) -> String {
         let project = state.worktreeProjects.first(where: { $0.id == projectId })
         return WorktreeBranchName.compose(
-            name: branch,
+            name: name,
             prefix: state.config.worktrees.branchPrefix,
             globalTemplate: state.config.worktrees.branchTemplate,
             projectTemplate: project?.worktreeBranchTemplate,
             now: branchTemplateDate
         )
+    }
+
+    /// gg stacks follow gg's own naming and attached tickets seed a name, so
+    /// only a plain branch can be named later.
+    private var allowsNamingFromFirstPrompt: Bool {
+        !createsGGStack && issueState.draft == nil
+    }
+
+    private var namesBranchFromFirstPrompt: Bool {
+        allowsNamingFromFirstPrompt && branch.isEmpty && !autoNamePlaceholder.isEmpty
+    }
+
+    /// Keeps the temporary name unless it now collides with a branch, a
+    /// worktree, or a directory: `git worktree add` would otherwise check out
+    /// that existing branch instead of creating a fresh one.
+    private func refreshAutoNamePlaceholder() {
+        let projectWorktrees = state.projectsManager.worktrees(projectId: projectId)
+        let isLocal = state.worktreeProjects.first(where: { $0.id == projectId })?.host == nil
+        func isTaken(_ name: String) -> Bool {
+            let candidate = composedBranch(name: name)
+            if branches.contains(candidate) || projectWorktrees.contains(where: { $0.branch == candidate }) {
+                return true
+            }
+            return isLocal && FileManager.default.fileExists(atPath: renderedPath(branch: candidate))
+        }
+        if autoNamePlaceholder.isEmpty || isTaken(autoNamePlaceholder) {
+            autoNamePlaceholder = WorktreeAutoBranchName.placeholder(isTaken: isTaken)
+        }
     }
 
     /// When creating a gg stack, the worktree base is pinned to gg's
@@ -392,7 +436,7 @@ struct NewWorktreeDialog: View {
         guard let project = state.worktreeProjects.first(where: { $0.id == projectId }) else {
             return "Create a worktree."
         }
-        guard !activeName.isEmpty else { return "Create a worktree in \(project.name)." }
+        guard !activeName.isEmpty || namesBranchFromFirstPrompt else { return "Create a worktree in \(project.name)." }
         if let host = project.host { return "\(host):\(renderedPath)" }
         return (renderedPath as NSString).abbreviatingWithTildeInPath
     }
@@ -441,12 +485,16 @@ struct NewWorktreeDialog: View {
     }
 
     private var renderedPath: String {
+        renderedPath(branch: effectiveBranch)
+    }
+
+    private func renderedPath(branch: String) -> String {
         guard let project = state.worktreeProjects.first(where: { $0.id == projectId }) else { return "" }
         return WorktreePathTemplateRenderer.render(
             template: state.config.worktrees.pathTemplate,
             worktreeRoot: state.config.worktrees.rootPath,
             repoName: project.name,
-            branch: effectiveBranch
+            branch: branch
         ).path
     }
 
@@ -669,6 +717,7 @@ struct NewWorktreeDialog: View {
         guard let project = state.worktreeProjects.first(where: { $0.id == projectId }) else { return }
         cancelNameSuggestion()
         let createdBranch = effectiveBranch
+        let namesFromFirstPrompt = namesBranchFromFirstPrompt
         let dest = URL(fileURLWithPath: renderedPath)
         let issueDraft = issueState.draft
         guard launchMode != .acp || !openAfterCreate || launchAgentId != "none" else {
@@ -698,7 +747,8 @@ struct NewWorktreeDialog: View {
                 runStartup: runStartup,
                 launchSurface: surface,
                 ggWorktreeMode: ggMode,
-                issueAttachment: issueDraft?.attachment
+                issueAttachment: issueDraft?.attachment,
+                namesBranchFromFirstPrompt: namesFromFirstPrompt
             )
             guard !id.isEmpty else {
                 createErrorMessage = "A worktree already exists at this path."
@@ -717,7 +767,7 @@ struct NewWorktreeDialog: View {
     private func submitCreate() {
         guard Self.canCreate(
             projectsEmpty: state.worktreeProjects.isEmpty,
-            branchEmpty: activeName.isEmpty,
+            branchEmpty: activeName.isEmpty && !namesBranchFromFirstPrompt,
             branchValidation: branchValidationMessage,
             ggConfigurationMissing: ggConfigurationMissing,
             requiresAcpAgent: openAfterCreate && launchMode == .acp,

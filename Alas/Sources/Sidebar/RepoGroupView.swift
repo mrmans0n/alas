@@ -81,6 +81,9 @@ struct RepoGroupView: View {
     var onOpenIssue: ((Worktree) -> (() -> Void)?)? = nil
     let onCopyPath: (Worktree) -> Void
     let onCopyBranch: (Worktree) -> Void
+    var onRenameBranch: ((Worktree) -> Void)? = nil
+    var isBranchNamePending: (Worktree) -> Bool = { _ in false }
+    var isNamingBranch: (Worktree) -> Bool = { _ in false }
     let onRevealInFinder: (Worktree) -> Void
     let onArchive: (Worktree) -> Void
     let onCleanupWorktrees: () -> Void
@@ -267,6 +270,9 @@ struct RepoGroupView: View {
             onOpenIssue: onOpenIssue?(wt),
             onCopyPath: { onCopyPath(wt) },
             onCopyBranch: { onCopyBranch(wt) },
+            onRenameBranch: onRenameBranch.map { rename in { rename(wt) } },
+            isBranchNamePending: isBranchNamePending(wt),
+            isNamingBranch: isNamingBranch(wt),
             onRevealInFinder: { onRevealInFinder(wt) },
             onArchive: { onArchive(wt) },
             onDelete: { onDelete(wt) },

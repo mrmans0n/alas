@@ -271,6 +271,8 @@ final class AppState {
     @ObservationIgnored let usageHistory: UsageHistoryStore?
     /// Records each session's turns in completion order.
     @ObservationIgnored let usageRecording = KeyedSerialQueue()
+    /// Worktrees whose branch is being named from their first chat prompt.
+    var autoNamingWorktreeIds: Set<String> = []
     /// Follow-up composers outlive the conditional Agent pane and worktree navigation.
     var agentSidebarFollowUps: [String: [ACPSession.ID: AgentSidebarFollowUpDraft]] = [:]
     let attentionStore: AttentionStore
@@ -4791,7 +4793,8 @@ final class AppState {
         launchSurface: WorktreeLaunchSurface,
         ggWorktreeMode: GGWorktreeMode = .inherit,
         issueAttachment: IssueAttachment? = nil,
-        destinationAlreadyPrepared: Bool = false
+        destinationAlreadyPrepared: Bool = false,
+        namesBranchFromFirstPrompt: Bool = false
     ) async -> String {
         guard let project = projects.first(where: { $0.id == projectId }), !project.isFolder else {
             // Should not happen if the dialog validated the project; fail silently.
@@ -4943,6 +4946,14 @@ final class AppState {
                             projectId: project.id,
                             worktreeId: newWorktree.id,
                             attachment: issueAttachment
+                        )
+                        saveProjects()
+                    }
+                    if namesBranchFromFirstPrompt {
+                        projectsManager.setPendingAutoBranchName(
+                            projectId: project.id,
+                            worktreeId: newWorktree.id,
+                            placeholder: newWorktree.branch
                         )
                         saveProjects()
                     }
@@ -13067,6 +13078,9 @@ final class AppState {
                     sessionId: sessionId,
                     title: title
                 )
+            },
+            onUserPromptRecorded: { [weak self] _, text in
+                self?.autoNameBranchIfPending(worktreeId: worktree.id, prompt: text)
             },
             localTitlesEnabled: { [weak self] in
                 self?.config.harness.acpLocalTitlesEnabled ?? false

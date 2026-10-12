@@ -185,6 +185,12 @@ struct WorktreeRowView: View {
     var onOpenIssue: (() -> Void)? = nil
     let onCopyPath: () -> Void
     let onCopyBranch: () -> Void
+    var onRenameBranch: (() -> Void)? = nil
+    /// Still on the temporary branch it was created on, waiting for a chat
+    /// prompt to name it.
+    var isBranchNamePending = false
+    /// A local model is naming the branch right now.
+    var isNamingBranch = false
     let onRevealInFinder: () -> Void
     let onArchive: () -> Void
     let onDelete: () -> Void
@@ -404,6 +410,7 @@ struct WorktreeRowView: View {
             .padding(.bottom, 7)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .aiBeam(isActive: isNamingBranch, cornerRadius: 9)
         .contentShape(Rectangle())
         .opacity(isPending ? 0.55 : 1)
         .onHover { hovering = $0 }
@@ -469,6 +476,12 @@ struct WorktreeRowView: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
+            if isBranchNamePending, !isNamingBranch {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 10))
+                    .foregroundColor(theme.color("fg-faint"))
+                    .help("The branch will be named from your first chat message.")
+            }
             if worktree.isDetached {
                 DetachedTag()
             }
@@ -761,6 +774,9 @@ struct WorktreeRowView: View {
         // Folder-project rows have no branch.
         if !worktree.branch.isEmpty {
             Button("Copy Branch Name", action: onCopyBranch)
+        }
+        if let onRenameBranch, !isMain, !worktree.branch.isEmpty, !worktree.isDetached {
+            Button("Rename Branch…", action: onRenameBranch)
         }
         if !worktree.path.isRemoteAlasPath {
             Button("Reveal in Finder", action: onRevealInFinder)

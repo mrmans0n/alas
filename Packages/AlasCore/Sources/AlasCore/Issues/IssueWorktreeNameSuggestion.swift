@@ -98,8 +98,30 @@ public struct IssueWorktreeNameSuggester: Sendable {
 
     @MainActor
     public func suggestName(for source: IssueSnapshot) async -> String? {
+        await suggestName(
+            messageCandidates: IssueWorktreeNamePolicy.messageCandidates(title: source.title, body: source.body)
+        ) { output in
+            IssueWorktreeNamePolicy.parse(output, displayReference: source.displayReference)
+        }
+    }
+
+    /// Names a worktree created without a name from the request in its first
+    /// chat prompt. `source` comes from `WorktreeAutoBranchName.source(fromPrompt:)`.
+    @MainActor
+    public func suggestName(forRequest source: String) async -> String? {
+        await suggestName(
+            messageCandidates: WorktreeAutoBranchName.messageCandidates(source: source),
+            parse: WorktreeAutoBranchName.parse
+        )
+    }
+
+    @MainActor
+    private func suggestName(
+        messageCandidates: [[LocalTextMessage]],
+        parse: @escaping @Sendable (String) -> String?
+    ) async -> String? {
         let request = LocalTextGenerationRequest(
-            messageCandidates: IssueWorktreeNamePolicy.messageCandidates(title: source.title, body: source.body),
+            messageCandidates: messageCandidates,
             inputTokenLimit: IssueWorktreeNamePolicy.inputTokenLimit,
             maxTokens: IssueWorktreeNamePolicy.maxTokens,
             temperature: 0,
@@ -109,9 +131,7 @@ public struct IssueWorktreeNameSuggester: Sendable {
 
         let router = router
         let job = Task {
-            await router.generate(request, caller: .worktreeName, priority: .automatic) { output in
-                IssueWorktreeNamePolicy.parse(output, displayReference: source.displayReference)
-            }
+            await router.generate(request, caller: .worktreeName, priority: .automatic, parse: parse)
         }
         requests?.track(job)
         let result = await withTaskCancellationHandler { await job.value } onCancel: { job.cancel() }

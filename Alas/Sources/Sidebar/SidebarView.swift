@@ -25,6 +25,7 @@ struct SidebarView: View {
     @State private var spaceTitleVisible = false
     @State private var hideTitleTask: Task<Void, Never>?
     @State private var showingNewWorkspace = false
+    @State private var renamingBranchWorktree: Worktree?
     /// Transient: never persisted and never applied outside this sidebar.
     @State private var worktreeFilter = ""
     @State private var highlightedWorktreeId: String?
@@ -170,6 +171,9 @@ struct SidebarView: View {
                                             pb.clearContents()
                                             pb.setString(wt.branch, forType: .string)
                                         },
+                                        onRenameBranch: { wt in renamingBranchWorktree = wt },
+                                        isBranchNamePending: { wt in state.isBranchNamePending(wt) },
+                                        isNamingBranch: { wt in state.autoNamingWorktreeIds.contains(wt.id) },
                                         onRevealInFinder: { wt in
                                             NSWorkspace.shared.activateFileViewerSelecting([wt.path])
                                         },
@@ -391,6 +395,9 @@ struct SidebarView: View {
         }
         .sheet(isPresented: $showingNewWorkspace) {
             NewWorkspaceDialog(state: state, presented: $showingNewWorkspace)
+        }
+        .sheet(item: $renamingBranchWorktree) { worktree in
+            RenameBranchDialog(state: state, worktree: worktree) { renamingBranchWorktree = nil }
         }
     }
 

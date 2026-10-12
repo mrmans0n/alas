@@ -375,6 +375,20 @@ public final class ProjectsManager {
         projects[idx].issueAttachments.removeValue(forKey: worktreeId)
     }
 
+    public func pendingAutoBranchName(projectId: String, worktreeId: String) -> String? {
+        projects.first(where: { $0.id == projectId })?.pendingAutoBranchNames[worktreeId]
+    }
+
+    public func setPendingAutoBranchName(projectId: String, worktreeId: String, placeholder: String) {
+        guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        projects[idx].pendingAutoBranchNames[worktreeId] = placeholder
+    }
+
+    public func removePendingAutoBranchName(projectId: String, worktreeId: String) {
+        guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        projects[idx].pendingAutoBranchNames.removeValue(forKey: worktreeId)
+    }
+
     public func reorderProject(fromIndex: Int, toIndex: Int) {
         guard projects.indices.contains(fromIndex),
               projects.indices.contains(toIndex),
@@ -651,6 +665,7 @@ public final class ProjectsManager {
         projects[idx].hiddenWorktreePaths.removeAll { removedPaths.contains($0) }
         projects[idx].ggWorktreeModes.removeValue(forKey: id)
         projects[idx].issueAttachments.removeValue(forKey: id)
+        projects[idx].pendingAutoBranchNames.removeValue(forKey: id)
     }
 
     public func visibleWorktrees(projectId: String) -> [Worktree] {
@@ -882,6 +897,7 @@ public final class ProjectsManager {
         let reconciledIds = Set(reconciled.map(\.id))
         let previousGGWorktreeModes = projects[idx].ggWorktreeModes
         let previousIssueAttachments = projects[idx].issueAttachments
+        let previousPendingAutoBranchNames = projects[idx].pendingAutoBranchNames
         let previousCachedWorktrees = projects[idx].cachedWorktrees
         projects[idx].cachedWorktrees = stored
         for (id, mode) in resolvedCreateModes {
@@ -897,12 +913,16 @@ public final class ProjectsManager {
         projects[idx].issueAttachments = projects[idx].issueAttachments.filter {
             reconciledIds.contains($0.key)
         }
+        projects[idx].pendingAutoBranchNames = projects[idx].pendingAutoBranchNames.filter {
+            reconciledIds.contains($0.key)
+        }
         return anchorChanged
             || orderChanged
             || projects[idx].cachedWorktrees != previousCachedWorktrees
             || projects[idx].hiddenWorktreePaths.count != before
             || projects[idx].ggWorktreeModes != previousGGWorktreeModes
             || projects[idx].issueAttachments != previousIssueAttachments
+            || projects[idx].pendingAutoBranchNames != previousPendingAutoBranchNames
     }
 
     /// Refresh every project. Returns `true` when at least one project's

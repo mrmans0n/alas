@@ -2353,4 +2353,33 @@ extension WorktreeServiceTests {
         let listed = try await svc.list(repoPath: repo, projectId: "p")
         #expect(listed.count == 2)
     }
+
+    @Test func renameBranchMovesTheCheckedOutBranchAndSuffixesATakenName() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try await Self.checkedGit(["branch", "feature/fix-sync"], cwd: repo)
+
+        let renamed = try await WorktreeService().renameBranch(
+            worktreePath: repo, from: "main", to: "feature/fix-sync", requireUnpublished: true
+        )
+
+        #expect(renamed == "feature/fix-sync-2")
+        #expect(try await Self.checkedGit(["symbolic-ref", "--short", "HEAD"], cwd: repo) == "feature/fix-sync-2")
+    }
+
+    @Test func renameBranchLeavesPublishedOrSwitchedBranchesAlone() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let svc = WorktreeService()
+
+        await #expect(throws: WorktreeService.BranchRenameError.branchChanged(expected: "quiet-otter")) {
+            try await svc.renameBranch(worktreePath: repo, from: "quiet-otter", to: "fix-sync", requireUnpublished: true)
+        }
+
+        try await Self.checkedGit(["checkout", "-q", "-b", "quiet-otter", "--track", "main"], cwd: repo)
+        await #expect(throws: WorktreeService.BranchRenameError.published("quiet-otter")) {
+            try await svc.renameBranch(worktreePath: repo, from: "quiet-otter", to: "fix-sync", requireUnpublished: true)
+        }
+        #expect(try await Self.checkedGit(["symbolic-ref", "--short", "HEAD"], cwd: repo) == "quiet-otter")
+    }
 }
