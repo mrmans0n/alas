@@ -24,7 +24,7 @@ enum WorktreeCreationCompletion {
             let reconciledWorktree = worktree()
 
             switch operationState() {
-            case .createFailed(_, let message, _, _, _, _):
+            case .createFailed(_, let message, _, _, _, _, _):
                 await reconcile()
                 if operationState() == nil, let reconciledWorktree = worktree() {
                     return .success(reconciledWorktree)

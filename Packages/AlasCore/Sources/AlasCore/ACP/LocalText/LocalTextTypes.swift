@@ -78,3 +78,20 @@ public protocol LocalTextGenerating: Sendable {
     func cancel(caller: LocalTextCaller) async
     func cancelAndUnload() async
 }
+
+/// Makes the on-device text engine. The app installs its MLX-backed engine
+/// from `PlatformServices.install()`; without one, every request fails as
+/// unsupported.
+public enum LocalTextEngine {
+    @MainActor public static var make: (LocalTextModelStore) -> any LocalTextGenerating = { _ in UnsupportedLocalText() }
+}
+
+private struct UnsupportedLocalText: LocalTextGenerating {
+    func generate(_: LocalTextGenerationRequest, caller _: LocalTextCaller,
+                  priority _: LocalTextJobPriority) async throws -> LocalTextGenerationResult {
+        throw LocalTextInferenceFailure.unsupported
+    }
+
+    func cancel(caller _: LocalTextCaller) async {}
+    func cancelAndUnload() async {}
+}

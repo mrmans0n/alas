@@ -386,7 +386,8 @@ public struct WorktreeService: Sendable {
         base: String,
         branch: String,
         destination: URL,
-        projectId: String
+        projectId: String,
+        requiresNewBranch: Bool = false
     ) async throws -> Worktree {
         switch GitNameValidator.validateBranchName(branch) {
         case .valid:
@@ -399,6 +400,9 @@ public struct WorktreeService: Sendable {
             cwd: repoPath
         )
         let branchExists = refCheck.exitCode == 0
+        if branchExists, requiresNewBranch {
+            throw WorktreeError.gitFailed("A branch named \(branch) already exists.")
+        }
         var staleRegistration: StaleWorktreeRegistration?
         if let registration = try? await Process.git(
                ["worktree", "list", "--porcelain"],
@@ -1377,6 +1381,86 @@ public struct WorktreeService: Sendable {
     public func prune(repoPath: URL) async throws {
         let result = try await Process.git(["worktree", "prune"], cwd: repoPath)
         guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
+    }
+
+    public enum BranchRenameError: Error, LocalizedError, Equatable, Sendable {
+        /// The worktree is no longer on the branch the caller meant to rename.
+        case branchChanged(expected: String)
+        /// The branch tracks, or a remote already has, a branch of its own
+        /// name, so renaming it locally would strand what was pushed.
+        case published(String)
+
+        public var errorDescription: String? {
+            switch self {
+            case let .branchChanged(expected):
+                "The worktree is no longer on \(expected)."
+            case let .published(branch):
+                "\(branch) has already been pushed."
+            }
+        }
+    }
+
+    /// Renames the branch checked out in `worktreePath` from `from` to `to`,
+    /// or to `to-2`, `to-3`, … when `to` already exists. The directory is
+    /// left in place. Returns the branch name actually used.
+    public func renameBranch(
+        worktreePath: URL,
+        from: String,
+        to: String,
+        requireUnpublished: Bool
+    ) async throws -> String {
+        if case .invalid(let message) = GitNameValidator.validateBranchName(to) {
+            throw WorktreeError.gitFailed("Invalid branch name: \(message)")
+        }
+        let head = try await Process.git(["symbolic-ref", "--quiet", "--short", "HEAD"], cwd: worktreePath)
+        guard head.exitCode == 0,
+              head.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == from
+        else { throw BranchRenameError.branchChanged(expected: from) }
+        if requireUnpublished {
+            // Only an upstream of the same name means it was pushed: a branch
+            // cut from `origin/main` tracks that base by default.
+            let merge = try await Process.git(["config", "--get", "branch.\(from).merge"], cwd: worktreePath)
+            if merge.exitCode == 0,
+               merge.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "refs/heads/\(from)" {
+                throw BranchRenameError.published(from)
+            }
+            // `git push origin HEAD` publishes without setting an upstream.
+            let remoteRefs = try await Process.git(
+                ["for-each-ref", "--format=%(refname)", "refs/remotes/*/\(from)"],
+                cwd: worktreePath
+            )
+            if remoteRefs.exitCode == 0,
+               !remoteRefs.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                throw BranchRenameError.published(from)
+            }
+            // A clone fetching only some branches keeps no tracking ref for a
+            // pushed one, so ask each remote. An unreachable remote leaves the
+            // question open and the rename is not attempted.
+            let remotes = try await Process.git(["remote"], cwd: worktreePath)
+            for remote in remotes.stdout.split(whereSeparator: \.isNewline).map(String.init) {
+                let advertisement = try await Process.git(
+                    ["ls-remote", "--exit-code", "--heads", "--", remote, "refs/heads/\(from)"],
+                    cwd: worktreePath,
+                    timeout: 15
+                )
+                switch advertisement.exitCode {
+                case 0: throw BranchRenameError.published(from)
+                case 2: continue
+                default: throw WorktreeError.gitFailed(advertisement.stderr)
+                }
+            }
+        }
+        var existing: Set<String> = []
+        let refs = try await Process.git(["for-each-ref", "--format=%(refname:short)", "refs/heads/"], cwd: worktreePath)
+        if refs.exitCode == 0 {
+            existing = Set(refs.stdout.split(whereSeparator: \.isNewline).map(String.init))
+        }
+        existing.remove(from)
+        let target = WorktreeAutoBranchName.uniqueName(to) { existing.contains($0) }
+        guard target != from else { return from }
+        let rename = try await Process.git(["branch", "-m", from, target], cwd: worktreePath)
+        guard rename.exitCode == 0 else { throw WorktreeError.gitFailed(rename.stderr) }
+        return target
     }
 
     // MARK: - Helpers

@@ -25,6 +25,7 @@ struct SidebarView: View {
     @State private var spaceTitleVisible = false
     @State private var hideTitleTask: Task<Void, Never>?
     @State private var showingNewWorkspace = false
+    @State private var renamingBranchWorktree: Worktree?
     /// Transient: never persisted and never applied outside this sidebar.
     @State private var worktreeFilter = ""
     @State private var highlightedWorktreeId: String?
@@ -170,6 +171,9 @@ struct SidebarView: View {
                                             pb.clearContents()
                                             pb.setString(wt.branch, forType: .string)
                                         },
+                                        onRenameBranch: { wt in renamingBranchWorktree = wt },
+                                        isBranchNamePending: { wt in state.isBranchNamePending(wt) },
+                                        isNamingBranch: { wt in state.autoNamingWorktreeIds.contains(wt.id) },
                                         onRevealInFinder: { wt in
                                             NSWorkspace.shared.activateFileViewerSelecting([wt.path])
                                         },
@@ -207,7 +211,8 @@ struct SidebarView: View {
                                                     runStartup: false,
                                                     launchSurface: retry.launchSurface,
                                                     ggWorktreeMode: retry.ggWorktreeMode,
-                                                    issueAttachment: retry.issueAttachment
+                                                    issueAttachment: retry.issueAttachment,
+                                                    namesBranchFromFirstPrompt: retry.namesBranchFromFirstPrompt
                                                 )
                                             }
                                         },
@@ -392,6 +397,9 @@ struct SidebarView: View {
         .sheet(isPresented: $showingNewWorkspace) {
             NewWorkspaceDialog(state: state, presented: $showingNewWorkspace)
         }
+        .sheet(item: $renamingBranchWorktree) { worktree in
+            RenameBranchDialog(state: state, worktree: worktree) { renamingBranchWorktree = nil }
+        }
     }
 
     /// Matched worktree ids of the active space, in sidebar display order.
@@ -457,12 +465,15 @@ struct SidebarView: View {
         base: String,
         ggWorktreeMode: GGWorktreeMode,
         launchSurface: WorktreeLaunchSurface,
-        issueAttachment: IssueAttachment?
+        issueAttachment: IssueAttachment?,
+        namesBranchFromFirstPrompt: Bool
     ) {
-        guard case .createFailed(_, _, let base, let ggWorktreeMode, let launchSurface, let issueAttachment) = operationState else {
-            return (defaultBase, .inherit, .none, nil)
+        guard case .createFailed(
+            _, _, let base, let ggWorktreeMode, let launchSurface, let issueAttachment, let namesBranchFromFirstPrompt
+        ) = operationState else {
+            return (defaultBase, .inherit, .none, nil, false)
         }
-        return (base, ggWorktreeMode, launchSurface, issueAttachment)
+        return (base, ggWorktreeMode, launchSurface, issueAttachment, namesBranchFromFirstPrompt)
     }
 
     private func showTransientSpaceTitle() {

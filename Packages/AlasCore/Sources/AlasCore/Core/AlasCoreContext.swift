@@ -65,6 +65,14 @@ public final class AlasCoreContext {
     @ObservationIgnored private var deletingWorktreeIDs: Set<String> = []
     /// Headless runs in flight, so deleting their worktree can stop them.
     @ObservationIgnored private var headlessRuns: [String: (worktreeID: String, task: Task<RunScriptCompletion, Error>)] = [:]
+
+    /// The on-device text model's files and state.
+    @ObservationIgnored public let localTextModelStore: LocalTextModelStore
+    /// The on-device text engine every local-text feature shares.
+    @ObservationIgnored public private(set) lazy var localText: any LocalTextGenerating =
+        localTextOverride ?? LocalTextEngine.make(localTextModelStore)
+    @ObservationIgnored public private(set) lazy var sessionSummaries = SessionSummaryCoordinator(engine: localText)
+    @ObservationIgnored private let localTextOverride: (any LocalTextGenerating)?
     /// Durable Workspace definitions and checkouts.
     @ObservationIgnored public let workspaceStore: WorkspaceStore
     /// Stops everything running in a checkout before a lifecycle operation
@@ -89,6 +97,8 @@ public final class AlasCoreContext {
         runHistoryStore: RunHistoryStore? = try? RunHistoryStore(),
         workspaceStore: WorkspaceStore = WorkspaceStore(),
         runScheduler: RunScheduler? = nil,
+        localTextModelStore: LocalTextModelStore = LocalTextModelStore(),
+        localText: (any LocalTextGenerating)? = nil,
         runCompletionWaiter: @escaping RunCompletionWaiter = { try await RunScriptCompletionMonitor.wait(for: $0) },
         makeSessionManager: @escaping @MainActor (SessionOwnerID, Worktree) -> ACPSessionManager = AlasCoreContext.defaultSessionManager
     ) {
@@ -97,6 +107,8 @@ public final class AlasCoreContext {
         self.runScheduler = runScheduler ?? RunScheduler(store: store)
         self.runCompletionWaiter = runCompletionWaiter
         self.runHistory = RunHistory(store: runHistoryStore)
+        self.localTextModelStore = localTextModelStore
+        self.localTextOverride = localText
         self.workspaceStore = workspaceStore
         self.stopWorkspaceCheckoutSessions = { _ in }
         self.store = store

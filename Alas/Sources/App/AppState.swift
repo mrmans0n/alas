@@ -162,12 +162,10 @@ final class AppState {
     /// session-lease layer so two running Alas builds don't fight over a
     /// shared per-worktree database.
     let instanceId: String = UUID().uuidString
-    @ObservationIgnored let localTextModelStore: LocalTextModelStore
+    var localTextModelStore: LocalTextModelStore { core.localTextModelStore }
     @ObservationIgnored let localTextReadModelState: @Sendable () async -> LocalTextModelState
-    @ObservationIgnored private let localTextInferenceOverride: (any LocalTextGenerating)?
     @ObservationIgnored let nextPromptInferenceOverride: (any NextPromptRuntime)?
-    @ObservationIgnored lazy var localTextInference: any LocalTextGenerating =
-        localTextInferenceOverride ?? LocalTextInferenceEngine(store: localTextModelStore, observeMemoryPressure: false)
+    var localTextInference: any LocalTextGenerating { core.localText }
     @ObservationIgnored lazy var nextPromptInference: any NextPromptRuntime = makeNextPromptInference()
     private func makeNextPromptInference() -> any NextPromptRuntime {
         if let nextPromptInferenceOverride { return nextPromptInferenceOverride }
@@ -186,7 +184,7 @@ final class AppState {
     @ObservationIgnored lazy var nextPromptCoordinator = NextPromptCoordinator(engine: nextPromptInference) { [weak self] turn in
         self?.nextPromptSnapshot(for: turn)
     }
-    @ObservationIgnored lazy var sessionSummaryCoordinator = SessionSummaryCoordinator(engine: localTextInference)
+    var sessionSummaryCoordinator: SessionSummaryCoordinator { core.sessionSummaries }
     @ObservationIgnored let localTextObservers = LocalTextObservers()
     @ObservationIgnored let qwenTitleRequests = ACPQwenTitleRequests()
     @ObservationIgnored private var worktreeExplainerStoreInstance: WorktreeExplainerStore?
@@ -271,6 +269,8 @@ final class AppState {
     @ObservationIgnored let usageHistory: UsageHistoryStore?
     /// Records each session's turns in completion order.
     @ObservationIgnored let usageRecording = KeyedSerialQueue()
+    /// Worktrees whose branch is being named from their first chat prompt.
+    var autoNamingWorktreeIds: Set<String> = []
     /// Follow-up composers outlive the conditional Agent pane and worktree navigation.
     var agentSidebarFollowUps: [String: [ACPSession.ID: AgentSidebarFollowUpDraft]] = [:]
     let attentionStore: AttentionStore
@@ -1544,9 +1544,7 @@ final class AppState {
         )
         self.store = store
         let suggestionStore = localTextModelStore ?? LocalTextModelStore()
-        self.localTextModelStore = suggestionStore
         self.localTextReadModelState = localTextReadModelState ?? { await suggestionStore.state }
-        self.localTextInferenceOverride = localTextInference
         self.nextPromptInferenceOverride = nextPromptInference
         self.localTextSupported = localTextSupported
         self.workspaceRemoteTransport = workspaceRemoteTransport
@@ -1593,6 +1591,8 @@ final class AppState {
             runHistoryStore: runHistoryStore,
             workspaceStore: workspaceStore,
             runScheduler: runScheduler,
+            localTextModelStore: suggestionStore,
+            localText: localTextInference,
             runCompletionWaiter: runScriptCompletionWaiter
         )
         let spacesManager = spacesFile.map(SpacesManager.init(file:))
@@ -4779,7 +4779,8 @@ final class AppState {
         launchSurface: WorktreeLaunchSurface,
         ggWorktreeMode: GGWorktreeMode = .inherit,
         issueAttachment: IssueAttachment? = nil,
-        destinationAlreadyPrepared: Bool = false
+        destinationAlreadyPrepared: Bool = false,
+        namesBranchFromFirstPrompt: Bool = false
     ) async -> String {
         guard let project = projects.first(where: { $0.id == projectId }), !project.isFolder else {
             // Should not happen if the dialog validated the project; fail silently.
@@ -4871,9 +4872,22 @@ final class AppState {
                 }
                 let newWorktree = try await WorktreeLifecycle.performCreateWorktree(
                     repoPath: repoPath,
-                    base: base, branch: branch, destination: canonicalDestination, projectId: projectId
+                    base: base, branch: branch, destination: canonicalDestination, projectId: projectId,
+                    // A temporary name must never check out an existing branch:
+                    // the first prompt would rename that branch.
+                    requiresNewBranch: namesBranchFromFirstPrompt
                 )
                 guard projects.contains(where: { $0.id == projectId }) else { return }
+                // Recorded as soon as the branch exists: a later step failing
+                // must not strand the worktree on its temporary name.
+                if namesBranchFromFirstPrompt {
+                    projectsManager.setPendingAutoBranchName(
+                        projectId: project.id,
+                        worktreeId: newWorktree.id,
+                        placeholder: newWorktree.branch
+                    )
+                    saveProjects()
+                }
                 let repoStartupScript = try await self.preparedRepoHook(
                     event: .worktreeCreate,
                     project: project,
@@ -4934,7 +4948,6 @@ final class AppState {
                         )
                         saveProjects()
                     }
-
                     if launchSurface != .delegated {
                         selectWorktree(id: newWorktree.id)
                     }
@@ -4964,7 +4977,8 @@ final class AppState {
                             base: base,
                             ggWorktreeMode: ggWorktreeMode,
                             launchSurface: launchSurface,
-                            issueAttachment: issueAttachment
+                            issueAttachment: issueAttachment,
+                            namesBranchFromFirstPrompt: namesBranchFromFirstPrompt
                         )
                     )
                 }
@@ -4984,7 +4998,8 @@ final class AppState {
                         base: base,
                         ggWorktreeMode: ggWorktreeMode,
                         launchSurface: launchSurface,
-                        issueAttachment: issueAttachment
+                        issueAttachment: issueAttachment,
+                        namesBranchFromFirstPrompt: namesBranchFromFirstPrompt
                     )
                 )
             }
@@ -6503,7 +6518,8 @@ final class AppState {
                 _,
                 _,
                 let launchSurface,
-                let issueAttachment
+                let issueAttachment,
+                let namesBranchFromFirstPrompt
             ) = state,
                 key.projectId == projectId
             else { continue }
@@ -6519,6 +6535,15 @@ final class AppState {
                     projectId: projectId,
                     worktreeId: worktreeId,
                     attachment: issueAttachment
+                )
+                changed = true
+            }
+            if namesBranchFromFirstPrompt,
+               projectsManager.pendingAutoBranchName(projectId: projectId, worktreeId: worktreeId) == nil {
+                projectsManager.setPendingAutoBranchName(
+                    projectId: projectId,
+                    worktreeId: worktreeId,
+                    placeholder: worktree.branch
                 )
                 changed = true
             }
@@ -6747,6 +6772,96 @@ final class AppState {
             Self.canonicalWorktreePath($0.path.path) == Self.canonicalWorktreePath(path.path)
         }) {
             rescanWorktreeStatus(worktreeId: restored.id)
+        }
+    }
+
+    /// Delete every archived worktree across all projects after one
+    /// confirmation. Remote worktrees and those referenced by any Workspace
+    /// checkout are left for the single-item flow (the batch path's local
+    /// branch and ownership re-checks refuse them), and anything
+    /// git refuses without `--force` is reported so the user can delete it
+    /// individually.
+    ///
+    /// The batch re-checks sessions, buffers, branch, and ownership but not
+    /// whether a target is still archived, so the Settings pane (the only
+    /// unarchive entry point) locks its archived rows while this runs.
+    private(set) var isDeletingArchivedWorktrees = false
+
+    /// One target per id, and none for an id any representation rejects. A
+    /// worktree id is its path, so one local checkout archived under two
+    /// projects appears twice: ownership is checked per project, so an
+    /// unowned alias must not delete a checkout the other one owns, and a
+    /// duplicate id would trap the batch's per-id snapshots.
+    nonisolated static func bulkDeleteTargets<T>(
+        _ candidates: [T],
+        id: (T) -> String,
+        isEligible: (T) -> Bool
+    ) -> [T] {
+        let blocked = Set(candidates.filter { !isEligible($0) }.map(id))
+        var seen: Set<String> = []
+        return candidates.filter { !blocked.contains(id($0)) && seen.insert(id($0)).inserted }
+    }
+
+    func deleteAllArchivedWorktrees() async {
+        guard !isDeletingArchivedWorktrees else { return }
+        let archived = projects.flatMap { projectsManager.archivedWorktrees(projectId: $0.id) }
+        let deletable = workspacesManager.canMutate
+            ? Self.bulkDeleteTargets(archived, id: \.id) { worktree in
+                // The batch skips any claimed worktree; a failed delete is
+                // released below so this run retries it.
+                let operationAllowsBatch: Bool
+                switch projectsManager.operationState(for: worktree) {
+                case nil, .deleteFailed: operationAllowsBatch = true
+                default: operationAllowsBatch = false
+                }
+                return operationAllowsBatch
+                    && !worktree.path.isRemoteAlasPath
+                    && worktreeCleanupWorkspaceOwners(for: worktree).isEmpty
+            }
+            : []
+        guard !archived.isEmpty else { return }
+        guard !deletable.isEmpty else {
+            showFileActionError(
+                title: "Nothing to Delete",
+                message: workspacesManager.canMutate
+                    ? "Remote, busy, or Workspace-referenced worktrees can't be deleted in bulk. Delete them individually."
+                    : "Workspace Checkout ownership could not be verified. Try again once Workspace storage is available."
+            )
+            return
+        }
+
+        let alert = NSAlert()
+        alert.messageText = "Delete \(deletable.count) archived \(deletable.count == 1 ? "worktree" : "worktrees")?"
+        // Frozen here: the batch re-reads the setting per item, and the
+        // confirmation must stay true if it is toggled mid-batch.
+        let deleteBranches = config.worktrees.deleteBranchOnRemove
+        var message = deleteBranches
+            ? "This removes their files from disk. Local branches will be deleted if merged."
+            : "This removes their files from disk. Local branches will be kept."
+        if deletable.count < Set(archived.map(\.id)).count {
+            message += " Remote, busy, or Workspace-referenced worktrees are skipped; delete them individually."
+        }
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        let deleteButton = alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        deleteButton.hasDestructiveAction = true
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        isDeletingArchivedWorktrees = true
+        defer { isDeletingArchivedWorktrees = false }
+        for worktree in deletable {
+            if case .deleteFailed = projectsManager.operationState(for: worktree) {
+                projectsManager.setOperationState(for: worktree, state: nil)
+            }
+        }
+        let results = await batchDeleteWorktrees(deletable, keepBranch: !deleteBranches)
+        if results.contains(where: { $0.outcome != .deleted }) {
+            showFileActionError(
+                title: "Some Worktrees Were Not Deleted",
+                message: WorktreeCleanupModel.summary(for: results)
+                    + ". Delete the remaining ones individually."
+            )
         }
     }
 
@@ -13015,6 +13130,9 @@ final class AppState {
                     sessionId: sessionId,
                     title: title
                 )
+            },
+            onUserPromptRecorded: { [weak self] _, text in
+                self?.autoNameBranchIfPending(worktreeId: worktree.id, prompt: text)
             },
             localTitlesEnabled: { [weak self] in
                 self?.config.harness.acpLocalTitlesEnabled ?? false
