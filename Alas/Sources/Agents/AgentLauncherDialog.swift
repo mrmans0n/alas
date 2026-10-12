@@ -25,6 +25,10 @@ struct AgentLauncherDialog: View {
     @State private var openingError: String?
     @State private var deletionRequest: ACPSessionDeletionRequest?
     @State private var deletionError: String?
+    /// Installs in flight, keyed like the install coordinator so another
+    /// agent or host stays installable meanwhile.
+    @State private var installingAdapters: Set<ACPAdapterUpdateKey> = []
+    @State private var adapterInstallError: String?
 
     private let agentTileSize: CGFloat = 64
     private let sessionStageTileSize: CGFloat = 36
@@ -560,6 +564,8 @@ struct AgentLauncherDialog: View {
             return "Loading sessions…"
         case .unsupported:
             return "No session history available"
+        case .needsSetup:
+            return "Adapter not installed"
         case .failed:
             return "Couldn't load sessions"
         case .ready:
@@ -612,11 +618,14 @@ struct AgentLauncherDialog: View {
             launcherStatusRow("Loading agent sessions…", progress: true)
         case .unsupported:
             launcherStatusRow("This agent does not expose session history.")
-        case .failed(let message):
+        case .needsSetup(let reason)
+            where ACPManagedAdapterDescriptor.descriptor(for: agent.id) != nil:
+            adapterInstallRow(agent: agent, reason: reason)
+        case .needsSetup(let message), .failed(let message):
             HStack(spacing: 8) {
                 Text(message).lineLimit(2)
                 Spacer()
-                Button("Retry") { startDiscovery(for: agent) }
+                Button("Retry") { restartDiscovery(for: agent) }
                     .buttonStyle(.plain)
                     .foregroundStyle(theme.color("accent"))
             }
@@ -697,6 +706,82 @@ struct AgentLauncherDialog: View {
                 launcherStatusRow(openingError)
             }
         }
+    }
+
+    private func adapterInstallRow(agent: AgentDefinition, reason: String) -> some View {
+        let installing = currentAdapterKey(agentID: agent.id)
+            .map { installingAdapters.contains($0) } ?? false
+        return HStack(spacing: 8) {
+            if installing { ProgressView().controlSize(.small) }
+            Text(installing
+                 ? "Installing \(agent.displayName) adapter…"
+                 : adapterInstallError.map { "Install failed: \($0)" } ?? reason)
+                .lineLimit(2)
+            Spacer()
+            if !installing {
+                Button(adapterInstallError == nil ? "Install" : "Retry") { installAdapter(for: agent) }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(theme.color("accent"))
+            }
+        }
+        .font(.system(size: 11))
+        .foregroundStyle(theme.color("fg-faint"))
+        .padding(.horizontal, 14)
+        .frame(minHeight: 38)
+    }
+
+    private func installAdapter(for agent: AgentDefinition) {
+        guard let key = currentAdapterKey(agentID: agent.id),
+              !installingAdapters.contains(key)
+        else { return }
+        installingAdapters.insert(key)
+        adapterInstallError = nil
+        Task {
+            defer { installingAdapters.remove(key) }
+            do {
+                try await appState.acpAdapterInstallCoordinator.install(target: key.target, agentID: key.agentID)
+            } catch {
+                if currentAdapterKey(agentID: agent.id) == key {
+                    adapterInstallError = error.localizedDescription
+                }
+                return
+            }
+            // The launcher can be closed, reopened, or moved while npm runs.
+            // The adapter belongs to the agent and target, so refresh
+            // whichever browser now shows them, whatever its owner.
+            guard currentAdapterKey(agentID: agent.id) == key, openingSessionId == nil else { return }
+            restartDiscovery(for: agent)
+        }
+    }
+
+    /// The browser's adapter key, or nil when it isn't showing `agentID`.
+    private func currentAdapterKey(agentID: String) -> ACPAdapterUpdateKey? {
+        guard chatAgent?.id == agentID, let target = launcherAdapterTarget() else { return nil }
+        return ACPAdapterUpdateKey(target: target, agentID: agentID)
+    }
+
+    /// Where the launcher's agents run: the active workspace checkout's
+    /// location, else the selected worktree's host.
+    private func launcherAdapterTarget() -> ACPAdapterTarget? {
+        let executionTarget: AgentExecutionTarget
+        if let checkout = selectedWorkspaceCheckout() {
+            executionTarget = checkout.executionLocation.agentExecutionTarget
+        } else if let worktree = selectedWorktree() {
+            executionTarget = appState.agentExecutionTarget(for: worktree)
+        } else {
+            return nil
+        }
+        switch executionTarget {
+        case .local: return .local
+        case .ssh(let host): return .ssh(host: host)
+        }
+    }
+
+    /// Reloads the current agent's sessions with the manager that produced
+    /// the current list, so a checkout browser stays scoped to the checkout.
+    private func restartDiscovery(for agent: AgentDefinition) {
+        guard let manager = selectedACPManagerForLauncher() else { return }
+        startDiscovery(for: agent, manager: manager, projectId: discoveryProjectId)
     }
 
     private func launcherStatusRow(_ text: String, progress: Bool = false) -> some View {
@@ -899,6 +984,7 @@ struct AgentLauncherDialog: View {
     ) {
         let prior = discoveryModel
         let model = ACPSessionDiscoveryModel()
+        adapterInstallError = nil
         discoveryModel = model
         discoveryOwner = manager.owner
         discoveryProjectId = projectId

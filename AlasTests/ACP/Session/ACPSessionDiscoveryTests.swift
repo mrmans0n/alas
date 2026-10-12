@@ -30,6 +30,26 @@ struct ACPSessionDiscoveryTests {
     }
 
     @MainActor
+    @Test("only a missing adapter reports installable setup", arguments: [
+        (ACPSetupResult.missing(reason: "adapter missing"), ACPSessionDiscoveryModel.Phase.needsSetup("adapter missing")),
+        (ACPSetupResult.error(message: "host unreachable"), ACPSessionDiscoveryModel.Phase.failed("host unreachable")),
+    ])
+    func setupResultPhase(setup: ACPSetupResult, expected: ACPSessionDiscoveryModel.Phase) async throws {
+        let store = try temporaryStore()
+        let client = discoveryClient(deleteCapability: false)
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in setup },
+            connectionFactory: { _, _, _ in ACPConnection(client: client) }
+        )
+        let model = ACPSessionDiscoveryModel()
+        await model.start(manager: manager, agentId: "claude")
+        #expect(model.phase == expected)
+    }
+
+    @MainActor
     @Test("remote deletion uses the discovered wire id and refreshes discovery")
     func remoteDeletionRefreshes() async throws {
         let store = try temporaryStore()

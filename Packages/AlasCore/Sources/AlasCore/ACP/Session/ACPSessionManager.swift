@@ -3913,9 +3913,7 @@ public final class ACPSessionManager: ChangeTracking {
         let host = effectiveRemoteHost()
         let setupSpec = launchSpecTransformer(spec, true)
         let setup = await evaluateSetup(for: setupSpec)
-        guard case .ready = setup else {
-            throw ACPSessionDiscoveryError.setupRequired(setup.reasonText)
-        }
+        guard case .ready = setup else { throw setup.discoveryError }
 
         let launchSpec = launchSpecTransformer(try await resolvedLaunchSpec(for: spec, host: host), true)
         let connection = try connectionFactory(launchSpec, host, worktreePath)
@@ -3983,7 +3981,7 @@ public final class ACPSessionManager: ChangeTracking {
         do {
             guard let spec = ACPLaunchCatalog.spec(for: discovered.agentId) else { throw ACPSessionDiscoveryError.noLaunchSpec(discovered.agentId) }
             let setup = await evaluateSetup(for: launchSpecTransformer(spec, true))
-            guard case .ready = setup else { throw ACPSessionDiscoveryError.setupRequired(setup.reasonText) }
+            guard case .ready = setup else { throw setup.discoveryError }
             let launch = launchSpecTransformer(try await resolvedLaunchSpec(for: spec, host: host), true)
             guard coordinator.fence(sessionId: sessionId) == fence, coordinator.hasAuthority(sessionId: sessionId) else { throw RemoteSessionUnavailable.ownershipLost }
             guard await coordinator.flush(sessionId: sessionId) else { throw RemoteSessionUnavailable.ownershipLost }
@@ -10042,6 +10040,15 @@ private extension ACPSetupResult {
         case .ready: return ""
         case .missing(let r): return r
         case .error(let m): return m
+        }
+    }
+
+    /// Only a missing adapter is installable; a failed probe (unreachable
+    /// host, broken Node) must stay a plain, retryable failure.
+    var discoveryError: ACPSessionDiscoveryError {
+        switch self {
+        case .missing(let reason): .setupRequired(reason)
+        case .ready, .error: .setupFailed(reasonText)
         }
     }
 
