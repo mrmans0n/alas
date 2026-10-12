@@ -243,8 +243,9 @@ enum MergeView3WayDecorations {
     }
 }
 
-/// Memoizes intra-line change marks: they run an LCS per hunk line pair,
-/// which is too slow to repeat on every scroll-driven body evaluation.
+/// Memoizes intra-line change marks. They run an LCS per hunk line pair on
+/// the main actor, so results are cached per hunk (an edit only recomputes
+/// the hunk it touched) and fresh work per render is capped file-wide.
 @MainActor
 final class MergeWordMarkCache {
     struct Marks {
@@ -253,18 +254,46 @@ final class MergeWordMarkCache {
         var remote: [Int: MergePaneText.WordMark] = [:]
     }
 
+    private struct HunkKey: Hashable {
+        let local: [String]
+        let remote: [String]
+        let mode: MergeWordDiff.Mode
+    }
+
     private var key: (layout: MergeRegionVisualLayout.Layout, mode: MergeWordDiff.Mode)?
     private var cached = Marks()
+    private var isComplete = false
+    private var hunks: [HunkKey: MergeWordDiff.HunkResult] = [:]
 
     func marks(for layout: MergeRegionVisualLayout.Layout, mode: MergeWordDiff.Mode) -> Marks {
-        if let key, key.mode == mode, key.layout == layout { return cached }
+        if isComplete, let key, key.mode == mode, key.layout == layout { return cached }
         var marks = Marks()
+        var budget = MergeWordDiff.fileCellBudget
+        var complete = true
+        var nextHunks: [HunkKey: MergeWordDiff.HunkResult] = [:]
         for range in layout.conflictRanges {
-            let hunk = MergeWordDiff.hunk(
+            let hunkKey = HunkKey(
                 local: range.localRows.map { layout.local[$0].content },
                 remote: range.remoteRows.map { layout.remote[$0].content },
                 mode: mode
             )
+            let hunk: MergeWordDiff.HunkResult
+            if let known = hunks[hunkKey] ?? nextHunks[hunkKey] {
+                hunk = known
+                nextHunks[hunkKey] = known
+            } else {
+                var hunkBudget = min(MergeWordDiff.hunkCellBudget, max(budget, 0))
+                let start = hunkBudget
+                hunk = MergeWordDiff.hunk(local: hunkKey.local, remote: hunkKey.remote, mode: mode, budget: &hunkBudget)
+                budget -= hunkBudget < 0 ? start : start - hunkBudget
+                // A hunk cut short by the file-wide budget gets another try
+                // on a later render; one that hit its own cap is final.
+                if hunk.isComplete || start == MergeWordDiff.hunkCellBudget {
+                    nextHunks[hunkKey] = hunk
+                } else {
+                    complete = false
+                }
+            }
             for (index, ranges) in hunk.local.enumerated() where !ranges.isEmpty {
                 let mark = MergePaneText.WordMark(ranges: ranges, kind: .local)
                 marks.local[range.localRows.lowerBound + index] = mark
@@ -276,8 +305,10 @@ final class MergeWordMarkCache {
                 marks.result[range.resultRemoteRows.lowerBound + index] = mark
             }
         }
+        hunks = nextHunks
         key = (layout, mode)
         cached = marks
+        isComplete = complete
         return marks
     }
 }

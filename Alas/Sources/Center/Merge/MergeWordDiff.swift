@@ -54,6 +54,8 @@ enum MergeWordDiff {
         /// Changed ranges per LOCAL hunk line, indexed like the hunk's lines.
         let local: [[NSRange]]
         let remote: [[NSRange]]
+        /// False when the cell budget ran out before every pair was diffed.
+        var isComplete = true
     }
 
     /// Two differing lines must share at least this fraction of their
@@ -66,12 +68,24 @@ enum MergeWordDiff {
     /// degrade to partial marks rather than stall the UI.
     static let hunkCellBudget = 2_000_000
 
+    /// Upper bound on DP cells spent computing marks for a whole file in
+    /// one render. Hunks past it stay unmarked until a later render.
+    static let fileCellBudget = 6_000_000
+
     /// Intra-line changes for a whole conflict hunk. Identical lines are
     /// matched first (line-level LCS); within each gap between matches, every
     /// LOCAL line pairs with its most similar REMOTE line, keeping order.
     /// Pairs below `minimumPairSimilarity` are unrelated rewrites and get no
     /// marks, since highlighting them would just be noise.
     static func hunk(local: [String], remote: [String], mode: Mode) -> HunkResult {
+        var budget = hunkCellBudget
+        return hunk(local: local, remote: remote, mode: mode, budget: &budget)
+    }
+
+    /// Same as `hunk(local:remote:mode:)`, drawing DP cells from `budget`
+    /// so callers can bound the work across many hunks. A negative budget
+    /// on return means it ran out.
+    static func hunk(local: [String], remote: [String], mode: Mode, budget: inout Int) -> HunkResult {
         var localRanges = Array(repeating: [NSRange](), count: local.count)
         var remoteRanges = Array(repeating: [NSRange](), count: remote.count)
         let maxHunkLines = 400
@@ -79,16 +93,23 @@ enum MergeWordDiff {
               local.count <= maxHunkLines, remote.count <= maxHunkLines
         else { return HunkResult(local: localRanges, remote: remoteRanges) }
 
-        var budget = hunkCellBudget - local.count * remote.count
+        guard local.count * remote.count <= budget else {
+            budget = -1
+            return HunkResult(local: localRanges, remote: remoteRanges, isComplete: false)
+        }
+        budget -= local.count * remote.count
         for (i, j) in pairedLines(local, remote, budget: &budget) {
             let cost = local[i].utf16.count * remote[j].utf16.count
-            guard cost <= budget else { break }
+            guard cost <= budget else {
+                budget = -1
+                break
+            }
             budget -= cost
             let result = diff(local: local[i], remote: remote[j], mode: mode)
             localRanges[i] = result.localChanged
             remoteRanges[j] = result.remoteChanged
         }
-        return HunkResult(local: localRanges, remote: remoteRanges)
+        return HunkResult(local: localRanges, remote: remoteRanges, isComplete: budget >= 0)
     }
 
     /// Fraction of both lines' tokens (identifiers, numbers, punctuation
@@ -100,7 +121,10 @@ enum MergeWordDiff {
         let total = ta.count + tb.count
         guard total > 0 else { return 1 }
         guard ta.count <= 256, tb.count <= 256 else { return 0 }
-        guard ta.count * tb.count <= budget else { return nil }
+        guard ta.count * tb.count <= budget else {
+            budget = -1
+            return nil
+        }
         budget -= ta.count * tb.count
         var previous = Array(repeating: 0, count: tb.count + 1)
         for x in ta {
