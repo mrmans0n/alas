@@ -1,7 +1,54 @@
 import Foundation
 
-/// Creating worktrees on disk, locally or over SSH, independent of any UI.
+/// Creating and removing worktrees on disk, locally or over SSH, independent
+/// of any UI.
 public enum WorktreeLifecycle {
+    /// The worktree's content changed after the user confirmed its deletion.
+    public struct DeleteContentFingerprintMismatch: Error {}
+
+    /// Removes the worktree and, when asked, its merged branch. A local
+    /// worktree is moved aside and staged for background cleanup when it can
+    /// be; `authorizedDeleteContentFingerprint` refuses the removal if the
+    /// content changed since it was taken.
+    public static func performRemoveWorktree(
+        repoPath: URL,
+        worktree: Worktree,
+        deleteBranchIfMerged: Bool,
+        force: Bool,
+        verifiedMergedBranchSHA: String? = nil,
+        authorizedDeleteContentFingerprint: String? = nil
+    ) async throws -> WorktreeRemovalOutcome {
+        try await Task.detached {
+            if let authorizedDeleteContentFingerprint {
+                let currentFingerprint = try await WorktreeService.worktreeDeleteContentFingerprint(
+                    worktreePath: worktree.path
+                )
+                guard currentFingerprint == authorizedDeleteContentFingerprint else {
+                    throw DeleteContentFingerprintMismatch()
+                }
+            }
+
+            if worktree.path.isRemoteAlasPath {
+                try await WorktreeService().remove(
+                    repoPath: repoPath,
+                    worktree: worktree,
+                    deleteBranchIfMerged: deleteBranchIfMerged,
+                    force: force,
+                    verifiedMergedBranchSHA: verifiedMergedBranchSHA
+                )
+                return .synchronous
+            }
+            return try await WorktreeService().removeFastLocal(
+                repoPath: repoPath,
+                worktree: worktree,
+                deleteBranchIfMerged: deleteBranchIfMerged,
+                force: force,
+                verifiedMergedBranchSHA: verifiedMergedBranchSHA,
+                authorizedDeleteContentFingerprint: authorizedDeleteContentFingerprint
+            )
+        }.value
+    }
+
     public static func performCreateWorktree(
         repoPath: URL,
         base: String,

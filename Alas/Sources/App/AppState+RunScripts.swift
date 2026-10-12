@@ -650,53 +650,36 @@ extension AppState {
         purgeFailures: Bool = true,
         purgeHistory: Bool = true
     ) -> Task<Void, Never>? {
-        var historyPurgeTask: Task<Void, Never>?
         cancelPendingRunScriptLaunches(worktreeID: worktreeID)
-        for (runID, entry) in core.runObservations where entry.worktreeID == worktreeID {
-            if purgeFailures {
-                let capture = purgeHistory ? .location(entry.location) : RunHistoryCapture.beforeCancelling(entry.location)
-                core.runObservations.removeValue(forKey: runID)?.task.cancel()
-                if purgeHistory {
-                    RunHistory.releaseInBackground(capture)
-                } else {
-                    let finalized = runRecords.markLostObservation(runID: runID, at: Date())
-                    core.finalizeRun(finalized, capture: capture)
-                }
-            } else {
+        guard purgeFailures else {
+            for runID in core.runObservations.filter({ $0.value.worktreeID == worktreeID }).keys {
                 core.stopObservingRun(runID: runID)
             }
-        }
-        if purgeFailures {
-            // The worktree itself is going away, so its run history goes with
-            // it rather than leaking into a future worktree that reuses the id.
-            for event in attentionStore.events where event.kind == .runScriptFailure
-                && attentionWorktree(for: event.owner)?.id == worktreeID {
-                observeAttention(.inactive(sourceKey: event.sourceKey))
-            }
-            if let worktree = attentionWorktrees.first(where: { $0.worktree.id == worktreeID })?.worktree,
-               let context = attentionContext(for: worktree) {
-                let prefix = "script:\(context.owner.storageKey):"
-                for key in attentionStore.document.observations.keys where key.rawValue.hasPrefix(prefix) {
-                    observeAttention(.inactive(sourceKey: key))
-                }
-            }
-            runRecords.purge(worktreeID: worktreeID)
-            runScriptFailureQueue.purge(worktreeID: worktreeID)
-            runFailureBriefs.retain(runIDs: runScriptFailureQueue.runIDs)
-            tabs.closeRunReports(worktreeId: worktreeID)
-            historyPurgeTask = runHistory.forget(worktreeID: worktreeID, deletingStoredRuns: purgeHistory)
-        } else {
             let now = Date()
             for record in runRecords.records(worktreeID: worktreeID) where record.status.isActive {
                 let finalized = runRecords.markLostObservation(runID: record.id, at: now)
                 core.finalizeRun(finalized, capture: .unavailable)
             }
+            core.resolveRunSettlements(worktreeID: worktreeID, .finished(.unknown))
+            return nil
         }
-        // Purging discards runs instead of finishing them, so anything still
-        // waiting on one has to be released here rather than by a record
-        // transition that will now never happen.
-        core.resolveRunSettlements(worktreeID: worktreeID, .finished(.unknown))
-        return historyPurgeTask
+        // The worktree itself is going away, so its run history goes with
+        // it rather than leaking into a future worktree that reuses the id.
+        for event in attentionStore.events where event.kind == .runScriptFailure
+            && attentionWorktree(for: event.owner)?.id == worktreeID {
+            observeAttention(.inactive(sourceKey: event.sourceKey))
+        }
+        if let worktree = attentionWorktrees.first(where: { $0.worktree.id == worktreeID })?.worktree,
+           let context = attentionContext(for: worktree) {
+            let prefix = "script:\(context.owner.storageKey):"
+            for key in attentionStore.document.observations.keys where key.rawValue.hasPrefix(prefix) {
+                observeAttention(.inactive(sourceKey: key))
+            }
+        }
+        runScriptFailureQueue.purge(worktreeID: worktreeID)
+        runFailureBriefs.retain(runIDs: runScriptFailureQueue.runIDs)
+        tabs.closeRunReports(worktreeId: worktreeID)
+        return core.discardRuns(worktreeID: worktreeID, deletingHistory: purgeHistory)
     }
 
     func cancelPendingRunScriptLaunches(worktreeID: String? = nil) {

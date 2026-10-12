@@ -164,6 +164,30 @@ extension AlasCoreContext {
         }
     }
 
+    /// Discards a worktree's runs because the worktree is going away: its
+    /// observations stop, its records go, and anyone waiting on one of its runs
+    /// is settled as `unknown`. Its stored history is deleted too when
+    /// `deletingHistory`, by the returned task; otherwise observed runs are
+    /// archived as lost first.
+    @discardableResult
+    public func discardRuns(worktreeID: String, deletingHistory: Bool) -> Task<Void, Never>? {
+        for (runID, entry) in runObservations where entry.worktreeID == worktreeID {
+            let capture = deletingHistory ? .location(entry.location) : RunHistoryCapture.beforeCancelling(entry.location)
+            runObservations.removeValue(forKey: runID)?.task.cancel()
+            if deletingHistory {
+                RunHistory.releaseInBackground(capture)
+            } else {
+                finalizeRun(runRecords.markLostObservation(runID: runID, at: Date()), capture: capture)
+            }
+        }
+        runRecords.purge(worktreeID: worktreeID)
+        let historyPurge = runHistory.forget(worktreeID: worktreeID, deletingStoredRuns: deletingHistory)
+        // Discarded runs never finish a record, so anything still waiting on
+        // one is released here.
+        resolveRunSettlements(worktreeID: worktreeID, .finished(.unknown))
+        return historyPurge
+    }
+
     /// The observed runs hosted by `sessionID`, optionally only local ones.
     public func observedRunIDs(sessionID: String, includeRemote: Bool = true) -> [String] {
         runObservations.compactMap { runID, entry in

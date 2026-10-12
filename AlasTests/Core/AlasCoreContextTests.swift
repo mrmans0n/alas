@@ -86,6 +86,12 @@ struct AlasCoreContextTests {
             return
         }
         #expect(text.contains("hello from feature"))
+
+        try await context.deleteWorktree(worktree)
+        #expect(!context.projects.worktrees(projectId: project.id).map(\.id).contains(worktree.id))
+        #expect(context.sessionManagers[.worktree(worktree.id)] == nil)
+        #expect(context.runRecords.records(worktreeID: worktree.id).isEmpty)
+        #expect(try await context.runHistory.store?.entry(id: record.id) == nil, "the deleted worktree's history goes with it")
     }
 
     /// A script that ran but never reported its exit status still ran, so

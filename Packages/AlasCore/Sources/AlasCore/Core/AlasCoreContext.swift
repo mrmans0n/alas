@@ -28,6 +28,11 @@ public final class AlasCoreContext {
     /// ones that never produced an archivable record.
     @ObservationIgnored public var runSettlementHandlers: [String: (worktreeID: String, notify: (RunScriptSettlement) -> Void)] = [:]
 
+    /// Starts background cleanup of a removed worktree's staged files.
+    @ObservationIgnored public var launchWorktreeCleanup: @MainActor (WorktreeTrashCleanupTicket) throws -> Void = {
+        try WorktreeTrashCleaner.launch($0)
+    }
+
     @ObservationIgnored private let store: any PersistenceStoreProtocol
     @ObservationIgnored private let projectsFile: URL
     @ObservationIgnored private let makeSessionManager: @MainActor (SessionOwnerID, Worktree) -> ACPSessionManager
@@ -190,6 +195,54 @@ public final class AlasCoreContext {
             capture: .completion(completion)
         )
         return outcome
+    }
+
+    /// Deletes `worktree` and its branch when merged and `deleteBranchIfMerged`.
+    /// Its agent sessions are shut down and its runs and run history are
+    /// discarded first. Git refusing the removal (uncommitted changes without
+    /// `force`, say) throws and leaves everything in place.
+    public func deleteWorktree(_ worktree: Worktree, force: Bool = false, deleteBranchIfMerged: Bool = false) async throws {
+        guard let project = projects.projects.first(where: { $0.id == worktree.projectId }) else {
+            throw ProjectCreationError.projectNotFound
+        }
+        let repoPath = URL(fileURLWithPath: project.path)
+        let outcome = try await ProjectMutationGate.shared.withMutation(projectID: project.id) {
+            try await WorktreeLifecycle.performRemoveWorktree(
+                repoPath: repoPath,
+                worktree: worktree,
+                deleteBranchIfMerged: deleteBranchIfMerged,
+                force: force
+            )
+        }
+        await disposeSessionManager(owner: .worktree(worktree.id))
+        await discardRuns(worktreeID: worktree.id, deletingHistory: true)?.value
+        if case .staged(let ticket) = outcome {
+            try? launchWorktreeCleanup(ticket)
+        }
+        if (try? await projects.refreshWorktrees(projectId: project.id)) == true {
+            try? saveProjects()
+        }
+    }
+
+    /// Shuts down the owner's agent sessions, persisting what they hold and
+    /// releasing their leases, and forgets the manager.
+    public func disposeSessionManager(owner: SessionOwnerID) async {
+        guard let manager = sessionManagers.removeValue(forKey: owner) else { return }
+        manager.flushPendingDraftWrites()
+        for runner in manager.runners.values {
+            runner.stop()
+        }
+        manager.prepareForDisposal()
+        await Self.finishDisposing(manager)
+    }
+
+    /// The asynchronous half of disposing a manager whose runners are stopped.
+    public static func finishDisposing(_ manager: ACPSessionManager) async {
+        await manager.flushAllPersistence()
+        await manager.disposeAllLiveSessions()
+        // Leases go last: a freed lease must not be claimable while an old
+        // agent process is still alive.
+        await manager.releaseAllOwnedLeases()
     }
 
     /// A manager with its own session database, as the app keeps per owner.
