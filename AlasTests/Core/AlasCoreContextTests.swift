@@ -87,7 +87,22 @@ struct AlasCoreContextTests {
         }
         #expect(text.contains("hello from feature"))
 
+        let longURL = root.appendingPathComponent("long.sh")
+        try "sleep 300\n".write(to: longURL, atomically: true, encoding: .utf8)
+        let long = RunScript(
+            scope: .repo, fileName: "long.sh", fileURL: longURL,
+            displayName: "Long", onExit: .close, cwd: nil, isExecutable: false
+        )
+        let longRun = Task { try await context.runScript(long, in: worktree) }
+        let deadline = ContinuousClock.now + .seconds(30)
+        while context.runRecords.record(worktreeID: worktree.id, scriptKey: long.key) == nil, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
         try await context.deleteWorktree(worktree)
+        await #expect(throws: CancellationError.self, "deleting the worktree stops its headless runs") {
+            _ = try await longRun.value
+        }
         #expect(!context.projects.worktrees(projectId: project.id).map(\.id).contains(worktree.id))
         #expect(context.sessionManagers[.worktree(worktree.id)] == nil)
         #expect(context.runRecords.records(worktreeID: worktree.id).isEmpty)

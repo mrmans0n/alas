@@ -1,5 +1,8 @@
 import Foundation
 import Observation
+import os
+
+private let contextLogger = Logger(subsystem: "io.nlopez.alas", category: "AlasCoreContext")
 
 /// The headless composition root: the projects Alas manages, their worktrees,
 /// and the session managers that run agents in them. Nothing here needs the
@@ -32,6 +35,9 @@ public final class AlasCoreContext {
     @ObservationIgnored public var launchWorktreeCleanup: @MainActor (WorktreeTrashCleanupTicket) throws -> Void = {
         try WorktreeTrashCleaner.launch($0)
     }
+
+    /// Headless runs in flight, so deleting their worktree can stop them.
+    @ObservationIgnored private var headlessRuns: [String: (worktreeID: String, task: Task<RunScriptCompletion, Error>)] = [:]
 
     @ObservationIgnored private let store: any PersistenceStoreProtocol
     @ObservationIgnored private let projectsFile: URL
@@ -177,7 +183,10 @@ public final class AlasCoreContext {
         ))
         let completion: RunScriptCompletion
         do {
-            completion = try await runs.run(script, in: worktree, project: project, runID: runID)
+            let run = Task { try await runs.run(script, in: worktree, project: project, runID: runID) }
+            headlessRuns[runID] = (worktree.id, run)
+            defer { headlessRuns.removeValue(forKey: runID) }
+            completion = try await withTaskCancellationHandler { try await run.value } onCancel: { run.cancel() }
         } catch is CancellationError {
             finalizeRun(runRecords.finish(runID: runID, outcome: .stopped, at: Date()), capture: .unavailable)
             throw CancellationError()
@@ -198,14 +207,22 @@ public final class AlasCoreContext {
     }
 
     /// Deletes `worktree` and its branch when merged and `deleteBranchIfMerged`.
-    /// Its agent sessions are shut down and its runs and run history are
-    /// discarded first. Git refusing the removal (uncommitted changes without
+    /// Its headless runs are stopped first; once it is removed, its agent
+    /// sessions are shut down and its runs and run history discarded. Git refusing the removal (uncommitted changes without
     /// `force`, say) throws and leaves everything in place.
     public func deleteWorktree(_ worktree: Worktree, force: Bool = false, deleteBranchIfMerged: Bool = false) async throws {
         guard let project = projects.projects.first(where: { $0.id == worktree.projectId }) else {
             throw ProjectCreationError.projectNotFound
         }
         let repoPath = URL(fileURLWithPath: project.path)
+        // Nothing may keep running inside the checkout once its files go.
+        let running = headlessRuns.values.filter { $0.worktreeID == worktree.id }.map(\.task)
+        for run in running {
+            run.cancel()
+        }
+        for run in running {
+            _ = try? await run.value
+        }
         let outcome = try await ProjectMutationGate.shared.withMutation(projectID: project.id) {
             try await WorktreeLifecycle.performRemoveWorktree(
                 repoPath: repoPath,
@@ -217,9 +234,27 @@ public final class AlasCoreContext {
         await disposeSessionManager(owner: .worktree(worktree.id))
         await discardRuns(worktreeID: worktree.id, deletingHistory: true)?.value
         if case .staged(let ticket) = outcome {
-            try? launchWorktreeCleanup(ticket)
+            do {
+                try launchWorktreeCleanup(ticket)
+            } catch {
+                contextLogger.error(
+                    "Could not launch worktree cleanup for \(ticket.stagedPath.path, privacy: .public): \(error.localizedDescription, privacy: .public)"
+                )
+            }
+            // Also covers a cleanup that could not be launched.
+            let cleanupProjects = projects.projects
+            Task.detached(priority: .utility) {
+                WorktreeTrashCleaner.sweep(projects: cleanupProjects)
+            }
         }
-        if (try? await projects.refreshWorktrees(projectId: project.id)) == true {
+        do {
+            if try await projects.refreshWorktrees(projectId: project.id) {
+                try? saveProjects()
+            }
+        } catch {
+            // The removal succeeded, so the row must not survive a failed
+            // refresh, in memory or on disk.
+            projects.dropRemovedWorktree(id: worktree.id, projectId: project.id)
             try? saveProjects()
         }
     }
