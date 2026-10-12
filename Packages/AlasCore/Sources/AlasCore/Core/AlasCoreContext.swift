@@ -79,8 +79,10 @@ public final class AlasCoreContext {
             projects.removeProject(id: project.id)
             throw ProjectCreationError.projectPersistenceFailed
         }
-        if try await projects.refreshWorktrees(projectId: project.id) {
-            try saveProjects()
+        // The project is committed. A refresh or save that fails from here on
+        // leaves the topology to the next refresh rather than failing the add.
+        if (try? await projects.refreshWorktrees(projectId: project.id)) == true {
+            try? saveProjects()
         }
         return project
     }

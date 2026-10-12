@@ -4,17 +4,27 @@ import Testing
 
 @MainActor
 struct AlasCoreContextTests {
+    /// A `main` branch with one empty commit, built once and copied per test.
+    private static let repoTemplate = Task { () throws -> URL in
+        let repo = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-core-template-\(UUID().uuidString)")
+            .appendingPathComponent("repo")
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        for args in [["init", "-q", "-b", "main"], ["commit", "-q", "--allow-empty", "-m", "init"]] {
+            let result = try await Process.git(args, cwd: repo)
+            guard result.exitCode == 0 else { throw ProcessError.nonZeroExit(result.exitCode, result.stderr) }
+        }
+        return repo
+    }
+
     /// The headless core drives a worktree, an agent session in it, and a run
     /// of one of its scripts, with no `AppState` or AppKit involved.
     @Test func drivesWorktreeSessionAndRunWithoutAppState() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-core-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let repo = root.appendingPathComponent("repo")
-        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
-        for args in [["init", "-q", "-b", "main"], ["commit", "-q", "--allow-empty", "-m", "init"]] {
-            let result = try await Process.git(args, cwd: repo)
-            #expect(result.exitCode == 0, "\(result.stderr)")
-        }
+        try FileManager.default.copyItem(at: try await Self.repoTemplate.value, to: repo)
         let agent = ACPMockClient()
         agent.script(method: "initialize") { _ in Data(#"{"protocolVersion":1,"sessionCapabilities":{}}"#.utf8) }
         agent.script(method: "session/new") { _ in Data(#"{"sessionId":"agent-session"}"#.utf8) }
