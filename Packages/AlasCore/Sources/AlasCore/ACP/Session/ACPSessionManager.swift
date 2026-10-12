@@ -3890,6 +3890,7 @@ public final class ACPSessionManager: ChangeTracking {
     }
 
     public func makeSessionDiscoveryHandle(agentId: String) async throws -> ACPSessionDiscoveryHandle {
+        await previousManagerDisposal?.value
         guard let spec = ACPLaunchCatalog.spec(for: agentId) else {
             throw ACPSessionDiscoveryError.noLaunchSpec(agentId)
         }
@@ -3929,6 +3930,7 @@ public final class ACPSessionManager: ChangeTracking {
     /// Returns false for local discovery. SSH deletion uses the session's
     /// fenced helper process, never the unfenced listing connection.
     public func deleteCoordinatedAgentHistory(_ discovered: ACPDiscoveredSession) async throws -> Bool {
+        await previousManagerDisposal?.value
         activeSessionDeletionCount += 1
         defer { activeSessionDeletionCount -= 1 }
         guard let host = effectiveRemoteHost(), let coordinator = try coordination() else { return false }
@@ -4002,6 +4004,7 @@ public final class ACPSessionManager: ChangeTracking {
         autoRunDefault: Bool = false,
         origin: ACPSessionOrigin = .agentImported
     ) async -> ACPSessionRow? {
+        await previousManagerDisposal?.value
         let discoveredCWD = URL(fileURLWithPath: discovered.cwd).standardizedFileURL.path
         let managerCWD = URL(fileURLWithPath: worktreePath).standardizedFileURL.path
         guard discovered.worktreeId == worktreeId, discoveredCWD == managerCWD else { return nil }
@@ -4049,7 +4052,8 @@ public final class ACPSessionManager: ChangeTracking {
     /// was truncated to save memory. Returns nil if the row is gone or
     /// the payload can't be decoded.
     public func reloadFullToolCallContent(sessionId: ACPSession.ID, toolCallId: String) async -> String? {
-        try? await persistence.loadToolCallContent(sessionId: sessionId, toolCallId: toolCallId)
+        await previousManagerDisposal?.value
+        return try? await persistence.loadToolCallContent(sessionId: sessionId, toolCallId: toolCallId)
     }
 
     private static func makeStdioConnection(
@@ -8269,6 +8273,7 @@ extension ACPSessionManager {
     public func bootstrapScheduledQueueSessions(
         onBootstrapped: (@MainActor (ACPSession.ID) -> Void)? = nil
     ) async -> [ACPSession.ID] {
+        await previousManagerDisposal?.value
         let ids: [ACPSession.ID]
         do {
             ids = try await persistence.scheduledQueueSessionIds()
@@ -8309,6 +8314,7 @@ extension ACPSessionManager {
         onBootstrapped: (@MainActor (ACPSession.ID) -> Void)? = nil
     ) async -> [ACPSession.ID] {
         guard continueInterruptedSessions() else { return [] }
+        await previousManagerDisposal?.value
         let ids: [ACPSession.ID]
         do {
             ids = try await persistence.interruptedQueueSessionIds()

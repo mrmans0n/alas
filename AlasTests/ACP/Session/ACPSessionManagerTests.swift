@@ -83,6 +83,45 @@ struct ACPSessionManagerTests {
     }
 
     @Test(.timeLimit(.minutes(1)))
+    func replacementDiscoveryWaitsForPreviousImport() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rebind-import-\(UUID()).sqlite")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = try ACPSessionStore(path: url.path)
+        let previous = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        defer { previous.shutdownBackgroundTasks() }
+        let discovered = ACPDiscoveredSession(
+            worktreeId: "wt", agentId: "claude", remoteSessionId: "remote",
+            cwd: "/tmp/wt", title: "Imported", updatedAt: nil,
+            additionalDirectories: [], localSessionId: nil
+        )
+        let writes = AsyncGate()
+        var imported: ACPSessionRow?
+        let disposal = Task { @MainActor in
+            await writes.enterAndWait()
+            imported = await previous.materializeDiscoveredSession(discovered)
+            await previous.flushAllPersistence()
+        }
+        await writes.waitUntilEntered()
+        let replacement = ACPSessionManager(
+            worktreeId: "wt", worktreePath: "/tmp/wt", store: store,
+            previousManagerDisposal: disposal
+        )
+        defer { replacement.shutdownBackgroundTasks() }
+        var completed = false
+        let lookup = Task { @MainActor in
+            let row = await replacement.materializeDiscoveredSession(discovered)
+            completed = true
+            return row
+        }
+        #expect(!(await awaitCondition(within: .seconds(1)) { completed }))
+        await writes.release()
+        let row = try #require(await lookup.value)
+        await disposal.value
+        #expect(row.id == imported?.id)
+        #expect(try store.recentSessions().count == 1)
+    }
+
+    @Test(.timeLimit(.minutes(1)))
     func connectedIdleRunnerCanRebindAfterWorkFinishes() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rebind-\(UUID()).sqlite")
         defer { try? FileManager.default.removeItem(at: url) }
