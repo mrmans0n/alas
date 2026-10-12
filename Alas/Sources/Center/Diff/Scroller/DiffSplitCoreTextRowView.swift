@@ -770,8 +770,12 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
 
     // MARK: - Drawing
 
-    override func draw(_ dirtyRect: NSRect) {
-        guard let palette, let context = NSGraphicsContext.current?.cgContext else { return }
+    override func draw(_ requestedRect: NSRect) {
+        // AppKit asks every row to redraw the strip a scroll step exposes,
+        // even rows the strip misses; those draws would still record every
+        // clip and stroke for Core Animation to replay.
+        let dirtyRect = requestedRect.intersection(bounds)
+        guard !dirtyRect.isEmpty, let palette, let context = NSGraphicsContext.current?.cgContext else { return }
         let cardRect = NSRect(x: 0, y: 0, width: bounds.width, height: max(0, bounds.height - bottomPadding))
         let fusion = chrome?.fusion ?? .none
         let hunkPath = chrome == nil ? nil : Self.roundedPath(
