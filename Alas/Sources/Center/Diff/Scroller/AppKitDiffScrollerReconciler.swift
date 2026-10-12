@@ -312,7 +312,7 @@ final class AppKitDiffScrollerReconciler {
             pool.releaseAll(except: keep)
 
             var geometryChanged = false
-            var mountedViews: [(id: String, view: AppKitDiffRowHostingView, isStable: Bool)] = []
+            var mountedViews: [(id: String, view: any AppKitDiffRowView, isStable: Bool)] = []
             var measuredHeightUpdates: [String: CGFloat] = [:]
             for id in keep {
                 guard let spec = specsByID[id], let row = tiling.row(withID: id) else { continue }

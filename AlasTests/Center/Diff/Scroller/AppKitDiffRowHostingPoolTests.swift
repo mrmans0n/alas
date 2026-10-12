@@ -52,6 +52,36 @@ struct AppKitDiffRowHostingPoolTests {
         #expect(changed.contentChanged)
     }
 
+    @Test("native rows mount, update in place, and come back from the park")
+    func nativeRowsMountAndPark() {
+        final class Probe: NSView, AppKitDiffRowView {
+            var representedRowID: String?
+            var onIntrinsicSizeInvalidated: ((String) -> Void)?
+            var lastMeasuredWidth: CGFloat?
+            var configured = 0
+            func measuredHeight(forWidth width: CGFloat) -> CGFloat { lastMeasuredWidth = width; return 10 }
+            func attach(to documentView: NSView) { documentView.addSubview(self) }
+            func suppressNextLayoutForStableScroll() {}
+        }
+        func spec(_ token: Int) -> AppKitDiffRowSpec {
+            var spec = AppKitDiffRowSpec(
+                id: "row", ownerID: nil, equalityToken: .init(token), contentSignature: 0, estimatedHeight: 10
+            ) { AnyView(EmptyView()) }
+            spec.native = AppKitDiffNativeRow(make: { Probe() }, configure: { ($0 as? Probe)?.configured += 1 })
+            return spec
+        }
+        let pool = AppKitDiffRowHostingPool()
+        let first = pool.view(for: spec(1))
+        pool.release(id: "row")
+        let parked = pool.view(for: spec(1))
+        let changed = pool.view(for: spec(2))
+
+        #expect(first.view is Probe)
+        #expect(parked.view === first.view && !parked.contentChanged)
+        #expect(changed.view === first.view && changed.contentChanged)
+        #expect((first.view as? Probe)?.configured == 2)
+    }
+
     @Test("released hosts are reused for a different row once the park is full")
     func reuse() {
         let pool = AppKitDiffRowHostingPool(maximumParkedHosts: 0)
@@ -85,7 +115,7 @@ struct AppKitDiffRowHostingPoolTests {
         pool.releaseAll(except: ["b"])
 
         #expect(pool.mountedIDs == ["b"])
-        #expect(pool.mountedView(id: "a") == nil)
+        #expect(pool.mountedHostingView(id: "a") == nil)
     }
 }
 

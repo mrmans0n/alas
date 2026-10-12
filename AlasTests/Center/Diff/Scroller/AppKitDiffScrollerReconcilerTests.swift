@@ -382,7 +382,7 @@ struct AppKitDiffScrollerReconcilerTests {
             targetID: "row-50", fallbackID: nil, alignment: .top, animated: false, generation: 1
         ))
 
-        let header = try #require(stack.pool.mountedView(id: "header"))
+        let header = try #require(stack.pool.mountedHostingView(id: "header"))
         #expect(abs(header.frame.minY - stack.scrollView.scrollY) < 0.5)
     }
 
@@ -410,7 +410,7 @@ struct AppKitDiffScrollerReconcilerTests {
             .withContentInsets(.init(top: 12, bottom: 18, left: 14, right: 20))
         stack.reconciler.apply(plan: insetPlan, contentWidth: stack.scrollView.contentWidth)
 
-        let firstView = try #require(stack.pool.mountedView(id: "row-0"))
+        let firstView = try #require(stack.pool.mountedHostingView(id: "row-0"))
 
         #expect(stack.tiling.row(withID: "row-0")?.minY == 12)
         #expect(stack.tiling.documentHeight == 110)
@@ -432,7 +432,7 @@ struct AppKitDiffScrollerReconcilerTests {
             plan: .init(rows: [spec("row", height: 20)]),
             contentWidth: stack.scrollView.contentWidth
         )
-        let view = try #require(stack.pool.mountedView(id: "row"))
+        let view = try #require(stack.pool.mountedHostingView(id: "row"))
         view.updateRootView(AnyView(Color.clear.frame(height: 80)))
         view.invalidateIntrinsicContentSize()
 
@@ -444,7 +444,7 @@ struct AppKitDiffScrollerReconcilerTests {
         let stack = makeStack()
         stack.reconciler.apply(plan: plan(), contentWidth: stack.scrollView.contentWidth)
         stack.window.layoutIfNeeded()
-        let host = try #require(stack.pool.mountedView(id: "row-0"))
+        let host = try #require(stack.pool.mountedHostingView(id: "row-0"))
         let measures = host.measureCountForTests
 
         for target in ["row-150", "row-0"] {
@@ -454,7 +454,7 @@ struct AppKitDiffScrollerReconcilerTests {
             stack.window.layoutIfNeeded()
         }
 
-        #expect(stack.pool.mountedView(id: "row-0") === host)
+        #expect(stack.pool.mountedHostingView(id: "row-0") === host)
         #expect(host.measureCountForTests == measures)
     }
 
@@ -488,7 +488,7 @@ struct AppKitDiffScrollerReconcilerTests {
         let stack = makeStack()
         stack.reconciler.apply(plan: plan(), contentWidth: stack.scrollView.contentWidth)
         stack.window.layoutIfNeeded()
-        let hosts = stack.pool.mountedIDs.compactMap(stack.pool.mountedView(id:))
+        let hosts = stack.pool.mountedIDs.compactMap(stack.pool.mountedHostingView(id:))
         let layoutPasses = hosts.map(\.layoutPassCountForTests)
         #expect(layoutPasses.allSatisfy { $0 > 0 })
 

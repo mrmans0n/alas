@@ -36,6 +36,8 @@ struct AppKitDiffRowSpec {
     let estimatedHeight: CGFloat
     var retention: AppKitDiffRowRetention = .recyclable
     var contextRowCount: Int? = nil
+    /// When set, the row is plain AppKit and `build` is not used.
+    var native: AppKitDiffNativeRow? = nil
     let build: () -> AnyView
 }
 
