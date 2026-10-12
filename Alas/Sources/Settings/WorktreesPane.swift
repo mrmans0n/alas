@@ -101,7 +101,14 @@ struct WorktreesPane: View {
                                     project: project,
                                     archived: archived,
                                     onUnarchive: { wt in state.unarchiveWorktree(projectId: project.id, path: wt.path) },
-                                    onDelete: { wt in state.deleteWorktree(wt) }
+                                    onDelete: { wt in state.deleteWorktree(wt) },
+                                    isPending: { wt in
+                                        // Failed states stay actionable so the user can retry.
+                                        switch state.projectsManager.operationState(for: wt) {
+                                        case .creating, .preparingDelete, .deleting: return true
+                                        default: return false
+                                        }
+                                    }
                                 )
                             }
                         }
@@ -200,6 +207,7 @@ private struct ArchivedProjectSection: View {
     let archived: [Worktree]
     let onUnarchive: (Worktree) -> Void
     let onDelete: (Worktree) -> Void
+    let isPending: (Worktree) -> Bool
     @Environment(\.theme) var theme
 
     var body: some View {
@@ -225,6 +233,7 @@ private struct ArchivedProjectSection: View {
                         AlasButton(title: "Delete", style: .subtle) { onDelete(wt) }
                         AlasButton(title: "Unarchive") { onUnarchive(wt) }
                     }
+                    .disabled(isPending(wt))
                 }
                 .padding(.vertical, 10)
                 .overlay(Divider().opacity(0.5), alignment: .top)

@@ -6776,7 +6776,14 @@ final class AppState {
         let deletable = workspacesManager.canMutate
             ? archived.filter { !$0.path.isRemoteAlasPath && worktreeCleanupWorkspaceOwners(for: $0).isEmpty }
             : []
-        guard !deletable.isEmpty else { return }
+        guard !archived.isEmpty else { return }
+        guard !deletable.isEmpty else {
+            showFileActionError(
+                title: "Nothing to Delete",
+                message: "Remote worktrees and those referenced by a Workspace checkout can't be deleted in bulk. Delete them individually."
+            )
+            return
+        }
 
         let alert = NSAlert()
         alert.messageText = "Delete \(deletable.count) archived \(deletable.count == 1 ? "worktree" : "worktrees")?"
