@@ -365,6 +365,15 @@ struct AppStateWorktreeCleanupBatchTests {
             .worktrees(projectId: fixture.project.id).count == before)
     }
 
+    // MARK: - bulkDeleteTargets
+
+    @Test func bulkDeleteTargetsDropsAnIdAnyAliasRejectsAndDedupesTheRest() {
+        // (id, eligible): "shared" is owned through one project only.
+        let candidates = [("shared", true), ("solo", true), ("shared", false), ("twice", true), ("twice", true)]
+        let targets = AppState.bulkDeleteTargets(candidates, id: \.0, isEligible: \.1)
+        #expect(targets.map(\.0) == ["solo", "twice"])
+    }
+
     // MARK: - hasOnlyAcknowledgedDirtiness
 
     @Test func identicalGenerationsAreAcknowledged() {

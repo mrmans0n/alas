@@ -6752,6 +6752,96 @@ final class AppState {
         }
     }
 
+    /// Delete every archived worktree across all projects after one
+    /// confirmation. Remote worktrees and those referenced by any Workspace
+    /// checkout are left for the single-item flow (the batch path's local
+    /// branch and ownership re-checks refuse them), and anything
+    /// git refuses without `--force` is reported so the user can delete it
+    /// individually.
+    ///
+    /// The batch re-checks sessions, buffers, branch, and ownership but not
+    /// whether a target is still archived, so the Settings pane (the only
+    /// unarchive entry point) locks its archived rows while this runs.
+    private(set) var isDeletingArchivedWorktrees = false
+
+    /// One target per id, and none for an id any representation rejects. A
+    /// worktree id is its path, so one local checkout archived under two
+    /// projects appears twice: ownership is checked per project, so an
+    /// unowned alias must not delete a checkout the other one owns, and a
+    /// duplicate id would trap the batch's per-id snapshots.
+    nonisolated static func bulkDeleteTargets<T>(
+        _ candidates: [T],
+        id: (T) -> String,
+        isEligible: (T) -> Bool
+    ) -> [T] {
+        let blocked = Set(candidates.filter { !isEligible($0) }.map(id))
+        var seen: Set<String> = []
+        return candidates.filter { !blocked.contains(id($0)) && seen.insert(id($0)).inserted }
+    }
+
+    func deleteAllArchivedWorktrees() async {
+        guard !isDeletingArchivedWorktrees else { return }
+        let archived = projects.flatMap { projectsManager.archivedWorktrees(projectId: $0.id) }
+        let deletable = workspacesManager.canMutate
+            ? Self.bulkDeleteTargets(archived, id: \.id) { worktree in
+                // The batch skips any claimed worktree; a failed delete is
+                // released below so this run retries it.
+                let operationAllowsBatch: Bool
+                switch projectsManager.operationState(for: worktree) {
+                case nil, .deleteFailed: operationAllowsBatch = true
+                default: operationAllowsBatch = false
+                }
+                return operationAllowsBatch
+                    && !worktree.path.isRemoteAlasPath
+                    && worktreeCleanupWorkspaceOwners(for: worktree).isEmpty
+            }
+            : []
+        guard !archived.isEmpty else { return }
+        guard !deletable.isEmpty else {
+            showFileActionError(
+                title: "Nothing to Delete",
+                message: workspacesManager.canMutate
+                    ? "Remote, busy, or Workspace-referenced worktrees can't be deleted in bulk. Delete them individually."
+                    : "Workspace Checkout ownership could not be verified. Try again once Workspace storage is available."
+            )
+            return
+        }
+
+        let alert = NSAlert()
+        alert.messageText = "Delete \(deletable.count) archived \(deletable.count == 1 ? "worktree" : "worktrees")?"
+        // Frozen here: the batch re-reads the setting per item, and the
+        // confirmation must stay true if it is toggled mid-batch.
+        let deleteBranches = config.worktrees.deleteBranchOnRemove
+        var message = deleteBranches
+            ? "This removes their files from disk. Local branches will be deleted if merged."
+            : "This removes their files from disk. Local branches will be kept."
+        if deletable.count < Set(archived.map(\.id)).count {
+            message += " Remote, busy, or Workspace-referenced worktrees are skipped; delete them individually."
+        }
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        let deleteButton = alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        deleteButton.hasDestructiveAction = true
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        isDeletingArchivedWorktrees = true
+        defer { isDeletingArchivedWorktrees = false }
+        for worktree in deletable {
+            if case .deleteFailed = projectsManager.operationState(for: worktree) {
+                projectsManager.setOperationState(for: worktree, state: nil)
+            }
+        }
+        let results = await batchDeleteWorktrees(deletable, keepBranch: !deleteBranches)
+        if results.contains(where: { $0.outcome != .deleted }) {
+            showFileActionError(
+                title: "Some Worktrees Were Not Deleted",
+                message: WorktreeCleanupModel.summary(for: results)
+                    + ". Delete the remaining ones individually."
+            )
+        }
+    }
+
     /// Live sessions attached to a worktree's open terminal/ACP tabs, counted
     /// directly rather than through harness activity state (busy/awaiting) —
     /// mirrors the cleanup sheet's own `activeSessionCount` probe. Used to
