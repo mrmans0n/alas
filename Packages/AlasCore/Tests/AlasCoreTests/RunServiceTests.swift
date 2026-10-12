@@ -74,7 +74,7 @@ struct RunServiceTests {
         run.cancel()
 
         await #expect(throws: CancellationError.self) { _ = try await run.value }
-        #expect(kill(pid, 0) != 0, "the SIGTERM-ignoring child is gone")
+        #expect(try await Self.processExits(pid), "the SIGTERM-ignoring child is gone")
     }
 
     @Test(.timeLimit(.minutes(1)))
@@ -107,10 +107,16 @@ struct RunServiceTests {
         run.cancel()
 
         await #expect(throws: CancellationError.self) { _ = try await run.value }
-        let gone = ContinuousClock.now + .seconds(10)
-        while kill(pid, 0) == 0, ContinuousClock.now < gone {
+        #expect(try await Self.processExits(pid), "the script command in script's own session is gone")
+    }
+
+    /// A killed process still needs to be scheduled and reaped, so poll for it
+    /// with a deadline rather than checking once.
+    private static func processExits(_ pid: pid_t) async throws -> Bool {
+        let deadline = ContinuousClock.now + .seconds(10)
+        while kill(pid, 0) == 0, ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(50))
         }
-        #expect(kill(pid, 0) != 0, "the script command in script's own session is gone")
+        return kill(pid, 0) != 0
     }
 }
