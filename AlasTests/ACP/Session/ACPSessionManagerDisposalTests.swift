@@ -222,6 +222,37 @@ struct ACPSessionManagerDisposalTests {
         await manager.detach(sessionId: parent.id)
     }
 
+    @Test("goal submission clears only its own successful draft", arguments: ["success", "failure", "newer", "disposed"])
+    func goalSubmissionPreservesUnsubmittedDrafts(outcome: String) async throws {
+        let client = ACPMockClient()
+        let started = AsyncStream<Void>.makeStream()
+        let release = AsyncStream<Void>.makeStream()
+        client.scriptAsync(method: "_session/goal") { _ in
+            started.continuation.yield()
+            for await _ in release.stream { break }
+            if outcome == "failure" { throw TestError.closeFailed }
+            return Data("{}".utf8)
+        }
+        let (manager, store, session) = try await attachedManager(client: client, supportsClose: true)
+        session.goalCapability = .init(version: 1, controlMethod: "_session/goal", actions: [.set])
+        manager.persistGoalDraft("finish", for: session)
+        let control = Task { try await manager.controlGoal(for: session.id, action: .set, objective: "finish") }
+        for await _ in started.stream { break }
+        if outcome == "newer" { manager.persistGoalDraft("new draft", for: session) }
+        if outcome == "disposed" { manager.prepareForDisposal() }
+        release.continuation.yield()
+        if outcome == "failure" {
+            await #expect(throws: (any Error).self) { try await control.value }
+        } else {
+            try await control.value
+        }
+        await manager.flushPersistence()
+        let expected = outcome == "newer" ? "new draft" : outcome == "failure" ? "finish" : ""
+        #expect(session.goalDraft == expected)
+        #expect(try store.loadSession(id: session.id)?.goalDraft == expected)
+        await manager.disposeAllLiveSessions()
+    }
+
     @Test("goal control stays busy until the agent response completes")
     func goalControlBlocksProjectRebinding() async throws {
         let client = ACPMockClient()
