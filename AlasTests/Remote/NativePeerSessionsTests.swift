@@ -902,8 +902,11 @@ struct NativePeerSessionsTests {
         #expect(completed == !rejected)
     }
 
-    @Test(arguments: [false, true], [false, true])
-    func queueEditDuringPendingSendKeepsOnlyTheNextDraft(whileAway: Bool, edited: Bool) {
+    @Test(arguments: [
+        (false, false, false), (false, true, false), (true, false, false), (true, true, false),
+        (false, false, true), (false, true, true), (true, false, true), (true, true, true),
+    ])
+    func queueEditDuringPendingSendKeepsBothDraftsOnRejection(whileAway: Bool, edited: Bool, rejected: Bool) {
         let (links, client) = drivenClient(canDrive: true)
         client.draft = "submitted prompt"
         client.sendPrompt()
@@ -911,12 +914,18 @@ struct NativePeerSessionsTests {
         client.queueEdit("q")
         if whileAway { client.clearSelection() }
         links.receive(.queueEditRestored(sessionId: "s", itemId: "q", text: "restored item"), from: "B")
-        if whileAway { client.select("B:s") }
+        if whileAway && !rejected { client.select("B:s") }
+        if rejected {
+            links.receive(.promptRejected(sessionId: "s"), from: "B")
+        } else {
         links.receive(.queueState(sessionId: "s", items: [
             .init(id: "new", text: "submitted prompt", imageCount: 0, resourceCount: 0, status: "pending",
                   lastError: nil, scheduledAt: nil)
         ]), from: "B")
-        #expect(client.draft == (edited ? "next prompt\nrestored item" : "restored item"))
+        }
+        if whileAway && rejected { client.select("B:s") }
+        let next = edited ? "next prompt\nrestored item" : "restored item"
+        #expect(client.draft == (rejected ? "submitted prompt\n" + next : next))
         #expect(client.composerState(for: "B:s").draft.plainText == client.draft)
         #expect(!client.isPromptPending)
     }

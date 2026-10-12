@@ -1083,17 +1083,37 @@ final class NativePeerSessions {
             composerErrors[sessionId] = superseded ? Self.unconfirmedDeliveryMessage : "Prompt was not delivered. Your draft was kept."
         }
         if let downstream { _ = federation.route(.unsubscribe(sessionId: sessionId), from: downstream) }
-        suspended.completion?(confirmed)
+        if confirmed {
+            suspended.completion?(true)
+        } else {
+            restoreRejectedPrompt(suspended.prompt, sessionId: sessionId, completion: suspended.completion)
+        }
         return true
+    }
+
+    private func restoreRejectedPrompt(
+        _ submitted: PendingPrompt, sessionId: String, completion: (@MainActor (Bool) -> Void)?
+    ) {
+        let composer = composerState(for: sessionId)
+        let nextDraft = composer.revision == submitted.composerRevision ? ACPComposerDraft.empty : composer.draft
+        let restored = submitted.composerDraft.appending(nextDraft)
+        // Settle the mounted editor first; its callback may restore the submitted
+        // snapshot. The session owner then preserves both durable drafts.
+        completion?(false)
+        composer.replaceDraft(restored)
+        if selectedSessionId == sessionId { draft = restored.plainText }
     }
 
     private func rejectPendingPrompt(message: String) {
         let completion = promptCompletion
+        let submitted = pendingPrompt
         pendingPrompt = nil
         promptCompletion = nil
         pendingPromptExpectedIndex = nil
         deliveryError = message
-        completion?(false)
+        if let submitted, let selectedSessionId {
+            restoreRejectedPrompt(submitted, sessionId: selectedSessionId, completion: completion)
+        }
     }
 
     private func receive(_ message: RemoteServerMessage) {
