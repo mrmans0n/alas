@@ -48,9 +48,15 @@ final class MergeSyntaxHighlighter {
     /// newest one is parsed next, so fast typing can't pile up full-file
     /// parses (the detached work can't be cancelled mid-parse).
     func update(_ input: Input) async {
+        guard !isParsing else {
+            // Queue even an input equal to `lastInput`: the in-flight parse
+            // is for something newer, and an undo back to the last parsed
+            // text must win over it.
+            pendingInput = input
+            return
+        }
         guard input != lastInput else { return }
         pendingInput = input
-        guard !isParsing else { return }
         isParsing = true
         defer { isParsing = false }
         while let next = pendingInput {
