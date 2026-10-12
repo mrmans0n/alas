@@ -22,7 +22,8 @@ struct ACPSessionManagerDisposalTests {
         try await manager.disposeSession(id: session.id)
         await manager.flushPersistence()
 
-        #expect(client.sent.map(\.method).filter { $0 == "session/close" }.count == 1)
+        let closeCount = client.sent.filter { $0.method == "session/close" }.count
+        #expect(closeCount == 1)
         #expect(manager.runners[session.id] == nil)
         #expect(try store.loadSession(id: session.id)?.remoteSessionId == "remote")
 
@@ -74,7 +75,8 @@ struct ACPSessionManagerDisposalTests {
         try await first.value
         try await second.value
 
-        #expect(client.sent.map(\.method).filter { $0 == "session/close" }.count == 1)
+        let closeCount = client.sent.filter { $0.method == "session/close" }.count
+        #expect(closeCount == 1)
     }
 
     @Test("failed close still removes the runner and shuts down the connection")
@@ -308,7 +310,8 @@ struct ACPSessionManagerDisposalTests {
             remoteSessionId: "remote"
         )
 
-        #expect(client.sent.map(\.method).filter { $0 == "session/close" }.count == 1)
+        let closeCount = client.sent.filter { $0.method == "session/close" }.count
+        #expect(closeCount == 1)
         #expect(manager.runners[session.id] == nil)
     }
 
@@ -337,7 +340,8 @@ struct ACPSessionManagerDisposalTests {
         try await deletion.value
         #expect(await awaitCondition { readiness == true })
 
-        #expect(client.sent.map(\.method).filter { $0 == "session/close" }.count == 1)
+        let closeCount = client.sent.filter { $0.method == "session/close" }.count
+        #expect(closeCount == 1)
         #expect(manager.runners[session.id] == nil)
         #expect(try store.loadSession(id: session.id) == nil)
     }
@@ -393,7 +397,8 @@ struct ACPSessionManagerDisposalTests {
         releaseProviders.continuation.yield()
         await attach.value
 
-        #expect(client.sent.map(\.method).filter { $0 == "session/close" }.count == 1)
+        let closeCount = client.sent.filter { $0.method == "session/close" }.count
+        #expect(closeCount == 1)
         #expect(client.shutdownCount >= 1)
         #expect(manager.runners[session.id] == nil)
     }
@@ -444,7 +449,8 @@ struct ACPSessionManagerDisposalTests {
         try await disposal.value
         await attach.value
 
-        #expect(client.sent.map(\.method).filter { $0 == "session/close" }.count == 1)
+        let closeCount = client.sent.filter { $0.method == "session/close" }.count
+        #expect(closeCount == 1)
         #expect(client.shutdownCount == 1)
         #expect(client.requestsAfterShutdownCount == 0)
         #expect(manager.runners[session.id] == nil)
