@@ -209,6 +209,9 @@ public final class ACPSessionRunner {
     private var activePromptTranscriptFloor: Int?
     private let onQueuedPromptDispatchRegistration: (@MainActor (UUID) -> (@Sendable () -> Void)?)?
     private let onSessionTitleUpdated: ((String) -> Void)?
+    /// The user's own prompt text each time one is recorded in the
+    /// transcript. Delegated prompts are not the user's and are skipped.
+    private let onUserPromptRecorded: ((String) -> Void)?
     private let localTitlesEnabled: @MainActor () -> Bool
     private let autoResumeAfterUsageLimit: @MainActor () -> Bool
     private let localTitleGenerator: @Sendable (String) async -> String?
@@ -438,6 +441,7 @@ public final class ACPSessionRunner {
          onPermissionBlocked: ((ACPChildBlocker) -> Void)? = nil,
          onQueuedPromptDispatchRegistration: (@MainActor (UUID) -> (@Sendable () -> Void)?)? = nil,
          onSessionTitleUpdated: ((String) -> Void)? = nil,
+         onUserPromptRecorded: ((String) -> Void)? = nil,
          localTitlesEnabled: @escaping @MainActor () -> Bool = { false },
          autoResumeAfterUsageLimit: @escaping @MainActor () -> Bool = { true },
          localTitleGenerator: @escaping @Sendable (String) async -> String? = { await ACPLocalTitleGenerator.generate(from: $0, fallback: nil) },
@@ -479,6 +483,7 @@ public final class ACPSessionRunner {
         self.onPermissionBlocked = onPermissionBlocked
         self.onQueuedPromptDispatchRegistration = onQueuedPromptDispatchRegistration
         self.onSessionTitleUpdated = onSessionTitleUpdated
+        self.onUserPromptRecorded = onUserPromptRecorded
         self.localTitlesEnabled = localTitlesEnabled
         self.autoResumeAfterUsageLimit = autoResumeAfterUsageLimit
         self.localTitleGenerator = localTitleGenerator
@@ -3899,6 +3904,9 @@ extension ACPSessionRunner {
                     guard !self.stopped, self.isConnectionCurrent(), self.nativeSteeringGeneration == generation
                     else { throw CancellationError() }
                     if self.session.title != titleBefore { self.persistFallbackTitleIfStoredPlaceholder() }
+                    if delegatedSource == nil {
+                        self.onUserPromptRecorded?(promptText)
+                    }
                 } else {
                     if let recordedMessageID,
                        let index = self.session.replaceSymbolSnapshots(inUserMessage: recordedMessageID, from: symbolExpansion) {
@@ -4399,6 +4407,9 @@ extension ACPSessionRunner {
                            return false
                        }) {
                         self.generateLocalTitle(for: Self.textPreview(of: blocks))
+                    }
+                    if delegatedSource == nil {
+                        self.onUserPromptRecorded?(promptText)
                     }
                     if let qid = queuedItemId,
                        let idx = self.session.queue.firstIndex(where: { $0.id == qid }) {

@@ -185,6 +185,12 @@ struct WorktreeRowView: View {
     var onOpenIssue: (() -> Void)? = nil
     let onCopyPath: () -> Void
     let onCopyBranch: () -> Void
+    var onRenameBranch: (() -> Void)? = nil
+    /// Still on the temporary branch it was created on, waiting for a chat
+    /// prompt to name it.
+    var isBranchNamePending = false
+    /// A local model is naming the branch right now.
+    var isNamingBranch = false
     let onRevealInFinder: () -> Void
     let onArchive: () -> Void
     let onDelete: () -> Void
@@ -331,7 +337,7 @@ struct WorktreeRowView: View {
         case .creating: return "Creating…"
         case .preparingDelete: return "Preparing deletion…"
         case .deleting: return "Deleting…"
-        case .createFailed(_, let msg, _, _, _, _): return "Create failed: \(msg.trimmedForDisplay)"
+        case .createFailed(_, let msg, _, _, _, _, _): return "Create failed: \(msg.trimmedForDisplay)"
         case .launchFailed(_, let msg, _): return "Launch failed: \(msg.trimmedForDisplay)"
         case .deleteFailed(let msg): return "Delete failed: \(msg.trimmedForDisplay)"
         case .none: return ""
@@ -351,7 +357,7 @@ struct WorktreeRowView: View {
 
     private var errorMessage: String? {
         switch operationState {
-        case .createFailed(_, let message, _, _, _, _), .launchFailed(_, let message, _), .deleteFailed(let message):
+        case .createFailed(_, let message, _, _, _, _, _), .launchFailed(_, let message, _), .deleteFailed(let message):
             return message
         case .creating, .preparingDelete, .deleting, .none:
             return nil
@@ -404,6 +410,7 @@ struct WorktreeRowView: View {
             .padding(.bottom, 7)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .aiBeam(isActive: isNamingBranch, cornerRadius: 9)
         .contentShape(Rectangle())
         .opacity(isPending ? 0.55 : 1)
         .onHover { hovering = $0 }
@@ -469,6 +476,12 @@ struct WorktreeRowView: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
+            if isBranchNamePending, !isNamingBranch {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 10))
+                    .foregroundColor(theme.color("fg-faint"))
+                    .help("The branch will be named from your first chat message.")
+            }
             if worktree.isDetached {
                 DetachedTag()
             }
@@ -761,6 +774,11 @@ struct WorktreeRowView: View {
         // Folder-project rows have no branch.
         if !worktree.branch.isEmpty {
             Button("Copy Branch Name", action: onCopyBranch)
+        }
+        // An active Workspace checkout records its branch by name for cleanup.
+        if let onRenameBranch, !isMain, !worktree.branch.isEmpty, !worktree.isDetached,
+           workspaceCheckout?.isActive != true {
+            Button("Rename Branch…", action: onRenameBranch)
         }
         if !worktree.path.isRemoteAlasPath {
             Button("Reveal in Finder", action: onRevealInFinder)

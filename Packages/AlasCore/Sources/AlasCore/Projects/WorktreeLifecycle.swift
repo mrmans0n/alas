@@ -7,7 +7,8 @@ public enum WorktreeLifecycle {
         base: String,
         branch: String,
         destination: URL,
-        projectId: String
+        projectId: String,
+        requiresNewBranch: Bool = false
     ) async throws -> Worktree {
         try await ProjectMutationGate.shared.withMutation(projectID: projectId) {
             try await Task.detached {
@@ -22,7 +23,8 @@ public enum WorktreeLifecycle {
                     base: base,
                     branch: branch,
                     destination: destination,
-                    projectId: projectId
+                    projectId: projectId,
+                    requiresNewBranch: requiresNewBranch
                 )
             }.value
         }

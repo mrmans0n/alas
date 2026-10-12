@@ -179,6 +179,10 @@ public struct ProjectConfig: Codable, Equatable, Identifiable, Sendable {
     public var ggWorktreeModes: [String: GGWorktreeMode] = [:]
     /// Sparse Issue attachments, keyed by worktree ID.
     public var issueAttachments: [String: IssueAttachment] = [:]
+    /// Worktrees created without a name, keyed by worktree ID, mapped to the
+    /// temporary branch they were created on. The first chat prompt renames
+    /// that branch; the entry is dropped once renamed or no longer applicable.
+    public var pendingAutoBranchNames: [String: String] = [:]
     /// Files-tab bookmarks, as worktree-relative paths in the order the
     /// user added them. Repo-level on purpose: every worktree of the
     /// project shares one list.
@@ -202,7 +206,7 @@ public struct ProjectConfig: Codable, Equatable, Identifiable, Sendable {
         case id, name, path, color, icon, addedAt, hiddenWorktreePaths, worktreeOrder,
              cachedWorktrees, worktreeOrderIsManual, startupScripts,
              mcpServers, worktreeOpenAfterCreate, worktreeDefaultLauncherMode, worktreeLaunchPreference, worktreeBranchTemplate, host, kind, ggMode,
-             ggWorktreeModes, issueAttachments, fileBookmarks,
+             ggWorktreeModes, issueAttachments, pendingAutoBranchNames, fileBookmarks,
              repoMCPTrust, disabledRepoMCPServers, approvedRepoHookHashes, pendingLegacyWorktreeIDs
     }
 
@@ -297,6 +301,7 @@ public struct ProjectConfig: Codable, Equatable, Identifiable, Sendable {
         ggMode = (try? c.decode(GGProjectMode.self, forKey: .ggMode)) ?? .auto
         ggWorktreeModes = (try? c.decode([String: GGWorktreeMode].self, forKey: .ggWorktreeModes)) ?? [:]
         issueAttachments = (try? c.decode([String: IssueAttachment].self, forKey: .issueAttachments)) ?? [:]
+        pendingAutoBranchNames = (try? c.decode([String: String].self, forKey: .pendingAutoBranchNames)) ?? [:]
         fileBookmarks = (try? c.decode([String].self, forKey: .fileBookmarks)) ?? []
         repoMCPTrust = (try? c.decode([String: RepoMCPTrustState].self, forKey: .repoMCPTrust)) ?? [:]
         disabledRepoMCPServers = (try? c.decode([String].self, forKey: .disabledRepoMCPServers)) ?? []
@@ -375,6 +380,7 @@ public struct ProjectConfig: Codable, Equatable, Identifiable, Sendable {
         }
         ggWorktreeModes = vKeys(ggWorktreeModes)
         issueAttachments = vKeys(issueAttachments)
+        pendingAutoBranchNames = vKeys(pendingAutoBranchNames)
         legacyWorktreeIDs.merge(renamed) { _, new in new }
     }
 
@@ -407,6 +413,9 @@ public struct ProjectConfig: Codable, Equatable, Identifiable, Sendable {
         }
         if !issueAttachments.isEmpty {
             try c.encode(issueAttachments, forKey: .issueAttachments)
+        }
+        if !pendingAutoBranchNames.isEmpty {
+            try c.encode(pendingAutoBranchNames, forKey: .pendingAutoBranchNames)
         }
         if !fileBookmarks.isEmpty {
             try c.encode(fileBookmarks, forKey: .fileBookmarks)

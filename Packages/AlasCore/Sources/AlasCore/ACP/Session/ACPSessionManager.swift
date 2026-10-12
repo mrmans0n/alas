@@ -205,6 +205,7 @@ public final class ACPSessionManager: ChangeTracking {
     /// the user's unsaved edits rather than stale disk bytes.
     public let onLiveBufferRead: ((String) -> String?)?
     private let onSessionTitleUpdated: ((ACPSession.ID, String) -> Void)?
+    private let onUserPromptRecorded: ((ACPSession.ID, String) -> Void)?
     private let localTitlesEnabled: @MainActor () -> Bool
     private let autoResumeAfterUsageLimit: @MainActor () -> Bool
     private let continueInterruptedSessions: @MainActor () -> Bool
@@ -1830,6 +1831,7 @@ public final class ACPSessionManager: ChangeTracking {
          onDirtyCheck: ((String) -> Bool)? = nil,
          onLiveBufferRead: ((String) -> String?)? = nil,
          onSessionTitleUpdated: ((ACPSession.ID, String) -> Void)? = nil,
+         onUserPromptRecorded: ((ACPSession.ID, String) -> Void)? = nil,
          localTitlesEnabled: @escaping @MainActor () -> Bool = { false },
          autoResumeAfterUsageLimit: @escaping @MainActor () -> Bool = { true },
          continueInterruptedSessions: @escaping @MainActor () -> Bool = { false },
@@ -1885,6 +1887,7 @@ public final class ACPSessionManager: ChangeTracking {
         self.onDirtyCheck = onDirtyCheck
         self.onLiveBufferRead = onLiveBufferRead
         self.onSessionTitleUpdated = onSessionTitleUpdated
+        self.onUserPromptRecorded = onUserPromptRecorded
         self.localTitlesEnabled = localTitlesEnabled
         self.autoResumeAfterUsageLimit = autoResumeAfterUsageLimit
         self.continueInterruptedSessions = continueInterruptedSessions
@@ -6973,6 +6976,12 @@ extension ACPSessionManager {
                                               self.refreshRecent()
                                               self.onSessionTitleUpdated?(sessionId, title)
                                               self.changeNotifier.post()
+                                          },
+                                          onUserPromptRecorded: { [weak self] text in
+                                              guard let self,
+                                                    self.connectionOwnerIDs[sessionId] == runnerConnectionOwnerID
+                                              else { return }
+                                              self.onUserPromptRecorded?(sessionId, text)
                                           },
                                           localTitlesEnabled: localTitlesEnabled,
                                           autoResumeAfterUsageLimit: autoResumeAfterUsageLimit,

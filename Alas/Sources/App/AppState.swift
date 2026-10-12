@@ -271,6 +271,8 @@ final class AppState {
     @ObservationIgnored let usageHistory: UsageHistoryStore?
     /// Records each session's turns in completion order.
     @ObservationIgnored let usageRecording = KeyedSerialQueue()
+    /// Worktrees whose branch is being named from their first chat prompt.
+    var autoNamingWorktreeIds: Set<String> = []
     /// Follow-up composers outlive the conditional Agent pane and worktree navigation.
     var agentSidebarFollowUps: [String: [ACPSession.ID: AgentSidebarFollowUpDraft]] = [:]
     let attentionStore: AttentionStore
@@ -4781,7 +4783,8 @@ final class AppState {
         launchSurface: WorktreeLaunchSurface,
         ggWorktreeMode: GGWorktreeMode = .inherit,
         issueAttachment: IssueAttachment? = nil,
-        destinationAlreadyPrepared: Bool = false
+        destinationAlreadyPrepared: Bool = false,
+        namesBranchFromFirstPrompt: Bool = false
     ) async -> String {
         guard let project = projects.first(where: { $0.id == projectId }), !project.isFolder else {
             // Should not happen if the dialog validated the project; fail silently.
@@ -4873,9 +4876,22 @@ final class AppState {
                 }
                 let newWorktree = try await WorktreeLifecycle.performCreateWorktree(
                     repoPath: repoPath,
-                    base: base, branch: branch, destination: canonicalDestination, projectId: projectId
+                    base: base, branch: branch, destination: canonicalDestination, projectId: projectId,
+                    // A temporary name must never check out an existing branch:
+                    // the first prompt would rename that branch.
+                    requiresNewBranch: namesBranchFromFirstPrompt
                 )
                 guard projects.contains(where: { $0.id == projectId }) else { return }
+                // Recorded as soon as the branch exists: a later step failing
+                // must not strand the worktree on its temporary name.
+                if namesBranchFromFirstPrompt {
+                    projectsManager.setPendingAutoBranchName(
+                        projectId: project.id,
+                        worktreeId: newWorktree.id,
+                        placeholder: newWorktree.branch
+                    )
+                    saveProjects()
+                }
                 let repoStartupScript = try await self.preparedRepoHook(
                     event: .worktreeCreate,
                     project: project,
@@ -4936,7 +4952,6 @@ final class AppState {
                         )
                         saveProjects()
                     }
-
                     if launchSurface != .delegated {
                         selectWorktree(id: newWorktree.id)
                     }
@@ -4966,7 +4981,8 @@ final class AppState {
                             base: base,
                             ggWorktreeMode: ggWorktreeMode,
                             launchSurface: launchSurface,
-                            issueAttachment: issueAttachment
+                            issueAttachment: issueAttachment,
+                            namesBranchFromFirstPrompt: namesBranchFromFirstPrompt
                         )
                     )
                 }
@@ -4986,7 +5002,8 @@ final class AppState {
                         base: base,
                         ggWorktreeMode: ggWorktreeMode,
                         launchSurface: launchSurface,
-                        issueAttachment: issueAttachment
+                        issueAttachment: issueAttachment,
+                        namesBranchFromFirstPrompt: namesBranchFromFirstPrompt
                     )
                 )
             }
@@ -6505,7 +6522,8 @@ final class AppState {
                 _,
                 _,
                 let launchSurface,
-                let issueAttachment
+                let issueAttachment,
+                let namesBranchFromFirstPrompt
             ) = state,
                 key.projectId == projectId
             else { continue }
@@ -6521,6 +6539,15 @@ final class AppState {
                     projectId: projectId,
                     worktreeId: worktreeId,
                     attachment: issueAttachment
+                )
+                changed = true
+            }
+            if namesBranchFromFirstPrompt,
+               projectsManager.pendingAutoBranchName(projectId: projectId, worktreeId: worktreeId) == nil {
+                projectsManager.setPendingAutoBranchName(
+                    projectId: projectId,
+                    worktreeId: worktreeId,
+                    placeholder: worktree.branch
                 )
                 changed = true
             }
@@ -13147,6 +13174,9 @@ final class AppState {
                     sessionId: sessionId,
                     title: title
                 )
+            },
+            onUserPromptRecorded: { [weak self] _, text in
+                self?.autoNameBranchIfPending(worktreeId: worktree.id, prompt: text)
             },
             localTitlesEnabled: { [weak self] in
                 self?.config.harness.acpLocalTitlesEnabled ?? false

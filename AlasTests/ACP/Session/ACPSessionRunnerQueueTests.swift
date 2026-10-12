@@ -52,6 +52,7 @@ struct ACPSessionRunnerQueueTests {
         isConnectionCurrent: (() -> Bool)? = nil,
         incomingUpdateCoalesceNanos: UInt64 = 16_000_000,
         onSuccessfulTurn: @escaping @MainActor (NextPromptCompletedTurn) -> Void = { _ in },
+        onUserPromptRecorded: ((String) -> Void)? = nil,
         autoResumeAfterUsageLimit: @escaping @MainActor () -> Bool = { true },
         pluginContext: (@MainActor (String) async -> [String])? = nil,
         onCheckpointCapture: (@MainActor (String, Bool) async -> CheckpointID?)? = nil
@@ -75,6 +76,7 @@ struct ACPSessionRunnerQueueTests {
             onPersist: onPersist,
             onPromptWorkChanged: onPromptWorkChanged,
             onSuccessfulTurn: onSuccessfulTurn,
+            onUserPromptRecorded: onUserPromptRecorded,
             autoResumeAfterUsageLimit: autoResumeAfterUsageLimit,
             onCheckpointCapture: onCheckpointCapture,
             pluginContext: pluginContext,
@@ -380,6 +382,21 @@ struct ACPSessionRunnerQueueTests {
             return
         }
         #expect(text == "redirect")
+    }
+
+    @Test("native steering reports the recorded user prompt")
+    func nativeSteeringReportsRecordedUserPrompt() async throws {
+        var recorded: [String] = []
+        let (runner, mock, session, _) = try mkRunner(onUserPromptRecorded: { recorded.append($0) })
+        session.supportsSteering = true
+        session.transcript.streamingState = .streaming
+        mock.script(method: "_session/steering") { _ in Data("{\"outcome\":\"injected\"}".utf8) }
+        defer { runner.stop() }
+        let accepted = await withCheckedContinuation { continuation in
+            runner.send(blocks: [.text("redirect")], intent: .steer) { continuation.resume(returning: $0) }
+        }
+        #expect(accepted)
+        #expect(recorded == ["redirect"])
     }
 
     @Test("native steering preserves the running prompt and queued tail", arguments: [true, false])
