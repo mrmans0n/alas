@@ -57,4 +57,35 @@ import Testing
         view.configure(result: result(old: [], new: ["after"]), font: font, theme: theme)
         #expect(view.cachedLineStringForTesting(side: .new, line: 0) == "after")
     }
+
+    @Test func narrowContentCannotScroll() {
+        var model = DiffSplitHorizontalScroll(oldContentWidth: 100, newContentWidth: 100, oldViewportWidth: 300, newViewportWidth: 300)
+        #expect(model.maxOffset(.new) == 0)
+        let moved = model.scroll(.new, byPoints: 50)
+        #expect(!moved)
+        #expect(model.offset(.new) == 0)
+    }
+
+    @Test func scrollingOneSideLeavesTheOtherAndClamps() {
+        var model = DiffSplitHorizontalScroll(oldContentWidth: 900, newContentWidth: 900, oldViewportWidth: 300, newViewportWidth: 300)
+        let forward = model.scroll(.new, byPoints: 1_000)
+        #expect(forward)
+        #expect(model.offset(.new) == 600)
+        #expect(model.offset(.old) == 0)
+        let back = model.scroll(.new, byPoints: -2_000)
+        #expect(back)
+        #expect(model.offset(.new) == 0)
+    }
+
+    @Test func resizeClampsOffset() {
+        var model = DiffSplitHorizontalScroll(oldContentWidth: 900, newContentWidth: 900, oldViewportWidth: 300, newViewportWidth: 300)
+        _ = model.scroll(.new, byPoints: 600)
+        model.setViewportWidths(old: 800, new: 800)
+        #expect(model.offset(.new) == 100)
+    }
+
+    @Test(arguments: [(CGFloat(3), true, CGFloat(3)), (3, false, 48)])
+    func wheelDeltasBecomePoints(delta: CGFloat, precise: Bool, expected: CGFloat) {
+        #expect(DiffSplitHorizontalScroll.pointDelta(scrollingDeltaX: delta, isPrecise: precise, lineHeight: 16) == expected)
+    }
 }

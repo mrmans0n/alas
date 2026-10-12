@@ -353,6 +353,7 @@
 		3133973F7269A55D44EBF506 /* ACPSubagentProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 480C62C6444C33EBAC9C54B0 /* ACPSubagentProtocolTests.swift */; };
 		316A645ECCB46A0F74915EA4 /* RemoteProjectGitWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7ECE27F4EE6CA578693BE83D /* RemoteProjectGitWatcher.swift */; };
 		316ABEA3944051EA41569FDC /* ACPContextRingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECD9419E685AD7EED286006B /* ACPContextRingTests.swift */; };
+		31DA570AF12914653357CA73 /* DiffSplitHorizontalScroll.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A3CEF4A53BB230307EF56F3 /* DiffSplitHorizontalScroll.swift */; };
 		322ACA90D1ED6EDEA8B40D1D /* AppStateWorktreeCleanupBatchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0A451D5E0D66CB2F4121AD /* AppStateWorktreeCleanupBatchTests.swift */; };
 		32324CCE247B8B4784674453 /* RemoteContentSearchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD8249F7BF5F86B0AFD5CAB8 /* RemoteContentSearchTests.swift */; };
 		324E539462E078CED452D311 /* RunRecordStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB695F22D0C756A00CEFCA72 /* RunRecordStoreTests.swift */; };
@@ -2727,6 +2728,7 @@
 		89D180B7FCAA9DD1F7D7D2E4 /* AppState+RunScripts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppState+RunScripts.swift"; sourceTree = "<group>"; };
 		8A1B501810079EB9A18E70D3 /* PairedDelimiterEditingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairedDelimiterEditingTests.swift; sourceTree = "<group>"; };
 		8A36635B4171D0C82FA7F79D /* NativePeerSidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativePeerSidebarView.swift; sourceTree = "<group>"; };
+		8A3CEF4A53BB230307EF56F3 /* DiffSplitHorizontalScroll.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffSplitHorizontalScroll.swift; sourceTree = "<group>"; };
 		8A811C3D697D29CF9267F2C5 /* GGSplitPreviewRowPlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GGSplitPreviewRowPlan.swift; sourceTree = "<group>"; };
 		8AD22187C951174C9ECEC4C4 /* ACPContextUsageButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPContextUsageButton.swift; sourceTree = "<group>"; };
 		8AD3C6DCEC447BEBA9F3911D /* IssueAttachmentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IssueAttachmentTests.swift; sourceTree = "<group>"; };
@@ -4666,6 +4668,7 @@
 				89B2725002A4349D9E5D1432 /* AppKitDiffTilingController.swift */,
 				24E0512A6C9A3BE43C8B796F /* DiffPaneRowPlan.swift */,
 				A4B35B097CB56E77053B7802 /* DiffSplitCoreTextRowView.swift */,
+				8A3CEF4A53BB230307EF56F3 /* DiffSplitHorizontalScroll.swift */,
 			);
 			path = Scroller;
 			sourceTree = "<group>";
@@ -7029,6 +7032,7 @@
 				CAD36BB3EBF8B31309B7BEFF /* DiffSelectableTextBuilder.swift in Sources */,
 				250F0E2CB26CC16D2FFDB9DD /* DiffSelectableTextView.swift in Sources */,
 				00EEC62AA3FD6F67FAFA08A4 /* DiffSplitCoreTextRowView.swift in Sources */,
+				31DA570AF12914653357CA73 /* DiffSplitHorizontalScroll.swift in Sources */,
 				46A9AFFA9A459522F71E073E /* DiffTabRenderContext.swift in Sources */,
 				AC47E67A657F67FF9374C654 /* DiffTabView.swift in Sources */,
 				CDD25FF161CF6DC83D92EA77 /* DraftAmendPrefill.swift in Sources */,
