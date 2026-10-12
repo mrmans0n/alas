@@ -30,6 +30,8 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
     private var theme: Theme?
     private var descent: CGFloat = 4
     private(set) var horizontalScroll = DiffSplitHorizontalScroll()
+    private let oldScroller = NSScroller(frame: .zero)
+    private let newScroller = NSScroller(frame: .zero)
 
     override var isFlipped: Bool { true }
     override var isOpaque: Bool { false }
@@ -38,6 +40,48 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         super.init(frame: frameRect)
         wantsLayer = true
         layerContentsRedrawPolicy = .onSetNeedsDisplay
+        for scroller in [oldScroller, newScroller] {
+            scroller.scrollerStyle = .overlay
+            scroller.controlSize = .small
+            scroller.target = self
+            scroller.action = #selector(scrollerDidMove(_:))
+            scroller.isHidden = true
+            addSubview(scroller)
+        }
+    }
+
+    func scrollerForTesting(_ side: Side) -> NSScroller {
+        side == .old ? oldScroller : newScroller
+    }
+
+    @objc private func scrollerDidMove(_ sender: NSScroller) {
+        let side: Side = sender === oldScroller ? .old : .new
+        if horizontalScroll.scroll(side, toFraction: CGFloat(sender.doubleValue)) {
+            setNeedsDisplay(codeRect(side))
+        }
+        updateScroller(side)
+    }
+
+    private func updateScroller(_ side: Side) {
+        let scroller = side == .old ? oldScroller : newScroller
+        let maxOffset = horizontalScroll.maxOffset(side)
+        scroller.isHidden = maxOffset == 0
+        guard maxOffset > 0 else { return }
+        let content = side == .old ? horizontalScroll.oldContentWidth : horizontalScroll.newContentWidth
+        let viewport = side == .old ? horizontalScroll.oldViewportWidth : horizontalScroll.newViewportWidth
+        scroller.knobProportion = viewport / max(content, 1)
+        scroller.doubleValue = Double(horizontalScroll.offset(side) / maxOffset)
+    }
+
+    private func layoutScrollers() {
+        let thickness = NSScroller.scrollerWidth(for: .small, scrollerStyle: .overlay)
+        for side in [Side.old, .new] {
+            let code = codeRect(side)
+            (side == .old ? oldScroller : newScroller).frame = NSRect(
+                x: code.minX, y: max(0, bounds.maxY - thickness), width: code.width, height: thickness
+            )
+            updateScroller(side)
+        }
     }
 
     @available(*, unavailable)
@@ -59,12 +103,14 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         // New content starts at the leading edge, as the panes do today.
         horizontalScroll.resetToLeading()
         updateViewportWidths()
+        layoutScrollers()
         needsDisplay = true
     }
 
     override func layout() {
         super.layout()
         updateViewportWidths()
+        layoutScrollers()
     }
 
     private func updateViewportWidths() {
@@ -101,6 +147,7 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         let delta = -DiffSplitHorizontalScroll.pointDelta(scrollingDeltaX: deltaX, isPrecise: isPrecise, lineHeight: lineHeight)
         if horizontalScroll.scroll(side, byPoints: delta) {
             setNeedsDisplay(codeRect(side))
+            updateScroller(side)
         }
         return true
     }

@@ -146,4 +146,23 @@ import Testing
         #expect(view.side(at: NSPoint(x: 100, y: 10)) == .old)
         #expect(view.side(at: NSPoint(x: 900, y: 10)) == .new)
     }
+
+    @Test func scrollerTracksTheOffsetAndHidesWhenContentFits() {
+        let (view, window) = mountedRow(newLine: String(repeating: "w", count: 300))
+        defer { window.close() }
+        #expect(view.scrollerForTesting(.old).isHidden)
+        #expect(!view.scrollerForTesting(.new).isHidden)
+        _ = view.scroll(deltaX: -40, deltaY: 0, isPrecise: true, at: NSPoint(x: 900, y: 20))
+        let expected = Double(40 / view.horizontalScroll.maxOffset(.new))
+        #expect(abs(view.scrollerForTesting(.new).doubleValue - expected) < 0.001)
+    }
+
+    @Test func draggingTheScrollerMovesTheOffset() {
+        let (view, window) = mountedRow(newLine: String(repeating: "w", count: 300))
+        defer { window.close() }
+        let scroller = view.scrollerForTesting(.new)
+        scroller.doubleValue = 0.5
+        _ = scroller.sendAction(scroller.action, to: scroller.target)
+        #expect(abs(view.horizontalScroll.offset(.new) - view.horizontalScroll.maxOffset(.new) / 2) < 1)
+    }
 }
