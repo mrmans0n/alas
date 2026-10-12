@@ -23,6 +23,10 @@ public final class AlasCoreContext {
         case workspaceStateUnreadable
         /// The path now holds a different checkout than the one asked for.
         case replaced
+        /// The worktree carries no lineage, so a replacement could not be told apart.
+        case unknownIdentity
+        /// An interrupted checkpoint restore must be recovered first.
+        case checkpointRecoveryPending
         /// Git would refuse it without `force`: uncommitted or untracked
         /// changes, or a lock.
         case needsForce(Set<WorktreeDeletePreflightReason>)
@@ -259,6 +263,7 @@ public final class AlasCoreContext {
         guard !projects.isMain(worktree, in: project) else { throw WorktreeDeletionRefusal.mainWorktree }
         try await refuseWorkspaceOwnedDeletion(worktree)
         try Self.refuseReplacedCheckout(worktree)
+        try await Self.refusePendingCheckpointRecovery(worktree)
         guard deletingWorktreeIDs.insert(worktree.id).inserted else { throw WorktreeBeingDeleted() }
         defer { deletingWorktreeIDs.remove(worktree.id) }
         if !force {
@@ -342,9 +347,19 @@ public final class AlasCoreContext {
     /// A checkout recreated at the same path carries a different lineage
     /// marker, or none.
     private nonisolated static func refuseReplacedCheckout(_ worktree: Worktree) throws {
-        guard let expected = worktree.lineageID else { return }
+        guard let expected = worktree.lineageID else { throw WorktreeDeletionRefusal.unknownIdentity }
         guard WorktreeService.existingLocalLineageID(forWorktreeAt: worktree.path) == expected else {
             throw WorktreeDeletionRefusal.replaced
+        }
+    }
+
+    /// Recovery state from an interrupted restore references the checkout,
+    /// so it must not disappear underneath it. An unreadable journal store
+    /// refuses too.
+    private nonisolated static func refusePendingCheckpointRecovery(_ worktree: Worktree) async throws {
+        guard let lineageID = worktree.lineageID else { throw WorktreeDeletionRefusal.unknownIdentity }
+        guard try await WorktreeCheckpointStore().recoverableJournals(lineageID: lineageID).isEmpty else {
+            throw WorktreeDeletionRefusal.checkpointRecoveryPending
         }
     }
 

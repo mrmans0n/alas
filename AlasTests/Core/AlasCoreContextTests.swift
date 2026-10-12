@@ -229,11 +229,11 @@ struct AlasCoreContextTests {
     }
 
     enum Refusal: String, CaseIterable {
-        case dirty, locked
+        case dirty, locked, checkpointRecoveryPending, unknownIdentity
     }
 
-    /// A deletion Git would refuse without `force` is refused before anything
-    /// is stopped, so the worktree's headless runs keep running.
+    /// A deletion that must not proceed is refused before anything is
+    /// stopped, so the worktree's headless runs keep running.
     @Test(arguments: Refusal.allCases)
     func refusedDeletionLeavesHeadlessRunsAlone(_ refusal: Refusal) async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-core-\(UUID().uuidString)")
@@ -248,16 +248,31 @@ struct AlasCoreContextTests {
             runHistoryStore: nil
         )
         let project = try await context.addProject(path: repo, displayName: "repo", icon: .default(color: "blue"))
-        let worktree = try await context.createWorktree(
+        var worktree = try await context.createWorktree(
             projectID: project.id, branch: "feature", base: "main", destination: root.appendingPathComponent("feature")
         )
+        let lineageID = try #require(worktree.lineageID)
         switch refusal {
         case .dirty:
             try "dirt".write(to: worktree.path.appendingPathComponent("untracked.txt"), atomically: true, encoding: .utf8)
         case .locked:
             let lock = try await Process.git(["worktree", "lock", worktree.path.path], cwd: repo)
             #expect(lock.exitCode == 0, "\(lock.stderr)")
+        case .checkpointRecoveryPending:
+            try await WorktreeCheckpointStore().writeJournal(CheckpointRestoreJournal(
+                lineageID: lineageID,
+                checkpointID: UUID(),
+                recoveryCheckpointID: UUID(),
+                phase: .prepared,
+                stagingRoot: worktree.path.appendingPathComponent(".alas-checkpoint-restore-\(UUID().uuidString.lowercased())").path,
+                selectedPaths: ["File.swift"],
+                expectedFingerprint: "fingerprint",
+                expectedIndexChecksum: "checksum"
+            ))
+        case .unknownIdentity:
+            worktree.lineageID = nil
         }
+        defer { try? FileManager.default.removeItem(at: Paths.checkpointsRoot.appendingPathComponent(lineageID, isDirectory: true)) }
         let scriptURL = root.appendingPathComponent("long.sh")
         try "sleep 300\n".write(to: scriptURL, atomically: true, encoding: .utf8)
         let script = RunScript(
