@@ -165,4 +165,63 @@ import Testing
         _ = scroller.sendAction(scroller.action, to: scroller.target)
         #expect(abs(view.horizontalScroll.offset(.new) - view.horizontalScroll.maxOffset(.new) / 2) < 1)
     }
+
+    @Test func lineHeightMatchesTheTextKitPanes() {
+        let storage = NSTextStorage(string: "a\nb", attributes: [.font: font, .paragraphStyle: CenterTypography.paragraphStyle()])
+        let layoutManager = NSLayoutManager()
+        let container = NSTextContainer(size: NSSize(width: 500, height: 1_000))
+        container.lineFragmentPadding = 0
+        layoutManager.addTextContainer(container)
+        storage.addLayoutManager(layoutManager)
+        layoutManager.ensureLayout(for: container)
+        let pitch = layoutManager.lineFragmentRect(forGlyphAt: 2, effectiveRange: nil).minY
+            - layoutManager.lineFragmentRect(forGlyphAt: 0, effectiveRange: nil).minY
+
+        let view = DiffSplitCoreTextRowView(frame: .zero)
+        view.configure(result: result(old: [], new: ["x"]), font: font, theme: theme)
+        #expect(view.lineHeight == pitch)
+    }
+
+    @Test func headerAddsItsHeightAndPushesTheCodeDown() {
+        let plain = DiffSplitCoreTextRowView(frame: .zero)
+        plain.configure(result: result(old: [], new: ["a", "b"]), font: font, theme: theme)
+        let headed = DiffSplitCoreTextRowView(frame: .zero)
+        headed.configure(
+            result: result(old: [], new: ["a", "b"]), font: font, theme: theme,
+            chrome: .init(header: "@@ -0,0 +1,2 @@", headerFont: font, fusion: .none)
+        )
+        #expect(headed.headerHeight > 0)
+        #expect(headed.measuredHeight(forWidth: 800) == plain.measuredHeight(forWidth: 800) + headed.headerHeight + DiffPaneHunkFusionState.none.bottomPadding)
+        let firstLineTop = headed.headerHeight + DiffSplitCoreTextRowView.verticalInset
+        #expect(headed.visibleLineRange(in: NSRect(x: 0, y: 0, width: 800, height: firstLineTop)).isEmpty)
+    }
+
+    @Test func gutterWidensWithLineNumbersLikeTheRuler() {
+        let diff = DiffParser.parse("@@ -100000,1 +100000,1 @@\n-a\n+b\n")
+        let rows = DiffDisplayModelBuilder.build(diff: diff, filePath: "Sources/Example.swift").groups.flatMap(\.rows)
+        let split = DiffPaneTextDocumentBuilder.buildSplit(rows: rows, fileExtension: "swift", font: font, showWhitespace: false, theme: theme)
+        let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 100))
+        view.configure(result: split, font: font, theme: theme)
+        view.layout()
+        let gutter = DiffPaneLineNumberGutterGeometry.thickness(labels: split.newGutter.string.components(separatedBy: "\n"))
+        #expect(gutter > DiffPaneLineNumberGutterGeometry.minimumThickness)
+        let pane = DiffPaneSplitGeometry.frames(containerWidth: 800).newPane
+        #expect(view.horizontalScroll.newViewportWidth == pane.width - gutter)
+    }
+
+    @Test func headerButtonsRunTheirActions() {
+        var pressed: [String] = []
+        let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 200))
+        view.configure(
+            result: result(old: [], new: ["a"]), font: font, theme: theme,
+            chrome: .init(header: "@@", headerFont: font, fusion: .none, actions: [
+                .init(symbol: "plus.square", tooltip: "Stage hunk") { pressed.append("stage") },
+                .init(symbol: "trash", tooltip: "Discard hunk") { pressed.append("discard") },
+            ])
+        )
+        let buttons = view.headerButtonsForTesting()
+        #expect(buttons.map(\.toolTip) == ["Stage hunk", "Discard hunk"])
+        buttons[1].performClick(nil)
+        #expect(pressed == ["discard"])
+    }
 }

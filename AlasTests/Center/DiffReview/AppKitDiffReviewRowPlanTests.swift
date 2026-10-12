@@ -584,6 +584,19 @@ struct AppKitDiffReviewRowPlanTests {
         #expect(ids.contains(AppKitDiffReviewRowID.inlineFeedback(.targetID(feedbackID: target.id, fileID: file.id))))
     }
 
+    @Test func coreTextHunkRowsCarryTheirHeaderAndCardEdges() throws {
+        AppKitDiffReviewRowPlanBuilder.usesCoreTextSplitRows = true
+        defer { AppKitDiffReviewRowPlanBuilder.usesCoreTextSplitRows = false }
+        let input = AppKitDiffReviewRowInput(file: textFile(), state: AppKitDiffReviewFileState(), theme: theme, layoutMode: .split)
+        let plan = AppKitDiffReviewRowPlanBuilder.build(inputs: [input])
+        let native = try #require(plan.corePlan.rows.first { $0.id.contains(":group:") }?.native)
+        let view = try #require(native.make() as? DiffSplitCoreTextRowView)
+        native.configure(view)
+        #expect(view.headerHeight > 0)
+        // A one-hunk file: the hunk row ends the file card.
+        #expect(view.cardEdges == DiffSplitCoreTextRowView.CardEdges(top: false, bottom: true))
+    }
+
     @Test(arguments: [(DiffLayoutMode.split, false, true), (.split, true, false), (.stacked, false, false)])
     func coreTextFlagMountsUnwrappedSplitHunksNatively(layout: DiffLayoutMode, wrap: Bool, native: Bool) {
         AppKitDiffReviewRowPlanBuilder.usesCoreTextSplitRows = true
