@@ -2,9 +2,9 @@ import AppKit
 import CoreText
 
 /// A split or stacked hunk drawn with CoreText in one view: no text views,
-/// scroll views, or rulers. Behind `ALAS_DIFF_CORETEXT`; unwrapped only, and
-/// no selection, hover, LSP, or expansion pills yet. A stacked hunk is one
-/// full-width pane, held as the new side.
+/// scroll views, or rulers. Behind `ALAS_DIFF_CORETEXT`; no selection, hover,
+/// LSP, or expansion pills yet. A stacked hunk is one full-width pane, held as
+/// the new side.
 @MainActor
 final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
     enum Side { case old, new }
@@ -50,6 +50,8 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
 
     private struct SideLines {
         var code: [CTLine] = []
+        /// Source of `code`, kept to break lines when wrapping.
+        var attributed: [NSAttributedString] = []
         var codeStrings: [String] = []
         var labels: [CTLine?] = []
         var tones: [DiffPaneLineTone] = []
@@ -61,6 +63,9 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
     private var old = SideLines()
     private var new = SideLines()
     private(set) var isStacked = false
+    private(set) var wraps = false
+    /// Wrapped lines for the last width laid out; nil when not wrapping.
+    private var wrapLayout: WrapLayout?
     private var theme: Theme?
     /// Distance from a line's top to its baseline, as TextKit places it.
     private var baselineOffset: CGFloat = 12
@@ -103,9 +108,11 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         result: DiffPaneTextDocumentBuilder.SplitResult,
         font: NSFont,
         theme: Theme,
-        chrome: HunkChrome? = nil
+        chrome: HunkChrome? = nil,
+        wraps: Bool = false
     ) {
         isStacked = false
+        self.wraps = wraps
         old = Self.lines(code: result.oldCode, gutter: result.oldGutter, theme: theme)
         new = Self.lines(code: result.newCode, gutter: result.newGutter, theme: theme)
         applyContent(font: font, theme: theme, chrome: chrome)
@@ -115,9 +122,11 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         stacked result: DiffPaneTextDocumentBuilder.StackedResult,
         font: NSFont,
         theme: Theme,
-        chrome: HunkChrome? = nil
+        chrome: HunkChrome? = nil,
+        wraps: Bool = false
     ) {
         isStacked = true
+        self.wraps = wraps
         old = SideLines()
         new = Self.lines(code: result.code, gutter: result.gutter, theme: theme)
         applyContent(font: font, theme: theme, chrome: chrome)
@@ -128,8 +137,10 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         let metrics = Self.textKitMetrics(for: font)
         lineHeight = metrics.lineHeight
         baselineOffset = metrics.baselineOffset
-        horizontalScroll.oldContentWidth = isStacked ? 0 : old.widest + 2 * Self.textInset
-        horizontalScroll.newContentWidth = new.widest + 2 * Self.textInset
+        wrapLayout = nil
+        // Wrapped lines fit their pane, so there is nothing to scroll sideways.
+        horizontalScroll.oldContentWidth = isStacked || wraps ? 0 : old.widest + 2 * Self.textInset
+        horizontalScroll.newContentWidth = wraps ? 0 : new.widest + 2 * Self.textInset
         // New content starts at the leading edge, as the panes do today.
         horizontalScroll.resetToLeading()
         applyChrome(chrome, theme: theme)
@@ -166,7 +177,8 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
     func measuredHeight(forWidth width: CGFloat) -> CGFloat {
         guard width > 0 else { return 0 }
         lastMeasuredWidth = width
-        return headerHeight + CGFloat(lineCount) * lineHeight + 2 * Self.verticalInset + bottomPadding
+        let visualLines = wraps ? layout(forWidth: width).rowStarts.last ?? 0 : lineCount
+        return headerHeight + CGFloat(visualLines) * lineHeight + 2 * Self.verticalInset + bottomPadding
     }
 
     func attach(to documentView: NSView) {
@@ -175,11 +187,82 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
 
     func suppressNextLayoutForStableScroll() {}
 
+    /// The rows (logical lines) that intersect `rect`.
     func visibleLineRange(in rect: NSRect) -> Range<Int> {
         guard lineCount > 0, lineHeight > 0 else { return 0..<0 }
-        let first = max(0, Int(floor((rect.minY - codeTop) / lineHeight)))
-        let last = min(lineCount, Int(ceil((rect.maxY - codeTop) / lineHeight)))
+        let firstVisual = max(0, Int(floor((rect.minY - codeTop) / lineHeight)))
+        let lastVisual = Int(ceil((rect.maxY - codeTop) / lineHeight))
+        guard wraps else {
+            let last = min(lineCount, lastVisual)
+            return firstVisual < last ? firstVisual..<last : firstVisual..<firstVisual
+        }
+        let starts = layout(forWidth: bounds.width).rowStarts
+        // The row containing `firstVisual`, through the last row starting before `lastVisual`.
+        let first = Self.row(containingVisualLine: firstVisual, rowStarts: starts)
+        let last = min(lineCount, Self.row(containingVisualLine: max(firstVisual, lastVisual - 1), rowStarts: starts) + 1)
         return first < last ? first..<last : first..<first
+    }
+
+    // MARK: - Wrapping
+
+    private struct WrapLayout {
+        let width: CGFloat
+        let old: [[CTLine]]
+        let new: [[CTLine]]
+        /// Visual line each row starts at; one extra entry holds the total.
+        let rowStarts: [Int]
+    }
+
+    /// Where each row starts when a row is as tall as its taller side, so
+    /// old and new lines stay level. The last entry is the total line count.
+    static func rowStarts(oldLineCounts: [Int], newLineCounts: [Int]) -> [Int] {
+        var starts = [0]
+        starts.reserveCapacity(max(oldLineCounts.count, newLineCounts.count) + 1)
+        for index in 0..<max(oldLineCounts.count, newLineCounts.count) {
+            let old = oldLineCounts.indices.contains(index) ? oldLineCounts[index] : 0
+            let new = newLineCounts.indices.contains(index) ? newLineCounts[index] : 0
+            starts.append(starts[starts.count - 1] + max(1, old, new))
+        }
+        return starts
+    }
+
+    static func row(containingVisualLine line: Int, rowStarts: [Int]) -> Int {
+        // Last start at or before `line`.
+        var low = 0, high = max(0, rowStarts.count - 2)
+        while low < high {
+            let mid = (low + high + 1) / 2
+            if rowStarts[mid] <= line { low = mid } else { high = mid - 1 }
+        }
+        return low
+    }
+
+    private func layout(forWidth width: CGFloat) -> WrapLayout {
+        if let wrapLayout, wrapLayout.width == width { return wrapLayout }
+        let oldWidth = isStacked ? 0 : pane(.old, width: width).width - old.gutterWidth - 2 * Self.textInset
+        let newWidth = pane(.new, width: width).width - new.gutterWidth - 2 * Self.textInset
+        let oldLines = isStacked ? [] : old.attributed.map { Self.wrapped($0, width: oldWidth) }
+        let newLines = new.attributed.map { Self.wrapped($0, width: newWidth) }
+        let layout = WrapLayout(
+            width: width, old: oldLines, new: newLines,
+            rowStarts: Self.rowStarts(oldLineCounts: oldLines.map(\.count), newLineCounts: newLines.map(\.count))
+        )
+        wrapLayout = layout
+        return layout
+    }
+
+    /// Breaks `line` at word boundaries to fit `width`, as TextKit's default
+    /// paragraph style does.
+    private static func wrapped(_ line: NSAttributedString, width: CGFloat) -> [CTLine] {
+        let typesetter = CTTypesetterCreateWithAttributedString(line)
+        guard line.length > 0, width > 1 else { return [CTTypesetterCreateLine(typesetter, CFRange(location: 0, length: line.length))] }
+        var lines: [CTLine] = []
+        var start = 0
+        while start < line.length {
+            let count = max(1, CTTypesetterSuggestLineBreak(typesetter, start, Double(width)))
+            lines.append(CTTypesetterCreateLine(typesetter, CFRange(location: start, length: count)))
+            start += count
+        }
+        return lines
     }
 
     // MARK: - Chrome
@@ -247,11 +330,12 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
 
     /// The column `side` draws in: a split half, or the full width for the
     /// new side of a stacked hunk.
-    private func pane(_ side: Side) -> NSRect {
+    private func pane(_ side: Side, width: CGFloat? = nil) -> NSRect {
+        let width = width ?? bounds.width
         if isStacked {
-            return side == .new ? NSRect(x: 0, y: 0, width: bounds.width, height: bounds.height) : .zero
+            return side == .new ? NSRect(x: 0, y: 0, width: width, height: bounds.height) : .zero
         }
-        let frames = DiffPaneSplitGeometry.frames(containerWidth: bounds.width)
+        let frames = DiffPaneSplitGeometry.frames(containerWidth: width)
         return side == .old ? frames.oldPane : frames.newPane
     }
 
@@ -342,10 +426,11 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         if let hunkPath { hunkPath.addClip() }
         drawHeader(theme: theme, context: context, dirtyRect: dirtyRect)
         let range = visibleLineRange(in: dirtyRect)
+        let wrapped = wraps ? layout(forWidth: bounds.width) : nil
         if !isStacked {
-            draw(old, in: pane(.old), offset: horizontalScroll.offset(.old), range: range, theme: theme, context: context)
+            draw(old, wrapped: wrapped?.old, rowStarts: wrapped?.rowStarts, in: pane(.old), offset: horizontalScroll.offset(.old), range: range, theme: theme, context: context)
         }
-        draw(new, in: pane(.new), offset: horizontalScroll.offset(.new), range: range, theme: theme, context: context)
+        draw(new, wrapped: wrapped?.new, rowStarts: wrapped?.rowStarts, in: pane(.new), offset: horizontalScroll.offset(.new), range: range, theme: theme, context: context)
         if !isStacked {
             let divider = DiffPaneSplitGeometry.frames(containerWidth: bounds.width).divider
             theme.nsColor("line").setFill()
@@ -376,7 +461,12 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         context.restoreGState()
     }
 
-    private func draw(_ side: SideLines, in pane: CGRect, offset: CGFloat, range: Range<Int>, theme: Theme, context: CGContext) {
+    /// Draws `side`'s rows in `range`. When wrapping, `wrapped` holds each
+    /// row's visual lines and `rowStarts` where each row begins.
+    private func draw(
+        _ side: SideLines, wrapped: [[CTLine]]?, rowStarts: [Int]?,
+        in pane: CGRect, offset: CGFloat, range: Range<Int>, theme: Theme, context: CGContext
+    ) {
         let gutter = side.gutterWidth
         context.saveGState()
         context.clip(to: CGRect(x: pane.minX, y: headerHeight, width: pane.width, height: max(0, bounds.height - headerHeight)))
@@ -385,17 +475,18 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         theme.nsColor("bg-0").setFill()
         NSRect(x: pane.minX, y: headerHeight, width: gutter, height: max(0, bounds.height - headerHeight - bottomPadding)).fill()
         for index in range {
-            let y = codeTop + CGFloat(index) * lineHeight
+            let y = codeTop + CGFloat(rowStarts?[index] ?? index) * lineHeight
+            let rowHeight = rowStarts.map { CGFloat($0[index + 1] - $0[index]) * lineHeight } ?? lineHeight
             let tone = side.tones.indices.contains(index) ? side.tones[index] : .context
             if let fill = Self.fill(for: tone, theme: theme) {
-                let codeRow = NSRect(x: pane.minX + gutter, y: y, width: max(0, pane.width - gutter), height: lineHeight)
+                let codeRow = NSRect(x: pane.minX + gutter, y: y, width: max(0, pane.width - gutter), height: rowHeight)
                 fill.setFill()
                 codeRow.fill()
                 if tone == .placeholder {
                     Self.drawPlaceholderHatch(in: codeRow, theme: theme)
                 }
             }
-            let gutterRow = NSRect(x: pane.minX, y: y, width: gutter, height: lineHeight)
+            let gutterRow = NSRect(x: pane.minX, y: y, width: gutter, height: rowHeight)
             if let fill = Self.gutterFill(for: tone, theme: theme) {
                 fill.setFill()
                 gutterRow.fill()
@@ -410,7 +501,13 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
                 context.textPosition = CGPoint(x: pane.minX + gutter - DiffPaneLineNumberGutterGeometry.horizontalPadding - width, y: baseline)
                 CTLineDraw(label, context)
             }
-            if side.code.indices.contains(index) {
+            if let wrapped {
+                guard wrapped.indices.contains(index) else { continue }
+                for (part, line) in wrapped[index].enumerated() {
+                    context.textPosition = CGPoint(x: pane.minX + gutter + Self.textInset, y: baseline + CGFloat(part) * lineHeight)
+                    CTLineDraw(line, context)
+                }
+            } else if side.code.indices.contains(index) {
                 context.saveGState()
                 context.clip(to: CGRect(x: pane.minX + gutter, y: y, width: max(0, pane.width - gutter), height: lineHeight))
                 context.textPosition = CGPoint(x: pane.minX + gutter + Self.textInset - offset, y: baseline)
@@ -570,6 +667,7 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
             }
             let ctLine = CTLineCreateWithAttributedString(line)
             side.code.append(ctLine)
+            side.attributed.append(line)
             side.codeStrings.append(line.string)
             side.widest = max(side.widest, CGFloat(CTLineGetTypographicBounds(ctLine, nil, nil, nil)))
         }

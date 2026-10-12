@@ -615,8 +615,8 @@ struct AppKitDiffReviewRowPlanTests {
         }
     }
 
-    @Test(arguments: [(DiffLayoutMode.split, false, true), (.split, true, false), (.stacked, false, true), (.stacked, true, false)])
-    func coreTextFlagMountsUnwrappedHunksNatively(layout: DiffLayoutMode, wrap: Bool, native: Bool) {
+    @Test(arguments: [DiffLayoutMode.split, .stacked], [false, true])
+    func coreTextFlagMountsHunksNatively(layout: DiffLayoutMode, wrap: Bool) {
         AppKitDiffReviewRowPlanBuilder.usesCoreTextRows = true
         defer { AppKitDiffReviewRowPlanBuilder.usesCoreTextRows = false }
         let input = AppKitDiffReviewRowInput(
@@ -624,7 +624,7 @@ struct AppKitDiffReviewRowPlanTests {
         )
         let plan = AppKitDiffReviewRowPlanBuilder.build(inputs: [input])
         let hunk = plan.corePlan.rows.first { $0.id.contains(":group:") }
-        #expect((hunk?.native != nil) == native)
+        #expect(hunk?.native != nil)
     }
 
     @Test func lineTargetsResolveToTheFusedHunkRowWhenNoLocalAccessoriesExist() {

@@ -224,6 +224,32 @@ import Testing
         #expect(!view.scrollerForTesting(.new).isHidden)
     }
 
+    @Test(arguments: [
+        ([1, 3], [2, 1], [0, 2, 5]),
+        ([], [1, 2], [0, 1, 3]),
+        ([0], [0], [0, 1]),
+    ])
+    func wrappedRowsAreAsTallAsTheirTallerSide(old: [Int], new: [Int], expected: [Int]) {
+        #expect(DiffSplitCoreTextRowView.rowStarts(oldLineCounts: old, newLineCounts: new) == expected)
+    }
+
+    @Test(arguments: [(0, 0), (1, 0), (2, 1), (4, 1), (9, 1)])
+    func visualLinesMapToTheirRow(line: Int, row: Int) {
+        #expect(DiffSplitCoreTextRowView.row(containingVisualLine: line, rowStarts: [0, 2, 5]) == row)
+    }
+
+    @Test func wrappingGrowsTheRowInsteadOfScrollingSideways() {
+        let long = (0..<60).map { "word\($0)" }.joined(separator: " ")
+        let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 600, height: 100))
+        view.configure(result: result(old: ["short"], new: [long]), font: font, theme: theme, wraps: true)
+        view.layout()
+        #expect(view.measuredHeight(forWidth: 600) >= 3 * view.lineHeight + 2 * DiffSplitCoreTextRowView.verticalInset)
+        #expect(view.measuredHeight(forWidth: 600) > view.measuredHeight(forWidth: 1_800))
+        #expect(view.scrollerForTesting(.new).isHidden)
+        let wholeRow = NSRect(x: 0, y: 0, width: 600, height: view.measuredHeight(forWidth: 600))
+        #expect(view.visibleLineRange(in: wholeRow) == 0..<1)
+    }
+
     @Test func headerButtonsRunTheirActions() {
         var pressed: [String] = []
         let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 200))
