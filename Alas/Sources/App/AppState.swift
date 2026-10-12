@@ -6765,6 +6765,36 @@ final class AppState {
         }
     }
 
+    /// Delete every archived worktree across all projects after one
+    /// confirmation. Workspace-owned checkouts are left alone (they must be
+    /// deleted from their checkout), and anything git refuses without
+    /// `--force` is reported so the user can delete it individually.
+    func deleteAllArchivedWorktrees() async {
+        let archived = projects.flatMap { projectsManager.archivedWorktrees(projectId: $0.id) }
+        let deletable = archived.filter { workspaceOwnershipDeletionRefusal(for: $0) == nil }
+        guard !deletable.isEmpty else { return }
+
+        let alert = NSAlert()
+        alert.messageText = "Delete \(deletable.count) archived \(deletable.count == 1 ? "worktree" : "worktrees")?"
+        alert.informativeText = deletable.count == archived.count
+            ? "This removes their files from disk."
+            : "This removes their files from disk. Worktrees owned by a Workspace checkout are skipped."
+        alert.alertStyle = .warning
+        let deleteButton = alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        deleteButton.hasDestructiveAction = true
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        let results = await batchDeleteWorktrees(deletable, keepBranch: false)
+        if results.contains(where: { $0.outcome != .deleted }) {
+            showFileActionError(
+                title: "Some Worktrees Were Not Deleted",
+                message: WorktreeCleanupModel.summary(for: results)
+                    + ". Delete the remaining ones individually."
+            )
+        }
+    }
+
     /// Live sessions attached to a worktree's open terminal/ACP tabs, counted
     /// directly rather than through harness activity state (busy/awaiting) —
     /// mirrors the cleanup sheet's own `activeSessionCount` probe. Used to
