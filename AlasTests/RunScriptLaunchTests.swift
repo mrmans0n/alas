@@ -702,7 +702,7 @@ struct RunScriptLaunchTests {
         _ = state.tabs.setFocusedLeaf(worktreeId: worktree.id, tabId: tab.id, leafId: "session")
 
         let runID = UUID().uuidString
-        state.runScriptCompletionTasks[runID] = (
+        state.core.runObservations[runID] = RunObservation(
             worktreeID: worktree.id,
             sessionID: "session",
             location: try RunScriptCompletionMonitor.paths(runID: runID, host: "devbox"),
@@ -769,7 +769,7 @@ struct RunScriptLaunchTests {
     @Test func processExitDoesNotCancelRemoteMonitorAfterLocalGrace() async throws {
         let state = AppState(store: TestPersistenceStore())
         let runID = UUID().uuidString
-        state.runScriptCompletionTasks[runID] = (
+        state.core.runObservations[runID] = RunObservation(
             worktreeID: "wt",
             sessionID: "session",
             location: try RunScriptCompletionMonitor.paths(runID: runID, host: "devbox"),
@@ -787,7 +787,7 @@ struct RunScriptLaunchTests {
     @Test func processExitEventuallyCancelsRemoteMonitor() async throws {
         let state = AppState(store: TestPersistenceStore())
         let runID = UUID().uuidString
-        state.runScriptCompletionTasks[runID] = (
+        state.core.runObservations[runID] = RunObservation(
             worktreeID: "wt",
             sessionID: "session",
             location: try RunScriptCompletionMonitor.paths(runID: runID, host: "devbox"),
@@ -813,7 +813,7 @@ struct RunScriptLaunchTests {
         }
         let state = AppState(store: TestPersistenceStore())
         let runID = UUID().uuidString
-        state.runScriptCompletionTasks[runID] = (
+        state.core.runObservations[runID] = RunObservation(
             worktreeID: "wt",
             sessionID: "session",
             location: .local(paths: paths),
@@ -1059,7 +1059,7 @@ struct RunScriptLaunchTests {
 
     @MainActor
     private func makeAppStateFixture(
-        waiter: @escaping AppState.RunScriptCompletionWaiter,
+        waiter: @escaping RunCompletionWaiter,
         terminalSessionOpener: AppState.TerminalSessionOpener? = nil,
         localMonitorGrace: Duration = .seconds(2)
     ) throws -> (state: AppState, script: RunScript, worktree: Worktree) {

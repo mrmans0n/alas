@@ -162,7 +162,7 @@ struct AppStateRunScheduleTests {
         #expect(archived?.outcome == .failed(exitCode: 7))
         #expect(archived?.output == .available(text: "out\n", truncated: false))
         // Nothing to wait on afterwards: the settlement handler was consumed.
-        #expect(fixture.state.runScriptSettlementHandlers.isEmpty)
+        #expect(fixture.state.core.runSettlementHandlers.isEmpty)
     }
 
     @Test func projectTargetResolvesToTheMainWorktreeAndSucceeds() async throws {
@@ -424,13 +424,13 @@ struct AppStateRunScheduleTests {
             await Task.yield()
         }
         #expect(fixture.state.runRecords.record(worktreeID: "wt-1", scriptKey: "repo:dev.sh")?.status == .running)
-        #expect(!fixture.state.runScriptSettlementHandlers.isEmpty)
+        #expect(!fixture.state.core.runSettlementHandlers.isEmpty)
 
         fixture.state.cleanupRunScriptState(worktreeID: "wt-1")
 
         let outcome = await run.value
         #expect(outcome == .unknown)
-        #expect(fixture.state.runScriptSettlementHandlers.isEmpty)
+        #expect(fixture.state.core.runSettlementHandlers.isEmpty)
     }
 
     // MARK: - Composition

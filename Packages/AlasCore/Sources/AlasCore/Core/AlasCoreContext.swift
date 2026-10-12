@@ -17,6 +17,14 @@ public final class AlasCoreContext {
     public let runHistory: RunHistory
     /// Runs project scripts without a terminal.
     @ObservationIgnored public let runs: RunService
+    /// Waits for a run's completion file. Injectable so tests can settle runs.
+    @ObservationIgnored public let runCompletionWaiter: RunCompletionWaiter
+    /// Runs whose completion is being waited for, keyed by run ID.
+    @ObservationIgnored public var runObservations: [String: RunObservation] = [:]
+    /// Told exactly once when a run settles, keyed by run ID. The worktree is
+    /// carried so a worktree teardown can settle every run it owns, including
+    /// ones that never produced an archivable record.
+    @ObservationIgnored public var runSettlementHandlers: [String: (worktreeID: String, notify: (RunScriptSettlement) -> Void)] = [:]
 
     @ObservationIgnored private let store: any PersistenceStoreProtocol
     @ObservationIgnored private let projectsFile: URL
@@ -29,10 +37,12 @@ public final class AlasCoreContext {
         projectsFile: URL = Paths.projectsFile,
         runs: RunService = RunService(),
         runHistoryStore: RunHistoryStore? = try? RunHistoryStore(),
+        runCompletionWaiter: @escaping RunCompletionWaiter = { try await RunScriptCompletionMonitor.wait(for: $0) },
         makeSessionManager: @escaping @MainActor (SessionOwnerID, Worktree) -> ACPSessionManager = AlasCoreContext.defaultSessionManager
     ) {
         self.projects = projects
         self.runs = runs
+        self.runCompletionWaiter = runCompletionWaiter
         self.runHistory = RunHistory(store: runHistoryStore)
         self.store = store
         self.projectsFile = projectsFile
@@ -160,18 +170,18 @@ public final class AlasCoreContext {
         do {
             completion = try await runs.run(script, in: worktree, project: project, runID: runID)
         } catch is CancellationError {
-            runHistory.archive(runRecords.finish(runID: runID, outcome: .stopped, at: Date()), capture: .unavailable)
+            finalizeRun(runRecords.finish(runID: runID, outcome: .stopped, at: Date()), capture: .unavailable)
             throw CancellationError()
         } catch where error is RunService.RunError || error is RunScriptCompletionMonitor.MonitorError {
             // The command ran but its exit status was never observed.
-            runHistory.archive(runRecords.markLostObservation(runID: runID, at: Date()), capture: .unavailable)
+            finalizeRun(runRecords.markLostObservation(runID: runID, at: Date()), capture: .unavailable)
             throw error
         } catch {
             runRecords.rollback(runID: runID, to: displaced)
             throw error
         }
         let outcome: RunOutcome = completion.exitCode == 0 ? .succeeded : .failed(exitCode: completion.exitCode)
-        runHistory.archive(
+        finalizeRun(
             runRecords.finish(runID: runID, outcome: outcome, at: completion.completedAt),
             capture: .completion(completion)
         )
