@@ -114,7 +114,7 @@ RightPaneLoadingSkeletonView(activeTab: .run)
             historyPageIndex = 0
             historyPage = .init(entries: [], totalCount: 0)
             historyError = nil
-            observedRunHistoryRevision = state.runHistoryRevision(worktreeID: startedWorktreeID)
+            observedRunHistoryRevision = state.runHistory.revision(worktreeID: startedWorktreeID)
             scripts = []
             scriptCatalogError = nil
             scannedWorktreeID = RunTabLoadingPresentation.scanMarkerAfterStartingRefresh(
@@ -138,8 +138,8 @@ RightPaneLoadingSkeletonView(activeTab: .run)
         .onChange(of: state.runScriptCatalogGeneration) {
             refreshScriptsFromControl()
         }
-        .onChange(of: state.runHistoryRevision) {
-            let revision = state.runHistoryRevision(worktreeID: worktree.id)
+        .onChange(of: state.runHistory.revision) {
+            let revision = state.runHistory.revision(worktreeID: worktree.id)
             guard revision != observedRunHistoryRevision else { return }
             observedRunHistoryRevision = revision
             historyPageIndex = 0
@@ -205,7 +205,7 @@ RightPaneLoadingSkeletonView(activeTab: .run)
                 script: script,
                 record: record,
                 hasTerminal: state.runningScriptTab(for: script, in: worktree) != nil,
-                hasReport: record.map { state.hasRunReport(worktreeID: worktree.id, runID: $0.id) } ?? false,
+                hasReport: record.map { state.runHistory.hasReport(worktreeID: worktree.id, runID: $0.id) } ?? false,
                 target: record?.target ?? state.runExecutionTarget(for: script, in: worktree)
             ),
             now: now
@@ -454,7 +454,7 @@ RightPaneLoadingSkeletonView(activeTab: .run)
     private func loadHistory() async {
         let requestedWorktreeID = worktree.id
         let requestedPageIndex = historyPageIndex
-        let requestedRevision = state.runHistoryRevision(worktreeID: requestedWorktreeID)
+        let requestedRevision = state.runHistory.revision(worktreeID: requestedWorktreeID)
         guard let history = state.runHistoryStore else {
             historyError = "Run history storage is unavailable."
             historyPage = .init(entries: [], totalCount: 0)
@@ -462,14 +462,14 @@ RightPaneLoadingSkeletonView(activeTab: .run)
         }
         do {
             let page = try await history.page(worktreeID: requestedWorktreeID, offset: requestedPageIndex * 20, limit: 20)
-            await state.reloadDurableRunReportIDs(worktreeID: requestedWorktreeID)
+            await state.runHistory.reloadDurableReportIDs(worktreeID: requestedWorktreeID)
             guard RunTabLoadingPresentation.acceptsHistoryLoadCompletion(
                 requestedWorktreeID: requestedWorktreeID,
                 requestedPageIndex: requestedPageIndex,
                 requestedRevision: requestedRevision,
                 activeWorktreeID: activeWorktreeID,
                 currentPageIndex: historyPageIndex,
-                currentRevision: state.runHistoryRevision(worktreeID: requestedWorktreeID),
+                currentRevision: state.runHistory.revision(worktreeID: requestedWorktreeID),
                 isCancelled: Task.isCancelled
             ) else { return }
             historyError = nil
@@ -481,7 +481,7 @@ RightPaneLoadingSkeletonView(activeTab: .run)
                 requestedRevision: requestedRevision,
                 activeWorktreeID: activeWorktreeID,
                 currentPageIndex: historyPageIndex,
-                currentRevision: state.runHistoryRevision(worktreeID: requestedWorktreeID),
+                currentRevision: state.runHistory.revision(worktreeID: requestedWorktreeID),
                 isCancelled: Task.isCancelled
             ) else { return }
             historyError = error.localizedDescription

@@ -962,7 +962,7 @@ struct CenterPaneView: View {
             liveTerminalKeys: Set(records.filter(\.status.isActive).map(\.scriptKey).filter {
                 state.runningScriptTab(scriptKey: $0, worktreeID: worktree.id) != nil
             }),
-            reportRunIDs: Set(records.map(\.id).filter { state.hasRunReport(worktreeID: worktree.id, runID: $0) })
+            reportRunIDs: Set(records.map(\.id).filter { state.runHistory.hasReport(worktreeID: worktree.id, runID: $0) })
         )
     }
 

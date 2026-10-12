@@ -760,12 +760,11 @@ struct AppStateRunRecordTests {
             output: .available(text: "late\n", truncated: false)
         )
         var appendFinished = false
-        fixture.state.runHistoryPersistenceTaskWorktreeIDs[entry.id] = fixture.worktree.id
-        fixture.state.runHistoryPersistenceTasks[entry.id] = Task { @MainActor [history = fixture.history] in
+        fixture.state.runHistory.track(runID: entry.id, worktreeID: fixture.worktree.id, Task { @MainActor [history = fixture.history] in
             try? await Task.sleep(for: .milliseconds(50))
             _ = try? await history.append(entry)
             appendFinished = true
-        }
+        })
 
         fixture.state.cleanupRunScriptState(worktreeID: fixture.worktree.id)
         let deadline = Date().addingTimeInterval(2)

@@ -32,6 +32,7 @@ struct AlasCoreContextTests {
         let context = try AlasCoreContext(
             loadingFrom: PersistenceStore(),
             projectsFile: projectsFile,
+            runHistoryStore: try RunHistoryStore(path: root.appendingPathComponent("history.sqlite").path),
             makeSessionManager: { owner, worktree in
                 ACPSessionManager(
                     worktreeId: worktree.id,
@@ -53,7 +54,7 @@ struct AlasCoreContextTests {
             base: "main",
             destination: root.appendingPathComponent("feature")
         )
-        let reloaded = try AlasCoreContext(loadingFrom: PersistenceStore(), projectsFile: projectsFile)
+        let reloaded = try AlasCoreContext(loadingFrom: PersistenceStore(), projectsFile: projectsFile, runHistoryStore: nil)
         _ = try await reloaded.projects.refreshWorktrees(projectId: project.id)
         #expect(reloaded.projects.worktrees(projectId: project.id).map(\.id).contains(worktree.id))
 
@@ -74,8 +75,16 @@ struct AlasCoreContextTests {
             cwd: nil,
             isExecutable: false
         )
-        let completion = try await context.runs.run(script, in: worktree, project: project)
-        #expect(completion.exitCode == 3)
-        #expect(String(decoding: completion.transcript ?? Data(), as: UTF8.self).contains("hello from feature"))
+        #expect(try await context.runScript(script, in: worktree) == .failed(exitCode: 3))
+        let record = try #require(context.runRecords.record(worktreeID: worktree.id, scriptKey: script.key))
+        #expect(record.status == .finished(.failed(exitCode: 3)))
+        await context.runHistory.flush()
+        #expect(context.runHistory.hasReport(worktreeID: worktree.id, runID: record.id))
+        let archived = try await context.runHistory.store?.entry(id: record.id)
+        guard case let .available(text, _) = archived?.output else {
+            Issue.record("the run's output is archived")
+            return
+        }
+        #expect(text.contains("hello from feature"))
     }
 }

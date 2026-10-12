@@ -300,7 +300,7 @@ struct AttentionNavigationTests {
         let item = try fixture.record(.runScriptFailure(failureID: "legacy"))
 
         #expect(await fixture.state.openAttentionItem(item) == .opened)
-        #expect(fixture.state.transientRunReport(worktreeID: "worktree", runID: "legacy")?.output == .unavailable)
+        #expect(fixture.state.runHistory.transientReport(worktreeID: "worktree", runID: "legacy")?.output == .unavailable)
         #expect(fixture.state.tabs.activeTabId(forWorktree: "worktree") == "run-report:legacy")
     }
 
@@ -324,7 +324,7 @@ struct AttentionNavigationTests {
         let item = try fixture.record(.runScriptFailure(failureID: "durable"))
 
         #expect(await fixture.state.openAttentionItem(item) == .opened)
-        #expect(fixture.state.transientRunReport(worktreeID: "worktree", runID: "durable") == nil)
+        #expect(fixture.state.runHistory.transientReport(worktreeID: "worktree", runID: "durable") == nil)
         #expect(fixture.state.tabs.activeTabId(forWorktree: "worktree") == "run-report:durable")
     }
 

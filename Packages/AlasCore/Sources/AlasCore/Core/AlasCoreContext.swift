@@ -10,6 +10,11 @@ public final class AlasCoreContext {
     public var projects: ProjectsManager
     /// One session manager per owner (worktree or workspace checkout).
     public var sessionManagers: [SessionOwnerID: ACPSessionManager] = [:]
+    /// Observed command lifecycles, keyed by worktree then script. A run's
+    /// outcome outlives whatever shell ran it.
+    public var runRecords = RunRecordStore()
+    /// Completed-run history.
+    public let runHistory: RunHistory
     /// Runs project scripts without a terminal.
     @ObservationIgnored public let runs: RunService
 
@@ -23,10 +28,12 @@ public final class AlasCoreContext {
         store: any PersistenceStoreProtocol = PersistenceStore(),
         projectsFile: URL = Paths.projectsFile,
         runs: RunService = RunService(),
+        runHistoryStore: RunHistoryStore? = try? RunHistoryStore(),
         makeSessionManager: @escaping @MainActor (SessionOwnerID, Worktree) -> ACPSessionManager = AlasCoreContext.defaultSessionManager
     ) {
         self.projects = projects
         self.runs = runs
+        self.runHistory = RunHistory(store: runHistoryStore)
         self.store = store
         self.projectsFile = projectsFile
         self.makeSessionManager = makeSessionManager
@@ -36,6 +43,7 @@ public final class AlasCoreContext {
     public convenience init(
         loadingFrom store: any PersistenceStoreProtocol = PersistenceStore(),
         projectsFile: URL = Paths.projectsFile,
+        runHistoryStore: RunHistoryStore? = try? RunHistoryStore(),
         makeSessionManager: @escaping @MainActor (SessionOwnerID, Worktree) -> ACPSessionManager = AlasCoreContext.defaultSessionManager
     ) throws {
         let file = try store.readIfExists(ProjectsFile.self, from: projectsFile) ?? ProjectsFile(projects: [])
@@ -43,6 +51,7 @@ public final class AlasCoreContext {
             projects: ProjectsManager(persistedProjects: file.projects),
             store: store,
             projectsFile: projectsFile,
+            runHistoryStore: runHistoryStore,
             makeSessionManager: makeSessionManager
         )
     }
@@ -117,6 +126,47 @@ public final class AlasCoreContext {
             try? saveProjects()
         }
         return worktree
+    }
+
+    /// Runs `script` in `worktree` without a terminal, recording it and
+    /// archiving its output like a terminal run. A run that never started
+    /// leaves the previous record in place.
+    @discardableResult
+    public func runScript(_ script: RunScript, in worktree: Worktree) async throws -> RunOutcome {
+        guard let project = projects.projects.first(where: { $0.id == worktree.projectId }) else {
+            throw ProjectCreationError.projectNotFound
+        }
+        let runID = UUID().uuidString
+        let displaced = runRecords.begin(RunRecord(
+            id: runID,
+            scriptKey: script.key,
+            scriptName: script.displayName,
+            worktreeID: worktree.id,
+            branch: worktree.branch,
+            target: RunExecutionTarget(
+                host: nil,
+                workingDirectory: script.cwd.map { worktree.path.appendingPathComponent($0).path } ?? worktree.path.path
+            ),
+            endpoint: script.endpoint,
+            status: .running,
+            startedAt: Date()
+        ))
+        let completion: RunScriptCompletion
+        do {
+            completion = try await runs.run(script, in: worktree, project: project, runID: runID)
+        } catch is CancellationError {
+            runHistory.archive(runRecords.finish(runID: runID, outcome: .stopped, at: Date()), capture: .unavailable)
+            throw CancellationError()
+        } catch {
+            runRecords.rollback(runID: runID, to: displaced)
+            throw error
+        }
+        let outcome: RunOutcome = completion.exitCode == 0 ? .succeeded : .failed(exitCode: completion.exitCode)
+        runHistory.archive(
+            runRecords.finish(runID: runID, outcome: outcome, at: completion.completedAt),
+            capture: .completion(completion)
+        )
+        return outcome
     }
 
     /// A manager with its own session database, as the app keeps per owner.
