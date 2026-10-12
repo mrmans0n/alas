@@ -3,7 +3,7 @@ import SwiftUI
 
 /// Width-aware SwiftUI host for a single diff row.
 @MainActor
-final class AppKitDiffRowHostingView: NSHostingView<AnyView> {
+final class AppKitDiffRowHostingView: NSHostingView<AnyView>, AppKitDiffRowView {
     var representedRowID: String?
     var onIntrinsicSizeInvalidated: ((String) -> Void)?
 

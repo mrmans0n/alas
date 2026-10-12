@@ -584,6 +584,42 @@ struct AppKitDiffReviewRowPlanTests {
         #expect(ids.contains(AppKitDiffReviewRowID.inlineFeedback(.targetID(feedbackID: target.id, fileID: file.id))))
     }
 
+    // These tests flip a static flag; that is safe while the builder is
+    // main-actor and the tests are synchronous.
+    @Test(arguments: [DiffLayoutMode.split, .stacked], [false, true])
+    func coreTextHunkRowsCarryTheirHeaderAndCardEdges(layout: DiffLayoutMode, wrap: Bool) throws {
+        AppKitDiffReviewRowPlanBuilder.usesCoreTextRows = true
+        defer { AppKitDiffReviewRowPlanBuilder.usesCoreTextRows = false }
+        let input = AppKitDiffReviewRowInput(
+            file: textFile(), state: AppKitDiffReviewFileState(), theme: theme, layoutMode: layout, wrapLines: wrap
+        )
+        let plan = AppKitDiffReviewRowPlanBuilder.build(inputs: [input])
+        let native = try #require(plan.corePlan.rows.first { $0.id.contains(":group:") }?.native)
+        let view = try #require(native.make() as? DiffSplitCoreTextRowView)
+        native.configure(view)
+        #expect(view.headerHeight > 0)
+        // A one-hunk file: the hunk row ends the file card.
+        #expect(view.cardEdges == DiffSplitCoreTextRowView.CardEdges(top: false, bottom: true))
+    }
+
+    @Test func coreTextSegmentRowsAroundCommentsMountNativelyWithoutAHeader() throws {
+        AppKitDiffReviewRowPlanBuilder.usesCoreTextRows = true
+        defer { AppKitDiffReviewRowPlanBuilder.usesCoreTextRows = false }
+        let file = textFile()
+        let input = AppKitDiffReviewRowInput(
+            file: file, draftComments: [draftComment(fileID: file.id)], state: AppKitDiffReviewFileState(), theme: theme, layoutMode: .split
+        )
+        let plan = AppKitDiffReviewRowPlanBuilder.build(inputs: [input])
+        let segments = plan.corePlan.rows.filter { $0.id.contains(":segment:") }
+        #expect(!segments.isEmpty)
+        for segment in segments {
+            let native = try #require(segment.native)
+            let view = try #require(native.make() as? DiffSplitCoreTextRowView)
+            native.configure(view)
+            #expect(view.headerHeight == 0)
+        }
+    }
+
     @Test func lineTargetsResolveToTheFusedHunkRowWhenNoLocalAccessoriesExist() {
         let file = textFile()
         let input = AppKitDiffReviewRowInput(file: file, state: AppKitDiffReviewFileState(), theme: theme)

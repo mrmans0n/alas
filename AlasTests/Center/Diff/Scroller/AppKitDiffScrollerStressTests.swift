@@ -89,7 +89,7 @@ struct AppKitDiffScrollerStressTests {
         var rows = (0..<200).map { row(index: $0) }
         rows[0] = accessibleRow(retention: .pinned)
         stack.reconciler.apply(plan: AppKitDiffRowPlan(rows: rows), contentWidth: stack.scrollView.contentWidth)
-        let hosted = try #require(stack.pool.mountedView(id: "focus-row"))
+        let hosted = try #require(stack.pool.mountedHostingView(id: "focus-row"))
         hosted.layoutSubtreeIfNeeded()
         let hostedDraftField = descendant(withAccessibilityIdentifier: "focusable-draft", in: hosted)
         #expect(hostedDraftField != nil)

@@ -15,7 +15,7 @@ final class AppKitDiffRowHostingPool {
     private let maximumParkedHosts: Int
 
     private struct Entry {
-        let view: AppKitDiffRowHostingView
+        let view: any AppKitDiffRowView
         var token: AppKitDiffRowEqualityToken
     }
 
@@ -24,6 +24,7 @@ final class AppKitDiffRowHostingPool {
     /// Parked row IDs, least recently released first.
     private var parkOrder: [String] = []
     private var reusableViews: [AppKitDiffRowHostingView] = []
+    private var reusableNativeViews: [any AppKitDiffRowView] = []
 
     init(maximumParkedHosts: Int = 160) {
         self.maximumParkedHosts = maximumParkedHosts
@@ -32,36 +33,64 @@ final class AppKitDiffRowHostingPool {
     var mountedIDs: Set<String> { Set(entries.keys) }
     var parkedIDs: Set<String> { Set(parked.keys) }
 
-    func mountedView(id: String) -> AppKitDiffRowHostingView? {
+    func mountedView(id: String) -> (any AppKitDiffRowView)? {
         entries[id]?.view
     }
 
-    func view(for spec: AppKitDiffRowSpec) -> (view: AppKitDiffRowHostingView, contentChanged: Bool) {
+    func mountedHostingView(id: String) -> AppKitDiffRowHostingView? {
+        mountedView(id: id) as? AppKitDiffRowHostingView
+    }
+
+    func view(for spec: AppKitDiffRowSpec) -> (view: any AppKitDiffRowView, contentChanged: Bool) {
         if var entry = entries[spec.id] ?? unpark(id: spec.id) {
-            if !entry.token.isEqual(to: spec.equalityToken) {
-                entry.view.updateRootView(spec.build())
-                entry.token = spec.equalityToken
+            if isNative(entry.view) == (spec.native != nil) {
+                if !entry.token.isEqual(to: spec.equalityToken) {
+                    apply(spec, to: entry.view)
+                    entry.token = spec.equalityToken
+                    entries[spec.id] = entry
+                    return (entry.view, true)
+                }
                 entries[spec.id] = entry
-                return (entry.view, true)
+                return (entry.view, false)
             }
-            entries[spec.id] = entry
-            return (entry.view, false)
+            // The row switched between SwiftUI and native rendering.
+            entries[spec.id] = nil
+            recycle(entry.view)
         }
 
-        let view: AppKitDiffRowHostingView
-        let parkIsFull = parked.count >= maximumParkedHosts
-        if let reusedView = reusableViews.popLast() ?? (parkIsFull ? evictOldestParked() : nil) {
+        let view: any AppKitDiffRowView
+        var isFreshHost = false
+        if let native = spec.native {
+            view = reusableNativeViews.popLast() ?? native.make()
+        } else if let reusedView = reusableViews.popLast() ?? (parked.count >= maximumParkedHosts ? evictOldestParkedHost() : nil) {
             view = reusedView
-            view.updateRootView(spec.build())
         } else {
             view = AppKitDiffRowHostingView(rootView: spec.build())
+            isFreshHost = true
+        }
+        if view.onIntrinsicSizeInvalidated == nil {
             view.onIntrinsicSizeInvalidated = { [weak self] id in
                 self?.onRowIntrinsicSizeInvalidated?(id)
             }
         }
+        if !isFreshHost {
+            apply(spec, to: view)
+        }
         view.representedRowID = spec.id
         entries[spec.id] = Entry(view: view, token: spec.equalityToken)
         return (view, true)
+    }
+
+    private func isNative(_ view: any AppKitDiffRowView) -> Bool {
+        !(view is AppKitDiffRowHostingView)
+    }
+
+    private func apply(_ spec: AppKitDiffRowSpec, to view: any AppKitDiffRowView) {
+        if let native = spec.native {
+            native.configure(view)
+        } else if let host = view as? AppKitDiffRowHostingView {
+            host.updateRootView(spec.build())
+        }
     }
 
     func release(id: String) {
@@ -96,7 +125,17 @@ final class AppKitDiffRowHostingPool {
         return entry
     }
 
-    private func evictOldestParked() -> AppKitDiffRowHostingView? {
+    /// Evicts the oldest parked row to keep the park bounded, and returns it
+    /// when it is a SwiftUI host that can be reused. Only one row leaves, so a
+    /// park of mostly native rows is not drained to find a host.
+    private func evictOldestParkedHost() -> AppKitDiffRowHostingView? {
+        guard let view = evictOldestParked() else { return nil }
+        if let host = view as? AppKitDiffRowHostingView { return host }
+        recycle(view)
+        return nil
+    }
+
+    private func evictOldestParked() -> (any AppKitDiffRowView)? {
         while !parkOrder.isEmpty {
             let id = parkOrder.removeFirst()
             if let entry = parked.removeValue(forKey: id) {
@@ -107,9 +146,15 @@ final class AppKitDiffRowHostingPool {
         return nil
     }
 
-    private func recycle(_ view: AppKitDiffRowHostingView) {
+    private func recycle(_ view: any AppKitDiffRowView) {
+        view.removeFromSuperview()
         view.representedRowID = nil
-        guard reusableViews.count < Self.maximumReusableHosts else { return }
-        reusableViews.append(view)
+        if let host = view as? AppKitDiffRowHostingView {
+            guard reusableViews.count < Self.maximumReusableHosts else { return }
+            reusableViews.append(host)
+        } else {
+            guard reusableNativeViews.count < Self.maximumReusableHosts else { return }
+            reusableNativeViews.append(view)
+        }
     }
 }
