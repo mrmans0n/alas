@@ -167,10 +167,20 @@ enum MergeWordDiff {
 
     private static func pairedLines(_ a: [String], _ b: [String], budget: inout Int) -> [(Int, Int)] {
         let n = a.count, m = b.count
+        // Intern lines once so the LCS compares integers: comparing long
+        // lines pairwise would cost O(n * m * line length).
+        var ids: [String: Int] = [:]
+        let aIDs = a.map { line -> Int in
+            if let id = ids[line] { return id }
+            let id = ids.count
+            ids[line] = id
+            return id
+        }
+        let bIDs = b.map { ids[$0] ?? -1 }
         var lcs = Array(repeating: Array(repeating: 0, count: m + 1), count: n + 1)
         for i in stride(from: n - 1, through: 0, by: -1) {
             for j in stride(from: m - 1, through: 0, by: -1) {
-                lcs[i][j] = a[i] == b[j] ? lcs[i + 1][j + 1] + 1 : max(lcs[i + 1][j], lcs[i][j + 1])
+                lcs[i][j] = aIDs[i] == bIDs[j] ? lcs[i + 1][j + 1] + 1 : max(lcs[i + 1][j], lcs[i][j + 1])
             }
         }
         var pairs: [(Int, Int)] = []
@@ -199,7 +209,7 @@ enum MergeWordDiff {
         }
         var i = 0, j = 0
         while i < n || j < m {
-            if i < n, j < m, a[i] == b[j] {
+            if i < n, j < m, aIDs[i] == bIDs[j] {
                 flushGap()
                 i += 1
                 j += 1
