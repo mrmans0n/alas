@@ -29,6 +29,10 @@ final class MergeConflictTabModel {
     private(set) var explanations: [String: MergeConflictExplanation] = [:]
     /// Key of the hunk whose explanation is being generated, if any.
     private(set) var explainingKey: String?
+    /// Hunks whose explanation came back empty or invalid. Explanations run
+    /// automatically when a hunk becomes current; this keeps a failing hunk
+    /// from being retried on every visit until the user asks again.
+    private(set) var failedExplanationKeys: Set<String> = []
     /// Conflict count at the moment `load()` last succeeded. Used by the
     /// minimap to show progress (resolved vs total). Cleared (set to 0)
     /// on `load()` failure.
@@ -56,7 +60,7 @@ final class MergeConflictTabModel {
     /// Per-tab session preference for word-level diff inside conflict
     /// hunks. Drives the highlight inside `MergeResultPane`. Not
     /// persisted — same lifetime semantics as `showBase`.
-    var wordDiffMode: MergeWordDiff.Mode = .characters
+    var wordDiffMode: MergeWordDiff.Mode = .words
 
     let worktreePath: URL
     let relativePath: String
@@ -115,6 +119,7 @@ final class MergeConflictTabModel {
             self.currentConflictIndex = firstConflictIndex()
             self.initialConflictCount = self.conflictCount
             self.explanations = [:]
+            self.failedExplanationKeys = []
             self.agentProposal = nil
             self.agentBusy = false
             self.loadError = nil
@@ -126,6 +131,7 @@ final class MergeConflictTabModel {
             self.currentConflictIndex = nil
             self.initialConflictCount = 0
             self.explanations = [:]
+            self.failedExplanationKeys = []
             self.agentProposal = nil
             self.agentBusy = false
             self.loadError = (error as? LocalizedError)?.errorDescription
@@ -970,14 +976,15 @@ final class MergeConflictTabModel {
 
     /// Explains the current hunk with the local model. Any reload, or an edit
     /// that removes the hunk, cancels the request and drops its result.
-    /// Failures leave the model untouched.
-    func explainCurrentConflict(using explainer: MergeConflictExplainer) async {
+    /// A failed hunk is skipped until `retry` is set.
+    func explainCurrentConflict(using explainer: MergeConflictExplainer, retry: Bool = false) async {
         guard let ordinal = currentConflictIndex,
               let regionIdx = conflictRegionIndex(forConflictOrdinal: ordinal),
               case .conflict(let block) = regions[regionIdx]
         else { return }
         let key = Self.conflictKey(for: block)
-        guard explanations[key] == nil, explainingKey != key else { return }
+        if retry { failedExplanationKeys.remove(key) }
+        guard explanations[key] == nil, explainingKey != key, !failedExplanationKeys.contains(key) else { return }
         cancelExplanation()
         let input = MergeConflictExplanationInput(
             path: relativePath,
@@ -994,6 +1001,8 @@ final class MergeConflictTabModel {
         explainingKey = nil
         if let explanation {
             explanations[key] = explanation
+        } else {
+            failedExplanationKeys.insert(key)
         }
     }
 

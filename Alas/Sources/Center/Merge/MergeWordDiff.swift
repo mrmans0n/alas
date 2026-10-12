@@ -50,6 +50,130 @@ enum MergeWordDiff {
         }
     }
 
+    struct HunkResult: Equatable {
+        /// Changed ranges per LOCAL hunk line, indexed like the hunk's lines.
+        let local: [[NSRange]]
+        let remote: [[NSRange]]
+    }
+
+    /// Two differing lines must share at least this fraction of their
+    /// characters before intra-line changes are highlighted.
+    static let minimumPairSimilarity = 0.5
+
+    /// Intra-line changes for a whole conflict hunk. Identical lines are
+    /// matched first (line-level LCS); within each gap between matches, every
+    /// LOCAL line pairs with its most similar REMOTE line, keeping order.
+    /// Pairs below `minimumPairSimilarity` are unrelated rewrites and get no
+    /// marks, since highlighting them would just be noise.
+    static func hunk(local: [String], remote: [String], mode: Mode) -> HunkResult {
+        var localRanges = Array(repeating: [NSRange](), count: local.count)
+        var remoteRanges = Array(repeating: [NSRange](), count: remote.count)
+        let maxHunkLines = 400
+        guard mode != .off, !local.isEmpty, !remote.isEmpty,
+              local.count <= maxHunkLines, remote.count <= maxHunkLines
+        else { return HunkResult(local: localRanges, remote: remoteRanges) }
+
+        for (i, j) in pairedLines(local, remote) {
+            let result = diff(local: local[i], remote: remote[j], mode: mode)
+            localRanges[i] = result.localChanged
+            remoteRanges[j] = result.remoteChanged
+        }
+        return HunkResult(local: localRanges, remote: remoteRanges)
+    }
+
+    /// Fraction of both lines' tokens (identifiers, numbers, punctuation
+    /// runs) they share in order. Token-level so two unrelated sentences
+    /// don't look similar just because they share common letters.
+    private static func similarity(_ a: String, _ b: String) -> Double {
+        let ta = tokens(a), tb = tokens(b)
+        let total = ta.count + tb.count
+        guard total > 0 else { return 1 }
+        guard ta.count <= 256, tb.count <= 256 else { return 0 }
+        var previous = Array(repeating: 0, count: tb.count + 1)
+        for x in ta {
+            var row = Array(repeating: 0, count: tb.count + 1)
+            for (j, y) in tb.enumerated() {
+                row[j + 1] = x == y ? previous[j] + 1 : max(previous[j + 1], row[j])
+            }
+            previous = row
+        }
+        return Double(2 * previous[tb.count]) / Double(total)
+    }
+
+    private static func tokens(_ s: String) -> [Substring] {
+        var result: [Substring] = []
+        var start: String.Index?
+        var startIsWord = false
+        for index in s.indices {
+            let ch = s[index]
+            if ch.isWhitespace {
+                if let st = start { result.append(s[st ..< index]); start = nil }
+                continue
+            }
+            let isWord = ch.isLetter || ch.isNumber || ch == "_"
+            if let st = start, isWord != startIsWord {
+                result.append(s[st ..< index])
+                start = nil
+            }
+            if start == nil {
+                start = index
+                startIsWord = isWord
+            }
+        }
+        if let st = start { result.append(s[st...]) }
+        return result
+    }
+
+    private static func pairedLines(_ a: [String], _ b: [String]) -> [(Int, Int)] {
+        let n = a.count, m = b.count
+        var lcs = Array(repeating: Array(repeating: 0, count: m + 1), count: n + 1)
+        for i in stride(from: n - 1, through: 0, by: -1) {
+            for j in stride(from: m - 1, through: 0, by: -1) {
+                lcs[i][j] = a[i] == b[j] ? lcs[i + 1][j + 1] + 1 : max(lcs[i + 1][j], lcs[i][j + 1])
+            }
+        }
+        var pairs: [(Int, Int)] = []
+        var gapA: [Int] = []
+        var gapB: [Int] = []
+        func flushGap() {
+            defer {
+                gapA.removeAll()
+                gapB.removeAll()
+            }
+            guard !gapA.isEmpty, !gapB.isEmpty, gapA.count * gapB.count <= 400 else { return }
+            var next = 0
+            for i in gapA where next < gapB.count {
+                var best: (index: Int, score: Double)?
+                for k in next ..< gapB.count {
+                    let score = similarity(a[i], b[gapB[k]])
+                    if score >= minimumPairSimilarity, score > (best?.score ?? 0) {
+                        best = (k, score)
+                    }
+                }
+                if let best {
+                    pairs.append((i, gapB[best.index]))
+                    next = best.index + 1
+                }
+            }
+        }
+        var i = 0, j = 0
+        while i < n || j < m {
+            if i < n, j < m, a[i] == b[j] {
+                flushGap()
+                i += 1
+                j += 1
+            } else if j < m, i == n || lcs[i][j + 1] >= lcs[i + 1][j] {
+                gapB.append(j)
+                j += 1
+            } else {
+                gapA.append(i)
+                i += 1
+            }
+        }
+        flushGap()
+        return pairs
+    }
+
     /// Classic Myers LCS via dynamic programming, emitting per-side
     /// UTF-16-unit ranges NOT in the longest common subsequence.
     /// O(N*M) time and memory.  `MergeResultPane.buildAttributedString`

@@ -70,4 +70,20 @@ struct MergeWordDiffTests {
         // Sanity: at least one range exists.
         #expect(!result.localChanged.isEmpty || !result.remoteChanged.isEmpty)
     }
+
+    @Test func hunkPairsLinesAroundInsertionsAndSkipsUnrelatedRewrites() {
+        let result = MergeWordDiff.hunk(
+            local: ["let a = 1", "shared()", "completely different text"],
+            remote: ["inserted()", "let a = 2", "shared()", "return 42"],
+            mode: .words
+        )
+        // "let a = 1" pairs with "let a = 2" despite the inserted line.
+        #expect(result.local[0] == [NSRange(location: 8, length: 1)])
+        #expect(result.remote[1] == [NSRange(location: 8, length: 1)])
+        // Identical and unrelated lines get no intra-line marks.
+        #expect(result.local[1].isEmpty)
+        #expect(result.remote[0].isEmpty)
+        #expect(result.local[2].isEmpty)
+        #expect(result.remote[3].isEmpty)
+    }
 }
