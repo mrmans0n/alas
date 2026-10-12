@@ -1,4 +1,3 @@
-import AppKit
 import Foundation
 import os
 
@@ -14,21 +13,25 @@ private let schedulerLogger = Logger(subsystem: "io.nlopez.alas", category: "Run
 /// reported as a gap instead of replayed.
 @MainActor
 @Observable
-final class RunScheduler {
-    typealias Runner = @MainActor (RunSchedule, RunScheduleInvocation) async -> RunScheduleRunReport
+public final class RunScheduler {
+    public typealias Runner = @MainActor (RunSchedule, RunScheduleInvocation) async -> RunScheduleRunReport
 
-    private(set) var schedules: [RunSchedule] = []
-    private(set) var states: [String: RunScheduleState] = [:]
-    private(set) var pausedProjectIDs: Set<String> = []
-    private(set) var isPausedGlobally = false
+    /// Posted when the machine wakes, so schedules due during sleep are
+    /// evaluated at once. Nil leaves wake-ups to the next timer tick.
+    public static var wakeNotification: (center: NotificationCenter, name: Notification.Name)?
+
+    public private(set) var schedules: [RunSchedule] = []
+    public private(set) var states: [String: RunScheduleState] = [:]
+    public private(set) var pausedProjectIDs: Set<String> = []
+    public private(set) var isPausedGlobally = false
     /// The most recent stretch during which schedules could not be evaluated.
-    private(set) var lastGap: RunScheduleGap?
-    private(set) var runningScheduleIDs: Set<String> = []
+    public private(set) var lastGap: RunScheduleGap?
+    public private(set) var runningScheduleIDs: Set<String> = []
     /// Bumped on every evaluation so views re-derive "next fire in …" labels.
-    private(set) var evaluationGeneration = 0
+    public private(set) var evaluationGeneration = 0
 
-    @ObservationIgnored var runner: Runner?
-    @ObservationIgnored var persistenceErrorHandler: ((String) -> Void)?
+    @ObservationIgnored public var runner: Runner?
+    @ObservationIgnored public var persistenceErrorHandler: ((String) -> Void)?
 
     @ObservationIgnored private let store: any PersistenceStoreProtocol
     @ObservationIgnored private let fileURL: URL
@@ -45,7 +48,7 @@ final class RunScheduler {
     @ObservationIgnored private var lastPersistedEvaluationAt: Date?
     @ObservationIgnored private var hasEvaluatedInThisProcess = false
 
-    init(
+    public init(
         store: any PersistenceStoreProtocol = PersistenceStore(),
         fileURL: URL = Paths.runSchedulesFile,
         now: @escaping () -> Date = { Date() },
@@ -70,7 +73,7 @@ final class RunScheduler {
 
     // MARK: - Lifecycle
 
-    func start() {
+    public func start() {
         guard timer == nil else { return }
         evaluate()
         let timer = Timer(timeInterval: tickInterval, repeats: true) { [weak self] _ in
@@ -81,8 +84,9 @@ final class RunScheduler {
         timer.tolerance = tickInterval / 10
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
-        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.didWakeNotification,
+        guard let wake = Self.wakeNotification else { return }
+        wakeObserver = wake.center.addObserver(
+            forName: wake.name,
             object: nil,
             queue: .main
         ) { [weak self] _ in
@@ -92,11 +96,11 @@ final class RunScheduler {
         }
     }
 
-    func stop() {
+    public func stop() {
         timer?.invalidate()
         timer = nil
-        if let wakeObserver {
-            NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
+        if let wakeObserver, let wake = Self.wakeNotification {
+            wake.center.removeObserver(wakeObserver)
             self.wakeObserver = nil
         }
         if lastEvaluatedAt != nil {
@@ -104,45 +108,45 @@ final class RunScheduler {
         }
     }
 
-    var isRunning: Bool { timer != nil }
+    public var isRunning: Bool { timer != nil }
 
     // MARK: - Queries
 
-    func state(for id: String) -> RunScheduleState {
+    public func state(for id: String) -> RunScheduleState {
         states[id] ?? RunScheduleState()
     }
 
-    func schedule(id: String) -> RunSchedule? {
+    public func schedule(id: String) -> RunSchedule? {
         schedules.first { $0.id == id }
     }
 
     /// Recent firings, most recently settled first. Bounded by
     /// `RunScheduleState.maximumRememberedFirings`.
-    func firings(for id: String) -> [RunScheduleFiring] {
+    public func firings(for id: String) -> [RunScheduleFiring] {
         state(for: id).firings
     }
 
     /// Whether a schedule is paused *as a whole*. An `.allProjects` schedule
     /// names no single project, so a per-project pause cannot silence it
     /// here; it is applied per target when the run fans out.
-    func isPaused(_ schedule: RunSchedule) -> Bool {
+    public func isPaused(_ schedule: RunSchedule) -> Bool {
         if isPausedGlobally { return true }
         guard let projectID = schedule.target.projectID else { return false }
         return pausedProjectIDs.contains(projectID)
     }
 
-    func isProjectPaused(_ projectID: String) -> Bool {
+    public func isProjectPaused(_ projectID: String) -> Bool {
         pausedProjectIDs.contains(projectID)
     }
 
-    func isRunning(_ schedule: RunSchedule) -> Bool {
+    public func isRunning(_ schedule: RunSchedule) -> Bool {
         runningScheduleIDs.contains(schedule.id)
     }
 
     /// Projects that have at least one schedule aimed at them. Pause toggles
     /// are offered for these only; pausing a project without schedules would
     /// be a no-op nobody could see.
-    var projectIDsWithSchedules: [String] {
+    public var projectIDsWithSchedules: [String] {
         var seen: Set<String> = []
         var ordered: [String] = []
         for schedule in schedules {
@@ -155,7 +159,7 @@ final class RunScheduler {
 
     // MARK: - Mutations
 
-    func add(_ schedule: RunSchedule) {
+    public func add(_ schedule: RunSchedule) {
         guard schedule.hasAction, schedules.contains(where: { $0.id == schedule.id }) == false else { return }
         schedules.append(schedule)
         var state = RunScheduleState()
@@ -170,7 +174,7 @@ final class RunScheduler {
         persist()
     }
 
-    func update(_ schedule: RunSchedule) {
+    public func update(_ schedule: RunSchedule) {
         guard schedule.hasAction, let index = schedules.firstIndex(where: { $0.id == schedule.id }) else { return }
         let previous = schedules[index]
         schedules[index] = schedule
@@ -192,7 +196,7 @@ final class RunScheduler {
         persist()
     }
 
-    func remove(id: String) {
+    public func remove(id: String) {
         schedules.removeAll { $0.id == id }
         states[id] = nil
         runTasks.removeValue(forKey: id)?.cancel()
@@ -200,13 +204,13 @@ final class RunScheduler {
         persist()
     }
 
-    func setEnabled(_ enabled: Bool, id: String) {
+    public func setEnabled(_ enabled: Bool, id: String) {
         guard var schedule = schedule(id: id), schedule.isEnabled != enabled else { return }
         schedule.isEnabled = enabled
         update(schedule)
     }
 
-    func setProjectPaused(_ paused: Bool, projectID: String) {
+    public func setProjectPaused(_ paused: Bool, projectID: String) {
         if paused {
             pausedProjectIDs.insert(projectID)
         } else {
@@ -215,7 +219,7 @@ final class RunScheduler {
         persist()
     }
 
-    func setPausedGlobally(_ paused: Bool) {
+    public func setPausedGlobally(_ paused: Bool) {
         guard isPausedGlobally != paused else { return }
         isPausedGlobally = paused
         persist()
@@ -223,7 +227,7 @@ final class RunScheduler {
 
     /// Removes schedules whose target project no longer exists. Called when
     /// a project is removed so the list does not accumulate dead rows.
-    func pruneSchedules(missingProjectIDs: Set<String>) {
+    public func pruneSchedules(missingProjectIDs: Set<String>) {
         let before = schedules.count
         schedules.removeAll { schedule in
             guard let projectID = schedule.target.projectID else { return false }
@@ -240,7 +244,7 @@ final class RunScheduler {
 
     /// Fires a schedule immediately, ignoring its trigger and any pause. It
     /// still refuses to stack on a run that is already in progress.
-    func runNow(id: String) {
+    public func runNow(id: String) {
         guard let schedule = schedule(id: id) else { return }
         dispatch(schedule, at: now(), invocation: .manual)
     }
@@ -249,7 +253,7 @@ final class RunScheduler {
 
     /// One pass over every schedule. Safe to call at any time; it is what the
     /// timer, the wake notification, startup and tests all use.
-    func evaluate(now overrideNow: Date? = nil) {
+    public func evaluate(now overrideNow: Date? = nil) {
         let current = overrideNow ?? now()
         noteGap(at: current)
         var changed = false
@@ -348,7 +352,7 @@ final class RunScheduler {
 
     /// Waits for in-flight runs. Test-only: production callers never block
     /// on a scheduled run.
-    func waitForRunsForTesting() async {
+    public func waitForRunsForTesting() async {
         for task in runTasks.values {
             await task.value
         }

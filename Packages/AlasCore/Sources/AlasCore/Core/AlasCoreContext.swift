@@ -17,6 +17,8 @@ public final class AlasCoreContext {
     public let runHistory: RunHistory
     /// Runs project scripts without a terminal.
     @ObservationIgnored public let runs: RunService
+    /// Decides when scheduled runs start; its runner decides how.
+    public let runScheduler: RunScheduler
 
     @ObservationIgnored private let store: any PersistenceStoreProtocol
     @ObservationIgnored private let projectsFile: URL
@@ -29,10 +31,12 @@ public final class AlasCoreContext {
         projectsFile: URL = Paths.projectsFile,
         runs: RunService = RunService(),
         runHistoryStore: RunHistoryStore? = try? RunHistoryStore(),
+        runScheduler: RunScheduler? = nil,
         makeSessionManager: @escaping @MainActor (SessionOwnerID, Worktree) -> ACPSessionManager = AlasCoreContext.defaultSessionManager
     ) {
         self.projects = projects
         self.runs = runs
+        self.runScheduler = runScheduler ?? RunScheduler(store: store)
         self.runHistory = RunHistory(store: runHistoryStore)
         self.store = store
         self.projectsFile = projectsFile

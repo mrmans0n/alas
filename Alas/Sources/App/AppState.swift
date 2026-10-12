@@ -313,7 +313,7 @@ final class AppState {
     @ObservationIgnored var runScriptSettlementHandlers: [String: (worktreeID: String, notify: (RunScriptSettlement) -> Void)] = [:]
     /// Decides when scheduled runs start. Execution is delegated back here so
     /// a scheduled run is a manual run with a different trigger.
-    let runScheduler: RunScheduler
+    var runScheduler: RunScheduler { core.runScheduler }
     /// Scheduled chat sessions whose first turn a firing is waiting on.
     let scheduledAgentTurns = ScheduledAgentTurns()
     /// The models each ACP agent last advertised, for surfaces that configure
@@ -1588,7 +1588,6 @@ final class AppState {
         self.runScriptLocalMonitorGrace = runScriptLocalMonitorGrace
         self.runScriptMonitorGrace = runScriptMonitorGrace
         self.usageHistory = usageHistory
-        self.runScheduler = runScheduler ?? RunScheduler(store: store)
         self.acpModelCatalog = acpModelCatalog ?? ACPAgentModelCatalog(store: store)
         let workspaceBridge = workspaceSpacePersistenceBridge ?? WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore)
         self.workspacesManager = workspacesManager ?? WorkspacesManager(bridge: workspaceBridge)
@@ -1605,7 +1604,8 @@ final class AppState {
         self.core = AlasCoreContext(
             projects: ProjectsManager(persistedProjects: projectsFile.projects),
             store: store,
-            runHistoryStore: runHistoryStore
+            runHistoryStore: runHistoryStore,
+            runScheduler: runScheduler
         )
         let spacesManager = spacesFile.map(SpacesManager.init(file:))
             ?? SpacesManager.migrating(projects: projectsFile.projects)
