@@ -125,12 +125,13 @@ final class AppKitDiffRowHostingPool {
         return entry
     }
 
-    /// The oldest parked SwiftUI host, recycling native rows parked ahead of it.
+    /// Evicts the oldest parked row to keep the park bounded, and returns it
+    /// when it is a SwiftUI host that can be reused. Only one row leaves, so a
+    /// park of mostly native rows is not drained to find a host.
     private func evictOldestParkedHost() -> AppKitDiffRowHostingView? {
-        while let view = evictOldestParked() {
-            if let host = view as? AppKitDiffRowHostingView { return host }
-            recycle(view)
-        }
+        guard let view = evictOldestParked() else { return nil }
+        if let host = view as? AppKitDiffRowHostingView { return host }
+        recycle(view)
         return nil
     }
 

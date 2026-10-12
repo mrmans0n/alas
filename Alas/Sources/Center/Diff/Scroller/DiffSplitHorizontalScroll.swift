@@ -1,4 +1,4 @@
-import CoreGraphics
+import AppKit
 
 /// Per-side horizontal scroll state for a CoreText split row. Each side
 /// scrolls on its own, as the two `NSScrollView` panes do today.
@@ -54,5 +54,26 @@ struct DiffSplitHorizontalScroll: Equatable {
     /// report lines, trackpads report points.
     static func pointDelta(scrollingDeltaX: CGFloat, isPrecise: Bool, lineHeight: CGFloat) -> CGFloat {
         isPrecise ? scrollingDeltaX : scrollingDeltaX * lineHeight
+    }
+}
+
+/// Which axis a trackpad gesture scrolls a CoreText row, decided when the
+/// gesture begins and kept through its momentum, as `NSScrollView` locks it.
+/// Mouse wheels have no phases and are decided per event.
+struct DiffSplitScrollGesture: Equatable {
+    private var claimsHorizontal: Bool?
+
+    /// Whether the row should consume this event. `canScroll` is whether the
+    /// side under the pointer has anything to scroll sideways.
+    mutating func claims(
+        phase: NSEvent.Phase, momentumPhase: NSEvent.Phase,
+        deltaX: CGFloat, deltaY: CGFloat, canScroll: Bool
+    ) -> Bool {
+        let decide = { canScroll && deltaX != 0 && abs(deltaX) >= abs(deltaY) }
+        if phase.isEmpty, momentumPhase.isEmpty { return decide() }
+        if phase.contains(.began) || claimsHorizontal == nil {
+            claimsHorizontal = decide()
+        }
+        return claimsHorizontal ?? false
     }
 }

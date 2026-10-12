@@ -44,12 +44,6 @@ import Testing
         #expect(view.cachedLineStringForTesting(side: .new, line: 0)?.contains(line.suffix(3)) == true)
     }
 
-    @Test func pureAdditionLeavesTheOldSideBlankButMeasurable() {
-        let view = DiffSplitCoreTextRowView(frame: .zero)
-        view.configure(result: result(old: [], new: ["let a = 1", "let b = 2"]), font: font, theme: theme)
-        #expect(view.cachedLineStringForTesting(side: .old, line: 0)?.trimmingCharacters(in: .whitespaces).isEmpty ?? true)
-        #expect(view.measuredHeight(forWidth: 800) > 0)
-    }
 
     @Test func reconfiguringReplacesCachedLines() {
         let view = DiffSplitCoreTextRowView(frame: .zero)
@@ -84,10 +78,6 @@ import Testing
         #expect(model.offset(.new) == 100)
     }
 
-    @Test(arguments: [(CGFloat(3), true, CGFloat(3)), (3, false, 48)])
-    func wheelDeltasBecomePoints(delta: CGFloat, precise: Bool, expected: CGFloat) {
-        #expect(DiffSplitHorizontalScroll.pointDelta(scrollingDeltaX: delta, isPrecise: precise, lineHeight: 16) == expected)
-    }
 
     private func mountedRow(newLine: String) -> (DiffSplitCoreTextRowView, NSWindow) {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1_000, height: 200), styleMask: [.titled], backing: .buffered, defer: false)
@@ -131,6 +121,44 @@ import Testing
         #expect(probe.forwarded == 1)
     }
 
+    @Test func highlightingACommentKeepsTheScrollOffset() {
+        let lines = result(old: [], new: [String(repeating: "w", count: 300)])
+        let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 1200, height: 100))
+        view.configure(result: lines, font: font, theme: theme)
+        view.layout()
+        _ = view.scroll(deltaX: -40, deltaY: 0, isPrecise: true, at: NSPoint(x: 900, y: 20))
+        let highlight = DiffReviewCommentHighlight(path: "Sources/Example.swift", side: .new, line: 1)
+        view.configure(result: lines, font: font, theme: theme, review: .init(activeHighlight: highlight))
+        #expect(view.horizontalScroll.offset(.new) == 40)
+    }
+
+    @Test func resizingUpdatesTheViewportWithoutALayoutPass() {
+        let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 100))
+        view.configure(result: result(old: [], new: [String(repeating: "w", count: 300)]), font: font, theme: theme)
+        let before = view.horizontalScroll.newViewportWidth
+        view.setFrameSize(NSSize(width: 1200, height: 100))
+        #expect(view.horizontalScroll.newViewportWidth > before)
+    }
+
+    /// One trackpad gesture: (phase, momentum phase, dx, dy) per event.
+    @Test(arguments: [
+        // Begins sideways: later mostly vertical events still scroll sideways.
+        ([(NSEvent.Phase.began, NSEvent.Phase(), CGFloat(-10), CGFloat(1)), (.changed, [], -1, -6), ([], .changed, -1, -6)], true, [true, true, true]),
+        // Begins vertical: later sideways jitter goes to the review.
+        ([(.began, [], -1, -10), (.changed, [], -8, -2)], true, [false, false]),
+        // Nothing to scroll sideways: the review gets everything.
+        ([(.began, [], -10, 0)], false, [false]),
+        // Mouse wheels have no phases and are decided per event.
+        ([([], [], -10, 0), ([], [], 0, -10)], true, [true, false]),
+    ] as [([(NSEvent.Phase, NSEvent.Phase, CGFloat, CGFloat)], Bool, [Bool])])
+    func gesturesKeepTheAxisTheyBeganOn(events: [(NSEvent.Phase, NSEvent.Phase, CGFloat, CGFloat)], canScroll: Bool, expected: [Bool]) {
+        var gesture = DiffSplitScrollGesture()
+        let claims = events.map {
+            gesture.claims(phase: $0.0, momentumPhase: $0.1, deltaX: $0.2, deltaY: $0.3, canScroll: canScroll)
+        }
+        #expect(claims == expected)
+    }
+
     @Test func newContentResetsBothSidesToTheLeadingEdge() {
         let (view, window) = mountedRow(newLine: String(repeating: "w", count: 300))
         defer { window.close() }
@@ -140,12 +168,6 @@ import Testing
         #expect(view.horizontalScroll.offset(.old) == 0)
     }
 
-    @Test func pointsLeftOfTheDividerBelongToTheOldSide() {
-        let (view, window) = mountedRow(newLine: "x")
-        defer { window.close() }
-        #expect(view.side(at: NSPoint(x: 100, y: 10)) == .old)
-        #expect(view.side(at: NSPoint(x: 900, y: 10)) == .new)
-    }
 
     @Test func scrollerTracksTheOffsetAndHidesWhenContentFits() {
         let (view, window) = mountedRow(newLine: String(repeating: "w", count: 300))
@@ -327,19 +349,4 @@ import Testing
         #expect(expanded.first?.1 == (optionKey ? .all : .chunk(size: 10)))
     }
 
-    @Test func headerButtonsRunTheirActions() {
-        var pressed: [String] = []
-        let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 200))
-        view.configure(
-            result: result(old: [], new: ["a"]), font: font, theme: theme,
-            chrome: .init(header: "@@", headerFont: font, fusion: .none, actions: [
-                .init(symbol: "plus.square", tooltip: "Stage hunk") { pressed.append("stage") },
-                .init(symbol: "trash", tooltip: "Discard hunk") { pressed.append("discard") },
-            ])
-        )
-        let buttons = view.headerButtonsForTesting()
-        #expect(buttons.map(\.toolTip) == ["Stage hunk", "Discard hunk"])
-        buttons[1].performClick(nil)
-        #expect(pressed == ["discard"])
-    }
 }

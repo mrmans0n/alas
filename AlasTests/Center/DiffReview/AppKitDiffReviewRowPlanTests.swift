@@ -584,10 +584,15 @@ struct AppKitDiffReviewRowPlanTests {
         #expect(ids.contains(AppKitDiffReviewRowID.inlineFeedback(.targetID(feedbackID: target.id, fileID: file.id))))
     }
 
-    @Test func coreTextHunkRowsCarryTheirHeaderAndCardEdges() throws {
+    // These tests flip a static flag; that is safe while the builder is
+    // main-actor and the tests are synchronous.
+    @Test(arguments: [DiffLayoutMode.split, .stacked], [false, true])
+    func coreTextHunkRowsCarryTheirHeaderAndCardEdges(layout: DiffLayoutMode, wrap: Bool) throws {
         AppKitDiffReviewRowPlanBuilder.usesCoreTextRows = true
         defer { AppKitDiffReviewRowPlanBuilder.usesCoreTextRows = false }
-        let input = AppKitDiffReviewRowInput(file: textFile(), state: AppKitDiffReviewFileState(), theme: theme, layoutMode: .split)
+        let input = AppKitDiffReviewRowInput(
+            file: textFile(), state: AppKitDiffReviewFileState(), theme: theme, layoutMode: layout, wrapLines: wrap
+        )
         let plan = AppKitDiffReviewRowPlanBuilder.build(inputs: [input])
         let native = try #require(plan.corePlan.rows.first { $0.id.contains(":group:") }?.native)
         let view = try #require(native.make() as? DiffSplitCoreTextRowView)
@@ -613,18 +618,6 @@ struct AppKitDiffReviewRowPlanTests {
             native.configure(view)
             #expect(view.headerHeight == 0)
         }
-    }
-
-    @Test(arguments: [DiffLayoutMode.split, .stacked], [false, true])
-    func coreTextFlagMountsHunksNatively(layout: DiffLayoutMode, wrap: Bool) {
-        AppKitDiffReviewRowPlanBuilder.usesCoreTextRows = true
-        defer { AppKitDiffReviewRowPlanBuilder.usesCoreTextRows = false }
-        let input = AppKitDiffReviewRowInput(
-            file: textFile(), state: AppKitDiffReviewFileState(), theme: theme, layoutMode: layout, wrapLines: wrap
-        )
-        let plan = AppKitDiffReviewRowPlanBuilder.build(inputs: [input])
-        let hunk = plan.corePlan.rows.first { $0.id.contains(":group:") }
-        #expect(hunk?.native != nil)
     }
 
     @Test func lineTargetsResolveToTheFusedHunkRowWhenNoLocalAccessoriesExist() {

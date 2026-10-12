@@ -63,12 +63,22 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         didSet { if cardEdges != oldValue { needsDisplay = true } }
     }
 
+    /// A line number, measured once.
+    private struct Label {
+        let line: CTLine
+        let width: CGFloat
+        init(_ line: CTLine) {
+            self.line = line
+            width = CTLineGetTypographicBounds(line, nil, nil, nil)
+        }
+    }
+
     private struct SideLines {
         var code: [CTLine] = []
         /// Source of `code`, kept to break lines when wrapping.
         var attributed: [NSAttributedString] = []
         var codeStrings: [String] = []
-        var labels: [CTLine?] = []
+        var labels: [Label?] = []
         var tones: [DiffPaneLineTone] = []
         var metadata: [DiffPaneTextDocumentBuilder.LineMetadata] = []
         /// Lines whose paragraph style sets their own height, such as the
@@ -94,7 +104,7 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
     }
     /// Row geometry for the last width laid out.
     private var rowLayout: RowLayout?
-    private var codeFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+    private var codeFont: NSFont?
     private var onContextExpansion: DiffContextExpansionHandler = { _, _, _ in }
 
     /// An expansion pill: one action on one row of one side.
@@ -112,7 +122,13 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
     }
     private var armedExpansion: (target: ExpansionTarget, optionKey: Bool)?
     private var didSetPointingHand = false
-    private var theme: Theme?
+    private var palette: Palette?
+    /// The documents the lines were built from. The same documents mean the
+    /// same lines, so overlays (highlights, chrome) can change without a
+    /// rebuild or a horizontal-scroll reset.
+    private var contentSources: [NSAttributedString] = []
+    private var chevronImages: [String: NSImage] = [:]
+    private var truncatedHeader: (width: CGFloat, line: CTLine)?
     /// Distance from a line's top to its baseline, as TextKit places it.
     private var baselineOffset: CGFloat = 12
     private var chrome: HunkChrome?
@@ -120,6 +136,7 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
     private var headerButtons: [NSButton] = []
     private var headerActions: [@MainActor () -> Void] = []
     private(set) var horizontalScroll = DiffSplitHorizontalScroll()
+    private var scrollGesture = DiffSplitScrollGesture()
     private let oldScroller = NSScroller(frame: .zero)
     private let newScroller = NSScroller(frame: .zero)
 
@@ -159,13 +176,18 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         review: ReviewLines = ReviewLines(),
         onContextExpansion: @escaping DiffContextExpansionHandler = { _, _, _ in }
     ) {
-        isStacked = false
+        let sources = [result.oldCode.attributedString, result.oldGutter, result.newCode.attributedString, result.newGutter]
+        let changed = contentChanged(sources: sources, stacked: false, wraps: wraps, font: font)
         self.onContextExpansion = onContextExpansion
-        self.wraps = wraps
         self.review = review
-        old = Self.lines(code: result.oldCode, gutter: result.oldGutter, font: font, theme: theme)
-        new = Self.lines(code: result.newCode, gutter: result.newGutter, font: font, theme: theme)
-        applyContent(font: font, theme: theme, chrome: chrome)
+        let palette = Palette(theme: theme)
+        if changed {
+            isStacked = false
+            self.wraps = wraps
+            old = Self.lines(code: result.oldCode, gutter: result.oldGutter, font: font, palette: palette)
+            new = Self.lines(code: result.newCode, gutter: result.newGutter, font: font, palette: palette)
+        }
+        apply(palette: palette, font: font, chrome: chrome, contentChanged: changed)
     }
 
     func configure(
@@ -177,33 +199,54 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         review: ReviewLines = ReviewLines(),
         onContextExpansion: @escaping DiffContextExpansionHandler = { _, _, _ in }
     ) {
-        isStacked = true
+        let changed = contentChanged(sources: [result.code.attributedString, result.gutter], stacked: true, wraps: wraps, font: font)
         self.onContextExpansion = onContextExpansion
-        self.wraps = wraps
         self.review = review
-        old = SideLines()
-        new = Self.lines(code: result.code, gutter: result.gutter, font: font, theme: theme)
-        applyContent(font: font, theme: theme, chrome: chrome)
+        let palette = Palette(theme: theme)
+        if changed {
+            isStacked = true
+            self.wraps = wraps
+            old = SideLines()
+            new = Self.lines(code: result.code, gutter: result.gutter, font: font, palette: palette)
+        }
+        apply(palette: palette, font: font, chrome: chrome, contentChanged: changed)
     }
 
-    private func applyContent(font: NSFont, theme: Theme, chrome: HunkChrome?) {
-        self.theme = theme
-        codeFont = font
-        hoveredExpansion = nil
-        pressedExpansion = nil
-        armedExpansion = nil
-        let metrics = Self.textKitMetrics(for: font)
-        lineHeight = metrics.lineHeight
-        baselineOffset = metrics.baselineOffset
-        rowLayout = nil
-        gutterSelection = nil
-        hoveredGutterRow = nil
-        // Wrapped lines fit their pane, so there is nothing to scroll sideways.
-        horizontalScroll.oldContentWidth = isStacked || wraps ? 0 : old.widest + 2 * Self.textInset
-        horizontalScroll.newContentWidth = wraps ? 0 : new.widest + 2 * Self.textInset
-        // New content starts at the leading edge, as the panes do today.
-        horizontalScroll.resetToLeading()
-        applyChrome(chrome, theme: theme)
+    /// Whether these documents differ from the ones on screen. The cache
+    /// hands back the same instances for unchanged content, and the theme and
+    /// font are part of its key, so identity is enough.
+    private func contentChanged(sources: [NSAttributedString], stacked: Bool, wraps: Bool, font: NSFont) -> Bool {
+        let same = sources.count == contentSources.count && zip(sources, contentSources).allSatisfy { $0 === $1 }
+            && stacked == isStacked && wraps == self.wraps && font == codeFont
+        contentSources = sources
+        return !same
+    }
+
+    private func apply(palette: Palette, font: NSFont, chrome: HunkChrome?, contentChanged: Bool) {
+        self.palette = palette
+        chevronImages = [:]
+        if contentChanged {
+            codeFont = font
+            hoveredExpansion = nil
+            pressedExpansion = nil
+            armedExpansion = nil
+            if didSetPointingHand {
+                NSCursor.arrow.set()
+                didSetPointingHand = false
+            }
+            let metrics = Self.textKitMetrics(for: font)
+            lineHeight = metrics.lineHeight
+            baselineOffset = metrics.baselineOffset
+            rowLayout = nil
+            gutterSelection = nil
+            hoveredGutterRow = nil
+            // Wrapped lines fit their pane, so there is nothing to scroll sideways.
+            horizontalScroll.oldContentWidth = isStacked || wraps ? 0 : old.widest + 2 * Self.textInset
+            horizontalScroll.newContentWidth = wraps ? 0 : new.widest + 2 * Self.textInset
+            // New content starts at the leading edge, as the panes do today.
+            horizontalScroll.resetToLeading()
+        }
+        applyChrome(chrome, palette: palette)
         updateViewportWidths()
         layoutSubviewsForContent()
         needsDisplay = true
@@ -345,12 +388,13 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
 
     // MARK: - Chrome
 
-    private func applyChrome(_ chrome: HunkChrome?, theme: Theme) {
+    private func applyChrome(_ chrome: HunkChrome?, palette: Palette) {
         self.chrome = chrome
+        truncatedHeader = nil
         headerLine = chrome.map {
             CTLineCreateWithAttributedString(NSAttributedString(string: $0.header, attributes: [
                 .font: $0.headerFont,
-                .foregroundColor: theme.nsColor("fg-muted"),
+                .foregroundColor: palette.fgMuted,
             ]))
         }
         let actions = chrome?.actions ?? []
@@ -387,6 +431,18 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         super.layout()
         updateViewportWidths()
         layoutSubviewsForContent()
+    }
+
+    /// The scroller sets frames directly after measuring, without a layout
+    /// pass, so a resize redraws and re-lays out here rather than stretching
+    /// the old layer contents.
+    override func setFrameSize(_ newSize: NSSize) {
+        let changed = newSize != frame.size
+        super.setFrameSize(newSize)
+        guard changed else { return }
+        updateViewportWidths()
+        layoutSubviewsForContent()
+        needsDisplay = true
     }
 
     private func layoutSubviewsForContent() {
@@ -607,7 +663,7 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
             let minX = CTLineGetOffsetForStringIndex(line, start, nil)
             let maxX = CTLineGetOffsetForStringIndex(line, start + action.range.length, nil)
             let textRect = NSRect(x: textX + minX, y: rowRect.minY, width: maxX - minX, height: textHeight)
-            let chevronSize = chevronImage(for: action, color: .textColor)?.size ?? .zero
+            let chevronSize = chevronImage(for: action)?.size ?? .zero
             let pill = DiffPaneCodeTextView.expandPillRect(textRect: textRect, firstLineRect: textRect, rowRect: rowRect, chevronSize: chevronSize)
             let chevron = chevronSize == .zero ? nil : DiffPaneCodeTextView.expandChevronRect(
                 chevronLeftX: textRect.minX - 5 - chevronSize.width, chevronSize: chevronSize, pillRect: pill
@@ -616,22 +672,28 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         }
     }
 
-    private func chevronImage(for action: DiffPaneTextDocumentBuilder.ContextExpansionAction, color: NSColor) -> NSImage? {
-        DiffPaneCodeTextView.expandChevronImage(boundary: action.boundary, mode: action.mode, font: codeFont, color: color)
+    /// The pill's chevron in the pill tint, built once per symbol.
+    private func chevronImage(for action: DiffPaneTextDocumentBuilder.ContextExpansionAction) -> NSImage? {
+        let symbol = DiffPaneTextDocumentBuilder.expandableContextSymbolName(boundary: action.boundary, mode: action.mode)
+        if let image = chevronImages[symbol] { return image }
+        let image = DiffPaneCodeTextView.expandChevronImage(
+            boundary: action.boundary, mode: action.mode, font: codeFont, color: palette?.pillTint ?? .textColor
+        )
+        chevronImages[symbol] = image
+        return image
     }
 
-    private func drawExpansionPills(_ side: Side, rows: Range<Int>, theme: Theme) {
-        let tint = theme.nsColor("seg-pill-active-fg")
+    private func drawExpansionPills(_ side: Side, rows: Range<Int>, palette: Palette) {
         for row in rows {
             for pill in expansionPills(side, row: row) {
                 let target = ExpansionTarget(side: side, row: row, action: pill.action)
                 let alpha = DiffPaneCodeTextView.expandPillFillAlpha(hovered: hoveredExpansion == target, pressed: pressedExpansion == target)
                 if alpha > 0 {
-                    theme.nsColor("accent").withAlphaComponent(alpha).setFill()
+                    palette.accent.withAlphaComponent(alpha).setFill()
                     NSBezierPath(roundedRect: pill.pill, xRadius: 6, yRadius: 6).fill()
                 }
                 if let chevron = pill.chevron {
-                    chevronImage(for: pill.action, color: tint)?.draw(
+                    chevronImage(for: pill.action)?.draw(
                         in: chevron, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil
                     )
                 }
@@ -677,16 +739,27 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
 
     override func scrollWheel(with event: NSEvent) {
         let location = convert(event.locationInWindow, from: nil)
-        if !scroll(deltaX: event.scrollingDeltaX, deltaY: event.scrollingDeltaY, isPrecise: event.hasPreciseScrollingDeltas, at: location) {
+        let handled = scroll(
+            deltaX: event.scrollingDeltaX, deltaY: event.scrollingDeltaY, isPrecise: event.hasPreciseScrollingDeltas,
+            at: location, phase: event.phase, momentumPhase: event.momentumPhase
+        )
+        if !handled {
             nextResponder?.scrollWheel(with: event)
         }
     }
 
-    /// Applies a wheel gesture at `point`. Returns false for gestures the
-    /// review should scroll instead: those whose vertical motion dominates.
-    func scroll(deltaX: CGFloat, deltaY: CGFloat, isPrecise: Bool, at point: NSPoint) -> Bool {
-        guard abs(deltaX) >= abs(deltaY), deltaX != 0 else { return false }
+    /// Applies a wheel event at `point`. Returns false for events the review
+    /// should scroll instead: gestures that began mostly vertical, and any
+    /// over a side with nothing to scroll sideways.
+    func scroll(
+        deltaX: CGFloat, deltaY: CGFloat, isPrecise: Bool, at point: NSPoint,
+        phase: NSEvent.Phase = [], momentumPhase: NSEvent.Phase = []
+    ) -> Bool {
         let side = side(at: point)
+        let canScroll = horizontalScroll.maxOffset(side) > 0
+        guard scrollGesture.claims(phase: phase, momentumPhase: momentumPhase, deltaX: deltaX, deltaY: deltaY, canScroll: canScroll) else {
+            return false
+        }
         let delta = -DiffSplitHorizontalScroll.pointDelta(scrollingDeltaX: deltaX, isPrecise: isPrecise, lineHeight: lineHeight)
         if horizontalScroll.scroll(side, byPoints: delta) {
             setNeedsDisplay(codeRect(side))
@@ -698,46 +771,55 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
     // MARK: - Drawing
 
     override func draw(_ dirtyRect: NSRect) {
-        guard let theme, let context = NSGraphicsContext.current?.cgContext else { return }
+        guard let palette, let context = NSGraphicsContext.current?.cgContext else { return }
         let cardRect = NSRect(x: 0, y: 0, width: bounds.width, height: max(0, bounds.height - bottomPadding))
         let fusion = chrome?.fusion ?? .none
-        let hunkPath = chrome == nil ? nil : Self.hunkCardPath(in: cardRect, fusion: fusion)
-
-        theme.nsColor("bg-1").setFill()
-        NSRect(x: 0, y: 0, width: bounds.width, height: bounds.height).intersection(dirtyRect).fill()
+        let hunkPath = chrome == nil ? nil : Self.roundedPath(
+            in: cardRect,
+            top: fusion.fusedWithPrevious ? 0 : Self.hunkCornerRadius,
+            bottom: fusion.fusedWithNext ? 0 : Self.hunkCornerRadius
+        )
 
         context.saveGState()
+        // Content stays inside the file card's rounded corners, as SwiftUI clips it.
+        if cardEdges.top || cardEdges.bottom {
+            Self.roundedPath(
+                in: bounds, top: cardEdges.top ? Self.cardCornerRadius : 0, bottom: cardEdges.bottom ? Self.cardCornerRadius : 0
+            ).addClip()
+        }
+        palette.bg1.setFill()
+        NSRect(x: 0, y: 0, width: bounds.width, height: bounds.height).intersection(dirtyRect).fill()
         if let hunkPath { hunkPath.addClip() }
-        drawHeader(theme: theme, context: context, dirtyRect: dirtyRect)
+        drawHeader(palette: palette, context: context, dirtyRect: dirtyRect)
         let range = visibleLineRange(in: dirtyRect)
         let layout = layout(forWidth: bounds.width)
         for side in isStacked ? [Side.new] : [.old, .new] {
             draw(
                 side, wrapped: side == .old ? layout.old : layout.new, tops: layout.tops,
-                in: pane(side), offset: horizontalScroll.offset(side), range: range, theme: theme, context: context
+                in: pane(side), offset: horizontalScroll.offset(side), range: range, palette: palette, context: context
             )
-            drawReviewOverlays(side, tops: layout.tops, theme: theme)
+            drawReviewOverlays(side, tops: layout.tops, palette: palette)
         }
         if !isStacked {
             let divider = DiffPaneSplitGeometry.frames(containerWidth: bounds.width).divider
-            theme.nsColor("line").setFill()
-            NSRect(x: divider.minX, y: max(dirtyRect.minY, headerHeight), width: divider.width, height: dirtyRect.height).fill()
+            let top = max(dirtyRect.minY, headerHeight)
+            palette.line.setFill()
+            NSRect(x: divider.minX, y: top, width: divider.width, height: max(0, dirtyRect.maxY - top)).fill()
         }
         context.restoreGState()
-
         if let hunkPath {
-            theme.nsColor("line").setStroke()
+            palette.line.setStroke()
             hunkPath.lineWidth = 0.75
             hunkPath.stroke()
         }
-        drawFileCardEdges(theme: theme)
+        drawFileCardEdges(palette: palette)
     }
 
-    private func drawHeader(theme: Theme, context: CGContext, dirtyRect: NSRect) {
-        guard chrome != nil, let headerLine, dirtyRect.minY < headerHeight else { return }
-        theme.nsColor("bg-2").setFill()
+    private func drawHeader(palette: Palette, context: CGContext, dirtyRect: NSRect) {
+        guard chrome != nil, let headerLine = header(), dirtyRect.minY < headerHeight else { return }
+        palette.bg2.setFill()
         NSRect(x: 0, y: 0, width: bounds.width, height: headerHeight).fill()
-        theme.nsColor("line").setFill()
+        palette.line.setFill()
         NSRect(x: 0, y: headerHeight - 0.5, width: bounds.width, height: 0.5).fill()
         var ascent: CGFloat = 0, descent: CGFloat = 0
         _ = CTLineGetTypographicBounds(headerLine, &ascent, &descent, nil)
@@ -748,12 +830,27 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         context.restoreGState()
     }
 
+    /// The header text, truncated to end 12pt before the first button, as
+    /// SwiftUI's one-line `Text` and `Spacer(minLength: 12)` lay it out.
+    private func header() -> CTLine? {
+        guard let headerLine else { return nil }
+        let trailing = headerButtons.first.map { $0.frame.minX - 12 } ?? bounds.width - Self.headerHorizontalPadding
+        let width = max(0, trailing - Self.headerHorizontalPadding)
+        if let truncatedHeader, truncatedHeader.width == width { return truncatedHeader.line }
+        let ellipsis = CTLineCreateWithAttributedString(NSAttributedString(
+            string: "…", attributes: [.font: chrome?.headerFont as Any, .foregroundColor: palette?.fgMuted as Any]
+        ))
+        let line = CTLineCreateTruncatedLine(headerLine, Double(width), .end, ellipsis) ?? headerLine
+        truncatedHeader = (width, line)
+        return line
+    }
+
     /// Draws `side`'s rows in `range`: backgrounds and line numbers, then
     /// the code clipped to its column. When wrapping, `wrapped` holds each
     /// row's visual lines.
     private func draw(
         _ which: Side, wrapped: [[CTLine]]?, tops: [CGFloat],
-        in pane: CGRect, offset: CGFloat, range: Range<Int>, theme: Theme, context: CGContext
+        in pane: CGRect, offset: CGFloat, range: Range<Int>, palette: Palette, context: CGContext
     ) {
         let side = lines(which)
         let gutter = side.gutterWidth
@@ -761,42 +858,45 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         context.clip(to: CGRect(x: pane.minX, y: headerHeight, width: pane.width, height: max(0, bounds.height - headerHeight)))
         context.textMatrix = CGAffineTransform(scaleX: 1, y: -1)
         // The gutter column, as `DiffPaneLineNumberRulerView` paints it.
-        theme.nsColor("bg-0").setFill()
+        palette.bg0.setFill()
         NSRect(x: pane.minX, y: headerHeight, width: gutter, height: max(0, bounds.height - headerHeight - bottomPadding)).fill()
         let rows = range.clamped(to: 0..<side.code.count)
         for index in rows {
             let y = codeTop + tops[index]
             let rowHeight = tops[index + 1] - tops[index]
             let tone = side.tones.indices.contains(index) ? side.tones[index] : .context
-            if let fill = Self.fill(for: tone, theme: theme) {
+            if let fill = palette.codeFills[tone] {
                 let codeRow = NSRect(x: pane.minX + gutter, y: y, width: max(0, pane.width - gutter), height: rowHeight)
                 fill.setFill()
                 codeRow.fill()
                 if tone == .placeholder {
-                    Self.drawPlaceholderHatch(in: codeRow, theme: theme)
+                    Self.drawPlaceholderHatch(in: codeRow, color: palette.hatch)
                 }
             }
             let gutterRow = NSRect(x: pane.minX, y: y, width: gutter, height: rowHeight)
-            if let fill = Self.gutterFill(for: tone, theme: theme) {
+            if let fill = palette.gutterFills[tone] {
                 fill.setFill()
                 gutterRow.fill()
             }
             if tone == .add || tone == .delete {
-                theme.nsColor(tone == .add ? "add" : "del").setFill()
+                (tone == .add ? palette.add : palette.del).setFill()
                 NSRect(x: gutterRow.minX, y: gutterRow.minY, width: 3, height: gutterRow.height).fill()
             }
+        }
+        // Under the line numbers and code, as the ruler and text view draw it.
+        drawActiveHighlight(which, tops: tops, palette: palette)
+        for index in rows {
             if side.labels.indices.contains(index), let label = side.labels[index] {
-                let width = CTLineGetTypographicBounds(label, nil, nil, nil)
                 context.textPosition = CGPoint(
-                    x: pane.minX + gutter - DiffPaneLineNumberGutterGeometry.horizontalPadding - width,
-                    y: y + baseline(side, index)
+                    x: pane.minX + gutter - DiffPaneLineNumberGutterGeometry.horizontalPadding - label.width,
+                    y: codeTop + tops[index] + baseline(side, index)
                 )
-                CTLineDraw(label, context)
+                CTLineDraw(label.line, context)
             }
         }
         context.clip(to: CGRect(x: pane.minX + gutter, y: headerHeight, width: max(0, pane.width - gutter), height: max(0, bounds.height - headerHeight)))
         // Under the labels, as `DiffPaneCodeTextView` draws them with the row backgrounds.
-        drawExpansionPills(which, rows: rows, theme: theme)
+        drawExpansionPills(which, rows: rows, palette: palette)
         for index in rows {
             let x = pane.minX + gutter + Self.textInset + (side.indents[index] ?? 0)
             let baseline = codeTop + tops[index] + baseline(side, index)
@@ -826,24 +926,29 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         return NSRect(x: pane.minX, y: top, width: pane.width, height: bottom - top)
     }
 
-    /// The active comment's lines, the gutter drag outline, and the hover
-    /// "+" affordance, as `DiffPaneCodeTextView` and the ruler draw them.
-    private func drawReviewOverlays(_ side: Side, tops: [CGFloat], theme: Theme) {
+    /// The active comment's lines, as `DiffPaneCodeTextView` and the ruler
+    /// draw them.
+    private func drawActiveHighlight(_ side: Side, tops: [CGFloat], palette: Palette) {
         let sideLines = lines(side)
+        guard let rows = review.activeHighlight?.highlightedRowRange(in: sideLines.metadata) else { return }
         let gutter = sideLines.gutterWidth
-        let accent = theme.nsColor("accent")
-        if let rows = review.activeHighlight?.highlightedRowRange(in: sideLines.metadata) {
-            let rect = rowsRect(rows, side: side, tops: tops)
-            accent.withAlphaComponent(0.18).setFill()
-            NSRect(x: rect.minX, y: rect.minY, width: gutter, height: rect.height).fill()
-            let code = NSRect(x: rect.minX + gutter + 4, y: rect.minY, width: max(rect.width - gutter - 8, 1), height: rect.height)
-            accent.withAlphaComponent(0.12).setFill()
-            NSBezierPath(roundedRect: code, xRadius: 4, yRadius: 4).fill()
-            accent.withAlphaComponent(0.82).setStroke()
-            let stroke = NSBezierPath(roundedRect: code.insetBy(dx: 0.5, dy: 0.5), xRadius: 4, yRadius: 4)
-            stroke.lineWidth = 1
-            stroke.stroke()
-        }
+        let rect = rowsRect(rows, side: side, tops: tops)
+        palette.accentGutter.setFill()
+        NSRect(x: rect.minX, y: rect.minY, width: gutter, height: rect.height).fill()
+        let code = NSRect(x: rect.minX + gutter + 4, y: rect.minY, width: max(rect.width - gutter - 8, 1), height: rect.height)
+        palette.accentCode.setFill()
+        NSBezierPath(roundedRect: code, xRadius: 4, yRadius: 4).fill()
+        palette.accentStroke.setStroke()
+        let stroke = NSBezierPath(roundedRect: code.insetBy(dx: 0.5, dy: 0.5), xRadius: 4, yRadius: 4)
+        stroke.lineWidth = 1
+        stroke.stroke()
+    }
+
+    /// The gutter drag outline and the hover "+" affordance, as the ruler
+    /// draws them.
+    private func drawReviewOverlays(_ side: Side, tops: [CGFloat], palette: Palette) {
+        let gutter = lines(side).gutterWidth
+        let accent = palette.accent
         if let selection = gutterSelection, selection.side == side {
             let rect = rowsRect(min(selection.start, selection.current)...max(selection.start, selection.current), side: side, tops: tops)
             let outline = NSRect(x: rect.minX + 4, y: rect.minY, width: max(gutter - 8, 1), height: rect.height)
@@ -861,7 +966,7 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
             NSBezierPath(roundedRect: rect, xRadius: 8, yRadius: 8).fill()
             let attributes: [NSAttributedString.Key: Any] = [
                 .font: NSFont.systemFont(ofSize: 12, weight: .bold),
-                .foregroundColor: theme.nsColor("bg-1"),
+                .foregroundColor: palette.bg1,
             ]
             let plus = "+" as NSString
             let size = plus.size(withAttributes: attributes)
@@ -870,40 +975,45 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
     }
 
     /// The review's file-card border: the sides always, top and bottom with
-    /// rounded corners where this row starts or ends the card.
-    private func drawFileCardEdges(theme: Theme) {
+    /// rounded corners where this row starts or ends the card. One stroke
+    /// per edge, so no side is drawn twice.
+    private func drawFileCardEdges(palette: Palette) {
         let rect = bounds.insetBy(dx: 0.375, dy: 0.375)
         let radius = Self.cardCornerRadius
-        let path = NSBezierPath()
-        if cardEdges.top {
-            path.move(to: NSPoint(x: rect.minX, y: rect.maxY))
+        let path: NSBezierPath
+        switch (cardEdges.top, cardEdges.bottom) {
+        case (true, true):
+            path = Self.roundedPath(in: bounds, top: radius, bottom: radius)
+        case (true, false):
+            path = NSBezierPath()
+            path.move(to: NSPoint(x: rect.minX, y: bounds.maxY))
             path.line(to: NSPoint(x: rect.minX, y: rect.minY + radius))
             path.appendArc(from: NSPoint(x: rect.minX, y: rect.minY), to: NSPoint(x: rect.minX + radius, y: rect.minY), radius: radius)
             path.line(to: NSPoint(x: rect.maxX - radius, y: rect.minY))
             path.appendArc(from: NSPoint(x: rect.maxX, y: rect.minY), to: NSPoint(x: rect.maxX, y: rect.minY + radius), radius: radius)
-            path.line(to: NSPoint(x: rect.maxX, y: rect.maxY))
-        } else {
+            path.line(to: NSPoint(x: rect.maxX, y: bounds.maxY))
+        case (false, true):
+            path = NSBezierPath()
+            path.move(to: NSPoint(x: rect.minX, y: bounds.minY))
+            path.line(to: NSPoint(x: rect.minX, y: rect.maxY - radius))
+            path.appendArc(from: NSPoint(x: rect.minX, y: rect.maxY), to: NSPoint(x: rect.minX + radius, y: rect.maxY), radius: radius)
+            path.line(to: NSPoint(x: rect.maxX - radius, y: rect.maxY))
+            path.appendArc(from: NSPoint(x: rect.maxX, y: rect.maxY), to: NSPoint(x: rect.maxX, y: rect.maxY - radius), radius: radius)
+            path.line(to: NSPoint(x: rect.maxX, y: bounds.minY))
+        case (false, false):
+            path = NSBezierPath()
             path.move(to: NSPoint(x: rect.minX, y: bounds.minY))
             path.line(to: NSPoint(x: rect.minX, y: bounds.maxY))
             path.move(to: NSPoint(x: rect.maxX, y: bounds.minY))
             path.line(to: NSPoint(x: rect.maxX, y: bounds.maxY))
         }
-        if cardEdges.bottom {
-            path.move(to: NSPoint(x: rect.minX, y: rect.minY))
-            path.line(to: NSPoint(x: rect.minX, y: rect.maxY - radius))
-            path.appendArc(from: NSPoint(x: rect.minX, y: rect.maxY), to: NSPoint(x: rect.minX + radius, y: rect.maxY), radius: radius)
-            path.line(to: NSPoint(x: rect.maxX - radius, y: rect.maxY))
-            path.appendArc(from: NSPoint(x: rect.maxX, y: rect.maxY), to: NSPoint(x: rect.maxX, y: rect.maxY - radius), radius: radius)
-            path.line(to: NSPoint(x: rect.maxX, y: rect.minY))
-        }
-        theme.nsColor("line").setStroke()
+        palette.line.setStroke()
         path.lineWidth = 0.75
         path.stroke()
     }
 
-    private static func hunkCardPath(in rect: NSRect, fusion: DiffPaneHunkFusionState) -> NSBezierPath {
-        let top = fusion.fusedWithPrevious ? 0 : hunkCornerRadius
-        let bottom = fusion.fusedWithNext ? 0 : hunkCornerRadius
+    /// `rect` inset by half a stroke, with `top` and `bottom` corner radii.
+    private static func roundedPath(in rect: NSRect, top: CGFloat, bottom: CGFloat) -> NSBezierPath {
         let r = rect.insetBy(dx: 0.375, dy: 0.375)
         let path = NSBezierPath()
         path.move(to: NSPoint(x: r.minX, y: r.minY + top))
@@ -919,7 +1029,7 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
     }
 
     /// Same hatch as `DiffPaneCodeTextView.drawPlaceholderHatch`.
-    private static func drawPlaceholderHatch(in rect: NSRect, theme: Theme) {
+    private static func drawPlaceholderHatch(in rect: NSRect, color: NSColor) {
         NSGraphicsContext.saveGraphicsState()
         NSBezierPath(rect: rect).addClip()
         defer { NSGraphicsContext.restoreGraphicsState() }
@@ -931,36 +1041,51 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
             x += 8
         }
         path.lineWidth = 1
-        theme.nsColor("line").withAlphaComponent(0.35).setStroke()
+        color.setStroke()
         path.stroke()
     }
 
-    /// The ruler's row fill, slightly lighter than the code's.
-    private static func gutterFill(for tone: DiffPaneLineTone, theme: Theme) -> NSColor? {
-        switch tone {
-        case .add: theme.nsColor("add").withAlphaComponent(0.16)
-        case .delete: theme.nsColor("del").withAlphaComponent(0.16)
-        case .placeholder: theme.nsColor("bg-2").withAlphaComponent(0.55)
-        case .collapsed: theme.nsColor("bg-3").withAlphaComponent(0.72)
-        case .context: nil
-        }
-    }
+    /// Theme colors resolved once per configure: `Theme.nsColor` bridges from
+    /// SwiftUI on every call, too slow to repeat per row on every frame.
+    private struct Palette {
+        let bg0, bg1, bg2, line, hatch, add, del, accent, accentGutter, accentCode, accentStroke, pillTint, fgMuted, fgFaint: NSColor
+        /// Row fills for the code, and the ruler's slightly lighter ones.
+        let codeFills: [DiffPaneLineTone: NSColor]
+        let gutterFills: [DiffPaneLineTone: NSColor]
 
-    private static func fill(for tone: DiffPaneLineTone, theme: Theme) -> NSColor? {
-        switch tone {
-        case .add: theme.nsColor("add").withAlphaComponent(0.18)
-        case .delete: theme.nsColor("del").withAlphaComponent(0.18)
-        case .placeholder: theme.nsColor("bg-2").withAlphaComponent(0.55)
-        case .collapsed: theme.nsColor("bg-3").withAlphaComponent(0.72)
-        case .context: nil
+        init(theme: Theme) {
+            bg0 = theme.nsColor("bg-0")
+            bg1 = theme.nsColor("bg-1")
+            bg2 = theme.nsColor("bg-2")
+            line = theme.nsColor("line")
+            hatch = line.withAlphaComponent(0.35)
+            add = theme.nsColor("add")
+            del = theme.nsColor("del")
+            accent = theme.nsColor("accent")
+            accentGutter = accent.withAlphaComponent(0.18)
+            accentCode = accent.withAlphaComponent(0.12)
+            accentStroke = accent.withAlphaComponent(0.82)
+            pillTint = theme.nsColor("seg-pill-active-fg")
+            fgMuted = theme.nsColor("fg-muted")
+            fgFaint = theme.nsColor("fg-faint")
+            let placeholder = bg2.withAlphaComponent(0.55)
+            let collapsed = theme.nsColor("bg-3").withAlphaComponent(0.72)
+            codeFills = [
+                .add: add.withAlphaComponent(0.18), .delete: del.withAlphaComponent(0.18),
+                .placeholder: placeholder, .collapsed: collapsed,
+            ]
+            gutterFills = [
+                .add: add.withAlphaComponent(0.16), .delete: del.withAlphaComponent(0.16),
+                .placeholder: placeholder, .collapsed: collapsed,
+            ]
         }
-    }
 
-    /// Same coloring as `DiffPaneLineNumberRulerView.labelAttributes`.
-    private static func labelColor(_ label: String, tone: DiffPaneLineTone, theme: Theme) -> NSColor {
-        if tone == .add || label.hasPrefix("+") { return theme.nsColor("add") }
-        if tone == .delete || label.hasPrefix("-") { return theme.nsColor("del") }
-        return theme.nsColor("fg-faint")
+        /// Same coloring as `DiffPaneLineNumberRulerView.labelAttributes`.
+        func labelColor(_ label: String, tone: DiffPaneLineTone) -> NSColor {
+            if tone == .add || label.hasPrefix("+") { return add }
+            if tone == .delete || label.hasPrefix("-") { return del }
+            return fgFaint
+        }
     }
 
     // MARK: - Text metrics and lines
@@ -1008,7 +1133,7 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         code document: DiffPaneTextDocumentBuilder.CodeDocument,
         gutter: NSAttributedString,
         font: NSFont,
-        theme: Theme
+        palette: Palette
     ) -> SideLines {
         var side = SideLines()
         let text = document.attributedString
@@ -1040,10 +1165,10 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
             let tone = metadata.tone ?? DiffPaneLineTone(label: label, rowKind: metadata.kind)
             side.tones.append(tone)
             side.metadata.append(metadata)
-            side.labels.append(label.isEmpty ? nil : CTLineCreateWithAttributedString(NSAttributedString(
+            side.labels.append(label.isEmpty ? nil : Label(CTLineCreateWithAttributedString(NSAttributedString(
                 string: label,
-                attributes: [.font: DiffPaneLineNumberGutterGeometry.labelFont, .foregroundColor: labelColor(label, tone: tone, theme: theme)]
-            )))
+                attributes: [.font: DiffPaneLineNumberGutterGeometry.labelFont, .foregroundColor: palette.labelColor(label, tone: tone)]
+            ))))
         }
         return side
     }
