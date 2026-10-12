@@ -728,7 +728,12 @@ struct AgentLauncherDialog: View {
     }
 
     private func installAdapter(for agent: AgentDefinition) {
-        guard installingAdapterAgentID == nil, let target = launcherAdapterTarget() else { return }
+        // The launcher can be reopened elsewhere while npm runs; only the
+        // browser that started the install may react to its result.
+        guard installingAdapterAgentID == nil,
+              let origin = discoveryModel,
+              let target = launcherAdapterTarget()
+        else { return }
         installingAdapterAgentID = agent.id
         adapterInstallError = nil
         Task {
@@ -736,10 +741,10 @@ struct AgentLauncherDialog: View {
             do {
                 try await appState.acpAdapterInstallCoordinator.install(target: target, agentID: agent.id)
             } catch {
-                if chatAgent?.id == agent.id { adapterInstallError = error.localizedDescription }
+                if discoveryModel === origin { adapterInstallError = error.localizedDescription }
                 return
             }
-            guard chatAgent?.id == agent.id else { return }
+            guard discoveryModel === origin else { return }
             restartDiscovery(for: agent)
         }
     }
