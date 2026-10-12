@@ -1075,12 +1075,11 @@ struct AppStateCleanupTests {
             portConflict: nil,
             output: .available(text: "late\n", truncated: false)
         )
-        state.runHistoryPersistenceTaskWorktreeIDs[entry.id] = worktree.id
-        state.runHistoryPersistenceTasks[entry.id] = Task { @MainActor [history] in
+        state.runHistory.track(runID: entry.id, worktreeID: worktree.id, Task { @MainActor [history] in
             try? await Task.sleep(for: .seconds(1))
             _ = try? await history.append(entry)
             appendFinished = true
-        }
+        })
 
         #expect(await state.cliDeleteWorktree(worktree, force: true, keepBranch: true) == .ok)
         try await waitForOperationState(state.projectsManager, id: worktree.id, projectId: project.id, equals: nil)

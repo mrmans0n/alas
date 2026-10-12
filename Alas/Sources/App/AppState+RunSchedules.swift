@@ -95,7 +95,7 @@ extension AppState {
     /// selecting an archived id would empty the centre pane and strand the tab.
     /// The entry is still named in that case; it is just not a link.
     func canOpenScheduleFiringRun(_ run: RunScheduleFiring.RunReference) -> Bool {
-        hasRunReport(worktreeID: run.worktreeID, runID: run.runID)
+        runHistory.hasReport(worktreeID: run.worktreeID, runID: run.runID)
             && visibleProjectForWorktree(run.worktreeID) != nil
     }
 
@@ -145,8 +145,8 @@ extension AppState {
     /// entry is always worth one query.
     func primeScheduleRunReportIDs(_ worktreeIDs: [String]) async {
         for worktreeID in worktreeIDs
-            where durableRunReportIDsByWorktreeID[worktreeID]?.isEmpty != false {
-            await reloadDurableRunReportIDs(worktreeID: worktreeID)
+            where runHistory.durableReportIDsByWorktreeID[worktreeID]?.isEmpty != false {
+            await runHistory.reloadDurableReportIDs(worktreeID: worktreeID)
         }
     }
 

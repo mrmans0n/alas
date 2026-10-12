@@ -13,6 +13,10 @@ public final class RunService {
         /// The shell exited without writing the completion file, for example
         /// because the script removed the capture directory or the disk filled.
         case completionNotPublished(exitCode: Int32)
+        /// The project lives on another host; only local runs are supported.
+        case remoteProjectUnsupported
+        /// The script is already running in this worktree.
+        case alreadyRunning
     }
 
     private let launch: Launch
@@ -66,6 +70,7 @@ public final class RunService {
         project: ProjectConfig,
         runID: String = UUID().uuidString
     ) async throws -> RunScriptCompletion {
+        guard project.host == nil else { throw RunError.remoteProjectUnsupported }
         let location = try RunScriptCompletionMonitor.paths(runID: runID, host: nil)
         let command = try RunScriptCommand.runScriptStartupScript(
             script: script,

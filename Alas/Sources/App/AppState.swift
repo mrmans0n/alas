@@ -260,21 +260,18 @@ final class AppState {
     /// Observed command lifecycles, keyed by worktree then script. Deliberately
     /// separate from `tabs`: a run's outcome outlives its terminal shell, and a
     /// live shell never implies a live command.
-    var runRecords = RunRecordStore()
+    var runRecords: RunRecordStore {
+        get { core.runRecords }
+        set { core.runRecords = newValue }
+    }
+    var runHistory: RunHistory { core.runHistory }
     /// Immutable completed-run history. A missing store keeps the live Run
     /// tab functional when Application Support cannot be opened.
-    @ObservationIgnored let runHistoryStore: RunHistoryStore?
+    var runHistoryStore: RunHistoryStore? { core.runHistory.store }
     /// Token, cost and usage-limit history of every agent turn; nil when Application Support cannot be opened.
     @ObservationIgnored let usageHistory: UsageHistoryStore?
     /// Records each session's turns in completion order.
     @ObservationIgnored let usageRecording = KeyedSerialQueue()
-    var runHistoryRevision = 0
-    var runHistoryRevisionsByWorktreeID: [String: Int] = [:]
-    var runHistoryError: String?
-    @ObservationIgnored var transientRunReports: [String: RunHistoryEntry] = [:]
-    var durableRunReportIDsByWorktreeID: [String: Set<String>] = [:]
-    @ObservationIgnored var runHistoryPersistenceTasks: [String: Task<Void, Never>] = [:]
-    @ObservationIgnored var runHistoryPersistenceTaskWorktreeIDs: [String: String] = [:]
     /// Follow-up composers outlive the conditional Agent pane and worktree navigation.
     var agentSidebarFollowUps: [String: [ACPSession.ID: AgentSidebarFollowUpDraft]] = [:]
     let attentionStore: AttentionStore
@@ -1590,7 +1587,6 @@ final class AppState {
         self.runScriptCompletionWaiter = runScriptCompletionWaiter
         self.runScriptLocalMonitorGrace = runScriptLocalMonitorGrace
         self.runScriptMonitorGrace = runScriptMonitorGrace
-        self.runHistoryStore = runHistoryStore
         self.usageHistory = usageHistory
         self.runScheduler = runScheduler ?? RunScheduler(store: store)
         self.acpModelCatalog = acpModelCatalog ?? ACPAgentModelCatalog(store: store)
@@ -1606,7 +1602,11 @@ final class AppState {
         // Restored ACP sessions of registry agents attach before the first
         // agent rescan, so their launch specs must be known from the start.
         ACPLaunchCatalog.publishRegistryAgents(config.agents.registry)
-        self.core = AlasCoreContext(projects: ProjectsManager(persistedProjects: projectsFile.projects), store: store)
+        self.core = AlasCoreContext(
+            projects: ProjectsManager(persistedProjects: projectsFile.projects),
+            store: store,
+            runHistoryStore: runHistoryStore
+        )
         let spacesManager = spacesFile.map(SpacesManager.init(file:))
             ?? SpacesManager.migrating(projects: projectsFile.projects)
         var spacesChanged = spacesManager.pruneMissingProjects(validProjectIds: Set(projectsFile.projects.map(\.id)))
@@ -1718,6 +1718,9 @@ final class AppState {
         }
         self.runScheduler.persistenceErrorHandler = { [weak self] message in
             self?.persistenceErrorHandler("Schedules Save Failed", message)
+        }
+        core.runHistory.onFailure = { [weak self] message in
+            self?.showFileActionError(title: "Run History Failed", message: message)
         }
         installRunScheduleRunner()
         startLocalTextObservers()
