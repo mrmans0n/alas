@@ -408,6 +408,9 @@ struct AppKitDiffReviewLineTargets {
 
 @MainActor
 enum AppKitDiffReviewRowPlanBuilder {
+    /// Spike: draws fused split hunks with `DiffSplitCoreTextRowView`.
+    static var usesCoreTextSplitRows = ProcessInfo.processInfo.environment["ALAS_DIFF_CORETEXT"] == "1"
+
     static func build(
         inputs: [AppKitDiffReviewRowInput],
         trailingRows: [AppKitDiffRowSpec] = []
@@ -554,6 +557,8 @@ enum AppKitDiffReviewRowPlanBuilder {
                 position = .middle
             }
             let row = rows[index]
+            // Native rows draw their own card edges; the chrome is a SwiftUI wrapper.
+            guard row.native == nil else { continue }
             rows[index] = row.withReviewCardChrome(position: position, theme: input.theme)
         }
     }
@@ -630,7 +635,7 @@ enum AppKitDiffReviewRowPlanBuilder {
                 let rowInput = hunkInput(group: group, context: context, input: input, fusion: fusions[groupIndex])
                 let hunkPlan = DiffPaneRowPlanBuilder.build(input: rowInput, state: input.state.hunkPresentationState)
                 guard let hunk = hunkPlan.rows.first else { continue }
-                rows.append(.init(
+                var spec = AppKitDiffRowSpec(
                     id: groupID,
                     ownerID: input.file.id.rawValue,
                     equalityToken: hunk.equalityToken,
@@ -639,7 +644,24 @@ enum AppKitDiffReviewRowPlanBuilder {
                     retention: hunk.retention
                 ) {
                     hunk.build()
-                })
+                }
+                if usesCoreTextSplitRows, input.layoutMode == .split, !input.wrapLines {
+                    let font = CenterTypography.resolveCodeFont(family: input.codeFontFamily, size: input.codeFontSize)
+                    let fileExtension = LanguageRegistry.highlighterExtension(forPath: input.file.summary.path)
+                    let theme = input.theme
+                    let showWhitespace = input.showWhitespace
+                    spec.native = AppKitDiffNativeRow(
+                        make: { DiffSplitCoreTextRowView(frame: .zero) },
+                        configure: { view in
+                            let result = DiffPaneDocumentCache.shared.splitResult(
+                                rows: visibleRows, fileExtension: fileExtension, font: font,
+                                showWhitespace: showWhitespace, theme: theme
+                            )
+                            (view as? DiffSplitCoreTextRowView)?.configure(result: result, font: font, theme: theme)
+                        }
+                    )
+                }
+                rows.append(spec)
                 continue
             }
 

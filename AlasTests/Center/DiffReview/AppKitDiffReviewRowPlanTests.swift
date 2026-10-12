@@ -584,6 +584,18 @@ struct AppKitDiffReviewRowPlanTests {
         #expect(ids.contains(AppKitDiffReviewRowID.inlineFeedback(.targetID(feedbackID: target.id, fileID: file.id))))
     }
 
+    @Test(arguments: [(DiffLayoutMode.split, false, true), (.split, true, false), (.stacked, false, false)])
+    func coreTextFlagMountsUnwrappedSplitHunksNatively(layout: DiffLayoutMode, wrap: Bool, native: Bool) {
+        AppKitDiffReviewRowPlanBuilder.usesCoreTextSplitRows = true
+        defer { AppKitDiffReviewRowPlanBuilder.usesCoreTextSplitRows = false }
+        let input = AppKitDiffReviewRowInput(
+            file: textFile(), state: AppKitDiffReviewFileState(), theme: theme, layoutMode: layout, wrapLines: wrap
+        )
+        let plan = AppKitDiffReviewRowPlanBuilder.build(inputs: [input])
+        let hunk = plan.corePlan.rows.first { $0.id.contains(":group:") }
+        #expect((hunk?.native != nil) == native)
+    }
+
     @Test func lineTargetsResolveToTheFusedHunkRowWhenNoLocalAccessoriesExist() {
         let file = textFile()
         let input = AppKitDiffReviewRowInput(file: file, state: AppKitDiffReviewFileState(), theme: theme)
