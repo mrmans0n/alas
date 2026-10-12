@@ -504,6 +504,14 @@ public actor ACPSessionPersistence {
         return try operation()
     }
 
+    public func setGoalDraft(sessionId: String, objective: String) throws {
+        try openedStore().setGoalDraft(sessionId: sessionId, objective: objective)
+    }
+
+    public func clearGoalDraft(sessionId: String, matching objective: String) throws {
+        try openedStore().clearGoalDraft(sessionId: sessionId, matching: objective)
+    }
+
     public func loadComposerDraftRecord(sessionId: String) throws -> ACPStoredComposerDraft? {
         try openedStore().loadComposerDraftRecord(sessionId: sessionId)
     }

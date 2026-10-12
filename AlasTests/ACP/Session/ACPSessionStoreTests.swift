@@ -9,6 +9,32 @@ struct ACPSessionStoreSchemaTests {
         return try ACPSessionStore(path: url.path)
     }
 
+    @Test func goalDraftSurvivesReopeningWithoutCrossingSessions() throws {
+        let store = try tmpStore()
+        for id in ["first", "second"] {
+            try store.upsertSession(.init(id: id, agentId: "codex", title: id,
+                autoRun: false, createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        }
+        try store.setGoalDraft(sessionId: "first", objective: " half written\n")
+        let reopened = try ACPSessionStore(path: store.path)
+        #expect(try reopened.loadSession(id: "first")?.goalDraft == " half written\n")
+        #expect(try reopened.loadSession(id: "second")?.goalDraft == "")
+        var row = try #require(try reopened.loadSession(id: "first"))
+        row.title = "Renamed"
+        try reopened.upsertSession(row)
+        #expect(try store.loadSession(id: "first")?.goalDraft == " half written\n")
+    }
+
+    @Test(arguments: ["submitted", "newer draft"])
+    func clearingSubmittedDraftPreservesNewerText(currentText: String) throws {
+        let store = try tmpStore()
+        try store.upsertSession(.init(id: "session", agentId: "codex", title: "Goal",
+            autoRun: false, createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        try store.setGoalDraft(sessionId: "session", objective: currentText)
+        try store.clearGoalDraft(sessionId: "session", matching: "submitted")
+        #expect(try store.loadSession(id: "session")?.goalDraft == (currentText == "submitted" ? "" : "newer draft"))
+    }
+
     @Test("opens a fresh DB at the target schema version")
     func freshSchema() throws {
         let store = try tmpStore()

@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-private let diffContextExpansionChunkSize = 10
+let diffContextExpansionChunkSize = 10
 
 typealias DiffContextExpansionHandler = (DiffContextExpansionKey, DiffContextExpansionMode, DiffContextExpansionEdge?) -> Void
 
@@ -51,7 +51,7 @@ extension DiffReviewInlineFeedbackSide {
     }
 }
 
-private extension DiffDisplayLine {
+extension DiffDisplayLine {
     func highlightLineNumber(for side: DiffReviewInlineFeedbackSide) -> Int? {
         switch side {
         case .old:
@@ -1775,48 +1775,7 @@ final class DiffPaneCodeTextView: NSTextView {
     }
 
     func reviewLineAnchor(fromRow startRow: Int, toRow endRow: Int) -> DiffReviewLineAnchor? {
-        let lowerRow = min(startRow, endRow)
-        let upperRow = max(startRow, endRow)
-        guard lineMetadata.indices.contains(lowerRow),
-              lineMetadata.indices.contains(upperRow)
-        else { return nil }
-
-        var resolvedAnchors: [DiffReviewLineAnchor] = []
-        for rowIndex in lowerRow...upperRow {
-            let metadata = lineMetadata[rowIndex]
-            if let anchor = metadata.reviewLineAnchor(rowIndex: rowIndex) {
-                resolvedAnchors.append(anchor)
-            } else if metadata.tone != .placeholder {
-                return nil
-            }
-        }
-        guard !resolvedAnchors.isEmpty,
-              let first = resolvedAnchors.first,
-              resolvedAnchors.allSatisfy({ $0.path == first.path })
-        else { return nil }
-        guard resolvedAnchors.count > 1 else { return first }
-
-        let side = resolvedAnchors.allSatisfy({ $0.side == first.side }) ? first.side : .unknown
-        let lineNumbers = resolvedAnchors.flatMap { anchor -> [Int] in
-            if let endLine = anchor.endLine {
-                return [anchor.line, endLine]
-            }
-            return [anchor.line]
-        }
-        guard let startLine = lineNumbers.min(),
-              let endLine = lineNumbers.max()
-        else { return nil }
-
-        return DiffReviewLineAnchor(
-            path: first.path,
-            side: side,
-            line: startLine,
-            endLine: endLine,
-            rowIndex: first.rowIndex,
-            endRowIndex: resolvedAnchors.last?.rowIndex ?? first.rowIndex,
-            selectedLines: resolvedAnchors.flatMap(\.selectedLines),
-            selectedText: resolvedAnchors.map(\.selectedText).joined(separator: "\n")
-        )
+        lineMetadata.reviewLineAnchor(fromRow: startRow, toRow: endRow)
     }
 
     func reviewLineAnchor(at point: NSPoint) -> DiffReviewLineAnchor? {
@@ -1868,30 +1827,14 @@ final class DiffPaneCodeTextView: NSTextView {
 
     private func expansionActions(atRow row: Int) -> [DiffPaneTextDocumentBuilder.ContextExpansionAction] {
         guard lineMetadata.indices.contains(row) else { return [] }
-        let metadata = lineMetadata[row]
-        if !metadata.expansionActions.isEmpty {
-            return metadata.expansionActions
-        }
-        guard let key = metadata.expansionKey else { return [] }
-        let mode: DiffPaneTextDocumentBuilder.ContextExpansionActionMode = key.isShared && metadata.expansionEdge == nil ? .all : .chunk
-        return [
-            DiffPaneTextDocumentBuilder.ContextExpansionAction(
-                key: key,
-                boundary: metadata.expansionBoundary ?? key.boundary,
-                edge: metadata.expansionEdge,
-                mode: mode,
-                range: metadata.range
-            ),
-        ]
+        return lineMetadata[row].contextExpansionActions
     }
 
     private func invokeExpansion(
         action: DiffPaneTextDocumentBuilder.ContextExpansionAction,
         optionKey: Bool
     ) {
-        let actionMode: DiffPaneTextDocumentBuilder.ContextExpansionActionMode = optionKey ? .all : action.mode
-        let mode: DiffContextExpansionMode = actionMode == .all ? .all : .chunk(size: diffContextExpansionChunkSize)
-        contextExpansionHandler(action.key, mode, action.edge)
+        action.invoke(optionKey: optionKey, handler: contextExpansionHandler)
     }
 
     private func drawLineBackgrounds(in dirtyRect: NSRect) {
@@ -2176,7 +2119,7 @@ final class DiffPaneCodeTextView: NSTextView {
         )
     }
 
-    private static func expandChevronImage(
+    static func expandChevronImage(
         boundary: DiffContextBoundary?,
         mode: DiffPaneTextDocumentBuilder.ContextExpansionActionMode,
         font: NSFont?,
@@ -2840,6 +2783,35 @@ final class DiffPaneLeadingClipView: NSClipView {
     }
 }
 
+extension DiffPaneTextDocumentBuilder.LineMetadata {
+    /// The expansion pills this line shows, each over its label range.
+    var contextExpansionActions: [DiffPaneTextDocumentBuilder.ContextExpansionAction] {
+        if !expansionActions.isEmpty {
+            return expansionActions
+        }
+        guard let key = expansionKey else { return [] }
+        let mode: DiffPaneTextDocumentBuilder.ContextExpansionActionMode = key.isShared && expansionEdge == nil ? .all : .chunk
+        return [
+            DiffPaneTextDocumentBuilder.ContextExpansionAction(
+                key: key,
+                boundary: expansionBoundary ?? key.boundary,
+                edge: expansionEdge,
+                mode: mode,
+                range: range
+            ),
+        ]
+    }
+}
+
+extension DiffPaneTextDocumentBuilder.ContextExpansionAction {
+    /// Expands by a chunk, or everything for `.all` actions and option-clicks.
+    func invoke(optionKey: Bool, handler: DiffContextExpansionHandler) {
+        let actionMode: DiffPaneTextDocumentBuilder.ContextExpansionActionMode = optionKey ? .all : mode
+        let expansion: DiffContextExpansionMode = actionMode == .all ? .all : .chunk(size: diffContextExpansionChunkSize)
+        handler(key, expansion, edge)
+    }
+}
+
 private extension DiffPaneTextDocumentBuilder.LineMetadata {
     func reviewLineAnchor(rowIndex: Int) -> DiffReviewLineAnchor? {
         guard let sourceLine,
@@ -2918,5 +2890,55 @@ extension Array where Element == NSRect {
             }
         }
         return low
+    }
+}
+
+extension Array where Element == DiffPaneTextDocumentBuilder.LineMetadata {
+    /// One anchor covering rows `startRow` through `endRow` (either order),
+    /// skipping placeholders; nil when the range crosses a non-code row or
+    /// files.
+    func reviewLineAnchor(fromRow startRow: Int, toRow endRow: Int) -> DiffReviewLineAnchor? {
+        let lowerRow = Swift.min(startRow, endRow)
+        let upperRow = Swift.max(startRow, endRow)
+        guard indices.contains(lowerRow),
+              indices.contains(upperRow)
+        else { return nil }
+
+        var resolvedAnchors: [DiffReviewLineAnchor] = []
+        for rowIndex in lowerRow...upperRow {
+            let metadata = self[rowIndex]
+            if let anchor = metadata.reviewLineAnchor(rowIndex: rowIndex) {
+                resolvedAnchors.append(anchor)
+            } else if metadata.tone != .placeholder {
+                return nil
+            }
+        }
+        guard !resolvedAnchors.isEmpty,
+              let first = resolvedAnchors.first,
+              resolvedAnchors.allSatisfy({ $0.path == first.path })
+        else { return nil }
+        guard resolvedAnchors.count > 1 else { return first }
+
+        let side = resolvedAnchors.allSatisfy({ $0.side == first.side }) ? first.side : .unknown
+        let lineNumbers = resolvedAnchors.flatMap { anchor -> [Int] in
+            if let endLine = anchor.endLine {
+                return [anchor.line, endLine]
+            }
+            return [anchor.line]
+        }
+        guard let startLine = lineNumbers.min(),
+              let endLine = lineNumbers.max()
+        else { return nil }
+
+        return DiffReviewLineAnchor(
+            path: first.path,
+            side: side,
+            line: startLine,
+            endLine: endLine,
+            rowIndex: first.rowIndex,
+            endRowIndex: resolvedAnchors.last?.rowIndex ?? first.rowIndex,
+            selectedLines: resolvedAnchors.flatMap(\.selectedLines),
+            selectedText: resolvedAnchors.map(\.selectedText).joined(separator: "\n")
+        )
     }
 }

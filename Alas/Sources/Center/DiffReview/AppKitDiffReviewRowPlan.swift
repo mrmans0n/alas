@@ -408,6 +408,9 @@ struct AppKitDiffReviewLineTargets {
 
 @MainActor
 enum AppKitDiffReviewRowPlanBuilder {
+    /// Spike: draws hunks and comment segments with `DiffSplitCoreTextRowView`.
+    static var usesCoreTextRows = ProcessInfo.processInfo.environment["ALAS_DIFF_CORETEXT"] == "1"
+
     static func build(
         inputs: [AppKitDiffReviewRowInput],
         trailingRows: [AppKitDiffRowSpec] = []
@@ -535,6 +538,96 @@ enum AppKitDiffReviewRowPlanBuilder {
         )
     }
 
+    /// A hunk or comment segment drawn by `DiffSplitCoreTextRowView`; a hunk
+    /// gets the same header, actions and card as `DiffPaneHunkRow`.
+    /// `header` is the hunk the row heads; segment blocks under a separate
+    /// group-header row pass nil. `highlightRows` are the rows the active
+    /// comment highlight is resolved against, as the text-view rows do.
+    private static func coreTextRow(
+        visibleRows: [DiffDisplayRow],
+        highlightRows: [DiffDisplayRow],
+        header: (group: DiffDisplayGroup, fusion: DiffPaneHunkFusionState)?,
+        input: AppKitDiffReviewRowInput
+    ) -> AppKitDiffNativeRow {
+        let font = CenterTypography.resolveCodeFont(family: input.codeFontFamily, size: input.codeFontSize)
+        let headerFont = CenterTypography.resolveCodeFont(family: input.codeFontFamily, size: input.codeFontSize - 1)
+        let fileExtension = LanguageRegistry.highlighterExtension(forPath: input.file.summary.path)
+        let theme = input.theme
+        let showWhitespace = input.showWhitespace
+        let layoutMode = input.layoutMode
+        let wraps = input.wrapLines
+        let state = input.state
+        let onContextExpansion = input.loadContextAndExpand
+        let review = DiffSplitCoreTextRowView.ReviewLines(
+            allowsSelection: input.allowsDraftCommentCreation,
+            activeHighlight: input.activeHighlight(for: highlightRows),
+            onSelect: { anchor in
+                input.beginPendingDraft(at: ReviewDraftCommentRowSegmentation.sourceIndexedAnchor(anchor, in: visibleRows))
+            }
+        )
+        return AppKitDiffNativeRow(
+            make: { DiffSplitCoreTextRowView(frame: .zero) },
+            configure: { view in
+                guard let view = view as? DiffSplitCoreTextRowView else { return }
+                let chrome = header.map { header in
+                    DiffSplitCoreTextRowView.HunkChrome(
+                        header: header.group.header, headerFont: headerFont, fusion: header.fusion,
+                        actions: hunkHeaderActions(group: header.group, state: state)
+                    )
+                }
+                if layoutMode == .split {
+                    let result = DiffPaneDocumentCache.shared.splitResult(
+                        rows: visibleRows, fileExtension: fileExtension, font: font,
+                        showWhitespace: showWhitespace, theme: theme
+                    )
+                    view.configure(
+                        result: result, font: font, theme: theme, chrome: chrome, wraps: wraps,
+                        review: review, onContextExpansion: onContextExpansion
+                    )
+                } else {
+                    let result = DiffPaneDocumentCache.shared.stackedResult(
+                        rows: visibleRows, fileExtension: fileExtension, font: font,
+                        showWhitespace: showWhitespace, theme: theme
+                    )
+                    view.configure(
+                        stacked: result, font: font, theme: theme, chrome: chrome, wraps: wraps,
+                        review: review, onContextExpansion: onContextExpansion
+                    )
+                }
+            }
+        )
+    }
+
+    /// The buttons `DiffPaneHunkRow` shows in its header, in the same order.
+    static func hunkHeaderActions(group: DiffDisplayGroup, state: AppKitDiffReviewFileState) -> [DiffSplitCoreTextRowView.HunkChrome.Action] {
+        var actions: [DiffSplitCoreTextRowView.HunkChrome.Action] = []
+        let presentation = state.hunkPresentationState
+        if !DiffCollapsedContextController.collapsedRowIDs(in: group).isEmpty {
+            let expanded = DiffCollapsedContextController.isExpanded(group, expandedIDs: presentation.expandedCollapsedRowIDs)
+            actions.append(.init(
+                symbol: expanded ? "minus.square" : "plus.square",
+                tooltip: expanded ? "Collapse context" : "Expand context"
+            ) { presentation.toggleCollapsedContext(in: group) })
+        }
+        let hunkActions = state.actionRelay.hunkActions(for: group.sourceHunk)
+        if hunkActions.stage != nil {
+            actions.append(.init(symbol: "plus.square", tooltip: "Stage hunk") {
+                state.actionRelay.hunkActions(for: group.sourceHunk).stage?()
+            })
+        }
+        if hunkActions.discard != nil {
+            actions.append(.init(symbol: "trash", tooltip: "Discard hunk") {
+                state.actionRelay.hunkActions(for: group.sourceHunk).discard?()
+            })
+        }
+        if hunkActions.dropFromCommit != nil {
+            actions.append(.init(symbol: "minus.circle", tooltip: "Drop from commit") {
+                state.actionRelay.hunkActions(for: group.sourceHunk).dropFromCommit?()
+            })
+        }
+        return actions
+    }
+
     private static func applyCardChrome(
         to rows: inout [AppKitDiffRowSpec],
         range: Range<Int>,
@@ -554,7 +647,9 @@ enum AppKitDiffReviewRowPlanBuilder {
                 position = .middle
             }
             let row = rows[index]
-            rows[index] = row.withReviewCardChrome(position: position, theme: input.theme)
+            rows[index] = row.native == nil
+                ? row.withReviewCardChrome(position: position, theme: input.theme)
+                : row.withNativeReviewCardEdges(position: position, theme: input.theme)
         }
     }
 
@@ -630,7 +725,7 @@ enum AppKitDiffReviewRowPlanBuilder {
                 let rowInput = hunkInput(group: group, context: context, input: input, fusion: fusions[groupIndex])
                 let hunkPlan = DiffPaneRowPlanBuilder.build(input: rowInput, state: input.state.hunkPresentationState)
                 guard let hunk = hunkPlan.rows.first else { continue }
-                rows.append(.init(
+                var spec = AppKitDiffRowSpec(
                     id: groupID,
                     ownerID: input.file.id.rawValue,
                     equalityToken: hunk.equalityToken,
@@ -639,7 +734,14 @@ enum AppKitDiffReviewRowPlanBuilder {
                     retention: hunk.retention
                 ) {
                     hunk.build()
-                })
+                }
+                if usesCoreTextRows {
+                    spec.native = coreTextRow(
+                        visibleRows: visibleRows, highlightRows: group.displayGroup.rows,
+                        header: (group.displayGroup, fusions[groupIndex]), input: input
+                    )
+                }
+                rows.append(spec)
                 continue
             }
 
@@ -658,6 +760,12 @@ enum AppKitDiffReviewRowPlanBuilder {
                             in: rowBlock.rows,
                             expandedCollapsedRowIDs: input.state.expandedCollapsedRowIDs
                         )
+                        if usesCoreTextRows {
+                            // The group header is its own row here, so the block has none.
+                            rows[rows.count - 1].native = coreTextRow(
+                                visibleRows: visibleRows, highlightRows: rowBlock.rows, header: nil, input: input
+                            )
+                        }
                         lineTargets.append(visibleRows, fileID: input.file.id, rowID: blockID)
                     case let .thread(thread):
                         let threadID = AppKitDiffReviewRowID.thread(fileID: input.file.id, threadID: thread.id)
@@ -1103,8 +1211,36 @@ struct AppKitDiffReviewHeaderRowBody: View {
 }
 
 private extension AppKitDiffRowSpec {
+    /// A native row draws the file card's edges itself; this tells it which.
     @MainActor
-    func withReviewCardChrome(
+    fileprivate func withNativeReviewCardEdges(
+        position: AppKitDiffReviewCardRowPosition,
+        theme: Theme
+    ) -> AppKitDiffRowSpec {
+        guard let native else { return self }
+        var spec = AppKitDiffRowSpec(
+            id: id,
+            ownerID: ownerID,
+            equalityToken: .init(AppKitDiffReviewCardRowToken(content: equalityToken, position: position, theme: theme)),
+            contentSignature: contentSignature,
+            estimatedHeight: estimatedHeight,
+            retention: retention,
+            contextRowCount: contextRowCount,
+            build: build
+        )
+        let edges = DiffSplitCoreTextRowView.CardEdges(
+            top: position == .first || position == .only,
+            bottom: position == .last || position == .only
+        )
+        spec.native = AppKitDiffNativeRow(make: native.make) { view in
+            native.configure(view)
+            (view as? DiffSplitCoreTextRowView)?.cardEdges = edges
+        }
+        return spec
+    }
+
+    @MainActor
+    fileprivate func withReviewCardChrome(
         position: AppKitDiffReviewCardRowPosition,
         theme: Theme
     ) -> AppKitDiffRowSpec {

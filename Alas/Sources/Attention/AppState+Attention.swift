@@ -482,19 +482,7 @@ extension AppState {
     }
 
     func reconcileAttention(observations: [AttentionObservation], isInitialSnapshot: Bool = true, at date: Date = Date()) {
-        for observation in observations {
-            guard let signal = observation.activeSignal else {
-                observeAttention(observation, at: date)
-                continue
-            }
-            if isInitialSnapshot, attentionStore.loadError != nil,
-               attentionStore.document.observations[signal.sourceKey] == nil {
-                if attentionSuppressedStartupSignals[signal.sourceKey] == nil {
-                    attentionSuppressedStartupSignals[signal.sourceKey] = signal.fingerprint
-                }
-            }
-            observeAttention(.active(signal), at: date)
-        }
+        core.attention.reconcile(observations: observations, isInitialSnapshot: isInitialSnapshot, at: date)
     }
 
     private var currentAttentionItems: [AttentionItem] {
@@ -573,23 +561,7 @@ extension AppState {
     }
 
     func observeAttention(_ observation: AttentionObservation, at date: Date = Date()) {
-        switch observation {
-        case .active(let signal):
-            if let suppressedFingerprint = attentionSuppressedStartupSignals[signal.sourceKey] {
-                if suppressedFingerprint == signal.fingerprint {
-                    return
-                }
-                if isSuppressedAttentionFingerprintShrink(sourceKey: signal.sourceKey, suppressedFingerprint: suppressedFingerprint, currentFingerprint: signal.fingerprint) {
-                    attentionSuppressedStartupSignals[signal.sourceKey] = signal.fingerprint
-                    return
-                }
-                attentionSuppressedStartupSignals[signal.sourceKey] = nil
-            }
-            registerAttentionAlias(for: signal)
-        case .inactive(let sourceKey):
-            attentionSuppressedStartupSignals[sourceKey] = nil
-        }
-        attentionStore.observe(observation, at: date)
+        core.attention.observe(observation, at: date)
     }
 
     func attentionContext(for worktree: Worktree) -> (owner: AttentionWorktreeIdentity, display: AttentionWorktreeDisplaySnapshot)? {
@@ -875,7 +847,7 @@ extension AppState {
         }
     }
 
-    private func registerAttentionAlias(for signal: AttentionSignal) {
+    func registerAttentionAlias(for signal: AttentionSignal) {
         registerAttentionAlias(owner: signal.owner, displayPath: signal.display.path)
     }
 
@@ -1009,81 +981,6 @@ extension AppState {
             checkout: checkout,
             worktrees: projects.flatMap { projectsManager.worktrees(projectId: $0.id) }
         )
-    }
-
-    private func isSuppressedAttentionFingerprintShrink(
-        sourceKey: AttentionSourceKey,
-        suppressedFingerprint: String,
-        currentFingerprint: String
-    ) -> Bool {
-        if sourceKey.rawValue.hasSuffix(":conflicts") {
-            return isStrictNonEmptySubset(decodedFingerprintSet(currentFingerprint), of: decodedFingerprintSet(suppressedFingerprint))
-        }
-        if sourceKey.rawValue.hasSuffix(":checks") {
-            return isHeadScopedFingerprintSetShrink(from: suppressedFingerprint, to: currentFingerprint, droppedPrefixCount: 1)
-        }
-        if sourceKey.rawValue.hasSuffix(":feedback") {
-            return isHeadScopedThreadFingerprintSetShrink(from: suppressedFingerprint, to: currentFingerprint)
-        }
-        return false
-    }
-
-    private func isHeadScopedThreadFingerprintSetShrink(from previousFingerprint: String, to currentFingerprint: String) -> Bool {
-        let previousParts = previousFingerprint.split(separator: "|", omittingEmptySubsequences: false)
-        let currentParts = currentFingerprint.split(separator: "|", omittingEmptySubsequences: false)
-        guard previousParts.count >= 4,
-              currentParts.count >= 3,
-              previousParts[0] == currentParts[0],
-              previousParts[1] == "decision",
-              currentParts[1] == "decision",
-              previousParts[2] == currentParts[2],
-              previousParts[3] == "threads"
-        else { return false }
-        if currentParts.count == 3 {
-            return true
-        }
-        guard currentParts[3] == "threads" else { return false }
-        return isStrictNonEmptySubset(
-            Set(currentParts.dropFirst(4).map(String.init)),
-            of: Set(previousParts.dropFirst(4).map(String.init))
-        )
-    }
-
-    private func isHeadScopedFingerprintSetShrink(from previousFingerprint: String, to currentFingerprint: String, droppedPrefixCount: Int) -> Bool {
-        let previousParts = previousFingerprint.split(separator: "|", omittingEmptySubsequences: false)
-        let currentParts = currentFingerprint.split(separator: "|", omittingEmptySubsequences: false)
-        guard previousParts.first == currentParts.first else { return false }
-        return isStrictNonEmptySubset(
-            Set(currentParts.dropFirst(droppedPrefixCount).map(String.init)),
-            of: Set(previousParts.dropFirst(droppedPrefixCount).map(String.init))
-        )
-    }
-
-    private func decodedFingerprintSet(_ fingerprint: String) -> Set<String> {
-        if let values = decodeLengthPrefixedFingerprintSet(fingerprint) {
-            return Set(values)
-        }
-        return Set(fingerprint.split(separator: "|").map(String.init))
-    }
-
-    private func decodeLengthPrefixedFingerprintSet(_ fingerprint: String) -> [String]? {
-        var index = fingerprint.startIndex
-        var values: [String] = []
-        while index < fingerprint.endIndex {
-            guard let separator = fingerprint[index...].firstIndex(of: ":"),
-                  let count = Int(fingerprint[index ..< separator])
-            else { return nil }
-            let valueStart = fingerprint.index(after: separator)
-            guard let valueEnd = fingerprint.index(valueStart, offsetBy: count, limitedBy: fingerprint.endIndex)
-            else { return nil }
-            values.append(String(fingerprint[valueStart ..< valueEnd]))
-            index = valueEnd
-        }
-        return values
-    }
-
-    private func isStrictNonEmptySubset(_ current: Set<String>, of previous: Set<String>) -> Bool {
-        !current.isEmpty && current.isStrictSubset(of: previous)
     }
 }
 

@@ -1,7 +1,7 @@
 import Foundation
 
 public final class ACPSessionStore {
-    public static let targetSchemaVersion = 25
+    public static let targetSchemaVersion = 26
     public let path: String
     public let db: SQLiteDatabase
 
@@ -52,6 +52,12 @@ public final class ACPSessionStore {
         if current < 23 { try migrate_to_v23() }
         if current < 24 { try migrate_to_v24() }
         if current < 25 { try migrate_to_v25() }
+        if current < 26 {
+            let columns = try db.query("PRAGMA table_info(sessions)")
+            if !columns.contains(where: { ($0["name"] as? String) == "goal_draft" }) {
+                try db.exec("ALTER TABLE sessions ADD COLUMN goal_draft TEXT NOT NULL DEFAULT ''")
+            }
+        }
         try recoverFromConcurrentWriters()
         if current == 0 {
             try db.exec("INSERT INTO schema_version (version) VALUES (?)", bindings: [Int64(Self.targetSchemaVersion)])
@@ -423,6 +429,8 @@ public struct ACPSessionRow: Equatable, Sendable {
     public var recoveryProcId: String? = nil
     public var mcpPreamblePending: String? = nil
     public var mcpPreambleSent: Bool = false
+    /// Written only by `setGoalDraft`; upserts keep the stored value.
+    public var goalDraft: String = ""
     /// Written only by `setUsageLimit`; upserts keep the stored value.
     public var usageLimit: ACPUsageLimit? = nil
     /// Written only by `setDirectTurnInFlight`; upserts keep the stored value.
@@ -456,7 +464,7 @@ public struct ACPSessionRow: Equatable, Sendable {
     public var lastOpenedAt: Int64
     public var archived: Bool
 
-    public init(id: String, agentId: String, title: String, titleSource: ACPSessionTitleSource = .placeholder, remoteSessionId: String? = nil, origin: ACPSessionOrigin = .alasCreated, contextRecoveryPending: Bool = false, recoveryProcId: String? = nil, mcpPreamblePending: String? = nil, mcpPreambleSent: Bool = false, usageLimit: ACPUsageLimit? = nil, directTurnInFlight: Bool = false, authStatus: ACPAuthStatus? = nil, currentModel: String? = nil, currentMode: String? = nil, configOptionValues: [String: ACPConfigValue] = [:], nativeSubagentsDisabled: Bool? = nil, promptSuggestions: [ACPPromptSuggestion]? = nil, ephemeralParentId: String? = nil, ephemeralCleanupPending: Bool = false, autoRun: Bool, helperProcStdoutOffset: Int64? = nil, helperProcStderrOffset: Int64? = nil, acpBrokerId: String? = nil, acpBrokerGeneration: Int64? = nil, acpBrokerAcknowledgedCursor: Int64 = 0, createdAt: Int64, updatedAt: Int64, lastOpenedAt: Int64, archived: Bool) {
+    public init(id: String, agentId: String, title: String, titleSource: ACPSessionTitleSource = .placeholder, remoteSessionId: String? = nil, origin: ACPSessionOrigin = .alasCreated, contextRecoveryPending: Bool = false, recoveryProcId: String? = nil, mcpPreamblePending: String? = nil, mcpPreambleSent: Bool = false, usageLimit: ACPUsageLimit? = nil, goalDraft: String = "", directTurnInFlight: Bool = false, authStatus: ACPAuthStatus? = nil, currentModel: String? = nil, currentMode: String? = nil, configOptionValues: [String: ACPConfigValue] = [:], nativeSubagentsDisabled: Bool? = nil, promptSuggestions: [ACPPromptSuggestion]? = nil, ephemeralParentId: String? = nil, ephemeralCleanupPending: Bool = false, autoRun: Bool, helperProcStdoutOffset: Int64? = nil, helperProcStderrOffset: Int64? = nil, acpBrokerId: String? = nil, acpBrokerGeneration: Int64? = nil, acpBrokerAcknowledgedCursor: Int64 = 0, createdAt: Int64, updatedAt: Int64, lastOpenedAt: Int64, archived: Bool) {
         self.id = id
         self.agentId = agentId
         self.title = title
@@ -468,6 +476,7 @@ public struct ACPSessionRow: Equatable, Sendable {
         self.mcpPreamblePending = mcpPreamblePending
         self.mcpPreambleSent = mcpPreambleSent
         self.usageLimit = usageLimit
+        self.goalDraft = goalDraft
         self.directTurnInFlight = directTurnInFlight
         self.authStatus = authStatus
         self.currentModel = currentModel
@@ -842,6 +851,16 @@ extension ACPSessionStore {
             "UPDATE sessions SET mcp_preamble_pending = ?, mcp_preamble_sent = ? WHERE id = ?",
             bindings: [pendingText, sent ? 1 : 0, sessionId]
         )
+    }
+
+    /// Drafts are local session state. General metadata upserts leave them intact.
+    public func setGoalDraft(sessionId: String, objective: String) throws {
+        try db.exec("UPDATE sessions SET goal_draft = ? WHERE id = ?", bindings: [objective, sessionId])
+    }
+
+    public func clearGoalDraft(sessionId: String, matching objective: String) throws {
+        try db.exec("UPDATE sessions SET goal_draft = '' WHERE id = ? AND goal_draft = ?",
+                    bindings: [sessionId, objective])
     }
 
     public func setUsageLimit(sessionId: String, limit: ACPUsageLimit?) throws {
@@ -1410,6 +1429,7 @@ extension ACPSessionStore {
             usageLimit: (r["usage_limit"] as? String).flatMap {
                 try? JSONDecoder().decode(ACPUsageLimit.self, from: Data($0.utf8))
             },
+            goalDraft: r["goal_draft"] as? String ?? "",
             directTurnInFlight: ((r["direct_turn_in_flight"] as? Int64) ?? 0) != 0,
             authStatus: (r["auth_status"] as? String).flatMap {
                 try? JSONDecoder().decode(ACPAuthStatus.self, from: Data($0.utf8))

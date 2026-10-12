@@ -54,6 +54,7 @@ struct DiffReviewFrameRateBenchmark {
         )
         defer { bench.close() }
         try await bench.settle()
+        FrameRateBenchmark.placePointer(over: bench.scroller, in: bench.window)
 
         let down = await bench.fling(direction: 1)
         let up = await bench.fling(direction: -1)
@@ -68,7 +69,9 @@ struct DiffReviewFrameRateBenchmark {
         up.report("\(name) pass=up", label: "DIFF-BENCH", envPrefix: "ALAS_DIFF_BENCH")
         all.report("\(name) pass=both selectionWrites=\(bench.selectionWrites)", label: "DIFF-BENCH", envPrefix: "ALAS_DIFF_BENCH")
         #expect(bench.reachedBottom, "the fling never reached the last file")
-        #expect(all.p95 <= FrameRateBenchmark.budgetMs, "p95 frame \(all.p95)ms")
+        // `ALAS_DIFF_BENCH_TARGET_FPS=90` judges against the 90fps budget.
+        let targetFPS = ProcessInfo.processInfo.environment["ALAS_DIFF_BENCH_TARGET_FPS"].flatMap(Double.init) ?? 60
+        #expect(all.p95 <= FrameRateBenchmark.budgetMs(fps: targetFPS), "p95 frame \(all.p95)ms at \(Int(targetFPS))fps")
     }
 }
 

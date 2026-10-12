@@ -53,6 +53,8 @@ public final class AlasCoreContext {
     @ObservationIgnored private var headlessRuns: [String: (worktreeID: String, task: Task<RunOutcome, Error>)] = [:]
     /// Worktrees whose archive is still tearing down; unarchiving waits.
     @ObservationIgnored private var archivingWorktreeIDs: Set<String> = []
+    /// Attention items and the gate observations pass through to reach them.
+    public let attention: AttentionIntake
 
     @ObservationIgnored private let store: any PersistenceStoreProtocol
     @ObservationIgnored private let projectsFile: URL
@@ -69,6 +71,7 @@ public final class AlasCoreContext {
         runScheduler: RunScheduler? = nil,
         localTextModelStore: LocalTextModelStore = LocalTextModelStore(),
         localText: (any LocalTextGenerating)? = nil,
+        attentionStore: AttentionStore? = nil,
         runCompletionWaiter: @escaping RunCompletionWaiter = { try await RunScriptCompletionMonitor.wait(for: $0) },
         makeSessionManager: @escaping @MainActor (SessionOwnerID, Worktree) -> ACPSessionManager = AlasCoreContext.defaultSessionManager
     ) {
@@ -77,6 +80,7 @@ public final class AlasCoreContext {
         self.runScheduler = runScheduler ?? RunScheduler(store: store)
         self.runCompletionWaiter = runCompletionWaiter
         self.runHistory = RunHistory(store: runHistoryStore)
+        self.attention = AttentionIntake(store: attentionStore ?? AttentionStore())
         self.localTextModelStore = localTextModelStore
         self.localTextOverride = localText
         self.workspaceStore = workspaceStore
@@ -259,12 +263,12 @@ public final class AlasCoreContext {
     /// first, so no new headless run or session manager is admitted while the
     /// rest happens. Its headless runs are stopped and its agent sessions shut
     /// down; its other active runs settle as lost. All of them keep their
-    /// history. Nothing is removed from disk. A failed save throws and
+    /// history. A second archive while one is tearing down is refused. Nothing is removed from disk. A failed save throws and
     /// leaves the worktree visible and untouched.
     public func archiveWorktree(_ worktree: Worktree) async throws {
-        try setWorktreeHidden(worktree.path, projectID: worktree.projectId, hidden: true)
-        archivingWorktreeIDs.insert(worktree.id)
+        guard archivingWorktreeIDs.insert(worktree.id).inserted else { throw WorktreeArchived() }
         defer { archivingWorktreeIDs.remove(worktree.id) }
+        try setWorktreeHidden(worktree.path, projectID: worktree.projectId, hidden: true)
         let running = headlessRuns.values.filter { $0.worktreeID == worktree.id }.map(\.task)
         for run in running {
             run.cancel()

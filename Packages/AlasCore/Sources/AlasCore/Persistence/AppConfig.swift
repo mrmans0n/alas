@@ -206,7 +206,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
             pruneStale: Bool,
             fetchRemoteBeforeCreate: Bool = false,
             defaultOrdering: WorktreeSortMode = .lastUpdateDesc,
-            cleanupIdleDays: Int = 14,
+            cleanupIdleDays: Int = 3,
             branchTemplate: String? = nil
         ) {
             self.rootPath = rootPath
@@ -238,7 +238,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
             pruneStale = try c.decode(Bool.self, forKey: .pruneStale)
             fetchRemoteBeforeCreate = (try? c.decode(Bool.self, forKey: .fetchRemoteBeforeCreate)) ?? false
             defaultOrdering = (try? c.decode(WorktreeSortMode.self, forKey: .defaultOrdering)) ?? .lastUpdateDesc
-            cleanupIdleDays = (try? c.decode(Int.self, forKey: .cleanupIdleDays)) ?? 14
+            cleanupIdleDays = (try? c.decode(Int.self, forKey: .cleanupIdleDays)) ?? 3
         }
     }
 

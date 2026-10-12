@@ -3,7 +3,7 @@ import Foundation
 @testable import Alas
 
 struct WorktreeCleanupConfigTests {
-    @Test func cleanupIdleDaysDefaultsToFourteen() {
+    @Test func cleanupIdleDaysDefaultsToThree() {
         let worktrees = AppConfig.Worktrees(
             rootPath: "/tmp",
             pathTemplate: "{branch}",
@@ -15,7 +15,7 @@ struct WorktreeCleanupConfigTests {
             fetchIntervalMinutes: 10,
             pruneStale: false
         )
-        #expect(worktrees.cleanupIdleDays == 14)
+        #expect(worktrees.cleanupIdleDays == 3)
     }
 
     /// Config files written before this key existed must keep loading.
@@ -37,7 +37,7 @@ struct WorktreeCleanupConfigTests {
             AppConfig.Worktrees.self,
             from: Data(json.utf8)
         )
-        #expect(decoded.cleanupIdleDays == 14)
+        #expect(decoded.cleanupIdleDays == 3)
     }
 
     @Test func cleanupIdleDaysRoundTrips() throws {

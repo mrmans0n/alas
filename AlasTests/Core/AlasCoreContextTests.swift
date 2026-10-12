@@ -116,6 +116,9 @@ struct AlasCoreContextTests {
         #expect(throws: AlasCoreContext.WorktreeArchived.self, "an archive still tearing down cannot be undone") {
             try context.unarchiveWorktree(path: worktree.path, projectID: project.id)
         }
+        await #expect(throws: AlasCoreContext.WorktreeArchived.self, "a second archive does not race the first") {
+            try await context.archiveWorktree(worktree)
+        }
         try await archiving.value
         await #expect(throws: CancellationError.self, "archiving stops the worktree's headless runs") {
             _ = try await longRun.value

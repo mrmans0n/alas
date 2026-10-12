@@ -536,6 +536,16 @@ public final class ACPSessionManager: ChangeTracking {
         return await runner.userCancel()
     }
 
+    public func persistGoalDraft(_ objective: String, for session: ACPSession) {
+        guard !isDisposed, sessions[session.id] === session, session.goalDraft != objective else { return }
+        session.goalDraft = objective
+        editedGoalDrafts[session.id] = objective
+        let id = session.id
+        enqueuePersistence { persistence in
+            try await persistence.setGoalDraft(sessionId: id, objective: objective)
+        }
+    }
+
     public func controlGoal(
         for id: ACPSession.ID,
         action: ACPGoalAction,
@@ -558,6 +568,21 @@ public final class ACPSessionManager: ChangeTracking {
             action: action,
             objective: objective
         )
+        if action == .set, let objective {
+            if editedGoalDrafts[id] == nil || editedGoalDrafts[id] == objective {
+                editedGoalDrafts[id] = ""
+                if session.goalDraft == objective { session.goalDraft = "" }
+                if let live = sessions[id], live !== session,
+                   live.goalDraft.isEmpty || live.goalDraft == objective {
+                    live.goalDraft = ""
+                }
+            }
+            // A successful response may arrive after disposal or eviction. Clear
+            // the submitted text durably, while preserving any newer saved draft.
+            enqueuePersistence { persistence in
+                try await persistence.clearGoalDraft(sessionId: id, matching: objective)
+            }
+        }
     }
 
     /// Cancel one native subagent without touching the parent turn. Only
@@ -1484,6 +1509,8 @@ public final class ACPSessionManager: ChangeTracking {
         }
     }
     private var draftFlushHandoffs: [ACPSession.ID: DraftFlushHandoff] = [:]
+    /// Edits and explicit clears must win over pending saves and hydration snapshots.
+    private var editedGoalDrafts: [ACPSession.ID: String] = [:]
     private static let draftDebounceNanos: UInt64 = 300_000_000
     private let setupEvaluator: ACPSetupEvaluator
     private let resolvesManagedLaunchPath: Bool
@@ -2573,6 +2600,7 @@ public final class ACPSessionManager: ChangeTracking {
             hydrationState: .loading,
             restoredFromPersistence: true)
         session.remoteSessionId = row.remoteSessionId
+        session.goalDraft = editedGoalDrafts[id] ?? row.goalDraft
         session.continuesInterruptedTurns = { [weak self] in self?.continueInterruptedSessions() ?? false }
         if let memory = transcriptScrollMemory[id] {
             session.followsTranscriptTail = memory.followsTail
@@ -2692,6 +2720,7 @@ public final class ACPSessionManager: ChangeTracking {
     }
 
     private func applyHydration(_ result: HydrationResult, to session: ACPSession) {
+        session.goalDraft = editedGoalDrafts[session.id] ?? result.row.goalDraft
         persistedRows[result.row.id] = result.row
         for row in result.recent {
             persistedRows[row.id] = row
