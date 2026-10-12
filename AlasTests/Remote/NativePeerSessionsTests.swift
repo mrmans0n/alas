@@ -902,6 +902,24 @@ struct NativePeerSessionsTests {
         #expect(completed == !rejected)
     }
 
+    @Test(arguments: [false, true])
+    func identicallyRetypedDraftSurvivesSendConfirmation(whileAway: Bool) {
+        let (links, client) = drivenClient(canDrive: true)
+        client.draft = "continue"
+        client.sendPrompt()
+        client.draft = ""
+        client.draft = "continue"
+        if whileAway { client.clearSelection() }
+        links.receive(.queueState(sessionId: "s", items: [
+            .init(id: "new", text: "continue", imageCount: 0, resourceCount: 0, status: "pending",
+                  lastError: nil, scheduledAt: nil)
+        ]), from: "B")
+        if whileAway { client.select("B:s") }
+        #expect(!client.isPromptPending)
+        #expect(client.draft == "continue")
+        #expect(client.composerState(for: "B:s").draft.plainText == "continue")
+    }
+
     @Test(arguments: [(true, false, false), (false, false, false), (true, true, false), (true, true, true)])
     func pendingSendIsConfirmedAfterNavigatingBack(
         confirmationWhileAway: Bool, reconnect: Bool, disconnectedBeforeNavigation: Bool

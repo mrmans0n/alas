@@ -49,6 +49,7 @@ final class NativePeerSessions {
         let text: String
         let attachments: [NativePeerAttachment]
         let composerDraft: ACPComposerDraft
+        let composerRevision: Int
         let epoch: Int?
         var mentions: [RemoteMention] = []
 
@@ -555,6 +556,7 @@ final class NativePeerSessions {
         let pending = PendingPrompt(
             text: text, attachments: attachments,
             composerDraft: selectedSessionId.map { composerState(for: $0).draft } ?? .empty,
+            composerRevision: selectedSessionId.map { composerState(for: $0).revision } ?? 0,
             epoch: transcript?.epoch, mentions: mentions)
         pendingPrompt = pending
         pendingPromptExpectedIndex = transcript?.totalCount ?? 0
@@ -1075,7 +1077,8 @@ final class NativePeerSessions {
         suspendedPrompts.removeValue(forKey: sessionId)
         if confirmed {
             let composer = composerState(for: sessionId)
-            if composer.draft == suspended.prompt.composerDraft { composer.replaceDraft(.empty) }
+            if composer.revision == suspended.prompt.composerRevision,
+               composer.draft == suspended.prompt.composerDraft { composer.replaceDraft(.empty) }
         } else {
             composerErrors[sessionId] = superseded ? Self.unconfirmedDeliveryMessage : "Prompt was not delivered. Your draft was kept."
         }
@@ -1222,7 +1225,10 @@ final class NativePeerSessions {
     /// changed since.
     private func confirm(_ sent: PendingPrompt) {
         let completion = promptCompletion
-        let unchanged = selectedSessionId.map { composerState(for: $0).draft == sent.composerDraft } ?? true
+        let unchanged = selectedSessionId.map {
+            let composer = composerState(for: $0)
+            return composer.revision == sent.composerRevision && composer.draft == sent.composerDraft
+        } ?? true
         if unchanged, let selectedSessionId { composerState(for: selectedSessionId).replaceDraft(.empty) }
         if unchanged, draft.trimmingCharacters(in: .whitespacesAndNewlines) == sent.text { draft = "" }
         if attachments == sent.attachments { attachments = [] }
