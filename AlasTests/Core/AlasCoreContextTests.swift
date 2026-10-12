@@ -112,4 +112,34 @@ struct AlasCoreContextTests {
         }
         #expect(context.runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status == .finished(.unknown))
     }
+
+    /// A second run of a script that is still running would displace the
+    /// first one's record and drop its history, so it is refused.
+    @Test func refusesToStartAScriptThatIsAlreadyRunning() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-core-\(UUID().uuidString)")
+        let project = ProjectConfig(id: "p", name: "p", path: root.path, color: "blue", addedAt: Date())
+        let worktree = Worktree(
+            id: root.path, projectId: "p", name: "main", branch: "main", path: root,
+            status: .clean, lastActivity: Date()
+        )
+        let script = RunScript(
+            scope: .repo, fileName: "noop.sh", fileURL: root.appendingPathComponent("noop.sh"),
+            displayName: "Noop", onExit: .close, cwd: nil, isExecutable: false
+        )
+        let context = AlasCoreContext(
+            projects: ProjectsManager(persistedProjects: [project]),
+            runs: RunService(launch: { _, _ in 0 }),
+            runHistoryStore: nil
+        )
+        let running = RunRecord(
+            id: "first", scriptKey: script.key, scriptName: "Noop", worktreeID: worktree.id, branch: "main",
+            target: RunExecutionTarget(host: nil, workingDirectory: root.path), status: .running, startedAt: Date()
+        )
+        context.runRecords.begin(running)
+
+        await #expect(throws: RunService.RunError.alreadyRunning) {
+            try await context.runScript(script, in: worktree)
+        }
+        #expect(context.runRecords.record(worktreeID: worktree.id, scriptKey: script.key) == running)
+    }
 }

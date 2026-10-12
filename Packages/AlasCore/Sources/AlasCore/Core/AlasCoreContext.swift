@@ -137,6 +137,10 @@ public final class AlasCoreContext {
         guard let project = projects.projects.first(where: { $0.id == worktree.projectId }) else {
             throw ProjectCreationError.projectNotFound
         }
+        guard project.host == nil else { throw RunService.RunError.remoteProjectUnsupported }
+        guard runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status.isActive != true else {
+            throw RunService.RunError.alreadyRunning
+        }
         let runID = UUID().uuidString
         let displaced = runRecords.begin(RunRecord(
             id: runID,
