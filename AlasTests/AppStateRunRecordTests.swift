@@ -143,7 +143,7 @@ struct AppStateRunRecordTests {
     }
 
     private func makeFixture(
-        waiter: @escaping AppState.RunScriptCompletionWaiter = { _ in
+        waiter: @escaping RunCompletionWaiter = { _ in
             RunScriptCompletion(exitCode: 0, transcript: nil, truncated: false)
         },
         endpoint: URL? = nil,
@@ -536,7 +536,7 @@ struct AppStateRunRecordTests {
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
         await awaitLaunches(fixture)
         let firstRunID = try #require(runRecord(fixture)?.id)
-        let firstMonitor = fixture.state.runScriptCompletionTasks[firstRunID]?.task
+        let firstMonitor = fixture.state.core.runObservations[firstRunID]?.task
 
         fixture.state.restartScript(fixture.script, in: fixture.worktree)
         await awaitLaunches(fixture)
@@ -571,7 +571,7 @@ struct AppStateRunRecordTests {
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
         await awaitLaunches(fixture)
         let firstRunID = try #require(runRecord(fixture)?.id)
-        let firstMonitor = fixture.state.runScriptCompletionTasks[firstRunID]?.task
+        let firstMonitor = fixture.state.core.runObservations[firstRunID]?.task
 
         fixture.state.restartScript(fixture.script, in: fixture.worktree)
         await awaitLaunches(fixture)
@@ -634,7 +634,7 @@ struct AppStateRunRecordTests {
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
         await awaitLaunches(fixture)
         let runID = try #require(runRecord(fixture)?.id)
-        let entry = try #require(fixture.state.runScriptCompletionTasks[runID])
+        let entry = try #require(fixture.state.core.runObservations[runID])
         guard case let .local(paths) = entry.location else {
             Issue.record("Expected local capture")
             return
@@ -1008,7 +1008,7 @@ struct AppStateRunRecordTests {
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
         await awaitLaunches(fixture)
         let runID = try #require(runRecord(fixture)?.id)
-        let entry = try #require(fixture.state.runScriptCompletionTasks[runID])
+        let entry = try #require(fixture.state.core.runObservations[runID])
         guard case let .local(paths) = entry.location else {
             Issue.record("Expected local capture")
             return
