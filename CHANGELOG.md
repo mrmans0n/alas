@@ -6,6 +6,35 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.21.1] - 2026-10-12
+
+### ✨ Features
+
+- Add optional HTTPS remote access through Tailscale Serve, with MagicDNS discovery and a tailnet-only mode (#1910).
+- Prevent local projects from claiming the same directory and identify the project that already owns it (#1911).
+- Show a detailed context-window breakdown for compatible Claude adapters (#1914).
+- Bring the local rich composer to peer chats, including code blocks, images, slash commands, dictation, quoting, and draft preservation (#1944).
+- Create worktrees with temporary branch names that can be renamed from the first chat prompt (#1948).
+- Delete individual archived worktrees, or all eligible archived worktrees, from Settings (#1949).
+
+### 🐛 Fixes
+
+- Add a working built-in YAML language-server preset and correct the GitHub Actions language-server command (#1924).
+- Stop stage and discard buttons in diff hunk headers from blinking (#1932).
+- Rebind mounted ACP tabs to the correct project configuration after directory ownership changes (#1933).
+- Restore the Install action when a managed ACP adapter is missing after an earlier setup prompt was dismissed (#1940).
+
+### ⚡ Performance
+
+- Reduce dropped frames while scrolling and streaming ACP transcripts (#1939).
+- Improve multi-file diff-review scrolling, row reuse, highlighting, and layout performance (#1941).
+
+### 🏗️ Internal
+
+- Establish the headless `AlasCore` package and move core models, persistence, projects, sessions, runs, scheduling, workspace coordination, and local-text services behind framework-neutral APIs and `AlasCoreContext` (#1925, #1928, #1929, #1930, #1931, #1934, #1937, #1938, #1943, #1945, #1946, #1947, #1950).
+- Update `serde_json` to 1.0.154 (#1926, #1927).
+- Stabilize recurring CI fixtures and share one in-memory persistence store across test suites (#1909, #1942).
+
 ## [0.21.0] - 2026-10-11
 
 ### ✨ Features
