@@ -65,9 +65,8 @@ struct NativePeerRightPaneView: View {
     private var toolbar: some View {
         HStack(spacing: 6) {
             Icon(name: "branch", size: 10, color: theme.color("fg-muted"))
-            Text([client.selectedWorktreePeer?.name, client.selectedWorktreeGroup?.worktree?.branch]
-                .compactMap { $0 }
-                .joined(separator: " · "))
+            // The peer's name already shows in the center pane's tab bar.
+            Text(client.selectedWorktreeGroup?.worktree?.branch ?? "")
                 .font(.system(size: 10.5, design: .monospaced))
                 .foregroundColor(theme.color("fg-muted"))
                 .lineLimit(1)

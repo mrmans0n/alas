@@ -33,7 +33,7 @@ struct NativePeerTabBar: View {
             onRevealSidebar: onRevealSidebar
         ) {
             if let peer {
-                NativePeerTabMarker(name: peer.name, state: peer.state)
+                NativePeerTabMarker(peer: peer)
             }
         } tabs: {
             ForEach(rows) { row in
@@ -105,31 +105,50 @@ extension RemoteSessionSummary {
 
 /// The peer a worktree's tabs live on, ahead of its first tab.
 private struct NativePeerTabMarker: View {
-    let name: String
-    let state: NativePeerState
+    let peer: NativePeerGroup
     @Environment(\.theme) private var theme
 
     var body: some View {
+        let tint = theme.color(peer.state.presenceColorToken)
+        let summary = Self.summary(for: peer)
         HStack(spacing: 5) {
             Image(systemName: "laptopcomputer")
-                .font(.system(size: 10.5, weight: .medium))
+                .font(.system(size: 10, weight: .medium))
                 .foregroundColor(theme.color("fg-muted"))
-            Text(name)
-                .font(.system(size: 11.5, weight: .medium))
+            Text(peer.name)
+                .font(.system(size: 11, weight: .medium))
                 .foregroundColor(theme.color("fg-dim"))
                 .lineLimit(1)
-                .frame(maxWidth: 160, alignment: .leading)
+                .truncationMode(.middle)
+                .frame(maxWidth: 120, alignment: .leading)
             Circle()
-                .fill(theme.color(state.presenceColorToken))
+                .fill(tint)
                 .frame(width: 6, height: 6)
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, 8)
+        .frame(height: 22)
+        .background(Capsule().fill(tint.opacity(0.12)))
+        .overlay(Capsule().strokeBorder(tint.opacity(0.25), lineWidth: 1))
+        .padding(.horizontal, 8)
         .frame(height: 34)
         .overlay(alignment: .trailing) {
             Rectangle().fill(theme.color("line")).frame(width: 1, height: 16)
         }
-        .help("On \(name) · \(state.label)")
+        .help("On \(summary)")
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Peer \(name), \(state.label)")
+        .accessibilityLabel("Peer \(summary)")
+    }
+
+    /// Name, state, then any running or waiting sessions on the peer.
+    private static func summary(for peer: NativePeerGroup) -> String {
+        let running = peer.sessions.count { $0.isActive && $0.status == "streaming" }
+        return [
+            peer.name,
+            peer.state.label,
+            running > 0 ? "\(running) running" : nil,
+            peer.attentionCount > 0 ? "\(peer.attentionCount) waiting" : nil,
+        ]
+        .compactMap { $0 }
+        .joined(separator: " · ")
     }
 }
