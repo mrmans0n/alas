@@ -137,6 +137,10 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         /// VoiceOver toggles message-action visibility. Full Keyboard Access
         /// has no notification, so it is read at each rebuild instead.
         private var voiceOverObservation: NSKeyValueObservation?
+        /// Full Keyboard Access posts nothing when it changes, so it is
+        /// re-read when the app becomes active, as `AssistiveTechnologyStatus` does.
+        private var appActivationObserver: (any NSObjectProtocol)?
+        private var lastShowsActionsPermanently = false
         private var minimapRenderer: ACPTranscriptMinimap?
         private var pendingMinimapUpdate: DispatchWorkItem?
 
@@ -191,6 +195,14 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                     guard let self, let host = self.host else { return }
                     self.update(host: host)
                 }
+            }
+            appActivationObserver = NotificationCenter.default.addMainActorObserver(
+                forName: NSApplication.didBecomeActiveNotification, object: nil
+            ) { [weak self] in
+                guard let self, let host = self.host,
+                      Self.systemShowsActionsPermanently() != self.lastShowsActionsPermanently
+                else { return }
+                self.update(host: host)
             }
             self.reconciler = reconciler
             scroller.onScroll = { [weak self] previousY, newY, viewportH, contentH, isProgrammatic in
@@ -347,7 +359,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 // re-slice and re-fold the whole window.
                 renderRows: currentRenderRows(host: host),
                 nativeRowsEnabled: nativeRowsEnabled,
-                showsActionsPermanently: Self.systemShowsActionsPermanently()
+                showsActionsPermanently: currentShowsActionsPermanently()
             )
             hasNonSyntheticRow = specs.contains {
                 !$0.id.hasPrefix(ACPTranscriptScrollerReconciler.syntheticIdPrefix)
@@ -770,6 +782,15 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             default:
                 nil
             }
+        }
+
+        private func currentShowsActionsPermanently() -> Bool {
+            lastShowsActionsPermanently = Self.systemShowsActionsPermanently()
+            return lastShowsActionsPermanently
+        }
+
+        isolated deinit {
+            if let appActivationObserver { NotificationCenter.default.removeObserver(appActivationObserver) }
         }
 
         static func systemShowsActionsPermanently() -> Bool {
