@@ -4,10 +4,11 @@ public struct ACPDelegatedPromptSource: Codable, Equatable, Sendable {
     public let sessionId: String
     public let messageId: String
     /// How the sender relates to the session the prompt was delivered to.
-    /// `"child"` when a delegated child wrote to its parent; nil for a
-    /// parent→child prompt, a mission prompt, and every source persisted
-    /// before this field existed. A plain string so an unknown future value
-    /// still decodes (and falls back to the generic label).
+    /// `"child"` when a delegated child wrote to its parent, `"alas-shepherd"`
+    /// for a prompt from Alas's PR shepherd; nil for a parent→child prompt, a
+    /// mission prompt, and every source persisted before this field existed.
+    /// A plain string so an unknown future value still decodes (and falls
+    /// back to the generic label).
     public var senderRelationship: String? = nil
     /// The sender's agent id, recorded with `senderRelationship`.
     public var senderAgentId: String? = nil
@@ -34,6 +35,23 @@ public struct ACPDelegatedPromptSource: Codable, Equatable, Sendable {
     public static let childRelationship = "child"
 
     public var isFromChild: Bool { senderRelationship == Self.childRelationship }
+
+    public static let shepherdRelationship = "alas-shepherd"
+
+    /// Queued by Alas's PR shepherd rather than by another session.
+    public var isFromShepherd: Bool { senderRelationship == Self.shepherdRelationship }
+
+    /// A prompt the PR shepherd queues for the session that owns a pull or
+    /// merge request. `recordKey` (the shepherd record's storage key) names
+    /// the sender; every prompt gets its own `messageID`, so two prompts are
+    /// never deduplicated as one delivery.
+    public static func shepherd(recordKey: String, messageID: UUID) -> ACPDelegatedPromptSource {
+        ACPDelegatedPromptSource(
+            sessionId: "shepherd:\(recordKey)",
+            messageId: messageID.uuidString,
+            senderRelationship: shepherdRelationship
+        )
+    }
 
     /// The source for an inbox message delivered as a prompt. The sender is
     /// tagged as a child only when `senderDelegation` (the delegation record
@@ -76,8 +94,8 @@ public struct ACPDelegatedPromptSource: Codable, Equatable, Sendable {
     }
 
     /// The caption above a delivered prompt in the receiving transcript:
-    /// a child's own report, Alas's notice about a child, or a generic
-    /// delegated prompt.
+    /// a child's own report, Alas's notice about a child, a PR shepherd
+    /// prompt, or a generic delegated prompt.
     public static func transcriptLabel(
         for source: ACPDelegatedPromptSource,
         agentDisplayName: (String) -> String
@@ -86,6 +104,7 @@ public struct ACPDelegatedPromptSource: Codable, Equatable, Sendable {
             let count = Set(batch.map(\.sessionId)).count
             return "Updates from \(count) child \(count == 1 ? "session" : "sessions")"
         }
+        if source.isFromShepherd { return "Alas PR shepherd" }
         guard source.isFromChild else { return "Delegated prompt" }
         let shortId = String(source.sessionId.prefix(8))
         let child = source.senderAgentId.flatMap { $0.isEmpty ? nil : agentDisplayName($0) }
