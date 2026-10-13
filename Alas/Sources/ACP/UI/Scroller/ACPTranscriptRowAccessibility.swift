@@ -111,3 +111,23 @@ final class ACPTranscriptTextAccessibilityElement: NSAccessibilityElement, @unch
         return MainActor.assumeIsolated { frameForRange(start, end) } ?? accessibilityFrame()
     }
 }
+
+/// A code block's drawn Copy button as an accessible button, so VoiceOver
+/// and Full Keyboard Access reach it as they do `CodeBlockView`'s.
+final class ACPTranscriptCodeCopyAccessibilityElement: NSAccessibilityElement, @unchecked Sendable {
+    private let press: @MainActor @Sendable () -> Void
+
+    init(press: @escaping @MainActor @Sendable () -> Void) {
+        self.press = press
+        super.init()
+        setAccessibilityRole(.button)
+        setAccessibilityLabel("Copy code")
+    }
+
+    override func accessibilityPerformPress() -> Bool {
+        // AppKit asks on the main thread.
+        let press = press
+        MainActor.assumeIsolated { press() }
+        return true
+    }
+}

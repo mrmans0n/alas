@@ -103,6 +103,10 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
     /// The text rows' text area, kept while their text is, so VoiceOver
     /// keeps its place.
     var textElement: ACPTranscriptTextAccessibilityElement?
+    /// One accessible Copy button per code block, kept while the content is.
+    var codeCopyElements: [ACPTranscriptCodeCopyAccessibilityElement] = []
+    /// Where code-block Copy writes; tests swap in a private pasteboard.
+    var codeCopyPasteboard: NSPasteboard = .general
 
     /// The code block showing "Copied".
     var copiedCodeBlock: Int? {
@@ -195,6 +199,7 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
             codeCopyFeedbackTask?.cancel()
             copiedCodeBlock = nil
             textElement = nil
+            codeCopyElements = []
         }
         self.content = content
         self.contentMaxWidth = contentMaxWidth

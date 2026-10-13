@@ -224,6 +224,20 @@ import Testing
         #expect(view.selectedText() == "First paragraph.\nSecond code here.\nlet x = 1")
     }
 
+    @Test func codeBlockCopyIsAnAccessibleButton() throws {
+        let view = row(.agent(markdown: "Intro.\n\n```swift\nlet x = 1\n```", commentary: false))
+        _ = view.measuredHeight(forWidth: 800)
+        let pasteboard = NSPasteboard(name: .init("acp-native-ax-copy-\(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+        view.codeCopyPasteboard = pasteboard
+        let copy = try #require(view.accessibilityChildren()?.compactMap { $0 as? ACPTranscriptCodeCopyAccessibilityElement }.first)
+        #expect(copy.accessibilityRole() == .button)
+        #expect(copy.accessibilityLabel() == "Copy code")
+        #expect(!copy.accessibilityFrameInParentSpace().isEmpty)
+        #expect(copy.accessibilityPerformPress())
+        #expect(pasteboard.string(forType: .string) == "let x = 1")
+    }
+
     @Test func codeBlockCopyCopiesOnlyTheCodeAndShowsCopiedUntilTheDelayEnds() async throws {
         let view = row(.agent(markdown: "```swift\nlet x = 1\n```", commentary: false))
         _ = view.measuredHeight(forWidth: 800)

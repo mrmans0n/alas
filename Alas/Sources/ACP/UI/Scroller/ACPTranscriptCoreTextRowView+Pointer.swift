@@ -352,6 +352,11 @@ extension ACPTranscriptCoreTextRowView {
         selectAll(nil)
     }
 
+    /// Copies code block `index`, as a click on its Copy button does.
+    func copyCodeBlock(_ index: Int) {
+        copyCode(index, to: codeCopyPasteboard)
+    }
+
     private func copyCode(_ index: Int, to pasteboard: NSPasteboard) {
         guard let markdown = markdown?.layout, markdown.codeBlocks.indices.contains(index) else { return }
         pasteboard.clearContents()

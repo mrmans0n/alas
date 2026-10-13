@@ -55,21 +55,28 @@ extension ACPTranscriptCoreTextRowView {
         // The system's list may omit subviews, so add the actions button
         // explicitly unless it is already there.
         var children = super.accessibilityChildren() ?? []
-        let (button, elements) = MainActor.assumeIsolated { (actionsButton as NSButton?, textAccessibilityElements()) }
+        let (button, elements, copies) = MainActor.assumeIsolated {
+            (actionsButton as NSButton?, textAccessibilityElements(), codeCopyAccessibilityElements())
+        }
         if let button, !children.contains(where: { $0 as AnyObject === button }) { children.append(button) }
-        return children + elements
+        return children + elements + copies
     }
 
     override func accessibilityHitTest(_ point: NSPoint) -> Any? {
         // AppKit asks on the main thread.
-        let hit: (button: NSButton?, element: ACPTranscriptTextAccessibilityElement?) = MainActor.assumeIsolated {
-            guard let window else { return (nil, nil) }
-            let local = convert(window.convertPoint(fromScreen: point), from: nil)
-            // A visible actions button answers for itself.
-            if let actionsButton, actionsButton.alphaValue > 0, actionsButton.frame.contains(local) { return (actionsButton, nil) }
-            return (nil, textAccessibilityElements().first { $0.accessibilityFrameInParentSpace().contains(local) })
-        }
+        let hit: (button: NSButton?, copy: ACPTranscriptCodeCopyAccessibilityElement?, element: ACPTranscriptTextAccessibilityElement?) =
+            MainActor.assumeIsolated {
+                guard let window else { return (nil, nil, nil) }
+                let local = convert(window.convertPoint(fromScreen: point), from: nil)
+                // A visible actions button answers for itself.
+                if let actionsButton, actionsButton.alphaValue > 0, actionsButton.frame.contains(local) { return (actionsButton, nil, nil) }
+                if let copy = codeCopyAccessibilityElements().first(where: { $0.accessibilityFrameInParentSpace().contains(local) }) {
+                    return (nil, copy, nil)
+                }
+                return (nil, nil, textAccessibilityElements().first { $0.accessibilityFrameInParentSpace().contains(local) })
+            }
         if let button = hit.button { return button }
+        if let copy = hit.copy { return copy }
         let element = hit.element
         return element ?? super.accessibilityHitTest(point)
     }
@@ -90,6 +97,24 @@ extension ACPTranscriptCoreTextRowView {
             }
             return
         }
+    }
+
+    /// Code-block Copy buttons, framed where they are drawn.
+    func codeCopyAccessibilityElements() -> [ACPTranscriptCodeCopyAccessibilityElement] {
+        guard hasTextArea, let (markdown, origin) = markdown else { return [] }
+        if codeCopyElements.count != markdown.codeBlocks.count {
+            codeCopyElements = markdown.codeBlocks.indices.map { index in
+                let element = ACPTranscriptCodeCopyAccessibilityElement { [weak self] in self?.copyCodeBlock(index) }
+                element.setAccessibilityParent(self)
+                return element
+            }
+        }
+        for (index, element) in codeCopyElements.enumerated() {
+            element.setAccessibilityFrameInParentSpace(
+                markdown.copyButtonRect(index, copied: copiedCodeBlock == index).offsetBy(dx: origin.x, dy: origin.y)
+            )
+        }
+        return codeCopyElements
     }
 
     private func textAccessibilityElements() -> [ACPTranscriptTextAccessibilityElement] {
