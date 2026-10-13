@@ -182,13 +182,8 @@ extension AlasCoreContext {
         case nil, .deleteFailed: break
         default: throw WorktreeArchiveRefusal.operationInProgress
         }
-        let claim = WorktreeOperationState.archiving(projectId: project.id)
-        projects.setOperationState(for: worktree, state: claim)
-        defer {
-            if projects.operationState(for: worktree) == claim {
-                projects.setOperationState(for: worktree, state: nil)
-            }
-        }
+        let claim = projects.claimOperation(.archiving(projectId: project.id), for: worktree)
+        defer { projects.releaseOperation(claim, for: worktree) }
         if let refusal = await workspaceOwnershipRefusal(for: worktree) {
             throw WorktreeArchiveRefusal.ownedByWorkspaceCheckout(refusal)
         }
@@ -214,6 +209,29 @@ extension AlasCoreContext {
             projects.setWorktreeHidden(projectId: projectID, path: path, hidden: wasHidden)
             throw error
         }
+    }
+
+    /// Reactivates an archived Workspace checkout. Until `publish` (which
+    /// refreshes whatever snapshot callers read ownership from) returns, its
+    /// members count as owned, so no archive slips in while the checkout's
+    /// state is in flight.
+    public func unarchiveWorkspaceCheckout(
+        id: UUID,
+        publish: @MainActor () async -> Void = {}
+    ) async throws -> WorkspaceCheckout {
+        unarchivingWorkspaceCheckouts[id, default: 0] += 1
+        defer {
+            unarchivingWorkspaceCheckouts[id]! -= 1
+            if unarchivingWorkspaceCheckouts[id] == 0 { unarchivingWorkspaceCheckouts[id] = nil }
+        }
+        let checkout = try await workspaceCoordinator().unarchive(checkoutID: id)
+        await publish()
+        return checkout
+    }
+
+    /// Whether `unarchiveWorkspaceCheckout` is reactivating checkout `id`.
+    public func isUnarchivingWorkspaceCheckout(_ id: UUID) -> Bool {
+        unarchivingWorkspaceCheckouts[id] != nil
     }
 
     /// Whether an interrupted checkpoint restore references the checkout.
@@ -276,13 +294,8 @@ extension AlasCoreContext {
         case nil, .deleteFailed: break
         default: throw WorktreeDeletionRefusal.operationInProgress
         }
-        let claim = WorktreeOperationState.deleting(projectId: project.id)
-        projects.setOperationState(for: worktree, state: claim)
-        defer {
-            if projects.operationState(for: worktree) == claim {
-                projects.setOperationState(for: worktree, state: nil)
-            }
-        }
+        let claim = projects.claimOperation(.deleting(projectId: project.id), for: worktree)
+        defer { projects.releaseOperation(claim, for: worktree) }
 
         let result = await removeWorktree(WorktreeRemovalRequest(
             worktree: worktree,
@@ -330,6 +343,10 @@ extension AlasCoreContext {
     /// on its own, matched like the app's worktree-cleanup ownership.
     /// Unreadable Workspace state refuses too.
     func workspaceOwnershipRefusal(for worktree: Worktree) async -> String? {
+        // Read before the load: an unarchive can finish, and leave the set,
+        // while the load is suspended. One starting later is refused by the
+        // claim the caller holds.
+        let unarchiving = unarchivingWorkspaceCheckouts
         let state: WorkspaceStateFile
         switch await workspaceStore.load() {
         case .missing: return nil
@@ -338,7 +355,9 @@ extension AlasCoreContext {
         }
         let path = worktree.path.standardizedFileURL.path
         let owner = state.checkouts.first { checkout in
-            checkout.workspaceID != nil && checkout.archivedAt == nil && checkout.members.contains { member in
+            checkout.workspaceID != nil
+                && (checkout.archivedAt == nil || unarchiving[checkout.id] != nil)
+                && checkout.members.contains { member in
                 guard member.projectID == worktree.projectId,
                       URL(fileURLWithPath: checkout.inAppWorktreePath(member.worktreePath)).standardizedFileURL.path == path
                 else { return false }
