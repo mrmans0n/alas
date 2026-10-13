@@ -571,10 +571,11 @@ public final class ReviewShepherd {
     /// lookup only finds open requests on the worktree's current branch, so
     /// when it returns another request or none, the request is read by
     /// number on the record's remote. Merged or closed there is decided on
-    /// (the policy finishes the record), with its checks loaded like a branch
-    /// lookup's. Still open means the worktree moved to another branch or the
-    /// request was retargeted: nothing is decided until the branch lookup
-    /// finds it again, and a new base is adopted so it can.
+    /// (the policy finishes the record before looking at checks, so they are
+    /// not read and a checks failure can't keep it from finishing). Still
+    /// open means the worktree moved to another branch or the request was
+    /// retargeted: nothing is decided until the branch lookup finds it again,
+    /// and a new base is adopted so it can.
     private func snapshotCarryingRequest(
         _ id: ShepherdRecordID,
         from snapshot: ReviewLoopSnapshot,
@@ -588,21 +589,20 @@ public final class ReviewShepherd {
         let request: ReviewRequest
         do {
             request = try await provider.reviewRequest(remote: record.remote, number: id.requestNumber, cwd: worktreePath)
-            if request.state != .open {
-                let checks = try await provider.checks(remote: record.remote, request: request, cwd: worktreePath)
-                return ReviewLoopSnapshot(
-                    local: snapshot.local,
-                    remote: record.remote,
-                    reviewRequest: request.withChecks(checks),
-                    providerAvailable: true,
-                    providerAuthenticated: true,
-                    providerCapabilities: provider.capabilities,
-                    errorMessage: nil
-                )
-            }
         } catch {
             noteFailure(id, String(describing: error))
             return nil
+        }
+        guard request.state == .open else {
+            return ReviewLoopSnapshot(
+                local: snapshot.local,
+                remote: record.remote,
+                reviewRequest: request,
+                providerAvailable: true,
+                providerAuthenticated: true,
+                providerCapabilities: provider.capabilities,
+                errorMessage: nil
+            )
         }
         guard var current = records[id] else { return nil }
         failureCounts[id] = nil
