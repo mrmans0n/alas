@@ -54,6 +54,24 @@ import Testing
         #expect(abs(background.rect.height - host.fittingSize.height) < 1)
     }
 
+    @Test func separateLinksToOneURLStaySeparate() throws {
+        let url = "https://example.com"
+        let source = "First [docs](\(url)) here, then plain words in between, and [docs again](\(url)).\n\nNew block [docs](\(url))."
+        let layout = try #require(ACPTranscriptMarkdownLayout.make(source: source, width: 160, theme: theme, typography: .default))
+        #expect(layout.linkSpans().map(\.text) == ["docs", "docs again", "docs"])
+    }
+
+    @Test func aWrappedLinkIsOneSpan() throws {
+        let layout = try #require(ACPTranscriptMarkdownLayout.make(
+            source: "Read [the full migration guide for this release](https://example.com) first.", width: 120,
+            theme: theme, typography: .default
+        ))
+        let spans = layout.linkSpans()
+        #expect(spans.count == 1)
+        #expect(spans.first?.text == "the full migration guide for this release")
+        #expect((spans.first?.rects.count ?? 0) > 1)
+    }
+
     @Test func linksAreStyledAndHitTestable() throws {
         let layout = try #require(ACPTranscriptMarkdownLayout.make(source: "See [docs](https://example.com) now.", width: 400, theme: theme, typography: .default))
         let line = try #require(layout.lines.first)

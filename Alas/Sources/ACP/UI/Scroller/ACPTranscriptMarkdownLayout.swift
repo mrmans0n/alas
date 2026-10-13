@@ -142,6 +142,10 @@ struct ACPTranscriptMarkdownLayout {
         let url: URL
         let text: String
         let rects: [CGRect]
+        /// The block and source offset where the span ends, so only the
+        /// next run of the same link continues it.
+        let block: Int
+        let end: Int
     }
 
     /// Every link in drawing order. Computed on demand (accessibility asks),
@@ -161,12 +165,19 @@ struct ACPTranscriptMarkdownLayout {
                 let rect = CGRect(x: line.origin.x + position.x, y: line.origin.y, width: width, height: line.height)
                 let text = NSMaxRange(NSRange(location: range.location, length: range.length)) <= blockText.length
                     ? blockText.substring(with: NSRange(location: range.location, length: range.length)) : ""
-                // Runs of one link continue across style changes and line wraps.
-                if let last = spans.last, last.url == url, let lastRect = last.rects.last,
-                   abs(lastRect.maxX - rect.minX) < 1 || rect.minY >= lastRect.maxY - 0.5 {
-                    spans[spans.count - 1] = LinkSpan(url: url, text: last.text + text, rects: last.rects + [rect])
+                let end = range.location + range.length
+                // Runs of one link continue across style changes and line wraps:
+                // same URL, same block, and nothing but wrapped-away whitespace
+                // between them in the source. Two links to one URL stay apart.
+                if let last = spans.last, last.url == url, last.block == block, last.end <= range.location,
+                   blockText.substring(with: NSRange(location: last.end, length: range.location - last.end))
+                       .allSatisfy(\.isWhitespace) {
+                    let gap = blockText.substring(with: NSRange(location: last.end, length: range.location - last.end))
+                    spans[spans.count - 1] = LinkSpan(
+                        url: url, text: last.text + gap + text, rects: last.rects + [rect], block: block, end: end
+                    )
                 } else {
-                    spans.append(LinkSpan(url: url, text: text, rects: [rect]))
+                    spans.append(LinkSpan(url: url, text: text, rects: [rect], block: block, end: end))
                 }
             }
         }
