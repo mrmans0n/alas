@@ -9306,6 +9306,12 @@ extension ACPSessionManager {
         onDispatchRegistered: (@Sendable () -> Void)? = nil
     ) -> Bool {
         guard !isDisposed, !mergingForks.contains(sessionId), let session = sessions[sessionId] else { return false }
+        // Prompts into an attached session start turns without attaching, so
+        // the worktree operation gate is enforced here too.
+        guard admitsNewWork() else {
+            session.lastError = Self.worktreeOperationInProgressMessage
+            return false
+        }
         session.nextPromptActivity.send()
         if case .needsAuth = session.setupState {
             return false

@@ -478,6 +478,15 @@ struct RunScriptLaunchTests {
         #expect(manager.liveSession(for: "new") == nil)
         await manager.attach(to: "existing", freshlyCreated: true)
         #expect(manager.runners["existing"] == nil, "no agent attaches through any path")
+        let submitted = manager.submit(
+            sessionId: "existing", text: "hi", attachments: [], intent: .auto, onCompleted: { _ in }
+        )
+        #expect(!submitted, "no prompt is dispatched into an existing session")
+
+        // The claim counts under whichever project now lists the same path.
+        state.projectsManager.setOperationState(for: worktree, state: nil)
+        state.projectsManager.setOperationState(forWorktreeId: worktree.id, projectId: "other", state: .preparingDelete)
+        #expect(!manager.admitsNewWork())
     }
 
     @MainActor

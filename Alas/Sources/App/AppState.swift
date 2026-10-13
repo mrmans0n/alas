@@ -13514,7 +13514,8 @@ final class AppState {
         if isFolderWorktree(worktree) {
             mgr.upstreamReferences.environment = .noRemotes
         }
-        mgr.admitsNewWork = { [weak self] in self?.projectsManager.admitsNewWork(in: worktree) ?? false }
+        let worktreeId = worktree.id
+        mgr.admitsNewWork = { [weak self] in self?.projectsManager.admitsNewWork(worktreeId: worktreeId) ?? false }
         acpManagers[owner] = mgr
         acpManagerProjectIds[owner] = worktree.projectId
         observeNextPromptSessions(mgr, owner: owner)

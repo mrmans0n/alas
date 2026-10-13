@@ -456,6 +456,13 @@ public final class ProjectsManager {
         operationState(for: worktree)?.blocksAdmission != true
     }
 
+    /// Whether new work may start at the worktree id under any project. Used
+    /// where only the id is stable: a same-path checkout can move between
+    /// projects while its sessions keep running.
+    public func admitsNewWork(worktreeId: String) -> Bool {
+        !worktreeOperationStates.contains { $0.key.worktreeId == worktreeId && $0.value.blocksAdmission }
+    }
+
     /// Every claim currently open, keyed by project and worktree id.
     public func operationStatesSnapshot() -> [WorktreeOperationKey: WorktreeOperationState] {
         worktreeOperationStates
