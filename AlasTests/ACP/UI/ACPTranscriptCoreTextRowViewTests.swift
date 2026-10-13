@@ -83,6 +83,25 @@ import Testing
         #expect(button.alphaValue == 1)
     }
 
+    @Test func reconfiguringAMountedRowWhenAssistiveTechTurnsOnShowsTheButtonWithoutHover() throws {
+        let view = row(.agent(markdown: "Hi", commentary: false), actions: .testing(menu: true))
+        _ = view.measuredHeight(forWidth: 1_400)
+        #expect(view.actionsButtonForTesting == nil)
+        var on = ACPTranscriptNativeRows.Actions.testing(menu: true)
+        on.showsActionsPermanently = true
+        view.configure(
+            content: .agent(markdown: "Hi", commentary: false), contentMaxWidth: 720, inToolCallGroup: false,
+            theme: theme, typography: .default, actions: on
+        )
+        let button = try #require(view.actionsButtonForTesting)
+        #expect(button.alphaValue == 1)
+        view.configure(
+            content: .agent(markdown: "Hi", commentary: false), contentMaxWidth: 720, inToolCallGroup: false,
+            theme: theme, typography: .default, actions: .testing(menu: true)
+        )
+        #expect(button.alphaValue == 0)
+    }
+
     @Test(arguments: [
         (ACPTranscriptCoreTextRowView.Content.thought(label: "Planning"), true),
         (.toolCall(

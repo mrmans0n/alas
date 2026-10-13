@@ -77,6 +77,18 @@ struct ACPTranscriptScrollerRowSpecsTests {
         }
     }
 
+    @Test("a message row's token changes when assistive tech turns on so mounted rows reconfigure")
+    func messageRowTokenCoversPermanentActions() throws {
+        let host = makeHost()
+        let agent = ACPMessage.agent(id: UUID(), StreamingText("answer"))
+        host.transcript.messages = [agent]
+        func token(_ permanent: Bool) throws -> ACPRowEqualityToken {
+            let specs = ACPTranscriptScroller.Coordinator.rowSpecs(host: host, showsActionsPermanently: permanent)
+            return try #require(specs.first { $0.id == agent.stableId }).equalityToken
+        }
+        #expect(try !token(true).isEqual(to: token(false)))
+    }
+
     @Test("only rows that park are considered for native drawing, so a streaming answer is never parsed")
     func nativeRowsSkipActiveTurn() {
         let host = makeHost()

@@ -134,6 +134,9 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         /// Whether eligible rows draw natively; the flag, unless a test sets it.
         var nativeRowsEnabled = ACPTranscriptNativeRows.isEnabled
         private var hasPendingRowExpansionUpdate = false
+        /// VoiceOver toggles message-action visibility. Full Keyboard Access
+        /// has no notification, so it is read at each rebuild instead.
+        private var voiceOverObservation: NSKeyValueObservation?
         private var minimapRenderer: ACPTranscriptMinimap?
         private var pendingMinimapUpdate: DispatchWorkItem?
 
@@ -179,6 +182,13 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                     guard let self else { return }
                     self.hasPendingRowExpansionUpdate = false
                     guard let host = self.host else { return }
+                    self.update(host: host)
+                }
+            }
+            voiceOverObservation = NSWorkspace.shared.observe(\.isVoiceOverEnabled, options: [.new]) { [weak self] _, _ in
+                // Deferred like the expansion store: KVO can fire mid-update.
+                Task { @MainActor [weak self] in
+                    guard let self, let host = self.host else { return }
                     self.update(host: host)
                 }
             }
@@ -336,7 +346,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 // read, so a width-only or expand-toggle update doesn't
                 // re-slice and re-fold the whole window.
                 renderRows: currentRenderRows(host: host),
-                nativeRowsEnabled: nativeRowsEnabled
+                nativeRowsEnabled: nativeRowsEnabled,
+                showsActionsPermanently: Self.systemShowsActionsPermanently()
             )
             hasNonSyntheticRow = specs.contains {
                 !$0.id.hasPrefix(ACPTranscriptScrollerReconciler.syntheticIdPrefix)
@@ -509,7 +520,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             expansionSeeds: ACPToolCallGroupExpansionSeeds = ACPToolCallGroupExpansionSeeds(),
             rowExpansionStore: ACPTranscriptRowExpansionStore = ACPTranscriptRowExpansionStore(),
             renderRows: [ACPTranscriptRenderRow]? = nil,
-            nativeRowsEnabled: Bool = ACPTranscriptNativeRows.isEnabled
+            nativeRowsEnabled: Bool = ACPTranscriptNativeRows.isEnabled,
+            showsActionsPermanently: Bool = Coordinator.systemShowsActionsPermanently()
         ) -> [ACPTranscriptRowSpec] {
             let transcript = host.transcript
             var specs: [ACPTranscriptRowSpec] = []
@@ -541,7 +553,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             var forkDividerEmitted = false
             // Read once: each `@Published` read goes through the property
             // wrapper, and this loop visits every row in the window.
-            let snapshot = RowSnapshot(host: host)
+            let snapshot = RowSnapshot(host: host, showsActionsPermanently: showsActionsPermanently)
             let messages = snapshot.messages
             let isTurnActive = transcript.streamingState != .idle
             let latestUserIndex = transcript.latestUserMessageIndex ?? 0
@@ -654,9 +666,12 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             let messages: [ACPMessage]
             let liveNarrationIndex: Int?
             let canFork: (Int) -> Bool
+            /// VoiceOver or Full Keyboard Access: message actions stay visible.
+            let showsActionsPermanently: Bool
 
             @MainActor
-            init(host: ACPTranscriptScroller) {
+            init(host: ACPTranscriptScroller, showsActionsPermanently: Bool) {
+                self.showsActionsPermanently = showsActionsPermanently
                 let transcript = host.transcript
                 messages = transcript.messages
                 liveNarrationIndex = ACPNarrationLiveness.liveIndex(
@@ -696,7 +711,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                     ),
                     inToolCallGroup: inToolCallGroup,
                     canCancelSubagent: host.onCancelSubagent != nil,
-                    isExpanded: expansion?.isExpanded ?? false
+                    isExpanded: expansion?.isExpanded ?? false,
+                    showsActionsPermanently: snapshot.showsActionsPermanently && Self.hasActionsMenu(message)
                 ),
                 host: host
             )
@@ -756,7 +772,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             }
         }
 
-        private static func showsActionsPermanently() -> Bool {
+        static func systemShowsActionsPermanently() -> Bool {
             NSWorkspace.shared.isVoiceOverEnabled || NSApp.isFullKeyboardAccessEnabled
         }
 
@@ -814,7 +830,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 menu: menu,
                 toggleExpanded: toggleExpanded,
                 openURL: { url in openLink(host: host, url) },
-                showsActionsPermanently: showsActionsPermanently()
+                showsActionsPermanently: snapshot.showsActionsPermanently
             )
         }
 
@@ -832,6 +848,16 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             /// A tool call or thought the user expanded: a toggle swaps
             /// between the native row and the expanded SwiftUI card.
             let isExpanded: Bool
+            /// Assistive tech keeps the actions button visible on rows that
+            /// have a menu; a change must reconfigure mounted rows.
+            let showsActionsPermanently: Bool
+        }
+
+        private static func hasActionsMenu(_ message: ACPMessage) -> Bool {
+            switch message {
+            case .user, .agent: true
+            default: false
+            }
         }
 
         private static func readyFork(host: ACPTranscriptScroller) -> ACPSessionForkRecord? {
@@ -1007,7 +1033,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                         menu: nil,
                         toggleExpanded: { expansionSeeds.setExpanded($0, members: memberStableIds) },
                         openURL: { url in openLink(host: host, url) },
-                        showsActionsPermanently: showsActionsPermanently()
+                        showsActionsPermanently: false
                     )
                 )
             }
