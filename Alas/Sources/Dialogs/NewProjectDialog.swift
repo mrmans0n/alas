@@ -132,6 +132,11 @@ private struct ProjectDialog: View {
     @State private var repoHookInspectionTask: Task<Void, Never>?
     @State private var repoHookReviewTask: Task<Void, Never>?
     @State private var mcpServers: [ProjectMCPServer] = []
+    @State private var shepherdInstructions: String = ""
+    @State private var shepherdRequiredReviewers: [String] = []
+    /// `.alas/shepherd.local.md` or `.alas/shepherd.md` when the project's
+    /// main worktree has one; that file wins over these settings.
+    @State private var shepherdRulesOverride: String?
     @State private var mcpManagerPresented = false
     @State private var isValidating = false
     @State private var errorMessage: String?
@@ -209,6 +214,7 @@ private struct ProjectDialog: View {
                             )
                         case .automation:
                             startupScriptsSection
+                            shepherdSection
                         case .integrations:
                             integrationsSection
                         }
@@ -235,6 +241,7 @@ private struct ProjectDialog: View {
             populateInitialValues()
             Task { await loadAvatarPresetIfAvailable() }
             refreshRepoHookPresentations()
+            loadShepherdRulesOverride()
         }
         .onDisappear {
             repoHookInspectionTask?.cancel()
@@ -885,6 +892,103 @@ private struct ProjectDialog: View {
         }
     }
 
+    /// Per-project PR shepherd rules. Shown only when editing a local git
+    /// project: the shepherd does not run for folders or remote worktrees.
+    @ViewBuilder
+    private var shepherdSection: some View {
+        if case .edit(let project) = mode, !project.isFolder, project.host == nil {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("PR shepherd")
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .foregroundColor(theme.color("fg"))
+                Text("Instructions and required reviewers Alas uses when it fixes or merges this project's pull requests.")
+                    .font(.system(size: 11))
+                    .foregroundColor(theme.color("fg-muted"))
+                if let shepherdRulesOverride {
+                    HStack(spacing: 6) {
+                        Image(systemName: "doc.text")
+                            .font(.system(size: 10.5))
+                        Text("Overridden by \(shepherdRulesOverride)")
+                            .font(.system(size: 11))
+                    }
+                    .foregroundStyle(theme.color("warn"))
+                    .help("The repository file wins over these settings. Remove or rename it to use them.")
+                    .accessibilityElement(children: .combine)
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Instructions")
+                        .font(.system(size: 11.5, weight: .medium))
+                        .foregroundColor(theme.color("fg"))
+                    ProjectStartupScriptEditor(text: $shepherdInstructions, minHeight: 60)
+                        .accessibilityLabel("PR shepherd instructions")
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Required reviewers")
+                        .font(.system(size: 11.5, weight: .medium))
+                        .foregroundColor(theme.color("fg"))
+                    Text("Logins that must review the current head before auto-merge.")
+                        .font(.system(size: 11))
+                        .foregroundColor(theme.color("fg-muted"))
+                    ForEach(shepherdRequiredReviewers.indices, id: \.self) { index in
+                        HStack(spacing: 8) {
+                            AlasField(
+                                text: shepherdReviewerBinding(at: index),
+                                placeholder: "chatgpt-codex-connector",
+                                monospaced: true
+                            )
+                            MCPServerIconButton(icon: "trash", tooltip: "Remove reviewer") {
+                                guard shepherdRequiredReviewers.indices.contains(index) else { return }
+                                shepherdRequiredReviewers.remove(at: index)
+                            }
+                        }
+                    }
+                    AlasButton(title: "Add Reviewer", icon: "plus", style: .subtle) {
+                        shepherdRequiredReviewers.append("")
+                    }
+                }
+            }
+        }
+    }
+
+    private func shepherdReviewerBinding(at index: Int) -> Binding<String> {
+        Binding(
+            get: { shepherdRequiredReviewers.indices.contains(index) ? shepherdRequiredReviewers[index] : "" },
+            set: { value in
+                guard shepherdRequiredReviewers.indices.contains(index) else { return }
+                shepherdRequiredReviewers[index] = value
+            }
+        )
+    }
+
+    /// Trimmed instructions, and reviewers without blanks, a leading `@`, or
+    /// case-insensitive duplicates. Empty settings clear the stored value.
+    private var draftShepherdSettings: ProjectShepherdSettings {
+        var seen = Set<String>()
+        let reviewers = shepherdRequiredReviewers.compactMap { raw -> String? in
+            var login = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if login.hasPrefix("@") { login.removeFirst() }
+            guard !login.isEmpty, seen.insert(login.lowercased()).inserted else { return nil }
+            return login
+        }
+        return ProjectShepherdSettings(
+            instructions: shepherdInstructions.trimmingCharacters(in: .whitespacesAndNewlines),
+            requiredReviewers: reviewers
+        )
+    }
+
+    /// Reads only the repo files (no project settings), so any non-`none`
+    /// source means a file overrides this section.
+    private func loadShepherdRulesOverride() {
+        guard case .edit(let project) = mode, !project.isFolder, project.host == nil else { return }
+        let root = URL(fileURLWithPath: project.path, isDirectory: true)
+        Task {
+            let rules = await Task.detached {
+                ShepherdRulesResolver.load(worktreePath: root, projectSettings: nil)
+            }.value
+            shepherdRulesOverride = rules.source == .none ? nil : rules.sourceLabel
+        }
+    }
+
     private func repoHookScriptMode(for event: RepoHookEvent) -> ProjectStartupScriptMode {
         switch event {
         case .sessionOpen: sessionOpenMode
@@ -1085,6 +1189,8 @@ private struct ProjectDialog: View {
             worktreeCreateScript = project.startupScripts.worktreeCreateScript
             agentSettings = project.startupScripts
             mcpServers = project.mcpServers
+            shepherdInstructions = project.shepherd?.instructions ?? ""
+            shepherdRequiredReviewers = project.shepherd?.requiredReviewers ?? []
         }
     }
 
@@ -1391,7 +1497,8 @@ private struct ProjectDialog: View {
                 icon: draftIcon,
                 startupScripts: draftStartupScripts,
                 mcpServers: mcpServers,
-                worktreeBranchTemplate: worktreeBranchTemplate
+                worktreeBranchTemplate: worktreeBranchTemplate,
+                shepherd: draftShepherdSettings
             )
             presented = false
         }

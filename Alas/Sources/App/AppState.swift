@@ -6654,7 +6654,8 @@ final class AppState {
         icon: ProjectIcon,
         startupScripts: ProjectStartupScripts,
         mcpServers: [ProjectMCPServer],
-        worktreeBranchTemplate: String? = nil
+        worktreeBranchTemplate: String? = nil,
+        shepherd: ProjectShepherdSettings? = nil
     ) {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else { return }
@@ -6666,7 +6667,8 @@ final class AppState {
                 icon: icon,
                 startupScripts: startupScripts,
                 mcpServers: mcpServers,
-                worktreeBranchTemplate: worktreeBranchTemplate
+                worktreeBranchTemplate: worktreeBranchTemplate,
+                shepherd: shepherd
             )
         )
         saveProjects()

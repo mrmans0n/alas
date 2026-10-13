@@ -57,6 +57,33 @@ struct ChangesPane: View {
                     }
                 }
 
+                SettingsGroup(title: "PR shepherd") {
+                    SettingsRow(
+                        name: "Auto-fix new PRs",
+                        desc: "Send failing checks, trusted review threads and merge conflicts back to the session that owns the PR. Each PR can change this from its toolbar button or the review drawer."
+                    ) {
+                        Toggle("", isOn: state.bind(\.changes.shepherd.autoFix))
+                            .toggleStyle(.switch)
+                            .labelsHidden()
+                    }
+                    SettingsRow(
+                        name: "Auto-merge new PRs",
+                        desc: "Squash-merge once checks pass, required reviewers have reviewed the current head, and the head has stayed the same for two polls."
+                    ) {
+                        Toggle("", isOn: state.bind(\.changes.shepherd.autoMerge))
+                            .toggleStyle(.switch)
+                            .labelsHidden()
+                    }
+                    SettingsRow(
+                        name: "Archive worktree after its PR merges",
+                        desc: "Runs once the owning session is idle. Hides the worktree and stops its tabs; nothing on disk is deleted."
+                    ) {
+                        Toggle("", isOn: state.bind(\.changes.shepherd.archiveAfterMerge))
+                            .toggleStyle(.switch)
+                            .labelsHidden()
+                    }
+                }
+
                 SettingsGroup(title: "Stacked diffs") {
                     SettingsRow(
                         name: "git-gud (gg)",
