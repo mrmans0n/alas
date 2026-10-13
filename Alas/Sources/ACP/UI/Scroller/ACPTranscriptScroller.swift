@@ -881,7 +881,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                     }
                 }
             )
-            if mayBeNative, !group.isLive {
+            // The native header has no "Show N earlier" button.
+            if mayBeNative, !group.isLive, hiddenMemberCount == 0 {
                 spec.native = ACPTranscriptNativeRows.row(
                     .toolGroupHeader(label: summary.label, iconSystemName: summary.iconSystemName, expanded: expanded),
                     contentMaxWidth: host.contentMaxWidth, inToolCallGroup: false,
