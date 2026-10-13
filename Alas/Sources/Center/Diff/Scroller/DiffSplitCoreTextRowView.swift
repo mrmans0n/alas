@@ -1407,12 +1407,8 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
             let tone = side.tones.indices.contains(index) ? side.tones[index] : .context
             if let fill = palette.codeFills[tone] {
                 let codeRow = NSRect(x: pane.minX + gutter, y: y, width: max(0, pane.width - gutter), height: rowHeight)
-                fill.setFill()
+                (tone == .placeholder ? palette.hatchPattern : fill).setFill()
                 codeRow.fill()
-                if tone == .placeholder {
-                    palette.hatchPattern.setFill()
-                    codeRow.fill()
-                }
             }
             let gutterRow = NSRect(x: pane.minX, y: y, width: gutter, height: rowHeight)
             if let fill = palette.gutterFills[tone] {
@@ -1619,7 +1615,10 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
             line = theme.nsColor("line")
             hatch = line.withAlphaComponent(0.35)
             let stroke = hatch
-            hatchPattern = NSColor(patternImage: NSImage(size: NSSize(width: 8, height: 8), flipped: false) { _ in
+            let placeholder = Self.opaque(bg2.withAlphaComponent(0.55), over: bg1)
+            hatchPattern = NSColor(patternImage: NSImage(size: NSSize(width: 8, height: 8), flipped: false) { rect in
+                placeholder.setFill()
+                rect.fill()
                 stroke.setStroke()
                 let path = NSBezierPath()
                 // One period of the diagonal, plus its neighbors so the corners
@@ -1642,16 +1641,34 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
             pillTint = theme.nsColor("seg-pill-active-fg")
             fgMuted = theme.nsColor("fg-muted")
             fgFaint = theme.nsColor("fg-faint")
-            let placeholder = bg2.withAlphaComponent(0.55)
             let collapsed = theme.nsColor("bg-3").withAlphaComponent(0.72)
+            // Code rows sit on bg-1 and gutter rows on bg-0, so their tints are
+            // flattened onto those: an opaque fill copies pixels instead of
+            // blending them, and these rows span the whole pane.
             codeFills = [
-                .add: add.withAlphaComponent(0.18), .delete: del.withAlphaComponent(0.18),
-                .placeholder: placeholder, .collapsed: collapsed,
+                .add: Self.opaque(add.withAlphaComponent(0.18), over: bg1),
+                .delete: Self.opaque(del.withAlphaComponent(0.18), over: bg1),
+                .placeholder: placeholder, .collapsed: Self.opaque(collapsed, over: bg1),
             ]
             gutterFills = [
-                .add: add.withAlphaComponent(0.16), .delete: del.withAlphaComponent(0.16),
-                .placeholder: placeholder, .collapsed: collapsed,
+                .add: Self.opaque(add.withAlphaComponent(0.16), over: bg0),
+                .delete: Self.opaque(del.withAlphaComponent(0.16), over: bg0),
+                .placeholder: Self.opaque(bg2.withAlphaComponent(0.55), over: bg0),
+                .collapsed: Self.opaque(collapsed, over: bg0),
             ]
+        }
+
+        /// `top` composited onto `base` in sRGB, or `top` itself when `base`
+        /// is translucent and the result would depend on what lies beneath.
+        static func opaque(_ top: NSColor, over base: NSColor) -> NSColor {
+            guard let top = top.usingColorSpace(.sRGB), let base = base.usingColorSpace(.sRGB),
+                  base.alphaComponent >= 1 else { return top }
+            let a = top.alphaComponent
+            func mix(_ t: CGFloat, _ b: CGFloat) -> CGFloat { t * a + b * (1 - a) }
+            return NSColor(
+                srgbRed: mix(top.redComponent, base.redComponent), green: mix(top.greenComponent, base.greenComponent),
+                blue: mix(top.blueComponent, base.blueComponent), alpha: 1
+            )
         }
 
         /// Same coloring as `DiffPaneLineNumberRulerView.labelAttributes`.
