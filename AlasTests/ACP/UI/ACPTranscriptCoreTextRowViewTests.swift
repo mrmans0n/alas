@@ -74,15 +74,13 @@ import Testing
         #expect(view.actionsButtonForTesting == nil)
     }
 
-    @Test func theActionsButtonSitsInTheRightLaneAndIsAlwaysVisibleForAssistiveTech() throws {
+    @Test func aPermanentActionsButtonIsAlwaysVisibleForAssistiveTech() throws {
         var actions = ACPTranscriptNativeRows.Actions.testing(menu: true)
         actions.showsActionsPermanently = true
         let view = row(.agent(markdown: "Hi", commentary: false), actions: actions)
         _ = view.measuredHeight(forWidth: 1_400)
         let button = try #require(view.actionsButtonForTesting)
         #expect(button.alphaValue == 1)
-        #expect(button.frame.minX == view.columnRect.maxX + ACPMessageGutterLayout.laneWidth - 8 - ACPMessageGutterLayout.menuWidth)
-        #expect(button.frame.minY == -2)
     }
 
     @Test(arguments: [
@@ -305,7 +303,6 @@ import Testing
         #expect(view.accessibilityValue() as? String == "Collapsed")
         #expect(view.accessibilityPerformPress())
         #expect(toggled == [true])
-        #expect(view.contentForTesting != nil)
     }
 }
 

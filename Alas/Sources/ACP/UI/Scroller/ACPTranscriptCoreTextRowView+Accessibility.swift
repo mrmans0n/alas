@@ -11,8 +11,6 @@ extension ACPTranscriptCoreTextRowView {
         }
     }
 
-    var contentForTesting: Content? { content }
-
     override func isAccessibilityElement() -> Bool {
         content != nil && !hasTextArea
     }
