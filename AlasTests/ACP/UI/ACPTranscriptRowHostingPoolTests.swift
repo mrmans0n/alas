@@ -29,6 +29,37 @@ struct ACPTranscriptRowHostingPoolTests {
         #expect(pool.view(for: spec(id: "a", token: 2)).contentChanged == true)
     }
 
+    @Test("native rows mount, update in place, and come back from the park")
+    func nativeRowsMountAndPark() {
+        final class Probe: NSView, ACPTranscriptRowView {
+            var onIntrinsicSizeInvalidated: (() -> Void)?
+            var lastMeasuredWidth: CGFloat?
+            var needsRemeasure = false
+            var configured = 0
+            func markNeedsRemeasure() { needsRemeasure = true }
+            func measuredHeight(forWidth width: CGFloat) -> CGFloat {
+                lastMeasuredWidth = width
+                needsRemeasure = false
+                return 10
+            }
+        }
+        func spec(_ token: Int) -> ACPTranscriptRowSpec {
+            var spec = ACPTranscriptRowSpec(id: "row", equalityToken: ACPRowEqualityToken(token)) { AnyView(EmptyView()) }
+            spec.native = ACPTranscriptNativeRow(make: { Probe() }, configure: { ($0 as! Probe).configured += 1 })
+            return spec
+        }
+        let pool = ACPTranscriptRowHostingPool()
+        let first = pool.view(for: spec(1))
+        pool.release(id: "row")
+        let revived = pool.view(for: spec(1))
+        let changed = pool.view(for: spec(2))
+
+        #expect(first.view is Probe)
+        #expect(revived.view === first.view && revived.view.needsRemeasure)
+        #expect(changed.view === first.view && changed.contentChanged)
+        #expect((first.view as! Probe).configured == 2)
+    }
+
     @Test("release forgets the id; a later request builds fresh state")
     func release() {
         let pool = ACPTranscriptRowHostingPool()

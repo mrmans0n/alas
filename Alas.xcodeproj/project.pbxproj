@@ -1288,6 +1288,7 @@
 		B92E46F97EDE821BFDC1C8C1 /* ACPContextBreakdownTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2CECD85939E5FA4D21645DD2 /* ACPContextBreakdownTests.swift */; };
 		B94F61E5170AA8102AA2A022 /* DiffPaneLSP.swift in Sources */ = {isa = PBXBuildFile; fileRef = B58BD62080F250E0F0DD057F /* DiffPaneLSP.swift */; };
 		B966D129022E68797918D90F /* MermaidAttachmentCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4C0622C1F5D9B46F429F896 /* MermaidAttachmentCoordinatorTests.swift */; };
+		B97A7F7C15353D0393079872 /* ACPTranscriptRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0035C50B016AD13E9E79C2F5 /* ACPTranscriptRowView.swift */; };
 		B9B77725584BFA7DEF67A088 /* DiffReviewSummaryPlacementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C11E86D988A07E54B33BE3F0 /* DiffReviewSummaryPlacementTests.swift */; };
 		B9BEA46E818C321122713F41 /* EditorFindControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6033DBD8BF13A76978A653A3 /* EditorFindControllerTests.swift */; };
 		B9D15679A5E813254E1DDCB6 /* ProviderReviewMutationController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F0AE27D70E34430C71AAF84 /* ProviderReviewMutationController.swift */; };
@@ -1785,6 +1786,7 @@
 		00057A43DD2D53F8F79FAC43 /* ShortcutActionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutActionTests.swift; sourceTree = "<group>"; };
 		001E204C8DBD41063D806ECA /* HTTPRequestParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HTTPRequestParserTests.swift; sourceTree = "<group>"; };
 		002C8D5C52466955E0A90606 /* BaseBranchSelector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BaseBranchSelector.swift; sourceTree = "<group>"; };
+		0035C50B016AD13E9E79C2F5 /* ACPTranscriptRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPTranscriptRowView.swift; sourceTree = "<group>"; };
 		005EFBECC6BC2AE9FD4E0807 /* LSPInstallProgressSheetPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LSPInstallProgressSheetPresentationTests.swift; sourceTree = "<group>"; };
 		005F92E45C7D391D8BD5A3FD /* AlasActionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasActionService.swift; sourceTree = "<group>"; };
 		00809DCA566AAAADD7448659 /* ProjectPickerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectPickerTests.swift; sourceTree = "<group>"; };
@@ -5176,6 +5178,7 @@
 				A4626606D2916B0CFE65F16B /* ACPTranscriptRowHostingPool.swift */,
 				7BA6DF8E37E9B38C627B030A /* ACPTranscriptRowHostingView.swift */,
 				ABC94CFEB59F22E028DA462F /* ACPTranscriptRowSpec.swift */,
+				0035C50B016AD13E9E79C2F5 /* ACPTranscriptRowView.swift */,
 				E9F849F92835C6A4EEA765B7 /* ACPTranscriptScroller.swift */,
 				81D94695C26A2270165EC820 /* ACPTranscriptScrollerReconciler.swift */,
 				447EEDD6DBF9822B25A56CD7 /* ACPTranscriptScrollerView.swift */,
@@ -6857,6 +6860,7 @@
 				95E01DC5A933FCC077399762 /* ACPTranscriptRowHostingPool.swift in Sources */,
 				62A80BDF7373A108DCF07512 /* ACPTranscriptRowHostingView.swift in Sources */,
 				1DD03B5760B7FCDF5E1B13A2 /* ACPTranscriptRowSpec.swift in Sources */,
+				B97A7F7C15353D0393079872 /* ACPTranscriptRowView.swift in Sources */,
 				555AA9EB427B45EEE1C05488 /* ACPTranscriptScroller.swift in Sources */,
 				E982387DB4C0EF18291C68FB /* ACPTranscriptScrollerReconciler.swift in Sources */,
 				39D5D6A30C7232D090066A89 /* ACPTranscriptScrollerView.swift in Sources */,

@@ -19,7 +19,7 @@ final class ACPTranscriptRowHostingPool {
     var onRowIntrinsicSizeInvalidated: ((String) -> Void)?
 
     private struct Entry {
-        let view: ACPTranscriptRowHostingView
+        let view: any ACPTranscriptRowView
         var token: ACPRowEqualityToken
         var parksWhenReleased: Bool
     }
@@ -40,24 +40,45 @@ final class ACPTranscriptRowHostingPool {
     /// none. Unlike `view(for:)` this never CREATES one, so callers can ask
     /// "is this row's content already measured at the current width?"
     /// without paying for a hosting view they may not need.
-    func mountedView(id: String) -> ACPTranscriptRowHostingView? {
+    func mountedView(id: String) -> (any ACPTranscriptRowView)? {
         entries[id]?.view
     }
 
-    func view(for spec: ACPTranscriptRowSpec) -> (view: ACPTranscriptRowHostingView, contentChanged: Bool) {
+    /// The live SwiftUI hosting view for `id`, or nil when the row is absent or native.
+    func mountedHostingView(id: String) -> ACPTranscriptRowHostingView? {
+        mountedView(id: id) as? ACPTranscriptRowHostingView
+    }
+
+    /// Whether `view` is the kind `spec` mounts: native rows reuse native views
+    /// and SwiftUI rows reuse hosting views.
+    private func canReuse(_ view: any ACPTranscriptRowView, for spec: ACPTranscriptRowSpec) -> Bool {
+        (spec.native != nil) != (view is ACPTranscriptRowHostingView)
+    }
+
+    func view(for spec: ACPTranscriptRowSpec) -> (view: any ACPTranscriptRowView, contentChanged: Bool) {
         if var entry = entries[spec.id] {
             entry.parksWhenReleased = spec.parksWhenReleased
             entries[spec.id] = entry
             if entry.token.isEqual(to: spec.equalityToken) {
                 return (entry.view, false)
             }
-            entry.view.updateRootView(spec.build())
-            entry.token = spec.equalityToken
-            entries[spec.id] = entry
-            return (entry.view, true)
+            if canReuse(entry.view, for: spec) {
+                if let native = spec.native {
+                    native.configure(entry.view)
+                } else if let host = entry.view as? ACPTranscriptRowHostingView {
+                    host.updateRootView(spec.build())
+                }
+                entry.token = spec.equalityToken
+                entries[spec.id] = entry
+                return (entry.view, true)
+            }
+            // The row changed kind under the same id: drop the old view.
+            entry.view.onIntrinsicSizeInvalidated = nil
+            entry.view.removeFromSuperview()
+            entries.removeValue(forKey: spec.id)
         }
         if var parkedEntry = unpark(id: spec.id) {
-            if parkedEntry.token.isEqual(to: spec.equalityToken) {
+            if parkedEntry.token.isEqual(to: spec.equalityToken), canReuse(parkedEntry.view, for: spec) {
                 parkedEntry.parksWhenReleased = spec.parksWhenReleased
                 attachCallback(to: parkedEntry.view, id: spec.id)
                 parkedEntry.view.markNeedsRemeasure()
@@ -66,7 +87,13 @@ final class ACPTranscriptRowHostingPool {
             }
             // Different content under the same id: drop the stale view.
         }
-        let view = ACPTranscriptRowHostingView(rootView: spec.build())
+        let view: any ACPTranscriptRowView
+        if let native = spec.native {
+            view = native.make()
+            native.configure(view)
+        } else {
+            view = ACPTranscriptRowHostingView(rootView: spec.build())
+        }
         attachCallback(to: view, id: spec.id)
         entries[spec.id] = Entry(view: view, token: spec.equalityToken, parksWhenReleased: spec.parksWhenReleased)
         return (view, true)
@@ -116,7 +143,7 @@ final class ACPTranscriptRowHostingPool {
     var parkedIdsForTesting: Set<String> { Set(parked.keys) }
     #endif
 
-    private func attachCallback(to view: ACPTranscriptRowHostingView, id: String) {
+    private func attachCallback(to view: any ACPTranscriptRowView, id: String) {
         view.onIntrinsicSizeInvalidated = { [weak self] in
             self?.onRowIntrinsicSizeInvalidated?(id)
         }

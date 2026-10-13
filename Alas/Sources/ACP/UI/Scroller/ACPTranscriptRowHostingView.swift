@@ -6,7 +6,7 @@ import SwiftUI
 ///   (streaming rows growing), so the tiling controller can re-measure;
 /// - fixed-width height measurement for the tiling layout.
 @MainActor
-final class ACPTranscriptRowHostingView: NSHostingView<AnyView> {
+final class ACPTranscriptRowHostingView: NSHostingView<AnyView>, ACPTranscriptRowView {
     var onIntrinsicSizeInvalidated: (() -> Void)?
 
     /// The row content as originally supplied, before the `.frame(width:)`

@@ -239,7 +239,7 @@ struct ACPTranscriptScrollerReconcilerApplyTests {
         )
         #expect(pool.mountedView(id: "b")?.frame.minY == 242)
 
-        let first = try #require(pool.mountedView(id: "a"))
+        let first = try #require(pool.mountedHostingView(id: "a"))
         first.updateRootView(AnyView(Color.clear.frame(height: 300)))
         reconciler.remeasureRow(id: "a")
         reconciler.layoutMountedRowsForScroll()
@@ -884,7 +884,7 @@ struct ACPTranscriptScrollerReconcilerApplyTests {
         // streaming row), independent of any `apply()` call: replace the
         // mounted view's content directly and rely on `remeasureRow` — the
         // callback path `pool.onRowIntrinsicSizeInvalidated` exists for.
-        let (view0, _) = pool.view(for: specs[0])
+        let view0 = pool.view(for: specs[0]).view as! ACPTranscriptRowHostingView
         view0.updateRootView(AnyView(Color.clear.frame(height: 250)))
         reconciler.remeasureRow(id: "r0")
 
@@ -902,7 +902,7 @@ struct ACPTranscriptScrollerReconcilerApplyTests {
         scroller.setScrollY(500)
         let scrollYBefore = scroller.scrollY
 
-        let (view0, _) = pool.view(for: specs[0])
+        let view0 = pool.view(for: specs[0]).view as! ACPTranscriptRowHostingView
         view0.updateRootView(AnyView(Color.clear.frame(height: 250)))
         reconciler.remeasureRow(id: "r0")
 
@@ -917,7 +917,7 @@ struct ACPTranscriptScrollerReconcilerApplyTests {
         reconciler.apply(specs: specs, contentWidth: 600, followsTail: false)
         scroller.setScrollY(5_000)
         reconciler.layoutMountedRowsForScroll()
-        let row = try #require(pool.mountedView(id: "r35"))
+        let row = try #require(pool.mountedHostingView(id: "r35"))
         let anchorBefore = try #require(tiling.row(withId: "r45")).minY - scroller.scrollY
 
         var mountedDuringCallback: Set<String>?
@@ -951,7 +951,7 @@ struct ACPTranscriptScrollerReconcilerApplyTests {
         scroller.setScrollY(scroller.contentHeight - scroller.viewportHeight - 40)
         let offsetBefore = screenOffset(of: "r8", tiling: tiling, scroller: scroller)
 
-        let (view, _) = pool.view(for: specs[0])
+        let view = pool.view(for: specs[0]).view as! ACPTranscriptRowHostingView
         view.updateRootView(AnyView(Color.clear.frame(height: 100)))
         reconciler.remeasureRow(id: "r0")
 
@@ -989,7 +989,7 @@ struct ACPTranscriptScrollerReconcilerApplyTests {
         reconciler.apply(specs: specs, contentWidth: 600, followsTail: true)
         #expect(scroller.distanceFromBottom < 1)
 
-        let (lastView, _) = pool.view(for: specs[9])
+        let lastView = pool.view(for: specs[9]).view as! ACPTranscriptRowHostingView
         lastView.updateRootView(AnyView(Color.clear.frame(height: 250)))
         reconciler.remeasureRow(id: "r9")
 
@@ -1033,7 +1033,7 @@ struct ACPTranscriptScrollerReconcilerApplyTests {
         scroller.setScrollY(0)
         let scrollYBefore = scroller.scrollY
 
-        let (lastView, _) = pool.view(for: specs[9])
+        let lastView = pool.view(for: specs[9]).view as! ACPTranscriptRowHostingView
         lastView.updateRootView(AnyView(Color.clear.frame(height: 250)))
         reconciler.remeasureRow(id: "r9")
 
@@ -1052,7 +1052,7 @@ struct ACPTranscriptScrollerReconcilerApplyTests {
         scroller.setScrollY(0)
         let scrollYBefore = scroller.scrollY
 
-        let (lastView, _) = pool.view(for: specs[9])
+        let lastView = pool.view(for: specs[9]).view as! ACPTranscriptRowHostingView
         lastView.updateRootView(AnyView(Color.clear.frame(height: 250)))
         reconciler.remeasureRow(id: "r9")
 
@@ -1793,7 +1793,7 @@ struct ACPTranscriptRowHostingPoolParkingTests {
         let pool = ACPTranscriptRowHostingPool()
         var views: [String: ACPTranscriptRowHostingView] = [:]
         for id in ["a", "b", "c"] {
-            views[id] = pool.view(for: spec(id)).view
+            views[id] = pool.view(for: spec(id)).view as! ACPTranscriptRowHostingView
             pool.release(id: id)
         }
 
