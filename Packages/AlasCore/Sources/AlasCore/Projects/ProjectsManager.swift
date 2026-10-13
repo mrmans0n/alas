@@ -55,6 +55,8 @@ public enum WorktreeOperationState: Equatable, Sendable {
     /// the same path can exist under more than one host's project, so the id
     /// alone cannot say which checkout is being removed.
     case deleting(projectId: String)
+    /// Archive is stopping everything in the worktree before hiding it.
+    case archiving(projectId: String)
     /// The raw GG policy is retry metadata only; AppState removes its effective
     /// optimistic overlay before entering this state.
     case createFailed(
@@ -77,7 +79,7 @@ extension WorktreeOperationState {
     /// carried out. Failed operations no longer hold the worktree.
     public var blocksAdmission: Bool {
         switch self {
-        case .creating, .preparingDelete, .deleting: true
+        case .creating, .preparingDelete, .deleting, .archiving: true
         case .createFailed, .launchFailed, .deleteFailed: false
         }
     }
@@ -878,8 +880,8 @@ public final class ProjectsManager {
                 if !liveIds.contains(id) {
                     clearedOperationKeys.append(key)
                 }
-            case .deleting:
-                // If the row is gone from git, the deletion succeeded.
+            case .deleting, .archiving:
+                // If the row is gone from git, the operation has nothing left to claim.
                 if !liveIds.contains(id) {
                     clearedOperationKeys.append(key)
                 }
@@ -987,7 +989,7 @@ public final class ProjectsManager {
             if let op = operationState(forWorktreeId: worktree.id, projectId: projectId) {
                 switch op {
                 case .creating, .createFailed: return false
-                case .preparingDelete, .deleting, .launchFailed, .deleteFailed: return true
+                case .preparingDelete, .deleting, .archiving, .launchFailed, .deleteFailed: return true
                 }
             }
             return true
