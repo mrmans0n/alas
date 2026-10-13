@@ -143,7 +143,11 @@ extension ACPTranscriptCoreTextRowView {
         context.translateBy(x: -rect.minX, y: -rect.minY)
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
-        drawContent(rect)
+        // Layer drawing runs outside the view's draw pass, so dynamic colors
+        // (links, selection) need the view's appearance made current.
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            drawContent(rect)
+        }
         NSGraphicsContext.restoreGraphicsState()
         context.restoreGState()
     }
