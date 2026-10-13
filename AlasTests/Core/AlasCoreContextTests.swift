@@ -370,6 +370,7 @@ struct AlasCoreContextTests {
         )
 
         #expect(FileManager.default.fileExists(atPath: worktree.path.appendingPathComponent("hook-ran").path) == approved)
+    }
 
     /// Archiving claims the worktree, so nothing new starts in it and it
     /// cannot be unarchived until the archive is done.
