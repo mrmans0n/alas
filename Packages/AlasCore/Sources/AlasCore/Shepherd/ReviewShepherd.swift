@@ -261,6 +261,11 @@ public final class ReviewShepherd {
                 autoMerge: autoMerge,
                 now: now
             )
+        if record.sessionID != sessionID {
+            // The new owner has not seen the replies its predecessor made, so
+            // every actionable trusted thread is its to answer.
+            record.handledThreadRevisions = nil
+        }
         record.sessionID = sessionID
         record.remote = request.remote
         record.branch = request.headRefName
@@ -621,7 +626,10 @@ public final class ReviewShepherd {
 
     /// Reads git again right before merging, as `RightPaneState.performMerge`
     /// does, so a commit or edit made since the probe can't slip through.
-    /// `ReviewLoopState.merge` then re-reads the provider and re-runs the gate.
+    /// Then fetches the request again and re-runs the shepherd's whole gate
+    /// (stable head, required reviewers on that head) on it, since reviewers
+    /// and rules may have changed since the decision. `ReviewLoopState.merge`
+    /// then re-reads the provider and re-runs the readiness gate.
     private func merge(
         _ id: ShepherdRecordID,
         generation: Int,
@@ -630,9 +638,7 @@ public final class ReviewShepherd {
     ) async -> MergeAttempt {
         guard let loop = loops[id], let reviewedHead = snapshot.reviewRequest?.headSHA else { return .finished(nil) }
         let fresh = try? await localProbe.probe(worktreePath, snapshot.local.baseBranch)
-        guard isCurrent(id, generation, before: "merge"),
-              let record = records[id], record.phase == .merging, record.autoMerge
-        else { return .abandoned }
+        guard mayStillMerge(id, generation) else { return .abandoned }
         guard let fresh,
               fresh.local.branchName == snapshot.local.branchName,
               fresh.local.headSHA == reviewedHead,
@@ -640,7 +646,38 @@ public final class ReviewShepherd {
               !fresh.local.hasStagedChanges,
               !fresh.local.needsPush
         else { return .finished(nil) }
-        return .finished(await loop.merge(snapshot: snapshot))
+        await loop.refresh(local: fresh.local, remotes: fresh.remotes)
+        guard mayStillMerge(id, generation) else { return .abandoned }
+        guard let effects,
+              let latest = loop.snapshot,
+              latest.errorMessage == nil,
+              let request = latest.reviewRequest,
+              request.state == .open,
+              ShepherdRecordID(worktreeID: id.worktreeID, request: request) == id
+        else { return .finished(nil) }
+        let rules = effects.rules(id.worktreeID)
+        let reviewers = rules.requiredReviewers.isEmpty
+            ? nil
+            : await headReviewers(for: latest, worktreePath: worktreePath)
+        guard mayStillMerge(id, generation), let owner = records[id]?.sessionID else { return .abandoned }
+        let session = await effects.sessionState(owner, id.worktreeID)
+        guard mayStillMerge(id, generation), let record = records[id] else { return .abandoned }
+        let observation = ShepherdObservation(
+            snapshot: latest,
+            headReviewers: reviewers,
+            session: session,
+            rules: rules,
+            now: now()
+        )
+        guard ShepherdPolicy.mergeGatePasses(record, observation) else { return .finished(nil) }
+        return .finished(await loop.merge(snapshot: latest))
+    }
+
+    /// The decision to merge still stands: same generation, still merging,
+    /// auto-merge still on.
+    private func mayStillMerge(_ id: ShepherdRecordID, _ generation: Int) -> Bool {
+        guard isCurrent(id, generation, before: "merge"), let record = records[id] else { return false }
+        return record.phase == .merging && record.autoMerge
     }
 
     /// Logs for at most `ShepherdPromptBuilder.maxCheckLogs` failing checks.
