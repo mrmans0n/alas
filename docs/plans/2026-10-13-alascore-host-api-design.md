@@ -56,7 +56,7 @@ public final class AlasHost {
 }
 ```
 
-`AlasHost` replaces `AlasCoreContext` as the public entry point. The context's engine stays, behind it.
+`AlasHost` is the public entry point. `AlasCoreContext` stays as the engine behind it.
 
 The domain APIs are thin structs over the engine. Indicative signatures:
 
@@ -81,7 +81,7 @@ public struct SessionsAPI {
 }
 ```
 
-`WorktreeRef` is `(projectID, path)`, matching the claim key, since a path can exist under more than one host's project. `HostCaller` names who asked: the app, a CLI/MCP origin (session id or cwd), a Remote peer, or a plugin. It is used for authorization and attribution only, never for presentation.
+Sessions are addressed by `SessionID` and owned by the existing `SessionOwnerID` (a worktree or a Workspace checkout), treated the same everywhere. `WorktreeRef` is `(projectID, path)`, matching the claim key, since a path can exist under more than one host's project. `HostCaller` names who asked: the app, a CLI/MCP origin (session id or cwd), a Remote peer, or a plugin. It is used for authorization and attribution only, never for presentation.
 
 Errors are per-domain enums, extending the ones that exist (`WorktreeDeletionRefusal`, `WorktreeArchiveRefusal`, `WorkspaceCheckoutCoordinatorError`).
 
@@ -121,7 +121,7 @@ public protocol AlasHostEnvironment: AnyObject {
 }
 ```
 
-This replaces the seven hook closures installed in `AppState.init`. `HeadlessHostEnvironment` provides the defaults: skip unapproved hooks, stop processes without terminals, and launch runs as plain processes.
+This replaces the seven hook closures installed in `AppState.init`. `HeadlessHostEnvironment` provides the defaults: skip unapproved hooks, stop processes without terminals, and launch runs as plain processes with output captured to run history.
 
 `RunLauncher` is how runs become one implementation. The app's launcher is terminal-backed and the headless one is process-backed. Starting, stopping, settling and recording a run is core logic either way. Run observation and settlement plumbing (`observeRun`, `finalizeRun`, `resolveRunSettlements`, `takeRunCapture` and their 20-odd app call sites) moves behind the launcher seam instead of being exported.
 
@@ -155,7 +155,7 @@ The host API is transport-free, and adapters map it:
 - **Local socket adapter:** the existing CLI/MCP protocol. It stays command-shaped.
 - **Remote adapter:** the existing Remote protocol, paired and over TLS. It gains list events (removing the 15 s polls), worktree lifecycle, projects and runs, as the host API grows them.
 
-Both protocols stay for now. Merging them is a later decision, once both are thin adapters over the same API.
+Both protocols stay for now. Which protocol headless clients use is open; see the trade-offs at the end.
 
 ### `alas-host`
 
@@ -197,10 +197,45 @@ Each phase is one or more independent PRs. It is done when its exit criterion ho
 
 Phases 1–3 change no external behavior and can start right away. Phase 5 is the first one users notice: lists update live instead of every 15 seconds.
 
-## Open questions
+## Decisions
 
-1. **App reads.** Keep the app's views binding to core `@Observable` stores (this doc's assumption), or move them onto snapshots and events too? Moving them is more uniform, but large, with no user-visible gain.
-2. **Headless runs.** Is process-backed only (no terminal, output captured to history) acceptable for `alas-host`? zmx could later provide a terminal-backed headless launcher.
-3. **Remote protocol growth.** Should the Remote protocol become the headless host's primary client protocol (paired, TLS, already session-aware)? Or should headless clients get a new, smaller one?
-4. **Naming.** Should the public entry point be `AlasHost`, with `AlasCoreContext` kept as the internal engine? Or should the context be renamed in place?
-5. **Session ownership.** Workspace-checkout-owned sessions are refused by several Remote paths today. Should the host treat checkout and worktree owners uniformly from the start?
+1. **App reads stay in-process.** The app's views keep binding to core `@Observable` stores. Only mutations must go through the host.
+2. **Headless runs are process-backed.** `alas-host` runs scripts as plain processes, with output captured to run history. A terminal-backed headless launcher (for example over zmx) can be added later behind the same `RunLauncher`.
+3. **`AlasHost` is the public entry point.** It is a new type. `AlasCoreContext` becomes the internal engine behind it and loses its public verbs as their callers move.
+4. **Session owners are uniform.** Every session verb takes the existing `SessionOwnerID` (`.worktree` or `.workspaceCheckout`), and authorization, attention and events treat both the same way. Its `.worktree` case carries only the id today; it gains the project, like `WorktreeRef`, so it is unambiguous for same-path checkouts across hosts. Phase 6 removes the Remote paths that refuse checkout-owned sessions today, because special-cased owners are where the lifecycle bugs of #1952 came from.
+
+## Open: the headless client protocol
+
+How a headless host's clients talk to it is decided before phase 5, which is the first phase that grows a protocol. Phases 1–4 do not depend on it. Three options:
+
+**A. Grow the Remote protocol into the host protocol.**
+- Pros:
+  - It exists and is in use: pairing, TLS, Tailscale and federation.
+  - It already streams transcripts as epoch/revision deltas and carries pending permission, question and plan requests.
+  - Everything added for headless clients also reaches the web client and peers.
+- Cons:
+  - It is shaped by one UI. Transcript snapshots are a 90-row tail, and it carries mentions and tab fields (`isActive`, `tabIndex`) and stringly session status.
+  - Pairing is heavy for local, scripted clients that already have the user's file permissions.
+  - Federated peers can run different Alas versions, so every message added is one kept compatible across versions. The bundled web client is versioned with the app, but peers are not.
+  - A gateway per connection holds per-client state (subscriptions, change-log retention), which then grows with every host feature.
+
+**B. A new, smaller host protocol.**
+- Pros:
+  - It mirrors `AlasHost` one to one, so messages could even be generated from the API.
+  - It carries no UI fields, versions independently, and authenticates local clients with Unix socket permissions.
+- Cons:
+  - It is a third protocol next to CLI and Remote. Session streaming, pending requests and change-log retention would be implemented twice, unless shared below both.
+  - The web client gains nothing unless it migrates.
+
+**C. One host message set, two transports, with Remote layered on top.**
+- How it works:
+  - The host protocol is B's message set.
+  - It is served over a local Unix socket (file permissions) and over the Remote server's paired TLS channel as its own namespace.
+  - Remote's web-specific messages (tails, mentions, tab actions) become a thin layer over host messages.
+  - The CLI stays command-shaped and calls the same API in-process.
+- Pros: A's security and transport plus B's clean shape, and one implementation of streaming.
+- Cons:
+  - It is the largest migration.
+  - The Remote layer has to keep old peers working while it moves underneath them.
+
+**Leaning: C**, decided at phase 5 with the costs then known. The deciding downside to weigh is peer compatibility: if federation across versions matters more than a clean protocol, A is cheaper.
