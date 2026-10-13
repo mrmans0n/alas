@@ -739,6 +739,11 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         }
         isPointerCovered = false
         let point = convert(event.locationInWindow, from: nil)
+        // A visible scroller over the code is its own target: no hover behind it.
+        if [oldScroller, newScroller].contains(where: { !$0.isHidden && $0.frame.contains(point) }) {
+            clearPointerHover()
+            return
+        }
         let hit = gutterRow(at: point)
         hoveredGutterRow = hit.flatMap { isCommentable(side: $0.side, row: $0.row) ? $0 : nil }
         hoveredExpansion = expansionTarget(at: point)
@@ -845,7 +850,10 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
             // The glyph the pointer is over, not the nearest caret position;
             // nothing past the line's last glyph, as the text view requires.
             guard index != kCFNotFound, x >= 0, x <= CTLineGetTypographicBounds(line, nil, nil, nil) else { return nil }
-            if index > 0, x < CTLineGetOffsetForStringIndex(line, index, nil) { index -= 1 }
+            if index > 0, x < CTLineGetOffsetForStringIndex(line, index, nil) {
+                // The glyph's first code unit, not the middle of a surrogate pair.
+                index = (sideLines.codeStrings[row] as NSString).rangeOfComposedCharacterSequence(at: index - 1).location
+            }
             guard index < length else { return nil }
         }
         return .init(row: row, index: index == kCFNotFound ? 0 : min(max(0, index), length))

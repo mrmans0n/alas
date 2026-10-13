@@ -335,6 +335,30 @@ import Testing
         #expect(view.horizontalScroll.offset(.old) == 0)
     }
 
+    @Test func pointerOnASurrogatePairsTrailingHalfResolvesItsStart() throws {
+        let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 200))
+        view.configure(result: result(old: [], new: ["a\u{1D465}b"]), font: font, theme: theme)
+        let line = CTLineCreateWithAttributedString(NSAttributedString(string: "a\u{1D465}b", attributes: [.font: font]))
+        // Just left of the caret after the pair: the glyph's trailing half.
+        let x = CTLineGetOffsetForStringIndex(line, 3, nil) - 1
+        let start = try #require(view.lineMetadata.first).range.location
+        #expect(view.characterIndex(at: newCodePoint(view, x: { $0.minX + x }, row: 0)) == start + 1)
+    }
+
+    @Test func pointerOverAVisibleScrollerSendsNoHover() throws {
+        let (view, window) = mountedRow(newLine: String(repeating: "w", count: 300))
+        defer { window.close() }
+        var hovered: [NSPoint] = []
+        view.hoverHandler = { hovered.append($0) }
+        let scroller = view.scrollerForTesting(.new)
+        let location = view.convert(NSPoint(x: scroller.frame.midX, y: scroller.frame.midY), to: nil)
+        view.mouseMoved(with: try #require(NSEvent.mouseEvent(
+            with: .mouseMoved, location: location, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+            context: nil, eventNumber: 0, clickCount: 0, pressure: 0
+        )))
+        #expect(hovered.isEmpty)
+    }
+
     @Test func eachSideReadsItsCodeToAccessibility() throws {
         let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 200))
         view.configure(result: result(old: ["let a = 0"], new: ["let a = 1", "let b = 2"]), font: font, theme: theme)
