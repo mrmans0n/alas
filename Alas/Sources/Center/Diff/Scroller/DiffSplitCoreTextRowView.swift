@@ -97,7 +97,15 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
     static let expansionPillPadding: CGFloat = 12
     static let cardCornerRadius: CGFloat = 8
 
-    var representedRowID: String?
+    var representedRowID: String? {
+        // A recycled view may get identical cached content for another row,
+        // so its selections cannot ride on the content check.
+        didSet {
+            guard representedRowID != oldValue else { return }
+            textSelection = nil
+            gutterSelection = nil
+        }
+    }
     var onIntrinsicSizeInvalidated: ((String) -> Void)?
     private(set) var lastMeasuredWidth: CGFloat?
     private(set) var lineHeight: CGFloat = 16
@@ -690,6 +698,13 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
             return
         }
         if isSelectingText, let selection = textSelection {
+            // Past the column's edge, reveal more of the line, as a text view's autoscroll does.
+            let code = codeRect(selection.side)
+            if point.x > code.maxX {
+                scrollFocusedSide(byPoints: point.x - code.maxX)
+            } else if point.x < code.minX {
+                scrollFocusedSide(byPoints: point.x - code.minX)
+            }
             if let position = textPosition(at: point, side: selection.side) {
                 textSelection?.focus = position
             }
@@ -1047,7 +1062,19 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
                     let first = min(Self.row(containing: max(0, visible.minY - codeTop), rowTops: tops), count - 1)
                     let last = min(Self.row(containing: max(0, visible.maxY - codeTop - 0.5), rowTops: tops), count - 1)
                     guard first <= last else { return nil }
-                    return (.init(row: first, index: 0), .init(row: last, index: (lines(side).codeStrings[last] as NSString).length))
+                    var start = 0, end = (lines(side).codeStrings[last] as NSString).length
+                    // A wrapped line counts only from its first to its last visible fragment.
+                    if wraps, let parts = side == .old ? layout(forWidth: bounds.width).old : layout(forWidth: bounds.width).new {
+                        let codeTop = codeTop, lineHeight = lineHeight
+                        let fragment = { (row: Int, y: CGFloat) -> CFRange? in
+                            guard parts.indices.contains(row), !parts[row].isEmpty else { return nil }
+                            let part = min(max(0, Int((y - codeTop - tops[row]) / lineHeight)), parts[row].count - 1)
+                            return CTLineGetStringRange(parts[row][part])
+                        }
+                        if let range = fragment(first, visible.minY) { start = range.location }
+                        if let range = fragment(last, visible.maxY - 0.5) { end = min(end, range.location + range.length) }
+                    }
+                    return (.init(row: first, index: start), .init(row: last, index: end))
                 }
                 element.select = { [weak self] start, end in
                     self?.textSelection = .init(side: side, anchor: start, focus: end)
