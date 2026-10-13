@@ -9,7 +9,7 @@ struct AppStateWorktreeArchiveBatchTests {
         defer { fixture.cleanUpAfterTest() }
         let targets = Array(fixture.worktrees.dropFirst())
 
-        let results = fixture.state.batchArchiveWorktrees(targets)
+        let results = await fixture.state.batchArchiveWorktrees(targets)
 
         #expect(results.allSatisfy { $0.outcome == .archived })
         #expect(fixture.state.projectsManager
@@ -28,7 +28,7 @@ struct AppStateWorktreeArchiveBatchTests {
         defer { fixture.cleanUpAfterTest() }
         let main = fixture.worktrees[0]
 
-        let results = fixture.state.batchArchiveWorktrees([main])
+        let results = await fixture.state.batchArchiveWorktrees([main])
 
         #expect(results[0].outcome == .skipped(reason: "Main worktree"))
         #expect(fixture.state.projectsManager
@@ -40,7 +40,7 @@ struct AppStateWorktreeArchiveBatchTests {
         defer { fixture.cleanUpAfterTest() }
         let target = fixture.worktrees[1]
 
-        _ = fixture.state.batchArchiveWorktrees([target])
+        _ = await fixture.state.batchArchiveWorktrees([target])
         #expect(fixture.state.projectsManager
             .visibleWorktrees(projectId: fixture.project.id)
             .contains { $0.id == target.id } == false)

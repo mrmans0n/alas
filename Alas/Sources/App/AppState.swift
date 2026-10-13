@@ -6717,87 +6717,65 @@ final class AppState {
         saveProjects()
     }
 
-    /// Archive (hide) a worktree. Closes all tabs/terminals/harness state for
-    /// it, marks the path hidden in `ProjectConfig`, and re-points selection if
-    /// the archived worktree was selected. Does NOT touch git or disk.
-    func archiveWorktree(_ worktree: Worktree) {
-        if let refusal = archiveRefusal(for: worktree) {
-            showFileActionError(title: "Archive Failed", message: refusal)
-            return
+    /// Archive (hide) a worktree: the core stops everything in it and hides
+    /// it, then selection moves on if it was selected. Does NOT touch git or
+    /// disk. The returned task finishes once the archive has run.
+    @discardableResult
+    func archiveWorktree(_ worktree: Worktree) -> Task<Void, Never>? {
+        // Claimed before the dirty-buffer prompt, whose run loop could
+        // otherwise let new work start in the worktree.
+        let claim: UUID
+        do {
+            claim = try core.beginArchive(worktree)
+        } catch {
+            showFileActionError(title: "Archive Failed", message: error.localizedDescription)
+            return nil
         }
-        let dirty = dirtyEditorTabIds(worktreeId: worktree.id)
-        if !dirty.isEmpty {
+        var savesBuffers = false
+        if !dirtyEditorTabIds(worktreeId: worktree.id).isEmpty {
             switch promptForDirtyBuffers(
                 action: "Archive",
                 branch: worktree.branch,
-                dirtyCount: dirty.count,
+                dirtyCount: dirtyEditorTabIds(worktreeId: worktree.id).count,
                 onDiskDestructive: false
             ) {
             case .save:
-                // The prompt's run loop can let another operation claim the
-                // worktree; never overwrite that claim.
-                if let refusal = archiveRefusal(for: worktree) {
-                    showFileActionError(title: "Archive Failed", message: refusal)
-                    return
-                }
-                // Claimed while buffers save, so nothing new starts or adopts
-                // the worktree before it is hidden.
-                let claim = projectsManager.claimOperation(.archiving(projectId: worktree.projectId), for: worktree)
-                Task { @MainActor in
-                    defer { projectsManager.releaseOperation(claim, for: worktree) }
-                    guard await saveDirtyBuffers(in: worktree) else { return }
-                    if let refusal = archiveRefusal(for: worktree, holdingClaim: claim) {
-                        showFileActionError(title: "Archive Failed", message: refusal)
-                        return
-                    }
-                    archiveWorktreeAfterSaving(worktree, holdingClaim: claim)
-                }
-                return
+                savesBuffers = true
             case .discard:
                 break
             case .cancel:
-                return
+                core.releaseWorktreeClaim(claim, for: worktree)
+                return nil
             }
         }
-
-        archiveWorktreeAfterSaving(worktree)
+        let removedIndex = projectsManager.visibleWorktrees(projectId: worktree.projectId)
+            .firstIndex(where: { $0.id == worktree.id }) ?? 0
+        return Task { @MainActor in
+            if savesBuffers, await !saveDirtyBuffers(in: worktree) {
+                core.releaseWorktreeClaim(claim, for: worktree)
+                return
+            }
+            do {
+                try await core.archiveWorktree(worktree, claim: claim)
+            } catch {
+                showFileActionError(title: "Archive Failed", message: error.localizedDescription)
+                return
+            }
+            finishArchivingWorktree(worktree, removedIndex: removedIndex)
+        }
     }
 
-    /// Why `worktree` cannot be archived now: another operation holds it, or
-    /// an active Workspace checkout manages it.
-    func archiveRefusal(for worktree: Worktree, holdingClaim claim: UUID? = nil) -> String? {
-        let holdsClaim = claim.map { projectsManager.holdsClaim($0, for: worktree) } ?? false
-        if let state = projectsManager.operationState(for: worktree), !holdsClaim, state.blocksAdmission {
-            return "Wait for the current worktree operation to finish before archiving."
+    /// Archives one confirmed batch item through the core.
+    private func archiveBatchItem(_ worktree: Worktree) async -> WorktreeBatchOutcome {
+        let removedIndex = projectsManager.visibleWorktrees(projectId: worktree.projectId)
+            .firstIndex(where: { $0.id == worktree.id }) ?? 0
+        do {
+            try await core.archiveWorktree(worktree)
+        } catch {
+            return .skipped(reason: error.localizedDescription)
         }
-        guard workspacesManager.canMutate else {
-            return "Workspace Checkout ownership could not be verified. Try again once Workspace storage is available."
-        }
-        if let owner = worktreeCleanupWorkspaceOwners(for: worktree).first(where: {
-            $0.state == .active || core.isUnarchivingWorkspaceCheckout($0.id)
-        }) {
-            return "This worktree is owned by Workspace checkout \u{201C}\(owner.name)\u{201D}. Archive it from the checkout instead."
-        }
-        return nil
-    }
-
-    /// Returns false, archiving nothing, when `archiveRefusal` objects.
-    @discardableResult
-    private func archiveWorktreeAfterSaving(_ worktree: Worktree, holdingClaim claim: UUID? = nil) -> Bool {
-        guard archiveRefusal(for: worktree, holdingClaim: claim) == nil else { return false }
-        // Snapshot index in the visible list BEFORE we mutate anything, so we
-        // can pick a sensible follow-up selection.
-        let siblingsBefore = projectsManager.visibleWorktrees(projectId: worktree.projectId)
-        let removedIndex = siblingsBefore.firstIndex(where: { $0.id == worktree.id }) ?? 0
-        projectsManager.setOperationState(for: worktree, state: nil)
-        projectsManager.setWorktreeHidden(
-            projectId: worktree.projectId,
-            path: worktree.path,
-            hidden: true
-        )
-        saveProjects()
         finishArchivingWorktree(worktree, removedIndex: removedIndex)
-        return true
+        return .archived
     }
 
     private func finishArchivingWorktree(
@@ -6807,8 +6785,6 @@ final class AppState {
         guard projectsManager.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path) else {
             return
         }
-        cleanupWorktreeState(worktreeId: worktree.id, purgeRunHistory: false)
-
         refreshGGSidebar()
         if selectedWorktreeId == worktree.id {
             selectWorktree(id: selectionAfterRemoval(
@@ -6821,15 +6797,12 @@ final class AppState {
     /// Restore an archived worktree. Tabs/terminals are NOT recreated — they
     /// were torn down at archive time and the user re-opens what they need.
     func unarchiveWorktree(projectId: String, path: URL) {
-        guard projectsManager.operationState(forWorktreeId: Worktree.makeId(path: path), projectId: projectId)?.blocksAdmission != true else {
-            showFileActionError(
-                title: "Unarchive Failed",
-                message: "Wait for the current worktree operation to finish before unarchiving."
-            )
+        do {
+            try core.unarchiveWorktree(path: path, projectID: projectId)
+        } catch {
+            showFileActionError(title: "Unarchive Failed", message: error.localizedDescription)
             return
         }
-        projectsManager.setWorktreeHidden(projectId: projectId, path: path, hidden: false)
-        saveProjects()
         if let restored = projectsManager.visibleWorktrees(projectId: projectId).first(where: {
             Self.canonicalWorktreePath($0.path.path) == Self.canonicalWorktreePath(path.path)
         }) {
@@ -6981,7 +6954,7 @@ final class AppState {
     /// archiving happens, so the user answers one prompt rather than one per
     /// worktree. Cancelling that prompt cancels the whole batch.
     @discardableResult
-    func batchArchiveWorktrees(_ worktrees: [Worktree]) -> [WorktreeBatchResult] {
+    func batchArchiveWorktrees(_ worktrees: [Worktree]) async -> [WorktreeBatchResult] {
         guard !worktrees.isEmpty else { return [] }
 
         // Snapshot which tabs are dirty right now, before the prompt. If the
@@ -7057,11 +7030,10 @@ final class AppState {
                 continue
             }
 
-            let archived = archiveWorktreeAfterSaving(worktree)
             results.append(WorktreeBatchResult(
                 worktreeId: worktree.id,
                 branch: worktree.branch,
-                outcome: archived ? .archived : .skipped(reason: archiveRefusal(for: worktree) ?? "Could not archive")
+                outcome: await archiveBatchItem(worktree)
             ))
         }
         return results
@@ -11392,7 +11364,7 @@ final class AppState {
                 )
             },
             archiveBatch: { [weak self] worktrees in
-                self?.batchArchiveWorktrees(worktrees) ?? []
+                await self?.batchArchiveWorktrees(worktrees) ?? []
             },
             confirm: { title, message, confirmButtonTitle in
                 let alert = NSAlert()
@@ -11700,11 +11672,10 @@ final class AppState {
                 ))
                 continue
             }
-            let archived = archiveWorktreeAfterSaving(worktree)
             results.append(.init(
                 worktreeId: worktree.id,
                 branch: worktree.branch,
-                outcome: archived ? .archived : .skipped(reason: archiveRefusal(for: worktree) ?? "Could not archive")
+                outcome: await archiveBatchItem(worktree)
             ))
         }
         return results

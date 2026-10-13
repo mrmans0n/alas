@@ -708,7 +708,7 @@ struct ClosedTabAppStateTests {
         }
         await Task.yield()
 
-        fixture.state.archiveWorktree(fixture.first)
+        await fixture.state.archiveWorktree(fixture.first)?.value
 
         await gate.release()
         await reopenTask.value
@@ -1017,7 +1017,7 @@ struct ClosedTabAppStateTests {
         }
         await gate.waitUntilEntered()
 
-        fixture.state.archiveWorktree(fixture.first)
+        await fixture.state.archiveWorktree(fixture.first)?.value
 
         await gate.release()
         await reopenTask.value
@@ -1049,7 +1049,7 @@ struct ClosedTabAppStateTests {
         let tab = fixture.state.tabs.appendEditor(worktreeId: fixture.first.id, title: "README.md", relativePath: "README.md")
         fixture.state.requestCloseTab(worktreeId: fixture.first.id, tabId: tab.id)
 
-        fixture.state.archiveWorktree(fixture.first)
+        await fixture.state.archiveWorktree(fixture.first)?.value
 
         #expect(!fixture.state.canReopenClosedTab)
         #expect(fixture.state.closedTabHistory.entries.isEmpty)
