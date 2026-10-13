@@ -1,5 +1,6 @@
 import AppKit
 import CoreText
+import SwiftUI
 import Testing
 @testable import Alas
 
@@ -31,6 +32,25 @@ import Testing
         #expect(tops == tops.sorted())
         #expect(layout.backgrounds.count == 1)
         #expect(layout.backgrounds[0].rect.minY > layout.lines[1].origin.y + layout.lines[1].height + 7.5)
+    }
+
+    @Test func codeBlocksAreSyntaxHighlighted() throws {
+        let layout = try #require(ACPTranscriptMarkdownLayout.make(source: "```swift\nlet value = 1\n```", width: 400, theme: theme, typography: .default))
+        let line = try #require(layout.lines.last)
+        let colors = Set((CTLineGetGlyphRuns(line.line) as! [CTRun]).compactMap {
+            (CTRunGetAttributes($0) as NSDictionary)[NSAttributedString.Key.foregroundColor] as? NSColor
+        })
+        #expect(colors.count > 1)
+    }
+
+    @Test(arguments: ["let a = 1", "let a = 1\nlet b = 2", "let a = 1\n\nlet b = 2"])
+    func codeBlockHeightMatchesTheSwiftUIBlock(code: String) throws {
+        let language = "swift"
+        let layout = try #require(ACPTranscriptMarkdownLayout.make(source: "```\(language)\n\(code)\n```", width: 500, theme: theme, typography: .default))
+        let host = NSHostingView(rootView: CodeBlockView(language: language, code: code, typography: .default)
+            .environment(\.theme, theme).frame(width: 500))
+        let background = try #require(layout.backgrounds.first)
+        #expect(abs(background.rect.height - host.fittingSize.height) < 1)
     }
 
     @Test func linksAreStyledAndHitTestable() throws {

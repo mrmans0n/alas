@@ -10,7 +10,7 @@ struct ACPTranscriptMarkdownLayout {
         let line: CTLine
         /// Top-left of the line's box, in a flipped space.
         var origin: CGPoint
-        let height: CGFloat
+        var height: CGFloat
         /// Underlined runs, which `CTLineDraw` leaves undrawn.
         var underlines: [Underline] = []
         /// The index into `texts` of the block this line shows, or nil for
@@ -210,8 +210,10 @@ struct ACPTranscriptMarkdownLayout {
                     color: theme.nsColor("accent").withAlphaComponent(ACPTranscriptMarkdownLayout.quoteBarAlpha),
                     cornerRadius: 0
                 ))
-            case .code(let language, let body), .streamingCode(let language, let body):
-                addCode(language: language, body: body)
+            case .code(let language, let body):
+                addCode(language: language, body: body, highlighted: true)
+            case .streamingCode(let language, let body):
+                addCode(language: language, body: body, highlighted: false)
             case .taskList, .image, .mermaid, .table:
                 break
             }
@@ -248,7 +250,7 @@ struct ACPTranscriptMarkdownLayout {
             return result
         }
 
-        private mutating func addCode(language: String?, body: String) {
+        private mutating func addCode(language: String?, body: String, highlighted: Bool) {
             typealias L = ACPTranscriptMarkdownLayout
             let top = y
             // The background is added first so it paints under the lines.
@@ -258,9 +260,14 @@ struct ACPTranscriptMarkdownLayout {
             // The header is as tall as the taller of its label and the button.
             let buttonFont = NSFont.systemFont(ofSize: typography.labelSize, weight: .medium)
             let buttonHeight = TextKitLineHeight.of(buttonFont) + 2 * L.copyButtonVerticalPadding
+            // `CodeBlockView`'s button also holds an icon, which can be taller than its label.
+            let icon = NSImage(systemSymbolName: "doc.on.doc", accessibilityDescription: nil)?
+                .withSymbolConfiguration(.init(pointSize: typography.labelSize, weight: .regular))
+            let iconHeight = (icon?.size.height ?? 0) + 2 * L.copyButtonVerticalPadding
+            let headerContentHeight = max(buttonHeight, iconHeight)
             y += L.codeHeaderVerticalPadding
             let headerTop = y
-            var headerHeight = max(L.codeEmptyHeaderContentHeight, buttonHeight)
+            var headerHeight = max(L.codeEmptyHeaderContentHeight, headerContentHeight)
             if let language, !language.isEmpty {
                 let label = NSAttributedString(string: language.uppercased(), attributes: [
                     .font: typography.appKitFont(size: typography.labelSize, traits: .boldFontMask),
@@ -270,7 +277,7 @@ struct ACPTranscriptMarkdownLayout {
                 let first = lines.count
                 addText(label, x: L.codeHeaderHorizontalPadding, width: max(1, width - 2 * L.codeHeaderHorizontalPadding), lineSpacing: 0)
                 let labelHeight = y - headerTop
-                headerHeight = max(labelHeight, buttonHeight)
+                headerHeight = max(labelHeight, headerContentHeight)
                 for index in first..<lines.count {
                     lines[index].origin.y += (headerHeight - labelHeight) / 2
                 }
@@ -282,14 +289,32 @@ struct ACPTranscriptMarkdownLayout {
             y = headerTop + headerHeight + L.codeHeaderVerticalPadding
 
             y += L.codeBodyVerticalPadding
-            let code = NSAttributedString(string: body, attributes: [
-                .font: CenterTypography.resolveCodeFont(family: typography.fontFamily, size: typography.codeSize),
-                .foregroundColor: theme.nsColor("fg"),
-            ])
+            let code: NSAttributedString
+            if highlighted {
+                // As `ACPSyntaxHighlightedText`, so the colors match the SwiftUI block.
+                code = ACPCodeBlockHighlighter.attributedString(
+                    code: body,
+                    language: language.flatMap(ACPCodeLanguage.highlighterExtension(for:)),
+                    theme: theme,
+                    fontFamily: typography.fontFamily,
+                    fontSize: typography.codeSize
+                )
+            } else {
+                code = NSAttributedString(string: body, attributes: [
+                    .font: CenterTypography.resolveCodeFont(family: typography.fontFamily, size: typography.codeSize),
+                    .foregroundColor: theme.nsColor("fg"),
+                ])
+            }
+            let firstCodeLine = lines.count
             addBlockText(
                 code, x: L.codeBodyHorizontalPadding, width: max(1, width - 2 * L.codeBodyHorizontalPadding),
                 lineSpacing: L.codeLineSpacing
             )
+            // Line spacing goes between lines, not after the last one.
+            if lines.count > firstCodeLine {
+                lines[lines.count - 1].height -= L.codeLineSpacing
+                y -= L.codeLineSpacing
+            }
             y += L.codeBodyVerticalPadding
 
             backgrounds[backgroundIndex] = Background(
