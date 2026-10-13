@@ -20,9 +20,17 @@ public enum ShepherdPromptBuilder {
     public static let header = "Alas PR shepherd"
     public static let maxCheckLogs = 3
 
-    /// Built at runtime so the fence never closes a Markdown code block that
-    /// quotes this file.
-    private static let fence = String(repeating: "`", count: 3)
+    /// A backtick fence longer than any backtick run in `text` (at least 3),
+    /// so untrusted text such as a check log can't close it early.
+    private static func fence(for text: String) -> String {
+        var longest = 0
+        var current = 0
+        for character in text {
+            current = character == "`" ? current + 1 : 0
+            longest = max(longest, current)
+        }
+        return String(repeating: "`", count: max(3, longest + 1))
+    }
 
     public static func fixPrompt(
         request: ReviewRequest,
@@ -105,9 +113,10 @@ public enum ShepherdPromptBuilder {
                 lines.append("Log unavailable.")
             } else {
                 if log?.isTruncated == true { lines.append("(last part of the log)") }
-                lines.append(fence + "text")
+                let logFence = fence(for: body)
+                lines.append(logFence + "text")
                 lines.append(body)
-                lines.append(fence)
+                lines.append(logFence)
             }
             if let url = log?.url ?? check.detailURL { lines.append("Full log: \(url.absoluteString)") }
         }
