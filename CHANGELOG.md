@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### ✨ Features
+
+- Shepherd pull and merge requests from the agent session that opened them: the new `pr_create` and `pr_status` MCP tools, background watching of CI, trusted review threads and merge conflicts on GitHub and GitLab, fix turns queued into the owning session, optional auto-merge through the existing merge gate, project shepherd rules from `.alas/shepherd.md`, and a PR button in the agent toolbar.
+
 ## [0.21.2] - 2026-10-13
 
 ### ✨ Features

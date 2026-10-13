@@ -250,7 +250,7 @@ Inside an Alas-spawned terminal:
 4. On an unpublished branch, click "Start" and confirm the next action becomes push.
 5. On a branch with an open PR, confirm the drawer shows `GitHub #<number>` and compact check/review/merge status.
 6. For a failing check, confirm "Open in agent" creates an ACP tab with a focused handoff prompt.
-7. Confirm merge, comment posting, review-thread resolution, force-push, and editing-agent runs are not executed without explicit user action.
+7. Confirm merge, comment posting, review-thread resolution, force-push, and editing-agent runs are not executed without explicit user action, unless PR shepherd auto-fix or auto-merge is turned on for that PR.
 
 ### Draft PR generation
 
@@ -260,6 +260,22 @@ Inside an Alas-spawned terminal:
 4. Click the sparkle button with an enabled AI tool.
 5. Confirm title/body are filled with Summary and Testing sections.
 6. Toggle Draft, then create the PR from a disposable branch or cancel before submission during local-only testing.
+
+## PR shepherd
+
+Use a disposable branch on a GitHub repository you can push to, with CI that runs on pull requests, and an ACP agent that supports MCP.
+
+1. In an agent session, make a small change, commit it, and ask the agent to open a PR. Confirm it offers first and calls `pr_create` only after you agree.
+2. Confirm the toolbar PR button shows an amber badge while checks run, and its popover lists the checks, the shepherd phase, and both toggles.
+3. Push a commit that breaks a test. Confirm that once CI fails, a prompt captioned "Alas PR shepherd" appears in the same session with the failing check and its log tail, and that the agent pushes a fix.
+4. Leave a review comment from a second account with write access. Confirm the session receives it as a fix turn while CI is still running.
+5. Leave a comment from your own account. Confirm it does not trigger a fix turn.
+6. Turn auto-fix off in the popover, break CI again, and confirm no fix turn arrives and the badge turns red.
+7. Create `.alas/shepherd.md` with `required_reviewers: [chatgpt-codex-connector]` frontmatter, turn auto-merge on, and confirm the PR does not merge until Codex has reviewed the current head (a formal review on that commit, or a thumbs-up reaction after it), and the popover lists Codex as missing until then.
+8. Once every gate passes, confirm the PR is squash-merged after two stable polls, the badge turns purple, and a macOS notification arrives.
+9. Open the Changes tab for a worktree whose PR was created from the Changes drawer. Confirm the drawer offers "Shepherd with…", binding a session sends it a context prompt, and that session's toolbar shows the badge.
+10. Archive the owning session of a shepherded PR with failing CI. Confirm a notification says the shepherd needs you and the drawer shows the escalation.
+11. Quit Alas mid-fix and relaunch. Confirm the record resumes and the phase moves on once the agent's push lands.
 
 ## Peer pairing by approval
 

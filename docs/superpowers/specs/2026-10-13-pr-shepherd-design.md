@@ -231,12 +231,19 @@ changed state (head moved, gate no longer passes) return the record to
 ### Required reviewers
 
 `rules.requiredReviewers` is a list of logins. A login counts as having
-reviewed the current head when the provider reports a review by that login on
-the current head SHA (GitHub review `commit.oid`; GitLab approval or note on
-the current head). Whether `chatgpt-codex-connector` posts a formal review per
-head is verified against a real PR in this repository during implementation.
-If it does not, the gate also accepts a top-level comment by that login
-created after the head commit's push time.
+reviewed the current head when any of these holds:
+
+- GitHub: a submitted review whose `commit.oid` is the head; a top-level
+  comment, or a THUMBS_UP reaction on the PR, created after the head commit's
+  `committedDate` (only while the PR's last commit is still the head).
+- GitLab: an approval not older than the head commit, or a note created after
+  it.
+
+Logins are lowercased and a trailing `[bot]` is stripped, so
+`chatgpt-codex-connector` matches `chatgpt-codex-connector[bot]`. Checked
+against `mrmans0n/alas` PRs #1966, #1969 and #1970: Codex leaves a formal
+review only when it has findings; on a clean head it adds a THUMBS_UP reaction
+(EYES while it is still reviewing, which does not count).
 
 ## Polling
 
