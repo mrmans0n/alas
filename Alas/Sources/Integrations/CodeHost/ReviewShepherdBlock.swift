@@ -1,0 +1,198 @@
+import SwiftUI
+
+/// What the Changes review drawer shows about the PR shepherd. Built by
+/// `ChangesTabView` from `AppState` so the drawer itself does no app lookups.
+struct ReviewShepherdDrawerModel {
+    struct Candidate: Identifiable, Equatable {
+        let id: String
+        let title: String
+        let agentName: String?
+
+        var menuTitle: String {
+            agentName.map { "\(title) · \($0)" } ?? title
+        }
+    }
+
+    /// Nil when the open PR is not shepherded yet.
+    let record: ShepherdRecord?
+    let presentation: ShepherdPresentation
+    /// Nil when the owning session is archived or no longer exists.
+    let ownerTitle: String?
+    let ownerAgent: String?
+    /// Sessions that can take the PR, newest `updatedAt` first, excluding the owner.
+    let candidates: [Candidate]
+    let setAutoFix: @MainActor (Bool) -> Void
+    let setAutoMerge: @MainActor (Bool) -> Void
+    let jump: @MainActor () -> Void
+    let stop: @MainActor () -> Void
+    let resume: @MainActor () -> Void
+    let shepherdWith: @MainActor (_ sessionID: String) -> Void
+    let shepherdWithNewSession: @MainActor () -> Void
+}
+
+/// Shepherd section inside the expanded review drawer, above the actions.
+struct ReviewShepherdBlock: View {
+    let model: ReviewShepherdDrawerModel
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            if let record = model.record {
+                bound(record)
+            } else {
+                unbound
+            }
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(theme.color("bg-2").opacity(0.48))
+        )
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("PR shepherd")
+    }
+
+    @ViewBuilder
+    private func bound(_ record: ShepherdRecord) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "pawprint")
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(model.presentation.tone.color(theme: theme) ?? theme.color("fg-faint"))
+            Text(model.ownerTitle ?? "Session archived or missing")
+                .font(.system(size: 11.5, weight: .semibold))
+                .foregroundColor(theme.color(model.ownerTitle == nil ? "fg-dim" : "fg"))
+                .lineLimit(1)
+                .truncationMode(.tail)
+            if let agent = model.ownerAgent {
+                Text(agent)
+                    .font(.system(size: 10.5))
+                    .foregroundColor(theme.color("fg-faint"))
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 6)
+            if model.ownerTitle != nil {
+                actionButton("Jump", systemImage: "arrow.up.forward.square", help: "Focus the session that owns this PR") {
+                    model.jump()
+                }
+            }
+        }
+
+        Text(model.presentation.phaseLine)
+            .font(.system(size: 11))
+            .foregroundColor(theme.color("fg-dim"))
+            .lineLimit(2)
+            .fixedSize(horizontal: false, vertical: true)
+
+        toggle(
+            "Auto-fix CI, conflicts and reviews",
+            isOn: record.autoFix,
+            isDisabled: record.phase.isTerminal,
+            set: model.setAutoFix
+        )
+        toggle(
+            "Auto-merge when ready (squash)",
+            isOn: record.autoMerge,
+            isDisabled: record.phase.isTerminal,
+            set: model.setAutoMerge
+        )
+
+        HStack(spacing: 8) {
+            if record.phase.isResumable {
+                actionButton("Resume", systemImage: "play", help: "Watch again and reset the fix attempt count") {
+                    model.resume()
+                }
+            }
+            actionButton("Stop shepherding", systemImage: "stop", help: "Stop watching. The PR stays open.") {
+                model.stop()
+            }
+            Spacer(minLength: 0)
+            if !record.phase.isTerminal {
+                sessionMenu(title: "Move to…", help: "Hand this PR to another session")
+            }
+        }
+    }
+
+    private var unbound: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "pawprint")
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(theme.color("fg-faint"))
+            Text("Not shepherded")
+                .font(.system(size: 11))
+                .foregroundColor(theme.color("fg-dim"))
+            Spacer(minLength: 6)
+            sessionMenu(title: "Shepherd with…", help: "Have a session fix and merge this PR")
+        }
+    }
+
+    private func toggle(
+        _ title: String,
+        isOn: Bool,
+        isDisabled: Bool,
+        set: @escaping @MainActor (Bool) -> Void
+    ) -> some View {
+        Toggle(isOn: Binding(get: { isOn }, set: { set($0) })) {
+            Text(title)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(theme.color("fg"))
+        }
+        .toggleStyle(.switch)
+        .controlSize(.mini)
+        .disabled(isDisabled)
+        .help(title)
+    }
+
+    /// Sessions sorted by `updatedAt` (the history list sorts by
+    /// `lastOpenedAt`, so the order here is explicit), then "New session".
+    private func sessionMenu(title: String, help: String) -> some View {
+        Menu {
+            ForEach(model.candidates) { candidate in
+                Button(candidate.menuTitle) {
+                    model.shepherdWith(candidate.id)
+                }
+            }
+            if !model.candidates.isEmpty {
+                Divider()
+            }
+            Button("New session") {
+                model.shepherdWithNewSession()
+            }
+        } label: {
+            Label(title, systemImage: "pawprint")
+                .font(.system(size: 11, weight: .semibold))
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.visible)
+        .fixedSize()
+        .help(help)
+        .accessibilityLabel(title)
+    }
+
+    private func actionButton(
+        _ title: String,
+        systemImage: String,
+        help: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 9.5, weight: .semibold))
+                Text(title)
+                    .font(.system(size: 11, weight: .semibold))
+                    .lineLimit(1)
+            }
+            .foregroundColor(theme.color("fg-muted"))
+            .padding(.horizontal, 8)
+            .frame(height: 22)
+            .background(theme.color("bg-3").opacity(0.72))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.75))
+        }
+        .buttonStyle(.plain)
+        .focusEffectDisabled()
+        .help(help)
+        .accessibilityLabel(title)
+    }
+}

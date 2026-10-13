@@ -5,6 +5,7 @@ struct ReviewLoopDrawer: View {
     let canOpenAgentHandoff: Bool
     let onAction: (ReviewReadinessActionKind) -> Void
     var onRevealReviewRequest: (Int) -> Void = { _ in }
+    var shepherd: ReviewShepherdDrawerModel? = nil
 
     @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -54,6 +55,9 @@ struct ReviewLoopDrawer: View {
             Spacer(minLength: 6)
 
             HStack(spacing: 5) {
+                if let shepherd, shepherd.record != nil {
+                    shepherdChip(shepherd)
+                }
                 ForEach(model.chips) { chip in
                     chipView(chip)
                 }
@@ -148,6 +152,10 @@ struct ReviewLoopDrawer: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+            if let shepherd {
+                ReviewShepherdBlock(model: shepherd)
+            }
+
             if !model.actions.isEmpty {
                 ScrollView(.horizontal) {
                     HStack(spacing: 8) {
@@ -219,6 +227,28 @@ struct ReviewLoopDrawer: View {
             RoundedRectangle(cornerRadius: 6)
                 .strokeBorder(color.opacity(chip.tone == .muted ? 0.2 : 0.34), lineWidth: 0.75)
         )
+    }
+
+    /// Shown only while a record exists. Same shape as `chipView`, tinted by
+    /// the toolbar badge tone.
+    private func shepherdChip(_ shepherd: ReviewShepherdDrawerModel) -> some View {
+        let color = shepherd.presentation.tone.color(theme: theme) ?? theme.color("fg-faint")
+        return Image(systemName: "pawprint")
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(color)
+            .padding(.horizontal, 7)
+            .frame(height: 22)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(color.opacity(0.12))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(color.opacity(0.34), lineWidth: 0.75)
+            )
+            .help(shepherd.presentation.tooltip)
+            .accessibilityLabel("PR shepherd")
+            .accessibilityValue(shepherd.presentation.tooltip)
     }
 
     private func labelColor(for tone: ReviewReadinessModel.Chip.Tone) -> Color {

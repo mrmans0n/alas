@@ -135,7 +135,8 @@ struct ChangesTabView: View {
                     onAction: { action in rps.handleReviewReadinessAction(action, appState: appState) },
                     onRevealReviewRequest: { number in
                         appState.acknowledgeAttentionSurface(worktreeID: rps.worktree.id, target: .reviewRequest(number: number))
-                    }
+                    },
+                    shepherd: shepherdDrawerModel
                 )
             }
         }
@@ -156,6 +157,77 @@ struct ChangesTabView: View {
     private var isRevealingAttentionReview: Bool {
         if case .reviewRequest = rps.attentionRevealedTarget { return true }
         return false
+    }
+
+    /// The shepherd record for this worktree's PR, or an unbound open PR the
+    /// user can hand to a session. Nil for folders, remote worktrees, and
+    /// branches with neither. A record for a different PR than the pane's
+    /// current one (an older merged PR on a reused branch) is ignored.
+    private var shepherdDrawerModel: ReviewShepherdDrawerModel? {
+        let worktree = rps.worktree
+        guard !rps.isFolder, !worktree.path.isRemoteAlasPath else { return nil }
+        let shepherd = appState.reviewShepherd
+        let paneSnapshot = rps.reviewLoop.snapshot
+        let paneRequest = paneSnapshot?.reviewRequest
+        let record: ShepherdRecord? = shepherd.record(forWorktree: worktree.id).flatMap { bound in
+            guard let paneRequest else { return bound }
+            return bound.id.requestNumber == paneRequest.number && bound.id.providerKind == paneRequest.provider
+                ? bound : nil
+        }
+        let snapshot = record.flatMap { shepherd.snapshots[$0.id] } ?? paneSnapshot
+        let request = snapshot?.reviewRequest
+        guard record != nil || request?.state == .open else { return nil }
+
+        let rows = appState.shepherdSessionCandidates(worktree: worktree)
+        let owner = record.flatMap { bound in rows.first { $0.id == bound.sessionID } }
+        let candidates = rows
+            .filter { $0.id != record?.sessionID }
+            .map {
+                ReviewShepherdDrawerModel.Candidate(
+                    id: $0.id,
+                    title: $0.title,
+                    agentName: appState.agent(id: $0.agentId)?.displayName
+                )
+            }
+        let gatePasses = snapshot.map { ReviewReadinessModel.canMergeReviewRequest(snapshot: $0) } ?? false
+        let recordID = record?.id
+        let ownerSessionID = record?.sessionID
+
+        return ReviewShepherdDrawerModel(
+            record: record,
+            presentation: ShepherdPresentation.make(record: record, request: request, mergeGatePasses: gatePasses),
+            ownerTitle: owner?.title,
+            ownerAgent: owner.flatMap { appState.agent(id: $0.agentId)?.displayName },
+            candidates: candidates,
+            setAutoFix: { on in
+                guard let recordID else { return }
+                appState.reviewShepherd.setAutoFix(on, for: recordID)
+            },
+            setAutoMerge: { on in
+                guard let recordID else { return }
+                appState.reviewShepherd.setAutoMerge(on, for: recordID)
+            },
+            jump: {
+                guard let ownerSessionID else { return }
+                Task { await appState.openExistingACPSession(sessionId: ownerSessionID, worktree: worktree) }
+            },
+            stop: {
+                guard let recordID else { return }
+                appState.reviewShepherd.stopShepherding(recordID)
+            },
+            resume: {
+                guard let recordID else { return }
+                appState.reviewShepherd.resume(recordID)
+            },
+            shepherdWith: { sessionID in
+                guard let request else { return }
+                Task { await appState.shepherdWithSession(sessionID, worktree: worktree, request: request) }
+            },
+            shepherdWithNewSession: {
+                guard let request else { return }
+                Task { await appState.shepherdWithNewSession(worktree: worktree, request: request) }
+            }
+        )
     }
 
     private var agentAvailabilityTaskID: String {
