@@ -28,8 +28,8 @@ extension AppState {
                 guard let self else { return }
                 Task { await self.rightPaneStore.refresh(worktreeId: worktreeID, forceReviewLoopRemote: true) }
             },
-            archiveWorktreeIfAllowed: { [weak self] worktreeID in
-                await self?.archiveShepherdWorktreeIfAllowed(worktreeID)
+            archiveWorktreeIfAllowed: { [weak self] worktreeID, sessionID in
+                await self?.archiveShepherdWorktreeIfAllowed(worktreeID, sessionID: sessionID)
             }
         )
     }
@@ -80,8 +80,10 @@ extension AppState {
     /// Queues `text` on the session as a shepherd prompt, captioned "Alas PR
     /// shepherd". Hydrates a session with no open tab, like the orchestration
     /// coordinator's delivery, then brings its agent up the way the composer
-    /// does, so the prompt runs after any turn in progress. False when the
-    /// session is missing or archived, or the queue could not be saved.
+    /// does, which claims the writer lease, so the prompt runs after any turn
+    /// in progress. False when the session is missing or archived, when
+    /// another instance owns it (this one is a read-only mirror), or when the
+    /// queue could not be saved under the lease.
     func deliverShepherdPrompt(sessionID: String, worktreeID: String, text: String) async -> Bool {
         guard let worktree = worktree(withId: worktreeID),
               let manager = acpManager(for: worktree),
@@ -91,13 +93,14 @@ extension AppState {
         else { return false }
         await manager.hydrateIfNeeded(id: sessionID)
         guard manager.liveSession(for: sessionID)?.hydrationState == .ready else { return false }
+        // Attaches an idle, disconnected or failed agent, claiming the writer
+        // lease first; a no-op while it is spawning or ready. When another
+        // instance holds the lease, the attach leaves a mirror without one and
+        // the fenced enqueue below refuses.
+        await manager.reattach(to: sessionID)
         let recordKey = reviewShepherd.record(forSession: sessionID)?.id.storageKey ?? worktreeID
         let source = ACPDelegatedPromptSource.shepherd(recordKey: recordKey, messageID: UUID())
-        guard await manager.enqueueDelegatedPrompt(text: text, source: source, into: sessionID) else { return false }
-        // Attaches an idle, disconnected or failed agent; a no-op while it is
-        // spawning or ready, where the enqueue already flushed the queue.
-        await manager.reattach(to: sessionID)
-        return true
+        return await manager.enqueueDelegatedPrompt(text: text, source: source, into: sessionID, requiringWriter: true)
     }
 
     func shepherdSessionState(sessionID: String, worktreeID: String) async -> ShepherdSessionState {
@@ -106,10 +109,21 @@ extension AppState {
               let row = await manager.persistedSessionRow(id: sessionID)
         else { return .missing }
         if row.archived { return .archived }
-        if let session = manager.liveSession(for: sessionID) {
+        guard let placeholder = manager.liveSession(for: sessionID) else {
+            return row.directTurnInFlight ? .busy : .idle
+        }
+        // A loading placeholder has an idle transcript and an empty queue
+        // until its persisted state is restored.
+        if placeholder.hydrationState == .loading {
+            await manager.hydrateIfNeeded(id: sessionID)
+        }
+        if let session = manager.liveSession(for: sessionID), session.hydrationState == .ready {
             return Self.shepherdSessionIsBusy(session, now: Date()) ? .busy : .idle
         }
-        return row.directTurnInFlight ? .busy : .idle
+        // Hydration did not finish: judge by the stored turn marker and queue.
+        if row.directTurnInFlight { return .busy }
+        let queue = (try? await manager.persistence.loadQueue(sessionId: sessionID)) ?? []
+        return queue.contains { Self.shepherdQueueItemIsDue($0, now: Date()) } ? .busy : .idle
     }
 
     /// The popover's Create PR/MR button: asks the session, as a normal user
@@ -192,11 +206,20 @@ extension AppState {
             )
             return
         }
-        // The launch returns normally when the session could not be opened,
-        // so check what it left behind, as plugin tasks do.
-        guard acpManager(for: worktree)?.liveSession(for: prepared.sessionID) != nil else {
+        // The launch returns normally when the session could not be opened
+        // or its agent did not start, so check what it left behind, as
+        // plugin tasks do.
+        guard let session = acpManager(for: worktree)?.liveSession(for: prepared.sessionID) else {
             inAppNotifications.post(
                 "Could not open a chat session for \(agentID) in \(worktree.branch).",
+                severity: .error,
+                worktreeID: worktree.id
+            )
+            return
+        }
+        if let reason = session.lastError {
+            inAppNotifications.post(
+                "\(agentID) could not start in \(worktree.branch): \(reason)",
                 severity: .error,
                 worktreeID: worktree.id
             )
@@ -261,10 +284,16 @@ extension AppState {
         case .spawning:
             return true
         case .ready:
-            return session.queue.contains { $0.lastError == nil && ($0.scheduledAt ?? .distantPast) <= now }
+            return session.queue.contains { shepherdQueueItemIsDue($0, now: now) }
         case .idle, .disconnected, .failed:
             return false
         }
+    }
+
+    /// A queued prompt that will run as soon as the agent is free: no error,
+    /// not scheduled for later.
+    private static func shepherdQueueItemIsDue(_ item: QueuedPrompt, now: Date) -> Bool {
+        item.lastError == nil && (item.scheduledAt ?? .distantPast) <= now
     }
 
     private func notifyShepherdEvent(_ event: ReviewShepherd.Event) {
@@ -348,16 +377,16 @@ extension AppState {
 
     /// Settings > Changes > "Archive worktree after its PR merges": the
     /// normal archive path, which hides the worktree and stops its tabs
-    /// without touching disk.
-    private func archiveShepherdWorktreeIfAllowed(_ worktreeID: String) async {
+    /// without touching disk. `sessionID` owns the finished record; the
+    /// worktree may hold other records owned by other sessions.
+    private func archiveShepherdWorktreeIfAllowed(_ worktreeID: String, sessionID: String) async {
         guard config.changes.shepherd.archiveAfterMerge,
               let resolved = projectAndWorktree(withWorktreeId: worktreeID),
-              resolved.worktree.isMainWorktree != true,
+              !projectsManager.isMain(resolved.worktree, in: resolved.project),
               !projectsManager.isWorktreeHidden(projectId: resolved.project.id, path: resolved.worktree.path)
         else { return }
         let worktree = resolved.worktree
-        if let record = reviewShepherd.record(forWorktree: worktreeID),
-           await shepherdSessionState(sessionID: record.sessionID, worktreeID: worktreeID) == .busy {
+        if await shepherdSessionState(sessionID: sessionID, worktreeID: worktreeID) == .busy {
             inAppNotifications.post(
                 "Kept \(worktree.branch): its chat session is still working.",
                 severity: .information,

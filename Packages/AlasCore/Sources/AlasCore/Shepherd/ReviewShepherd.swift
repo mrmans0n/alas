@@ -108,8 +108,9 @@ public final class ReviewShepherd {
         public var rules: @MainActor (_ worktreeID: String) -> ShepherdRules
         public var notify: @MainActor (Event) -> Void
         public var refreshPaneIfCached: @MainActor (_ worktreeID: String) -> Void
-        /// Checks the archive-after-merge setting and the owner's state itself.
-        public var archiveWorktreeIfAllowed: @MainActor (_ worktreeID: String) async -> Void
+        /// Checks the archive-after-merge setting and the finished record's
+        /// owner session (`sessionID`) itself.
+        public var archiveWorktreeIfAllowed: @MainActor (_ worktreeID: String, _ sessionID: String) async -> Void
 
         public init(
             worktreeContext: @escaping @MainActor (_ worktreeID: String) -> WorktreeContext?,
@@ -118,7 +119,7 @@ public final class ReviewShepherd {
             rules: @escaping @MainActor (_ worktreeID: String) -> ShepherdRules,
             notify: @escaping @MainActor (Event) -> Void,
             refreshPaneIfCached: @escaping @MainActor (_ worktreeID: String) -> Void,
-            archiveWorktreeIfAllowed: @escaping @MainActor (_ worktreeID: String) async -> Void
+            archiveWorktreeIfAllowed: @escaping @MainActor (_ worktreeID: String, _ sessionID: String) async -> Void
         ) {
             self.worktreeContext = worktreeContext
             self.sessionState = sessionState
@@ -593,7 +594,7 @@ public final class ReviewShepherd {
             case .merged:
                 effects.notify(.merged(next, title: request.title))
                 loops[id] = nil
-                await effects.archiveWorktreeIfAllowed(id.worktreeID)
+                await effects.archiveWorktreeIfAllowed(id.worktreeID, next.sessionID)
             case .queued:
                 effects.notify(.queued(next, title: request.title))
             default:
@@ -607,7 +608,7 @@ public final class ReviewShepherd {
             switch outcome {
             case .merged:
                 effects.notify(.merged(record, title: request.title))
-                await effects.archiveWorktreeIfAllowed(id.worktreeID)
+                await effects.archiveWorktreeIfAllowed(id.worktreeID, record.sessionID)
             case .closed:
                 effects.notify(.closed(record, title: request.title))
             }
