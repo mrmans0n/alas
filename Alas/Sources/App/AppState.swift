@@ -6728,17 +6728,20 @@ final class AppState {
     func archiveWorktree(_ worktree: Worktree) -> Task<Void, Never>? {
         var savesBuffers = false
         var acknowledged: [TabID: Int] = [:]
-        if !dirtyEditorTabIds(worktreeId: worktree.id).isEmpty {
+        // Snapshotted before the prompt: its run loop lets other windows keep
+        // editing, and only what the user was shown counts as acknowledged.
+        let dirtyAtPrompt = dirtyTabGenerations(worktreeId: worktree.id)
+        if !dirtyAtPrompt.isEmpty {
             switch promptForDirtyBuffers(
                 action: "Archive",
                 branch: worktree.branch,
-                dirtyCount: dirtyEditorTabIds(worktreeId: worktree.id).count,
+                dirtyCount: dirtyAtPrompt.count,
                 onDiskDestructive: false
             ) {
             case .save:
                 savesBuffers = true
             case .discard:
-                acknowledged = dirtyTabGenerations(worktreeId: worktree.id)
+                acknowledged = dirtyAtPrompt
             case .cancel:
                 return nil
             }
