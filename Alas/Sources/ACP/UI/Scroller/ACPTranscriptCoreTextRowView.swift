@@ -67,6 +67,9 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
     private var inToolCallGroup = false
     private var theme: Theme?
     private var typography: ACPChatTypography = .default
+    /// Interaction closures from the latest configure, kept even when the
+    /// content token is unchanged and the layout is reused.
+    private(set) var actions: ACPTranscriptNativeRows.Actions = .inert
     private var palette: Palette?
     private var symbols: [SymbolRole: Symbol] = [:]
     private var cachedLayout: Layout?
@@ -107,8 +110,10 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
     // MARK: - Content
 
     func configure(
-        content: Content, contentMaxWidth: CGFloat, inToolCallGroup: Bool, theme: Theme, typography: ACPChatTypography
+        content: Content, contentMaxWidth: CGFloat, inToolCallGroup: Bool, theme: Theme, typography: ACPChatTypography,
+        actions: ACPTranscriptNativeRows.Actions = .inert
     ) {
+        self.actions = actions
         let sizeChanged = content != self.content || contentMaxWidth != self.contentMaxWidth
             || inToolCallGroup != self.inToolCallGroup || typography != self.typography
         guard sizeChanged || theme != self.theme else { return }

@@ -73,12 +73,32 @@ enum ACPTranscriptNativeRows {
         }
     }
 
+    /// What a native row can do beyond drawing. Stored on the view rather than
+    /// folded into `Content`, so a row whose token is unchanged keeps the
+    /// closures it was last configured with, as the SwiftUI rows do.
+    struct Actions {
+        /// The "…" menu inputs; nil for rows without a gutter (thoughts, tool
+        /// calls, group headers).
+        var menu: ACPMessageActionsMenu.Input?
+        /// Toggles a tool-call group header; nil elsewhere.
+        var toggleExpanded: ((Bool) -> Void)?
+        var openURL: (URL) -> Void
+        /// VoiceOver or Full Keyboard Access is on, so the actions affordance
+        /// stays visible instead of appearing on hover.
+        var showsActionsPermanently: Bool
+
+        static var inert: Actions {
+            Actions(menu: nil, toggleExpanded: nil, openURL: { _ in }, showsActionsPermanently: false)
+        }
+    }
+
     static func row(
         _ content: ACPTranscriptCoreTextRowView.Content,
         contentMaxWidth: CGFloat,
         inToolCallGroup: Bool,
         theme: Theme,
-        typography: ACPChatTypography
+        typography: ACPChatTypography,
+        actions: Actions
     ) -> ACPTranscriptNativeRow {
         ACPTranscriptNativeRow(
             make: { ACPTranscriptCoreTextRowView(frame: .zero) },
@@ -88,7 +108,8 @@ enum ACPTranscriptNativeRows {
                     contentMaxWidth: contentMaxWidth,
                     inToolCallGroup: inToolCallGroup,
                     theme: theme,
-                    typography: typography
+                    typography: typography,
+                    actions: actions
                 )
             }
         )

@@ -700,10 +700,75 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                ) {
                 spec.native = ACPTranscriptNativeRows.row(
                     content, contentMaxWidth: host.contentMaxWidth, inToolCallGroup: inToolCallGroup,
-                    theme: host.theme, typography: host.typography
+                    theme: host.theme, typography: host.typography,
+                    actions: nativeActions(
+                        host: host, snapshot: snapshot, row: row, message: message, toggleExpanded: nil
+                    )
                 )
             }
             return spec
+        }
+
+        private static func showsActionsPermanently() -> Bool {
+            NSWorkspace.shared.isVoiceOverEnabled || NSApp.isFullKeyboardAccessEnabled
+        }
+
+        /// The same route as `openTranscriptURLAction`, with the system
+        /// opener as the fallback the SwiftUI `.systemAction` provides.
+        private static func openLink(host: ACPTranscriptScroller, _ url: URL) {
+            if !host.onOpenTranscriptLink(url) { NSWorkspace.shared.open(url) }
+        }
+
+        /// Native-row actions mirroring what `ACPTranscriptRowContent` hands
+        /// `ACPMessageGutter`. Only user and agent rows have a menu.
+        private static func nativeActions(
+            host: ACPTranscriptScroller,
+            snapshot: RowSnapshot,
+            row: ACPTranscriptVisibleRow,
+            message: ACPMessage,
+            toggleExpanded: ((Bool) -> Void)?
+        ) -> ACPTranscriptNativeRows.Actions {
+            var menu: ACPMessageActionsMenu.Input?
+            let kind: ACPForkMessageBoundary.Kind?
+            let markdown: (() -> String)?
+            var checkpointID: CheckpointID?
+            switch message {
+            case .user(_, _, let text, _, _, _):
+                kind = .user
+                markdown = { text }
+                checkpointID = ACPTranscriptRowContent.checkpointID(in: message)
+            case .agent(_, _, let buffer):
+                kind = .agent
+                markdown = { buffer.value }
+            default:
+                kind = nil
+                markdown = nil
+            }
+            if let kind, let markdown {
+                let forkTargets = host.forkTargets
+                let boundary = ACPMessageForkMenuPolicy.showsForkAction(
+                    messageKind: message.kind,
+                    isEligible: snapshot.canFork(row.index),
+                    targetCount: forkTargets.count
+                ) ? ACPForkMessageBoundary(stableID: row.stableId, kind: kind) : nil
+                menu = .init(
+                    markdown: markdown,
+                    createdAt: host.transcript.createdAt(forStableId: row.stableId),
+                    checkpointID: checkpointID,
+                    forkBoundary: boundary,
+                    forkTargets: forkTargets,
+                    onQuote: host.onQuote,
+                    onFork: host.onFork,
+                    onRestoreCheckpoint: host.onRestoreCheckpoint,
+                    messageMenuItems: host.messageMenuItems
+                )
+            }
+            return .init(
+                menu: menu,
+                toggleExpanded: toggleExpanded,
+                openURL: { url in openLink(host: host, url) },
+                showsActionsPermanently: showsActionsPermanently()
+            )
         }
 
         private struct MessageRowTokenInputs: Equatable {
@@ -887,7 +952,13 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 spec.native = ACPTranscriptNativeRows.row(
                     .toolGroupHeader(label: summary.label, iconSystemName: summary.iconSystemName, expanded: expanded),
                     contentMaxWidth: host.contentMaxWidth, inToolCallGroup: false,
-                    theme: host.theme, typography: host.typography
+                    theme: host.theme, typography: host.typography,
+                    actions: .init(
+                        menu: nil,
+                        toggleExpanded: { expansionSeeds.setExpanded($0, members: memberStableIds) },
+                        openURL: { url in openLink(host: host, url) },
+                        showsActionsPermanently: showsActionsPermanently()
+                    )
                 )
             }
             return spec

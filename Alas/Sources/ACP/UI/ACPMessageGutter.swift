@@ -163,7 +163,7 @@ struct ACPMessageGutter<Content: View>: View {
     private var dotsMenu: some View {
         ACPMessageActionsButton(
             copySource: copySource,
-            timestampText: messageCreatedAt.map { ACPMessageTimestampFormatter.string(for: $0) },
+            createdAt: messageCreatedAt,
             forkBoundary: forkBoundary,
             forkTargets: forkTargets,
             onQuote: onQuote,
@@ -187,7 +187,7 @@ struct ACPMessageGutter<Content: View>: View {
 
 private struct ACPMessageActionsButton: NSViewRepresentable {
     let copySource: ACPMessageCopySource
-    let timestampText: String?
+    let createdAt: Date?
     let forkBoundary: ACPForkMessageBoundary?
     let forkTargets: [ACPSessionForkTarget]
     let onQuote: (String) -> Void
@@ -200,7 +200,7 @@ private struct ACPMessageActionsButton: NSViewRepresentable {
     func makeCoordinator() -> Coordinator {
         Coordinator(
             copySource: copySource,
-            timestampText: timestampText,
+            createdAt: createdAt,
             forkBoundary: forkBoundary,
             forkTargets: forkTargets,
             onQuote: onQuote,
@@ -221,7 +221,7 @@ private struct ACPMessageActionsButton: NSViewRepresentable {
 
     func updateNSView(_ button: NSButton, context: Context) {
         context.coordinator.copySource = copySource
-        context.coordinator.timestampText = timestampText
+        context.coordinator.createdAt = createdAt
         context.coordinator.forkBoundary = forkBoundary
         context.coordinator.forkTargets = forkTargets
         context.coordinator.onQuote = onQuote
@@ -235,7 +235,7 @@ private struct ACPMessageActionsButton: NSViewRepresentable {
     @MainActor
     final class Coordinator: NSObject {
         var copySource: ACPMessageCopySource
-        var timestampText: String?
+        var createdAt: Date?
         var forkBoundary: ACPForkMessageBoundary?
         var forkTargets: [ACPSessionForkTarget]
         var onQuote: (String) -> Void
@@ -243,12 +243,10 @@ private struct ACPMessageActionsButton: NSViewRepresentable {
         var checkpointID: CheckpointID?
         var onRestoreCheckpoint: (CheckpointID) -> Void
         var messageMenuItems: () -> [ACPMessageMenuItem]
-        /// The items of the open menu, which its entries index into.
-        private var shownMenuItems: [ACPMessageMenuItem] = []
 
         init(
             copySource: ACPMessageCopySource,
-            timestampText: String?,
+            createdAt: Date?,
             forkBoundary: ACPForkMessageBoundary?,
             forkTargets: [ACPSessionForkTarget],
             onQuote: @escaping (String) -> Void,
@@ -258,7 +256,7 @@ private struct ACPMessageActionsButton: NSViewRepresentable {
             onFork: @escaping (ACPForkMessageBoundary, String) -> Void
         ) {
             self.copySource = copySource
-            self.timestampText = timestampText
+            self.createdAt = createdAt
             self.forkBoundary = forkBoundary
             self.forkTargets = forkTargets
             self.onQuote = onQuote
@@ -269,106 +267,23 @@ private struct ACPMessageActionsButton: NSViewRepresentable {
         }
 
         @objc func showMenu(_ sender: NSButton) {
-            let menu = NSMenu()
-            if let timestampText {
-                let timestampItem = NSMenuItem(title: timestampText, action: nil, keyEquivalent: "")
-                timestampItem.isEnabled = false
-                menu.addItem(timestampItem)
-                menu.addItem(.separator())
-            }
-            if checkpointID != nil {
-                let restoreItem = NSMenuItem(
-                    title: "Restore files to before this request",
-                    action: #selector(restoreCheckpoint(_:)),
-                    keyEquivalent: ""
-                )
-                restoreItem.target = self
-                menu.addItem(restoreItem)
-                menu.addItem(.separator())
-            }
-            let copyItem = NSMenuItem(
-                title: "Copy message",
-                action: #selector(copyMessage(_:)),
-                keyEquivalent: ""
-            )
-            copyItem.target = self
-            menu.addItem(copyItem)
-            let markdown = copySource.markdown
-            if ACPMessageQuote.canQuote(markdown) {
-                let quoteItem = NSMenuItem(
-                    title: "Quote",
-                    action: #selector(quoteMessage(_:)),
-                    keyEquivalent: ""
-                )
-                quoteItem.target = self
-                menu.addItem(quoteItem)
-            }
-            if forkBoundary != nil, !forkTargets.isEmpty {
-                menu.addItem(.separator())
-                let forkItem = NSMenuItem(title: "Fork from here", action: nil, keyEquivalent: "")
-                let submenu = NSMenu()
-                for target in forkTargets {
-                    let item = NSMenuItem(
-                        title: target.displayName,
-                        action: #selector(forkFromHere(_:)),
-                        keyEquivalent: ""
-                    )
-                    item.target = self
-                    item.representedObject = target.id
-                    item.image = AgentLogoView.menuImage(assetName: target.logoAssetName, size: 14)
-                    if target.isSameAgent {
-                        item.badge = NSMenuItemBadge(string: "Current")
-                    }
-                    submenu.addItem(item)
-                }
-                forkItem.submenu = submenu
-                menu.addItem(forkItem)
-            }
-            shownMenuItems = messageMenuItems()
-            if !shownMenuItems.isEmpty {
-                menu.addItem(.separator())
-                for (index, entry) in shownMenuItems.enumerated() {
-                    let item = NSMenuItem(title: entry.title, action: #selector(runMenuItem(_:)), keyEquivalent: "")
-                    item.target = self
-                    item.tag = index
-                    item.image = entry.icon.flatMap { NSImage(systemSymbolName: $0, accessibilityDescription: nil) }
-                    menu.addItem(item)
-                }
-            }
+            let source = copySource
+            let menu = ACPMessageActionsMenu.make(.init(
+                markdown: { source.markdown },
+                createdAt: createdAt,
+                checkpointID: checkpointID,
+                forkBoundary: forkBoundary,
+                forkTargets: forkTargets,
+                onQuote: onQuote,
+                onFork: onFork,
+                onRestoreCheckpoint: onRestoreCheckpoint,
+                messageMenuItems: messageMenuItems
+            ))
             menu.popUp(
-                positioning: copyItem,
+                positioning: menu.items.first { $0.title == "Copy message" },
                 at: NSPoint(x: 0, y: sender.bounds.height + 2),
                 in: sender
             )
-        }
-
-        @objc private func restoreCheckpoint(_ sender: NSMenuItem) {
-            guard let checkpointID else { return }
-            onRestoreCheckpoint(checkpointID)
-        }
-
-        @objc private func copyMessage(_ sender: NSMenuItem) {
-            let text = copySource.markdown
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(text, forType: .string)
-        }
-
-        @objc private func quoteMessage(_ sender: NSMenuItem) {
-            let markdown = copySource.markdown
-            guard ACPMessageQuote.canQuote(markdown) else { return }
-            onQuote(markdown)
-        }
-
-        @objc private func runMenuItem(_ sender: NSMenuItem) {
-            guard shownMenuItems.indices.contains(sender.tag) else { return }
-            shownMenuItems[sender.tag].run(copySource.markdown)
-        }
-
-        @objc private func forkFromHere(_ sender: NSMenuItem) {
-            guard let boundary = forkBoundary,
-                  let targetID = sender.representedObject as? String
-            else { return }
-            onFork(boundary, targetID)
         }
     }
 }
