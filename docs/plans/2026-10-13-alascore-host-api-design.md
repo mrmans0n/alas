@@ -150,16 +150,19 @@ Sealing the whole package is out of scope. Many value types are rightly public.
 
 ### Transport
 
-The host API is transport-free, and adapters map it:
+The host API is transport-free. One wire shape mirrors it, the **host protocol**: snapshot, events and verbs as messages, with its own version. It is carried two ways:
 
-- **Local socket adapter:** the existing CLI/MCP protocol. It stays command-shaped.
-- **Remote adapter:** the existing Remote protocol, paired and over TLS. It gains list events (removing the 15 s polls), worktree lifecycle, projects and runs, as the host API grows them.
+- **Local Unix socket:** authorized by file permissions. This is what `alas-host` clients and local tools use.
+- **Remote server:** a versioned namespace on the paired TLS channel, for clients on other machines.
 
-Both protocols stay for now. Which protocol headless clients use is open; see the trade-offs at the end.
+Two shapes sit on top of the host protocol:
+
+- **Remote's web messages** (transcript tails, mentions, tab actions) become a thin layer over it. Peers that predate the host namespace keep being answered in the old messages.
+- **The CLI/MCP protocol** stays command-shaped. Its router calls `AlasHost` in-process.
 
 ### `alas-host`
 
-`alas-host` is a SwiftPM executable target in `Packages/AlasCore`. It builds `AlasHost` with `HeadlessHostEnvironment` and serves the socket and Remote adapters.
+`alas-host` is a SwiftPM executable target in `Packages/AlasCore`. It builds `AlasHost` with `HeadlessHostEnvironment` and serves the host protocol on the local socket and, when Remote is enabled, on the Remote server.
 
 - It uses the app's data directory layout, honoring `ALAS_APP_SUPPORT_DIR`.
 - It takes an exclusive lock on that directory, and so does the app. The two never write the same state at once; attaching the app to a running host is a non-goal.
@@ -190,10 +193,14 @@ Each phase is one or more independent PRs. It is done when its exit criterion ho
 2. **Environment and SPI.** Introduce `AlasHostEnvironment` and `HeadlessHostEnvironment` in place of the hook closures. Mark the remaining app plumbing `@_spi(AppHost)`. *Exit:* `AlasCoreContext` has no settable closure properties, and a test target importing `AlasCore` without SPI cannot reach the plumbing.
 3. **Runs.** Introduce `RunLauncher`; terminal-backed and process-backed runs share start, settle and record. *Exit:* no run observation or settlement call remains in `AppState+RunScripts`.
 4. **Host facade and snapshots.** Add `AlasHost` with `projects`, `worktrees`, `workspaces` and `runs` as value-typed APIs and `snapshot()`. *Exit:* the CLI's `wt list`, `wt new`, `wt delete` and `workspace_list/show` go through the host.
-5. **Events.** `HostEvent` with cursors, coalescing and resync. The Remote adapter pushes session and worktree lists. *Exit:* the web client's and federation's 15 s list polls are gone.
-6. **Sessions.** `SessionsAPI` over the session managers. `RemoteSessionsProvider` is implemented in core over the host, with presentation through the presenter. *Exit:* the provider conformance leaves `AppState`, and no requirement returns `ACPSession`.
+5. **Events and the host protocol.**
+   - Add `HostEvent` with cursors, coalescing and resync.
+   - Add the host message set (snapshot, events, and the verbs from phase 4), served on a local Unix socket and as a versioned namespace on the Remote server.
+   - The Remote layer subscribes to host events instead of polling.
+   - *Exit:* the web client's and federation's 15 s list polls are gone, and a host-protocol client can list and mutate projects, worktrees and workspaces.
+6. **Sessions.** `SessionsAPI` over the session managers. Session verbs, transcripts and pending requests join the host protocol. Remote's session messages become a layer over them, and `RemoteSessionsProvider` is retired. *Exit:* no Remote session path reaches `AppState` except through the presenter, and no API returns `ACPSession`.
 7. **CLI, MCP and plugins.** `AlasActionService` shrinks to presentation. `ACPSessionOrchestrationCoordinator` and `PluginHostActions` call the host. Review stores move to the host. *Exit:* every domain command in the router and plugin host calls `AlasHost`.
-8. **`alas-host`.** The executable target, the data-directory lock and the hostless end-to-end test. *Exit:* CI boots `alas-host` and drives a worktree, a session and a run over the wire.
+8. **`alas-host`.** The executable target serving the host protocol, the data-directory lock and the hostless end-to-end test. *Exit:* CI boots `alas-host` and drives a worktree, a session and a run over the wire.
 
 Phases 1–3 change no external behavior and can start right away. Phase 5 is the first one users notice: lists update live instead of every 15 seconds.
 
@@ -204,9 +211,9 @@ Phases 1–3 change no external behavior and can start right away. Phase 5 is th
 3. **`AlasHost` is the public entry point.** It is a new type. `AlasCoreContext` becomes the internal engine behind it and loses its public verbs as their callers move.
 4. **Session owners are uniform.** Every session verb takes the existing `SessionOwnerID` (`.worktree` or `.workspaceCheckout`), and authorization, attention and events treat both the same way. Its `.worktree` case carries only the id today; it gains the project, like `WorktreeRef`, so it is unambiguous for same-path checkouts across hosts. Phase 6 removes the Remote paths that refuse checkout-owned sessions today, because special-cased owners are where the lifecycle bugs of #1952 came from.
 
-## Open: the headless client protocol
+5. **One host protocol, two transports (option C below).** Headless clients speak a host message set that mirrors `AlasHost`. It is served over a local Unix socket (file permissions) and over the Remote server's paired TLS channel as its own namespace. Remote's web-specific messages become a layer over host messages, and the CLI stays command-shaped over the same API in-process. This was chosen over the cheaper options for its clean shape and single streaming implementation, accepting the larger migration.
 
-How a headless host's clients talk to it is decided before phase 5, which is the first phase that grows a protocol. Phases 1–4 do not depend on it. Three options:
+### Client protocol options considered
 
 **A. Grow the Remote protocol into the host protocol.**
 - Pros:
@@ -238,4 +245,4 @@ How a headless host's clients talk to it is decided before phase 5, which is the
   - It is the largest migration.
   - The Remote layer has to keep old peers working while it moves underneath them.
 
-**Leaning: C**, decided at phase 5 with the costs then known. The deciding downside to weigh is peer compatibility: if federation across versions matters more than a clean protocol, A is cheaper.
+**Chosen: C.** Peer compatibility is handled by version negotiation in `hello`: the host namespace carries its own protocol version, and the Remote layer keeps answering the existing messages for peers that do not speak it, until a release drops them.
