@@ -1174,10 +1174,11 @@ struct ACPSessionOrchestrationCoordinatorTests {
     private func completion(
         result: ACPTurnCompletion.Result = .completed,
         startedAt: Int64 = 500,
-        lastAgentText: String? = "Parser fixed."
+        lastAgentText: String? = "Parser fixed.",
+        delegatedSource: ACPDelegatedPromptSource? = nil
     ) -> ACPTurnCompletion {
         .init(sessionId: "child", startedAt: startedAt, result: result,
-              delegatedSource: nil, lastAgentText: lastAgentText)
+              delegatedSource: delegatedSource, lastAgentText: lastAgentText)
     }
 
     @Test("unreported child completion wakes the parent")
@@ -1267,6 +1268,18 @@ struct ACPSessionOrchestrationCoordinatorTests {
         await fixture.coordinator.childTurnCompleted(completion())
 
         #expect(try await fixture.persistence.pendingMessages(targetSessionId: "parent").isEmpty)
+    }
+
+    @Test("a PR shepherd turn on a delegated child is not reported to the parent")
+    func shepherdTurnOnChildIsIgnored() async throws {
+        let fixture = try makeOutcomeFixture()
+        try await insertReadyChild(fixture.persistence)
+
+        await fixture.coordinator.childTurnCompleted(completion(
+            delegatedSource: .shepherd(recordKey: "github:owner/repo#7", messageID: UUID())
+        ))
+
+        #expect(try await fixture.persistence.pendingMessageTargetSessionIds().isEmpty)
     }
 
     @Test("markChildFailed records the phase and wakes the parent once")

@@ -882,11 +882,14 @@ public final class ACPSessionOrchestrationCoordinator {
         return .queue(queue)
     }
 
-    /// Entry point for a delegated child's finished turn. Non-children and
-    /// terminal children are ignored; everything else becomes an inbox row
-    /// for the parent, wake or notice per `outcomeDisposition`.
+    /// Entry point for a delegated child's finished turn. Non-children,
+    /// terminal children and turns started by a PR shepherd prompt (the
+    /// shepherd, not the parent, asked for that work) are ignored; everything
+    /// else becomes an inbox row for the parent, wake or notice per
+    /// `outcomeDisposition`.
     public func childTurnCompleted(_ completion: ACPTurnCompletion) async {
-        guard let record = try? await environment.persistence.delegation(childSessionId: completion.sessionId),
+        guard completion.delegatedSource?.isFromShepherd != true,
+              let record = try? await environment.persistence.delegation(childSessionId: completion.sessionId),
               record.phase != .failed, record.phase != .closed
         else { return }
         let disposition = ACPSessionOrchestrationPolicy.outcomeDisposition(
