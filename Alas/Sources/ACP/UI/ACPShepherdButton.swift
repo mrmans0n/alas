@@ -70,6 +70,9 @@ struct ShepherdSessionContext {
     /// A non-terminal record owned by a different session in this worktree.
     let otherRecord: ShepherdRecord?
     let snapshot: ReviewLoopSnapshot?
+    /// The shepherd's own merge gate from its latest decision on the bound
+    /// record; nil without one.
+    private let shepherdGatePasses: Bool?
 
     init(sessionID: String, worktree: Worktree, state: AppState, fetched: ReviewLoopSnapshot? = nil) {
         let shepherd = state.reviewShepherd
@@ -91,6 +94,7 @@ struct ShepherdSessionContext {
         } else {
             snapshot = pane ?? fetched
         }
+        shepherdGatePasses = own.map { shepherd.gatePasses[$0.id] ?? false }
     }
 
     private static func carries(_ id: ShepherdRecordID, _ snapshot: ReviewLoopSnapshot) -> Bool {
@@ -102,9 +106,10 @@ struct ShepherdSessionContext {
     /// record's request.
     var request: ReviewRequest? { snapshot?.reviewRequest }
 
-    /// The readiness half of the merge gate. Required reviewers need a
-    /// provider call, so the popover reports them separately.
+    /// A bound record uses the shepherd's full gate (head stability and
+    /// required reviewers included); without one, the readiness half.
     var mergeGatePasses: Bool {
+        if let shepherdGatePasses { return shepherdGatePasses }
         guard let snapshot, request != nil else { return false }
         return ReviewReadinessModel.canMergeReviewRequest(snapshot: snapshot)
     }
@@ -293,10 +298,10 @@ private struct ShepherdPopover: View {
     }
 
     /// Once `load()` has the rules and head reviewers, use the policy's exact
-    /// merge gate (required reviewers and head stability included) instead of
-    /// the readiness-only approximation the toolbar badge uses. Until the
-    /// reviewers for the current head arrive, `headReviewers` is nil and the gate fails closed when
-    /// the rules require any.
+    /// merge gate on this fresh data instead of the shepherd's gate from its
+    /// last poll, which the toolbar badge uses. Until the reviewers for the
+    /// current head arrive, `headReviewers` is nil and the gate fails closed
+    /// when the rules require any.
     private func exactPresentation(record: ShepherdRecord, context: ShepherdSessionContext) -> ShepherdPresentation {
         guard !isLoading, let snapshot = context.snapshot, context.request != nil else { return context.presentation }
         let observation = ShepherdObservation(

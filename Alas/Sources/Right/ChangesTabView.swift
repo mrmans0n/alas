@@ -251,7 +251,10 @@ struct ChangesTabView: View {
                     agentName: appState.agent(id: $0.agentId)?.displayName
                 )
             }
-        let gatePasses = ReviewReadinessModel.canMergeReviewRequest(snapshot: snapshot)
+        // A bound record uses the shepherd's full gate from its last decision;
+        // without one, the readiness half.
+        let gatePasses = record.map { shepherd.gatePasses[$0.id] ?? false }
+            ?? ReviewReadinessModel.canMergeReviewRequest(snapshot: snapshot)
         let recordID = record?.id
         let ownerSessionID = record?.sessionID
 

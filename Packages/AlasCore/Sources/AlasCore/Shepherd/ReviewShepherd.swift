@@ -170,6 +170,10 @@ public final class ReviewShepherd {
     public private(set) var records: [ShepherdRecordID: ShepherdRecord] = [:]
     /// The latest successful fetch per record, for the toolbar and drawer.
     public private(set) var snapshots: [ShepherdRecordID: ReviewLoopSnapshot] = [:]
+    /// `ShepherdPolicy.mergeGatePasses` from the latest decision per record,
+    /// on the same observation the policy decided on (rules, reviewers on the
+    /// head, head stability), so ready badges agree with what it would do.
+    public private(set) var gatePasses: [ShepherdRecordID: Bool] = [:]
 
     @ObservationIgnored private let store: any PersistenceStoreProtocol
     @ObservationIgnored private let fileURL: URL
@@ -581,13 +585,15 @@ public final class ReviewShepherd {
         guard let current = records[id], current.sessionID == owner, !current.phase.isTerminal else { return }
         failureCounts[id] = nil
         snapshots[id] = observed
-        let decision = ShepherdPolicy.decide(current, ShepherdObservation(
+        let observation = ShepherdObservation(
             snapshot: observed,
             headReviewers: reviewers,
             session: session,
             rules: rules,
             now: now()
-        ))
+        )
+        let decision = ShepherdPolicy.decide(current, observation)
+        gatePasses[id] = ShepherdPolicy.mergeGatePasses(decision.record, observation)
         var next = decision.record
         if next.phase.isTerminal, next.finishedAt == nil {
             next.finishedAt = now()
@@ -808,13 +814,15 @@ public final class ReviewShepherd {
         guard mayStillMerge(id, generation), let record = records[id] else { return .abandoned }
         // `decide` moves a `.merging` record back to watching before running
         // the rules, so it can return `.merge` again for this record.
-        let decision = ShepherdPolicy.decide(record, ShepherdObservation(
+        let observation = ShepherdObservation(
             snapshot: latest,
             headReviewers: reviewers,
             session: session,
             rules: rules,
             now: now()
-        ))
+        )
+        let decision = ShepherdPolicy.decide(record, observation)
+        gatePasses[id] = ShepherdPolicy.mergeGatePasses(decision.record, observation)
         guard decision.action == .merge else {
             return .redecided(decision, before: record, snapshot: latest, rules: rules)
         }
@@ -978,6 +986,7 @@ public final class ReviewShepherd {
     private func remove(_ id: ShepherdRecordID) {
         records[id] = nil
         snapshots[id] = nil
+        gatePasses[id] = nil
         loops[id] = nil
         dueAt[id] = nil
         failureCounts[id] = nil
