@@ -471,6 +471,8 @@ struct ACPTranscriptScrollerRowSpecsTests {
                 ACPTranscriptVisibleRow(index: 1, stableId: "tc-b"),
                 ACPTranscriptVisibleRow(index: 2, stableId: "tc-c"),
             ])),
+            // A memoized fold can be stale: a row past the transcript has no spec.
+            .message(ACPTranscriptVisibleRow(index: 3, stableId: "tc-gone")),
         ]
         let ids = ACPTranscriptScroller.Coordinator.rowSpecs(host: host, renderRows: supplied).map(\.id)
         #expect(ids == ["tc-a", "tcg-tc-b", "__composer_spacer__"])

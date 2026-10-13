@@ -613,7 +613,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             case .toolCallGroup(let group), .toolCallGroupHeader(let group): group.members.map(\.index)
             }
             return indices.contains { index in
-                guard case .toolCall(let call) = messages[index] else { return false }
+                // A memoized fold can name rows past a shrunken transcript.
+                guard messages.indices.contains(index), case .toolCall(let call) = messages[index] else { return false }
                 return call.status == "pending" || call.status == "in_progress" || call.terminalIds.contains { id in
                     guard let terminal = host.session.terminalHost.terminal(id: id) else { return false }
                     return !terminal.released && terminal.exitStatus == nil
