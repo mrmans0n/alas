@@ -128,6 +128,9 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         /// Lives for the Coordinator's lifetime, i.e. as long as this chat
         /// tab's transcript stays mounted.
         private let toolCallGroupExpansionSeeds = ACPToolCallGroupExpansionSeeds()
+        /// Which tool calls and thoughts are expanded, so an expanded row
+        /// stays SwiftUI and a collapsed one can be drawn natively.
+        let rowExpansionStore = ACPTranscriptRowExpansionStore()
         private var minimapRenderer: ACPTranscriptMinimap?
         private var pendingMinimapUpdate: DispatchWorkItem?
 
@@ -158,6 +161,12 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             // A bundle's expanded flag lives in its row token, so a toggle
             // must produce a fresh spec list to take effect on screen.
             toolCallGroupExpansionSeeds.onChange = { [weak self] in
+                guard let self, let host = self.host else { return }
+                self.update(host: host)
+            }
+            // Same for a tool call or thought: its expanded flag decides
+            // between the native row and the expanded SwiftUI card.
+            rowExpansionStore.onChange = { [weak self] in
                 guard let self, let host = self.host else { return }
                 self.update(host: host)
             }
@@ -310,6 +319,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                     contentMaxWidth: host.contentMaxWidth
                 ),
                 expansionSeeds: toolCallGroupExpansionSeeds,
+                rowExpansionStore: rowExpansionStore,
                 // Same memoized fold the scroll-anchor and minimap lookups
                 // read, so a width-only or expand-toggle update doesn't
                 // re-slice and re-fold the whole window.
@@ -484,6 +494,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             availableRowContentWidth: CGFloat? = nil,
             availableTrailingGutterWidth: CGFloat? = nil,
             expansionSeeds: ACPToolCallGroupExpansionSeeds = ACPToolCallGroupExpansionSeeds(),
+            rowExpansionStore: ACPTranscriptRowExpansionStore = ACPTranscriptRowExpansionStore(),
             renderRows: [ACPTranscriptRenderRow]? = nil,
             nativeRowsEnabled: Bool = ACPTranscriptNativeRows.isEnabled
         ) -> [ACPTranscriptRowSpec] {
@@ -545,6 +556,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 case .message(let row):
                     guard let spec = Self.messageRowSpec(
                         host: host, snapshot: snapshot, row: row, inToolCallGroup: false,
+                        rowExpansionStore: rowExpansionStore,
                         mayBeNative: mayBeNative,
                         availableRowContentWidth: availableRowContentWidth,
                         availableTrailingGutterWidth: availableTrailingGutterWidth
@@ -554,6 +566,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 case .toolCallGroupMember(let row, _):
                     guard let spec = Self.messageRowSpec(
                         host: host, snapshot: snapshot, row: row, inToolCallGroup: true,
+                        rowExpansionStore: rowExpansionStore,
                         mayBeNative: mayBeNative,
                         availableRowContentWidth: availableRowContentWidth,
                         availableTrailingGutterWidth: availableTrailingGutterWidth
@@ -653,12 +666,14 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             snapshot: RowSnapshot,
             row: ACPTranscriptVisibleRow,
             inToolCallGroup: Bool,
+            rowExpansionStore: ACPTranscriptRowExpansionStore,
             mayBeNative: Bool,
             availableRowContentWidth: CGFloat,
             availableTrailingGutterWidth: CGFloat
         ) -> ACPTranscriptRowSpec? {
             guard snapshot.messages.indices.contains(row.index) else { return nil }
             let message = snapshot.messages[row.index]
+            let expansion = Self.rowExpansion(of: message, stableId: row.stableId, store: rowExpansionStore)
             let rowToken = token(
                 MessageRowTokenInputs(
                     key: Self.messageRowKey(
@@ -667,7 +682,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                         availableTrailingGutterWidth: availableTrailingGutterWidth
                     ),
                     inToolCallGroup: inToolCallGroup,
-                    canCancelSubagent: host.onCancelSubagent != nil
+                    canCancelSubagent: host.onCancelSubagent != nil,
+                    isExpanded: expansion?.isExpanded ?? false
                 ),
                 host: host
             )
@@ -681,7 +697,9 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                             row: row,
                             message: message,
                             availableRowContentWidth: availableRowContentWidth,
-                            availableTrailingGutterWidth: availableTrailingGutterWidth
+                            availableTrailingGutterWidth: availableTrailingGutterWidth,
+                            isExpanded: expansion?.isExpanded ?? false,
+                            onExpandedChange: expansion?.setExpanded
                         )
                         if inToolCallGroup {
                             ACPToolCallGroupMemberRow { card }
@@ -697,17 +715,32 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                    for: message,
                    isLive: snapshot.liveNarrationIndex == row.index,
                    isCommentary: ACPTranscriptRowContent.presentationPhase(of: message) == .commentary,
+                   isExpanded: expansion?.isExpanded ?? false,
                    createdAt: host.transcript.createdAt(forStableId: row.stableId)
                ) {
                 spec.native = ACPTranscriptNativeRows.row(
                     content, contentMaxWidth: host.contentMaxWidth, inToolCallGroup: inToolCallGroup,
                     theme: host.theme, typography: host.typography,
                     actions: nativeActions(
-                        host: host, snapshot: snapshot, row: row, message: message, toggleExpanded: nil
+                        host: host, snapshot: snapshot, row: row, message: message,
+                        toggleExpanded: expansion?.setExpanded
                     )
                 )
             }
             return spec
+        }
+
+        /// A tool call's or thought's expanded flag and its setter; nil for
+        /// rows that do not expand.
+        private static func rowExpansion(
+            of message: ACPMessage, stableId: String, store: ACPTranscriptRowExpansionStore
+        ) -> (isExpanded: Bool, setExpanded: (Bool) -> Void)? {
+            switch message {
+            case .toolCall, .thought:
+                (store.expanded.contains(stableId), { store.setExpanded($0, stableID: stableId) })
+            default:
+                nil
+            }
         }
 
         private static func showsActionsPermanently() -> Bool {
@@ -783,6 +816,9 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             /// its mounted row — and its hidden Cancel — until some
             /// unrelated field of that message happened to change.
             let canCancelSubagent: Bool
+            /// A tool call or thought the user expanded: a toggle swaps
+            /// between the native row and the expanded SwiftUI card.
+            let isExpanded: Bool
         }
 
         private static func readyFork(host: ACPTranscriptScroller) -> ACPSessionForkRecord? {
@@ -979,7 +1015,9 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             row: ACPTranscriptVisibleRow,
             message: ACPMessage,
             availableRowContentWidth: CGFloat? = nil,
-            availableTrailingGutterWidth: CGFloat? = nil
+            availableTrailingGutterWidth: CGFloat? = nil,
+            isExpanded: Bool = false,
+            onExpandedChange: ((Bool) -> Void)? = nil
         ) -> some View {
             ACPTranscriptRowContent(
                 stableId: row.stableId,
@@ -1005,7 +1043,9 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 messageMenuItems: host.messageMenuItems,
                 onCancelSubagent: host.onCancelSubagent,
                 delegatedLabel: delegatedLabel(host: host, message: message),
-                visualAidActions: host.visualAidActions
+                visualAidActions: host.visualAidActions,
+                isExpanded: isExpanded,
+                onExpandedChange: onExpandedChange
             )
             // Column framing (max width / horizontal padding / centering)
             // is applied uniformly to every row by `wrapRow`, not here —

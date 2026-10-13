@@ -32,11 +32,13 @@ enum ACPTranscriptNativeRows {
 
     /// The native content for `message`, or nil when it must stay SwiftUI.
     /// `isLive` is the live narration flag; tool calls decide liveness from
-    /// their own status.
+    /// their own status. `isExpanded` marks a tool call or thought the user
+    /// opened, which only the SwiftUI card can show.
     static func content(
         for message: ACPMessage,
         isLive: Bool,
         isCommentary: Bool,
+        isExpanded: Bool = false,
         createdAt: Date? = nil
     ) -> ACPTranscriptCoreTextRowView.Content? {
         guard !isLive else { return nil }
@@ -54,9 +56,10 @@ enum ACPTranscriptNativeRows {
             guard supportsMarkdown(markdown) else { return nil }
             return .agent(markdown: markdown, commentary: isCommentary)
         case .thought(_, _, let buffer):
+            guard !isExpanded else { return nil }
             return .thought(label: ACPThoughtView.inlineLabel(for: buffer.value) ?? "Thinking…")
         case .toolCall(let call):
-            guard call.status == "completed" || call.status == "failed",
+            guard !isExpanded, call.status == "completed" || call.status == "failed",
                   call.assets.isEmpty, call.terminalIds.isEmpty,
                   ACPContextCompaction(toolCall: call) == nil,
                   ACPBackgroundTask(toolCall: call) == nil,
@@ -82,7 +85,8 @@ enum ACPTranscriptNativeRows {
         /// The "…" menu inputs; nil for rows without a gutter (thoughts, tool
         /// calls, group headers).
         var menu: ACPMessageActionsMenu.Input?
-        /// Toggles a tool-call group header; nil elsewhere.
+        /// Expands a tool call or thought, or toggles a tool-call group
+        /// header; nil elsewhere.
         var toggleExpanded: ((Bool) -> Void)?
         var openURL: (URL) -> Void
         /// VoiceOver or Full Keyboard Access is on, so the actions affordance

@@ -16,6 +16,8 @@ struct ACPToolCallCard: View {
     /// Optional — when nil (or when the lookup returns nil) the card falls
     /// back to the in-memory `toolCall.content`.
     var loadFullContent: ((String) async -> String?)? = nil
+    /// Reports each toggle, so the transcript can remember it across rebuilds.
+    var onExpandedChange: ((Bool) -> Void)? = nil
     @State private var expanded = false
     @State private var expandedContent: String? = nil
     @State private var expandedSyntax = ACPToolCallSyntaxCache()
@@ -29,12 +31,14 @@ struct ACPToolCallCard: View {
         messageCreatedAt: Date? = nil,
         trustedImageRoot: URL? = nil,
         loadFullContent: ((String) async -> String?)? = nil,
-        initiallyExpanded: Bool = false
+        initiallyExpanded: Bool = false,
+        onExpandedChange: ((Bool) -> Void)? = nil
     ) {
         self.toolCall = toolCall
         self.messageCreatedAt = messageCreatedAt
         self.trustedImageRoot = trustedImageRoot
         self.loadFullContent = loadFullContent
+        self.onExpandedChange = onExpandedChange
         _expanded = State(initialValue: initiallyExpanded)
     }
 
@@ -42,19 +46,8 @@ struct ACPToolCallCard: View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
                 expanded.toggle()
-                if expanded, toolCall.isContentTruncated, expandedContent == nil {
-                    // First expand of an off-window truncated card: page the
-                    // full content back in from SQLite via the host-provided
-                    // loader. Subsequent toggles reuse the cached string.
-                    let toolCallId = toolCall.toolCallId
-                    loadingContentToolCallId = toolCallId
-                    Task { @MainActor in
-                        let loaded = await loadFullContent?(toolCallId)
-                        guard loadingContentToolCallId == toolCallId else { return }
-                        expandedContent = loaded
-                        loadingContentToolCallId = nil
-                    }
-                }
+                loadFullContentIfNeeded()
+                onExpandedChange?(expanded)
             } label: {
                 HStack(spacing: 8) {
                     Image(systemName: presentation.iconSystemName)
@@ -127,7 +120,26 @@ struct ACPToolCallCard: View {
             expandedSyntax.clear()
         }
         .acpRowHover { isHovering = $0 }
+        // A card built already expanded (the transcript remembered it) never
+        // goes through the button, so it pages its content in here.
+        .onAppear { loadFullContentIfNeeded() }
         .onDisappear { isHovering = false }
+    }
+
+    /// First expand of an off-window truncated card: page the full content
+    /// back in from SQLite via the host-provided loader, once. Subsequent
+    /// toggles reuse the cached string.
+    private func loadFullContentIfNeeded() {
+        guard expanded, toolCall.isContentTruncated, expandedContent == nil, loadingContentToolCallId == nil
+        else { return }
+        let toolCallId = toolCall.toolCallId
+        loadingContentToolCallId = toolCallId
+        Task { @MainActor in
+            let loaded = await loadFullContent?(toolCallId)
+            guard loadingContentToolCallId == toolCallId else { return }
+            expandedContent = loaded
+            loadingContentToolCallId = nil
+        }
     }
 
     /// What to draw inside the expanded card. Prefers the just-fetched

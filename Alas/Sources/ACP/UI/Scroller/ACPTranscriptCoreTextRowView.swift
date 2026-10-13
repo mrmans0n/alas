@@ -5,8 +5,9 @@ import CoreText
 /// A common transcript row drawn with CoreText in one view instead of a
 /// SwiftUI host: agent prose, commentary, a collapsed thought, a collapsed
 /// tool call, a tool-call group header, and the user bubble. Hover reveals
-/// the message actions button and a tool row's timestamp; there are no
-/// clicks on the content, selection, or accessibility yet.
+/// the message actions button and a tool row's timestamp; clicking a tool
+/// row, thought, or group header expands it. There is no selection or
+/// accessibility yet.
 @MainActor
 final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
     enum Content: Equatable, Sendable {
@@ -94,6 +95,7 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
         if window == nil {
             dropTiles()
             resetHover()
+            armedHitTarget = nil
         } else {
             updateTileScale()
             needsDisplay = true
@@ -172,6 +174,8 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
         let height: CGFloat
         let column: CGRect
         let items: [Item]
+        /// The header line a click expands or collapses, for rows that have one.
+        var toggleRect: CGRect?
     }
 
     private func layout(forWidth width: CGFloat) -> Layout {
@@ -212,7 +216,16 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
         case .user(let markdown):
             builder.addUserBubble(markdown, contentMaxWidth: contentMaxWidth, theme: theme, typography: typography)
         }
-        return builder.finish(width: width, column: column)
+        var layout = builder.finish(width: width, column: column)
+        switch content {
+        case .thought, .toolCall, .toolGroupHeader:
+            // These rows are their header line, so the whole column width
+            // and height is the click target.
+            layout.toggleRect = CGRect(x: column.minX, y: 0, width: column.width, height: layout.height)
+        case .agent, .user:
+            break
+        }
+        return layout
     }
 
     /// Accumulates items left to right and top to bottom from `x`/`y`.
@@ -606,6 +619,52 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
         path.addArc(tangent1End: CGPoint(x: rect.minX, y: rect.minY), tangent2End: CGPoint(x: rect.maxX, y: rect.minY), radius: large)
         path.closeSubpath()
         return path
+    }
+
+    // MARK: - Clicks
+
+    /// What a press on the row lands on. Armed on mouse-down and fired on
+    /// mouse-up only if the pointer is still over the same target, like the
+    /// diff's expansion pills.
+    private enum HitTarget: Equatable {
+        case expansionToggle
+    }
+
+    private var armedHitTarget: HitTarget?
+
+    private func hitTarget(at point: NSPoint) -> HitTarget? {
+        guard bounds.width > 0, actions.toggleExpanded != nil,
+              layout(forWidth: bounds.width).toggleRect?.contains(point) == true
+        else { return nil }
+        return .expansionToggle
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if let target = hitTarget(at: convert(event.locationInWindow, from: nil)) {
+            armedHitTarget = target
+            return
+        }
+        super.mouseDown(with: event)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard let armed = armedHitTarget else { return super.mouseUp(with: event) }
+        armedHitTarget = nil
+        guard hitTarget(at: convert(event.locationInWindow, from: nil)) == armed else { return }
+        perform(armed)
+    }
+
+    private func perform(_ target: HitTarget) {
+        switch target {
+        case .expansionToggle:
+            // A native tool call or thought is always collapsed; a group
+            // header draws either state.
+            if case .toolGroupHeader(_, _, let expanded) = content {
+                actions.toggleExpanded?(!expanded)
+            } else {
+                actions.toggleExpanded?(true)
+            }
+        }
     }
 
     // MARK: - Hover and actions

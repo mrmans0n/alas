@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import SwiftUI
 import Testing
 @testable import Alas
 
@@ -13,6 +14,7 @@ private func makeHost(
     typography: ACPChatTypography = .default,
     onRememberScrollAnchor: @escaping (String?, Int?, Bool) -> Void = { _, _, _ in },
     onQueueRemove: @escaping (UUID) -> Void = { _ in },
+    onLoadFullToolCallContent: @escaping (String) async -> String? = { _ in nil },
     collapsesFinishedToolCalls: Bool = false
 ) -> ACPTranscriptScroller {
     ACPTranscriptScroller(
@@ -22,7 +24,7 @@ private func makeHost(
         typography: typography,
         trustedImageRoot: nil,
         onOpenDiff: { _ in },
-        onLoadFullToolCallContent: { _ in nil },
+        onLoadFullToolCallContent: onLoadFullToolCallContent,
         forkTargets: [],
         onFork: { _, _ in },
         rememberedScrollAnchor: { nil },
@@ -367,6 +369,69 @@ struct ACPTranscriptScrollerRowSpecsTests {
         // toggle must yield a different token or the reconciler would keep
         // the stale row content on screen.
         #expect(!collapsed.isEqual(to: expanded))
+    }
+
+    @Test("expanding a native tool row swaps it for the expanded SwiftUI card")
+    func expandingANativeToolRowSwapsItForTheExpandedSwiftUICard() throws {
+        let host = makeHost()
+        host.transcript.messages = [.user(id: UUID(), text: "go", attachments: []), tool("a")]
+        let coordinator = ACPTranscriptScroller.Coordinator()
+        let store = coordinator.rowExpansionStore
+        func spec() throws -> ACPTranscriptRowSpec {
+            try #require(ACPTranscriptScroller.Coordinator.rowSpecs(
+                host: host, rowExpansionStore: store, nativeRowsEnabled: true
+            ).first { $0.id == "tc-a" })
+        }
+
+        let collapsed = try spec()
+        #expect(collapsed.native != nil)
+
+        store.setExpanded(true, stableID: "tc-a")
+        let expanded = try spec()
+        #expect(expanded.native == nil)
+        #expect(!collapsed.equalityToken.isEqual(to: expanded.equalityToken))
+
+        store.setExpanded(false, stableID: "tc-a")
+        #expect(try spec().native != nil)
+    }
+
+    @Test("an expanded truncated tool card still loads its full content")
+    func expandedTruncatedToolCardsStillLoadTheirFullContent() async throws {
+        let loads = LoadRecorder()
+        let host = makeHost(onLoadFullToolCallContent: { id in
+            await loads.record(id)
+            return "full output"
+        })
+        var call = ACPMessage.ToolCall(toolCallId: "a", title: "Run a", kind: "execute", status: "completed", content: "partial")
+        call.isContentTruncated = true
+        host.transcript.messages = [.user(id: UUID(), text: "go", attachments: []), .toolCall(call)]
+        let store = ACPTranscriptRowExpansionStore()
+        store.setExpanded(true, stableID: "tc-a")
+
+        let spec = try #require(ACPTranscriptScroller.Coordinator.rowSpecs(
+            host: host, rowExpansionStore: store, nativeRowsEnabled: true
+        ).first { $0.id == "tc-a" })
+        #expect(spec.native == nil)
+
+        // Built already expanded, the card pages its content in on appear.
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 300),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.contentViewController = NSHostingController(rootView: spec.build())
+        defer { window.close() }
+        try await eventually("the card to load its full content") {
+            window.layoutIfNeeded()
+            return !loads.ids.isEmpty
+        }
+        #expect(loads.ids == ["a"])
+    }
+
+    @MainActor
+    private final class LoadRecorder {
+        private(set) var ids: [String] = []
+        func record(_ id: String) { ids.append(id) }
     }
 
     @Test("an expanded bundle emits a header spec followed by one spec per member")

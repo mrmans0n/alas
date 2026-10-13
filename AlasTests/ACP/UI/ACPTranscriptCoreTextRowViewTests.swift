@@ -84,6 +84,46 @@ import Testing
         #expect(button.frame.minX == view.columnRect.maxX + ACPMessageGutterLayout.laneWidth - 8 - ACPMessageGutterLayout.menuWidth)
         #expect(button.frame.minY == -2)
     }
+
+    @Test(arguments: [
+        (ACPTranscriptCoreTextRowView.Content.thought(label: "Planning"), true),
+        (.toolCall(
+            presentation: ACPToolCallPresentation.resolve(.init(toolCallId: "t", title: "Read a", kind: "read", status: "completed")),
+            target: "a.swift", duration: nil, failed: false
+        ), true),
+        (.toolGroupHeader(label: "Ran 3 commands", iconSystemName: "terminal", expanded: true), false),
+    ])
+    func aClickReleasedOverTheHeaderTogglesExpansion(content: ACPTranscriptCoreTextRowView.Content, expected: Bool) {
+        var toggles: [Bool] = []
+        var actions = ACPTranscriptNativeRows.Actions.inert
+        actions.toggleExpanded = { toggles.append($0) }
+        let view = row(content, actions: actions)
+        let height = view.measuredHeight(forWidth: 1_000)
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1_000, height: 200), styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView?.addSubview(view)
+        view.frame = NSRect(x: 0, y: 0, width: 1_000, height: height)
+        let header = view.convert(NSPoint(x: view.columnRect.midX, y: height / 2), to: nil)
+        let outside = view.convert(NSPoint(x: view.columnRect.midX, y: height + 50), to: nil)
+        func send(_ type: NSEvent.EventType, at point: NSPoint) {
+            let event = NSEvent.mouseEvent(
+                with: type, location: point, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 0, clickCount: 1, pressure: 1
+            )!
+            type == .leftMouseDown ? view.mouseDown(with: event) : view.mouseUp(with: event)
+        }
+
+        send(.leftMouseDown, at: header)
+        send(.leftMouseUp, at: outside)
+        #expect(toggles.isEmpty)
+
+        send(.leftMouseDown, at: header)
+        send(.leftMouseUp, at: header)
+        #expect(toggles == [expected])
+    }
 }
 
 extension ACPTranscriptNativeRows.Actions {
