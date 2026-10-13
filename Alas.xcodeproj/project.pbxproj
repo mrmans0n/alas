@@ -1448,6 +1448,7 @@
 		D27A1F6D7592D6A4BDD9FC4F /* GitIgnoreServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EB58175A9A39073E9D73F85 /* GitIgnoreServiceTests.swift */; };
 		D27A85DE79B3B62C6F91174A /* ReviewFeedbackBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0886F9B3096AC1264E3D337 /* ReviewFeedbackBundle.swift */; };
 		D28EE6309DBB51EFEDCEAC18 /* ACPSessionManagerLeaseTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96C13707B79B7A4F4BB2608E /* ACPSessionManagerLeaseTests.swift */; };
+		D2B220E198A50063BA6D085C /* ACPMarkdownInlineText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E5D19C1D00A2B7B281A83F4 /* ACPMarkdownInlineText.swift */; };
 		D2B345D1AEB1D5CEF48354C3 /* HoverHighlightFeatureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100091C8ABC3F3FA66C744E9 /* HoverHighlightFeatureTests.swift */; };
 		D2D5D79EE8DE82FC44C2D36A /* CompletionFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = D510DACCD80A328B2DFABDC0 /* CompletionFeature.swift */; };
 		D2DBD17549E31DAAF87EE4A9 /* ACPDictationServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF5F310D158323C328E56929 /* ACPDictationServiceTests.swift */; };
@@ -2220,6 +2221,7 @@
 		3E10A1919A8DDC6A8DBB8B97 /* ChangedRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChangedRow.swift; sourceTree = "<group>"; };
 		3E2FE4EE19E484F6CF12C3DE /* WorkspaceCheckoutBoundaryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceCheckoutBoundaryTests.swift; sourceTree = "<group>"; };
 		3E3ADEB5299C3FFB091D55EE /* session-update-tool-call-meta.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "session-update-tool-call-meta.json"; sourceTree = "<group>"; };
+		3E5D19C1D00A2B7B281A83F4 /* ACPMarkdownInlineText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPMarkdownInlineText.swift; sourceTree = "<group>"; };
 		3EC4DF5F82BE5F73A7551EFE /* ImageDiffPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageDiffPresentation.swift; sourceTree = "<group>"; };
 		3EC4FE9500B277A3921C8AB2 /* GGStackSummaryStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GGStackSummaryStoreTests.swift; sourceTree = "<group>"; };
 		3F1D8FEB5416139D8B2BA780 /* HoverFeatureRenderingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoverFeatureRenderingTests.swift; sourceTree = "<group>"; };
@@ -5220,6 +5222,7 @@
 				8C8DCF7AEECB84028A4B9A18 /* ACPImageEncoding+AppKit.swift */,
 				A5E1462C85D0E49127BCED81 /* ACPImageThumbnail.swift */,
 				DC3814D8B30EBB9991F3388A /* ACPMarkdownInlineRenderer.swift */,
+				3E5D19C1D00A2B7B281A83F4 /* ACPMarkdownInlineText.swift */,
 				84A01D6512394EF1C41782AD /* ACPMarkdownInlineTextView.swift */,
 				2AE565966DD010FDFD7DFF50 /* ACPMarkdownLiveStyler.swift */,
 				DE2AC16E9220C05F670BE3EB /* ACPMarkdownText.swift */,
@@ -6794,6 +6797,7 @@
 				BBACA7DCC1EFA6D55AEB38CE /* ACPMCPStatusControl.swift in Sources */,
 				D0F370E528AA4D07814AEB15 /* ACPMCPStatusPolicy.swift in Sources */,
 				7ABF2BE84D6677FE5BCC8ED1 /* ACPMarkdownInlineRenderer.swift in Sources */,
+				D2B220E198A50063BA6D085C /* ACPMarkdownInlineText.swift in Sources */,
 				88C1A4EBC12F7F7BA7FE9B06 /* ACPMarkdownInlineTextView.swift in Sources */,
 				6AE129E340CA74CC26B34B66 /* ACPMarkdownLiveStyler.swift in Sources */,
 				E6F317EB2FF5522C77B30B62 /* ACPMarkdownText.swift in Sources */,
