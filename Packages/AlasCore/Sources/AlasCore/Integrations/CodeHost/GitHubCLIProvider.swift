@@ -1833,7 +1833,8 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
                         viewerDidAuthor: c.viewerDidAuthor,
                         authorAssociation: c.authorAssociation,
                         authorTypename: c.author?.typename
-                    )
+                    ),
+                    viewerDidAuthor: c.viewerDidAuthor ?? false
                 )
             }
             let comments = allComments.filter { !$0.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
@@ -1995,7 +1996,8 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
             createdAt: (try? parseOptionalDate(comment.createdAt)) ?? nil,
             viewerCanUpdate: comment.viewerDidAuthor ?? false,
             viewerCanDelete: comment.viewerDidAuthor ?? false,
-            isPending: false
+            isPending: false,
+            viewerDidAuthor: comment.viewerDidAuthor ?? false
         )
     }
 

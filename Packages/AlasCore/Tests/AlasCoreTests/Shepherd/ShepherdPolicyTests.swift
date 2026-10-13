@@ -32,9 +32,19 @@ private let stabilityCases: [ShepherdStabilityCase] = [
 
 private let failingOnly = ShepherdFixRequest(hasConflict: false, failingChecks: [F.failing], threads: [])
 private let threadOnly = ShepherdFixRequest(hasConflict: false, failingChecks: [], threads: [F.trustedThread])
+/// Same head comment as `F.trustedThread`, so only the reply differs.
 private let repliedThread = F.thread("PRRT_1", comments: [
-    F.comment("c1", author: "maintainer", body: "Please back off.", trust: .trusted),
-    F.comment("c2", author: "me", body: "Backoff already lives in RetryPolicy.", trust: .untrusted),
+    F.comment("PRRT_1-c1", author: "maintainer", body: "Please back off.", trust: .trusted),
+    F.comment("c2", author: "me", body: "Backoff already lives in RetryPolicy.", trust: .untrusted, viewer: true),
+])
+private let followUpThread = F.thread("PRRT_1", comments: [
+    F.comment("PRRT_1-c1", author: "maintainer", body: "Please back off.", trust: .trusted),
+    F.comment("c2", author: "me", body: "Backoff already lives in RetryPolicy.", trust: .untrusted, viewer: true),
+    F.comment("c3", author: "maintainer", body: "It doesn't cover uploads.", trust: .trusted),
+])
+private let driveByThread = F.thread("PRRT_1", comments: [
+    F.comment("PRRT_1-c1", author: "maintainer", body: "Please back off.", trust: .trusted),
+    F.comment("c2", author: "passerby", body: "+1", trust: .untrusted),
 ])
 private let codexRules = ShepherdRules(source: .repoFile, instructions: "", requiredReviewers: ["chatgpt-codex-connector"])
 private let mixedCaseRules = ShepherdRules(source: .projectSettings, instructions: "", requiredReviewers: ["ChatGPT-Codex-Connector"])
@@ -64,8 +74,12 @@ private let policyCases: [ShepherdPolicyCase] = [
           action: .wait, phase: .escalated(.attemptsExhausted)),
     .init(testDescription: "escalated record returns to watching when problems clear",
           record: F.record(phase: .escalated(.noProgress)),
-          observation: F.observation(F.snapshot(F.request(checks: [F.pending]))),
+          observation: F.observation(F.snapshot(F.request())),
           action: .wait, phase: .watching),
+    .init(testDescription: "escalation does not clear while a check is pending",
+          record: F.record(phase: .escalated(.noProgress), fixAttempts: 1, lastDispatched: F.fingerprint(failingOnly)),
+          observation: F.observation(F.snapshot(F.request(checks: [F.failing, F.pending]))),
+          action: .wait, phase: .escalated(.noProgress)),
     .init(testDescription: "owner-gone escalation holds while the owner is gone",
           record: F.record(phase: .escalated(.ownerGone)),
           observation: F.observation(F.snapshot(F.request()), session: .archived),
@@ -113,11 +127,26 @@ private let policyCases: [ShepherdPolicyCase] = [
                            lastDispatched: F.fingerprint(threadOnly)),
           observation: F.observation(F.snapshot(F.request(threads: [repliedThread]))),
           action: .wait, phase: .watching),
+    .init(testDescription: "awaitingPush with a pending check holds without counting",
+          record: F.record(phase: .awaitingPush(turnEndedAt: F.earlier, pollsWithoutProgress: 1), fixAttempts: 1,
+                           lastDispatched: F.fingerprint(failingOnly)),
+          observation: F.observation(F.snapshot(F.request(checks: [F.failing, F.pending]))),
+          action: .wait, phase: .awaitingPush(turnEndedAt: F.earlier, pollsWithoutProgress: 1)),
+    .init(testDescription: "an untrusted non-viewer comment on a dispatched thread is not progress",
+          record: F.record(phase: .awaitingPush(turnEndedAt: F.earlier, pollsWithoutProgress: 0), fixAttempts: 1,
+                           lastDispatched: F.fingerprint(threadOnly)),
+          observation: F.observation(F.snapshot(F.request(threads: [driveByThread]))),
+          action: .wait, phase: .awaitingPush(turnEndedAt: F.earlier, pollsWithoutProgress: 1)),
     // Rule 7
     .init(testDescription: "problems already dispatched wait",
           record: F.record(fixAttempts: 1, lastDispatched: F.fingerprint(failingOnly)),
           observation: F.observation(F.snapshot(F.request(checks: [F.failing]))),
           action: .wait, phase: .watching),
+    .init(testDescription: "a new trusted comment in a dispatched thread redispatches",
+          record: F.record(fixAttempts: 1, lastDispatched: F.fingerprint(threadOnly)),
+          observation: F.observation(F.snapshot(F.request(threads: [followUpThread]))),
+          action: .dispatchFix(ShepherdFixRequest(hasConflict: false, failingChecks: [], threads: [followUpThread])),
+          phase: .fixing(dispatchedAt: F.now)),
     .init(testDescription: "trusted thread dispatches while checks are pending",
           record: F.record(), observation: F.observation(F.snapshot(F.request(checks: [F.pending], threads: [F.trustedThread]))),
           action: .dispatchFix(threadOnly), phase: .fixing(dispatchedAt: F.now)),
@@ -210,6 +239,20 @@ private let policyCases: [ShepherdPolicyCase] = [
             headSHA: F.head, hasConflict: false, failingCheckIDs: ["unit-tests"], threadIDs: []
         ))
         #expect(decision.record.updatedAt == F.now)
+    }
+
+    @Test("a recurring identical failure after a conclusive green redispatches")
+    func recurringFailureRedispatches() {
+        let green = ShepherdPolicy.decide(
+            F.record(fixAttempts: 1, lastDispatched: F.fingerprint(failingOnly)),
+            F.observation(F.snapshot(F.request()))
+        )
+        #expect(green.record.fixAttempts == 0)
+        #expect(green.record.lastDispatchedFingerprint == nil)
+
+        let again = ShepherdPolicy.decide(green.record, F.observation(F.snapshot(F.request(checks: [F.failing]))))
+        #expect(again.action == .dispatchFix(failingOnly))
+        #expect(again.record.fixAttempts == 1)
     }
 
     @Test("fix attempts reset only once checks are green", arguments: [

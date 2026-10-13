@@ -28,10 +28,12 @@ enum ShepherdFixtures {
                     detailURL: URL(string: "https://ci.example/\(id)"), completedAt: nil)
     }
 
-    static func comment(_ id: String, author: String, body: String, trust: ReviewAuthorTrust) -> ReviewComment {
+    static func comment(
+        _ id: String, author: String, body: String, trust: ReviewAuthorTrust, viewer: Bool = false
+    ) -> ReviewComment {
         ReviewComment(id: id, author: author, body: body, url: nil, createdAt: nil,
-                      viewerCanUpdate: false, viewerCanDelete: false, isPending: false,
-                      authorTrust: trust)
+                      viewerCanUpdate: viewer, viewerCanDelete: viewer, isPending: false,
+                      authorTrust: trust, viewerDidAuthor: viewer)
     }
 
     static func thread(

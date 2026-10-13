@@ -588,6 +588,7 @@ struct GitHubCLIProviderTests {
         let thread = try #require(threads.first)
         #expect(thread.comments.first?.authorTrust == testCase.expected)
         #expect(thread.comments.last?.authorTrust == .untrusted)
+        #expect(thread.comments.last?.viewerDidAuthor == true)
         #expect(thread.headAuthorTrust == testCase.expected)
     }
 

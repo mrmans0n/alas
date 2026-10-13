@@ -1653,6 +1653,13 @@ public struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
         return standing == .privileged ? .trusted : .untrusted
     }
 
+    private static func isViewerAuthor(_ author: GitLabDiscussionAuthor?, currentUserUsername: String?) -> Bool {
+        guard let username = normalizedOptionalString(author?.username),
+              let viewer = normalizedOptionalString(currentUserUsername)
+        else { return false }
+        return username.lowercased() == viewer.lowercased()
+    }
+
     private static func threads(
         from discussions: [GitLabDiscussion],
         requestURL: URL,
@@ -1685,7 +1692,8 @@ public struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
                         of: note.author,
                         currentUserUsername: currentUserUsername,
                         authorStandings: authorStandings
-                    )
+                    ),
+                    viewerDidAuthor: isViewerAuthor(note.author, currentUserUsername: currentUserUsername)
                 )
             }
 
@@ -2193,7 +2201,8 @@ public struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
             createdAt: try? parseOptionalGitLabDate(note.createdAt),
             viewerCanUpdate: true,
             viewerCanDelete: true,
-            isPending: false
+            isPending: false,
+            viewerDidAuthor: true
         )
     }
 

@@ -318,6 +318,9 @@ public struct ReviewComment: Identifiable, Equatable, Sendable {
     public let viewerCanDelete: Bool
     public let isPending: Bool
     public let authorTrust: ReviewAuthorTrust
+    /// True when the authenticated user wrote the comment, e.g. the agent
+    /// replying through the user's CLI login.
+    public let viewerDidAuthor: Bool
 
     public init(
         id: String,
@@ -328,7 +331,8 @@ public struct ReviewComment: Identifiable, Equatable, Sendable {
         viewerCanUpdate: Bool,
         viewerCanDelete: Bool,
         isPending: Bool,
-        authorTrust: ReviewAuthorTrust = .unknown
+        authorTrust: ReviewAuthorTrust = .unknown,
+        viewerDidAuthor: Bool = false
     ) {
         self.id = id
         self.author = author
@@ -339,6 +343,7 @@ public struct ReviewComment: Identifiable, Equatable, Sendable {
         self.viewerCanDelete = viewerCanDelete
         self.isPending = isPending
         self.authorTrust = authorTrust
+        self.viewerDidAuthor = viewerDidAuthor
     }
 }
 

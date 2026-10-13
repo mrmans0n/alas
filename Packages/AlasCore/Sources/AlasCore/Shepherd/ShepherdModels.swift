@@ -68,7 +68,8 @@ public struct ShepherdFingerprint: Codable, Equatable, Sendable {
     public let hasConflict: Bool
     /// Sorted.
     public let failingCheckIDs: [String]
-    /// Sorted; actionable threads from trusted reviewers only.
+    /// Sorted `"<thread id>#<latest trusted comment id>"` entries for
+    /// actionable threads from trusted reviewers only.
     public let threadIDs: [String]
 
     public init(headSHA: String, hasConflict: Bool, failingCheckIDs: [String], threadIDs: [String]) {

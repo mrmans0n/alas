@@ -21,8 +21,18 @@ public struct ShepherdFixRequest: Equatable, Sendable {
             headSHA: headSHA,
             hasConflict: hasConflict,
             failingCheckIDs: failingChecks.map(\.id).sorted(),
-            threadIDs: threads.map(\.id).sorted()
+            threadIDs: threadRevisions
         )
+    }
+
+    /// Sorted `"<thread id>#<latest trusted comment id>"` entries, so a new
+    /// trusted comment in a thread counts as new feedback.
+    var threadRevisions: [String] {
+        threads.map { thread in
+            let latest = thread.comments.last { $0.authorTrust == .trusted }?.id ?? ""
+            return "\(thread.id)#\(latest)"
+        }
+        .sorted()
     }
 }
 
@@ -161,6 +171,8 @@ public enum ShepherdPolicy {
 
         updateHeadStability(&record, request: request)
         let problems = Self.problems(in: request)
+        let conclusive = isConclusive(request)
+        let cleared = conclusive && problems.isEmpty
 
         // A merge attempt interrupted by a quit, or a merge queue the
         // provider no longer reports, falls back to watching.
@@ -181,7 +193,7 @@ public enum ShepherdPolicy {
         case .escalated(let reason):
             let ownerStillGone = reason == .ownerGone && record.autoFix
                 && (observation.session == .archived || observation.session == .missing)
-            guard problems.isEmpty, !ownerStillGone else { return .wait }
+            guard cleared, !ownerStillGone else { return .wait }
             record.phase = .watching
         default:
             break
@@ -189,7 +201,8 @@ public enum ShepherdPolicy {
 
         // Rule 3: auto-fix off skips straight to the merge rules.
         if record.autoFix {
-            if let action = fixRules(&record, request: request, problems: problems, observation: observation) {
+            if let action = fixRules(&record, request: request, problems: problems, conclusive: conclusive,
+                                     observation: observation) {
                 return action
             }
         } else {
@@ -207,8 +220,10 @@ public enum ShepherdPolicy {
         _ record: inout ShepherdRecord,
         request: ReviewRequest,
         problems: ShepherdFixRequest,
+        conclusive: Bool,
         observation: ShepherdObservation
     ) -> ShepherdAction? {
+        let cleared = conclusive && problems.isEmpty
         // Rules 4 and 5: owner.
         switch observation.session {
         case .archived, .missing:
@@ -226,8 +241,12 @@ public enum ShepherdPolicy {
             record.phase = .awaitingPush(turnEndedAt: observation.now, pollsWithoutProgress: 0)
         }
         if case .awaitingPush(let turnEndedAt, let polls) = record.phase {
-            if madeProgress(since: record.lastDispatchedFingerprint, request: request, problems: problems) {
+            if madeProgress(since: record.lastDispatchedFingerprint, request: request, problems: problems, cleared: cleared) {
                 record.phase = .watching
+            } else if !conclusive {
+                // Pending checks, unknown mergeability or a partial thread
+                // list can hide the problems; neither progress nor a miss.
+                return .wait
             } else {
                 let count = polls + 1
                 if count >= noProgressPollLimit {
@@ -241,7 +260,12 @@ public enum ShepherdPolicy {
 
         // Rule 7: problems.
         if problems.isEmpty {
-            if !hasPendingChecks(request) { record.fixAttempts = 0 }
+            // Only a conclusive clean observation proves the dispatched
+            // problems are gone; then the same problem returning is new work.
+            if cleared {
+                record.fixAttempts = 0
+                record.lastDispatchedFingerprint = nil
+            }
             return nil
         }
         let fingerprint = problems.fingerprint(headSHA: request.headSHA ?? "")
@@ -278,6 +302,14 @@ public enum ShepherdPolicy {
         request.checks.contains { $0.bucket == .pending }
     }
 
+    /// Nothing can be hiding a problem: no check still running or
+    /// unclassified, mergeability computed and the full thread list fetched.
+    private static func isConclusive(_ request: ReviewRequest) -> Bool {
+        request.mergeState != .unknown
+            && request.areThreadsComplete
+            && !request.checks.contains { $0.bucket == .pending || $0.bucket == .unknown }
+    }
+
     /// Same head with no pending check counts up; a pending check or a new
     /// head starts over. Capped so a stable record stays equal across polls.
     private static func updateHeadStability(_ record: inout ShepherdRecord, request: ReviewRequest) {
@@ -298,20 +330,19 @@ public enum ShepherdPolicy {
     }
 
     /// Progress after a fix turn: a new provider head, a changed set of
-    /// trusted threads, nothing left to fix, or a reply on a dispatched thread
-    /// from someone other than a trusted reviewer (the agent answering).
+    /// trusted thread revisions, the agent replying on a dispatched thread, or
+    /// problems conclusively cleared.
     private static func madeProgress(
         since dispatched: ShepherdFingerprint?,
         request: ReviewRequest,
-        problems: ShepherdFixRequest
+        problems: ShepherdFixRequest,
+        cleared: Bool
     ) -> Bool {
         guard let dispatched else { return true }
-        if problems.isEmpty { return true }
+        if cleared { return true }
         if (request.headSHA ?? "") != dispatched.headSHA { return true }
-        if problems.threads.map(\.id).sorted() != dispatched.threadIDs { return true }
-        return problems.threads.contains { thread in
-            dispatched.threadIDs.contains(thread.id)
-                && (thread.comments.last?.authorTrust ?? .unknown) != .trusted
-        }
+        if problems.threadRevisions != dispatched.threadIDs { return true }
+        // The revision sets match, so every thread here was dispatched.
+        return problems.threads.contains { $0.comments.last?.viewerDidAuthor == true }
     }
 }
