@@ -52,7 +52,9 @@ enum ACPTranscriptNativeRows {
         case .user(_, _, let text, let attachments, let delegatedSource, let pastedSpans):
             guard attachments.isEmpty, pastedSpans.isEmpty, delegatedSource == nil,
                   !text.hasPrefix("/"),
-                  text.range(of: #"(^|\s)/[A-Za-z]"#, options: .regularExpression) == nil,
+                  // Absolute paths after whitespace or any opener, as
+                  // `ACPAbsolutePathDetector` accepts them; "and/or" stays native.
+                  text.range(of: #"(^|[^A-Za-z0-9])/[A-Za-z]"#, options: .regularExpression) == nil,
                   text.range(of: #"#\d"#, options: .regularExpression) == nil,
                   // Chip forms that depend on the workspace (GitLab `!34`, an
                   // existing `~/file`, a PR/MR URL); the real detectors need

@@ -27,6 +27,8 @@ import Testing
         ("## ![badge](b.png) title", false, false),
         ("see !34", true, false),
         ("open ~/notes.txt", true, false),
+        ("inspect (/tmp)", true, false),
+        ("either and/or works", true, true),
         ("details at https://gitlab.example.com/g/p/-/merge_requests/7", true, false),
         ("no images or chips here", true, true),
         ("no images or chips here", false, true),
