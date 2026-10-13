@@ -109,6 +109,9 @@ struct ACPToolbar: View {
                     }
                 }
             }
+            if showsShepherdButton {
+                ACPShepherdButton(session: session, worktree: worktree, state: state)
+            }
             ToolbarBtn(
                 icon: "rectangle.trailingthird.inset.filled",
                 tooltip: state.config.harness.acpShowMinimap ? "Hide minimap" : "Show minimap",
@@ -135,6 +138,13 @@ struct ACPToolbar: View {
     private var isWorkspaceCheckoutOwner: Bool {
         if case .workspaceCheckout = owner { return true }
         return false
+    }
+
+    /// v1 shepherds local git worktrees only: no Workspace checkouts,
+    /// remote worktrees, or folder projects.
+    private var showsShepherdButton: Bool {
+        guard !isWorkspaceCheckoutOwner, !worktree.path.isRemoteAlasPath else { return false }
+        return state.projectsManager.projects.first(where: { $0.id == worktree.projectId })?.isFolder != true
     }
 
     private func reconnectSession() {
