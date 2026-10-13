@@ -77,7 +77,11 @@ extension AlasCoreContext {
         for run in running {
             _ = try? await run.value
         }
-        await quiesceWorktree(worktree)
+        do {
+            try await quiesceWorktree(worktree)
+        } catch {
+            return .failed("Could not stop everything using the worktree: \(error.localizedDescription)")
+        }
 
         let outcome: WorktreeRemovalOutcome
         do {

@@ -1725,7 +1725,7 @@ final class AppState {
             await self?.checkpointWorktreeRemovalDisabledAfterDiscovery(worktree) ?? true
         }
         core.quiesceWorktree = { [weak self] worktree in
-            await self?.quiesceWorktreeForRemoval(worktree)
+            try await self?.quiesceWorktreeForRemoval(worktree)
         }
         core.runHistory.onFailure = { [weak self] message in
             self?.showFileActionError(title: "Run History Failed", message: message)
@@ -3407,15 +3407,9 @@ final class AppState {
     /// calls this when archiving a checkout.
     func stopWorkspaceCheckoutSessions(_ checkout: WorkspaceCheckout) async throws {
         let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
-        let liveTerminalSessions = terminal.registry.all
-            .filter { $0.owner == owner && $0.zmxSessionName != nil }
-            .map { TerminalSessionIdentity(owner: owner, leafId: $0.id) }
-        let terminalSessions = Array(Set(persistedWorkspaceCheckoutTerminalSessions(checkout) + liveTerminalSessions))
-        // The registry is authoritative for live sessions, including a
-        // freshly opened terminal whose tab has not been persisted yet.
         // Persisted checkout-owned tab records are archived only after live
         // sessions have drained, so unarchive cannot expose stale processes.
-        try await terminal.terminateSessionsAndWait(terminalSessions, timeout: 5)
+        try await terminateTerminalSessionsAndWait(owner: owner)
         terminal.unregisterSessions(owner: owner)
         await disposeACPManagerAndWait(owner: owner)
         archiveSessionTabs(owner: owner)
@@ -3428,8 +3422,22 @@ final class AppState {
 #endif
 
     private func persistedWorkspaceCheckoutTerminalSessions(_ checkout: WorkspaceCheckout) -> [TerminalSessionIdentity] {
-        let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
-        return tabs.tabs(for: owner).flatMap { tab -> [TerminalSessionIdentity] in
+        persistedTerminalSessions(owner: .workspaceCheckout(checkout.id, checkout.executionLocation))
+    }
+
+    /// Kills every terminal process the owner has and waits for the daemon to
+    /// confirm, up to a timeout. The registry is authoritative for live
+    /// sessions, including a freshly opened terminal whose tab has not been
+    /// persisted yet; persisted tabs cover sessions not attached this launch.
+    private func terminateTerminalSessionsAndWait(owner: SessionOwnerID) async throws {
+        let live = terminal.registry.all
+            .filter { $0.owner == owner && $0.zmxSessionName != nil }
+            .map { TerminalSessionIdentity(owner: owner, leafId: $0.id) }
+        try await terminal.terminateSessionsAndWait(Array(Set(persistedTerminalSessions(owner: owner) + live)), timeout: 5)
+    }
+
+    private func persistedTerminalSessions(owner: SessionOwnerID) -> [TerminalSessionIdentity] {
+        tabs.tabs(for: owner).flatMap { tab -> [TerminalSessionIdentity] in
             guard case .terminal(let state) = tab else { return [] }
             return state.root.leaves().map { TerminalSessionIdentity(owner: owner, leafId: $0.id) }
         }
@@ -10034,8 +10042,12 @@ final class AppState {
     /// Stops everything using a worktree whose files are about to go: its
     /// agents (awaited), terminals, tabs, buffers and pending runs. Run
     /// history stays until the removal has succeeded.
-    private func quiesceWorktreeForRemoval(_ worktree: Worktree) async {
-        await disposeACPManagerAndWait(owner: .worktree(worktree.id))
+    private func quiesceWorktreeForRemoval(_ worktree: Worktree) async throws {
+        let owner = SessionOwnerID.worktree(worktree.id)
+        await disposeACPManagerAndWait(owner: owner)
+        // Closing a tab only queues the daemon-side kill; wait for it so no
+        // terminal process still writes while the checkout is audited.
+        try await terminateTerminalSessionsAndWait(owner: owner)
         cleanupWorktreeState(worktreeId: worktree.id, purgeRunHistory: false)
     }
 

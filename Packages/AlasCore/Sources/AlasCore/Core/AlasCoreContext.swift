@@ -63,9 +63,10 @@ public final class AlasCoreContext {
         await AlasCoreContext.hasPendingCheckpointRecovery($0)
     }
     /// Stops everything using a worktree that is about to go: its agent
-    /// sessions by default. The app installs one that also closes its
-    /// terminals and tabs.
-    @ObservationIgnored public lazy var quiesceWorktree: @MainActor (Worktree) async -> Void = { [weak self] worktree in
+    /// sessions by default. The app installs one that also kills its
+    /// terminals, waiting for them, and closes its tabs. Throwing refuses the
+    /// removal.
+    @ObservationIgnored public lazy var quiesceWorktree: @MainActor (Worktree) async throws -> Void = { [weak self] worktree in
         await self?.disposeSessionManager(owner: .worktree(worktree.id))
     }
     /// Headless runs in flight, covering finalization, so lifecycle
