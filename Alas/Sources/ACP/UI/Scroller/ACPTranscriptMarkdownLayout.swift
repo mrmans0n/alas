@@ -293,13 +293,7 @@ struct ACPTranscriptMarkdownLayout {
             let code: NSAttributedString
             if highlighted {
                 // As `ACPSyntaxHighlightedText`, so the colors match the SwiftUI block.
-                code = ACPCodeBlockHighlighter.attributedString(
-                    code: body,
-                    language: language.flatMap(ACPCodeLanguage.highlighterExtension(for:)),
-                    theme: theme,
-                    fontFamily: typography.fontFamily,
-                    fontSize: typography.codeSize
-                )
+                code = HighlightCache.attributedString(code: body, language: language, theme: theme, typography: typography)
             } else {
                 code = NSAttributedString(string: body, attributes: [
                     .font: CenterTypography.resolveCodeFont(family: typography.fontFamily, size: typography.codeSize),
@@ -390,6 +384,30 @@ struct ACPTranscriptMarkdownLayout {
             }
             return height
         }
+    }
+}
+
+/// Highlighted code by content, language, theme and font, so a width change
+/// re-breaks lines without highlighting again. Entries are immutable copies.
+@MainActor
+private enum HighlightCache {
+    private static let cache = NSCache<NSString, NSAttributedString>()
+
+    static func attributedString(
+        code: String, language: String?, theme: Theme, typography: ACPChatTypography
+    ) -> NSAttributedString {
+        let resolved = language.flatMap(ACPCodeLanguage.highlighterExtension(for:))
+        let key = [
+            ACPSyntaxHighlightCacheKey.themeKey(theme), resolved ?? "", typography.fontFamily,
+            "\(typography.codeSize)", code,
+        ].joined(separator: "\u{0}") as NSString
+        if let cached = cache.object(forKey: key) { return cached }
+        let highlighted = ACPCodeBlockHighlighter.attributedString(
+            code: code, language: resolved, theme: theme, fontFamily: typography.fontFamily, fontSize: typography.codeSize
+        )
+        let stored = highlighted.copy() as! NSAttributedString
+        cache.setObject(stored, forKey: key, cost: code.utf8.count)
+        return stored
     }
 }
 
