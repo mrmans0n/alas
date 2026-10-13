@@ -16,6 +16,7 @@ struct SidebarView: View {
     @Binding var collapsedProjects: Set<String>
     let onSettings: () -> Void
     let onAddProject: () -> Void
+    let onAddFolder: () -> Void
     let onEditProject: (_ projectId: String) -> Void
     let onRemoveProject: (_ projectId: String) -> Void
     let onNewWorktree: (_ projectId: String?) -> Void
@@ -48,6 +49,7 @@ struct SidebarView: View {
                     state: state,
                     onSettings: onSettings,
                     onAddProject: onAddProject,
+                    onAddFolder: onAddFolder,
                     onHideSidebar: onHideSidebar,
                     showingNewWorkspace: $showingNewWorkspace
                 )
@@ -496,6 +498,7 @@ private struct SidebarAttentionHeader: View {
     @Bindable var state: AppState
     let onSettings: () -> Void
     let onAddProject: () -> Void
+    let onAddFolder: () -> Void
     let onHideSidebar: () -> Void
     @Binding var showingNewWorkspace: Bool
 
@@ -511,6 +514,7 @@ private struct SidebarAttentionHeader: View {
         SidebarHeaderView(
             onSettings: onSettings,
             onAddProject: onAddProject,
+            onAddFolder: onAddFolder,
             onSearch: { NotificationCenter.default.post(name: .alasOpenSearch, object: nil) },
             onHideSidebar: onHideSidebar,
             onNewWorkspace: { showingNewWorkspace = true },
