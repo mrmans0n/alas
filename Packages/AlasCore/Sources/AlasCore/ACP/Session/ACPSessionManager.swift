@@ -3013,7 +3013,7 @@ public final class ACPSessionManager: ChangeTracking {
         inFlightBackfills[id]?.cancel()
         inFlightBackfills[id] = nil
         pendingBackfillOlderMessages[id] = nil
-        sessions[id]?.transcript.resetMarkdownCaches()
+        sessions[id]?.transcript.discardRenderState()
         sessions[id] = nil
         mirrorMessageSnapshots.removeValue(forKey: id)
         sessionRefCounts.removeValue(forKey: id)
@@ -3079,7 +3079,7 @@ public final class ACPSessionManager: ChangeTracking {
         inFlightBackfills[id]?.cancel()
         inFlightBackfills[id] = nil
         pendingBackfillOlderMessages[id] = nil
-        sessions[id]?.transcript.resetMarkdownCaches()
+        sessions[id]?.transcript.discardRenderState()
         sessions[id] = nil
         mirrorMessageSnapshots.removeValue(forKey: id)
         sessionRefCounts.removeValue(forKey: id)
@@ -3211,7 +3211,7 @@ public final class ACPSessionManager: ChangeTracking {
         // doesn't keep waking after a mirrored tab closes. Idempotent —
         // no-op for writer sessions.
         endMirroring(sessionId: id)
-        session.transcript.resetMarkdownCaches()
+        session.transcript.discardRenderState()
         sessions[id] = nil
         visibleSessionCounts.removeValue(forKey: id)
     }
