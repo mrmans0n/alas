@@ -281,6 +281,12 @@ public protocol CodeHostProvider: Sendable {
     /// for merged review requests instead of the fork when one exists.
     /// Returns `nil` for a repository that is not a fork.
     func repositoryParent(remote: CodeHostRemote, cwd: URL) async throws -> CodeHostRemote?
+
+    /// Lowercased logins that reviewed the request's current head: a review
+    /// or approval on `request.headSHA`, or a top-level comment posted after
+    /// the head commit. Throws when the provider can't tell, so callers fail
+    /// closed instead of reading an empty set as "nobody reviewed".
+    func reviewersOnHead(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> Set<String>
 }
 
 extension CodeHostProvider {
@@ -499,6 +505,12 @@ extension CodeHostProvider {
     /// only ever used as an enhancement to it.
     public func repositoryParent(remote: CodeHostRemote, cwd: URL) async throws -> CodeHostRemote? {
         nil
+    }
+
+    // Throwing for the same reason as `mergedReviewRequests`: an empty set
+    // would read as "nobody reviewed" rather than "can't tell".
+    public func reviewersOnHead(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> Set<String> {
+        throw CodeHostProviderError.unsupportedProvider(remote.kind)
     }
 }
 

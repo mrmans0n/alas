@@ -110,6 +110,41 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
     }
     """
 
+    public static let reviewersOnHeadQuery = """
+    query($owner: String!, $repo: String!, $number: Int!) {
+      repository(owner: $owner, name: $repo) {
+        pullRequest(number: $number) {
+          commits(last: 1) {
+            nodes {
+              commit {
+                oid
+                committedDate
+              }
+            }
+          }
+          reviews(last: 100, states: [APPROVED, CHANGES_REQUESTED, COMMENTED]) {
+            nodes {
+              author {
+                login
+              }
+              commit {
+                oid
+              }
+            }
+          }
+          comments(last: 100) {
+            nodes {
+              author {
+                login
+              }
+              createdAt
+            }
+          }
+        }
+      }
+    }
+    """
+
     public static let mergeQueueMetadataQuery = """
     query($owner: String!, $name: String!, $number: Int!) {
       repository(owner: $owner, name: $name) {
@@ -783,6 +818,28 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
         }
 
         return try Self.parseReviewThreadsPage(result.stdout)
+    }
+
+    public func reviewersOnHead(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> Set<String> {
+        guard let headSHA = request.headSHA, !headSHA.isEmpty else {
+            throw CodeHostProviderError.malformedOutput("GitHub reviewers on head require the pull request head SHA.")
+        }
+        let result = try await runner.run(
+            "gh",
+            args: [
+                "api", "graphql",
+                "--hostname", remote.host,
+                "-f", "query=\(Self.reviewersOnHeadQuery)",
+                "-F", "owner=\(remote.owner)",
+                "-F", "repo=\(remote.repository)",
+                "-F", "number=\(request.number)",
+            ],
+            cwd: cwd
+        )
+        guard result.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(command: "gh api graphql", stderr: result.stderr)
+        }
+        return try Self.parseReviewersOnHead(result.stdout, headSHA: headSHA)
     }
 
     private func fetchPRNodeID(
@@ -1828,6 +1885,39 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
         }
     }
 
+    /// Lowercased logins with a submitted review on `headSHA`, plus authors of
+    /// top-level comments created after the head commit. The comment cutoff
+    /// only applies while the newest PR commit is `headSHA`; if the head moved
+    /// since the request was fetched, comments count for nobody.
+    public static func parseReviewersOnHead(_ json: String, headSHA: String) throws -> Set<String> {
+        let response: ReviewersOnHeadResponse
+        do {
+            response = try JSONDecoder().decode(ReviewersOnHeadResponse.self, from: Data(json.utf8))
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse gh reviewers output")
+        }
+        let pullRequest = response.data.repository.pullRequest
+        let head = headSHA.lowercased()
+
+        var reviewers = Set<String>()
+        for review in pullRequest.reviews.nodes {
+            guard review.commit?.oid.lowercased() == head, let login = review.author?.login else { continue }
+            reviewers.insert(login.lowercased())
+        }
+        guard let lastCommit = pullRequest.commits.nodes.last?.commit,
+              lastCommit.oid.lowercased() == head,
+              let headCommittedAt = try? parseOptionalDate(lastCommit.committedDate)
+        else { return reviewers }
+        for comment in pullRequest.comments.nodes {
+            guard let login = comment.author?.login,
+                  let createdAt = try? parseOptionalDate(comment.createdAt),
+                  createdAt > headCommittedAt
+            else { continue }
+            reviewers.insert(login.lowercased())
+        }
+        return reviewers
+    }
+
     private static func parseAddThreadReplyResponse(_ json: String) throws -> ReviewComment {
         let data = Data(json.utf8)
         let response: AddPullRequestReviewThreadReplyResponse
@@ -2809,6 +2899,55 @@ private struct ReviewThreadAuthor: Decodable {
         self.login = login
         self.typename = typename
     }
+}
+
+private struct ReviewersOnHeadResponse: Decodable {
+    struct Nodes<Node: Decodable>: Decodable {
+        let nodes: [Node]
+    }
+
+    struct Login: Decodable {
+        let login: String
+    }
+
+    struct CommitOID: Decodable {
+        let oid: String
+    }
+
+    struct HeadCommit: Decodable {
+        let oid: String
+        let committedDate: String?
+    }
+
+    struct CommitNode: Decodable {
+        let commit: HeadCommit
+    }
+
+    struct Review: Decodable {
+        let author: Login?
+        let commit: CommitOID?
+    }
+
+    struct Comment: Decodable {
+        let author: Login?
+        let createdAt: String?
+    }
+
+    struct PullRequest: Decodable {
+        let commits: Nodes<CommitNode>
+        let reviews: Nodes<Review>
+        let comments: Nodes<Comment>
+    }
+
+    struct Repository: Decodable {
+        let pullRequest: PullRequest
+    }
+
+    struct ResponseData: Decodable {
+        let repository: Repository
+    }
+
+    let data: ResponseData
 }
 
 private struct AddPullRequestReviewThreadReplyResponse: Decodable {

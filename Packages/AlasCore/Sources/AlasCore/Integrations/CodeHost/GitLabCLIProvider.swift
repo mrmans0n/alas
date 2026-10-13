@@ -1433,6 +1433,46 @@ public struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
         )
     }
 
+    public func reviewersOnHead(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> Set<String> {
+        guard let headSHA = Self.normalizedOptionalString(request.headSHA) else {
+            throw CodeHostProviderError.malformedOutput("GitLab reviewers on head require the merge request head SHA.")
+        }
+        let approvals = try await apiJSON(
+            Self.mergeRequestAPIPath(remote: remote, request: request, suffix: "approvals"),
+            remote: remote,
+            cwd: cwd
+        )
+        let notes = try await apiJSON(
+            Self.mergeRequestAPIPath(remote: remote, request: request, suffix: "notes"),
+            query: ["sort=desc", "order_by=created_at", "per_page=100"],
+            remote: remote,
+            cwd: cwd
+        )
+        let headCommit = try await apiJSON(
+            "projects/\(Self.encodedProjectPath(remote.repositorySlug))/repository/commits/\(headSHA)",
+            remote: remote,
+            cwd: cwd
+        )
+        return try Self.parseReviewersOnHead(approvalsJSON: approvals, notesJSON: notes, headCommitJSON: headCommit)
+    }
+
+    /// `glab api <path>` as JSON. Query fields switch the call to an explicit
+    /// GET, as `openIssues` does, so `-f` becomes query parameters.
+    private func apiJSON(_ path: String, query: [String] = [], remote: CodeHostRemote, cwd: URL) async throws -> String {
+        var args = ["api", path, "--hostname", remote.host, "--output", "json"]
+        if !query.isEmpty {
+            args += ["--method", "GET"]
+            for field in query {
+                args += ["-f", field]
+            }
+        }
+        let result = try await runner.run("glab", args: args, cwd: cwd)
+        guard result.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(command: "glab api \(path)", stderr: result.stderr)
+        }
+        return result.stdout
+    }
+
     public static func normalizedBaseBranch(_ baseBranch: String, remoteName: String) -> String {
         let prefix = "\(remoteName)/"
         guard baseBranch.hasPrefix(prefix) else { return baseBranch }
@@ -2195,6 +2235,49 @@ public struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
         return user.bot ?? false
     }
 
+    /// Lowercased usernames that approved or commented on the head commit.
+    /// An approval counts unless its `approved_at` (newer GitLab) is older
+    /// than the head commit. Notes count when posted after the head commit.
+    /// System notes ("added 1 commit", "approved this merge request") never
+    /// count.
+    public static func parseReviewersOnHead(
+        approvalsJSON: String,
+        notesJSON: String,
+        headCommitJSON: String
+    ) throws -> Set<String> {
+        let decoder = JSONDecoder()
+        let approvals: GitLabApprovalsResponse
+        let notes: [GitLabDiscussionNote]
+        let headCommit: GitLabCommitResponse
+        do {
+            approvals = try decoder.decode(GitLabApprovalsResponse.self, from: Data(approvalsJSON.utf8))
+            notes = try decoder.decode([GitLabDiscussionNote].self, from: Data(notesJSON.utf8))
+            headCommit = try decoder.decode(GitLabCommitResponse.self, from: Data(headCommitJSON.utf8))
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse glab reviewers output")
+        }
+        guard let headCreatedAt = try? parseOptionalGitLabDate(headCommit.createdAt) else {
+            throw CodeHostProviderError.malformedOutput("glab commit output is missing created_at")
+        }
+
+        var reviewers = Set<String>()
+        for approval in approvals.approvedBy ?? [] {
+            guard let username = normalizedOptionalString(approval.user?.username) else { continue }
+            if let approvedAt = try? parseOptionalGitLabDate(approval.approvedAt), approvedAt < headCreatedAt {
+                continue
+            }
+            reviewers.insert(username.lowercased())
+        }
+        for note in notes where !note.isSystem {
+            guard let username = normalizedOptionalString(note.author?.username),
+                  let createdAt = try? parseOptionalGitLabDate(note.createdAt),
+                  createdAt > headCreatedAt
+            else { continue }
+            reviewers.insert(username.lowercased())
+        }
+        return reviewers
+    }
+
     private static func checkID(for pipeline: GitLabPipeline) -> String {
         encodedID([
             "gitlab-pipeline-check",
@@ -2867,6 +2950,32 @@ private struct GitLabCurrentUser: Decodable {
 
     public init(username: String?) {
         self.username = username
+    }
+}
+
+private struct GitLabApprovalsResponse: Decodable {
+    struct Approval: Decodable {
+        let user: GitLabDiscussionAuthor?
+        let approvedAt: String?
+
+        private enum CodingKeys: String, CodingKey {
+            case user
+            case approvedAt = "approved_at"
+        }
+    }
+
+    let approvedBy: [Approval]?
+
+    private enum CodingKeys: String, CodingKey {
+        case approvedBy = "approved_by"
+    }
+}
+
+private struct GitLabCommitResponse: Decodable {
+    let createdAt: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case createdAt = "created_at"
     }
 }
 

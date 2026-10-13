@@ -630,6 +630,91 @@ struct GitHubCLIProviderTests {
         """
     }
 
+    struct ReviewersOnHeadCase: Sendable, CustomTestStringConvertible {
+        let testDescription: String
+        let lastCommitOID: String
+        let reviews: String
+        let comments: String
+        let expected: Set<String>
+    }
+
+    @Test(
+        "Reviewers on head keep head-commit reviews and comments posted after the head commit",
+        arguments: [
+            ReviewersOnHeadCase(
+                testDescription: "review on head counts, lowercased",
+                lastCommitOID: "head-sha-42",
+                reviews: #"{"author": {"login": "Codex-Connector"}, "commit": {"oid": "head-sha-42"}}"#,
+                comments: "",
+                expected: ["codex-connector"]
+            ),
+            ReviewersOnHeadCase(
+                testDescription: "review on an older commit does not count",
+                lastCommitOID: "head-sha-42",
+                reviews: #"{"author": {"login": "maintainer"}, "commit": {"oid": "old-sha"}}"#,
+                comments: "",
+                expected: []
+            ),
+            ReviewersOnHeadCase(
+                testDescription: "comment after the head commit counts",
+                lastCommitOID: "head-sha-42",
+                reviews: "",
+                comments: #"{"author": {"login": "Maintainer"}, "createdAt": "2026-10-13T10:05:00Z"}"#,
+                expected: ["maintainer"]
+            ),
+            ReviewersOnHeadCase(
+                testDescription: "comment before the head commit does not count",
+                lastCommitOID: "head-sha-42",
+                reviews: "",
+                comments: #"{"author": {"login": "maintainer"}, "createdAt": "2026-10-13T09:55:00Z"}"#,
+                expected: []
+            ),
+            ReviewersOnHeadCase(
+                testDescription: "moved head ignores comments",
+                lastCommitOID: "newer-sha",
+                reviews: "",
+                comments: #"{"author": {"login": "maintainer"}, "createdAt": "2026-10-13T10:05:00Z"}"#,
+                expected: []
+            ),
+            ReviewersOnHeadCase(
+                testDescription: "deleted author is skipped",
+                lastCommitOID: "head-sha-42",
+                reviews: #"{"author": null, "commit": {"oid": "head-sha-42"}}"#,
+                comments: "",
+                expected: []
+            ),
+        ]
+    )
+    func reviewersOnHeadSelection(_ testCase: ReviewersOnHeadCase) throws {
+        let output = Self.reviewersOnHeadOutput(
+            lastCommitOID: testCase.lastCommitOID,
+            reviews: testCase.reviews,
+            comments: testCase.comments
+        )
+
+        #expect(try GitHubCLIProvider.parseReviewersOnHead(output, headSHA: "head-sha-42") == testCase.expected)
+    }
+
+    private static func reviewersOnHeadOutput(lastCommitOID: String, reviews: String, comments: String) -> String {
+        """
+        {
+          "data": {
+            "repository": {
+              "pullRequest": {
+                "commits": {
+                  "nodes": [
+                    { "commit": { "oid": "\(lastCommitOID)", "committedDate": "2026-10-13T10:00:00Z" } }
+                  ]
+                },
+                "reviews": { "nodes": [\(reviews)] },
+                "comments": { "nodes": [\(comments)] }
+              }
+            }
+          }
+        }
+        """
+    }
+
     @Test func githubPublishReviewUsesGraphQLPayloadAndRefreshesPR() async throws {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: Self.pullRequestNodeOutput, stderr: ""),

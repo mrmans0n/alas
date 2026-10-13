@@ -2208,6 +2208,64 @@ struct GitLabCLIProviderTests {
     ]
     """
 
+    struct GitLabReviewersOnHeadCase: Sendable, CustomTestStringConvertible {
+        let testDescription: String
+        let approvals: String
+        let notes: String
+        let expected: Set<String>
+    }
+
+    @Test(
+        "Reviewers on head keep current approvals and human notes posted after the head commit",
+        arguments: [
+            GitLabReviewersOnHeadCase(
+                testDescription: "approval without approved_at counts, lowercased",
+                approvals: #"{"user": {"id": 7, "username": "Maintainer"}}"#,
+                notes: "",
+                expected: ["maintainer"]
+            ),
+            GitLabReviewersOnHeadCase(
+                testDescription: "approval after the head commit counts",
+                approvals: #"{"user": {"username": "maintainer"}, "approved_at": "2026-10-13T10:05:00.000Z"}"#,
+                notes: "",
+                expected: ["maintainer"]
+            ),
+            GitLabReviewersOnHeadCase(
+                testDescription: "approval before the head commit does not count",
+                approvals: #"{"user": {"username": "maintainer"}, "approved_at": "2026-10-13T09:55:00.000Z"}"#,
+                notes: "",
+                expected: []
+            ),
+            GitLabReviewersOnHeadCase(
+                testDescription: "note after the head commit counts",
+                approvals: "",
+                notes: #"{"id": 1, "body": "Looks good.", "system": false, "author": {"username": "Codex"}, "created_at": "2026-10-13T10:05:00.000Z"}"#,
+                expected: ["codex"]
+            ),
+            GitLabReviewersOnHeadCase(
+                testDescription: "note before the head commit does not count",
+                approvals: "",
+                notes: #"{"id": 1, "body": "Looks good.", "system": false, "author": {"username": "codex"}, "created_at": "2026-10-13T09:55:00.000Z"}"#,
+                expected: []
+            ),
+            GitLabReviewersOnHeadCase(
+                testDescription: "system note after the head commit does not count",
+                approvals: "",
+                notes: #"{"id": 1, "body": "approved this merge request", "system": true, "author": {"username": "maintainer"}, "created_at": "2026-10-13T10:05:00.000Z"}"#,
+                expected: []
+            ),
+        ]
+    )
+    func reviewersOnHeadSelection(_ testCase: GitLabReviewersOnHeadCase) throws {
+        let reviewers = try GitLabCLIProvider.parseReviewersOnHead(
+            approvalsJSON: "{\"approved_by\": [\(testCase.approvals)]}",
+            notesJSON: "[\(testCase.notes)]",
+            headCommitJSON: #"{"id": "head123", "created_at": "2026-10-13T10:00:00.000Z"}"#
+        )
+
+        #expect(reviewers == testCase.expected)
+    }
+
     @Test func noteIDRequiresNumericCommentID() throws {
         let comment = ReviewComment(
             id: "123",
