@@ -79,6 +79,8 @@ public final class ACPSessionOrchestrationCoordinator {
         /// is only consulted for sessions the user attached.
         public let referencedSessionLocation: (_ sessionId: String, _ projectId: String) async -> SessionLocation?
         public let manager: (Worktree) -> ACPSessionManager?
+        /// Whether new agent sessions may start in the worktree now.
+        public let admitsNewSessions: (Worktree) -> Bool
         public let newWorktreeDestination: (String, String) -> URL?
         /// Creates the worktree for `(projectId, branch, base)`. The last
         /// argument records the prepared destination on the delegation and
@@ -117,8 +119,10 @@ public final class ACPSessionOrchestrationCoordinator {
             rememberParent: @escaping (String, String) -> Void,
             autoRunDefault: @escaping () -> Bool,
             notifyChanged: @escaping () -> Void,
-            pause: @escaping (Duration) async -> Void = { try? await Task.sleep(for: $0) }
+            pause: @escaping (Duration) async -> Void = { try? await Task.sleep(for: $0) },
+            admitsNewSessions: @escaping (Worktree) -> Bool = { _ in true }
         ) {
+            self.admitsNewSessions = admitsNewSessions
             self.persistence = persistence
             self.instanceId = instanceId
             self.now = now
@@ -1149,6 +1153,14 @@ public final class ACPSessionOrchestrationCoordinator {
             phase: .starting,
             updatedAt: environment.now()
         )
+        // The awaits above can cross a delete claim on the worktree.
+        guard environment.admitsNewSessions(worktree) else {
+            await markChildFailed(
+                childSessionId: childID,
+                message: "Wait for the current worktree operation to finish before starting sessions."
+            )
+            return
+        }
         if manager.liveSession(for: childID) == nil {
             _ = manager.createSession(
                 id: childID,

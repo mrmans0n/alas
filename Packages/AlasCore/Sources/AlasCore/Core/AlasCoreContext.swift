@@ -269,11 +269,12 @@ public final class AlasCoreContext {
     }
 
     /// The session manager for `worktree`, created on first use. None is
-    /// created while the worktree is being created or deleted.
+    /// handed out, cached or new, while the worktree is being created or
+    /// deleted.
     public func sessionManager(for worktree: Worktree) throws -> ACPSessionManager {
+        guard projects.admitsNewWork(in: worktree) else { throw WorktreeOperationInProgress() }
         let owner = SessionOwnerID.worktree(worktree.id)
         if let manager = sessionManagers[owner] { return manager }
-        guard projects.admitsNewWork(in: worktree) else { throw WorktreeOperationInProgress() }
         let manager = makeSessionManager(owner, worktree)
         sessionManagers[owner] = manager
         return manager
