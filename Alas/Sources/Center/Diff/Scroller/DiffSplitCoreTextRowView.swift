@@ -794,9 +794,21 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
     func textHit(at point: NSPoint) -> (side: Side, position: TextSelection.Position)? {
         let side = side(at: point)
         guard codeRect(side).contains(point), let row = row(at: point.y), row < lines(side).code.count,
-              let position = textPosition(at: point, side: side)
+              !isWrapPadding(point, side: side), let position = textPosition(at: point, side: side)
         else { return nil }
         return (side, position)
+    }
+
+    /// Whether `point` is in the blank space below `side`'s last visual line,
+    /// where the other side wrapped to more lines and made the row taller.
+    private func isWrapPadding(_ point: NSPoint, side: Side) -> Bool {
+        guard wraps else { return false }
+        let layout = layout(forWidth: bounds.width)
+        let offset = point.y - codeTop
+        guard offset >= 0, let last = layout.tops.last, offset < last else { return false }
+        let row = Self.row(containing: offset, rowTops: layout.tops)
+        guard let parts = side == .old ? layout.old : layout.new, parts.indices.contains(row), !parts[row].isEmpty else { return false }
+        return Int((offset - layout.tops[row]) / lineHeight) >= parts[row].count
     }
 
     /// The row and offset on `side` nearest `point`. Points above or below
@@ -820,8 +832,8 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         let row = min(containing, sideLines.code.count - 1)
         var line = sideLines.code[row]
         if wraps, let parts = (side == .old ? layout(forWidth: bounds.width).old : layout(forWidth: bounds.width).new)?[row], !parts.isEmpty {
+            if characterUnder, isWrapPadding(point, side: side) { return nil }
             let part = Int((offset - tops[row]) / lineHeight)
-            if characterUnder, part >= parts.count { return nil }
             line = parts[min(max(0, part), parts.count - 1)]
         }
         let x = point.x - code.minX - Self.textInset - (sideLines.indents[row] ?? 0) + (wraps ? 0 : horizontalScroll.offset(side))
@@ -979,11 +991,17 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
 
     override func accessibilityHitTest(_ point: NSPoint) -> Any? {
         // AppKit asks on the main thread.
-        let element: CodeAccessibilityElement? = MainActor.assumeIsolated {
-            guard let window else { return nil }
+        let hit: (scroller: NSScroller?, element: CodeAccessibilityElement?) = MainActor.assumeIsolated {
+            guard let window else { return (nil, nil) }
             let local = convert(window.convertPoint(fromScreen: point), from: nil)
-            return codeAccessibilityElements().first { $0.accessibilityFrameInParentSpace().contains(local) }
+            // A visible scroller sits over its code column and answers for itself.
+            if let scroller = [oldScroller, newScroller].first(where: { !$0.isHidden && $0.frame.contains(local) }) {
+                return (scroller, nil)
+            }
+            return (nil, codeAccessibilityElements().first { $0.accessibilityFrameInParentSpace().contains(local) })
         }
+        if let scroller = hit.scroller { return scroller }
+        let element = hit.element
         return element ?? super.accessibilityHitTest(point)
     }
 
@@ -996,6 +1014,12 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
                 element.setAccessibilityRole(.textArea)
                 element.setAccessibilityLabel(isStacked ? "Code" : side == .old ? "Old code" : "New code")
                 element.setAccessibilityParent(self)
+                element.frameForLines = { [weak self] start, end in
+                    guard let self, let window else { return nil }
+                    var rect = textRect(side, row: start.row, from: start.index, to: start.row == end.row ? end.index : .max)
+                    if end.row != start.row { rect = rect.union(textRect(side, row: end.row, from: 0, to: end.index)) }
+                    return window.convertToScreen(convert(rect, to: nil))
+                }
                 codeElements[side] = element
                 return element
             }()
@@ -1862,6 +1886,30 @@ extension DiffSplitCoreTextRowView: DiffPaneLSPHost {
     }
 
     /// The first glyph of `range`, where hover panels anchor.
+    /// Where `row`'s characters `start..<end` on `side` draw: the glyphs'
+    /// own span on one visual line, or the full width of the visual lines
+    /// a wrapped range crosses.
+    func textRect(_ side: Side, row: Int, from start: Int, to end: Int) -> NSRect {
+        let sideLines = lines(side)
+        let code = codeRect(side)
+        guard sideLines.code.indices.contains(row) else { return code }
+        let layout = layout(forWidth: bounds.width)
+        let length = (sideLines.codeStrings[row] as NSString).length
+        let start = min(max(0, start), length), end = min(max(start, end), length)
+        let parts = wraps ? ((side == .old ? layout.old : layout.new)?[row] ?? []) : [sideLines.code[row]]
+        guard !parts.isEmpty else { return code }
+        let part = { (index: Int) in parts.lastIndex { CTLineGetStringRange($0).location <= index } ?? 0 }
+        let first = part(start), last = part(max(start, end - 1))
+        let top = codeTop + layout.tops[row] + CGFloat(first) * lineHeight
+        guard first == last else {
+            return NSRect(x: code.minX, y: top, width: code.width, height: CGFloat(last - first + 1) * lineHeight)
+        }
+        let originX = code.minX + Self.textInset + (sideLines.indents[row] ?? 0) - (wraps ? 0 : horizontalScroll.offset(side))
+        let minX = CTLineGetOffsetForStringIndex(parts[first], start, nil)
+        let maxX = CTLineGetOffsetForStringIndex(parts[first], end, nil)
+        return NSRect(x: originX + minX, y: top, width: max(1, maxX - minX), height: lineHeight)
+    }
+
     func symbolAnchorRect(for range: NSRange) -> NSRect? {
         guard range.length > 0,
               let row = new.metadata.firstIndex(where: { NSLocationInRange(range.location, $0.range) })
@@ -1920,8 +1968,19 @@ final class CodeAccessibilityElement: NSAccessibilityElement, @unchecked Sendabl
         return NSRange(location: lineStarts[line], length: end - lineStarts[line])
     }
 
+    /// The screen rect of the text from one (line, offset) to another, set
+    /// by the row that draws it.
+    var frameForLines: (@MainActor @Sendable (_ start: (row: Int, index: Int), _ end: (row: Int, index: Int)) -> NSRect?)?
+
     override func accessibilityFrame(for range: NSRange) -> NSRect {
-        accessibilityFrame()
+        guard range.location != NSNotFound, range.location <= text.length else { return accessibilityFrame() }
+        let startRow = accessibilityLine(for: range.location)
+        let endRow = accessibilityLine(for: max(range.location, NSMaxRange(range) - 1))
+        let start = (row: startRow, index: range.location - lineStarts[startRow])
+        let end = (row: endRow, index: NSMaxRange(range) - lineStarts[endRow])
+        // AppKit asks on the main thread.
+        guard let frameForLines else { return accessibilityFrame() }
+        return MainActor.assumeIsolated { frameForLines(start, end) } ?? accessibilityFrame()
     }
 }
 

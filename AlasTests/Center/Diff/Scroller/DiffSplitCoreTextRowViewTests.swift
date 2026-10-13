@@ -307,13 +307,14 @@ import Testing
         #expect(view.characterIndex(at: NSPoint(x: textX(.old, 6), y: y)) == nil)
     }
 
-    @Test func pointerBelowAShorterWrappedSideResolvesNothing() throws {
+    @Test func pointerBelowAShorterWrappedSideHitsNothing() throws {
         let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 200))
         let long = Array(repeating: "alpha", count: 40).joined(separator: " ")
         view.configure(result: result(old: [long], new: ["let alpha = 1"]), font: font, theme: theme, wraps: true)
         // The old side wraps, so the row is taller than the new side's one line.
         let below = newCodePoint(view, x: { $0.minX + 20 }, row: 1)
         #expect(view.characterIndex(at: below) == nil)
+        #expect(view.textHit(at: below) == nil)
         #expect(view.characterIndex(at: newCodePoint(view, x: { $0.minX + 20 }, row: 0)) != nil)
     }
 
@@ -345,6 +346,32 @@ import Testing
         let new = try #require(elements.last)
         #expect(new.accessibilityString(for: new.accessibilityRange(forLine: 1)) == "let b = 2")
         #expect(new.accessibilityLine(for: 11) == 1)
+    }
+
+    @Test func accessibilityFramesFollowTheRequestedLine() throws {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 200), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 200))
+        window.contentView?.addSubview(view)
+        view.configure(result: result(old: [], new: ["let a = 1", "let b = 2"]), font: font, theme: theme)
+        let new = try #require(view.codeAccessibilityElements().last)
+        let first = new.accessibilityFrame(for: new.accessibilityRange(forLine: 0))
+        let second = new.accessibilityFrame(for: new.accessibilityRange(forLine: 1))
+        #expect(abs(first.height - view.lineHeight) < 1)
+        // Screen space runs upward, so the later line sits one line lower.
+        #expect(abs(first.minY - second.minY - view.lineHeight) < 1)
+        #expect(second.width < new.accessibilityFrame().width)
+    }
+
+    @Test func accessibilityHitTestingReachesTheVisibleScroller() throws {
+        let (view, window) = mountedRow(newLine: String(repeating: "w", count: 300))
+        defer { window.close() }
+        let scroller = view.scrollerForTesting(.new)
+        #expect(!scroller.isHidden)
+        let center = NSPoint(x: scroller.frame.midX, y: scroller.frame.midY)
+        let screen = window.convertPoint(toScreen: view.convert(center, to: nil))
+        #expect(!(view.accessibilityHitTest(screen) is CodeAccessibilityElement))
     }
 
     @Test(arguments: [DiffReviewInlineFeedbackSide.old, .new])
