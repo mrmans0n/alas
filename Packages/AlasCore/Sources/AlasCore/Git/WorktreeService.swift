@@ -453,7 +453,13 @@ public struct WorktreeService: Sendable {
 
         let result = try await Process.git(args, cwd: repoPath)
         if result.exitCode == 0 {
-            return makeWorktree(destination: destination, branch: branch, projectId: projectId)
+            // Recorded now, as the fallback path and discovery do, so a fresh
+            // Worktree can be told apart from a checkout later recreated here.
+            var worktree = makeWorktree(destination: destination, branch: branch, projectId: projectId)
+            if !repoPath.isRemoteAlasPath {
+                worktree.lineageID = Self.localLineageID(forWorktreeAt: destination)
+            }
+            return worktree
         }
 
         guard Self.looksLikeMissingLFS(result.stderr) else {
@@ -1601,6 +1607,29 @@ public struct WorktreeService: Sendable {
     }
 
     public static let dirtyWorktreeMessage = "Worktree contains modified or untracked files."
+
+    /// Permissive substring check: git's exact wording around dirty or locked
+    /// worktrees varies by version. If the match misses, the caller surfaces
+    /// the raw stderr instead, which is acceptable degradation.
+    ///
+    /// A locked worktree needs `--force --force`, which `removeFastLocal`
+    /// already supplies once `force: true` comes back through
+    /// `confirmForceDeletePendingWorktree` and it re-reads the registration's
+    /// own locked bit — this only has to recognize that a retry is worth
+    /// offering at all.
+    ///
+    /// Git's separate refusal for worktrees holding initialized submodules is
+    /// deliberately absent: `WorktreeService` answers that one itself once the
+    /// tree is verified clean, so it never reaches a user prompt.
+    public static func requiresForceRetry(forRemovalRefusal stderr: String) -> Bool {
+        let s = stderr.lowercased()
+        return s.contains("is dirty")
+            || s.contains("dirty worktree")
+            || s.contains("contains modified or untracked files")
+            || s.contains("modified or untracked")
+            || s.contains("locked working tree")
+            || (s.contains("locked") && s.contains("remove -f -f"))
+    }
 
     private static func gitContextArguments(
         worktreePath: URL,

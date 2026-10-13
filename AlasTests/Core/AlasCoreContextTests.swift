@@ -92,6 +92,27 @@ struct AlasCoreContextTests {
             return
         }
         #expect(text.contains("hello from feature"))
+
+        let longURL = root.appendingPathComponent("long.sh")
+        try "sleep 300\n".write(to: longURL, atomically: true, encoding: .utf8)
+        let long = RunScript(
+            scope: .repo, fileName: "long.sh", fileURL: longURL,
+            displayName: "Long", onExit: .close, cwd: nil, isExecutable: false
+        )
+        let longRun = Task { try await context.runScript(long, in: worktree) }
+        let deadline = ContinuousClock.now + .seconds(30)
+        while context.runRecords.record(worktreeID: worktree.id, scriptKey: long.key) == nil, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        try await context.deleteWorktree(worktree)
+        await #expect(throws: CancellationError.self, "deleting the worktree stops its headless runs") {
+            _ = try await longRun.value
+        }
+        #expect(!context.projects.worktrees(projectId: project.id).map(\.id).contains(worktree.id))
+        #expect(context.sessionManagers[.worktree(worktree.id)] == nil)
+        #expect(context.runRecords.records(worktreeID: worktree.id).isEmpty)
+        #expect(try await context.runHistory.store?.entry(id: record.id) == nil, "the deleted worktree's history goes with it")
     }
 
     /// A script that ran but never reported its exit status still ran, so
@@ -176,5 +197,127 @@ struct AlasCoreContextTests {
             try context.sessionManager(for: worktree)
         }
         #expect(context.runRecords.record(worktreeID: worktree.id, scriptKey: script.key) == nil)
+    }
+
+    /// The removal cannot be undone, so a project list that cannot be saved
+    /// afterwards is reported rather than left to restore the deleted row.
+    @Test func deletionThatCannotSaveTheProjectListThrows() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-core-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let repo = root.appendingPathComponent("repo")
+        try FileManager.default.copyItem(at: try await Self.repoTemplate.value, to: repo)
+        let store = TestPersistenceStore()
+        let context = AlasCoreContext(
+            projects: ProjectsManager(persistedProjects: []),
+            store: store,
+            projectsFile: root.appendingPathComponent("projects.json"),
+            runHistoryStore: nil
+        )
+        let project = try await context.addProject(path: repo, displayName: "repo", icon: .default(color: "blue"))
+        let worktree = try await context.createWorktree(
+            projectID: project.id,
+            branch: "feature",
+            base: "main",
+            destination: root.appendingPathComponent("feature")
+        )
+        store.writeError = CocoaError(.fileWriteOutOfSpace)
+
+        await #expect(throws: CocoaError.self) {
+            try await context.deleteWorktree(worktree)
+        }
+        #expect(!context.projects.worktrees(projectId: project.id).map(\.id).contains(worktree.id))
+    }
+
+    /// A checkout recreated at the deleted one's path is someone else's work,
+    /// so a stale `Worktree` must not remove it, even with `force`.
+    @Test func refusesToDeleteACheckoutRecreatedAtTheSamePath() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-core-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let repo = root.appendingPathComponent("repo")
+        try FileManager.default.copyItem(at: try await Self.repoTemplate.value, to: repo)
+        let context = AlasCoreContext(
+            projects: ProjectsManager(persistedProjects: []),
+            store: TestPersistenceStore(),
+            projectsFile: root.appendingPathComponent("projects.json"),
+            runHistoryStore: nil
+        )
+        let project = try await context.addProject(path: repo, displayName: "repo", icon: .default(color: "blue"))
+        let destination = root.appendingPathComponent("feature")
+        let stale = try await context.createWorktree(projectID: project.id, branch: "feature", base: "main", destination: destination)
+        for args in [["worktree", "remove", "--force", destination.path], ["worktree", "add", "-q", "-b", "other", destination.path, "main"]] {
+            let result = try await Process.git(args, cwd: repo)
+            #expect(result.exitCode == 0, "\(result.stderr)")
+        }
+
+        await #expect(throws: WorktreeDeletionRefusal.changed("The path holds a different checkout")) {
+            try await context.deleteWorktree(stale, force: true)
+        }
+        #expect(FileManager.default.fileExists(atPath: destination.path))
+    }
+
+    enum Refusal: String, CaseIterable {
+        case dirty, locked, checkpointRecoveryPending, unknownIdentity
+    }
+
+    /// A deletion that must not proceed is refused before anything is
+    /// stopped, so the worktree's headless runs keep running.
+    @Test(arguments: Refusal.allCases)
+    func refusedDeletionLeavesHeadlessRunsAlone(_ refusal: Refusal) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-core-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let repo = root.appendingPathComponent("repo")
+        try FileManager.default.copyItem(at: try await Self.repoTemplate.value, to: repo)
+        let context = AlasCoreContext(
+            projects: ProjectsManager(persistedProjects: []),
+            store: TestPersistenceStore(),
+            projectsFile: root.appendingPathComponent("projects.json"),
+            runHistoryStore: nil
+        )
+        let project = try await context.addProject(path: repo, displayName: "repo", icon: .default(color: "blue"))
+        var worktree = try await context.createWorktree(
+            projectID: project.id, branch: "feature", base: "main", destination: root.appendingPathComponent("feature")
+        )
+        let lineageID = try #require(worktree.lineageID)
+        switch refusal {
+        case .dirty:
+            try "dirt".write(to: worktree.path.appendingPathComponent("untracked.txt"), atomically: true, encoding: .utf8)
+        case .locked:
+            let lock = try await Process.git(["worktree", "lock", worktree.path.path], cwd: repo)
+            #expect(lock.exitCode == 0, "\(lock.stderr)")
+        case .checkpointRecoveryPending:
+            try await WorktreeCheckpointStore().writeJournal(CheckpointRestoreJournal(
+                lineageID: lineageID,
+                checkpointID: UUID(),
+                recoveryCheckpointID: UUID(),
+                phase: .prepared,
+                stagingRoot: worktree.path.appendingPathComponent(".alas-checkpoint-restore-\(UUID().uuidString.lowercased())").path,
+                selectedPaths: ["File.swift"],
+                expectedFingerprint: "fingerprint",
+                expectedIndexChecksum: "checksum"
+            ))
+        case .unknownIdentity:
+            worktree.lineageID = nil
+        }
+        defer { try? FileManager.default.removeItem(at: Paths.checkpointsRoot.appendingPathComponent(lineageID, isDirectory: true)) }
+        let scriptURL = root.appendingPathComponent("long.sh")
+        try "sleep 300\n".write(to: scriptURL, atomically: true, encoding: .utf8)
+        let script = RunScript(
+            scope: .repo, fileName: "long.sh", fileURL: scriptURL,
+            displayName: "Long", onExit: .close, cwd: nil, isExecutable: false
+        )
+        let run = Task { try await context.runScript(script, in: worktree) }
+        defer { run.cancel() }
+        let deadline = ContinuousClock.now + .seconds(30)
+        while context.runRecords.record(worktreeID: worktree.id, scriptKey: script.key) == nil, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        await #expect(throws: WorktreeDeletionRefusal.self) {
+            try await context.deleteWorktree(worktree)
+        }
+        #expect(context.runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status == .running)
     }
 }
