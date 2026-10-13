@@ -345,6 +345,10 @@ extension AlasCoreContext {
     /// on its own, matched like the app's worktree-cleanup ownership.
     /// Unreadable Workspace state refuses too.
     func workspaceOwnershipRefusal(for worktree: Worktree) async -> String? {
+        // Read before the load: an unarchive can finish, and leave the set,
+        // while the load is suspended. One starting later is refused by the
+        // claim the caller holds.
+        let unarchiving = unarchivingWorkspaceCheckoutIDs
         let state: WorkspaceStateFile
         switch await workspaceStore.load() {
         case .missing: return nil
@@ -354,7 +358,7 @@ extension AlasCoreContext {
         let path = worktree.path.standardizedFileURL.path
         let owner = state.checkouts.first { checkout in
             checkout.workspaceID != nil
-                && (checkout.archivedAt == nil || unarchivingWorkspaceCheckoutIDs.contains(checkout.id))
+                && (checkout.archivedAt == nil || unarchiving.contains(checkout.id))
                 && checkout.members.contains { member in
                 guard member.projectID == worktree.projectId,
                       URL(fileURLWithPath: checkout.inAppWorktreePath(member.worktreePath)).standardizedFileURL.path == path
