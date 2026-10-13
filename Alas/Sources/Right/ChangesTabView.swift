@@ -11,6 +11,7 @@ struct ChangesTabView: View {
     @State private var collapsedChangePaths: Set<String> = []
     @State private var appKitActionRelay = ChangesAppKitActionRelay()
     @State private var amendProbe = CommitPublishAmendProbeLoader()
+    @State private var shepherdOwnerLookup: ShepherdOwnerLookup?
     @Environment(\.theme) private var theme
 
     private var conflicts: [ChangedFile] {
@@ -152,6 +153,9 @@ struct ChangesTabView: View {
                 try await GitService().headPublicationState(worktreePath: rps.worktree.path)
             }
         }
+        .task(id: shepherdOwnerTaskID) {
+            await loadShepherdOwner()
+        }
     }
 
     private var isRevealingAttentionReview: Bool {
@@ -159,28 +163,62 @@ struct ChangesTabView: View {
         return false
     }
 
-    /// The shepherd record for this worktree's PR, or an unbound open PR the
-    /// user can hand to a session. Nil for folders, remote worktrees, and
-    /// branches with neither. A record for a different PR than the pane's
-    /// current one (an older merged PR on a reused branch) is ignored.
+    /// The persisted row of a bound record's owning session, loaded by id so
+    /// an owner outside the manager's recent rows still resolves.
+    private struct ShepherdOwnerLookup {
+        let sessionID: String
+        let row: ACPSessionRow?
+    }
+
+    /// The record for exactly the pane's review request, when the worktree is
+    /// one the shepherd supports.
+    private var shepherdRecord: ShepherdRecord? {
+        guard appState.isShepherdEligible(rps.worktree),
+              let request = rps.reviewLoop.snapshot?.reviewRequest
+        else { return nil }
+        return appState.reviewShepherd.records[ShepherdRecordID(worktreeID: rps.worktree.id, request: request)]
+    }
+
+    private var shepherdOwnerTaskID: String {
+        "\(rps.worktree.id)\u{0000}\(shepherdRecord?.sessionID ?? "")"
+    }
+
+    private func loadShepherdOwner() async {
+        guard let sessionID = shepherdRecord?.sessionID,
+              let manager = appState.acpManager(for: rps.worktree)
+        else {
+            shepherdOwnerLookup = nil
+            return
+        }
+        let row = await manager.persistedSessionRow(id: sessionID)
+        guard !Task.isCancelled else { return }
+        shepherdOwnerLookup = ShepherdOwnerLookup(sessionID: sessionID, row: row)
+    }
+
+    /// The shepherd record for the pane's PR, or an unbound open PR the user
+    /// can hand to a session. Nil for worktrees the shepherd does not support,
+    /// and for branches with neither. Only a record for exactly the pane's
+    /// request counts, so an older PR on a reused branch is never shown.
     private var shepherdDrawerModel: ReviewShepherdDrawerModel? {
         let worktree = rps.worktree
-        guard !rps.isFolder, !worktree.path.isRemoteAlasPath else { return nil }
+        guard appState.isShepherdEligible(worktree),
+              let paneSnapshot = rps.reviewLoop.snapshot,
+              paneSnapshot.reviewRequest != nil
+        else { return nil }
         let shepherd = appState.reviewShepherd
-        let paneSnapshot = rps.reviewLoop.snapshot
-        let paneRequest = paneSnapshot?.reviewRequest
-        let record: ShepherdRecord? = shepherd.record(forWorktree: worktree.id).flatMap { bound in
-            guard let paneRequest else { return bound }
-            return bound.id.requestNumber == paneRequest.number && bound.id.providerKind == paneRequest.provider
-                ? bound : nil
-        }
+        let record = shepherdRecord
         let snapshot = record.flatMap { shepherd.snapshots[$0.id] } ?? paneSnapshot
-        let request = snapshot?.reviewRequest
-        guard record != nil || request?.state == .open else { return nil }
+        guard let request = snapshot.reviewRequest,
+              record != nil || request.state == .open
+        else { return nil }
 
-        let rows = appState.shepherdSessionCandidates(worktree: worktree)
-        let owner = record.flatMap { bound in rows.first { $0.id == bound.sessionID } }
-        let candidates = rows
+        let manager = appState.acpManager(for: worktree)
+        let owner: ACPSessionRow? = record.flatMap { bound -> ACPSessionRow? in
+            if let recent = manager?.sessionRows.first(where: { $0.id == bound.sessionID }) { return recent }
+            guard let lookup = shepherdOwnerLookup, lookup.sessionID == bound.sessionID else { return nil }
+            return lookup.row
+        }.flatMap { $0.archived ? nil : $0 }
+        let candidates = appState.shepherdSessionCandidates(worktree: worktree)
             .filter { $0.id != record?.sessionID }
             .map {
                 ReviewShepherdDrawerModel.Candidate(
@@ -189,7 +227,7 @@ struct ChangesTabView: View {
                     agentName: appState.agent(id: $0.agentId)?.displayName
                 )
             }
-        let gatePasses = snapshot.map { ReviewReadinessModel.canMergeReviewRequest(snapshot: $0) } ?? false
+        let gatePasses = ReviewReadinessModel.canMergeReviewRequest(snapshot: snapshot)
         let recordID = record?.id
         let ownerSessionID = record?.sessionID
 
@@ -220,12 +258,13 @@ struct ChangesTabView: View {
                 appState.reviewShepherd.resume(recordID)
             },
             shepherdWith: { sessionID in
-                guard let request else { return }
                 Task { await appState.shepherdWithSession(sessionID, worktree: worktree, request: request) }
             },
             shepherdWithNewSession: {
-                guard let request else { return }
                 Task { await appState.shepherdWithNewSession(worktree: worktree, request: request) }
+            },
+            refreshSessions: {
+                manager?.refreshRecent()
             }
         )
     }

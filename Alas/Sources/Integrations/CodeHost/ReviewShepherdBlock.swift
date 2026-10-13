@@ -28,6 +28,8 @@ struct ReviewShepherdDrawerModel {
     let resume: @MainActor () -> Void
     let shepherdWith: @MainActor (_ sessionID: String) -> Void
     let shepherdWithNewSession: @MainActor () -> Void
+    /// Reloads the worktree's recent sessions so the menus offer current ones.
+    let refreshSessions: @MainActor () -> Void
 }
 
 /// Shepherd section inside the expanded review drawer, above the actions.
@@ -51,6 +53,7 @@ struct ReviewShepherdBlock: View {
         )
         .accessibilityElement(children: .contain)
         .accessibilityLabel("PR shepherd")
+        .onAppear { model.refreshSessions() }
     }
 
     @ViewBuilder
