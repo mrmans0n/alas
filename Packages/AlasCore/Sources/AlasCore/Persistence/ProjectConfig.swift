@@ -201,13 +201,17 @@ public struct ProjectConfig: Codable, Equatable, Identifiable, Sendable {
     /// is retried on the next launch even after this file is re-saved with
     /// the virtual ids; cleared once a migration run fully succeeds.
     public var legacyWorktreeIDs: [String: String] = [:]
+    /// Project-level PR shepherd rules. A `.alas/shepherd.local.md` or
+    /// `.alas/shepherd.md` file in the worktree overrides them completely.
+    public var shepherd: ProjectShepherdSettings?
 
     public enum CodingKeys: String, CodingKey, Sendable {
         case id, name, path, color, icon, addedAt, hiddenWorktreePaths, worktreeOrder,
              cachedWorktrees, worktreeOrderIsManual, startupScripts,
              mcpServers, worktreeOpenAfterCreate, worktreeDefaultLauncherMode, worktreeLaunchPreference, worktreeBranchTemplate, host, kind, ggMode,
              ggWorktreeModes, issueAttachments, pendingAutoBranchNames, fileBookmarks,
-             repoMCPTrust, disabledRepoMCPServers, approvedRepoHookHashes, pendingLegacyWorktreeIDs
+             repoMCPTrust, disabledRepoMCPServers, approvedRepoHookHashes, pendingLegacyWorktreeIDs,
+             shepherd
     }
 
     public init(
@@ -307,6 +311,7 @@ public struct ProjectConfig: Codable, Equatable, Identifiable, Sendable {
         disabledRepoMCPServers = (try? c.decode([String].self, forKey: .disabledRepoMCPServers)) ?? []
         approvedRepoHookHashes = (try? c.decode([String].self, forKey: .approvedRepoHookHashes)) ?? []
         legacyWorktreeIDs = (try? c.decode([String: String].self, forKey: .pendingLegacyWorktreeIDs)) ?? [:]
+        shepherd = try? c.decodeIfPresent(ProjectShepherdSettings.self, forKey: .shepherd)
         if let host {
             if RemotePath.isValidHost(host) {
                 virtualizeLegacyRemotePaths(host: host)
@@ -432,6 +437,9 @@ public struct ProjectConfig: Codable, Equatable, Identifiable, Sendable {
         }
         if !legacyWorktreeIDs.isEmpty {
             try c.encode(legacyWorktreeIDs, forKey: .pendingLegacyWorktreeIDs)
+        }
+        if let shepherd, !shepherd.isEmpty {
+            try c.encode(shepherd, forKey: .shepherd)
         }
     }
 
