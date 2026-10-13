@@ -147,10 +147,10 @@ import Testing
             let x: CGFloat
             if case .user = content { x = view.columnRect.maxX - 30 } else { x = view.columnRect.minX + 8 }
             let start = view.convert(NSPoint(x: x, y: 10), to: nil)
-            func send(_ type: NSEvent.EventType, at point: NSPoint) {
+            func send(_ type: NSEvent.EventType, at point: NSPoint, clickCount: Int = 1) {
                 let event = NSEvent.mouseEvent(
                     with: type, location: point, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
-                    context: nil, eventNumber: 0, clickCount: 1, pressure: 1
+                    context: nil, eventNumber: 0, clickCount: clickCount, pressure: 1
                 )!
                 switch type {
                 case .leftMouseDown: view.mouseDown(with: event)
@@ -166,6 +166,11 @@ import Testing
             #expect(opened == (opens ? [URL(string: "https://example.com")!] : []))
             // A drag that starts on a link selects text instead.
             #expect(view.selectedText().isEmpty == opens)
+            // The second press of a double-click does not open it again.
+            let openedBefore = opened
+            send(.leftMouseDown, at: start, clickCount: 2)
+            send(.leftMouseUp, at: start, clickCount: 2)
+            #expect(opened == openedBefore)
         }
     }
 

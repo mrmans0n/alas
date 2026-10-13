@@ -58,7 +58,9 @@ extension ACPTranscriptCoreTextRowView {
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
-        if let target = hitTarget(at: point) {
+        // A double-click's second press does not open or copy again; over a
+        // link it selects the word, as text does.
+        if let target = hitTarget(at: point), event.clickCount == 1 || target == .expansionToggle {
             armedHitTarget = target
             pressOrigin = point
             return
