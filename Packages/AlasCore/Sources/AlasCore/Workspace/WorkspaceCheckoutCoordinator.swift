@@ -650,6 +650,10 @@ public actor WorkspaceCheckoutCoordinator {
         else {
             throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict
         }
+        // An existing worktree being archived or deleted must not be adopted.
+        guard await memberAdmitsWork(currentMember.projectID, currentCheckout.inAppWorktreePath(candidate.path)) else {
+            throw WorkspaceCheckoutCoordinatorError.operationInProgress
+        }
         try await store.mutate { state in
             guard let checkoutIndex = state.checkouts.firstIndex(where: { $0.id == checkoutID }),
                   state.checkouts[checkoutIndex].archivedAt == nil,
@@ -1476,6 +1480,13 @@ public actor WorkspaceCheckoutCoordinator {
               Set(plan.members.map(\.workspaceMemberID)).count == plan.members.count,
               Set(plan.members.map(\.checkoutMemberID)).count == plan.members.count
         else { throw WorkspaceCheckoutCoordinatorError.incompletePlan }
+        // A destination another operation holds (an existing worktree being
+        // archived or deleted) must not become a member.
+        for planned in plan.members where plan.executionLocation.normalized == .local {
+            guard await memberAdmitsWork(planned.projectID, planned.destinationPath) else {
+                throw WorkspaceCheckoutCoordinatorError.operationInProgress
+            }
+        }
         let workspaceMembers = Dictionary(uniqueKeysWithValues: workspace.members.map { ($0.id, $0) })
         let members = try plan.members.map { planned -> WorkspaceCheckoutMember in
             guard let source = workspaceMembers[planned.workspaceMemberID] else {
