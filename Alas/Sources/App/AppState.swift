@@ -6736,13 +6736,22 @@ final class AppState {
                 onDiskDestructive: false
             ) {
             case .save:
+                // Claimed while buffers save, so nothing new starts or adopts
+                // the worktree before it is hidden.
+                let claim = WorktreeOperationState.archiving(projectId: worktree.projectId)
+                projectsManager.setOperationState(for: worktree, state: claim)
                 Task { @MainActor in
+                    defer {
+                        if projectsManager.operationState(for: worktree) == claim {
+                            projectsManager.setOperationState(for: worktree, state: nil)
+                        }
+                    }
                     guard await saveDirtyBuffers(in: worktree) else { return }
-                    if let refusal = archiveRefusal(for: worktree) {
+                    if let refusal = archiveRefusal(for: worktree, holdingClaim: claim) {
                         showFileActionError(title: "Archive Failed", message: refusal)
                         return
                     }
-                    archiveWorktreeAfterSaving(worktree)
+                    archiveWorktreeAfterSaving(worktree, holdingClaim: claim)
                 }
                 return
             case .discard:
@@ -6757,8 +6766,8 @@ final class AppState {
 
     /// Why `worktree` cannot be archived now: another operation holds it, or
     /// an active Workspace checkout manages it.
-    func archiveRefusal(for worktree: Worktree) -> String? {
-        if projectsManager.operationState(for: worktree)?.blocksAdmission == true {
+    func archiveRefusal(for worktree: Worktree, holdingClaim claim: WorktreeOperationState? = nil) -> String? {
+        if let state = projectsManager.operationState(for: worktree), state != claim, state.blocksAdmission {
             return "Wait for the current worktree operation to finish before archiving."
         }
         guard workspacesManager.canMutate else {
@@ -6772,8 +6781,8 @@ final class AppState {
 
     /// Returns false, archiving nothing, when `archiveRefusal` objects.
     @discardableResult
-    private func archiveWorktreeAfterSaving(_ worktree: Worktree) -> Bool {
-        guard archiveRefusal(for: worktree) == nil else { return false }
+    private func archiveWorktreeAfterSaving(_ worktree: Worktree, holdingClaim claim: WorktreeOperationState? = nil) -> Bool {
+        guard archiveRefusal(for: worktree, holdingClaim: claim) == nil else { return false }
         // Snapshot index in the visible list BEFORE we mutate anything, so we
         // can pick a sensible follow-up selection.
         let siblingsBefore = projectsManager.visibleWorktrees(projectId: worktree.projectId)
