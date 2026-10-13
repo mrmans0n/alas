@@ -55,28 +55,35 @@ extension ACPTranscriptCoreTextRowView {
         // The system's list may omit subviews, so add the actions button
         // explicitly unless it is already there.
         var children = super.accessibilityChildren() ?? []
-        let (button, elements, copies) = MainActor.assumeIsolated {
-            (actionsButton as NSButton?, textAccessibilityElements(), codeCopyAccessibilityElements())
+        let (button, elements, links, copies) = MainActor.assumeIsolated {
+            (actionsButton as NSButton?, textAccessibilityElements(), linkAccessibilityElements(), codeCopyAccessibilityElements())
         }
         if let button, !children.contains(where: { $0 as AnyObject === button }) { children.append(button) }
-        return children + elements + copies
+        return children + elements + links + copies
     }
 
     override func accessibilityHitTest(_ point: NSPoint) -> Any? {
         // AppKit asks on the main thread.
-        let hit: (button: NSButton?, copy: ACPTranscriptCodeCopyAccessibilityElement?, element: ACPTranscriptTextAccessibilityElement?) =
+        let hit: (
+            button: NSButton?, copy: ACPTranscriptCodeCopyAccessibilityElement?,
+            link: ACPTranscriptLinkAccessibilityElement?, element: ACPTranscriptTextAccessibilityElement?
+        ) =
             MainActor.assumeIsolated {
-                guard let window else { return (nil, nil, nil) }
+                guard let window else { return (nil, nil, nil, nil) }
                 let local = convert(window.convertPoint(fromScreen: point), from: nil)
                 // A visible actions button answers for itself.
-                if let actionsButton, actionsButton.alphaValue > 0, actionsButton.frame.contains(local) { return (actionsButton, nil, nil) }
+                if let actionsButton, actionsButton.alphaValue > 0, actionsButton.frame.contains(local) { return (actionsButton, nil, nil, nil) }
                 if let copy = codeCopyAccessibilityElements().first(where: { $0.accessibilityFrameInParentSpace().contains(local) }) {
-                    return (nil, copy, nil)
+                    return (nil, copy, nil, nil)
                 }
-                return (nil, nil, textAccessibilityElements().first { $0.accessibilityFrameInParentSpace().contains(local) })
+                if let link = linkAccessibilityElements().first(where: { $0.accessibilityFrameInParentSpace().contains(local) }) {
+                    return (nil, nil, link, nil)
+                }
+                return (nil, nil, nil, textAccessibilityElements().first { $0.accessibilityFrameInParentSpace().contains(local) })
             }
         if let button = hit.button { return button }
         if let copy = hit.copy { return copy }
+        if let link = hit.link { return link }
         let element = hit.element
         return element ?? super.accessibilityHitTest(point)
     }
@@ -97,6 +104,27 @@ extension ACPTranscriptCoreTextRowView {
             }
             return
         }
+    }
+
+    /// Markdown links, framed over their drawn text (the union of a wrapped
+    /// link's line rects).
+    func linkAccessibilityElements() -> [ACPTranscriptLinkAccessibilityElement] {
+        guard hasTextArea, let (markdown, origin) = markdown else { return [] }
+        let spans = markdown.linkSpans()
+        if linkElements.map(\.url) != spans.map(\.url) {
+            linkElements = spans.map { span in
+                let element = ACPTranscriptLinkAccessibilityElement(url: span.url, text: span.text) { [weak self] url in
+                    self?.actions.openURL(url)
+                }
+                element.setAccessibilityParent(self)
+                return element
+            }
+        }
+        for (element, span) in zip(linkElements, spans) {
+            let frame = span.rects.dropFirst().reduce(span.rects[0]) { $0.union($1) }
+            element.setAccessibilityFrameInParentSpace(frame.offsetBy(dx: origin.x, dy: origin.y))
+        }
+        return linkElements
     }
 
     /// Code-block Copy buttons, framed where they are drawn.

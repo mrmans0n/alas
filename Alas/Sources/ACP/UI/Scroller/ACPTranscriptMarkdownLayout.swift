@@ -136,6 +136,43 @@ struct ACPTranscriptMarkdownLayout {
         return first < last ? lines[first..<last] : lines[first..<first]
     }
 
+    /// A link as drawn: its URL, visible text, and the rect of each line it
+    /// covers, in layout coordinates. A wrapped link has one rect per line.
+    struct LinkSpan {
+        let url: URL
+        let text: String
+        let rects: [CGRect]
+    }
+
+    /// Every link in drawing order. Computed on demand (accessibility asks),
+    /// so laying out a row pays nothing for it.
+    func linkSpans() -> [LinkSpan] {
+        var spans: [LinkSpan] = []
+        for line in lines {
+            guard let block = line.block, texts.indices.contains(block) else { continue }
+            let blockText = texts[block] as NSString
+            for run in CTLineGetGlyphRuns(line.line) as! [CTRun] {
+                let value = (CTRunGetAttributes(run) as NSDictionary)[NSAttributedString.Key.link]
+                guard let url = (value as? URL) ?? (value as? String).flatMap(URL.init(string:)) else { continue }
+                let range = CTRunGetStringRange(run)
+                var position = CGPoint.zero
+                CTRunGetPositions(run, CFRange(location: 0, length: 1), &position)
+                let width = CGFloat(CTRunGetTypographicBounds(run, CFRange(location: 0, length: 0), nil, nil, nil))
+                let rect = CGRect(x: line.origin.x + position.x, y: line.origin.y, width: width, height: line.height)
+                let text = NSMaxRange(NSRange(location: range.location, length: range.length)) <= blockText.length
+                    ? blockText.substring(with: NSRange(location: range.location, length: range.length)) : ""
+                // Runs of one link continue across style changes and line wraps.
+                if let last = spans.last, last.url == url, let lastRect = last.rects.last,
+                   abs(lastRect.maxX - rect.minX) < 1 || rect.minY >= lastRect.maxY - 0.5 {
+                    spans[spans.count - 1] = LinkSpan(url: url, text: last.text + text, rects: last.rects + [rect])
+                } else {
+                    spans.append(LinkSpan(url: url, text: text, rects: [rect]))
+                }
+            }
+        }
+        return spans
+    }
+
     /// The link under `point`, in layout coordinates; nil outside link glyphs.
     func link(at point: CGPoint) -> URL? {
         let lines = linesIntersecting(CGRect(x: point.x, y: point.y, width: 0, height: 0))

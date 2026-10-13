@@ -105,6 +105,8 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
     var textElement: ACPTranscriptTextAccessibilityElement?
     /// One accessible Copy button per code block, kept while the content is.
     var codeCopyElements: [ACPTranscriptCodeCopyAccessibilityElement] = []
+    /// One accessible link per drawn link, kept while the links are.
+    var linkElements: [ACPTranscriptLinkAccessibilityElement] = []
     /// Where code-block Copy writes; tests swap in a private pasteboard.
     var codeCopyPasteboard: NSPasteboard = .general
 
@@ -200,6 +202,7 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
             copiedCodeBlock = nil
             textElement = nil
             codeCopyElements = []
+            linkElements = []
         }
         self.content = content
         self.contentMaxWidth = contentMaxWidth

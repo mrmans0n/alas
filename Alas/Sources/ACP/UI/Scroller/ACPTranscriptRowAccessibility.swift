@@ -131,3 +131,26 @@ final class ACPTranscriptCodeCopyAccessibilityElement: NSAccessibilityElement, @
         return true
     }
 }
+
+/// A drawn Markdown link as an accessible link, so VoiceOver and Full
+/// Keyboard Access can reach and open it as in the text view renderer.
+final class ACPTranscriptLinkAccessibilityElement: NSAccessibilityElement, @unchecked Sendable {
+    let url: URL
+    private let open: @MainActor @Sendable (URL) -> Void
+
+    init(url: URL, text: String, open: @escaping @MainActor @Sendable (URL) -> Void) {
+        self.url = url
+        self.open = open
+        super.init()
+        setAccessibilityRole(.link)
+        setAccessibilityLabel(text)
+        setAccessibilityURL(url)
+    }
+
+    override func accessibilityPerformPress() -> Bool {
+        // AppKit asks on the main thread.
+        let open = open, url = url
+        MainActor.assumeIsolated { open(url) }
+        return true
+    }
+}

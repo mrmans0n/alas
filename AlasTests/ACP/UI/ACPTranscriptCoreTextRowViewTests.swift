@@ -142,6 +142,20 @@ import Testing
         #expect(toggles == [expected])
     }
 
+    @Test func linksAreAccessibleAndOpenWhenPressed() throws {
+        var opened: [URL] = []
+        var actions = ACPTranscriptNativeRows.Actions.inert
+        actions.openURL = { opened.append($0) }
+        let view = row(.agent(markdown: "See [the docs](https://example.com) now.", commentary: false), actions: actions)
+        _ = view.measuredHeight(forWidth: 800)
+        let link = try #require(view.accessibilityChildren()?.compactMap { $0 as? ACPTranscriptLinkAccessibilityElement }.first)
+        #expect(link.accessibilityRole() == .link)
+        #expect(link.accessibilityLabel() == "the docs")
+        #expect(!link.accessibilityFrameInParentSpace().isEmpty)
+        #expect(link.accessibilityPerformPress())
+        #expect(opened == [URL(string: "https://example.com")!])
+    }
+
     @Test(arguments: [(0.0, true), (2.0, true), (6.0, false)])
     func aLinkOpensOnClickButNotAfterADrag(dragDistance: Double, opens: Bool) {
         for content in [
