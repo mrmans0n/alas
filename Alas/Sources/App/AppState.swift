@@ -3468,9 +3468,7 @@ final class AppState {
             cfg: config.terminal,
             theme: themeStore.current
         )
-        harness.detector.register(sessionId: session.id) { [weak session] in
-            session?.surface.foregroundPid
-        }
+        session.registerForegroundPid(with: harness.detector)
         return tabs.appendTerminal(owner: context.owner, title: "Terminal", sessionId: session.id)
     }
 
@@ -3527,9 +3525,7 @@ final class AppState {
             cfg: config.terminal,
             theme: themeStore.current
         )
-        harness.detector.register(sessionId: session.id) { [weak session] in
-            session?.surface.foregroundPid
-        }
+        session.registerForegroundPid(with: harness.detector)
         return tabs.appendTerminal(owner: context.owner, title: agent.displayName, sessionId: session.id)
     }
 
@@ -3571,7 +3567,7 @@ final class AppState {
                 remoteCwdAlreadyValidated: restoredCwd != nil,
                 leafId: leafID
             )
-            harness.detector.register(sessionId: newSession.id) { [weak newSession] in newSession?.surface.foregroundPid }
+            newSession.registerForegroundPid(with: harness.detector)
             _ = tabs.splitFocusedLeaf(
                 owner: owner,
                 tabId: tabID,
@@ -3768,7 +3764,7 @@ final class AppState {
                 forcedCwdLocation: leaf.lastCwdLocation,
                 leafId: leaf.id
             )
-            harness.detector.register(sessionId: session.id) { [weak session] in session?.surface.foregroundPid }
+            session.registerForegroundPid(with: harness.detector)
         }
         return tabs.tabs(for: owner).first(where: { $0.id == tabID })
     }
@@ -8172,9 +8168,7 @@ final class AppState {
                 repoStartupScript: repoStartupScript,
                 leafId: newLeafId
             )
-            harness.detector.register(sessionId: session.id) { [weak session] in
-                session?.surface.foregroundPid
-            }
+            session.registerForegroundPid(with: harness.detector)
             _ = tabs.splitFocusedLeaf(
                 worktreeId: worktreeId, tabId: activeId, axis: axis,
                 newLeafId: newLeafId, newSessionId: newLeafId
@@ -8752,9 +8746,7 @@ final class AppState {
                 remoteCwdAlreadyValidated: forcedCwd != nil,
                 leafId: leaf.id
             )
-            harness.detector.register(sessionId: session.id) { [weak session] in
-                session?.surface.foregroundPid
-            }
+            session.registerForegroundPid(with: harness.detector)
         }
         return tabs.tabs(for: owner).first(where: { $0.id == tabID })
     }
@@ -8861,9 +8853,7 @@ final class AppState {
                 allowLegacyAttach: allowLegacyAttach,
                 preResolvedZmxSessionName: preResolvedZmxSessionName
             )
-            harness.detector.register(sessionId: session.id) { [weak session] in
-                session?.surface.foregroundPid
-            }
+            session.registerForegroundPid(with: harness.detector)
         }
         return tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == tabId })
     }
