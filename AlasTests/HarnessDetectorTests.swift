@@ -36,6 +36,27 @@ struct HarnessDetectorTests {
         #expect(HarnessKind.forAgent(id: "cursor-agent", binary: "/usr/bin/true") == .cursor)
     }
 
+    /// The detector polls on its own queue. The provider is created in the
+    /// app module, which reaches AlasCore through `@_exported import`, so a
+    /// main-actor-isolated provider would trap on its executor check there.
+    @MainActor
+    @Test func terminalSessionPidProviderRunsOffMain() async {
+        let session = TerminalSession(
+            id: "leaf",
+            worktreeId: "wt",
+            projectId: "proj",
+            surface: AlasGhostty.SurfaceView(testIO: FakeGhosttySurfaceIO()),
+            executable: "/bin/zsh",
+            args: []
+        )
+        let detector = HarnessDetector()
+        session.registerForegroundPid(with: detector)
+        let pid = await Task.detached { detector.foregroundPid(sessionId: "leaf") }.value
+        // A test surface has no Ghostty surface, so there is no foreground pid.
+        #expect(pid == nil)
+        withExtendedLifetime(session) {}
+    }
+
     @Test func matchesClaudeProcess() {
         #expect(HarnessDetector.matchKind(processName: "claude") == .claudeCode)
         #expect(HarnessDetector.matchKind(processName: "claude-code") == .claudeCode)
