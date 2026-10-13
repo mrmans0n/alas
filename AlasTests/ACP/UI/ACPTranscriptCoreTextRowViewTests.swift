@@ -203,6 +203,56 @@ import Testing
                        inToolCallGroup: false, theme: theme, typography: .default, actions: .testing(menu: false))
         #expect(view.selectedText().isEmpty == !sameContent)
     }
+    @Test func textRowsReadTheirPlainTextAndBindTheSelection() throws {
+        let view = row(.agent(markdown: "Hello **bold** world\n\nSecond `code` here", commentary: false))
+        _ = view.measuredHeight(forWidth: 800)
+        let element = try #require(view.accessibilityChildren()?.compactMap { $0 as? NSAccessibilityElement }.first)
+        #expect(element.accessibilityRole() == .textArea)
+        #expect(element.accessibilityValue() as? String == "Hello bold world\nSecond code here")
+        #expect(element.accessibilityRange(forLine: 1).location == 17)
+        element.setAccessibilitySelectedTextRange(NSRange(location: 6, length: 15))
+        #expect(view.selectedText() == "bold world\nSeco")
+        #expect(element.accessibilitySelectedText() == "bold world\nSeco")
+    }
+
+    @Test func theActionsButtonIsAnAccessibilityChildOfTextRows() throws {
+        var actions = ACPTranscriptNativeRows.Actions.testing(menu: true)
+        actions.showsActionsPermanently = true
+        let view = row(.agent(markdown: "Hi", commentary: false), actions: actions)
+        _ = view.measuredHeight(forWidth: 800)
+        let button = try #require(view.actionsButtonForTesting)
+        let children = try #require(view.accessibilityChildren())
+        #expect(children.contains { $0 as AnyObject === button })
+    }
+
+    @Test(arguments: [
+        (false, "Collapsed", true), (true, "Expanded", false),
+    ])
+    func oneLineRowsAreButtonsThatToggle(headerExpanded: Bool, value: String, toggledTo: Bool) {
+        var toggled: [Bool] = []
+        var actions = ACPTranscriptNativeRows.Actions.inert
+        actions.toggleExpanded = { toggled.append($0) }
+        let header = row(.toolGroupHeader(label: "Ran 3 commands", iconSystemName: "terminal", expanded: headerExpanded), actions: actions)
+        #expect(header.accessibilityRole() == .button)
+        #expect(header.accessibilityLabel() == "Ran 3 commands")
+        #expect(header.accessibilityValue() as? String == value)
+        #expect(header.accessibilityPerformPress())
+        #expect(toggled == [toggledTo])
+    }
+
+    @Test func toolRowsDescribeTheirTargetDurationAndFailure() {
+        var toggled: [Bool] = []
+        var actions = ACPTranscriptNativeRows.Actions.inert
+        actions.toggleExpanded = { toggled.append($0) }
+        let presentation = ACPToolCallPresentation.resolve(.init(toolCallId: "t", title: "Ran ls", kind: "execute", status: "failed"))
+        let view = row(.toolCall(presentation: presentation, target: "ls", duration: "12ms", failed: true), actions: actions)
+        #expect(view.accessibilityRole() == .button)
+        #expect(view.accessibilityLabel() == "\(presentation.label) ls, 12ms, failed")
+        #expect(view.accessibilityValue() as? String == "Collapsed")
+        #expect(view.accessibilityPerformPress())
+        #expect(toggled == [true])
+        #expect(view.contentForTesting != nil)
+    }
 }
 
 extension ACPTranscriptNativeRows.Actions {

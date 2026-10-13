@@ -1,0 +1,105 @@
+import AppKit
+
+/// A native transcript row's text as navigable static text, ported from the
+/// diff's `CodeAccessibilityElement`: whole value, characters, and visual
+/// lines, with the selection bound to the row's. The value is the rendered
+/// block texts joined by newlines, the same text copy puts on the pasteboard.
+/// Its own state is immutable after init, and AppKit only uses it on the main
+/// thread.
+final class ACPTranscriptTextAccessibilityElement: NSAccessibilityElement, @unchecked Sendable {
+    typealias Position = ACPTranscriptCoreTextRowView.TextSelection.Position
+
+    let texts: [String]
+    private let text: NSString
+    /// Where each block starts in `text`.
+    private let blockStarts: [Int]
+    /// Where each visual line starts in `text`.
+    private let lineStarts: [Int]
+
+    /// `lines` are the (block, offset in block) starts of the drawn lines.
+    init(texts: [String], lines: [Position]) {
+        var starts: [Int] = []
+        var location = 0
+        for block in texts {
+            starts.append(location)
+            location += (block as NSString).length + 1
+        }
+        self.texts = texts
+        text = texts.joined(separator: "\n") as NSString
+        blockStarts = starts
+        var lineStarts = lines.compactMap { line in starts.indices.contains(line.block) ? starts[line.block] + line.index : nil }
+        if lineStarts.first != 0 { lineStarts.insert(0, at: 0) }
+        self.lineStarts = lineStarts
+        super.init()
+    }
+
+    override func accessibilityValue() -> Any? { text as String }
+    override func accessibilityNumberOfCharacters() -> Int { text.length }
+
+    /// The lines the enclosing scroll view shows, set by the row.
+    var visibleLines: (@MainActor @Sendable () -> (start: Position, end: Position)?)?
+
+    override func accessibilityVisibleCharacterRange() -> NSRange {
+        guard let visibleLines else { return NSRange(location: 0, length: text.length) }
+        guard let lines = MainActor.assumeIsolated({ visibleLines() }) else { return NSRange(location: 0, length: 0) }
+        let start = offset(of: lines.start)
+        return NSRange(location: start, length: max(0, offset(of: lines.end) - start))
+    }
+
+    override func accessibilityString(for range: NSRange) -> String? {
+        guard range.location != NSNotFound, NSMaxRange(range) <= text.length else { return nil }
+        return text.substring(with: range)
+    }
+
+    override func accessibilityLine(for index: Int) -> Int {
+        max(0, (lineStarts.lastIndex { $0 <= index }) ?? 0)
+    }
+
+    override func accessibilityRange(forLine line: Int) -> NSRange {
+        guard lineStarts.indices.contains(line) else { return NSRange(location: NSNotFound, length: 0) }
+        let end = line + 1 < lineStarts.count ? lineStarts[line + 1] : text.length
+        return NSRange(location: lineStarts[line], length: end - lineStarts[line])
+    }
+
+    /// The screen rect of the text from one position to another, set by the
+    /// row that draws it.
+    var frameForRange: (@MainActor @Sendable (_ start: Position, _ end: Position) -> NSRect?)?
+    /// The row's selection, and a way to replace it, so assistive apps can
+    /// read and set it as in a text view.
+    var selection: (@MainActor @Sendable () -> (start: Position, end: Position)?)?
+    var select: (@MainActor @Sendable (_ start: Position, _ end: Position) -> Void)?
+
+    private func offset(of position: Position) -> Int {
+        guard blockStarts.indices.contains(position.block) else { return text.length }
+        return min(blockStarts[position.block] + position.index, text.length)
+    }
+
+    func position(at offset: Int) -> Position {
+        let offset = min(max(0, offset), text.length)
+        guard let block = blockStarts.lastIndex(where: { $0 <= offset }) else { return Position(block: 0, index: 0) }
+        return Position(block: block, index: min(offset - blockStarts[block], (texts[block] as NSString).length))
+    }
+
+    override func accessibilitySelectedTextRange() -> NSRange {
+        guard let selection, let span = MainActor.assumeIsolated({ selection() }) else { return NSRange(location: 0, length: 0) }
+        let start = offset(of: span.start)
+        return NSRange(location: start, length: max(0, offset(of: span.end) - start))
+    }
+
+    override func setAccessibilitySelectedTextRange(_ range: NSRange) {
+        guard let select, range.location != NSNotFound else { return }
+        let start = position(at: range.location), end = position(at: NSMaxRange(range))
+        MainActor.assumeIsolated { select(start, end) }
+    }
+
+    override func accessibilitySelectedText() -> String? {
+        accessibilityString(for: accessibilitySelectedTextRange())
+    }
+
+    override func accessibilityFrame(for range: NSRange) -> NSRect {
+        guard range.location != NSNotFound, range.location <= text.length, let frameForRange else { return accessibilityFrame() }
+        let start = position(at: range.location), end = position(at: NSMaxRange(range))
+        // AppKit asks on the main thread.
+        return MainActor.assumeIsolated { frameForRange(start, end) } ?? accessibilityFrame()
+    }
+}

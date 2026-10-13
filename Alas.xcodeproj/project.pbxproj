@@ -1506,6 +1506,7 @@
 		D95A7FAF0B955642ED9D7521 /* ACPAuthFailureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 380D04E9EB0D0ED0C24702DA /* ACPAuthFailureTests.swift */; };
 		D98DD9D4BE2AF6E9ABEB2401 /* AlasCoreExports.swift in Sources */ = {isa = PBXBuildFile; fileRef = F82F6946A682F86F58B7120B /* AlasCoreExports.swift */; };
 		D9E335CB096989ECD0A861F9 /* BeautifulMermaidBackendTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5341B1BDF38DAE656D5B6849 /* BeautifulMermaidBackendTests.swift */; };
+		D9E8451463778A9778403D64 /* ACPTranscriptRowAccessibility.swift in Sources */ = {isa = PBXBuildFile; fileRef = C333FC7915436F54A251FF67 /* ACPTranscriptRowAccessibility.swift */; };
 		D9FD24854A41DF2E9214E078 /* ReviewDraftCommentController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58BC051640BBB02A2EBF6E4F /* ReviewDraftCommentController.swift */; };
 		DA5ED6D708DD8C0B5563AB4F /* WindowDragHandle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32D6E47CC4523FDE263C764C /* WindowDragHandle.swift */; };
 		DAA0AFA398C02EC663708825 /* ViewDragOut.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC461E04DD9DDF78F8825942 /* ViewDragOut.swift */; };
@@ -3113,6 +3114,7 @@
 		C2CA853E91C240B7B5551859 /* GitServiceStagedTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitServiceStagedTests.swift; sourceTree = "<group>"; };
 		C2D7EA3F2B69C0A8D2F8F8A5 /* ACPPromptCapabilitiesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPPromptCapabilitiesTests.swift; sourceTree = "<group>"; };
 		C2E0C7ED63A67D16A79DF4BA /* ReleaseCheckerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReleaseCheckerTests.swift; sourceTree = "<group>"; };
+		C333FC7915436F54A251FF67 /* ACPTranscriptRowAccessibility.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPTranscriptRowAccessibility.swift; sourceTree = "<group>"; };
 		C33AEF4AA4C36DBC1B912F25 /* MermaidModelsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MermaidModelsTests.swift; sourceTree = "<group>"; };
 		C33E8F2129F2A32E3C4534CC /* RemoteDeviceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteDeviceTests.swift; sourceTree = "<group>"; };
 		C34ED0F4DB5FB6620993ECFC /* DiffSelectableTextTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffSelectableTextTests.swift; sourceTree = "<group>"; };
@@ -5195,6 +5197,7 @@
 				DCEBECCEC34EBCA9D7FFF9E0 /* ACPTranscriptMarkdownLayout.swift */,
 				09673A323A79C650D9C66D49 /* ACPTranscriptMinimap.swift */,
 				A45079EAAF39A1A3D00281FE /* ACPTranscriptNativeRows.swift */,
+				C333FC7915436F54A251FF67 /* ACPTranscriptRowAccessibility.swift */,
 				369B312B65E6D4C969B8BF2B /* ACPTranscriptRowExpansionStore.swift */,
 				A4626606D2916B0CFE65F16B /* ACPTranscriptRowHostingPool.swift */,
 				7BA6DF8E37E9B38C627B030A /* ACPTranscriptRowHostingView.swift */,
@@ -6881,6 +6884,7 @@
 				E416F033FE5772B85A07CAF2 /* ACPTranscriptMinimap.swift in Sources */,
 				B98B8417274006AA31B843ED /* ACPTranscriptNativeRows.swift in Sources */,
 				1425D5399125F11619A6B79C /* ACPTranscriptRenderCaches.swift in Sources */,
+				D9E8451463778A9778403D64 /* ACPTranscriptRowAccessibility.swift in Sources */,
 				414DEC9066B4CEB304F77639 /* ACPTranscriptRowContent.swift in Sources */,
 				EFC7C4236178EB3E3FE6D105 /* ACPTranscriptRowExpansionStore.swift in Sources */,
 				95E01DC5A933FCC077399762 /* ACPTranscriptRowHostingPool.swift in Sources */,
