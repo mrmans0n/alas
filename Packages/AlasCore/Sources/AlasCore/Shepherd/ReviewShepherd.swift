@@ -576,7 +576,32 @@ public final class ReviewShepherd {
             escalate(id, .deliveryFailed, title: request.title)
         case .merge:
             let attempt = await merge(id, generation: generation, snapshot: snapshot, worktreePath: context.path)
-            guard case .finished(let outcome) = attempt, let latest = records[id] else { return }
+            let outcome: ReviewMergeOutcome?
+            switch attempt {
+            case .abandoned:
+                return
+            case .redecided(let decision, let previous, let fresh, let freshRules):
+                // The fresh observation no longer says merge. Commit what the
+                // policy said instead and act on it like any poll's decision.
+                var next = decision.record
+                if next.phase.isTerminal, next.finishedAt == nil {
+                    next.finishedAt = now()
+                }
+                if next != previous {
+                    next.updatedAt = now()
+                    put(next)
+                }
+                snapshots[id] = fresh
+                let redecided = bumpGeneration(id)
+                await execute(
+                    decision.action, for: id, generation: redecided, before: previous,
+                    snapshot: fresh, rules: freshRules, context: context
+                )
+                return
+            case .finished(let result):
+                outcome = result
+            }
+            guard let latest = records[id] else { return }
             // A merge or queue entry happened whatever changed meanwhile, so
             // it is recorded on the current record. "Not merged" only puts
             // the record back to watching when nothing changed it.
@@ -621,16 +646,21 @@ public final class ReviewShepherd {
         /// The record was stopped, rebound or toggled while git was read:
         /// nothing was merged and nothing is recorded.
         case abandoned
+        /// The policy, run again on fresh data, decided something other than
+        /// merging. Nothing was merged; the decision is still to be committed.
+        /// Never carries `.merge`.
+        case redecided(ShepherdDecision, before: ShepherdRecord, snapshot: ReviewLoopSnapshot, rules: ShepherdRules)
         /// Nil when the final checks or the provider declined the merge.
         case finished(ReviewMergeOutcome?)
     }
 
     /// Reads git again right before merging, as `RightPaneState.performMerge`
     /// does, so a commit or edit made since the probe can't slip through.
-    /// Then fetches the request again and re-runs the shepherd's whole gate
-    /// (stable head, required reviewers on that head) on it, since reviewers
-    /// and rules may have changed since the decision. `ReviewLoopState.merge`
-    /// then re-reads the provider and re-runs the readiness gate.
+    /// Then fetches the request again and asks the policy once more on that
+    /// fresh data (rules, reviewers on the head, the owner's state), since
+    /// any of it may have changed since the decision; only a fresh `.merge`
+    /// merges. `ReviewLoopState.merge` then re-reads the provider and re-runs
+    /// the readiness gate.
     private func merge(
         _ id: ShepherdRecordID,
         generation: Int,
@@ -652,25 +682,34 @@ public final class ReviewShepherd {
         guard let effects,
               let latest = loop.snapshot,
               latest.errorMessage == nil,
+              latest.providerAvailable,
+              latest.providerAuthenticated,
               let request = latest.reviewRequest,
-              request.state == .open,
               ShepherdRecordID(worktreeID: id.worktreeID, request: request) == id
         else { return .finished(nil) }
         let rules = effects.rules(id.worktreeID)
-        let reviewers = rules.requiredReviewers.isEmpty
+        let reviewers = rules.requiredReviewers.isEmpty || request.state != .open
             ? nil
             : await headReviewers(for: latest, worktreePath: worktreePath)
         guard mayStillMerge(id, generation), let owner = records[id]?.sessionID else { return .abandoned }
         let session = await effects.sessionState(owner, id.worktreeID)
         guard mayStillMerge(id, generation), let record = records[id] else { return .abandoned }
-        let observation = ShepherdObservation(
+        // `decide` moves a `.merging` record back to watching before running
+        // the rules, so it can return `.merge` again for this record.
+        let decision = ShepherdPolicy.decide(record, ShepherdObservation(
             snapshot: latest,
             headReviewers: reviewers,
             session: session,
             rules: rules,
             now: now()
-        )
-        guard ShepherdPolicy.mergeGatePasses(record, observation) else { return .finished(nil) }
+        ))
+        guard decision.action == .merge else {
+            return .redecided(decision, before: record, snapshot: latest, rules: rules)
+        }
+        if decision.record != record {
+            put(decision.record)
+        }
+        snapshots[id] = latest
         return .finished(await loop.merge(snapshot: latest))
     }
 
