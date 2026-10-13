@@ -484,7 +484,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             availableRowContentWidth: CGFloat? = nil,
             availableTrailingGutterWidth: CGFloat? = nil,
             expansionSeeds: ACPToolCallGroupExpansionSeeds = ACPToolCallGroupExpansionSeeds(),
-            renderRows: [ACPTranscriptRenderRow]? = nil
+            renderRows: [ACPTranscriptRenderRow]? = nil,
+            nativeRowsEnabled: Bool = ACPTranscriptNativeRows.isEnabled
         ) -> [ACPTranscriptRowSpec] {
             let transcript = host.transcript
             var specs: [ACPTranscriptRowSpec] = []
@@ -533,11 +534,18 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                     specs.append(Self.forkDividerSpec(host: host, fork: fork))
                     forkDividerEmitted = true
                 }
+                // Decided before the spec so a row that stays live (active
+                // turn, running tool) never pays the native eligibility parse:
+                // it keeps streaming into its SwiftUI graph.
+                let isActiveTurnRow = isTurnActive && Self.firstIndex(of: renderRow) >= latestUserIndex
+                let parks = !isActiveTurnRow && !Self.hasLiveTool(in: renderRow, messages: messages, host: host)
+                let mayBeNative = nativeRowsEnabled && parks
                 let lastIndex: Int
                 switch renderRow {
                 case .message(let row):
                     guard let spec = Self.messageRowSpec(
                         host: host, snapshot: snapshot, row: row, inToolCallGroup: false,
+                        mayBeNative: mayBeNative,
                         availableRowContentWidth: availableRowContentWidth,
                         availableTrailingGutterWidth: availableTrailingGutterWidth
                     ) else { continue }
@@ -546,6 +554,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 case .toolCallGroupMember(let row, _):
                     guard let spec = Self.messageRowSpec(
                         host: host, snapshot: snapshot, row: row, inToolCallGroup: true,
+                        mayBeNative: mayBeNative,
                         availableRowContentWidth: availableRowContentWidth,
                         availableTrailingGutterWidth: availableTrailingGutterWidth
                     ) else { continue }
@@ -553,7 +562,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                     lastIndex = row.index
                 case .toolCallGroup(let group), .toolCallGroupHeader(let group):
                     specs.append(Self.toolCallGroupHeaderSpec(
-                        host: host, messages: messages, group: group, expansionSeeds: expansionSeeds
+                        host: host, messages: messages, group: group, expansionSeeds: expansionSeeds,
+                        mayBeNative: mayBeNative
                     ))
                     if case .toolCallGroup = renderRow {
                         // A collapsed bundle stands in for every member, so
@@ -568,12 +578,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                         lastIndex = .min
                     }
                 }
-                let isActiveTurnRow = isTurnActive && Self.firstIndex(of: renderRow) >= latestUserIndex
-                if isActiveTurnRow || Self.hasLiveTool(in: renderRow, messages: messages, host: host) {
-                    specs[specs.count - 1].parksWhenReleased = false
-                }
-                // A live row keeps streaming into its SwiftUI graph, so it is never native.
-                if !specs[specs.count - 1].parksWhenReleased { specs[specs.count - 1].native = nil }
+                if !parks { specs[specs.count - 1].parksWhenReleased = false }
                 // A parked graph would keep the visual's web page and its process alive.
                 if case .message(let row) = renderRow,
                    messages.indices.contains(row.index),
@@ -647,6 +652,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             snapshot: RowSnapshot,
             row: ACPTranscriptVisibleRow,
             inToolCallGroup: Bool,
+            mayBeNative: Bool,
             availableRowContentWidth: CGFloat,
             availableTrailingGutterWidth: CGFloat
         ) -> ACPTranscriptRowSpec? {
@@ -684,8 +690,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                     }
                 }
             )
-            // `rowSpecs` clears this again for any row that stays live.
-            if ACPTranscriptNativeRows.isEnabled,
+            // `mayBeNative` is false for any row that stays live.
+            if mayBeNative,
                let content = ACPTranscriptNativeRows.content(
                    for: message,
                    isLive: snapshot.liveNarrationIndex == row.index,
@@ -825,7 +831,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             host: ACPTranscriptScroller,
             messages: [ACPMessage],
             group: ACPTranscriptToolCallGroup,
-            expansionSeeds: ACPToolCallGroupExpansionSeeds
+            expansionSeeds: ACPToolCallGroupExpansionSeeds,
+            mayBeNative: Bool
         ) -> ACPTranscriptRowSpec {
             let toolCalls: [ACPMessage.ToolCall] = group.members.compactMap { row in
                 guard messages.indices.contains(row.index),
@@ -874,7 +881,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                     }
                 }
             )
-            if ACPTranscriptNativeRows.isEnabled, !group.isLive {
+            if mayBeNative, !group.isLive {
                 spec.native = ACPTranscriptNativeRows.row(
                     .toolGroupHeader(label: summary.label, iconSystemName: summary.iconSystemName, expanded: expanded),
                     contentMaxWidth: host.contentMaxWidth, inToolCallGroup: false,

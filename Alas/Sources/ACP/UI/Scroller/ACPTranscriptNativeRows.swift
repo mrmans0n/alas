@@ -24,6 +24,12 @@ enum ACPTranscriptNativeRows {
         return supported
     }
 
+    /// Whether `source` has been parsed for eligibility. Tests use it to pin
+    /// that rows which can never be native skip the parse.
+    static func hasParsed(_ source: String) -> Bool {
+        supportCache.object(forKey: source as NSString) != nil
+    }
+
     /// The native content for `message`, or nil when it must stay SwiftUI.
     /// `isLive` is the live narration flag; tool calls decide liveness from
     /// their own status.

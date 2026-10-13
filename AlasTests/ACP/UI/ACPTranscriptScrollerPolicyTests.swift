@@ -75,6 +75,24 @@ struct ACPTranscriptScrollerRowSpecsTests {
         }
     }
 
+    @Test("only rows that park are considered for native drawing, so a streaming answer is never parsed")
+    func nativeRowsSkipActiveTurn() {
+        let host = makeHost()
+        let streaming = "streaming answer \(UUID())"
+        let messages: [ACPMessage] = [
+            .user(id: UUID(), text: "previous", attachments: []),
+            .agent(id: UUID(), StreamingText("history \(UUID())")),
+            .user(id: UUID(), text: "current", attachments: []),
+            .agent(id: UUID(), StreamingText(streaming))
+        ]
+        host.transcript.messages = messages
+        host.transcript.streamingState = .streaming
+        let specs = ACPTranscriptScroller.Coordinator.rowSpecs(host: host, nativeRowsEnabled: true)
+        #expect(specs.first { $0.id == messages[1].stableId }?.native != nil)
+        #expect(specs.first { $0.id == messages[3].stableId }?.native == nil)
+        #expect(!ACPTranscriptNativeRows.hasParsed(streaming))
+    }
+
     @Test("idle tool rows park only after both tool and terminal finish", arguments: ["pending", "in_progress", "completed", "failed"])
     func idleToolParkingPolicy(status: String) {
         let host = makeHost()
