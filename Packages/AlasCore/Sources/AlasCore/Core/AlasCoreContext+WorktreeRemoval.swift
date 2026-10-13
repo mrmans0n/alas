@@ -216,6 +216,21 @@ extension AlasCoreContext {
         }
     }
 
+    /// Reactivates an archived Workspace checkout. Until `publish` (which
+    /// refreshes whatever snapshot callers read ownership from) returns, its
+    /// members count as owned, so no archive slips in while the checkout's
+    /// state is in flight.
+    public func unarchiveWorkspaceCheckout(
+        id: UUID,
+        publish: @MainActor () async -> Void = {}
+    ) async throws -> WorkspaceCheckout {
+        unarchivingWorkspaceCheckoutIDs.insert(id)
+        defer { unarchivingWorkspaceCheckoutIDs.remove(id) }
+        let checkout = try await workspaceCoordinator().unarchive(checkoutID: id)
+        await publish()
+        return checkout
+    }
+
     /// Whether an interrupted checkpoint restore references the checkout.
     /// An unreadable journal store counts as one.
     public static func hasPendingCheckpointRecovery(_ worktree: Worktree) async -> Bool {
@@ -338,7 +353,9 @@ extension AlasCoreContext {
         }
         let path = worktree.path.standardizedFileURL.path
         let owner = state.checkouts.first { checkout in
-            checkout.workspaceID != nil && checkout.archivedAt == nil && checkout.members.contains { member in
+            checkout.workspaceID != nil
+                && (checkout.archivedAt == nil || unarchivingWorkspaceCheckoutIDs.contains(checkout.id))
+                && checkout.members.contains { member in
                 guard member.projectID == worktree.projectId,
                       URL(fileURLWithPath: checkout.inAppWorktreePath(member.worktreePath)).standardizedFileURL.path == path
                 else { return false }

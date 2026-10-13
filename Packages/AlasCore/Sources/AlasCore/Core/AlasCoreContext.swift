@@ -48,6 +48,10 @@ public final class AlasCoreContext {
     /// are skipped.
     @ObservationIgnored public var resolveWorkspaceRepoHook: WorkspaceRepoHookResolving = { _ in nil }
     @ObservationIgnored private var workspaceCheckoutCoordinator: WorkspaceCheckoutCoordinator?
+    /// Checkouts `unarchiveWorkspaceCheckout` is reactivating. Archive treats
+    /// their members as owned already: the coordinator checks them before
+    /// the store flips, and display snapshots catch up only afterwards.
+    @ObservationIgnored public internal(set) var unarchivingWorkspaceCheckoutIDs: Set<UUID> = []
 
     /// Attention items and the gate observations pass through to reach them.
     public let attention: AttentionIntake

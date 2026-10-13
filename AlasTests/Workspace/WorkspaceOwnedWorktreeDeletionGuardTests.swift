@@ -64,6 +64,21 @@ struct WorkspaceOwnedWorktreeDeletionGuardTests {
         #expect(fixture.state.workspacesManager.checkout(id: checkoutID)?.archivedAt != nil)
     }
 
+    /// Between the store reactivating the checkout and the app's snapshot
+    /// catching up, the snapshot still says archived; an archive landing
+    /// there would leave an active checkout with a hidden member.
+    @Test func archiveIsRefusedWhileItsCheckoutIsBeingUnarchived() async throws {
+        let fixture = try await Fixture.make(suffix: "archive-during-unarchive", checkoutArchived: true)
+        defer { fixture.removeFiles() }
+        let checkoutID = try #require(fixture.checkoutID)
+
+        _ = try await fixture.state.core.unarchiveWorkspaceCheckout(id: checkoutID) {
+            fixture.state.archiveWorktree(fixture.worktree)
+        }
+
+        #expect(!fixture.state.projectsManager.isWorktreeHidden(projectId: fixture.project.id, path: fixture.worktree.path))
+    }
+
     @Test func deleteAndForgetUnarchivesAnArchivedCheckoutInsteadOfRefusingIt() async throws {
         let fixture = try await Fixture.make(suffix: "delete-archived", checkoutArchived: true)
         defer { fixture.removeFiles() }

@@ -4104,9 +4104,9 @@ final class AppState {
     /// The coordinator takes the member projects' mutation gates and refuses
     /// while a member worktree is held by another operation.
     private func unarchiveWorkspaceCheckoutUnderProjectMutationGate(id: UUID) async throws -> WorkspaceCheckout {
-        let unarchived = try await workspaceCoordinator().unarchive(checkoutID: id)
-        await workspacesManager.refreshCheckoutSnapshots()
-        return unarchived
+        try await core.unarchiveWorkspaceCheckout(id: id) {
+            await self.workspacesManager.refreshCheckoutSnapshots()
+        }
     }
 
     func stopWorkspaceCheckoutAfterCurrentOperations(id: UUID) async throws {
@@ -6778,7 +6778,9 @@ final class AppState {
         guard workspacesManager.canMutate else {
             return "Workspace Checkout ownership could not be verified. Try again once Workspace storage is available."
         }
-        if let owner = worktreeCleanupWorkspaceOwners(for: worktree).first(where: { $0.state == .active }) {
+        if let owner = worktreeCleanupWorkspaceOwners(for: worktree).first(where: {
+            $0.state == .active || core.unarchivingWorkspaceCheckoutIDs.contains($0.id)
+        }) {
             return "This worktree is owned by Workspace checkout \u{201C}\(owner.name)\u{201D}. Archive it from the checkout instead."
         }
         return nil
@@ -10958,7 +10960,9 @@ final class AppState {
         // owns the delete. An archived or Former Workspace checkout no
         // longer does, and the row's own removal actions are the only way
         // to clear those — refusing here would make them dead ends.
-        guard let owner = worktreeCleanupWorkspaceOwners(for: worktree).first(where: { $0.state == .active }) else { return nil }
+        guard let owner = worktreeCleanupWorkspaceOwners(for: worktree).first(where: {
+            $0.state == .active || core.unarchivingWorkspaceCheckoutIDs.contains($0.id)
+        }) else { return nil }
         return "This worktree is owned by Workspace checkout \u{201C}\(owner.name)\u{201D}. Delete it from the checkout instead."
     }
 
