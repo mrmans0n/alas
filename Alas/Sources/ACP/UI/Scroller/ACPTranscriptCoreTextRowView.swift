@@ -85,7 +85,12 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        updateTileScale()
+        if window == nil {
+            dropTiles()
+        } else {
+            updateTileScale()
+            needsDisplay = true
+        }
         observeClipView()
     }
 
@@ -690,6 +695,15 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
             tile.setNeedsDisplay()
         }
         needsDisplay = true
+    }
+
+    /// A parked row keeps no bitmaps; `updateLayer` redraws the tiles it
+    /// needs once the row is attached again.
+    private func dropTiles() {
+        for tile in tiles.values {
+            tile.removeFromSuperlayer()
+        }
+        tiles.removeAll()
     }
 
     /// Fits tiles to a new size: drops those past the end and reframes the rest.
