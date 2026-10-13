@@ -243,7 +243,10 @@ final class AppState {
     /// Repo-local `.alas/` config, read per worktree with its own change cache.
     let repoConfigStore = RepoConfigStore()
     let repoHookApprovalQueue = RepoHookApprovalQueue()
-    @ObservationIgnored var repoHookLoader = RepoHookLoader()
+    var repoHookLoader: RepoHookLoader {
+        get { core.repoHookLoader }
+        set { core.repoHookLoader = newValue }
+    }
     /// Project icons already resolved from repo files, keyed by the identity of
     /// the file that supplied them.
     let repoIconDisplayCache = RepoIconDisplayCache()
@@ -1727,6 +1730,8 @@ final class AppState {
         core.quiesceWorktree = { [weak self] worktree in
             try await self?.quiesceWorktreeForRemoval(worktree)
         }
+        core.repoHookPrompter = .queue(repoHookApprovalQueue)
+        core.globalTerminalConfig = { [weak self] in self?.config.terminal ?? AppConfig.defaults.terminal }
         core.runHistory.onFailure = { [weak self] message in
             self?.showFileActionError(title: "Run History Failed", message: message)
         }
@@ -4908,30 +4913,11 @@ final class AppState {
                     )
                     saveProjects()
                 }
-                let repoStartupScript = try await self.preparedRepoHook(
-                    event: .worktreeCreate,
+                try await core.runWorktreeCreateScripts(
                     project: project,
                     worktree: newWorktree,
-                    context: .worktreeCreate,
                     includeUserStartupScript: runStartup
                 )
-                let startupScript = StartupScriptResolver.worktreeCreateScript(
-                    global: self.config.terminal,
-                    repoScript: repoStartupScript,
-                    project: project
-                )
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-                if runStartup && !startupScript.isEmpty {
-                    if let host = project.host ?? RemoteHostRegistry.shared.host(forPath: newWorktree.path.path) {
-                        _ = try? await RemoteExec.run(host: host, cwd: newWorktree.path.path, command: startupScript)
-                    } else {
-                        _ = try? await Process.run(
-                            "/bin/zsh",
-                            args: ["-c", startupScript],
-                            cwd: newWorktree.path
-                        )
-                    }
-                }
                 guard projects.contains(where: { $0.id == projectId }) else { return }
 
                 do {

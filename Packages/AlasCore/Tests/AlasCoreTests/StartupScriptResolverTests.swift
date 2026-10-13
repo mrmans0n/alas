@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-@testable import Alas
+@testable import AlasCore
 
 struct StartupScriptResolverTests {
     // MARK: - Helpers
