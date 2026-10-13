@@ -97,6 +97,7 @@ enum ShepherdFixtures {
         fixAttempts: Int = 0,
         lastDispatched: ShepherdFingerprint? = nil,
         viewerCommentIDs: [String]? = nil,
+        handled: [String]? = nil,
         lastSeenHead: String? = nil,
         stablePolls: Int = 0,
         notifiedReady: String? = nil
@@ -112,6 +113,7 @@ enum ShepherdFixtures {
         record.fixAttempts = fixAttempts
         record.lastDispatchedFingerprint = lastDispatched
         record.viewerCommentIDsAtDispatch = viewerCommentIDs
+        record.handledThreadRevisions = handled
         record.lastSeenHeadSHA = lastSeenHead
         record.stableHeadPolls = stablePolls
         record.notifiedReadyHeadSHA = notifiedReady

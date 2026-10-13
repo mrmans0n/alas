@@ -103,12 +103,15 @@ public enum ShepherdPolicy {
         return ShepherdDecision(record: next, action: action)
     }
 
-    public static func problems(in request: ReviewRequest) -> ShepherdFixRequest {
-        ShepherdFixRequest(
+    /// The dispatchable problems. Threads whose current revision is in
+    /// `handled` (the agent already answered that feedback) are left out.
+    public static func problems(in request: ReviewRequest, handled: [String]) -> ShepherdFixRequest {
+        let handled = Set(handled)
+        return ShepherdFixRequest(
             hasConflict: request.mergeState == .dirty,
             // Partial CI results never trigger a fix.
             failingChecks: hasIncompleteChecks(request) ? [] : request.checks.filter { $0.bucket == .fail },
-            threads: request.threads.filter { $0.isActionable && $0.headAuthorTrust == .trusted }
+            threads: trustedThreads(in: request).filter { !handled.contains(ShepherdFixRequest.revision(of: $0)) }
         )
     }
 
@@ -174,13 +177,10 @@ public enum ShepherdPolicy {
         }
 
         updateHeadStability(&record, request: request)
-        let problems = Self.problems(in: request)
-        let dispatched = record.lastDispatchedFingerprint
-        let conclusive = isConclusive(request, for: dispatched)
-        // Failures hide behind incomplete checks, so clearing always needs
-        // complete checks, whatever was dispatched.
-        let cleared = conclusive && problems.isEmpty && !hasIncompleteChecks(request)
-        pruneDispatched(&record, request: request, problems: problems)
+        pruneHandled(&record, request: request)
+        let problems = Self.problems(in: request, handled: record.handledThreadRevisions ?? [])
+        let conclusive = isConclusive(request, for: record.lastDispatchedFingerprint)
+        let cleared = isCleared(request, problems: problems, conclusive: conclusive)
 
         // A merge attempt interrupted by a quit, or a merge queue the
         // provider no longer reports, falls back to watching.
@@ -209,8 +209,8 @@ public enum ShepherdPolicy {
 
         // Rule 3: auto-fix off skips straight to the merge rules.
         if record.autoFix {
-            if let action = fixRules(&record, request: request, problems: problems, dispatched: dispatched,
-                                     conclusive: conclusive, cleared: cleared, observation: observation) {
+            if let action = fixRules(&record, request: request, problems: problems, conclusive: conclusive,
+                                     cleared: cleared, observation: observation) {
                 return action
             }
         } else {
@@ -228,7 +228,6 @@ public enum ShepherdPolicy {
         _ record: inout ShepherdRecord,
         request: ReviewRequest,
         problems: ShepherdFixRequest,
-        dispatched: ShepherdFingerprint?,
         conclusive: Bool,
         cleared: Bool,
         observation: ShepherdObservation
@@ -249,9 +248,18 @@ public enum ShepherdPolicy {
         if case .fixing = record.phase {
             record.phase = .awaitingPush(turnEndedAt: observation.now, pollsWithoutProgress: 0)
         }
+        var problems = problems
         if case .awaitingPush(let turnEndedAt, let polls) = record.phase {
-            if madeProgress(record, dispatched: dispatched, request: request, problems: problems, cleared: cleared) {
+            let replied = repliedRevisions(record, problems: problems)
+            if !replied.isEmpty || madeProgress(record, request: request, problems: problems, cleared: cleared) {
+                // The turn is over. The agent answered the replied threads;
+                // rule 7 drops the fingerprint, so everything else that
+                // survives goes out again as the next attempt.
                 record.phase = .watching
+                if !replied.isEmpty {
+                    record.handledThreadRevisions = Set(record.handledThreadRevisions ?? []).union(replied).sorted()
+                    problems = Self.problems(in: request, handled: record.handledThreadRevisions ?? [])
+                }
             } else if observation.now.timeIntervalSince(turnEndedAt) >= awaitingPushTimeout {
                 record.phase = .escalated(.noProgress)
                 return .escalate(.noProgress)
@@ -270,22 +278,24 @@ public enum ShepherdPolicy {
             }
         }
 
-        // Rule 7: problems.
+        // Rule 7: problems. No fix turn is outstanding here, so a fingerprint
+        // left over from an earlier turn (a pause, auto-fix toggled, an older
+        // record) never holds back the problems in front of us.
+        record.lastDispatchedFingerprint = nil
+        record.viewerCommentIDsAtDispatch = nil
         if problems.isEmpty {
-            // A conclusive clean observation already pruned the fingerprint
-            // away; it also restores the full attempt budget.
-            if cleared { record.fixAttempts = 0 }
+            if isCleared(request, problems: problems, conclusive: isConclusive(request, for: nil)) {
+                record.fixAttempts = 0
+            }
             return nil
         }
-        let fingerprint = problems.fingerprint(headSHA: request.headSHA ?? "")
-        if fingerprint == record.lastDispatchedFingerprint { return .wait }
         if record.fixAttempts >= maxFixAttempts {
             record.phase = .escalated(.attemptsExhausted)
             return .escalate(.attemptsExhausted)
         }
         record.phase = .fixing(dispatchedAt: observation.now)
         record.fixAttempts += 1
-        record.lastDispatchedFingerprint = fingerprint
+        record.lastDispatchedFingerprint = problems.fingerprint(headSHA: request.headSHA ?? "")
         record.viewerCommentIDsAtDispatch = problems.threads
             .flatMap(\.comments)
             .filter(\.viewerDidAuthor)
@@ -317,6 +327,17 @@ public enum ShepherdPolicy {
         request.checks.contains { $0.bucket == .pending || $0.bucket == .unknown }
     }
 
+    /// Actionable threads whose head comment is from a trusted reviewer.
+    private static func trustedThreads(in request: ReviewRequest) -> [ReviewThread] {
+        request.threads.filter { $0.isActionable && $0.headAuthorTrust == .trusted }
+    }
+
+    /// Problems conclusively gone. Failures hide behind incomplete checks,
+    /// so this always needs complete checks, whatever was dispatched.
+    private static func isCleared(_ request: ReviewRequest, problems: ShepherdFixRequest, conclusive: Bool) -> Bool {
+        conclusive && problems.isEmpty && !hasIncompleteChecks(request)
+    }
+
     /// Whether the observation is complete for every dimension that was
     /// dispatched: checks, conflict and threads. With nothing dispatched,
     /// all three must be complete.
@@ -331,41 +352,13 @@ public enum ShepherdPolicy {
             && (dispatched.threadIDs.isEmpty || request.areThreadsComplete)
     }
 
-    /// Drops dispatched entries that are conclusively gone, per dimension:
-    /// failing checks once no check is incomplete, the conflict once
-    /// mergeability is known, thread revisions once the thread list is
-    /// complete. A problem that later returns unchanged is then new work.
-    private static func pruneDispatched(
-        _ record: inout ShepherdRecord,
-        request: ReviewRequest,
-        problems: ShepherdFixRequest
-    ) {
-        guard let dispatched = record.lastDispatchedFingerprint else { return }
-        var failingCheckIDs = dispatched.failingCheckIDs
-        if !hasIncompleteChecks(request) {
-            let failing = Set(problems.failingChecks.map(\.id))
-            failingCheckIDs = failingCheckIDs.filter(failing.contains)
-        }
-        var hasConflict = dispatched.hasConflict
-        if request.mergeState != .unknown {
-            hasConflict = hasConflict && problems.hasConflict
-        }
-        var threadIDs = dispatched.threadIDs
-        if request.areThreadsComplete {
-            let revisions = Set(problems.threadRevisions)
-            threadIDs = threadIDs.filter(revisions.contains)
-        }
-        guard !failingCheckIDs.isEmpty || hasConflict || !threadIDs.isEmpty else {
-            record.lastDispatchedFingerprint = nil
-            record.viewerCommentIDsAtDispatch = nil
-            return
-        }
-        record.lastDispatchedFingerprint = ShepherdFingerprint(
-            headSHA: dispatched.headSHA,
-            hasConflict: hasConflict,
-            failingCheckIDs: failingCheckIDs,
-            threadIDs: threadIDs
-        )
+    /// Forgets handled revisions that no longer exist (thread resolved,
+    /// outdated or deleted), judged only on a complete thread list.
+    private static func pruneHandled(_ record: inout ShepherdRecord, request: ReviewRequest) {
+        guard request.areThreadsComplete, let handled = record.handledThreadRevisions else { return }
+        let present = Set(trustedThreads(in: request).map(ShepherdFixRequest.revision(of:)))
+        let kept = handled.filter(present.contains)
+        if kept != handled { record.handledThreadRevisions = kept.isEmpty ? nil : kept }
     }
 
     /// Same head with complete checks counts up; an incomplete check or a new
@@ -387,30 +380,44 @@ public enum ShepherdPolicy {
         }
     }
 
-    /// Progress after a fix turn, judged against the fingerprint as
-    /// dispatched: a new provider head, a dispatched entry conclusively gone,
+    /// Progress after a fix turn, judged against the dispatched fingerprint:
+    /// a new provider head, a dispatched check or conflict conclusively gone,
     /// a changed set of trusted thread revisions (only additions when the
-    /// thread list is partial), a viewer comment on a dispatched thread that
-    /// did not exist at dispatch, or problems conclusively cleared.
+    /// thread list is partial), or problems conclusively cleared. Agent
+    /// replies are `repliedRevisions`.
     private static func madeProgress(
         _ record: ShepherdRecord,
-        dispatched: ShepherdFingerprint?,
         request: ReviewRequest,
         problems: ShepherdFixRequest,
         cleared: Bool
     ) -> Bool {
-        guard let dispatched else { return true }
+        guard let dispatched = record.lastDispatchedFingerprint else { return true }
         if cleared { return true }
         if (request.headSHA ?? "") != dispatched.headSHA { return true }
-        if record.lastDispatchedFingerprint != dispatched { return true }
+        if !hasIncompleteChecks(request) {
+            let failing = Set(problems.failingChecks.map(\.id))
+            if dispatched.failingCheckIDs.contains(where: { !failing.contains($0) }) { return true }
+        }
+        if dispatched.hasConflict, request.mergeState != .unknown, !problems.hasConflict { return true }
         let current = Set(problems.threadRevisions)
         let previous = Set(dispatched.threadIDs)
-        if request.areThreadsComplete ? current != previous : !current.isSubset(of: previous) { return true }
-        // Records saved before reply tracking never count a reply.
-        guard let known = record.viewerCommentIDsAtDispatch.map(Set.init) else { return false }
-        return problems.threads.contains { thread in
-            previous.contains(ShepherdFixRequest.revision(of: thread))
-                && thread.comments.contains { $0.viewerDidAuthor && !known.contains($0.id) }
+        return request.areThreadsComplete ? current != previous : !current.isSubset(of: previous)
+    }
+
+    /// Revisions of dispatched threads that gained a viewer comment that did
+    /// not exist at dispatch: the agent answered them. Records saved before
+    /// reply tracking never count a reply.
+    private static func repliedRevisions(_ record: ShepherdRecord, problems: ShepherdFixRequest) -> [String] {
+        guard let dispatched = record.lastDispatchedFingerprint,
+              let known = record.viewerCommentIDsAtDispatch.map(Set.init)
+        else { return [] }
+        let previous = Set(dispatched.threadIDs)
+        return problems.threads.compactMap { thread in
+            let revision = ShepherdFixRequest.revision(of: thread)
+            guard previous.contains(revision),
+                  thread.comments.contains(where: { $0.viewerDidAuthor && !known.contains($0.id) })
+            else { return nil }
+            return revision
         }
     }
 }

@@ -95,6 +95,11 @@ public struct ShepherdRecord: Codable, Equatable, Sendable {
     /// Nil in records saved before this field existed. Cleared with the
     /// fingerprint.
     public var viewerCommentIDsAtDispatch: [String]?
+    /// Sorted thread revisions (`"<thread id>#<latest trusted comment id>"`)
+    /// the agent answered with a reply; they are not dispatched again until
+    /// a trusted reviewer comments. Nil means none, including records saved
+    /// before this field existed.
+    public var handledThreadRevisions: [String]?
     public var fixAttempts: Int
     public var lastSeenHeadSHA: String?
     /// Consecutive polls that saw `lastSeenHeadSHA` with no pending or
@@ -126,6 +131,7 @@ public struct ShepherdRecord: Codable, Equatable, Sendable {
         self.phase = .watching
         self.lastDispatchedFingerprint = nil
         self.viewerCommentIDsAtDispatch = nil
+        self.handledThreadRevisions = nil
         self.fixAttempts = 0
         self.lastSeenHeadSHA = nil
         self.stableHeadPolls = 0

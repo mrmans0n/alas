@@ -279,7 +279,7 @@ public final class ReviewShepherd {
         if sendContext, let effects {
             let prompt = ShepherdPromptBuilder.bindPrompt(
                 request: request,
-                fix: ShepherdPolicy.problems(in: request),
+                fix: ShepherdPolicy.problems(in: request, handled: record.handledThreadRevisions ?? []),
                 rules: effects.rules(worktreeID)
             )
             let delivered = await effects.deliverPrompt(sessionID, worktreeID, prompt)

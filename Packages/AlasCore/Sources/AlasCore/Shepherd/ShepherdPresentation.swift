@@ -53,7 +53,7 @@ public struct ShepherdPresentation: Equatable, Sendable {
         if mergeGatePasses { return (.ready, "ready to merge") }
         guard let request else { return (.working, "watching") }
         if request.checks.contains(where: { $0.bucket == .pending }) { return (.working, "checks running") }
-        let problems = ShepherdPolicy.problems(in: request)
+        let problems = ShepherdPolicy.problems(in: request, handled: record.handledThreadRevisions ?? [])
         guard !problems.isEmpty else { return (.working, "watching") }
         let what = summary(
             hasConflict: problems.hasConflict,

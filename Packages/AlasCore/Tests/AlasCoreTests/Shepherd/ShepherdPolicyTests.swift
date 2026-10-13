@@ -33,6 +33,9 @@ private let stabilityCases: [ShepherdStabilityCase] = [
 
 private let failingOnly = ShepherdFixRequest(hasConflict: false, failingChecks: [F.failing], threads: [])
 private let threadOnly = ShepherdFixRequest(hasConflict: false, failingChecks: [], threads: [F.trustedThread])
+private let uiFailing = F.check("ui-tests", .fail)
+/// Revision of `F.trustedThread` and every reply variant below.
+private let threadRevision = "PRRT_1#PRRT_1-c1"
 /// Same head comment as `F.trustedThread`, so only the reply differs.
 private let repliedThread = F.thread("PRRT_1", comments: [
     F.comment("PRRT_1-c1", author: "maintainer", body: "Please back off.", trust: .trusted),
@@ -180,15 +183,14 @@ private let policyCases: [ShepherdPolicyCase] = [
           observation: F.observation(F.snapshot(F.request(threads: [driveByThread]))),
           action: .wait, phase: .awaitingPush(turnEndedAt: F.earlier, pollsWithoutProgress: 1)),
     // Rule 7
-    .init(testDescription: "problems already dispatched wait",
+    .init(testDescription: "a fingerprint left from an earlier turn does not hold back a fix",
           record: F.record(fixAttempts: 1, lastDispatched: F.fingerprint(failingOnly)),
           observation: F.observation(F.snapshot(F.request(checks: [F.failing]))),
+          action: .dispatchFix(failingOnly), phase: .fixing(dispatchedAt: F.now)),
+    .init(testDescription: "a declined thread is not redispatched after a new head",
+          record: F.record(fixAttempts: 1, handled: [threadRevision]),
+          observation: F.observation(F.snapshot(F.request(head: F.newHead, threads: [repliedThread]), localHead: F.newHead)),
           action: .wait, phase: .watching),
-    .init(testDescription: "a new trusted comment in a dispatched thread redispatches",
-          record: F.record(fixAttempts: 1, lastDispatched: F.fingerprint(threadOnly)),
-          observation: F.observation(F.snapshot(F.request(threads: [followUpThread]))),
-          action: .dispatchFix(ShepherdFixRequest(hasConflict: false, failingChecks: [], threads: [followUpThread])),
-          phase: .fixing(dispatchedAt: F.now)),
     .init(testDescription: "trusted thread dispatches while checks are pending",
           record: F.record(), observation: F.observation(F.snapshot(F.request(checks: [F.pending], threads: [F.trustedThread]))),
           action: .dispatchFix(threadOnly), phase: .fixing(dispatchedAt: F.now)),
@@ -311,6 +313,53 @@ private let policyCases: [ShepherdPolicyCase] = [
         )
         #expect(reopened.action == .dispatchFix(threadOnly))
         #expect(reopened.record.fixAttempts == 2)
+    }
+
+    @Test("partial clearance redispatches the survivors as the next attempt")
+    func partialClearanceRedispatches() {
+        let both = ShepherdFixRequest(hasConflict: false, failingChecks: [F.failing, uiFailing], threads: [])
+        let decision = ShepherdPolicy.decide(
+            F.record(phase: .awaitingPush(turnEndedAt: F.earlier, pollsWithoutProgress: 0), fixAttempts: 1,
+                     lastDispatched: F.fingerprint(both), viewerCommentIDs: []),
+            F.observation(F.snapshot(F.request(checks: [F.check("unit-tests", .pass), uiFailing])))
+        )
+        #expect(decision.action == .dispatchFix(ShepherdFixRequest(hasConflict: false, failingChecks: [uiFailing], threads: [])))
+        #expect(decision.record.fixAttempts == 2)
+    }
+
+    @Test("a reply to the thread redispatches only the check left unfixed")
+    func replyRedispatchesUnfixedCheck() {
+        let mixed = ShepherdFixRequest(hasConflict: false, failingChecks: [F.failing], threads: [F.trustedThread])
+        let decision = ShepherdPolicy.decide(
+            F.record(phase: .awaitingPush(turnEndedAt: F.earlier, pollsWithoutProgress: 0), fixAttempts: 1,
+                     lastDispatched: F.fingerprint(mixed), viewerCommentIDs: []),
+            F.observation(F.snapshot(F.request(checks: [F.failing], threads: [repliedThread])))
+        )
+        #expect(decision.action == .dispatchFix(failingOnly))
+        #expect(decision.record.fixAttempts == 2)
+        #expect(decision.record.handledThreadRevisions == [threadRevision])
+    }
+
+    @Test("a new trusted comment on a handled thread redispatches it")
+    func followUpOnHandledThreadRedispatches() {
+        let decision = ShepherdPolicy.decide(
+            F.record(fixAttempts: 1, handled: [threadRevision]),
+            F.observation(F.snapshot(F.request(threads: [followUpThread])))
+        )
+        #expect(decision.action == .dispatchFix(ShepherdFixRequest(hasConflict: false, failingChecks: [], threads: [followUpThread])))
+        // The answered revision no longer exists, so it is forgotten.
+        #expect(decision.record.handledThreadRevisions == nil)
+    }
+
+    @Test("only handled threads remaining counts as cleared")
+    func handledThreadsCountAsCleared() {
+        let decision = ShepherdPolicy.decide(
+            F.record(fixAttempts: 2, handled: [threadRevision]),
+            F.observation(F.snapshot(F.request(threads: [repliedThread])))
+        )
+        #expect(decision.action == .wait)
+        #expect(decision.record.fixAttempts == 0)
+        #expect(decision.record.handledThreadRevisions == [threadRevision])
     }
 
     @Test("a recurring identical failure after a conclusive green redispatches")
