@@ -1208,9 +1208,11 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         }
     }
 
-    /// The tiles to have drawn: the visible part plus a viewport each way.
+    /// The tiles to have drawn: the visible part plus a quarter viewport
+    /// each way, so a tall row entering the screen draws a tile or two per
+    /// frame rather than several viewports at once.
     private func wantedTiles() -> Range<Int> {
-        let margin = max(visibleRect.height, enclosingScrollView?.contentView.bounds.height ?? 0)
+        let margin = (enclosingScrollView?.contentView.bounds.height ?? visibleRect.height) / 4
         return Self.tileRange(covering: visibleRect.insetBy(dx: 0, dy: -margin), height: bounds.height, tileHeight: Self.tileHeight)
     }
 
@@ -1408,7 +1410,8 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
                 fill.setFill()
                 codeRow.fill()
                 if tone == .placeholder {
-                    Self.drawPlaceholderHatch(in: codeRow, color: palette.hatch)
+                    palette.hatchPattern.setFill()
+                    codeRow.fill()
                 }
             }
             let gutterRow = NSRect(x: pane.minX, y: y, width: gutter, height: rowHeight)
@@ -1597,27 +1600,14 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         return path
     }
 
-    /// Same hatch as `DiffPaneCodeTextView.drawPlaceholderHatch`.
-    private static func drawPlaceholderHatch(in rect: NSRect, color: NSColor) {
-        NSGraphicsContext.saveGraphicsState()
-        NSBezierPath(rect: rect).addClip()
-        defer { NSGraphicsContext.restoreGraphicsState() }
-        let path = NSBezierPath()
-        var x = rect.minX - rect.height
-        while x < rect.maxX {
-            path.move(to: NSPoint(x: x, y: rect.maxY))
-            path.line(to: NSPoint(x: x + rect.height, y: rect.minY))
-            x += 8
-        }
-        path.lineWidth = 1
-        color.setStroke()
-        path.stroke()
-    }
-
     /// Theme colors resolved once per configure: `Theme.nsColor` bridges from
     /// SwiftUI on every call, too slow to repeat per row on every frame.
     private struct Palette {
         let bg0, bg1, bg2, line, hatch, add, del, accent, accentGutter, accentCode, accentStroke, pillTint, fgMuted, fgFaint: NSColor
+        /// The placeholder hatch as a pattern fill: the same 45° lines 8pt
+        /// apart that `DiffPaneCodeTextView` strokes one by one, at a
+        /// fraction of the cost of stroking them on every tile draw.
+        let hatchPattern: NSColor
         /// Row fills for the code, and the ruler's slightly lighter ones.
         let codeFills: [DiffPaneLineTone: NSColor]
         let gutterFills: [DiffPaneLineTone: NSColor]
@@ -1628,6 +1618,21 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
             bg2 = theme.nsColor("bg-2")
             line = theme.nsColor("line")
             hatch = line.withAlphaComponent(0.35)
+            let stroke = hatch
+            hatchPattern = NSColor(patternImage: NSImage(size: NSSize(width: 8, height: 8), flipped: false) { _ in
+                stroke.setStroke()
+                let path = NSBezierPath()
+                // One period of the diagonal, plus its neighbors so the corners
+                // join. Rows draw flipped, so this runs bottom-left to top-right
+                // on screen, as the text view's hatch does.
+                for offset: CGFloat in [-8, 0, 8] {
+                    path.move(to: NSPoint(x: offset, y: 8))
+                    path.line(to: NSPoint(x: offset + 8, y: 0))
+                }
+                path.lineWidth = 1
+                path.stroke()
+                return true
+            })
             add = theme.nsColor("add")
             del = theme.nsColor("del")
             accent = theme.nsColor("accent")
