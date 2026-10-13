@@ -2580,7 +2580,7 @@ final class AppState {
             guard !isOfflineHost else { return }
             for worktree in projectsManager.visibleWorktrees(projectId: project.id) {
                 switch projectsManager.operationState(forWorktreeId: worktree.id, projectId: project.id) {
-                case .creating, .preparingDelete, .deleting, .createFailed:
+                case .creating, .preparingDelete, .deleting, .archiving, .createFailed:
                     continue
                 case nil, .launchFailed, .deleteFailed:
                     guard let worktreeGeneration = projectScanToken.worktreeGeneration(worktreeID: worktree.id)
@@ -2624,7 +2624,7 @@ final class AppState {
             let isOfflineHost = project.host.map { RemoteHostStatusStore.shared.offlineHosts.contains($0) } ?? false
             guard !isOfflineHost else { return }
             switch self.projectsManager.operationState(forWorktreeId: worktree.id, projectId: project.id) {
-            case .creating, .preparingDelete, .deleting, .createFailed:
+            case .creating, .preparingDelete, .deleting, .archiving, .createFailed:
                 return
             case nil, .launchFailed, .deleteFailed:
                 break
@@ -3021,7 +3021,7 @@ final class AppState {
                 // for them) but keep preflight and deleteFailed rows selectable.
                 return self.projectsManager.visibleWorktrees(projectId: projectId).filter {
                     switch self.projectsManager.operationState(forWorktreeId: $0.id, projectId: projectId) {
-                    case .creating, .deleting, .createFailed:
+                    case .creating, .deleting, .archiving, .createFailed:
                         return false
                     case nil, .preparingDelete, .launchFailed, .deleteFailed:
                         return true
@@ -15438,7 +15438,7 @@ extension AppState: RemoteSessionsProvider {
         for project in projects {
             for worktree in projectsManager.visibleWorktrees(projectId: project.id) {
                 switch projectsManager.operationState(forWorktreeId: worktree.id, projectId: project.id) {
-                case .creating, .preparingDelete, .deleting, .createFailed:
+                case .creating, .preparingDelete, .deleting, .archiving, .createFailed:
                     continue
                 case nil, .launchFailed, .deleteFailed:
                     out.append(await remoteWorktreeOption(project: project, worktree: worktree))
@@ -15512,7 +15512,7 @@ extension AppState: RemoteSessionsProvider {
             return .failure(Self.checkpointRecoveryBlocksACPMessage)
         }
         switch projectsManager.operationState(forWorktreeId: worktreeId, projectId: resolved.project.id) {
-        case .creating, .preparingDelete, .deleting, .createFailed:
+        case .creating, .preparingDelete, .deleting, .archiving, .createFailed:
             return .failure("Worktree is no longer available.")
         case nil, .launchFailed, .deleteFailed:
             break

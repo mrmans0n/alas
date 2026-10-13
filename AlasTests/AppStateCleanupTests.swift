@@ -1845,6 +1845,26 @@ struct AppStateCleanupTests {
         #expect(state.selectedWorktreeId != wt.id)
     }
 
+    /// Archiving used to clear whatever claim the worktree held, reopening it
+    /// to sessions mid-delete. Now a blocking claim refuses the archive.
+    @Test func archiveIsRefusedWhileADeleteHoldsTheWorktree() async throws {
+        let repo = try await makeRepo(name: "archive-while-deleting")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        var refusal: String?
+        let state = AppState(fileActionErrorHandler: { _, message in refusal = message })
+        let project = try await state.projectsManager.addProject(path: repo, displayName: "archive", color: "#5fb7c4")
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        let wt = state.projectsManager.worktrees(projectId: project.id)[0]
+        state.projectsManager.setOperationState(for: wt, state: .deleting(projectId: project.id))
+
+        state.archiveWorktree(wt)
+
+        #expect(refusal != nil)
+        #expect(!state.projectsManager.isWorktreeHidden(projectId: project.id, path: wt.path))
+        #expect(state.projectsManager.operationState(for: wt) == .deleting(projectId: project.id))
+    }
+
     @Test func archiveWorktreeFromDeleteFailedStateClosesTabs() async throws {
         let repo = try await makeRepo(name: "archive-from-failed-tabs")
         defer { try? FileManager.default.removeItem(at: repo) }

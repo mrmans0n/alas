@@ -147,7 +147,7 @@ extension AppState {
         try await ProjectMutationGate.shared.withMutation(projectID: worktree.projectId) { [self] in
             let isIdle = await MainActor.run {
                 switch projectsManager.operationState(forWorktreeId: worktree.id, projectId: worktree.projectId) {
-                case .creating, .preparingDelete, .deleting: false
+                case .creating, .preparingDelete, .deleting, .archiving: false
                 case nil, .createFailed, .launchFailed, .deleteFailed: true
                 }
             }
