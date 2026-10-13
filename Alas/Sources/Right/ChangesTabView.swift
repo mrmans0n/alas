@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 
 struct ChangesTabView: View {
@@ -12,6 +13,9 @@ struct ChangesTabView: View {
     @State private var appKitActionRelay = ChangesAppKitActionRelay()
     @State private var amendProbe = CommitPublishAmendProbeLoader()
     @State private var shepherdOwnerLookup: ShepherdOwnerLookup?
+    /// Ids and archive flags of the worktree's recent sessions. Archiving,
+    /// here or in another instance, changes it and reloads the owner row.
+    @State private var shepherdSessionsSignature = ""
     @Environment(\.theme) private var theme
 
     private var conflicts: [ChangedFile] {
@@ -153,6 +157,10 @@ struct ChangesTabView: View {
                 try await GitService().headPublicationState(worktreePath: rps.worktree.path)
             }
         }
+        .onReceive(shepherdRecentRows) { rows in
+            let signature = rows.map { "\($0.id)\u{0001}\($0.archived)" }.joined(separator: "\u{0000}")
+            if signature != shepherdSessionsSignature { shepherdSessionsSignature = signature }
+        }
         .task(id: shepherdOwnerTaskID) {
             await loadShepherdOwner()
         }
@@ -179,10 +187,20 @@ struct ChangesTabView: View {
         return appState.reviewShepherd.records[ShepherdRecordID(worktreeID: rps.worktree.id, request: request)]
     }
 
-    private var shepherdOwnerTaskID: String {
-        "\(rps.worktree.id)\u{0000}\(shepherdRecord?.sessionID ?? "")"
+    private var shepherdRecentRows: AnyPublisher<[ACPSessionRow], Never> {
+        guard appState.isShepherdEligible(rps.worktree),
+              let manager = appState.acpManager(for: rps.worktree)
+        else { return Empty().eraseToAnyPublisher() }
+        return manager.$recent.eraseToAnyPublisher()
     }
 
+    private var shepherdOwnerTaskID: String {
+        "\(rps.worktree.id)\u{0000}\(shepherdRecord?.sessionID ?? "")\u{0000}\(shepherdSessionsSignature)"
+    }
+
+    /// Reads the owner from the store after pending writes land, so an archive
+    /// made here or by another instance shows; the manager's cached row is the
+    /// fallback when the read fails.
     private func loadShepherdOwner() async {
         guard let sessionID = shepherdRecord?.sessionID,
               let manager = appState.acpManager(for: rps.worktree)
@@ -190,7 +208,13 @@ struct ChangesTabView: View {
             shepherdOwnerLookup = nil
             return
         }
-        let row = await manager.persistedSessionRow(id: sessionID)
+        await manager.flushPersistence()
+        let row: ACPSessionRow?
+        do {
+            row = try await manager.persistence.loadSession(id: sessionID)
+        } catch {
+            row = await manager.persistedSessionRow(id: sessionID)
+        }
         guard !Task.isCancelled else { return }
         shepherdOwnerLookup = ShepherdOwnerLookup(sessionID: sessionID, row: row)
     }
