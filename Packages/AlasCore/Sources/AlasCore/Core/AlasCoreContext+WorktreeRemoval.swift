@@ -201,14 +201,17 @@ extension AlasCoreContext {
     /// Archives a worktree claimed by `beginArchive`, and releases the claim.
     public func archiveWorktree(_ worktree: Worktree, claim: UUID) async throws {
         defer { projects.releaseOperation(claim, for: worktree) }
-        guard projects.holdsClaim(claim, for: worktree) else { throw WorktreeArchiveRefusal.operationInProgress }
+        // Each check reads the claim after the ownership await: a refresh can
+        // clear it meanwhile, and whatever is listed then is not this claim's.
         if let refusal = await workspaceOwnershipRefusal(for: worktree) {
             throw WorktreeArchiveRefusal.ownedByWorkspaceCheckout(refusal)
         }
+        guard projects.holdsClaim(claim, for: worktree) else { throw WorktreeArchiveRefusal.operationInProgress }
         try await performArchive(worktree, revalidate: { [weak self] in
             guard let self else { return nil }
+            let refusal = await workspaceOwnershipRefusal(for: worktree)
             guard projects.holdsClaim(claim, for: worktree) else { return WorktreeArchiveRefusal.operationInProgress }
-            return await workspaceOwnershipRefusal(for: worktree).map(WorktreeArchiveRefusal.ownedByWorkspaceCheckout)
+            return refusal.map(WorktreeArchiveRefusal.ownedByWorkspaceCheckout)
         })
         projects.finishOperation(claim, for: worktree)
     }
