@@ -636,11 +636,12 @@ struct GitHubCLIProviderTests {
         let lastCommitOID: String
         let reviews: String
         let comments: String
+        var reactions = ""
         let expected: Set<String>
     }
 
     @Test(
-        "Reviewers on head keep head-commit reviews and comments posted after the head commit",
+        "Reviewers on head keep head-commit reviews, and comments and thumbs-up reactions after the head commit",
         arguments: [
             ReviewersOnHeadCase(
                 testDescription: "review on head counts, lowercased",
@@ -684,19 +685,56 @@ struct GitHubCLIProviderTests {
                 comments: "",
                 expected: []
             ),
+            ReviewersOnHeadCase(
+                testDescription: "bot review drops the [bot] suffix",
+                lastCommitOID: "head-sha-42",
+                reviews: #"{"author": {"login": "chatgpt-codex-connector[bot]"}, "commit": {"oid": "head-sha-42"}}"#,
+                comments: "",
+                expected: ["chatgpt-codex-connector"]
+            ),
+            ReviewersOnHeadCase(
+                testDescription: "thumbs-up after the head commit counts",
+                lastCommitOID: "head-sha-42",
+                reviews: "",
+                comments: "",
+                reactions: #"{"content": "THUMBS_UP", "createdAt": "2026-10-13T10:05:00Z", "user": {"login": "chatgpt-codex-connector[bot]"}}"#,
+                expected: ["chatgpt-codex-connector"]
+            ),
+            ReviewersOnHeadCase(
+                testDescription: "eyes reaction after the head commit does not count",
+                lastCommitOID: "head-sha-42",
+                reviews: "",
+                comments: "",
+                reactions: #"{"content": "EYES", "createdAt": "2026-10-13T10:05:00Z", "user": {"login": "chatgpt-codex-connector[bot]"}}"#,
+                expected: []
+            ),
+            ReviewersOnHeadCase(
+                testDescription: "thumbs-up before the head commit does not count",
+                lastCommitOID: "head-sha-42",
+                reviews: "",
+                comments: "",
+                reactions: #"{"content": "THUMBS_UP", "createdAt": "2026-10-13T09:55:00Z", "user": {"login": "chatgpt-codex-connector[bot]"}}"#,
+                expected: []
+            ),
         ]
     )
     func reviewersOnHeadSelection(_ testCase: ReviewersOnHeadCase) throws {
         let output = Self.reviewersOnHeadOutput(
             lastCommitOID: testCase.lastCommitOID,
             reviews: testCase.reviews,
-            comments: testCase.comments
+            comments: testCase.comments,
+            reactions: testCase.reactions
         )
 
         #expect(try GitHubCLIProvider.parseReviewersOnHead(output, headSHA: "head-sha-42") == testCase.expected)
     }
 
-    private static func reviewersOnHeadOutput(lastCommitOID: String, reviews: String, comments: String) -> String {
+    private static func reviewersOnHeadOutput(
+        lastCommitOID: String,
+        reviews: String,
+        comments: String,
+        reactions: String
+    ) -> String {
         """
         {
           "data": {
@@ -708,7 +746,8 @@ struct GitHubCLIProviderTests {
                   ]
                 },
                 "reviews": { "nodes": [\(reviews)] },
-                "comments": { "nodes": [\(comments)] }
+                "comments": { "nodes": [\(comments)] },
+                "reactions": { "nodes": [\(reactions)] }
               }
             }
           }

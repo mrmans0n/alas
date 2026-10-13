@@ -140,6 +140,15 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
               createdAt
             }
           }
+          reactions(last: 100) {
+            nodes {
+              content
+              createdAt
+              user {
+                login
+              }
+            }
+          }
         }
       }
     }
@@ -1886,10 +1895,13 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
         }
     }
 
-    /// Lowercased logins with a submitted review on `headSHA`, plus authors of
-    /// top-level comments created after the head commit. The comment cutoff
-    /// only applies while the newest PR commit is `headSHA`; if the head moved
-    /// since the request was fetched, comments count for nobody.
+    /// Logins with a submitted review on `headSHA`, plus authors of top-level
+    /// comments and thumbs-up reactions created after the head commit. Codex
+    /// reacts with a thumbs-up instead of reviewing when it finds nothing; its
+    /// in-progress eyes reaction doesn't count. The cutoff only applies while
+    /// the newest PR commit is `headSHA`; if the head moved since the request
+    /// was fetched, comments and reactions count for nobody. Logins are
+    /// normalized by `normalizedReviewerLogin`.
     public static func parseReviewersOnHead(_ json: String, headSHA: String) throws -> Set<String> {
         let response: ReviewersOnHeadResponse
         do {
@@ -1903,7 +1915,7 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
         var reviewers = Set<String>()
         for review in pullRequest.reviews.nodes {
             guard review.commit?.oid.lowercased() == head, let login = review.author?.login else { continue }
-            reviewers.insert(login.lowercased())
+            reviewers.insert(normalizedReviewerLogin(login))
         }
         guard let lastCommit = pullRequest.commits.nodes.last?.commit,
               lastCommit.oid.lowercased() == head,
@@ -1914,9 +1926,25 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
                   let createdAt = try? parseOptionalDate(comment.createdAt),
                   createdAt > headCommittedAt
             else { continue }
-            reviewers.insert(login.lowercased())
+            reviewers.insert(normalizedReviewerLogin(login))
+        }
+        for reaction in pullRequest.reactions.nodes where reaction.content == "THUMBS_UP" {
+            guard let login = reaction.user?.login,
+                  let createdAt = try? parseOptionalDate(reaction.createdAt),
+                  createdAt > headCommittedAt
+            else { continue }
+            reviewers.insert(normalizedReviewerLogin(login))
         }
         return reviewers
+    }
+
+    /// Lowercased, without the `[bot]` suffix GitHub adds to app logins, so a
+    /// rule naming `chatgpt-codex-connector` matches `chatgpt-codex-connector[bot]`.
+    private static func normalizedReviewerLogin(_ login: String) -> String {
+        let lowered = login.lowercased()
+        let botSuffix = "[bot]"
+        guard lowered.hasSuffix(botSuffix) else { return lowered }
+        return String(lowered.dropLast(botSuffix.count))
     }
 
     private static func parseAddThreadReplyResponse(_ json: String) throws -> ReviewComment {
@@ -2935,10 +2963,17 @@ private struct ReviewersOnHeadResponse: Decodable {
         let createdAt: String?
     }
 
+    struct Reaction: Decodable {
+        let content: String
+        let createdAt: String?
+        let user: Login?
+    }
+
     struct PullRequest: Decodable {
         let commits: Nodes<CommitNode>
         let reviews: Nodes<Review>
         let comments: Nodes<Comment>
+        let reactions: Nodes<Reaction>
     }
 
     struct Repository: Decodable {
