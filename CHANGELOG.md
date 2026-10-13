@@ -6,6 +6,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.21.2] - 2026-10-13
+
+### ✨ Features
+
+- Preserve unfinished goal drafts per agent session across worktree switches, popover closures, and app restarts (#1954).
+- Rework the three-way conflict editor with synchronized scrolling, conflict ribbons, full-pane syntax highlighting, clearer word differences, and automatic explanations (#1958).
+- Make CoreText diff rows the default, with text selection, copy controls, keyboard navigation, LSP actions, and accessibility support (#1953, #1960).
+- Block new runs and agent sessions while a worktree operation prevents admission (#1962).
+- Use one guarded worktree-removal flow for the app and headless clients, including preflight checks, orderly shutdown, revalidation, and cleanup (#1964).
+
+### 🐛 Fixes
+
+- Lower the default worktree-cleanup idle threshold from 14 days to three days while preserving explicit user settings (#1957).
+- Clear stale selections from recycled diff rows, add horizontal autoscrolling during selection, and report accurate visible accessibility ranges (#1963).
+
+### ⚡ Performance
+
+- Render CoreText diff rows in tiles to reduce dropped frames, main-thread CPU use, and repeated redraws in large multi-file reviews (#1959).
+
+### 🏗️ Internal
+
+- Share worktree removal, run teardown, and session disposal primitives through `AlasCoreContext` (#1951).
+- Move attention intake and startup-signal suppression into the core context (#1955).
+- Move transcript Markdown caches next to the renderer and tie their eviction to the visible row window (#1961).
+
 ## [0.21.1] - 2026-10-12
 
 ### ✨ Features
