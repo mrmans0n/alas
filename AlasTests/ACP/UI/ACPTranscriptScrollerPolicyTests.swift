@@ -395,6 +395,29 @@ struct ACPTranscriptScrollerRowSpecsTests {
         #expect(try spec().native != nil)
     }
 
+    @Test("pressing a mounted native tool row swaps it for the card only after the press returns")
+    func pressingAMountedNativeToolRowSwapsItAfterThePressReturns() async throws {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.replaceTranscriptMessages([.user(id: UUID(), text: "go", attachments: []), tool("a")])
+        session.transcript.visibleHead = 0
+        session.transcript.visibleTail = nil
+        let scroller = ACPTranscriptScrollerView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
+        let coordinator = ACPTranscriptScroller.Coordinator()
+        coordinator.nativeRowsEnabled = true
+        coordinator.attach(scroller: scroller, host: makeHost(session: session))
+        scroller.layoutSubtreeIfNeeded()
+        let native = try #require(coordinator.mountedRowViewForTesting(id: "tc-a") as? ACPTranscriptCoreTextRowView)
+
+        #expect(native.accessibilityPerformPress())
+        // The press is still on the stack when the store changes, so the
+        // row it came from must stay mounted until the call returns.
+        #expect(coordinator.mountedRowViewForTesting(id: "tc-a") === native)
+        #expect(native.superview != nil)
+        try await eventually("the expanded card to replace the native row") {
+            coordinator.mountedRowViewForTesting(id: "tc-a") is ACPTranscriptRowHostingView
+        }
+    }
+
     @Test("an expanded truncated tool card still loads its full content")
     func expandedTruncatedToolCardsStillLoadTheirFullContent() async throws {
         let loads = LoadRecorder()

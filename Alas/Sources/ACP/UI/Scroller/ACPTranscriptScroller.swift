@@ -131,6 +131,9 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         /// Which tool calls and thoughts are expanded, so an expanded row
         /// stays SwiftUI and a collapsed one can be drawn natively.
         let rowExpansionStore = ACPTranscriptRowExpansionStore()
+        /// Whether eligible rows draw natively; the flag, unless a test sets it.
+        var nativeRowsEnabled = ACPTranscriptNativeRows.isEnabled
+        private var hasPendingRowExpansionUpdate = false
         private var minimapRenderer: ACPTranscriptMinimap?
         private var pendingMinimapUpdate: DispatchWorkItem?
 
@@ -165,10 +168,19 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 self.update(host: host)
             }
             // Same for a tool call or thought: its expanded flag decides
-            // between the native row and the expanded SwiftUI card.
+            // between the native row and the expanded SwiftUI card. That
+            // swap removes the view whose click, accessibility press, or
+            // button action is still on the stack, so it waits for the next
+            // main-actor turn; toggles before then share one update.
             rowExpansionStore.onChange = { [weak self] in
-                guard let self, let host = self.host else { return }
-                self.update(host: host)
+                guard let self, !self.hasPendingRowExpansionUpdate else { return }
+                self.hasPendingRowExpansionUpdate = true
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    self.hasPendingRowExpansionUpdate = false
+                    guard let host = self.host else { return }
+                    self.update(host: host)
+                }
             }
             self.reconciler = reconciler
             scroller.onScroll = { [weak self] previousY, newY, viewportH, contentH, isProgrammatic in
@@ -323,7 +335,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 // Same memoized fold the scroll-anchor and minimap lookups
                 // read, so a width-only or expand-toggle update doesn't
                 // re-slice and re-fold the whole window.
-                renderRows: currentRenderRows(host: host)
+                renderRows: currentRenderRows(host: host),
+                nativeRowsEnabled: nativeRowsEnabled
             )
             hasNonSyntheticRow = specs.contains {
                 !$0.id.hasPrefix(ACPTranscriptScrollerReconciler.syntheticIdPrefix)
@@ -2050,6 +2063,10 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             for id in reconciler.mountedRowIdsForTesting {
                 reconciler.remeasureRow(id: id)
             }
+        }
+
+        func mountedRowViewForTesting(id: String) -> (any ACPTranscriptRowView)? {
+            pool.mountedView(id: id)
         }
 
         var mountedRowCountForTesting: Int {
