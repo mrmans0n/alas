@@ -6726,15 +6726,6 @@ final class AppState {
     /// disk. The returned task finishes once the archive has run.
     @discardableResult
     func archiveWorktree(_ worktree: Worktree) -> Task<Void, Never>? {
-        // Claimed before the dirty-buffer prompt, whose run loop could
-        // otherwise let new work start in the worktree.
-        let claim: UUID
-        do {
-            claim = try core.beginArchive(worktree)
-        } catch {
-            showFileActionError(title: "Archive Failed", message: error.localizedDescription)
-            return nil
-        }
         var savesBuffers = false
         var acknowledged: [TabID: Int] = [:]
         if !dirtyEditorTabIds(worktreeId: worktree.id).isEmpty {
@@ -6749,9 +6740,18 @@ final class AppState {
             case .discard:
                 acknowledged = dirtyTabGenerations(worktreeId: worktree.id)
             case .cancel:
-                core.releaseWorktreeClaim(claim, for: worktree)
                 return nil
             }
+        }
+        // Claimed after the prompt: `.archiving` reads as removed, so the
+        // panes would go away while the user is still deciding. Work admitted
+        // meanwhile is stopped by the archive's quiesce.
+        let claim: UUID
+        do {
+            claim = try core.beginArchive(worktree)
+        } catch {
+            showFileActionError(title: "Archive Failed", message: error.localizedDescription)
+            return nil
         }
         let removedIndex = projectsManager.visibleWorktrees(projectId: worktree.projectId)
             .firstIndex(where: { $0.id == worktree.id }) ?? 0
