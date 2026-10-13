@@ -13514,6 +13514,7 @@ final class AppState {
         if isFolderWorktree(worktree) {
             mgr.upstreamReferences.environment = .noRemotes
         }
+        mgr.admitsNewWork = { [weak self] in self?.projectsManager.admitsNewWork(in: worktree) ?? false }
         acpManagers[owner] = mgr
         acpManagerProjectIds[owner] = worktree.projectId
         observeNextPromptSessions(mgr, owner: owner)
@@ -14168,7 +14169,9 @@ final class AppState {
                 )
             },
             enqueuePrompt: { _, id, promptID, text in
-                await manager.enqueuePrompt(id: promptID, text: text, into: id)
+                // Queuing into an attached session would start its turn.
+                guard self.projectsManager.admitsNewWork(in: worktree) else { return false }
+                return await manager.enqueuePrompt(id: promptID, text: text, into: id)
             },
             attach: { _, id, freshlyCreated in
                 guard await !self.checkpointACPAdmissionDisabledAfterDiscovery(worktreeId: worktree.id) else {

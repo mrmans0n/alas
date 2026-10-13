@@ -452,7 +452,8 @@ struct RunScriptLaunchTests {
     }
 
     /// A manager cached before the claim is still handed back, but no agent
-    /// session starts through it while the worktree is being deleted.
+    /// session starts or attaches through it while the worktree is being
+    /// deleted.
     @MainActor
     @Test func cachedManagerStartsNoSessionInAWorktreeBeingDeleted() async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -466,6 +467,7 @@ struct RunScriptLaunchTests {
         let state = AppState(store: TestPersistenceStore())
         state.projectsManager = ProjectsManager(persistedProjects: [project])
         let manager = try #require(state.acpManager(for: worktree))
+        _ = manager.createSession(id: "existing", agentId: "codex", autoRunDefault: false)
         state.projectsManager.setOperationState(for: worktree, state: .deleting(projectId: project.id))
 
         await #expect(throws: ACPWorktreeSessionBootstrapError.self) {
@@ -474,6 +476,8 @@ struct RunScriptLaunchTests {
             )
         }
         #expect(manager.liveSession(for: "new") == nil)
+        await manager.attach(to: "existing", freshlyCreated: true)
+        #expect(manager.runners["existing"] == nil, "no agent attaches through any path")
     }
 
     @MainActor
