@@ -74,6 +74,26 @@ struct ProjectsManagerTests {
         #expect(mgr.operationState(forWorktreeId: sharedID, projectId: second.id) == nil)
     }
 
+    /// A worktree deleted, recreated at the same path and deleted again gets
+    /// an equal claim; the first deletion finishing late must not release it.
+    @Test func claimIsReleasedOnlyByTheOperationThatOpenedIt() {
+        let path = URL(fileURLWithPath: "/srv/checkouts/member")
+        let worktree = Worktree(
+            id: Worktree.makeId(path: path), projectId: "p", name: "member", branch: "member",
+            path: path, status: .clean, lastActivity: .distantPast
+        )
+        let mgr = ProjectsManager(persistedProjects: [])
+        let first = mgr.claimOperation(.deleting(projectId: "p"), for: worktree)
+        mgr.setOperationState(for: worktree, state: nil)
+        let second = mgr.claimOperation(.deleting(projectId: "p"), for: worktree)
+
+        mgr.releaseOperation(first, for: worktree)
+        #expect(mgr.operationState(for: worktree) == .deleting(projectId: "p"))
+
+        mgr.releaseOperation(second, for: worktree)
+        #expect(mgr.operationState(for: worktree) == nil)
+    }
+
     @Test func addProjectAppendsToList() async throws {
         let repo = try await makeRepo(name: "alpha")
         defer { try? FileManager.default.removeItem(at: repo) }
