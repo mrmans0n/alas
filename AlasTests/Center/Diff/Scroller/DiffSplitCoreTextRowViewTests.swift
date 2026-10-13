@@ -267,13 +267,13 @@ import Testing
         return NSPoint(x: x(rect), y: DiffSplitCoreTextRowView.verticalInset + (CGFloat(row) + 0.5) * view.lineHeight)
     }
 
-    @Test(arguments: [(0, "alpha"), (1, "")])
-    func doubleClickingSelectsTheWordUnderThePointer(row: Int, expected: String) throws {
+    @Test(arguments: [(0, CGFloat(0), "alpha"), (1, 0, ""), (0, 200, "")])
+    func doubleClickingSelectsTheWordUnderThePointer(row: Int, past: CGFloat, expected: String) throws {
         let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 200))
         view.configure(result: result(old: [], new: ["let alpha = 1", ""]), font: font, theme: theme)
         let line = CTLineCreateWithAttributedString(NSAttributedString(string: "let alpha = 1", attributes: [.font: font]))
         // The right half of alpha's last character: the nearest caret falls after the word.
-        let x = CTLineGetOffsetForStringIndex(line, 9, nil) - 1
+        let x = CTLineGetOffsetForStringIndex(line, 9, nil) - 1 + past
         let point = newCodePoint(view, x: { $0.minX + x }, row: row)
         view.mouseDown(with: try click(view, .leftMouseDown, at: point, count: 2))
         view.mouseUp(with: try click(view, .leftMouseUp, at: point, count: 2))
@@ -354,7 +354,7 @@ import Testing
         defer { window.close() }
         let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 200))
         window.contentView?.addSubview(view)
-        view.configure(result: result(old: [], new: ["let a = 1", "let b = 2"]), font: font, theme: theme)
+        view.configure(result: result(old: [], new: ["a", "let middle = 2", "c"]), font: font, theme: theme)
         let new = try #require(view.codeAccessibilityElements().last)
         let first = new.accessibilityFrame(for: new.accessibilityRange(forLine: 0))
         let second = new.accessibilityFrame(for: new.accessibilityRange(forLine: 1))
@@ -362,6 +362,9 @@ import Testing
         // Screen space runs upward, so the later line sits one line lower.
         #expect(abs(first.minY - second.minY - view.lineHeight) < 1)
         #expect(second.width < new.accessibilityFrame().width)
+        // A range over three lines covers the middle one too.
+        let all = new.accessibilityFrame(for: NSRange(location: 0, length: new.accessibilityNumberOfCharacters()))
+        #expect(all.contains(second.insetBy(dx: 0.5, dy: 0.5)))
     }
 
     @Test func accessibilityHitTestingReachesTheVisibleScroller() throws {

@@ -861,11 +861,11 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         case 2:
             // The word under the pointer, as NSTextView picks it, not the one
             // after the nearest caret position.
-            guard line.length > 0 else {
+            // Blank space past the line's end selects nothing.
+            guard line.length > 0, let under = textPosition(at: point, side: side, characterUnder: true)?.index else {
                 textSelection = .init(side: side, anchor: position, focus: position)
                 return
             }
-            let under = textPosition(at: point, side: side, characterUnder: true)?.index ?? position.index
             let word = NSAttributedString(string: line as String).doubleClick(at: min(max(0, under), line.length - 1))
             textSelection = .init(side: side, anchor: .init(row: position.row, index: word.location), focus: .init(row: position.row, index: NSMaxRange(word)))
         case 3...:
@@ -1017,6 +1017,9 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
                 element.frameForLines = { [weak self] start, end in
                     guard let self, let window else { return nil }
                     var rect = textRect(side, row: start.row, from: start.index, to: start.row == end.row ? end.index : .max)
+                    for row in start.row + 1..<max(start.row + 1, end.row) {
+                        rect = rect.union(textRect(side, row: row, from: 0, to: .max))
+                    }
                     if end.row != start.row { rect = rect.union(textRect(side, row: end.row, from: 0, to: end.index)) }
                     return window.convertToScreen(convert(rect, to: nil))
                 }
