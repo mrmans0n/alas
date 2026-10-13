@@ -136,7 +136,13 @@ public final class ReviewShepherd {
         public var refreshPaneIfCached: @MainActor (_ worktreeID: String) -> Void
         /// Checks the archive-after-merge setting and the finished record's
         /// owner session (`sessionID`) itself.
-        public var archiveWorktreeIfAllowed: @MainActor (_ worktreeID: String, _ sessionID: String) async -> ArchiveResult
+        /// `isStillWanted` is checked right before archiving, after any
+        /// suspension; false declines.
+        public var archiveWorktreeIfAllowed: @MainActor (
+            _ worktreeID: String,
+            _ sessionID: String,
+            _ isStillWanted: @escaping @MainActor () -> Bool
+        ) async -> ArchiveResult
 
         public init(
             worktreeContext: @escaping @MainActor (_ worktreeID: String) -> WorktreeContext?,
@@ -150,7 +156,11 @@ public final class ReviewShepherd {
             rules: @escaping @MainActor (_ worktreeID: String) -> ShepherdRules,
             notify: @escaping @MainActor (Event) -> Void,
             refreshPaneIfCached: @escaping @MainActor (_ worktreeID: String) -> Void,
-            archiveWorktreeIfAllowed: @escaping @MainActor (_ worktreeID: String, _ sessionID: String) async -> ArchiveResult
+            archiveWorktreeIfAllowed: @escaping @MainActor (
+                _ worktreeID: String,
+                _ sessionID: String,
+                _ isStillWanted: @escaping @MainActor () -> Bool
+            ) async -> ArchiveResult
         ) {
             self.worktreeContext = worktreeContext
             self.sessionState = sessionState
@@ -719,6 +729,11 @@ public final class ReviewShepherd {
             case .finished(let result):
                 outcome = result
             }
+            if outcome == nil {
+                // No merge happened: the gate that said merge no longer holds
+                // until the next decision re-proves it.
+                gatePasses[id] = false
+            }
             guard let latest = records[id] else { return }
             // A merge or queue entry happened whatever changed meanwhile, so
             // it is recorded on the current record. "Not merged" only puts
@@ -733,6 +748,10 @@ public final class ReviewShepherd {
             }
             next.updatedAt = now()
             put(next)
+            // Merged or queued: the next decision (if any) recomputes the gate.
+            if outcome != nil {
+                gatePasses[id] = nil
+            }
             switch next.phase {
             case .merged:
                 effects.notify(.merged(next, title: request.title))
@@ -877,14 +896,24 @@ public final class ReviewShepherd {
     /// Runs the archive-after-merge step for a merged record. A busy owner
     /// marks it pending so `turnCompleted` or the next `start()` tries again;
     /// archiving or any other answer (setting off, worktree gone) clears it.
+    /// The app re-checks that the record is still this merged one right
+    /// before archiving, since the owner's state is read asynchronously.
     private func archiveAfterMerge(_ id: ShepherdRecordID) async {
         guard let effects, let record = records[id], record.phase == .merged,
               !archivesInFlight.contains(id)
         else { return }
         archivesInFlight.insert(id)
         defer { archivesInFlight.remove(id) }
-        let result = await effects.archiveWorktreeIfAllowed(id.worktreeID, record.sessionID)
-        guard var latest = records[id] else { return }
+        let generation = generations[id]
+        let isStillWanted: @MainActor () -> Bool = { [weak self] in
+            guard let self, self.records[id]?.phase == .merged, self.generations[id] == generation else {
+                shepherdLogger.debug("Abandoning the archive for PR shepherd \(id.storageKey, privacy: .private): the record changed")
+                return false
+            }
+            return true
+        }
+        let result = await effects.archiveWorktreeIfAllowed(id.worktreeID, record.sessionID, isStillWanted)
+        guard isStillWanted(), var latest = records[id] else { return }
         let pending: Bool? = result == .deferredBusy ? true : nil
         guard latest.archivePending != pending else { return }
         latest.archivePending = pending

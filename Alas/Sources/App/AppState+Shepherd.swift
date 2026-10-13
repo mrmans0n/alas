@@ -30,8 +30,10 @@ extension AppState {
                 guard let self else { return }
                 Task { await self.rightPaneStore.refresh(worktreeId: worktreeID, forceReviewLoopRemote: true) }
             },
-            archiveWorktreeIfAllowed: { [weak self] worktreeID, sessionID in
-                await self?.archiveShepherdWorktreeIfAllowed(worktreeID, sessionID: sessionID) ?? .declined
+            archiveWorktreeIfAllowed: { [weak self] worktreeID, sessionID, isStillWanted in
+                await self?.archiveShepherdWorktreeIfAllowed(
+                    worktreeID, sessionID: sessionID, isStillWanted: isStillWanted
+                ) ?? .declined
             }
         )
     }
@@ -395,9 +397,12 @@ extension AppState {
     /// without touching disk. `sessionID` owns the finished record; the
     /// worktree may hold other records owned by other sessions. A busy owner
     /// defers quietly: the shepherd tries again when its turn ends.
+    /// `isStillWanted` false (the record was stopped or rebound while the
+    /// owner's state was read) declines without archiving.
     private func archiveShepherdWorktreeIfAllowed(
         _ worktreeID: String,
-        sessionID: String
+        sessionID: String,
+        isStillWanted: @MainActor () -> Bool
     ) async -> ReviewShepherd.ArchiveResult {
         guard config.changes.shepherd.archiveAfterMerge,
               let resolved = projectAndWorktree(withWorktreeId: worktreeID),
@@ -417,6 +422,12 @@ extension AppState {
             )
             return .declined
         }
+        // The session state read suspends: the record, the setting or the
+        // worktree may have changed meanwhile.
+        guard isStillWanted(),
+              config.changes.shepherd.archiveAfterMerge,
+              !projectsManager.isWorktreeHidden(projectId: resolved.project.id, path: worktree.path)
+        else { return .declined }
         archiveWorktree(worktree)
         return .archived
     }
