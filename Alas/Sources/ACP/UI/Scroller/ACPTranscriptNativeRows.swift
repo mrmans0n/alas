@@ -36,7 +36,8 @@ enum ACPTranscriptNativeRows {
     static func content(
         for message: ACPMessage,
         isLive: Bool,
-        isCommentary: Bool
+        isCommentary: Bool,
+        createdAt: Date? = nil
     ) -> ACPTranscriptCoreTextRowView.Content? {
         guard !isLive else { return nil }
         switch message {
@@ -66,6 +67,7 @@ enum ACPTranscriptNativeRows {
                 presentation: presentation,
                 target: ACPToolCallPresentation.target(for: call, label: presentation.label),
                 duration: call.executionDuration.map { ACPToolCallDurationFormatter.string(for: $0) },
+                timestamp: createdAt.map { ACPMessageTimestampFormatter.string(for: $0) },
                 failed: call.status == "failed"
             )
         case .fileEdit, .plan, .systemNotice, .visualAid:

@@ -31,6 +31,12 @@ final class ACPDelayedHoverVisibility: ObservableObject {
         isVisible = false
     }
 
+    /// Runs a pending hide now instead of waiting out the delay.
+    func flushPendingHide() {
+        guard hideTask != nil else { return }
+        reset()
+    }
+
     func leave() {
         hideTask?.cancel()
         let delay = hideDelayNanoseconds

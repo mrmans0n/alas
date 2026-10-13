@@ -696,7 +696,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                let content = ACPTranscriptNativeRows.content(
                    for: message,
                    isLive: snapshot.liveNarrationIndex == row.index,
-                   isCommentary: ACPTranscriptRowContent.presentationPhase(of: message) == .commentary
+                   isCommentary: ACPTranscriptRowContent.presentationPhase(of: message) == .commentary,
+                   createdAt: host.transcript.createdAt(forStableId: row.stableId)
                ) {
                 spec.native = ACPTranscriptNativeRows.row(
                     content, contentMaxWidth: host.contentMaxWidth, inToolCallGroup: inToolCallGroup,

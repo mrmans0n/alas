@@ -1,10 +1,12 @@
 import AppKit
+import Combine
 import CoreText
 
 /// A common transcript row drawn with CoreText in one view instead of a
 /// SwiftUI host: agent prose, commentary, a collapsed thought, a collapsed
-/// tool call, a tool-call group header, and the user bubble. Draw-only: no
-/// hover, clicks, selection, menus, or accessibility.
+/// tool call, a tool-call group header, and the user bubble. Hover reveals
+/// the message actions button and a tool row's timestamp; there are no
+/// clicks on the content, selection, or accessibility yet.
 @MainActor
 final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
     enum Content: Equatable, Sendable {
@@ -13,7 +15,8 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
         /// A collapsed thought.
         case thought(label: String)
         /// A collapsed tool call.
-        case toolCall(presentation: ACPToolCallPresentation, target: String?, duration: String?, failed: Bool)
+        /// `timestamp` is shown before the duration while the pointer is over the row.
+        case toolCall(presentation: ACPToolCallPresentation, target: String?, duration: String?, timestamp: String? = nil, failed: Bool)
         /// A tool-call group header, without the "Show N earlier" button.
         case toolGroupHeader(label: String, iconSystemName: String, expanded: Bool)
         /// The user's prompt in its right-aligned bubble.
@@ -90,6 +93,7 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
         super.viewDidMoveToWindow()
         if window == nil {
             dropTiles()
+            resetHover()
         } else {
             updateTileScale()
             needsDisplay = true
@@ -114,6 +118,7 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
         actions: ACPTranscriptNativeRows.Actions = .inert
     ) {
         self.actions = actions
+        defer { syncActionsButton() }
         let sizeChanged = content != self.content || contentMaxWidth != self.contentMaxWidth
             || inToolCallGroup != self.inToolCallGroup || typography != self.typography
         guard sizeChanged || theme != self.theme else { return }
@@ -127,6 +132,7 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
         symbols = Self.renderSymbols(for: content, palette: palette)
         cachedLayout = nil
         invalidateTiles()
+        actionsButton?.apply(theme: theme)
         if sizeChanged { onIntrinsicSizeInvalidated?() }
     }
 
@@ -138,6 +144,7 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
         guard width > 0 else { return 0 }
         needsRemeasure = false
         lastMeasuredWidth = width
+        positionActions()
         return layout(forWidth: width).height
     }
 
@@ -196,8 +203,10 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
         case .thought(let label):
             builder.addLane()
             builder.addNarrationHeader(symbol: .leading, label: label)
-        case .toolCall(let presentation, let target, let duration, _):
-            builder.addToolCall(target: target, duration: duration, label: presentation.label)
+        case .toolCall(let presentation, let target, let duration, let timestamp, _):
+            builder.addToolCall(
+                target: target, duration: duration, timestamp: isHovering ? timestamp : nil, label: presentation.label
+            )
         case .toolGroupHeader(let label, _, _):
             builder.addGroupHeader(label: label)
         case .user(let markdown):
@@ -248,7 +257,7 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
 
         /// The collapsed `ACPToolCallCard` header: icon, label, target chip,
         /// spacer, duration, failure mark, chevron.
-        mutating func addToolCall(target: String?, duration: String?, label: String) {
+        mutating func addToolCall(target: String?, duration: String?, timestamp: String?, label: String) {
             let labelFont = NSFont.systemFont(ofSize: V.toolLabelSize)
             let targetFont = NSFont.monospacedSystemFont(ofSize: V.toolTargetSize, weight: .regular)
             let durationFont = NSFont.monospacedSystemFont(ofSize: V.toolDurationSize, weight: .medium)
@@ -271,6 +280,12 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
             }
             if let duration {
                 let line = V.line(duration, font: durationFont, color: palette.fgFaint)
+                trailing -= V.width(of: line)
+                addText(line, x: trailing, rowTop: top, rowHeight: height)
+                trailing -= V.toolSpacing
+            }
+            if let timestamp {
+                let line = V.line(timestamp, font: durationFont, color: palette.fgFaint)
                 trailing -= V.width(of: line)
                 addText(line, x: trailing, rowTop: top, rowHeight: height)
                 trailing -= V.toolSpacing
@@ -414,7 +429,7 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
             if commentary { specs[.leading] = ("hammer", narrationFontSize, .regular, palette.fgFaint) }
         case .thought:
             specs[.leading] = ("brain", narrationFontSize, .regular, palette.fgFaint)
-        case .toolCall(let presentation, _, _, let failed):
+        case .toolCall(let presentation, _, _, _, let failed):
             specs[.leading] = (presentation.iconSystemName, iconPointSize, .regular, palette.fgFaint)
             if failed { specs[.status] = ("xmark", statusPointSize, .bold, palette.del) }
             specs[.chevron] = ("chevron.down", chevronPointSize, .regular, palette.fgFaint)
@@ -593,6 +608,204 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
         return path
     }
 
+    // MARK: - Hover and actions
+
+    private lazy var hover = ACPDelayedHoverVisibility()
+    private var hoverObservation: AnyCancellable?
+    private var isHovering = false
+    private var isHoverVisible = false
+    private var isPointerCovered = false
+    private var isMenuOpen = false {
+        didSet { if isMenuOpen != oldValue { refreshActionsVisibility() } }
+    }
+    private var actionsButton: ActionsButton?
+    private var actionsTimestamp: NSTextField?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        // Added once: an `.inVisibleRect` area follows the view, and replacing
+        // it under the pointer fires a spurious exit/enter pair.
+        guard trackingAreas.isEmpty else { return }
+        addTrackingArea(NSTrackingArea(
+            rect: .zero, options: [.mouseEnteredAndExited, .mouseMoved, .activeInActiveApp, .inVisibleRect], owner: self
+        ))
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        pointerMoved(toWindowLocation: event.locationInWindow)
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        pointerMoved(toWindowLocation: event.locationInWindow)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        isPointerCovered = false
+        setHovering(false)
+    }
+
+    /// Tracking areas still fire under overlays (launcher, palettes); a
+    /// covered move behaves like leaving the row, once.
+    private func pointerMoved(toWindowLocation location: NSPoint) {
+        guard isTopmostHitTarget(atWindowLocation: location) else {
+            if !isPointerCovered {
+                isPointerCovered = true
+                setHovering(false)
+            }
+            return
+        }
+        isPointerCovered = false
+        setHovering(true)
+    }
+
+    private func setHovering(_ inside: Bool) {
+        guard inside != isHovering else { return }
+        isHovering = inside
+        if inside {
+            if actions.menu != nil { ensureActionsButton() }
+            hover.enter()
+        } else {
+            hover.leave()
+        }
+        // A tool row shows its timestamp while hovered; it is one line, so
+        // only its first tile changes.
+        if case .toolCall(_, _, _, let timestamp?, _) = content, !timestamp.isEmpty {
+            cachedLayout = nil
+            tiles[0]?.setNeedsDisplay()
+        }
+    }
+
+    /// Detaching a retained row clears hover without the pointer-exit delay.
+    private func resetHover() {
+        isPointerCovered = false
+        let wasHovering = isHovering
+        isHovering = false
+        hover.reset()
+        isMenuOpen = false
+        if wasHovering { cachedLayout = nil }
+    }
+
+    /// Creates, updates, or removes the button for the latest `actions`.
+    private func syncActionsButton() {
+        if actions.menu == nil {
+            actionsButton?.removeFromSuperview()
+            actionsTimestamp?.removeFromSuperview()
+            actionsButton = nil
+            actionsTimestamp = nil
+        } else if actions.showsActionsPermanently || isHovering {
+            ensureActionsButton()
+        }
+        positionActions()
+        refreshActionsVisibility()
+    }
+
+    /// Built on first hover, not with the row: every platform view costs a
+    /// layout pass when its row mounts mid-scroll. Once built it stays
+    /// mounted, toggling alpha, since removing it would dismiss an open menu.
+    private func ensureActionsButton() {
+        guard actionsButton == nil else { return }
+        let button = ActionsButton()
+        button.target = self
+        button.action = #selector(showActionsMenu(_:))
+        if let theme { button.apply(theme: theme) }
+        addSubview(button)
+        actionsButton = button
+        // `@Published` publishes before it stores, so keep the delivered value.
+        hoverObservation = hover.$isVisible.sink { [weak self] visible in
+            MainActor.assumeIsolated {
+                self?.isHoverVisible = visible
+                self?.refreshActionsVisibility()
+            }
+        }
+        positionActions()
+        refreshActionsVisibility()
+    }
+
+    private var showsActions: Bool {
+        actions.showsActionsPermanently || isMenuOpen || isHoverVisible
+    }
+
+    private func refreshActionsVisibility() {
+        guard let actionsButton else { return }
+        let alpha: CGFloat = showsActions ? 1 : 0
+        actionsButton.alphaValue = alpha
+        actionsTimestamp?.alphaValue = alpha
+    }
+
+    /// Flush with the right edge of the reserved lane: the button's own
+    /// padding makes the net inset `laneWidth - 8`; `y: -2` aligns it with the
+    /// top of the content, as `ACPMessageGutter` does.
+    private func positionActions() {
+        guard let actionsButton, lastMeasuredWidth != nil else { return }
+        let column = columnRect
+        let x = column.maxX + ACPMessageGutterLayout.laneWidth - 8 - ACPMessageGutterLayout.menuWidth
+        let size = NSSize(width: ACPMessageGutterLayout.menuWidth, height: ACPMessageGutterLayout.menuWidth)
+        actionsButton.frame = NSRect(origin: NSPoint(x: x, y: -2), size: size)
+        let createdAt = actions.menu?.createdAt
+        let showsInline = createdAt != nil
+            && ACPTranscriptRowContent.showsInlineTimestamp(
+                availableRowContentWidth: column.width,
+                availableTrailingGutterWidth: (lastMeasuredWidth ?? 0) - column.maxX
+            )
+        guard showsInline, let createdAt, let theme else {
+            actionsTimestamp?.removeFromSuperview()
+            actionsTimestamp = nil
+            return
+        }
+        let label = actionsTimestamp ?? makeTimestampLabel()
+        label.stringValue = ACPMessageTimestampFormatter.string(for: createdAt)
+        label.textColor = theme.nsColor("fg-faint")
+        label.layer?.backgroundColor = theme.nsColor("bg-3").withAlphaComponent(0.92).cgColor
+        label.sizeToFit()
+        let labelSize = NSSize(width: label.frame.width + 12, height: label.frame.height + 8)
+        label.frame = NSRect(
+            x: x, y: actionsButton.frame.maxY + ACPMessageGutterLayout.timestampVerticalSpacing,
+            width: labelSize.width, height: labelSize.height
+        )
+        label.layer?.cornerRadius = labelSize.height / 2
+        label.alphaValue = actionsButton.alphaValue
+    }
+
+    private func makeTimestampLabel() -> NSTextField {
+        let label = TimestampLabel(labelWithString: "")
+        label.font = .monospacedSystemFont(ofSize: 10, weight: .medium)
+        label.alignment = .center
+        label.wantsLayer = true
+        label.setAccessibilityElement(false)
+        addSubview(label)
+        actionsTimestamp = label
+        return label
+    }
+
+    @objc private func showActionsMenu(_ sender: NSButton) {
+        guard let input = actions.menu else { return }
+        let menu = ACPMessageActionsMenu.make(input)
+        menu.delegate = self
+        menu.popUp(
+            positioning: menu.items.first { $0.title == "Copy message" },
+            at: NSPoint(x: 0, y: sender.bounds.height + 2),
+            in: sender
+        )
+    }
+
+    var actionsButtonForTesting: NSButton? { actionsButton }
+
+    var isMenuOpenForTesting: Bool {
+        get { isMenuOpen }
+        set { isMenuOpen = newValue }
+    }
+
+    func hoverForTesting(_ inside: Bool) {
+        setHovering(inside)
+    }
+
+    func flushHoverForTesting() {
+        hover.flushPendingHide()
+    }
+
     // MARK: - Tiles (ported from `DiffSplitCoreTextRowView`)
 
     /// The scroller sets frames directly after measuring, without a layout
@@ -603,6 +816,7 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
         guard changed else { return }
         layoutTiles()
         invalidateTiles()
+        positionActions()
     }
 
     /// Rows draw into tile layers of this height. Each tile draws once when
@@ -766,4 +980,55 @@ private final class TileDelegate: NSObject, @preconcurrency CALayerDelegate {
     func action(for layer: CALayer, forKey event: String) -> CAAction? {
         NSNull()
     }
+}
+
+extension ACPTranscriptCoreTextRowView: NSMenuDelegate {
+    func menuWillOpen(_ menu: NSMenu) { isMenuOpen = true }
+    func menuDidClose(_ menu: NSMenu) { isMenuOpen = false }
+}
+
+/// The "…" button, styled as `ACPMessageGutter` styles its SwiftUI wrapper.
+private final class ActionsButton: NSButton {
+    private static let ellipsisImage = NSImage(systemSymbolName: "ellipsis", accessibilityDescription: "Message actions")
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        isBordered = false
+        bezelStyle = .regularSquare
+        setButtonType(.momentaryChange)
+        image = Self.ellipsisImage
+        imagePosition = .imageOnly
+        imageScaling = .scaleProportionallyDown
+        focusRingType = .none
+        toolTip = "Message actions"
+        setAccessibilityLabel("Message actions")
+        wantsLayer = true
+        layer?.cornerRadius = 5
+        layer?.borderWidth = 0.5
+        alphaValue = 0
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("not supported") }
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: ACPMessageGutterLayout.menuWidth, height: ACPMessageGutterLayout.menuWidth)
+    }
+
+    /// A hidden button is not a click target, as `allowsHitTesting(false)` does for the SwiftUI one.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        alphaValue == 0 ? nil : super.hitTest(point)
+    }
+
+    @MainActor
+    func apply(theme: Theme) {
+        contentTintColor = theme.nsColor("fg-muted")
+        layer?.backgroundColor = theme.nsColor("bg-3").withAlphaComponent(0.85).cgColor
+        layer?.borderColor = theme.nsColor("line").cgColor
+    }
+}
+
+/// The inline timestamp capsule under the button; never a hit target.
+private final class TimestampLabel: NSTextField {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
