@@ -7,6 +7,9 @@ import Observation
 @MainActor
 @Observable
 public final class AlasCoreContext {
+    /// The worktree is being created or deleted, so nothing new starts in it.
+    public struct WorktreeOperationInProgress: Error, Equatable {}
+
     public var projects: ProjectsManager
     /// One session manager per owner (worktree or workspace checkout).
     public var sessionManagers: [SessionOwnerID: ACPSessionManager] = [:]
@@ -184,6 +187,7 @@ public final class AlasCoreContext {
             throw ProjectCreationError.projectNotFound
         }
         guard project.host == nil else { throw RunService.RunError.remoteProjectUnsupported }
+        guard projects.admitsNewWork(in: worktree) else { throw WorktreeOperationInProgress() }
         guard runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status.isActive != true else {
             throw RunService.RunError.alreadyRunning
         }
@@ -264,10 +268,12 @@ public final class AlasCoreContext {
         )
     }
 
-    /// The session manager for `worktree`, created on first use.
-    public func sessionManager(for worktree: Worktree) -> ACPSessionManager {
+    /// The session manager for `worktree`, created on first use. None is
+    /// created while the worktree is being created or deleted.
+    public func sessionManager(for worktree: Worktree) throws -> ACPSessionManager {
         let owner = SessionOwnerID.worktree(worktree.id)
         if let manager = sessionManagers[owner] { return manager }
+        guard projects.admitsNewWork(in: worktree) else { throw WorktreeOperationInProgress() }
         let manager = makeSessionManager(owner, worktree)
         sessionManagers[owner] = manager
         return manager

@@ -316,6 +316,13 @@ extension AppState {
             )
         }
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else { return .projectUnavailable }
+        // Refused before a record exists, so the row never flips to Starting.
+        guard projectsManager.admitsNewWork(in: worktree) else {
+            return .refused(
+                title: "Run Script Failed",
+                message: "Wait for the current worktree operation to finish before running scripts."
+            )
+        }
         // Claim the slot synchronously, alongside `pendingScriptLaunches`, so
         // the row flips to "Starting" on the same turn the user clicked and a
         // second click can't open a second run behind the first one's back.

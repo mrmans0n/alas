@@ -412,6 +412,45 @@ struct RunScriptLaunchTests {
         #expect(state.pendingScriptLaunches.isEmpty)
     }
 
+    /// A worktree being deleted admits nothing new: a run is refused before
+    /// its record exists, and no agent session manager is built for it.
+    @MainActor
+    @Test func nothingNewStartsInAWorktreeBeingDeleted() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let scriptURL = dir.appendingPathComponent("dev.sh")
+        try "echo hi\n".write(to: scriptURL, atomically: true, encoding: .utf8)
+        let runScript = RunScript(
+            scope: .repo, fileName: "dev.sh", fileURL: scriptURL,
+            displayName: "Dev", onExit: .keep, cwd: nil, isExecutable: false
+        )
+        let project = ProjectConfig(id: "project", name: "Project", path: dir.path, color: "blue", addedAt: Date())
+        let worktree = Worktree(
+            id: "wt", projectId: project.id, name: "main", branch: "main",
+            path: dir, status: .clean, lastActivity: Date()
+        )
+        var openCount = 0
+        let state = AppState(
+            store: TestPersistenceStore(),
+            terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
+                openCount += 1
+                return AppState.OpenedTerminalSession(id: "session-\(openCount)", foregroundPid: { nil })
+            }
+        )
+        state.projectsManager = ProjectsManager(persistedProjects: [project])
+        state.projectsManager.setOperationState(for: worktree, state: .deleting(projectId: project.id))
+
+        guard case .refused = state.startScriptLaunch(runScript, in: worktree, presentsLaunchFailure: false) else {
+            Issue.record("the launch is refused")
+            return
+        }
+        await finishPendingLaunches(state)
+        #expect(state.runRecords.record(worktreeID: worktree.id, scriptKey: runScript.key) == nil)
+        #expect(openCount == 0)
+        #expect(state.acpManager(for: worktree) == nil)
+    }
+
     @MainActor
     @Test func cancelledTerminalPreparationDoesNotOpenTerminal() async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

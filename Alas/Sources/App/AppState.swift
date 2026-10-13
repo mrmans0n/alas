@@ -11395,12 +11395,7 @@ final class AppState {
             || harness.hasBackgroundActivity(sessionId: sessionId)
     }
     nonisolated static func blocksWorktreeSessionAdmission(_ state: WorktreeOperationState?) -> Bool {
-        switch state {
-        case .creating, .preparingDelete, .deleting:
-            return true
-        case .createFailed, .launchFailed, .deleteFailed, nil:
-            return false
-        }
+        state?.blocksAdmission ?? false
     }
 
     nonisolated static func harnessActivityIsBusy(_ state: ActivityState?) -> Bool {
@@ -13107,6 +13102,8 @@ final class AppState {
         let worktree = self.worktree(withId: worktree.id) ?? worktree
         let owner = SessionOwnerID.worktree(worktree.id)
         var previousManagerDisposal: Task<Void, Never>?
+        // A manager disposed by a delete in progress must not come back.
+        guard acpManagers[owner] != nil || projectsManager.admitsNewWork(in: worktree) else { return nil }
         if let existing = acpManagers[owner] {
             // The manager's providers captured the project that owned the
             // directory when it was built. When ownership has moved, replace it

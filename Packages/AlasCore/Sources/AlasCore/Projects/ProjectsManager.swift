@@ -71,6 +71,18 @@ public enum WorktreeOperationState: Equatable, Sendable {
     case deleteFailed(message: String)
 }
 
+extension WorktreeOperationState {
+    /// Whether this claim keeps new terminals, agent sessions and runs out of
+    /// the worktree: it is being created, or a delete is being confirmed or
+    /// carried out. Failed operations no longer hold the worktree.
+    public var blocksAdmission: Bool {
+        switch self {
+        case .creating, .preparingDelete, .deleting: true
+        case .createFailed, .launchFailed, .deleteFailed: false
+        }
+    }
+}
+
 /// Identity of a worktree claim inside a specific project. A worktree id is
 /// its path, so the project is part of the claim's identity: two projects
 /// (typically one per SSH host) can list a checkout at the same path.
@@ -437,6 +449,11 @@ public final class ProjectsManager {
     /// Opens or clears a claim for a worktree value.
     public func setOperationState(for worktree: Worktree, state: WorktreeOperationState?) {
         setOperationState(forWorktreeId: worktree.id, projectId: worktree.projectId, state: state)
+    }
+
+    /// Whether new terminals, agent sessions and runs may start in `worktree`.
+    public func admitsNewWork(in worktree: Worktree) -> Bool {
+        operationState(for: worktree)?.blocksAdmission != true
     }
 
     /// Every claim currently open, keyed by project and worktree id.
