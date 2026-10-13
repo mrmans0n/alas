@@ -49,6 +49,43 @@ public enum WorktreeRemovalResult: Equatable, Sendable {
 
     /// The reason a removal skipped because its confirmed content changed.
     public static let changedDeleteRisksMessage = "Git deletion risks changed since confirmation"
+    /// The reason a deletion skipped because its claim or checkout changed.
+    public static let changedSinceConfirmationMessage = "Worktree changed since confirmation"
+    public static let checkpointRecoveryMessage = "An interrupted checkpoint restore needs recovery before this worktree can be deleted."
+}
+
+/// How `AlasCoreContext.deleteWorktree(_:claim:options:)` removes a worktree
+/// and what it leaves on the row when it does not.
+public struct WorktreeDeleteOptions: Sendable {
+    public var force = false
+    public var deleteBranchIfMerged = false
+    public var verifiedMergedBranchSHA: String?
+    /// The content fingerprint the caller confirmed; see `WorktreeRemovalRequest`.
+    public var authorizedContentFingerprint: String?
+    /// When Git refuses without force, keep the claim (as `.preparingDelete`)
+    /// so the caller can ask, then delete again with `force` or release it.
+    /// Otherwise the refusal is left on the row as `.deleteFailed`.
+    public var keepsClaimForForcePrompt = false
+    /// Leave a skipped deletion on the row as `.deleteFailed`, for retry.
+    /// Batches report skips in their own results and restore the row.
+    public var recordsSkips = true
+    /// Refresh the project once removed. A batch passes false and calls
+    /// `finishDeletions` once for all of its removals.
+    public var refreshesProject = true
+    /// More checks right before removal, under the project mutation gate.
+    /// A reason skips the deletion.
+    public var revalidate: @MainActor @Sendable () async -> String? = { nil }
+
+    public init() {}
+}
+
+public enum WorktreeDeletionOutcome: Equatable, Sendable {
+    case deleted
+    /// Git refused without force.
+    case needsForce(String)
+    /// The worktree changed since the caller confirmed. Nothing was removed.
+    case skipped(String)
+    case failed(String)
 }
 
 extension AlasCoreContext {
@@ -289,7 +326,7 @@ public enum WorktreeArchiveRefusal: LocalizedError, Equatable {
 }
 
 /// Why `AlasCoreContext.deleteWorktree` did not delete.
-public enum WorktreeDeletionRefusal: Error, Equatable {
+public enum WorktreeDeletionRefusal: LocalizedError, Equatable {
     /// The project's main checkout is never deleted.
     case mainWorktree
     /// Remote checkouts carry no lineage marker to tell a replacement apart;
@@ -307,6 +344,19 @@ public enum WorktreeDeletionRefusal: Error, Equatable {
     /// An interrupted checkpoint restore must be recovered first.
     case checkpointRecoveryPending
     case failed(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .mainWorktree: "The main checkout cannot be deleted."
+        case .remoteUnsupported: "Remote worktrees can only be deleted from the app."
+        case .unknownIdentity: "The worktree's identity is unknown, so a replacement could not be told apart."
+        case .operationInProgress: "Wait for the current worktree operation to finish."
+        case .needsForce(let refusal): refusal
+        case .changed(let reason): reason
+        case .checkpointRecoveryPending: WorktreeRemovalResult.checkpointRecoveryMessage
+        case .failed(let message): message
+        }
+    }
 }
 
 extension AlasCoreContext {
@@ -316,62 +366,170 @@ extension AlasCoreContext {
     /// checkout, remote checkouts and worktrees without a lineage. Throws if
     /// the project list cannot be saved afterwards; the worktree is gone by then.
     public func deleteWorktree(_ worktree: Worktree, force: Bool = false, deleteBranchIfMerged: Bool = false) async throws {
-        guard let project = projects.projects.first(where: { $0.id == worktree.projectId }) else {
-            throw ProjectCreationError.projectNotFound
-        }
         guard !worktree.path.isRemoteAlasPath else { throw WorktreeDeletionRefusal.remoteUnsupported }
-        guard !projects.isMain(worktree, in: project) else { throw WorktreeDeletionRefusal.mainWorktree }
         guard let lineageID = worktree.lineageID else { throw WorktreeDeletionRefusal.unknownIdentity }
-        switch projects.operationState(for: worktree) {
-        case nil, .deleteFailed: break
-        default: throw WorktreeDeletionRefusal.operationInProgress
-        }
-        let claim = projects.claimOperation(.deleting(projectId: project.id), for: worktree)
-        defer { projects.releaseOperation(claim, for: worktree) }
-
-        let result = await removeWorktree(WorktreeRemovalRequest(
-            worktree: worktree,
-            repoPath: URL(fileURLWithPath: project.path),
-            force: force,
-            deleteBranchIfMerged: deleteBranchIfMerged,
-            revalidate: { [weak self] in
-                guard WorktreeService.existingLocalLineageID(forWorktreeAt: worktree.path) == lineageID else {
-                    return "The path holds a different checkout"
-                }
-                guard WorktreeService.localBranchName(forWorktreeAt: worktree.path) == worktree.branch else {
-                    return "The checkout is on another branch"
-                }
-                return await self?.workspaceOwnershipRefusal(for: worktree)
+        let claim = try beginDelete(worktree)
+        var options = WorktreeDeleteOptions()
+        options.force = force
+        options.deleteBranchIfMerged = deleteBranchIfMerged
+        options.recordsSkips = false
+        options.refreshesProject = false
+        options.revalidate = {
+            guard WorktreeService.existingLocalLineageID(forWorktreeAt: worktree.path) == lineageID else {
+                return "The path holds a different checkout"
             }
-        ))
-        switch result {
-        case .removed:
-            break
+            guard WorktreeService.localBranchName(forWorktreeAt: worktree.path) == worktree.branch else {
+                return "The checkout is on another branch"
+            }
+            return nil
+        }
+        switch await deleteWorktree(worktree, claim: claim, options: options) {
+        case .deleted:
+            try await finishDeletions([(worktree, claim)])
         case .needsForce(let refusal):
             throw WorktreeDeletionRefusal.needsForce(refusal)
         case .skipped(let reason):
             throw WorktreeDeletionRefusal.changed(reason)
-        case .checkpointRecoveryPending:
+        case .failed(let message) where message == WorktreeRemovalResult.checkpointRecoveryMessage:
             throw WorktreeDeletionRefusal.checkpointRecoveryPending
         case .failed(let message):
             throw WorktreeDeletionRefusal.failed(message)
         }
+    }
 
-        let changed: Bool
-        do {
-            changed = try await projects.refreshWorktrees(projectId: project.id)
-        } catch {
-            // The removal succeeded, so the row must not survive a failed
-            // refresh, in memory or on disk.
-            projects.dropRemovedWorktree(id: worktree.id, projectId: project.id)
-            changed = true
+    /// Claims `worktree` for deletion (as `.preparingDelete`), for callers
+    /// that confirm first. Pass the claim to `deleteWorktree(_:claim:options:)`,
+    /// or release it if the deletion does not go ahead.
+    public func beginDelete(_ worktree: Worktree) throws -> UUID {
+        guard let project = projects.projects.first(where: { $0.id == worktree.projectId }) else {
+            throw ProjectCreationError.projectNotFound
         }
-        // Held until the refresh dropped the row; finished, not released,
-        // so nothing the claim replaced returns for the removed path.
-        projects.finishOperation(claim, for: worktree)
-        if changed {
-            try saveProjects()
+        guard !projects.isMain(worktree, in: project) else { throw WorktreeDeletionRefusal.mainWorktree }
+        switch projects.operationState(for: worktree) {
+        case nil, .deleteFailed: break
+        default: throw WorktreeDeletionRefusal.operationInProgress
         }
+        return projects.claimOperation(.preparingDelete, for: worktree)
+    }
+
+    /// Marks a claimed deletion as confirmed: the row reads as being deleted
+    /// from here on.
+    public func confirmDelete(_ claim: UUID, for worktree: Worktree) {
+        projects.updateClaim(claim, to: .deleting(projectId: worktree.projectId), for: worktree)
+    }
+
+    /// Ends a claim a `begin…` call returned, leaving `message` on the row as
+    /// a failure the user can retry.
+    public func failWorktreeClaim(_ claim: UUID, for worktree: Worktree, message: String) {
+        projects.finishOperation(claim, for: worktree, leaving: .deleteFailed(message: message))
+    }
+
+    /// Deletes a worktree claimed by `beginDelete`. Ownership by an active
+    /// Workspace checkout is checked before anything stops and again right
+    /// before removal. The claim ends here, except when Git asks for force
+    /// and `keepsClaimForForcePrompt` holds it for the caller's prompt, or a
+    /// removal whose refresh `finishDeletions` still owes.
+    public func deleteWorktree(_ worktree: Worktree, claim: UUID, options: WorktreeDeleteOptions) async -> WorktreeDeletionOutcome {
+        guard let project = projects.projects.first(where: { $0.id == worktree.projectId }) else {
+            projects.releaseOperation(claim, for: worktree)
+            return .failed("Could not find the project for this worktree.")
+        }
+        let ownership = await workspaceOwnershipRefusal(for: worktree)
+        guard projects.holdsClaim(claim, for: worktree) else {
+            return .skipped(WorktreeRemovalResult.changedSinceConfirmationMessage)
+        }
+        if let ownership {
+            return settleSkippedDeletion(worktree, claim: claim, reason: ownership, options: options)
+        }
+        projects.updateClaim(claim, to: .deleting(projectId: project.id), for: worktree)
+
+        let result = await removeWorktree(WorktreeRemovalRequest(
+            worktree: worktree,
+            repoPath: URL(fileURLWithPath: project.path),
+            force: options.force,
+            deleteBranchIfMerged: options.deleteBranchIfMerged,
+            verifiedMergedBranchSHA: options.verifiedMergedBranchSHA,
+            authorizedContentFingerprint: options.authorizedContentFingerprint,
+            revalidate: { [weak self] in
+                if let reason = await options.revalidate() { return reason }
+                guard let self else { return WorktreeRemovalResult.changedSinceConfirmationMessage }
+                let ownership = await workspaceOwnershipRefusal(for: worktree)
+                guard projects.holdsClaim(claim, for: worktree) else {
+                    return WorktreeRemovalResult.changedSinceConfirmationMessage
+                }
+                return ownership
+            }
+        ))
+        switch result {
+        case .removed:
+            if options.refreshesProject {
+                try? await finishDeletions([(worktree, claim)])
+            }
+            return .deleted
+        case .needsForce(let refusal) where options.force:
+            projects.finishOperation(claim, for: worktree, leaving: .deleteFailed(message: refusal))
+            return .failed(refusal)
+        case .needsForce(let refusal):
+            if options.keepsClaimForForcePrompt {
+                projects.updateClaim(claim, to: .preparingDelete, for: worktree)
+            } else {
+                projects.finishOperation(claim, for: worktree, leaving: .deleteFailed(message: refusal))
+            }
+            return .needsForce(refusal)
+        case .checkpointRecoveryPending:
+            let message = WorktreeRemovalResult.checkpointRecoveryMessage
+            projects.finishOperation(claim, for: worktree, leaving: .deleteFailed(message: message))
+            return .failed(message)
+        case .failed(let message):
+            projects.finishOperation(claim, for: worktree, leaving: .deleteFailed(message: message))
+            return .failed(message)
+        case .skipped(let reason):
+            return settleSkippedDeletion(worktree, claim: claim, reason: reason, options: options)
+        }
+    }
+
+    /// Refreshes each project the removals belong to, once, then ends their
+    /// claims. The claims outlive the refresh: until it runs the removed rows
+    /// are still listed and must not admit new work. A refresh that fails
+    /// drops the removed rows instead, so they cannot resolve as live
+    /// worktrees. Throws if the project list cannot be saved.
+    public func finishDeletions(_ deletions: [(worktree: Worktree, claim: UUID)]) async throws {
+        var saveError: (any Error)?
+        for projectID in Array(Set(deletions.map(\.worktree.projectId))).sorted() {
+            let removed = deletions.filter { $0.worktree.projectId == projectID }
+            var needsSave: Bool
+            do {
+                needsSave = try await refreshProjectWorktrees(projectID)
+            } catch {
+                for deletion in removed {
+                    projects.dropRemovedWorktree(id: deletion.worktree.id, projectId: projectID)
+                }
+                needsSave = true
+            }
+            // Finished, not released: nothing the claim replaced comes back
+            // for a removed path, nor for a checkout recreated at it since.
+            for deletion in removed {
+                projects.finishOperation(deletion.claim, for: deletion.worktree)
+            }
+            if needsSave {
+                do { try saveProjects() } catch { saveError = saveError ?? error }
+            }
+        }
+        if let saveError { throw saveError }
+    }
+
+    private func settleSkippedDeletion(
+        _ worktree: Worktree,
+        claim: UUID,
+        reason: String,
+        options: WorktreeDeleteOptions
+    ) -> WorktreeDeletionOutcome {
+        if options.recordsSkips, reason != WorktreeRemovalResult.changedDeleteRisksMessage {
+            projects.finishOperation(claim, for: worktree, leaving: .deleteFailed(message: reason))
+        } else {
+            projects.releaseOperation(claim, for: worktree)
+        }
+        return .skipped(reason)
     }
 
     /// Why an active Workspace checkout keeps `worktree` from being deleted

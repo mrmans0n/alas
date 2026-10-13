@@ -74,6 +74,12 @@ public final class AlasCoreContext {
     @ObservationIgnored public lazy var quiesceWorktree: @MainActor (Worktree) async throws -> Void = { [weak self] worktree in
         await self?.disposeSessionManager(owner: .worktree(worktree.id))
     }
+    /// Re-reads a project's worktrees after a removal. Returns whether the
+    /// project list changed and still needs saving. The app installs its own
+    /// refresh, which also reconciles what it shows and saves by itself.
+    @ObservationIgnored public lazy var refreshProjectWorktrees: @MainActor (String) async throws -> Bool = { [weak self] projectID in
+        try await self?.projects.refreshWorktrees(projectId: projectID) ?? false
+    }
     /// Headless runs in flight, covering finalization, so lifecycle
     /// operations can stop them and wait until their records settle.
     @ObservationIgnored var headlessRuns: [String: (worktreeID: String, task: Task<RunOutcome, Error>)] = [:]

@@ -1368,6 +1368,7 @@ struct AppStateCleanupTests {
 
         let pending = AppState.pendingForceDelete(
             for: worktree,
+            claim: UUID(),
             repoPath: URL(fileURLWithPath: "/tmp/repo"),
             deleteBranchIfMerged: true,
             removedIndex: 2,
@@ -1395,6 +1396,7 @@ struct AppStateCleanupTests {
 
         let pending = AppState.pendingForceDelete(
             for: worktree,
+            claim: UUID(),
             repoPath: repoPath,
             deleteBranchIfMerged: true,
             removedIndex: 3,
@@ -1421,6 +1423,7 @@ struct AppStateCleanupTests {
 
         let pending = AppState.pendingForceDelete(
             for: worktree,
+            claim: UUID(),
             repoPath: repoPath,
             deleteBranchIfMerged: true,
             removedIndex: 2,
@@ -1436,46 +1439,17 @@ struct AppStateCleanupTests {
         #expect(pending?.removedIndex == 2)
     }
 
-    @Test func cancelForceDeleteClearsPendingState() async throws {
-        let repo = try await makeRepo(name: "cancel-force")
-        defer { try? FileManager.default.removeItem(at: repo) }
-        let state = AppState()
-        let project = try await state.projectsManager.addProject(path: repo, displayName: "cancel-force", color: "#5fb7c4")
-        try await state.projectsManager.refreshWorktrees(projectId: project.id)
-        let trees = state.projectsManager.worktrees(projectId: project.id)
-        let wt = try #require(trees.first)
-
-        state.pendingForceDeleteWorktree = AppState.PendingForceDeleteWorktree(
-            id: wt.id,
-            branch: wt.branch,
-            projectId: wt.projectId,
-            repoPath: repo,
-            worktreePath: wt.path,
-            deleteBranchIfMerged: false,
-            removedIndex: 0
-        )
-        #expect(state.pendingForceDeleteWorktree != nil)
-
-        state.cancelForceDeletePendingWorktree()
-        #expect(state.pendingForceDeleteWorktree == nil)
-        #expect(state.projectsManager.operationState(forWorktreeId: wt.id, projectId: project.id) == nil)
-    }
-
     /// Regression: the force-delete alert used to clear operation state to
     /// `nil` while it waited on the user, leaving the worktree unclaimed —
     /// a scheduled run or remote session could be admitted during that
     /// window, then have its writes silently discarded once the user
     /// confirmed force delete (which skips the cleanliness audits).
-    @Test func preparingDeleteDuringForceAlertBlocksAdmissionUntilResolved() async throws {
+    @Test func forcePromptHoldsTheClaimUntilCancelled() async throws {
         let repo = try await makeRepo(name: "force-alert-claim")
         defer { try? FileManager.default.removeItem(at: repo) }
         let state = AppState()
-        let project = try await state.projectsManager.addProject(path: repo, displayName: "force-alert-claim", color: "#5fb7c4")
-        try await state.projectsManager.refreshWorktrees(projectId: project.id)
-        let trees = state.projectsManager.worktrees(projectId: project.id)
-        let wt = try #require(trees.first)
-
-        state.projectsManager.setOperationState(forWorktreeId: wt.id, projectId: project.id, state: .preparingDelete)
+        let (project, wt) = try await addProjectWithLinkedWorktree(state, repo: repo, branch: "force-alert-claim")
+        let claim = try state.core.beginDelete(wt)
         state.pendingForceDeleteWorktree = AppState.PendingForceDeleteWorktree(
             id: wt.id,
             branch: wt.branch,
@@ -1483,7 +1457,8 @@ struct AppStateCleanupTests {
             repoPath: repo,
             worktreePath: wt.path,
             deleteBranchIfMerged: false,
-            removedIndex: 0
+            removedIndex: 0,
+            claim: claim
         )
 
         #expect(AppState.blocksWorktreeSessionAdmission(state.projectsManager.operationState(forWorktreeId: wt.id, projectId: project.id)))
