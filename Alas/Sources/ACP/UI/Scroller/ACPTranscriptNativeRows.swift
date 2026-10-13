@@ -1,12 +1,18 @@
 import Foundation
 
 /// Decides which transcript rows are drawn by `ACPTranscriptCoreTextRowView`
-/// instead of a SwiftUI host, and maps them to its content. Behind
-/// `ALAS_TRANSCRIPT_CORETEXT=1`; everything the native view can't draw
-/// (selection, chips, expanded cards, live streaming) stays SwiftUI.
+/// instead of a SwiftUI host, and maps them to its content.
+///
+/// On by default; set `ALAS_TRANSCRIPT_CORETEXT=0` to opt out and draw every
+/// row with SwiftUI. Native rows cover finished agent messages (including
+/// commentary), collapsed thoughts and tool calls, tool-group headers without
+/// hidden members, and plain user messages. Everything else stays SwiftUI per
+/// row: live/streaming rows, expanded cards, user messages with chips or
+/// attachments, tables, images, task lists, Mermaid, file edits, plans,
+/// notices, visual aids, subagents, and compaction/background tasks.
 @MainActor
 enum ACPTranscriptNativeRows {
-    static let isEnabled: Bool = ProcessInfo.processInfo.environment["ALAS_TRANSCRIPT_CORETEXT"] == "1"
+    static let isEnabled: Bool = ProcessInfo.processInfo.environment["ALAS_TRANSCRIPT_CORETEXT"] != "0"
 
     private static let supportCache: NSCache<NSString, NSNumber> = {
         let cache = NSCache<NSString, NSNumber>()
