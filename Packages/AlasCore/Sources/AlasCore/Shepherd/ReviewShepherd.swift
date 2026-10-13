@@ -151,6 +151,13 @@ public final class ReviewShepherd {
     @ObservationIgnored private var dueAt: [ShepherdRecordID: Date] = [:]
     @ObservationIgnored private var failureCounts: [ShepherdRecordID: Int] = [:]
     @ObservationIgnored private var inFlight: Set<ShepherdRecordID> = []
+    /// Bumped by every change made outside an evaluation and by every
+    /// committed decision. An action that suspends (delivery, merge) goes on
+    /// only while its record keeps the generation captured when the decision
+    /// was committed, so a stop, rebind or toggle made meanwhile wins. Values
+    /// never repeat, so a deleted and rebound record can't match a stale one.
+    @ObservationIgnored private var generations: [ShepherdRecordID: Int] = [:]
+    @ObservationIgnored private var lastGeneration = 0
 
     public init(
         store: any PersistenceStoreProtocol,
@@ -266,6 +273,7 @@ public final class ReviewShepherd {
         record.viewerCommentIDsAtDispatch = nil
         record.updatedAt = now
         put(record)
+        let generation = bumpGeneration(id)
         failureCounts[id] = nil
         dueAt[id] = now
         if sendContext, let effects {
@@ -275,7 +283,7 @@ public final class ReviewShepherd {
                 rules: effects.rules(worktreeID)
             )
             let delivered = await effects.deliverPrompt(sessionID, worktreeID, prompt)
-            if !delivered {
+            if !delivered, isCurrent(id, generation, before: "the bind delivery escalation") {
                 escalate(id, .deliveryFailed, title: request.title)
             }
         }
@@ -328,6 +336,7 @@ public final class ReviewShepherd {
             next.phase = .awaitingPush(turnEndedAt: now, pollsWithoutProgress: 0)
             next.updatedAt = now
             put(next)
+            bumpGeneration(record.id)
             dueAt[record.id] = now
         }
         pump()
@@ -445,6 +454,7 @@ public final class ReviewShepherd {
             pauseForAuth(id)
             return
         }
+        endAuthPause(id)
         guard let observed = await snapshotCarryingRequest(id, from: snapshot, worktreePath: context.path) else { return }
         let rules = effects.rules(id.worktreeID)
         let reviewers: Set<String>?
@@ -476,7 +486,8 @@ public final class ReviewShepherd {
             next.updatedAt = now()
             put(next)
         }
-        await execute(decision.action, for: id, before: current, snapshot: observed, rules: rules, context: context)
+        let generation = bumpGeneration(id)
+        await execute(decision.action, for: id, generation: generation, before: current, snapshot: observed, rules: rules, context: context)
         if let latest = records[id] {
             scheduleNext(latest, checksPending: observed.reviewRequest?.checks.contains { $0.bucket == .pending } ?? false)
         }
@@ -534,6 +545,7 @@ public final class ReviewShepherd {
     private func execute(
         _ action: ShepherdAction,
         for id: ShepherdRecordID,
+        generation: Int,
         before: ShepherdRecord,
         snapshot: ReviewLoopSnapshot,
         rules: ShepherdRules,
@@ -545,9 +557,10 @@ public final class ReviewShepherd {
             return
         case .dispatchFix(let fix):
             let logs = await checkLogs(for: fix, request: request, remote: record.remote, worktreePath: context.path)
+            guard isCurrent(id, generation, before: "fix delivery") else { return }
             let prompt = ShepherdPromptBuilder.fixPrompt(request: request, fix: fix, logs: logs, rules: rules)
             let delivered = await effects.deliverPrompt(record.sessionID, id.worktreeID, prompt)
-            guard !delivered, var failed = records[id] else { return }
+            guard !delivered, isCurrent(id, generation, before: "the delivery rollback"), var failed = records[id] else { return }
             // The prompt never reached the session, so it is not an attempt:
             // after Resume the same problems are dispatched again.
             failed.fixAttempts = before.fixAttempts
@@ -556,8 +569,15 @@ public final class ReviewShepherd {
             put(failed)
             escalate(id, .deliveryFailed, title: request.title)
         case .merge:
-            let outcome = await merge(id, snapshot: snapshot, worktreePath: context.path)
-            guard let latest = records[id] else { return }
+            let attempt = await merge(id, generation: generation, snapshot: snapshot, worktreePath: context.path)
+            guard case .finished(let outcome) = attempt, let latest = records[id] else { return }
+            // A merge or queue entry happened whatever changed meanwhile, so
+            // it is recorded on the current record. "Not merged" only puts
+            // the record back to watching when nothing changed it.
+            guard outcome != nil || generations[id] == generation else {
+                shepherdLogger.debug("PR shepherd \(id.storageKey, privacy: .private) changed during a merge that did not happen")
+                return
+            }
             var next = ShepherdPolicy.applyMergeOutcome(outcome, to: latest, now: now())
             if next.phase.isTerminal, next.finishedAt == nil {
                 next.finishedAt = now()
@@ -591,19 +611,36 @@ public final class ReviewShepherd {
         }
     }
 
+    private enum MergeAttempt {
+        /// The record was stopped, rebound or toggled while git was read:
+        /// nothing was merged and nothing is recorded.
+        case abandoned
+        /// Nil when the final checks or the provider declined the merge.
+        case finished(ReviewMergeOutcome?)
+    }
+
     /// Reads git again right before merging, as `RightPaneState.performMerge`
     /// does, so a commit or edit made since the probe can't slip through.
     /// `ReviewLoopState.merge` then re-reads the provider and re-runs the gate.
-    private func merge(_ id: ShepherdRecordID, snapshot: ReviewLoopSnapshot, worktreePath: URL) async -> ReviewMergeOutcome? {
-        guard let loop = loops[id], let reviewedHead = snapshot.reviewRequest?.headSHA else { return nil }
-        guard let fresh = try? await localProbe.probe(worktreePath, snapshot.local.baseBranch),
+    private func merge(
+        _ id: ShepherdRecordID,
+        generation: Int,
+        snapshot: ReviewLoopSnapshot,
+        worktreePath: URL
+    ) async -> MergeAttempt {
+        guard let loop = loops[id], let reviewedHead = snapshot.reviewRequest?.headSHA else { return .finished(nil) }
+        let fresh = try? await localProbe.probe(worktreePath, snapshot.local.baseBranch)
+        guard isCurrent(id, generation, before: "merge"),
+              let record = records[id], record.phase == .merging, record.autoMerge
+        else { return .abandoned }
+        guard let fresh,
               fresh.local.branchName == snapshot.local.branchName,
               fresh.local.headSHA == reviewedHead,
               !fresh.local.hasWorkingTreeChanges,
               !fresh.local.hasStagedChanges,
               !fresh.local.needsPush
-        else { return nil }
-        return await loop.merge(snapshot: snapshot)
+        else { return .finished(nil) }
+        return .finished(await loop.merge(snapshot: snapshot))
     }
 
     /// Logs for at most `ShepherdPromptBuilder.maxCheckLogs` failing checks.
@@ -646,8 +683,18 @@ public final class ReviewShepherd {
         effects?.notify(.escalated(record, reason, title: title))
     }
 
+    /// The provider answered signed in, so a sign-in pause is over, even when
+    /// this poll decides nothing (the worktree is on another branch, say).
+    /// An escalated record keeps waiting for Resume.
+    private func endAuthPause(_ id: ShepherdRecordID) {
+        guard var record = records[id], record.phase == .paused else { return }
+        record.phase = .watching
+        record.updatedAt = now()
+        put(record)
+    }
+
     /// The provider CLI is missing or signed out. Pauses once, with one
-    /// escalation; the policy resumes the record on the next good fetch. An
+    /// escalation; `endAuthPause` resumes the record on the next good fetch. An
     /// escalated record keeps waiting for Resume instead.
     private func pauseForAuth(_ id: ShepherdRecordID) {
         guard var record = records[id] else { return }
@@ -671,8 +718,26 @@ public final class ReviewShepherd {
         guard record != records[id] else { return }
         record.updatedAt = now()
         put(record)
+        bumpGeneration(id)
         dueAt[id] = now()
         pump()
+    }
+
+    @discardableResult
+    private func bumpGeneration(_ id: ShepherdRecordID) -> Int {
+        lastGeneration += 1
+        generations[id] = lastGeneration
+        return lastGeneration
+    }
+
+    /// Whether an action captured at `generation` may still run. Logs at
+    /// debug when it may not; the next poll re-evaluates the record.
+    private func isCurrent(_ id: ShepherdRecordID, _ generation: Int, before step: String) -> Bool {
+        guard records[id] != nil, generations[id] == generation else {
+            shepherdLogger.debug("Abandoning \(step, privacy: .public) for PR shepherd \(id.storageKey, privacy: .private): the record changed")
+            return false
+        }
+        return true
     }
 
     // MARK: - Storage
@@ -697,6 +762,7 @@ public final class ReviewShepherd {
         loops[id] = nil
         dueAt[id] = nil
         failureCounts[id] = nil
+        generations[id] = nil
         persist()
     }
 
