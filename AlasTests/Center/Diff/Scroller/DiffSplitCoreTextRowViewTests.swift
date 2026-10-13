@@ -356,6 +356,40 @@ import Testing
         #expect(new.accessibilityLine(for: NSMaxRange(visible) - 1) <= 3)
     }
 
+    @Test func reassigningTheRowClearsItsSelection() throws {
+        let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 200))
+        view.representedRowID = "first"
+        view.configure(result: result(old: [], new: ["let alpha = 1"]), font: font, theme: theme)
+        let point = newCodePoint(view, x: { $0.minX + 20 }, row: 0)
+        view.mouseDown(with: try click(view, .leftMouseDown, at: point, count: 3))
+        view.mouseUp(with: try click(view, .leftMouseUp, at: point, count: 3))
+        view.representedRowID = "second"
+        #expect(view.selectedText().isEmpty)
+    }
+
+    @Test func draggingASelectionPastTheColumnScrollsThatSide() throws {
+        let (view, window) = mountedRow(newLine: String(repeating: "w", count: 300))
+        defer { window.close() }
+        let code = DiffSplitCoreTextRowView.codeColumn(.new, containerWidth: 1_000, stacked: false, gutter: 42)
+        let y = DiffSplitCoreTextRowView.verticalInset + view.lineHeight / 2
+        view.mouseDown(with: try click(view, .leftMouseDown, at: NSPoint(x: code.minX + 40, y: y)))
+        view.mouseDragged(with: try click(view, .leftMouseDragged, at: NSPoint(x: code.minX + code.width + 30, y: y)))
+        #expect(view.horizontalScroll.offset(.new) > 0)
+        view.mouseUp(with: try click(view, .leftMouseUp, at: NSPoint(x: code.minX + code.width + 30, y: y)))
+    }
+
+    @Test func accessibilityVisibleRangeStopsAtTheVisibleWrappedFragments() throws {
+        let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 400))
+        let long = Array(repeating: "alpha", count: 200).joined(separator: " ")
+        view.configure(result: result(old: [], new: [long]), font: font, theme: theme, wraps: true)
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 800, height: DiffSplitCoreTextRowView.verticalInset + 2 * view.lineHeight))
+        scrollView.documentView = view
+        let new = try #require(view.codeAccessibilityElements().last)
+        let visible = new.accessibilityVisibleCharacterRange()
+        #expect(visible.location == 0)
+        #expect(visible.length > 0 && visible.length < (long as NSString).length)
+    }
+
     @Test func pointerOnASurrogatePairsTrailingHalfResolvesItsStart() throws {
         let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 200))
         view.configure(result: result(old: [], new: ["a\u{1D465}b"]), font: font, theme: theme)
