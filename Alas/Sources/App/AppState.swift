@@ -13469,6 +13469,8 @@ final class AppState {
         if isFolderWorktree(worktree) {
             mgr.upstreamReferences.environment = .noRemotes
         }
+        let worktreeId = worktree.id
+        mgr.admitsNewWork = { [weak self] in self?.projectsManager.admitsNewWork(worktreeId: worktreeId) ?? false }
         acpManagers[owner] = mgr
         acpManagerProjectIds[owner] = worktree.projectId
         observeNextPromptSessions(mgr, owner: owner)
@@ -14090,6 +14092,12 @@ final class AppState {
         guard await !checkpointACPAdmissionDisabledAfterDiscovery(worktreeId: worktree.id) else {
             throw ACPWorktreeSessionBootstrapError(message: Self.checkpointRecoveryBlocksACPMessage)
         }
+        // Every await below can cross a delete claim, so admission is
+        // rechecked right before a session is created or attached.
+        let operationInProgress = "Wait for the current worktree operation to finish before starting sessions."
+        guard projectsManager.admitsNewWork(in: worktree) else {
+            throw ACPWorktreeSessionBootstrapError(message: operationInProgress)
+        }
         guard let manager = acpManager(for: worktree) else {
             throw ACPWorktreeSessionBootstrapError(message: "Could not create ACP session manager.")
         }
@@ -14107,6 +14115,9 @@ final class AppState {
                     await manager.hydrateIfNeeded(id: id)
                     return
                 }
+                guard self.projectsManager.admitsNewWork(in: worktree) else {
+                    throw ACPWorktreeSessionBootstrapError(message: operationInProgress)
+                }
                 _ = manager.createSession(
                     id: id,
                     agentId: agentId,
@@ -14114,11 +14125,17 @@ final class AppState {
                 )
             },
             enqueuePrompt: { _, id, promptID, text in
-                await manager.enqueuePrompt(id: promptID, text: text, into: id)
+                // Queuing into an attached session would start its turn.
+                guard self.projectsManager.admitsNewWork(in: worktree) else { return false }
+                return await manager.enqueuePrompt(id: promptID, text: text, into: id)
             },
             attach: { _, id, freshlyCreated in
                 guard await !self.checkpointACPAdmissionDisabledAfterDiscovery(worktreeId: worktree.id) else {
                     manager.liveSession(for: id)?.lastError = Self.checkpointRecoveryBlocksACPMessage
+                    return
+                }
+                guard self.projectsManager.admitsNewWork(in: worktree) else {
+                    manager.liveSession(for: id)?.lastError = operationInProgress
                     return
                 }
                 await manager.attach(to: id, freshlyCreated: freshlyCreated)

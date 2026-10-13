@@ -315,6 +315,8 @@ public final class AlasCoreContext {
         let owner = SessionOwnerID.worktree(worktree.id)
         if let manager = sessionManagers[owner] { return manager }
         let manager = makeSessionManager(owner, worktree)
+        let worktreeId = worktree.id
+        manager.admitsNewWork = { [weak self] in self?.projects.admitsNewWork(worktreeId: worktreeId) ?? false }
         sessionManagers[owner] = manager
         return manager
     }

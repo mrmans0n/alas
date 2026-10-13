@@ -451,6 +451,44 @@ struct RunScriptLaunchTests {
         #expect(state.acpManager(for: worktree) == nil)
     }
 
+    /// A manager cached before the claim is still handed back, but no agent
+    /// session starts or attaches through it while the worktree is being
+    /// deleted.
+    @MainActor
+    @Test func cachedManagerStartsNoSessionInAWorktreeBeingDeleted() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let project = ProjectConfig(id: "project", name: "Project", path: dir.path, color: "blue", addedAt: Date())
+        let worktree = Worktree(
+            id: "wt", projectId: project.id, name: "main", branch: "main",
+            path: dir, status: .clean, lastActivity: Date()
+        )
+        let state = AppState(store: TestPersistenceStore())
+        state.projectsManager = ProjectsManager(persistedProjects: [project])
+        let manager = try #require(state.acpManager(for: worktree))
+        _ = manager.createSession(id: "existing", agentId: "codex", autoRunDefault: false)
+        state.projectsManager.setOperationState(for: worktree, state: .deleting(projectId: project.id))
+
+        await #expect(throws: ACPWorktreeSessionBootstrapError.self) {
+            _ = try await state.startACPSession(
+                worktree: worktree, sessionID: "new", agentID: "codex", promptID: UUID(), prompt: nil
+            )
+        }
+        #expect(manager.liveSession(for: "new") == nil)
+        await manager.attach(to: "existing", freshlyCreated: true)
+        #expect(manager.runners["existing"] == nil, "no agent attaches through any path")
+        let submitted = manager.submit(
+            sessionId: "existing", text: "hi", attachments: [], intent: .auto, onCompleted: { _ in }
+        )
+        #expect(!submitted, "no prompt is dispatched into an existing session")
+
+        // The claim counts under whichever project now lists the same path.
+        state.projectsManager.setOperationState(for: worktree, state: nil)
+        state.projectsManager.setOperationState(forWorktreeId: worktree.id, projectId: "other", state: .preparingDelete)
+        #expect(!manager.admitsNewWork())
+    }
+
     @MainActor
     @Test func cancelledTerminalPreparationDoesNotOpenTerminal() async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
