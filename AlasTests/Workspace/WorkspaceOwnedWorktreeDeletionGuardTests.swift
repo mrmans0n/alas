@@ -64,6 +64,33 @@ struct WorkspaceOwnedWorktreeDeletionGuardTests {
         #expect(fixture.state.workspacesManager.checkout(id: checkoutID)?.archivedAt != nil)
     }
 
+    /// Between the store reactivating the checkout and the app's snapshot
+    /// catching up, the snapshot still says archived; an archive landing
+    /// there would leave an active checkout with a hidden member. That holds
+    /// until the last of two overlapping unarchives is done.
+    @Test func archiveIsRefusedUntilTheLastOverlappingUnarchiveFinishes() async throws {
+        let fixture = try await Fixture.make(suffix: "archive-during-unarchive", checkoutArchived: true)
+        defer { fixture.removeFiles() }
+        let checkoutID = try #require(fixture.checkoutID)
+        let core = fixture.state.core
+        let (entered, enter) = AsyncStream<Void>.makeStream()
+        let (released, release) = AsyncStream<Void>.makeStream()
+        let pending = Task { @MainActor in
+            try await core.unarchiveWorkspaceCheckout(id: checkoutID) {
+                enter.yield()
+                for await _ in released { break }
+            }
+        }
+        for await _ in entered { break }
+        _ = try await core.unarchiveWorkspaceCheckout(id: checkoutID)
+
+        fixture.state.archiveWorktree(fixture.worktree)
+        release.yield()
+        _ = try await pending.value
+
+        #expect(!fixture.state.projectsManager.isWorktreeHidden(projectId: fixture.project.id, path: fixture.worktree.path))
+    }
+
     @Test func deleteAndForgetUnarchivesAnArchivedCheckoutInsteadOfRefusingIt() async throws {
         let fixture = try await Fixture.make(suffix: "delete-archived", checkoutArchived: true)
         defer { fixture.removeFiles() }
