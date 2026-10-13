@@ -99,12 +99,28 @@ public final class ReviewShepherd {
         case escalated(ShepherdRecord, ShepherdEscalation, title: String?)
     }
 
+    /// How a prompt delivery ended.
+    public enum Delivery: Equatable, Sendable {
+        case delivered
+        /// The prompt could not be queued on the session.
+        case failed
+        /// `isStillWanted` turned false before the prompt was queued: the
+        /// record was stopped, rebound or changed meanwhile. Nothing was sent.
+        case superseded
+    }
+
     public struct Effects {
         /// Nil when the worktree is gone or archived; its records are dropped.
         public var worktreeContext: @MainActor (_ worktreeID: String) -> WorktreeContext?
         public var sessionState: @MainActor (_ sessionID: String, _ worktreeID: String) async -> ShepherdSessionState
-        /// Queues `text` on the session. False when it could not be queued.
-        public var deliverPrompt: @MainActor (_ sessionID: String, _ worktreeID: String, _ text: String) async -> Bool
+        /// Queues `text` on the session. `isStillWanted` is checked right
+        /// before the session's queue changes, after any suspension.
+        public var deliverPrompt: @MainActor (
+            _ sessionID: String,
+            _ worktreeID: String,
+            _ text: String,
+            _ isStillWanted: @escaping @MainActor () -> Bool
+        ) async -> Delivery
         public var rules: @MainActor (_ worktreeID: String) -> ShepherdRules
         public var notify: @MainActor (Event) -> Void
         public var refreshPaneIfCached: @MainActor (_ worktreeID: String) -> Void
@@ -115,7 +131,12 @@ public final class ReviewShepherd {
         public init(
             worktreeContext: @escaping @MainActor (_ worktreeID: String) -> WorktreeContext?,
             sessionState: @escaping @MainActor (_ sessionID: String, _ worktreeID: String) async -> ShepherdSessionState,
-            deliverPrompt: @escaping @MainActor (_ sessionID: String, _ worktreeID: String, _ text: String) async -> Bool,
+            deliverPrompt: @escaping @MainActor (
+                _ sessionID: String,
+                _ worktreeID: String,
+                _ text: String,
+                _ isStillWanted: @escaping @MainActor () -> Bool
+            ) async -> Delivery,
             rules: @escaping @MainActor (_ worktreeID: String) -> ShepherdRules,
             notify: @escaping @MainActor (Event) -> Void,
             refreshPaneIfCached: @escaping @MainActor (_ worktreeID: String) -> Void,
@@ -288,8 +309,10 @@ public final class ReviewShepherd {
                 fix: ShepherdPolicy.problems(in: request, handled: record.handledThreadRevisions ?? []),
                 rules: effects.rules(worktreeID)
             )
-            let delivered = await effects.deliverPrompt(sessionID, worktreeID, prompt)
-            if !delivered, isCurrent(id, generation, before: "the bind delivery escalation") {
+            let delivery = await effects.deliverPrompt(sessionID, worktreeID, prompt) { [weak self] in
+                self?.isCurrent(id, generation, before: "the bind delivery") ?? false
+            }
+            if delivery == .failed, isCurrent(id, generation, before: "the bind delivery escalation") {
                 escalate(id, .deliveryFailed, title: request.title)
             }
         }
@@ -634,8 +657,14 @@ public final class ReviewShepherd {
             let logs = await checkLogs(for: fix, request: request, remote: record.remote, worktreePath: context.path)
             guard isCurrent(id, generation, before: "fix delivery") else { return }
             let prompt = ShepherdPromptBuilder.fixPrompt(request: request, fix: fix, logs: logs, rules: rules)
-            let delivered = await effects.deliverPrompt(record.sessionID, id.worktreeID, prompt)
-            guard !delivered, isCurrent(id, generation, before: "the delivery rollback"), var failed = records[id] else { return }
+            let delivery = await effects.deliverPrompt(record.sessionID, id.worktreeID, prompt) { [weak self] in
+                self?.isCurrent(id, generation, before: "fix delivery") ?? false
+            }
+            // A superseded delivery sent nothing and its record changed; the
+            // next poll decides again on the current one.
+            guard delivery == .failed, isCurrent(id, generation, before: "the delivery rollback"),
+                  var failed = records[id]
+            else { return }
             // The prompt never reached the session, so it is not an attempt:
             // after Resume the same problems are dispatched again.
             failed.fixAttempts = before.fixAttempts

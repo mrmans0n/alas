@@ -15,8 +15,10 @@ extension AppState {
             sessionState: { [weak self] sessionID, worktreeID in
                 await self?.shepherdSessionState(sessionID: sessionID, worktreeID: worktreeID) ?? .missing
             },
-            deliverPrompt: { [weak self] sessionID, worktreeID, text in
-                await self?.deliverShepherdPrompt(sessionID: sessionID, worktreeID: worktreeID, text: text) ?? false
+            deliverPrompt: { [weak self] sessionID, worktreeID, text, isStillWanted in
+                await self?.deliverShepherdPrompt(
+                    sessionID: sessionID, worktreeID: worktreeID, text: text, isStillWanted: isStillWanted
+                ) ?? .failed
             },
             rules: { [weak self] worktreeID in
                 self?.shepherdRules(worktreeID: worktreeID) ?? ShepherdRules.none
@@ -81,26 +83,39 @@ extension AppState {
     /// shepherd". Hydrates a session with no open tab, like the orchestration
     /// coordinator's delivery, then brings its agent up the way the composer
     /// does, which claims the writer lease, so the prompt runs after any turn
-    /// in progress. False when the session is missing or archived, when
+    /// in progress. `.failed` when the session is missing or archived, when
     /// another instance owns it (this one is a read-only mirror), or when the
-    /// queue could not be saved under the lease.
-    func deliverShepherdPrompt(sessionID: String, worktreeID: String, text: String) async -> Bool {
+    /// queue could not be saved under the lease. `.superseded` when
+    /// `isStillWanted` turns false while the session is brought up.
+    func deliverShepherdPrompt(
+        sessionID: String,
+        worktreeID: String,
+        text: String,
+        isStillWanted: @MainActor () -> Bool
+    ) async -> ReviewShepherd.Delivery {
         guard let worktree = worktree(withId: worktreeID),
               let manager = acpManager(for: worktree),
               let row = await manager.persistedSessionRow(id: sessionID),
               !row.archived,
               manager.placeholderSession(id: sessionID) != nil
-        else { return false }
+        else { return .failed }
         await manager.hydrateIfNeeded(id: sessionID)
-        guard manager.liveSession(for: sessionID)?.hydrationState == .ready else { return false }
+        guard manager.liveSession(for: sessionID)?.hydrationState == .ready else { return .failed }
         // Attaches an idle, disconnected or failed agent, claiming the writer
         // lease first; a no-op while it is spawning or ready. When another
         // instance holds the lease, the attach leaves a mirror without one and
         // the fenced enqueue below refuses.
         await manager.reattach(to: sessionID)
+        // The enqueue waits for a transcript backfill before touching the
+        // queue; drain it here so the check below is the last suspension.
+        await manager.awaitBackfill(id: sessionID)
+        // Stop, rebind or a newer decision while the session came up: the
+        // queue is left alone.
+        guard isStillWanted() else { return .superseded }
         let recordKey = reviewShepherd.record(forSession: sessionID)?.id.storageKey ?? worktreeID
         let source = ACPDelegatedPromptSource.shepherd(recordKey: recordKey, messageID: UUID())
-        return await manager.enqueueDelegatedPrompt(text: text, source: source, into: sessionID, requiringWriter: true)
+        let queued = await manager.enqueueDelegatedPrompt(text: text, source: source, into: sessionID, requiringWriter: true)
+        return queued ? .delivered : .failed
     }
 
     func shepherdSessionState(sessionID: String, worktreeID: String) async -> ShepherdSessionState {
