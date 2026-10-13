@@ -801,21 +801,27 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
 
     /// The row and offset on `side` nearest `point`. Points above or below
     /// the rows clamp to the first or last line, as a drag past the edge does.
+    /// With `characterUnder`, only a glyph actually under `point` counts: the
+    /// padding below a side that wraps to fewer lines resolves to nothing.
     func textPosition(at point: NSPoint, side: Side, characterUnder: Bool = false) -> TextSelection.Position? {
         let sideLines = lines(side)
         let code = codeRect(side)
         guard !sideLines.code.isEmpty, code.width > 0 else { return nil }
         let tops = layout(forWidth: bounds.width).tops
         let offset = point.y - codeTop
-        if offset < 0 { return .init(row: 0, index: 0) }
+        if offset < 0 { return characterUnder ? nil : .init(row: 0, index: 0) }
         if offset >= tops[tops.count - 1] {
+            guard !characterUnder else { return nil }
             let last = sideLines.code.count - 1
             return .init(row: last, index: (sideLines.codeStrings[last] as NSString).length)
         }
-        let row = min(Self.row(containing: offset, rowTops: tops), sideLines.code.count - 1)
+        let containing = Self.row(containing: offset, rowTops: tops)
+        if characterUnder, containing >= sideLines.code.count { return nil }
+        let row = min(containing, sideLines.code.count - 1)
         var line = sideLines.code[row]
         if wraps, let parts = (side == .old ? layout(forWidth: bounds.width).old : layout(forWidth: bounds.width).new)?[row], !parts.isEmpty {
             let part = Int((offset - tops[row]) / lineHeight)
+            if characterUnder, part >= parts.count { return nil }
             line = parts[min(max(0, part), parts.count - 1)]
         }
         let x = point.x - code.minX - Self.textInset - (sideLines.indents[row] ?? 0) + (wraps ? 0 : horizontalScroll.offset(side))
@@ -909,12 +915,24 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
     override func scrollPageDown(_ sender: Any?) { scrollReview(byPages: 1) }
     override func pageUp(_ sender: Any?) { scrollReview(byPages: -1) }
     override func pageDown(_ sender: Any?) { scrollReview(byPages: 1) }
+    // Sideways arrows scroll the focused side's long lines, as moving the
+    // caret along them did in the text views.
+    override func moveLeft(_ sender: Any?) { scrollFocusedSide(byPoints: -lineHeight) }
+    override func moveRight(_ sender: Any?) { scrollFocusedSide(byPoints: lineHeight) }
     override func moveUp(_ sender: Any?) { scrollReview(byPoints: -lineHeight) }
     override func moveDown(_ sender: Any?) { scrollReview(byPoints: lineHeight) }
     override func scrollLineUp(_ sender: Any?) { scrollReview(byPoints: -lineHeight) }
     override func scrollLineDown(_ sender: Any?) { scrollReview(byPoints: lineHeight) }
     override func scrollToBeginningOfDocument(_ sender: Any?) { scrollReview(to: -.greatestFiniteMagnitude) }
     override func scrollToEndOfDocument(_ sender: Any?) { scrollReview(to: .greatestFiniteMagnitude) }
+
+    private func scrollFocusedSide(byPoints delta: CGFloat) {
+        let side = textSelection?.side ?? .new
+        guard !wraps, horizontalScroll.scroll(side, byPoints: delta) else { return }
+        invalidateTiles(codeRect(side))
+        updateScroller(side)
+        lspController?.notifyScrolled()
+    }
 
     private func scrollReview(byPages pages: CGFloat) {
         guard let clip = enclosingScrollView?.contentView else { return }

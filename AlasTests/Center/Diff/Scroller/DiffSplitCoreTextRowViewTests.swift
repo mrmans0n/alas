@@ -307,6 +307,33 @@ import Testing
         #expect(view.characterIndex(at: NSPoint(x: textX(.old, 6), y: y)) == nil)
     }
 
+    @Test func pointerBelowAShorterWrappedSideResolvesNothing() throws {
+        let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 200))
+        let long = Array(repeating: "alpha", count: 40).joined(separator: " ")
+        view.configure(result: result(old: [long], new: ["let alpha = 1"]), font: font, theme: theme, wraps: true)
+        // The old side wraps, so the row is taller than the new side's one line.
+        let below = newCodePoint(view, x: { $0.minX + 20 }, row: 1)
+        #expect(view.characterIndex(at: below) == nil)
+        #expect(view.characterIndex(at: newCodePoint(view, x: { $0.minX + 20 }, row: 0)) != nil)
+    }
+
+    @Test(arguments: [#selector(NSResponder.moveRight(_:)), #selector(NSResponder.moveLeft(_:))])
+    func horizontalArrowsScrollTheFocusedSide(selector: Selector) throws {
+        let (view, window) = mountedRow(newLine: String(repeating: "w", count: 300))
+        defer { window.close() }
+        let point = NSPoint(x: 900, y: DiffSplitCoreTextRowView.verticalInset + view.lineHeight / 2)
+        view.mouseDown(with: try click(view, .leftMouseDown, at: point))
+        view.mouseUp(with: try click(view, .leftMouseUp, at: point))
+        if selector == #selector(NSResponder.moveLeft(_:)) {
+            _ = view.scroll(deltaX: -200, deltaY: 0, isPrecise: true, at: point)
+        }
+        let before = view.horizontalScroll.offset(.new)
+        view.doCommand(by: selector)
+        let after = view.horizontalScroll.offset(.new)
+        #expect(selector == #selector(NSResponder.moveRight(_:)) ? after > before : after < before)
+        #expect(view.horizontalScroll.offset(.old) == 0)
+    }
+
     @Test func eachSideReadsItsCodeToAccessibility() throws {
         let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 200))
         view.configure(result: result(old: ["let a = 0"], new: ["let a = 1", "let b = 2"]), font: font, theme: theme)
