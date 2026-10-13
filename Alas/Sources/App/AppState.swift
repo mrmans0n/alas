@@ -14135,6 +14135,12 @@ final class AppState {
         guard await !checkpointACPAdmissionDisabledAfterDiscovery(worktreeId: worktree.id) else {
             throw ACPWorktreeSessionBootstrapError(message: Self.checkpointRecoveryBlocksACPMessage)
         }
+        // Every await below can cross a delete claim, so admission is
+        // rechecked right before a session is created or attached.
+        let operationInProgress = "Wait for the current worktree operation to finish before starting sessions."
+        guard projectsManager.admitsNewWork(in: worktree) else {
+            throw ACPWorktreeSessionBootstrapError(message: operationInProgress)
+        }
         guard let manager = acpManager(for: worktree) else {
             throw ACPWorktreeSessionBootstrapError(message: "Could not create ACP session manager.")
         }
@@ -14152,6 +14158,9 @@ final class AppState {
                     await manager.hydrateIfNeeded(id: id)
                     return
                 }
+                guard self.projectsManager.admitsNewWork(in: worktree) else {
+                    throw ACPWorktreeSessionBootstrapError(message: operationInProgress)
+                }
                 _ = manager.createSession(
                     id: id,
                     agentId: agentId,
@@ -14164,6 +14173,10 @@ final class AppState {
             attach: { _, id, freshlyCreated in
                 guard await !self.checkpointACPAdmissionDisabledAfterDiscovery(worktreeId: worktree.id) else {
                     manager.liveSession(for: id)?.lastError = Self.checkpointRecoveryBlocksACPMessage
+                    return
+                }
+                guard self.projectsManager.admitsNewWork(in: worktree) else {
+                    manager.liveSession(for: id)?.lastError = operationInProgress
                     return
                 }
                 await manager.attach(to: id, freshlyCreated: freshlyCreated)
