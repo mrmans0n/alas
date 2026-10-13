@@ -13,8 +13,16 @@ public struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
     // `Sendable` struct hold it (see `GitLabPendingComments`).
     private let pendingComments = GitLabPendingComments()
 
-    public init(runner: any CodeHostCommandRunning = ProcessCodeHostCommandRunner()) {
+    // Process-wide by default (see `GitLabAuthorStandingCache`); tests pass
+    // their own so cases stay independent.
+    private let authorStandingCache: GitLabAuthorStandingCache
+
+    public init(
+        runner: any CodeHostCommandRunning = ProcessCodeHostCommandRunner(),
+        authorStandingCache: GitLabAuthorStandingCache = .shared
+    ) {
         self.runner = runner
+        self.authorStandingCache = authorStandingCache
     }
 
     public func mergedReviewRequests(
@@ -1069,6 +1077,70 @@ public struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
         }
     }
 
+    /// Standing of each author id in this project, from the cache or the
+    /// members/users APIs. Ids whose lookup fails are left out, so their
+    /// comments stay `.unknown` and nothing is cached for them.
+    private func authorStandings(
+        for authorIDs: [Int],
+        remote: CodeHostRemote,
+        cwd: URL
+    ) async -> [Int: GitLabAuthorStanding] {
+        var standings: [Int: GitLabAuthorStanding] = [:]
+        for userID in authorIDs {
+            if let cached = authorStandingCache.standing(
+                host: remote.host,
+                projectPath: remote.repositorySlug,
+                userID: userID
+            ) {
+                standings[userID] = cached
+                continue
+            }
+            guard let standing = await fetchAuthorStanding(userID: userID, remote: remote, cwd: cwd) else { continue }
+            authorStandingCache.store(standing, host: remote.host, projectPath: remote.repositorySlug, userID: userID)
+            standings[userID] = standing
+        }
+        return standings
+    }
+
+    /// `members/all` includes access inherited from groups; a 404 means "not a
+    /// member". Note payloads carry no `bot` flag, so the users API is asked
+    /// only when membership alone doesn't already make the author trusted.
+    private func fetchAuthorStanding(userID: Int, remote: CodeHostRemote, cwd: URL) async -> GitLabAuthorStanding? {
+        guard let member = try? await runner.run(
+            "glab",
+            args: [
+                "api", "projects/\(Self.encodedProjectPath(remote.repositorySlug))/members/all/\(userID)",
+                "--hostname", remote.host, "--output", "json",
+            ],
+            cwd: cwd
+        ) else { return nil }
+
+        let accessLevel: Int?
+        if member.exitCode == 0 {
+            guard let level = try? Self.parseMemberAccessLevel(member.stdout) else { return nil }
+            accessLevel = level
+        } else if case .notFound? = CodeHostIssueProviderError.classification(
+            // `number` only feeds the error message, which is discarded here.
+            provider: kind, remote: remote, number: userID, result: member
+        ) {
+            accessLevel = nil
+        } else {
+            return nil
+        }
+        if let accessLevel, accessLevel >= GitLabAuthorStanding.minimumTrustedAccessLevel {
+            return .privileged
+        }
+
+        guard let user = try? await runner.run(
+            "glab",
+            args: ["api", "users/\(userID)", "--hostname", remote.host, "--output", "json"],
+            cwd: cwd
+        ), user.exitCode == 0,
+            let isBot = try? Self.parseUserIsBot(user.stdout)
+        else { return nil }
+        return GitLabAuthorStanding(accessLevel: accessLevel, isBot: isBot)
+    }
+
     private func reviewRequestDetails(
         remote: CodeHostRemote,
         request: ReviewRequest,
@@ -1347,7 +1419,18 @@ public struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
         }
 
         let currentUserUsername = await currentUserUsername(remote: remote, cwd: cwd)
-        return try Self.parseDiscussions(result.stdout, requestURL: request.url, currentUserUsername: currentUserUsername)
+        let discussions = try Self.decodeDiscussions(result.stdout)
+        let standings = await authorStandings(
+            for: Self.standingLookupAuthorIDs(in: discussions, currentUserUsername: currentUserUsername),
+            remote: remote,
+            cwd: cwd
+        )
+        return try Self.threads(
+            from: discussions,
+            requestURL: request.url,
+            currentUserUsername: currentUserUsername,
+            authorStandings: standings
+        )
     }
 
     public static func normalizedBaseBranch(_ baseBranch: String, remoteName: String) -> String {
@@ -1468,22 +1551,77 @@ public struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
     public static func parseDiscussions(
         _ json: String,
         requestURL: URL,
-        currentUserUsername: String? = nil
+        currentUserUsername: String? = nil,
+        authorStandings: [Int: GitLabAuthorStanding] = [:]
     ) throws -> [ReviewThread] {
-        let data = Data(json.utf8)
-        let discussions: [GitLabDiscussion]
+        try threads(
+            from: decodeDiscussions(json),
+            requestURL: requestURL,
+            currentUserUsername: currentUserUsername,
+            authorStandings: authorStandings
+        )
+    }
+
+    private static func decodeDiscussions(_ json: String) throws -> [GitLabDiscussion] {
         do {
-            discussions = try JSONDecoder().decode([GitLabDiscussion].self, from: data)
+            return try JSONDecoder().decode([GitLabDiscussion].self, from: Data(json.utf8))
         } catch {
             throw CodeHostProviderError.malformedOutput("Unable to parse glab mr note list output")
         }
+    }
 
-        return try discussions.compactMap { discussion in
-            // Collect all non-system notes with a non-empty body.
-            let actionableNotes = discussion.notes.filter { note in
-                !note.isSystem && !note.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            }
-            guard let firstNote = actionableNotes.first else {
+    /// Non-system notes with a non-empty body: the notes that become comments.
+    private static func actionableNotes(in discussion: GitLabDiscussion) -> [GitLabDiscussionNote] {
+        discussion.notes.filter { note in
+            !note.isSystem && !note.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+    }
+
+    /// Ids of thread-head authors whose standing must be looked up, sorted for
+    /// a stable request order. Only head comments decide `headAuthorTrust`,
+    /// so reply authors are not looked up. Empty when the viewer is unknown:
+    /// every comment is then `.unknown`, so lookups would be wasted.
+    private static func standingLookupAuthorIDs(
+        in discussions: [GitLabDiscussion],
+        currentUserUsername: String?
+    ) -> [Int] {
+        guard let viewer = normalizedOptionalString(currentUserUsername)?.lowercased() else { return [] }
+        var ids = Set<Int>()
+        for discussion in discussions {
+            guard let author = actionableNotes(in: discussion).first?.author,
+                  let id = author.id,
+                  let username = normalizedOptionalString(author.username),
+                  username.lowercased() != viewer
+            else { continue }
+            ids.insert(id)
+        }
+        return ids.sorted()
+    }
+
+    /// Trusted when the author is not the viewer and is a bot or has
+    /// Developer access or higher.
+    private static func authorTrust(
+        of author: GitLabDiscussionAuthor?,
+        currentUserUsername: String?,
+        authorStandings: [Int: GitLabAuthorStanding]
+    ) -> ReviewAuthorTrust {
+        guard let username = normalizedOptionalString(author?.username),
+              let viewer = normalizedOptionalString(currentUserUsername)
+        else { return .unknown }
+        if username.lowercased() == viewer.lowercased() { return .untrusted }
+        guard let id = author?.id, let standing = authorStandings[id] else { return .unknown }
+        return standing == .privileged ? .trusted : .untrusted
+    }
+
+    private static func threads(
+        from discussions: [GitLabDiscussion],
+        requestURL: URL,
+        currentUserUsername: String?,
+        authorStandings: [Int: GitLabAuthorStanding]
+    ) throws -> [ReviewThread] {
+        try discussions.compactMap { discussion in
+            let notes = Self.actionableNotes(in: discussion)
+            guard let firstNote = notes.first else {
                 return nil
             }
 
@@ -1491,7 +1629,7 @@ public struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
             // Assumed GitLab note position keys: new_path, new_line, old_line, old_path
             // (from glab mr note list --output json).
             let position = firstNote.position
-            let comments: [ReviewComment] = try actionableNotes.enumerated().map { index, note in
+            let comments: [ReviewComment] = try notes.enumerated().map { index, note in
                 let commentURL = try discussionURL(note: note, requestURL: requestURL)
                 let isViewer = note.author?.username.map { currentUserUsername == $0 } ?? false
                 return ReviewComment(
@@ -1502,7 +1640,12 @@ public struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
                     createdAt: try? parseOptionalGitLabDate(note.createdAt),
                     viewerCanUpdate: isViewer,
                     viewerCanDelete: isViewer,
-                    isPending: false
+                    isPending: false,
+                    authorTrust: authorTrust(
+                        of: note.author,
+                        currentUserUsername: currentUserUsername,
+                        authorStandings: authorStandings
+                    )
                 )
             }
 
@@ -2028,6 +2171,30 @@ public struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
         return username
     }
 
+    static func parseMemberAccessLevel(_ json: String) throws -> Int {
+        let member: GitLabMemberResponse
+        do {
+            member = try JSONDecoder().decode(GitLabMemberResponse.self, from: Data(json.utf8))
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse glab api member output")
+        }
+        guard let accessLevel = member.accessLevel else {
+            throw CodeHostProviderError.malformedOutput("glab api member output is missing access_level")
+        }
+        return accessLevel
+    }
+
+    /// `bot` is missing on GitLab versions that predate it; that reads as a human.
+    static func parseUserIsBot(_ json: String) throws -> Bool {
+        let user: GitLabUserResponse
+        do {
+            user = try JSONDecoder().decode(GitLabUserResponse.self, from: Data(json.utf8))
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse glab api users output")
+        }
+        return user.bot ?? false
+    }
+
     private static func checkID(for pipeline: GitLabPipeline) -> String {
         encodedID([
             "gitlab-pipeline-check",
@@ -2137,6 +2304,62 @@ private final class GitLabPendingComments: @unchecked Sendable {
     }
 
     public init() {}
+}
+
+/// A GitLab comment author's standing in the project, which decides trust
+/// for anyone other than the viewer.
+public enum GitLabAuthorStanding: Equatable, Sendable {
+    /// A bot, or a member with Developer (30) access or higher.
+    case privileged
+    /// Not a member, or a member below Developer, and not a bot.
+    case unprivileged
+
+    public static let minimumTrustedAccessLevel = 30
+
+    public init(accessLevel: Int?, isBot: Bool) {
+        self = isBot || (accessLevel ?? 0) >= Self.minimumTrustedAccessLevel ? .privileged : .unprivileged
+    }
+}
+
+/// Author standings keyed by host, project and user id.
+///
+/// `@unchecked Sendable` for the same reason as `GitLabPendingComments`: the
+/// only mutable state is `entries`, and every access goes through `lock`.
+/// `shared` is the provider default because registries create provider
+/// instances per call site. Entries expire after an hour so a role change
+/// is picked up without restarting Alas.
+public final class GitLabAuthorStandingCache: @unchecked Sendable {
+    public static let shared = GitLabAuthorStandingCache()
+    static let timeToLive: TimeInterval = 60 * 60
+
+    private struct Entry {
+        let standing: GitLabAuthorStanding
+        let storedAt: Date
+    }
+
+    private let lock = NSLock()
+    private var entries: [String: Entry] = [:]
+
+    public init() {}
+
+    func standing(host: String, projectPath: String, userID: Int, now: Date = Date()) -> GitLabAuthorStanding? {
+        let key = Self.key(host: host, projectPath: projectPath, userID: userID)
+        lock.lock()
+        defer { lock.unlock() }
+        guard let entry = entries[key], now.timeIntervalSince(entry.storedAt) < Self.timeToLive else { return nil }
+        return entry.standing
+    }
+
+    func store(_ standing: GitLabAuthorStanding, host: String, projectPath: String, userID: Int, now: Date = Date()) {
+        let key = Self.key(host: host, projectPath: projectPath, userID: userID)
+        lock.lock()
+        defer { lock.unlock() }
+        entries[key] = Entry(standing: standing, storedAt: now)
+    }
+
+    private static func key(host: String, projectPath: String, userID: Int) -> String {
+        "\(host.lowercased())|\(projectPath.lowercased())|\(userID)"
+    }
 }
 
 private struct MRListItem: Decodable {
@@ -2648,11 +2871,37 @@ private struct GitLabCurrentUser: Decodable {
 }
 
 private struct GitLabDiscussionAuthor: Decodable {
+    let id: Int?
     let username: String?
 
-    public init(username: String?) {
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        // Lenient: an unexpected id shape must not drop the whole note.
+        self.id = try? container.decodeIfPresent(Int.self, forKey: .id)
+        self.username = try container.decodeIfPresent(String.self, forKey: .username)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case username
+    }
+
+    public init(id: Int? = nil, username: String?) {
+        self.id = id
         self.username = username
     }
+}
+
+private struct GitLabMemberResponse: Decodable {
+    let accessLevel: Int?
+
+    private enum CodingKeys: String, CodingKey {
+        case accessLevel = "access_level"
+    }
+}
+
+private struct GitLabUserResponse: Decodable {
+    let bot: Bool?
 }
 
 private struct GitLabCreatedNote: Decodable {

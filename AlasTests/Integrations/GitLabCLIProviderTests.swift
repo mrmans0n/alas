@@ -2045,6 +2045,169 @@ struct GitLabCLIProviderTests {
         #expect(threads[0].comments[0].viewerCanDelete == false)
     }
 
+    struct DiscussionTrustCase: Sendable, CustomTestStringConvertible {
+        let testDescription: String
+        let author: String
+        let currentUserUsername: String?
+        let standings: [Int: GitLabAuthorStanding]
+        let expected: ReviewAuthorTrust
+    }
+
+    @Test(
+        "Discussion comments map viewer and project standing to author trust",
+        arguments: [
+            DiscussionTrustCase(
+                testDescription: "privileged author",
+                author: #"{ "id": 7, "username": "maintainer" }"#,
+                currentUserUsername: "viewer",
+                standings: [7: .privileged],
+                expected: .trusted
+            ),
+            DiscussionTrustCase(
+                testDescription: "unprivileged author",
+                author: #"{ "id": 7, "username": "maintainer" }"#,
+                currentUserUsername: "viewer",
+                standings: [7: .unprivileged],
+                expected: .untrusted
+            ),
+            DiscussionTrustCase(
+                testDescription: "viewer, matched case-insensitively, even when privileged",
+                author: #"{ "id": 1, "username": "Viewer" }"#,
+                currentUserUsername: "viewer",
+                standings: [1: .privileged],
+                expected: .untrusted
+            ),
+            DiscussionTrustCase(
+                testDescription: "standing not resolved",
+                author: #"{ "id": 7, "username": "maintainer" }"#,
+                currentUserUsername: "viewer",
+                standings: [:],
+                expected: .unknown
+            ),
+            DiscussionTrustCase(
+                testDescription: "author without id",
+                author: #"{ "username": "maintainer" }"#,
+                currentUserUsername: "viewer",
+                standings: [7: .privileged],
+                expected: .unknown
+            ),
+            DiscussionTrustCase(
+                testDescription: "viewer unknown",
+                author: #"{ "id": 7, "username": "maintainer" }"#,
+                currentUserUsername: nil,
+                standings: [7: .privileged],
+                expected: .unknown
+            ),
+        ]
+    )
+    func discussionCommentAuthorTrust(_ testCase: DiscussionTrustCase) throws {
+        let threads = try GitLabCLIProvider.parseDiscussions(
+            Self.singleNoteDiscussionsOutput(author: testCase.author),
+            requestURL: URL(string: "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42")!,
+            currentUserUsername: testCase.currentUserUsername,
+            authorStandings: testCase.standings
+        )
+
+        let thread = try #require(threads.first)
+        #expect(thread.comments.first?.authorTrust == testCase.expected)
+        #expect(thread.headAuthorTrust == testCase.expected)
+    }
+
+    @Test("Author standing comes from member and user lookups and is cached across refreshes")
+    func authorStandingLookupsAreCachedAcrossRefreshes() async throws {
+        let members = "projects/platform%2Fmobile%2Falas/members/all"
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.mrViewOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.trustDiscussionsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: #"{"username":"viewer"}"#, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: #"{"id":7,"username":"maintainer","access_level":30}"#, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: #"{"id":8,"username":"reporter","access_level":20}"#, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: #"{"id":8,"username":"reporter","bot":false}"#, stderr: ""),
+            ProcessResult(exitCode: 1, stdout: #"{"message":"404 Not found"}"#, stderr: "glab: 404 Not Found (HTTP 404)"),
+            ProcessResult(exitCode: 0, stdout: #"{"id":9,"username":"review-bot","bot":true}"#, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.pipelineWithJobsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.mrViewOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.trustDiscussionsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: #"{"username":"viewer"}"#, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.pipelineWithJobsOutput, stderr: ""),
+        ])
+        let provider = GitLabCLIProvider(runner: runner, authorStandingCache: GitLabAuthorStandingCache())
+        let expected: [String: ReviewAuthorTrust] = [
+            "by-maintainer": .trusted,
+            "by-reporter": .untrusted,
+            "by-bot": .trusted,
+            "by-viewer": .untrusted,
+        ]
+
+        let first = try await provider.reviewRequest(remote: Self.remote, number: 42, cwd: Self.cwd)
+        let second = try await provider.reviewRequest(remote: Self.remote, number: 42, cwd: Self.cwd)
+
+        #expect(Dictionary(uniqueKeysWithValues: first.threads.map { ($0.id, $0.headAuthorTrust) }) == expected)
+        #expect(Dictionary(uniqueKeysWithValues: second.threads.map { ($0.id, $0.headAuthorTrust) }) == expected)
+        let userLookup = ["api", "user", "--hostname", "gitlab.example.com", "--output", "json"]
+        let standingLookups = await runner.commands.map(\.args).filter { $0.first == "api" && $0 != userLookup }
+        #expect(standingLookups == [
+            ["api", "\(members)/7", "--hostname", "gitlab.example.com", "--output", "json"],
+            ["api", "\(members)/8", "--hostname", "gitlab.example.com", "--output", "json"],
+            ["api", "users/8", "--hostname", "gitlab.example.com", "--output", "json"],
+            ["api", "\(members)/9", "--hostname", "gitlab.example.com", "--output", "json"],
+            ["api", "users/9", "--hostname", "gitlab.example.com", "--output", "json"],
+        ])
+    }
+
+    private static func singleNoteDiscussionsOutput(author: String) -> String {
+        """
+        [
+          {
+            "id": "discussion-trust",
+            "notes": [
+              {
+                "id": 801,
+                "body": "Please rename this.",
+                "system": false,
+                "resolvable": true,
+                "resolved": false,
+                "author": \(author)
+              }
+            ]
+          }
+        ]
+        """
+    }
+
+    private static let trustDiscussionsOutput = """
+    [
+      {
+        "id": "by-maintainer",
+        "notes": [
+          { "id": 701, "body": "Rename this.", "system": false, "resolvable": true, "resolved": false,
+            "author": { "id": 7, "username": "maintainer" } }
+        ]
+      },
+      {
+        "id": "by-reporter",
+        "notes": [
+          { "id": 702, "body": "Maybe split this.", "system": false, "resolvable": true, "resolved": false,
+            "author": { "id": 8, "username": "reporter" } }
+        ]
+      },
+      {
+        "id": "by-bot",
+        "notes": [
+          { "id": 703, "body": "Possible nil dereference.", "system": false, "resolvable": true, "resolved": false,
+            "author": { "id": 9, "username": "review-bot" } }
+        ]
+      },
+      {
+        "id": "by-viewer",
+        "notes": [
+          { "id": 704, "body": "Note to self.", "system": false, "resolvable": true, "resolved": false,
+            "author": { "id": 1, "username": "viewer" } }
+        ]
+      }
+    ]
+    """
+
     @Test func noteIDRequiresNumericCommentID() throws {
         let comment = ReviewComment(
             id: "123",
