@@ -52,6 +52,27 @@ public final class AlasCoreContext {
     /// Attention items and the gate observations pass through to reach them.
     public let attention: AttentionIntake
 
+    /// Starts background cleanup of a removed worktree's staged files.
+    @ObservationIgnored public var launchWorktreeCleanup: @MainActor (WorktreeTrashCleanupTicket) throws -> Void = {
+        try WorktreeTrashCleaner.launch($0)
+    }
+    /// Whether an interrupted checkpoint restore must be recovered before the
+    /// worktree can be removed. The app installs one that also counts a
+    /// checkpoint operation it has in flight.
+    @ObservationIgnored public var checkpointRecoveryBlocksRemoval: @MainActor (Worktree) async -> Bool = {
+        await AlasCoreContext.hasPendingCheckpointRecovery($0)
+    }
+    /// Stops everything using a worktree that is about to go: its agent
+    /// sessions by default. The app installs one that also kills its
+    /// terminals, waiting for them, and closes its tabs. Throwing refuses the
+    /// removal.
+    @ObservationIgnored public lazy var quiesceWorktree: @MainActor (Worktree) async throws -> Void = { [weak self] worktree in
+        await self?.disposeSessionManager(owner: .worktree(worktree.id))
+    }
+    /// Headless runs in flight, covering finalization, so lifecycle
+    /// operations can stop them and wait until their records settle.
+    @ObservationIgnored var headlessRuns: [String: (worktreeID: String, task: Task<RunOutcome, Error>)] = [:]
+
     @ObservationIgnored private let store: any PersistenceStoreProtocol
     @ObservationIgnored private let projectsFile: URL
     @ObservationIgnored private let makeSessionManager: @MainActor (SessionOwnerID, Worktree) -> ACPSessionManager
@@ -206,26 +227,33 @@ public final class AlasCoreContext {
             status: .running,
             startedAt: Date()
         ))
-        let completion: RunScriptCompletion
-        do {
-            completion = try await runs.run(script, in: worktree, project: project, runID: runID)
-        } catch is CancellationError {
-            finalizeRun(runRecords.finish(runID: runID, outcome: .stopped, at: Date()), capture: .unavailable)
-            throw CancellationError()
-        } catch where error is RunService.RunError || error is RunScriptCompletionMonitor.MonitorError {
-            // The command ran but its exit status was never observed.
-            finalizeRun(runRecords.markLostObservation(runID: runID, at: Date()), capture: .unavailable)
-            throw error
-        } catch {
-            runRecords.rollback(runID: runID, to: displaced)
-            throw error
+        // The task covers the whole run, finalization included, so lifecycle
+        // operations can wait for the record to settle.
+        let lifecycle = Task { () throws -> RunOutcome in
+            let completion: RunScriptCompletion
+            do {
+                completion = try await runs.run(script, in: worktree, project: project, runID: runID)
+            } catch is CancellationError {
+                finalizeRun(runRecords.finish(runID: runID, outcome: .stopped, at: Date()), capture: .unavailable)
+                throw CancellationError()
+            } catch where error is RunService.RunError || error is RunScriptCompletionMonitor.MonitorError {
+                // The command ran but its exit status was never observed.
+                finalizeRun(runRecords.markLostObservation(runID: runID, at: Date()), capture: .unavailable)
+                throw error
+            } catch {
+                runRecords.rollback(runID: runID, to: displaced)
+                throw error
+            }
+            let outcome: RunOutcome = completion.exitCode == 0 ? .succeeded : .failed(exitCode: completion.exitCode)
+            finalizeRun(
+                runRecords.finish(runID: runID, outcome: outcome, at: completion.completedAt),
+                capture: .completion(completion)
+            )
+            return outcome
         }
-        let outcome: RunOutcome = completion.exitCode == 0 ? .succeeded : .failed(exitCode: completion.exitCode)
-        finalizeRun(
-            runRecords.finish(runID: runID, outcome: outcome, at: completion.completedAt),
-            capture: .completion(completion)
-        )
-        return outcome
+        headlessRuns[runID] = (worktree.id, lifecycle)
+        defer { headlessRuns.removeValue(forKey: runID) }
+        return try await withTaskCancellationHandler { try await lifecycle.value } onCancel: { lifecycle.cancel() }
     }
 
     /// The one coordinator for Workspace checkout lifecycles. It reads the
@@ -246,6 +274,18 @@ public final class AlasCoreContext {
         )
         workspaceCheckoutCoordinator = coordinator
         return coordinator
+    }
+
+    /// Shuts down the owner's agent sessions, persisting what they hold and
+    /// releasing their leases, and forgets the manager.
+    public func disposeSessionManager(owner: SessionOwnerID) async {
+        guard let manager = sessionManagers.removeValue(forKey: owner) else { return }
+        manager.flushPendingDraftWrites()
+        for runner in manager.runners.values {
+            runner.stop()
+        }
+        manager.prepareForDisposal()
+        await Self.finishDisposing(manager)
     }
 
     /// The asynchronous half of disposing a session manager whose runners are
