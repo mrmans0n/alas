@@ -22,6 +22,11 @@ struct ACPTranscriptFrameRateBenchmark {
         let bench = try BenchWindow(messages: corpus.messages, collapsesFinishedToolCalls: collapsesFinishedToolCalls)
         defer { bench.close() }
         try await bench.settle()
+        // `ALAS_TRANSCRIPT_BENCH_POINTER=1` rests the pointer over the
+        // transcript, so rows scrolling under it pay their hover handling.
+        if ProcessInfo.processInfo.environment["ALAS_TRANSCRIPT_BENCH_POINTER"] == "1" {
+            FrameRateBenchmark.placePointer(over: bench.scroller, in: bench.window)
+        }
 
         // A brisk trackpad fling: ~2400pt/s up to the top of history and back.
         var direction: CGFloat = -1
