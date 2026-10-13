@@ -6736,6 +6736,7 @@ final class AppState {
             return nil
         }
         var savesBuffers = false
+        var acknowledged: [TabID: Int] = [:]
         if !dirtyEditorTabIds(worktreeId: worktree.id).isEmpty {
             switch promptForDirtyBuffers(
                 action: "Archive",
@@ -6746,7 +6747,7 @@ final class AppState {
             case .save:
                 savesBuffers = true
             case .discard:
-                break
+                acknowledged = dirtyTabGenerations(worktreeId: worktree.id)
             case .cancel:
                 core.releaseWorktreeClaim(claim, for: worktree)
                 return nil
@@ -6760,7 +6761,9 @@ final class AppState {
                 return
             }
             do {
-                try await core.archiveWorktree(worktree, claim: claim)
+                try await withAcknowledgedDirtyTabs(acknowledged, for: worktree) {
+                    try await core.archiveWorktree(worktree, claim: claim)
+                }
             } catch {
                 showFileActionError(title: "Archive Failed", message: error.localizedDescription)
                 return
@@ -6770,16 +6773,35 @@ final class AppState {
     }
 
     /// Archives one confirmed batch item through the core.
-    private func archiveBatchItem(_ worktree: Worktree) async -> WorktreeBatchOutcome {
+    private func archiveBatchItem(_ worktree: Worktree, acknowledgedDirtyTabs acknowledged: [TabID: Int]) async -> WorktreeBatchOutcome {
         let removedIndex = projectsManager.visibleWorktrees(projectId: worktree.projectId)
             .firstIndex(where: { $0.id == worktree.id }) ?? 0
         do {
-            try await core.archiveWorktree(worktree)
+            try await withAcknowledgedDirtyTabs(acknowledged, for: worktree) {
+                try await core.archiveWorktree(worktree)
+            }
         } catch {
             return .skipped(reason: error.localizedDescription)
         }
         finishArchivingWorktree(worktree, removedIndex: removedIndex)
         return .archived
+    }
+
+    /// Runs `operation` with `acknowledged` as the only unsaved edits the
+    /// quiesce step may discard in `worktree`; anything dirtied since refuses.
+    private func withAcknowledgedDirtyTabs(
+        _ acknowledged: [TabID: Int],
+        for worktree: Worktree,
+        _ operation: () async throws -> Void
+    ) async throws {
+        let key = WorktreeOperationKey(projectId: worktree.projectId, worktreeId: worktree.id)
+        acknowledgedDirtyTabs[key] = acknowledged
+        defer { acknowledgedDirtyTabs[key] = nil }
+        try await operation()
+    }
+
+    struct UnacknowledgedEditsError: LocalizedError {
+        var errorDescription: String? { "The worktree has unsaved changes made after this was confirmed." }
     }
 
     private func finishArchivingWorktree(
@@ -6825,6 +6847,10 @@ final class AppState {
     /// whether a target is still archived, so the Settings pane (the only
     /// unarchive entry point) locks its archived rows while this runs.
     private(set) var isDeletingArchivedWorktrees = false
+
+    /// Unsaved edits a confirmed archive may discard, per worktree, while it
+    /// runs. Read by the quiesce step right before it closes editors.
+    @ObservationIgnored private var acknowledgedDirtyTabs: [WorktreeOperationKey: [TabID: Int]] = [:]
 
     /// One target per id, and none for an id any representation rejects. A
     /// worktree id is its path, so one local checkout archived under two
@@ -7037,7 +7063,7 @@ final class AppState {
             results.append(WorktreeBatchResult(
                 worktreeId: worktree.id,
                 branch: worktree.branch,
-                outcome: await archiveBatchItem(worktree)
+                outcome: await archiveBatchItem(worktree, acknowledgedDirtyTabs: knownDirtyGenerations)
             ))
         }
         return results
@@ -10060,6 +10086,12 @@ final class AppState {
         // Closing a tab only queues the daemon-side kill; wait for it so no
         // terminal process still writes while the checkout is audited.
         try await terminateTerminalSessionsAndWait(owner: owner)
+        // Checked with no suspension before the editors close: an open
+        // buffer can still be edited while the operation awaits above.
+        if let acknowledged = acknowledgedDirtyTabs[WorktreeOperationKey(projectId: worktree.projectId, worktreeId: worktree.id)],
+           !Self.hasOnlyAcknowledgedDirtiness(current: dirtyTabGenerations(worktreeId: worktree.id), acknowledgedAtConfirmation: acknowledged) {
+            throw UnacknowledgedEditsError()
+        }
         cleanupWorktreeState(worktreeId: worktree.id, purgeRunHistory: false)
     }
 
@@ -11641,7 +11673,7 @@ final class AppState {
         )
     }
 
-    private func batchArchiveWorktrees(
+    func batchArchiveWorktrees(
         _ authorization: WorktreeCleanupArchiveAuthorization,
         _ worktrees: [Worktree]
     ) async -> [WorktreeBatchResult] {
@@ -11679,7 +11711,10 @@ final class AppState {
             results.append(.init(
                 worktreeId: worktree.id,
                 branch: worktree.branch,
-                outcome: await archiveBatchItem(worktree)
+                outcome: await archiveBatchItem(
+                    worktree,
+                    acknowledgedDirtyTabs: authorization.bufferResolution == .save ? [:] : authorization.dirtyTabsByWorktree[worktree.id] ?? [:]
+                )
             ))
         }
         return results
