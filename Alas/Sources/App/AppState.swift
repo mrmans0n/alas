@@ -1731,10 +1731,12 @@ final class AppState {
             self?.showFileActionError(title: "Run History Failed", message: message)
         }
         installRunScheduleRunner()
+        installReviewShepherdEffects()
         startLocalTextObservers()
         AlasTerminationCoordinator.shared.flush = { [weak self] in
             await self?.shutdownLocalTextFeatures()
             self?.runScheduler.stop()
+            self?.reviewShepherd.stop()
             await GGLandingStore.shared.cancelAllAndWait()
             self?.cancelPendingRunScriptLaunches()
             self?.cancelAllRunScriptCompletionTasks()
@@ -13170,6 +13172,7 @@ final class AppState {
             onTurnCompleted: { [weak self] completion in
                 Task { @MainActor [weak self] in
                     self?.scheduledAgentTurns.deliver(completion)
+                    self?.reviewShepherd.turnCompleted(sessionID: completion.sessionId)
                     await self?.acpOrchestration.childTurnCompleted(completion)
                 }
             },

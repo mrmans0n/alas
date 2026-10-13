@@ -22,6 +22,8 @@ public final class AlasCoreContext {
     @ObservationIgnored public let runs: RunService
     /// Decides when scheduled runs start; its runner decides how.
     public let runScheduler: RunScheduler
+    /// Watches bound pull and merge requests; AppState installs its effects.
+    public let reviewShepherd: ReviewShepherd
     /// Waits for a run's completion file. Injectable so tests can settle runs.
     @ObservationIgnored public let runCompletionWaiter: RunCompletionWaiter
     /// Runs whose completion is being waited for, keyed by run ID.
@@ -86,6 +88,7 @@ public final class AlasCoreContext {
         runHistoryStore: RunHistoryStore? = try? RunHistoryStore(),
         workspaceStore: WorkspaceStore = WorkspaceStore(),
         runScheduler: RunScheduler? = nil,
+        reviewShepherd: ReviewShepherd? = nil,
         localTextModelStore: LocalTextModelStore = LocalTextModelStore(),
         localText: (any LocalTextGenerating)? = nil,
         attentionStore: AttentionStore? = nil,
@@ -95,6 +98,7 @@ public final class AlasCoreContext {
         self.projects = projects
         self.runs = runs
         self.runScheduler = runScheduler ?? RunScheduler(store: store)
+        self.reviewShepherd = reviewShepherd ?? ReviewShepherd(store: store)
         self.runCompletionWaiter = runCompletionWaiter
         self.runHistory = RunHistory(store: runHistoryStore)
         self.attention = AttentionIntake(store: attentionStore ?? AttentionStore())

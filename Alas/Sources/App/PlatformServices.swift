@@ -30,6 +30,7 @@ enum PlatformServices {
             }
         )
         RunScheduler.wakeNotification = (NSWorkspace.shared.notificationCenter, NSWorkspace.didWakeNotification)
+        ReviewShepherd.wakeNotification = (NSWorkspace.shared.notificationCenter, NSWorkspace.didWakeNotification)
         LocalTextEngine.make = { LocalTextInferenceEngine(store: $0, observeMemoryPressure: false) }
         ACPImageEncoding.encoder = { ACPImageEncoding.appKitInlineBase64(fileURL: $0, maxDimension: $1) }
         URLOpening.shared = URLOpening(
