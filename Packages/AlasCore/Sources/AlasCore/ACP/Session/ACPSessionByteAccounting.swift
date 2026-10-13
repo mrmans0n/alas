@@ -37,9 +37,9 @@ extension ACPSession {
         return total
     }
 
-    /// Forwards to `ACPTranscript.markdownCacheByteEstimate`.
+    /// What the transcript's render state retains, mostly parsed markdown.
     public func markdownCacheByteEstimate() -> UInt64 {
-        transcript.markdownCacheByteEstimate
+        transcript.renderState?.byteEstimate ?? 0
     }
 }
 #endif

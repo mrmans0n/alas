@@ -143,6 +143,24 @@ final class DiffPaneLSPDocumentRetain {
     }
 }
 
+/// What `DiffPaneLSPController` needs from the view it serves: pointer
+/// callbacks, document offsets under the pointer, and anchors for its
+/// popovers. Offsets index the view's whole code document, as
+/// `lineMetadata` ranges do.
+@MainActor
+protocol DiffPaneLSPHost: NSView {
+    var hoverHandler: ((NSPoint) -> Void)? { get set }
+    var commandClickHandler: ((NSPoint) -> Void)? { get set }
+    var flagsChangedHandler: ((NSEvent) -> Void)? { get set }
+    var mouseExitedHandler: (() -> Void)? { get set }
+    var lineMetadata: [DiffPaneTextDocumentBuilder.LineMetadata] { get }
+    var lspTheme: Theme? { get }
+    var lspFont: NSFont? { get }
+    func characterIndex(at point: NSPoint) -> Int?
+    func symbolRange(at point: NSPoint) -> NSRange?
+    func symbolAnchorRect(for range: NSRange) -> NSRect?
+}
+
 @MainActor
 final class DiffPaneLSPController {
     private struct ContextKey: Equatable {
@@ -159,7 +177,7 @@ final class DiffPaneLSPController {
         }
     }
 
-    private weak var textView: DiffPaneCodeTextView?
+    private weak var textView: (any DiffPaneLSPHost)?
     private var context: DiffPaneLSPContext?
     private var allowedSide: DiffLineSide = .new
     private var hoverTask: Task<Void, Never>?
@@ -184,7 +202,7 @@ final class DiffPaneLSPController {
         definitionPopover = nil
     }
 
-    init(textView: DiffPaneCodeTextView) {
+    init(textView: any DiffPaneLSPHost) {
         self.textView = textView
         textView.hoverHandler = { [weak self] point in
             self?.requestHover(at: point)
@@ -428,7 +446,7 @@ final class DiffPaneLSPController {
         guard let textView,
               textView.window != nil,
               let body = nonEmptyBody(result),
-              let theme = textView.theme
+              let theme = textView.lspTheme
         else {
             hideHover()
             return
@@ -437,8 +455,8 @@ final class DiffPaneLSPController {
         let renderResult = MarkdownRenderer().render(
             document: Document(parsing: body),
             theme: theme,
-            monospacedFontFamily: textView.font?.familyName ?? "JetBrainsMono Nerd Font",
-            monospacedFontSize: max(1, Int((textView.font?.pointSize ?? 13).rounded())),
+            monospacedFontFamily: textView.lspFont?.familyName ?? "JetBrainsMono Nerd Font",
+            monospacedFontSize: max(1, Int((textView.lspFont?.pointSize ?? 13).rounded())),
             baseDirectory: context.fileURL.deletingLastPathComponent(),
             worktreeRoot: context.worktreeRoot,
             mermaidProfile: .compact

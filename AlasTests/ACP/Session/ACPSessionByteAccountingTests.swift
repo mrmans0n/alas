@@ -34,9 +34,9 @@ struct ACPSessionByteAccountingTests {
     @Test("markdownCacheByteEstimate sums lastFullText across caches")
     func markdownCacheSums() {
         let session = ACPSession(id: "s1", agentId: "claude", worktreeId: "w1", title: "t")
-        let cacheA = session.transcript.markdownCache(forMessage: "a")
+        let cacheA = ACPTranscriptRenderCaches.of(session.transcript).cache(forMessage: "a")
         cacheA.update(with: String(repeating: "x", count: 1000))
-        let cacheB = session.transcript.markdownCache(forMessage: "b")
+        let cacheB = ACPTranscriptRenderCaches.of(session.transcript).cache(forMessage: "b")
         cacheB.update(with: String(repeating: "y", count: 500))
         let bytes = session.markdownCacheByteEstimate()
         #expect(bytes >= 1500)

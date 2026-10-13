@@ -16,7 +16,7 @@ final class HoverWindowController {
         size: NSSize,
         theme: Theme,
         anchor: NSRect,
-        in textView: NSTextView,
+        in hostView: NSView,
         onWillPresentMermaidViewer: @escaping () -> Void,
         onOpenLink: @escaping (URL) -> Bool = { _ in false }
     ) {
@@ -37,7 +37,7 @@ final class HoverWindowController {
             contentViewController: hostingController,
             size: size,
             anchor: anchor,
-            in: textView
+            in: hostView
         )
     }
 
