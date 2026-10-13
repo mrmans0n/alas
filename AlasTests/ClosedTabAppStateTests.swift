@@ -692,6 +692,8 @@ struct ClosedTabAppStateTests {
             }
         )
         let fixture = makeFixture(state: state)
+        // Archive refuses until Workspace ownership can be checked.
+        await fixture.state.loadWorkspaces()
         _ = fixture.state.acpManager(for: fixture.first)
         let tab = fixture.state.tabs.append(
             acpSession: ACPSessionTabState(sessionId: "removed-worktree-chat", title: "Closed chat"),
@@ -995,6 +997,8 @@ struct ClosedTabAppStateTests {
             }
         )
         let fixture = makeFixture(state: state)
+        // Archive refuses until Workspace ownership can be checked.
+        await fixture.state.loadWorkspaces()
         let original = TerminalTabState(
             id: "remote-prep-removed-worktree",
             title: "Terminal",
@@ -1038,8 +1042,10 @@ struct ClosedTabAppStateTests {
         #expect(!fixture.state.canReopenClosedTab)
     }
 
-    @Test func worktreeCleanupPurgesItsClosedTabEntries() {
+    @Test func worktreeCleanupPurgesItsClosedTabEntries() async {
         let fixture = makeFixture()
+        // Archive refuses until Workspace ownership can be checked.
+        await fixture.state.loadWorkspaces()
         let tab = fixture.state.tabs.appendEditor(worktreeId: fixture.first.id, title: "README.md", relativePath: "README.md")
         fixture.state.requestCloseTab(worktreeId: fixture.first.id, tabId: tab.id)
 

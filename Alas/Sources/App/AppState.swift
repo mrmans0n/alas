@@ -6764,6 +6764,9 @@ final class AppState {
         if projectsManager.operationState(for: worktree)?.blocksAdmission == true {
             return "Wait for the current worktree operation to finish before archiving."
         }
+        guard workspacesManager.canMutate else {
+            return "Workspace Checkout ownership could not be verified. Try again once Workspace storage is available."
+        }
         if let owner = worktreeCleanupWorkspaceOwners(for: worktree).first(where: { $0.state == .active }) {
             return "This worktree is owned by Workspace checkout \u{201C}\(owner.name)\u{201D}. Archive it from the checkout instead."
         }
@@ -6810,7 +6813,7 @@ final class AppState {
     /// Restore an archived worktree. Tabs/terminals are NOT recreated — they
     /// were torn down at archive time and the user re-opens what they need.
     func unarchiveWorktree(projectId: String, path: URL) {
-        guard projectsManager.admitsNewWork(worktreeId: Worktree.makeId(path: path)) else {
+        guard projectsManager.operationState(forWorktreeId: Worktree.makeId(path: path), projectId: projectId)?.blocksAdmission != true else {
             showFileActionError(
                 title: "Unarchive Failed",
                 message: "Wait for the current worktree operation to finish before unarchiving."

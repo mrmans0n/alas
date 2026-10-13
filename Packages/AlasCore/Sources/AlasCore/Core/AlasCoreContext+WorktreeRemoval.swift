@@ -148,9 +148,17 @@ extension AlasCoreContext {
     /// persists that. Its runs settle as lost but keep their history, and
     /// nothing leaves the disk. Throws, leaving the worktree visible, when it
     /// cannot be quiesced or the save fails.
-    public func performArchive(_ worktree: Worktree) async throws {
+    public func performArchive(
+        _ worktree: Worktree,
+        revalidate: @MainActor () async -> (any Error)? = { nil }
+    ) async throws {
         await stopHeadlessRuns(worktreeID: worktree.id)
         try await quiesceWorktree(worktree)
+        // Ownership can change while everything stops (a Workspace checkout
+        // registering this worktree), so it is checked again right before hiding.
+        if let refusal = await revalidate() {
+            throw refusal
+        }
         let wasHidden = projects.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path)
         projects.setWorktreeHidden(projectId: worktree.projectId, path: worktree.path, hidden: true)
         do {
@@ -184,7 +192,9 @@ extension AlasCoreContext {
         if let refusal = await workspaceOwnershipRefusal(for: worktree) {
             throw WorktreeArchiveRefusal.ownedByWorkspaceCheckout(refusal)
         }
-        try await performArchive(worktree)
+        try await performArchive(worktree, revalidate: { [weak self] in
+            await self?.workspaceOwnershipRefusal(for: worktree).map(WorktreeArchiveRefusal.ownedByWorkspaceCheckout)
+        })
     }
 
     /// Shows an archived worktree again. Sessions and runs are not restored.
@@ -193,7 +203,7 @@ extension AlasCoreContext {
         guard projects.projects.contains(where: { $0.id == projectID }) else {
             throw ProjectCreationError.projectNotFound
         }
-        guard projects.admitsNewWork(worktreeId: Worktree.makeId(path: path)) else {
+        guard projects.operationState(forWorktreeId: Worktree.makeId(path: path), projectId: projectID)?.blocksAdmission != true else {
             throw WorktreeArchiveRefusal.operationInProgress
         }
         let wasHidden = projects.isWorktreeHidden(projectId: projectID, path: path)
