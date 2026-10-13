@@ -175,8 +175,9 @@ public final class AlasCoreContext {
     }
 
     /// Creates a worktree for `branch` from `base` at `destination`, runs its
-    /// create script unless `runStartupScripts` is false, then refreshes and
-    /// persists the project's worktree list on a best-effort basis.
+    /// create script unless `runStartupScripts` is false or its repository hook
+    /// approval is cancelled, then refreshes and persists the project's
+    /// worktree list on a best-effort basis.
     public func createWorktree(
         projectID: String,
         branch: String,
@@ -199,7 +200,11 @@ public final class AlasCoreContext {
             destination: prepared,
             projectId: projectID
         )
-        try await runWorktreeCreateScripts(project: project, worktree: worktree, includeUserStartupScript: runStartupScripts)
+        // The worktree exists from here on: a cancelled hook approval only
+        // means its scripts do not run, not that the creation failed.
+        do {
+            try await runWorktreeCreateScripts(project: project, worktree: worktree, includeUserStartupScript: runStartupScripts)
+        } catch RepoHookPreflightError.cancelled {}
         // The worktree now exists on disk, and git is the source of truth for
         // it: a refresh or save that fails here is left to the next refresh
         // rather than reported as a failed creation.
