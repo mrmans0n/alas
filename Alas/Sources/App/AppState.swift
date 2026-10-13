@@ -4276,9 +4276,11 @@ final class AppState {
 
     private func cleanupDeletedWorkspaceMemberRuntime(_ worktree: Worktree) async {
         cleanupWorktreeState(worktreeId: worktree.id)
-        projectsManager.setOperationState(for: worktree, state: nil)
         removePersistedGGWorktreeMode(projectId: worktree.projectId, worktreeId: worktree.id)
+        // The claim outlives the refresh: until then the removed row is still
+        // listed and must not admit new work.
         _ = try? await refreshProjectWorktrees(projectId: worktree.projectId)
+        projectsManager.setOperationState(for: worktree, state: nil)
         if selectedWorktreeId == worktree.id {
             selectedWorktreeId = nil
         }
@@ -6736,6 +6738,12 @@ final class AppState {
                 onDiskDestructive: false
             ) {
             case .save:
+                // The prompt's run loop can let another operation claim the
+                // worktree; never overwrite that claim.
+                if let refusal = archiveRefusal(for: worktree) {
+                    showFileActionError(title: "Archive Failed", message: refusal)
+                    return
+                }
                 // Claimed while buffers save, so nothing new starts or adopts
                 // the worktree before it is hidden.
                 let claim = WorktreeOperationState.archiving(projectId: worktree.projectId)
