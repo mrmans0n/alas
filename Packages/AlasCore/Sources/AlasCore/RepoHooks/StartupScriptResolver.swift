@@ -2,9 +2,9 @@ import Foundation
 
 /// Pure helper that resolves a startup script from global, repo, and
 /// per-user project configuration.
-enum StartupScriptResolver {
+public enum StartupScriptResolver {
     /// Compute the effective "session open" script for a terminal pane.
-    static func sessionOpenScript(
+    public static func sessionOpenScript(
         global: AppConfig.Terminal,
         repoScript: String?,
         project: ProjectConfig
@@ -18,7 +18,7 @@ enum StartupScriptResolver {
     }
 
     /// Compute the effective "worktree create" script for a newly-created worktree.
-    static func worktreeCreateScript(
+    public static func worktreeCreateScript(
         global: AppConfig.Terminal,
         repoScript: String?,
         project: ProjectConfig

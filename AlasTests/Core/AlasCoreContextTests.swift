@@ -331,4 +331,36 @@ struct AlasCoreContextTests {
         }
         #expect(context.runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status == .running)
     }
+
+    /// A headless create runs the repository's create hook only when it was
+    /// already approved: there is nobody to ask.
+    @Test(arguments: [false, true])
+    func createRunsOnlyApprovedRepoHooks(approved: Bool) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-core-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let repo = root.appendingPathComponent("repo")
+        try FileManager.default.copyItem(at: try await Self.repoTemplate.value, to: repo)
+        let context = AlasCoreContext(
+            projects: ProjectsManager(persistedProjects: []),
+            store: TestPersistenceStore(),
+            projectsFile: root.appendingPathComponent("projects.json"),
+            runHistoryStore: nil
+        )
+        context.repoHookLoader = RepoHookLoader { _, _, _ in .data(Data("touch hook-ran\n".utf8)) }
+        let project = try await context.addProject(path: repo, displayName: "repo", icon: .default(color: "blue"))
+        if approved {
+            guard case let .loaded(hook) = await context.repoHookLoader.load(event: .worktreeCreate, worktreeRoot: repo, host: nil) else {
+                Issue.record("the fake hook loads")
+                return
+            }
+            try context.persistRepoHookApproval(projectId: project.id, hash: hook.hash)
+        }
+
+        let worktree = try await context.createWorktree(
+            projectID: project.id, branch: "feature", base: "main", destination: root.appendingPathComponent("feature")
+        )
+
+        #expect(FileManager.default.fileExists(atPath: worktree.path.appendingPathComponent("hook-ran").path) == approved)
+    }
 }

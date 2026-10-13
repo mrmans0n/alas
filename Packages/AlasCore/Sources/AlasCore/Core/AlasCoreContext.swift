@@ -73,6 +73,14 @@ public final class AlasCoreContext {
     /// operations can stop them and wait until their records settle.
     @ObservationIgnored var headlessRuns: [String: (worktreeID: String, task: Task<RunOutcome, Error>)] = [:]
 
+    /// Reads repository hooks from a worktree.
+    @ObservationIgnored public var repoHookLoader = RepoHookLoader()
+    /// Asks about unapproved repository hooks. Headless, they are skipped; the
+    /// app installs its approval queue.
+    @ObservationIgnored public var repoHookPrompter: RepoHookPrompter = .skipping
+    /// The global startup scripts. The app installs its terminal settings.
+    @ObservationIgnored public var globalTerminalConfig: @MainActor () -> AppConfig.Terminal = { AppConfig.defaults.terminal }
+
     @ObservationIgnored private let store: any PersistenceStoreProtocol
     @ObservationIgnored private let projectsFile: URL
     @ObservationIgnored private let makeSessionManager: @MainActor (SessionOwnerID, Worktree) -> ACPSessionManager
@@ -166,13 +174,15 @@ public final class AlasCoreContext {
         return project
     }
 
-    /// Creates a worktree for `branch` from `base` at `destination`, then
-    /// refreshes and persists the project's worktree list on a best-effort basis.
+    /// Creates a worktree for `branch` from `base` at `destination`, runs its
+    /// create script unless `runStartupScripts` is false, then refreshes and
+    /// persists the project's worktree list on a best-effort basis.
     public func createWorktree(
         projectID: String,
         branch: String,
         base: String,
-        destination: URL
+        destination: URL,
+        runStartupScripts: Bool = true
     ) async throws -> Worktree {
         guard let project = projects.projects.first(where: { $0.id == projectID }) else {
             throw ProjectCreationError.projectNotFound
@@ -189,6 +199,7 @@ public final class AlasCoreContext {
             destination: prepared,
             projectId: projectID
         )
+        try await runWorktreeCreateScripts(project: project, worktree: worktree, includeUserStartupScript: runStartupScripts)
         // The worktree now exists on disk, and git is the source of truth for
         // it: a refresh or save that fails here is left to the next refresh
         // rather than reported as a failed creation.
