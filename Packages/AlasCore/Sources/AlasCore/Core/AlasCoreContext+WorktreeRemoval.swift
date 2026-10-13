@@ -63,10 +63,16 @@ extension AlasCoreContext {
         if await checkpointRecoveryBlocksRemoval(worktree) {
             return .checkpointRecoveryPending
         }
-        if !request.force, request.authorizedContentFingerprint == nil,
-           let preflight = try? await WorktreeService().deletePreflight(worktreePath: worktree.path),
-           preflight.requiresForce {
-            return .needsForce(WorktreeService.dirtyWorktreeMessage)
+        if !request.force, request.authorizedContentFingerprint == nil {
+            // The preflight has its own missing-LFS fallback; anything it still
+            // cannot answer refuses before anything is stopped.
+            do {
+                if try await WorktreeService().deletePreflight(worktreePath: worktree.path).requiresForce {
+                    return .needsForce(WorktreeService.dirtyWorktreeMessage)
+                }
+            } catch {
+                return .failed("\(error.localizedDescription)")
+            }
         }
 
         // Nothing may keep using the checkout while its files go.
