@@ -373,11 +373,12 @@ public final class ReviewShepherd {
     /// A fresh fetch of the record's own request, for `pr_status`. Read-only:
     /// no policy, no record change, no scheduling. The branch lookup is used
     /// when it finds this record's request; otherwise (the worktree moved to
-    /// another branch, or the request is merged or closed) the request is read
-    /// by number. A missing or signed-out provider CLI leaves the request out
-    /// and keeps the provider flags; a failed by-number read leaves it out
-    /// with `errorMessage` set. Nil when the record or its worktree is gone or
-    /// the worktree's git state cannot be read.
+    /// another branch, or the request is merged or closed) the request and
+    /// its checks are read by number on the record's remote. A missing or
+    /// signed-out provider CLI clears the matching provider flag; any other
+    /// failure sets `errorMessage`. Either way the request is left out. Nil
+    /// when the record or its worktree is gone or the worktree's git state
+    /// cannot be read.
     public func statusSnapshot(for id: ShepherdRecordID) async -> ReviewLoopSnapshot? {
         guard let record = records[id],
               let context = effects?.worktreeContext(id.worktreeID),
@@ -388,49 +389,52 @@ public final class ReviewShepherd {
            ShepherdRecordID(worktreeID: id.worktreeID, request: request) == id {
             return snapshot
         }
-        func withoutRequest(available: Bool, authenticated: Bool, error: String?) -> ReviewLoopSnapshot {
+        func onRecordRemote(
+            _ request: ReviewRequest?,
+            available: Bool = true,
+            authenticated: Bool = true,
+            capabilities: CodeHostProviderCapabilities = .readOnly,
+            error: String? = nil
+        ) -> ReviewLoopSnapshot {
             ReviewLoopSnapshot(
                 local: snapshot.local,
-                remote: snapshot.remote,
-                reviewRequest: nil,
+                remote: record.remote,
+                reviewRequest: request,
                 providerAvailable: available,
                 providerAuthenticated: authenticated,
-                providerCapabilities: snapshot.providerCapabilities,
+                providerCapabilities: capabilities,
                 errorMessage: error
             )
         }
-        if snapshot.remote != nil, !snapshot.providerAvailable || !snapshot.providerAuthenticated {
-            return withoutRequest(
-                available: snapshot.providerAvailable,
-                authenticated: snapshot.providerAuthenticated,
-                error: nil
-            )
-        }
         guard let provider = providerRegistry.provider(for: id.providerKind) else {
-            return withoutRequest(
-                available: false,
-                authenticated: false,
+            return onRecordRemote(
+                nil, available: false, authenticated: false,
                 error: CodeHostProviderError.unsupportedProvider(id.providerKind).localizedDescription
             )
         }
         do {
-            let request = try await provider.reviewRequest(remote: record.remote, number: id.requestNumber, cwd: context.path)
-            return ReviewLoopSnapshot(
-                local: snapshot.local,
-                remote: snapshot.remote,
-                reviewRequest: request,
-                providerAvailable: true,
-                providerAuthenticated: true,
-                providerCapabilities: snapshot.providerCapabilities,
-                errorMessage: nil
-            )
+            let request = try await requestByNumber(record, provider: provider, worktreePath: context.path)
+            return onRecordRemote(request, capabilities: provider.capabilities)
         } catch CodeHostProviderError.cliMissing(let message) {
-            return withoutRequest(available: false, authenticated: false, error: message)
+            return onRecordRemote(nil, available: false, authenticated: false, error: message)
         } catch CodeHostProviderError.unauthenticated(let message) {
-            return withoutRequest(available: true, authenticated: false, error: message)
+            return onRecordRemote(nil, authenticated: false, error: message)
         } catch {
-            return withoutRequest(available: true, authenticated: true, error: error.localizedDescription)
+            return onRecordRemote(nil, capabilities: provider.capabilities, error: error.localizedDescription)
         }
+    }
+
+    /// The record's request read by number on its own remote, with its checks,
+    /// as `ReviewLoopState` loads a branch's request. A checks failure fails
+    /// the read, as it fails a review loop refresh.
+    private func requestByNumber(
+        _ record: ShepherdRecord,
+        provider: any CodeHostProvider,
+        worktreePath: URL
+    ) async throws -> ReviewRequest {
+        let request = try await provider.reviewRequest(remote: record.remote, number: record.id.requestNumber, cwd: worktreePath)
+        let checks = try await provider.checks(remote: record.remote, request: request, cwd: worktreePath)
+        return request.withChecks(checks)
     }
 
     /// Lowercased logins that reviewed the request's current head. Nil when
@@ -566,8 +570,9 @@ public final class ReviewShepherd {
     /// The snapshot to decide on, carrying this record's request. The branch
     /// lookup only finds open requests on the worktree's current branch, so
     /// when it returns another request or none, the request is read by
-    /// number. Merged or closed there is decided on (the policy finishes the
-    /// record). Still open means the worktree moved to another branch or the
+    /// number on the record's remote. Merged or closed there is decided on
+    /// (the policy finishes the record), with its checks loaded like a branch
+    /// lookup's. Still open means the worktree moved to another branch or the
     /// request was retargeted: nothing is decided until the branch lookup
     /// finds it again, and a new base is adopted so it can.
     private func snapshotCarryingRequest(
@@ -583,20 +588,21 @@ public final class ReviewShepherd {
         let request: ReviewRequest
         do {
             request = try await provider.reviewRequest(remote: record.remote, number: id.requestNumber, cwd: worktreePath)
+            if request.state != .open {
+                let checks = try await provider.checks(remote: record.remote, request: request, cwd: worktreePath)
+                return ReviewLoopSnapshot(
+                    local: snapshot.local,
+                    remote: record.remote,
+                    reviewRequest: request.withChecks(checks),
+                    providerAvailable: true,
+                    providerAuthenticated: true,
+                    providerCapabilities: provider.capabilities,
+                    errorMessage: nil
+                )
+            }
         } catch {
             noteFailure(id, String(describing: error))
             return nil
-        }
-        guard request.state == .open else {
-            return ReviewLoopSnapshot(
-                local: snapshot.local,
-                remote: snapshot.remote,
-                reviewRequest: request,
-                providerAvailable: true,
-                providerAuthenticated: true,
-                providerCapabilities: snapshot.providerCapabilities,
-                errorMessage: nil
-            )
         }
         guard var current = records[id] else { return nil }
         failureCounts[id] = nil

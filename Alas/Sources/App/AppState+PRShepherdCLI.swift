@@ -9,8 +9,9 @@ private struct PRShepherdCLIError: Error {
 /// calling ACP session and its worktree, and rejected Workspace checkout owners.
 extension AppState {
     /// Pushes the exact HEAD, opens the PR/MR (or adopts the open one for this
-    /// branch), and binds the shepherd to the calling session. One call per
-    /// worktree at a time.
+    /// branch), and binds the shepherd to the calling session. A call made
+    /// while another runs for the worktree waits for it, then adopts the
+    /// request it opened, else returns its response.
     func cliPRCreate(
         sessionID: String,
         worktreeID: String,
@@ -19,19 +20,54 @@ extension AppState {
         draft: Bool,
         base: String?
     ) async -> AlasCLIResponse {
-        guard prCreateWorktreeIDsInFlight.insert(worktreeID).inserted else {
-            return .error("pr_create is already running for this worktree. Wait for it to finish, then call pr_status.")
+        if let running = prCreateTasks[worktreeID] {
+            let response = await running.value
+            if let adopted = await adoptOpenPR(sessionID: sessionID, worktreeID: worktreeID, base: base) {
+                return .text([ReviewCommentWireDTO.jsonLine(adopted)])
+            }
+            return response
         }
-        defer { prCreateWorktreeIDsInFlight.remove(worktreeID) }
-        do {
-            let result = try await createShepherdedPR(
-                sessionID: sessionID, worktreeID: worktreeID,
-                title: title, body: body, draft: draft, base: base
-            )
-            return .text([ReviewCommentWireDTO.jsonLine(result)])
-        } catch {
-            return .error(Self.prShepherdErrorMessage(error))
+        let task = Task { @MainActor [weak self] () -> AlasCLIResponse in
+            guard let self else { return .error("Alas is not available.") }
+            do {
+                let result = try await self.createShepherdedPR(
+                    sessionID: sessionID, worktreeID: worktreeID,
+                    title: title, body: body, draft: draft, base: base
+                )
+                return .text([ReviewCommentWireDTO.jsonLine(result)])
+            } catch {
+                return .error(Self.prShepherdErrorMessage(error))
+            }
         }
+        prCreateTasks[worktreeID] = task
+        let response = await task.value
+        if prCreateTasks[worktreeID] == task {
+            prCreateTasks[worktreeID] = nil
+        }
+        return response
+    }
+
+    /// The open request for the worktree's branch, bound to `sessionID`. Nil
+    /// when there is none or it can't be read.
+    private func adoptOpenPR(sessionID: String, worktreeID: String, base: String?) async -> PRCreateResultWire? {
+        guard let target = try? prShepherdTarget(worktreeID) else { return nil }
+        let baseBranch = await prCreateBaseBranch(base, context: target.context)
+        guard let snapshot = await reviewShepherd.fetchSnapshot(worktreePath: target.context.path, baseBranch: baseBranch),
+              let request = snapshot.reviewRequest,
+              request.state == .open
+        else { return nil }
+        let record = await bindPRShepherd(sessionID: sessionID, worktreeID: worktreeID, request: request)
+        return PRCreateResultWire(
+            request: request, headSHA: request.headSHA ?? snapshot.local.headSHA, created: false,
+            uncommittedChanges: snapshot.local.hasWorkingTreeChanges || snapshot.local.hasStagedChanges,
+            record: record
+        )
+    }
+
+    /// The requested base, else the worktree's, without a `<remote>/` prefix.
+    private func prCreateBaseBranch(_ base: String?, context: ReviewShepherd.WorktreeContext) async -> String {
+        let remotes = (try? await GitService().remotes(worktreePath: context.path)) ?? []
+        return Self.normalizedBaseBranch(base ?? context.baseBranch, remoteNames: Set(remotes.map(\.name)))
     }
 
     /// Fresh status of the PR/MR bound to the calling session, else of the
@@ -54,15 +90,13 @@ extension AppState {
         base: String?
     ) async throws -> PRCreateResultWire {
         let (_, context) = try prShepherdTarget(worktreeID)
-        let git = GitService()
         // The local probe fails outright on an unborn branch, so say so first.
         if let head = try? await Process.git(["rev-parse", "--verify", "--quiet", "HEAD"], cwd: context.path),
            head.exitCode == 1 {
-            let branch = (try? await git.currentBranch(worktreePath: context.path)) ?? ""
+            let branch = (try? await GitService().currentBranch(worktreePath: context.path)) ?? ""
             throw PRShepherdCLIError(message: "\(branch.isEmpty ? "This branch" : branch) has no commits yet.")
         }
-        let remoteNames = Set(((try? await git.remotes(worktreePath: context.path)) ?? []).map(\.name))
-        let baseBranch = Self.normalizedBaseBranch(base ?? context.baseBranch, remoteNames: remoteNames)
+        let baseBranch = await prCreateBaseBranch(base, context: context)
         guard let snapshot = await reviewShepherd.fetchSnapshot(worktreePath: context.path, baseBranch: baseBranch) else {
             throw PRShepherdCLIError(message: "Alas could not read this worktree's Git state.")
         }
