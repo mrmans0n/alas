@@ -224,11 +224,19 @@ extension AlasCoreContext {
         id: UUID,
         publish: @MainActor () async -> Void = {}
     ) async throws -> WorkspaceCheckout {
-        unarchivingWorkspaceCheckoutIDs.insert(id)
-        defer { unarchivingWorkspaceCheckoutIDs.remove(id) }
+        unarchivingWorkspaceCheckouts[id, default: 0] += 1
+        defer {
+            unarchivingWorkspaceCheckouts[id]! -= 1
+            if unarchivingWorkspaceCheckouts[id] == 0 { unarchivingWorkspaceCheckouts[id] = nil }
+        }
         let checkout = try await workspaceCoordinator().unarchive(checkoutID: id)
         await publish()
         return checkout
+    }
+
+    /// Whether `unarchiveWorkspaceCheckout` is reactivating checkout `id`.
+    public func isUnarchivingWorkspaceCheckout(_ id: UUID) -> Bool {
+        unarchivingWorkspaceCheckouts[id] != nil
     }
 
     /// Whether an interrupted checkpoint restore references the checkout.
@@ -348,7 +356,7 @@ extension AlasCoreContext {
         // Read before the load: an unarchive can finish, and leave the set,
         // while the load is suspended. One starting later is refused by the
         // claim the caller holds.
-        let unarchiving = unarchivingWorkspaceCheckoutIDs
+        let unarchiving = unarchivingWorkspaceCheckouts
         let state: WorkspaceStateFile
         switch await workspaceStore.load() {
         case .missing: return nil
@@ -358,7 +366,7 @@ extension AlasCoreContext {
         let path = worktree.path.standardizedFileURL.path
         let owner = state.checkouts.first { checkout in
             checkout.workspaceID != nil
-                && (checkout.archivedAt == nil || unarchiving.contains(checkout.id))
+                && (checkout.archivedAt == nil || unarchiving[checkout.id] != nil)
                 && checkout.members.contains { member in
                 guard member.projectID == worktree.projectId,
                       URL(fileURLWithPath: checkout.inAppWorktreePath(member.worktreePath)).standardizedFileURL.path == path

@@ -6779,7 +6779,7 @@ final class AppState {
             return "Workspace Checkout ownership could not be verified. Try again once Workspace storage is available."
         }
         if let owner = worktreeCleanupWorkspaceOwners(for: worktree).first(where: {
-            $0.state == .active || core.unarchivingWorkspaceCheckoutIDs.contains($0.id)
+            $0.state == .active || core.isUnarchivingWorkspaceCheckout($0.id)
         }) {
             return "This worktree is owned by Workspace checkout \u{201C}\(owner.name)\u{201D}. Archive it from the checkout instead."
         }
@@ -10961,7 +10961,7 @@ final class AppState {
         // longer does, and the row's own removal actions are the only way
         // to clear those — refusing here would make them dead ends.
         guard let owner = worktreeCleanupWorkspaceOwners(for: worktree).first(where: {
-            $0.state == .active || core.unarchivingWorkspaceCheckoutIDs.contains($0.id)
+            $0.state == .active || core.isUnarchivingWorkspaceCheckout($0.id)
         }) else { return nil }
         return "This worktree is owned by Workspace checkout \u{201C}\(owner.name)\u{201D}. Delete it from the checkout instead."
     }
