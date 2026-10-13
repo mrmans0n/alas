@@ -473,11 +473,12 @@ public final class ProjectsManager {
         return claimTokens[key] == token && worktreeOperationStates[key] != nil
     }
 
-    /// Clears the claim on `worktree` only if `token` still holds it.
+    /// Clears the claim on `worktree` only if `token` still holds it. The
+    /// token is dropped even when a refresh already cleared the claim.
     public func releaseOperation(_ token: UUID, for worktree: Worktree) {
-        if holdsClaim(token, for: worktree) {
-            setOperationState(for: worktree, state: nil)
-        }
+        let key = WorktreeOperationKey(projectId: worktree.projectId, worktreeId: worktree.id)
+        guard claimTokens[key] == token else { return }
+        setOperationState(for: worktree, state: nil)
     }
 
     /// Whether new terminals, agent sessions and runs may start in `worktree`.
