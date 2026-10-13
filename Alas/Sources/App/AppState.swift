@@ -7643,6 +7643,21 @@ final class AppState {
                       await manager.showVisualAid(visual, in: sessionID)
                 else { return .error("This session can't show visuals right now.") }
                 return .text([#"{"visual_id":"\#(visual.id.uuidString)"}"#])
+            },
+            prCreate: { [weak self] sessionID, worktreeID, params in
+                guard let self else { return .error("Alas is not available.") }
+                return await self.cliPRCreate(
+                    sessionID: sessionID,
+                    worktreeID: worktreeID,
+                    title: params.title,
+                    body: params.body,
+                    draft: params.draft,
+                    base: params.base
+                )
+            },
+            prStatus: { [weak self] sessionID, worktreeID in
+                guard let self else { return .error("Alas is not available.") }
+                return await self.cliPRStatus(sessionID: sessionID, worktreeID: worktreeID)
             }
         )
     }

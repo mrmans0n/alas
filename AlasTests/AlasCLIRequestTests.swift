@@ -426,6 +426,66 @@ struct AlasCLIRequestTests {
         }
     }
 
+    @Test(arguments: [
+        (#"{"title":"fix: retry","body":"Why.","draft":true,"base":"release"}"#,
+         PRCreateParams?.some(PRCreateParams(title: "fix: retry", body: "Why.", draft: true, base: "release"))),
+        (#"{"title":" fix: retry ","body":"Why."}"#,
+         PRCreateParams(title: "fix: retry", body: "Why.", draft: false, base: nil)),
+        (#"{"title":"fix: retry","body":"Why.","base":"  "}"#,
+         PRCreateParams(title: "fix: retry", body: "Why.", draft: false, base: nil)),
+        (#"{"body":"Why."}"#, nil),
+        (#"{"title":"   ","body":"Why."}"#, nil),
+        (#"{"title":"fix: retry"}"#, nil),
+        (#"{"title":"fix: retry","body":"Why.","draft":"yes"}"#, nil),
+    ])
+    func decodesPRCreate(params: String, expected: PRCreateParams?) throws {
+        let json = #"{"v":1,"kind":"cli","command":"pr_create","session_id":"acp-1","cwd":"/wt","params":\#(params)}"#
+        if let expected {
+            #expect(try AlasCLIRequest.decode(from: Data(json.utf8)).command == .prCreate(expected))
+        } else {
+            #expect(throws: AlasCLIRequestError.malformed) {
+                try AlasCLIRequest.decode(from: Data(json.utf8))
+            }
+        }
+    }
+
+    @Test func decodesPRStatus() throws {
+        let json = #"{"v":1,"kind":"cli","command":"pr_status","session_id":"acp-1","cwd":"/wt","params":{}}"#
+        #expect(try AlasCLIRequest.decode(from: Data(json.utf8)).command == .prStatus)
+    }
+
+    /// Pins the agent-facing `pr_status` keys from the spec, including the
+    /// explicit nulls agents rely on.
+    @Test(arguments: [
+        (PRStatusWire(pullRequest: nil, shepherd: nil), #"{"pull_request":null,"shepherd":null}"#),
+        (
+            PRStatusWire(
+                pullRequest: .init(
+                    number: 2041,
+                    url: "https://example.com/pr/2041",
+                    state: "open",
+                    draft: false,
+                    headSha: "a3f9c1e",
+                    mergeState: "blocked",
+                    checks: .init(
+                        passed: 10, failed: 1, pending: 1, skipped: 0,
+                        failing: [.init(name: "unit-tests", workflow: "CI", url: nil)]
+                    ),
+                    threads: [.init(
+                        id: "PRRT_1", path: "Auth/TokenRefresher.swift", line: 88, author: "maintainer",
+                        trust: "trusted", body: "Back off.", url: nil
+                    )],
+                    missingRequiredReviewers: ["chatgpt-codex-connector"]
+                ),
+                shepherd: .init(phase: "fixing", autoFix: true, autoMerge: false, fixAttempts: 1, rulesSource: "repo_file")
+            ),
+            #"{"pull_request":{"checks":{"failed":1,"failing":[{"name":"unit-tests","url":null,"workflow":"CI"}],"passed":10,"pending":1,"skipped":0},"draft":false,"head_sha":"a3f9c1e","merge_state":"blocked","missing_required_reviewers":["chatgpt-codex-connector"],"number":2041,"state":"open","threads":[{"author":"maintainer","body":"Back off.","id":"PRRT_1","line":88,"path":"Auth\/TokenRefresher.swift","trust":"trusted","url":null}],"url":"https:\/\/example.com\/pr\/2041"},"shepherd":{"auto_fix":true,"auto_merge":false,"fix_attempts":1,"phase":"fixing","rules_source":"repo_file"}}"#
+        ),
+    ])
+    func prStatusWireMatchesTheSpecKeys(status: PRStatusWire, expected: String) {
+        #expect(ReviewCommentWireDTO.jsonLine(status) == expected)
+    }
+
     private struct ProbeParams: Decodable, Equatable {
         var name: String
         var count: Int?

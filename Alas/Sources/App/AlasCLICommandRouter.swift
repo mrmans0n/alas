@@ -63,6 +63,12 @@ struct AlasCLICommandRouter {
     var showVisualAid: (String, ACPVisualAid) async -> AlasCLIResponse = { _, _ in
         .error("Visual aids are not available yet.")
     }
+    var prCreate: (String, String, PRCreateParams) async -> AlasCLIResponse = { _, _, _ in
+        .error("The PR shepherd is not available yet.")
+    }
+    var prStatus: (String, String) async -> AlasCLIResponse = { _, _ in
+        .error("The PR shepherd is not available yet.")
+    }
 
     /// Also used by plugins (`review/comment`), so they take the CLI's paths rather than a copy of them.
     var service: AlasActionService {
@@ -183,6 +189,14 @@ struct AlasCLICommandRouter {
            case .workspaceCheckout = owner {
             return notifyOwnedSession(sessionId, owner, body, title, level)
         }
+        switch request.command {
+        case .prCreate, .prStatus:
+            if case .workspaceCheckout = requestOwner {
+                return .error("The PR shepherd does not support Workspace checkouts yet. Use a regular worktree.")
+            }
+        default:
+            break
+        }
         let origin: Worktree
         let originOwner: SessionOwnerID?
         if let sessionId = request.sessionId,
@@ -280,6 +294,16 @@ struct AlasCLICommandRouter {
             preconditionFailure("Session commands are handled before generic origin resolution")
         case .visualShow:
             preconditionFailure("visual_show is handled before generic origin resolution")
+        case .prCreate(let params):
+            guard let sessionId = request.sessionId, resolveACPSessionOrigin(sessionId) != nil else {
+                return .error("pr_create is only available to ACP agent sessions.")
+            }
+            return await prCreate(sessionId, origin.id, params)
+        case .prStatus:
+            guard let sessionId = request.sessionId, resolveACPSessionOrigin(sessionId) != nil else {
+                return .error("pr_status is only available to ACP agent sessions.")
+            }
+            return await prStatus(sessionId, origin.id)
         }
     }
 }

@@ -574,6 +574,7 @@
 		4F6177806CEB8E50F0D70F7B /* MermaidViewerStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84A09AB192DD6181CD974283 /* MermaidViewerStateTests.swift */; };
 		4F6DAC87A8E1730770319BBB /* RightPaneGGStackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA5820BB012E55F3A0C1272B /* RightPaneGGStackTests.swift */; };
 		4FB2B36BAEB48DBA3607B45E /* IssueKindTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13A8F6AECF58B1513EB313EF /* IssueKindTests.swift */; };
+		4FBF5CEB92EFD0CEB600107B /* PRShepherdWireDTO.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71CB54F2EACAE776D5A67D51 /* PRShepherdWireDTO.swift */; };
 		4FD9E5FFB4C75850CF7B2FE7 /* StagedDiffLoaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99CD99C81057F377C5E249B7 /* StagedDiffLoaderTests.swift */; };
 		4FE322C88A2B06C317DDA9B5 /* ReviewSessionTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64C593F9F14DD962C9822C64 /* ReviewSessionTabView.swift */; };
 		4FE75EB8E4B75CAD5370147B /* ACPBackgroundTaskPresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82C802E0AB3F5DAB096101E4 /* ACPBackgroundTaskPresentationTests.swift */; };
@@ -1751,6 +1752,7 @@
 		FD9F0F14E4EA5ACF408211A7 /* ACPTranscriptTilingController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5A981A28B0FED8C3D95B107 /* ACPTranscriptTilingController.swift */; };
 		FDAAE84A48C2AD650444141B /* GGStackCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83B6B0597FA2E0DF89580A60 /* GGStackCacheTests.swift */; };
 		FDB1BD021ED0D2C7247E42D5 /* RightPaneStateLoadOlderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3C89163A30EA4D278E86959 /* RightPaneStateLoadOlderTests.swift */; };
+		FDEE5AFDD2BCB32C26705688 /* AppState+PRShepherdCLI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C6A8F991EAB5CAED7397353 /* AppState+PRShepherdCLI.swift */; };
 		FE1517EC14DCB1C29528C865 /* StatusParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBA6A9F78C8E8CDF6D170BDD /* StatusParserTests.swift */; };
 		FE3F355996C9362DA52687B9 /* MermaidDiagramTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FD5EF425B826054367B9A98 /* MermaidDiagramTheme.swift */; };
 		FE5846F4401C702264817399 /* SpaceEmojiPickerSelectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28777B087266D8AE174BA233 /* SpaceEmojiPickerSelectionTests.swift */; };
@@ -1985,6 +1987,7 @@
 		1C0479721D1BC95DC664D4CB /* IssueWorktreeLaunchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IssueWorktreeLaunchTests.swift; sourceTree = "<group>"; };
 		1C6281C3FC6602FD3C92B699 /* WebPreviewBrowserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebPreviewBrowserTests.swift; sourceTree = "<group>"; };
 		1C63CBD839A151565AE577AE /* SSHIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHIntegrationTests.swift; sourceTree = "<group>"; };
+		1C6A8F991EAB5CAED7397353 /* AppState+PRShepherdCLI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppState+PRShepherdCLI.swift"; sourceTree = "<group>"; };
 		1C8926C5ABBB7B8157ACFEF3 /* session-update-context-compaction-partial.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "session-update-context-compaction-partial.json"; sourceTree = "<group>"; };
 		1C893B8591A0B47E36E910F3 /* CheckpointRecoveryCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CheckpointRecoveryCard.swift; sourceTree = "<group>"; };
 		1C8F14A2CEAE4B8404213C73 /* AlasSegmentedControl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasSegmentedControl.swift; sourceTree = "<group>"; };
@@ -2578,6 +2581,7 @@
 		71A2A074CEB9C9BA2AD34DD7 /* CenterSelectionStateResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CenterSelectionStateResolverTests.swift; sourceTree = "<group>"; };
 		71A90560CED6562BBC313F3C /* ProjectConfigHostTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectConfigHostTests.swift; sourceTree = "<group>"; };
 		71BFAD7D324EEAE4DA5D402E /* TerminalTabStateCodableTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalTabStateCodableTests.swift; sourceTree = "<group>"; };
+		71CB54F2EACAE776D5A67D51 /* PRShepherdWireDTO.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PRShepherdWireDTO.swift; sourceTree = "<group>"; };
 		71DEA04B12C341C540CCD54A /* AppKitDiffReviewFlingPerfTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppKitDiffReviewFlingPerfTests.swift; sourceTree = "<group>"; };
 		71E01A18A7215E3FEEB71B07 /* ACPBrokerClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPBrokerClientTests.swift; sourceTree = "<group>"; };
 		71F9CE2A0C76E75E95A641AE /* DraftAmendPrefill.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftAmendPrefill.swift; sourceTree = "<group>"; };
@@ -6395,6 +6399,7 @@
 				79A2359B8406A9094561C922 /* AppState+NextPromptSuggestions.swift */,
 				DBCEDCD8B33C492723BD58E3 /* AppState+PairingApproval.swift */,
 				4D1566BDB099224888C7FEF3 /* AppState+PeerConsoles.swift */,
+				1C6A8F991EAB5CAED7397353 /* AppState+PRShepherdCLI.swift */,
 				67B6E33159E74B53749FDE5D /* AppState+RepoConfig.swift */,
 				775B5EF5353D424CA076CA13 /* AppState+RepoHooks.swift */,
 				377761A3E22B405ADB5451F3 /* AppState+RunSchedules.swift */,
@@ -6409,6 +6414,7 @@
 				90E9DAE6A3C83B64305D5805 /* EditorCommands.swift */,
 				B44D759586280250330A9A04 /* FontSizeCommands.swift */,
 				C18DE414CB2E7F817B9FCEAA /* PlatformServices.swift */,
+				71CB54F2EACAE776D5A67D51 /* PRShepherdWireDTO.swift */,
 				9B123302E0FD0B9F187EA680 /* RepoIconDisplayCache.swift */,
 				6D7BE909731E9D15A032A6E0 /* ReviewCommentWireDTO.swift */,
 				B15DFCD74150803355CC0A95 /* RightPaneSelectionState.swift */,
@@ -6917,6 +6923,7 @@
 				FD5659886908E19C5156D657 /* AppState+Attention.swift in Sources */,
 				1DDDC6B80D519E9EFD5DAAB7 /* AppState+LocalText.swift in Sources */,
 				BEF575D260C79BD830798BDD /* AppState+NextPromptSuggestions.swift in Sources */,
+				FDEE5AFDD2BCB32C26705688 /* AppState+PRShepherdCLI.swift in Sources */,
 				C43E42415BA089A482AE45BE /* AppState+PairingApproval.swift in Sources */,
 				134F7DE151C7728BE1C73F31 /* AppState+PeerConsoles.swift in Sources */,
 				CEC8F80B42EB6B8FBCC84AE2 /* AppState+Plugins.swift in Sources */,
@@ -7232,6 +7239,7 @@
 				84103C99FE430DB2B36982D1 /* OpenSessionsSection.swift in Sources */,
 				082582F4BBA9DCFF0EAB9588 /* OperationCard.swift in Sources */,
 				ACB0AD03C9DFD88A431E6BC5 /* OutdatedThreadsDrawer.swift in Sources */,
+				4FBF5CEB92EFD0CEB600107B /* PRShepherdWireDTO.swift in Sources */,
 				66DCE2D5A6D886BAE5A6B9A0 /* PairedComposerTextControls.swift in Sources */,
 				7962F21EA05595E2182ECF6E /* PairedDelimiterEditing.swift in Sources */,
 				9B472368F15A281048C8D70E /* PaneBandStyle.swift in Sources */,

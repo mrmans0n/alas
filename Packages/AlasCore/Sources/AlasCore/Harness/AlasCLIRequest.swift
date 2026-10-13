@@ -35,6 +35,22 @@ public enum AlasCLINotifyLevel: String, Equatable, Sendable {
     case attention
 }
 
+/// `pr_create` arguments after validation: title and body trimmed and
+/// non-empty, `base` nil when omitted or blank (the worktree's base branch).
+public struct PRCreateParams: Equatable, Sendable {
+    public let title: String
+    public let body: String
+    public let draft: Bool
+    public let base: String?
+
+    public init(title: String, body: String, draft: Bool = false, base: String? = nil) {
+        self.title = title
+        self.body = body
+        self.draft = draft
+        self.base = base
+    }
+}
+
 public struct AlasCLIRequest: Equatable, Sendable {
     public enum Command: Equatable, Sendable {
         case open(paths: [String])
@@ -59,6 +75,11 @@ public struct AlasCLIRequest: Equatable, Sendable {
         case visualShow(title: String, html: String, question: ACPVisualAid.Question?)
         /// `session_read`, `session_search`, `session_wait`, `session_interrupt`.
         case sessionAction(ACPDelegatedSessionAction)
+        /// MCP-only: push this worktree's branch, open its PR/MR (or adopt the
+        /// open one) and bind the PR shepherd to the calling session.
+        case prCreate(PRCreateParams)
+        /// MCP-only: fresh status of the calling session's PR/MR.
+        case prStatus
         case resolve
     }
 
@@ -285,6 +306,13 @@ public struct AlasCLIRequest: Equatable, Sendable {
             self.title = title
             self.level = level
         }
+    }
+
+    private struct PRCreateWireParams: Decodable {
+        var title: String?
+        var body: String?
+        var draft: Bool?
+        var base: String?
     }
 
     private struct AgentListParams: Decodable {
@@ -622,6 +650,16 @@ public struct AlasCLIRequest: Equatable, Sendable {
                 verdict: verdict,
                 summary: params?.summary ?? ""
             ))
+        case "pr_create":
+            let params = try Self.decodeParams(PRCreateWireParams.self, from: data)
+            command = .prCreate(PRCreateParams(
+                title: try requiredNonEmpty(params.title),
+                body: try requiredNonEmpty(params.body),
+                draft: params.draft ?? false,
+                base: params.base?.nilIfBlank
+            ))
+        case "pr_status":
+            command = .prStatus
         case "agent_list":
             let params = try Self.decodeParams(AgentListParams.self, from: data)
             command = .agentList(worktree: try params.worktree.map(requiredNonEmpty))
