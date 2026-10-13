@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### 🐛 Fixes
+
+- Fix a crash about a second after splitting a terminal pane, restoring a terminal tab, or opening a Workspace checkout terminal, when the harness detector polled the pane off the main thread (regression in 0.21.1).
+
 ## [0.21.2] - 2026-10-13
 
 ### ✨ Features

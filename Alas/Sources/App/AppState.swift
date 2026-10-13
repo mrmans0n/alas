@@ -409,7 +409,7 @@ final class AppState {
     private static let logger = Logger(subsystem: "io.nlopez.alas", category: "AppState")
     struct OpenedTerminalSession {
         let id: String
-        let foregroundPid: () -> pid_t?
+        let foregroundPid: HarnessDetector.PidProvider
     }
 
     func beginCenterGitMutation(worktreeId: String) {
