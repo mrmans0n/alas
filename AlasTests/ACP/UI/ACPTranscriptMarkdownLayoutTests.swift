@@ -18,6 +18,11 @@ import Testing
         let narrow = try #require(ACPTranscriptMarkdownLayout.make(source: source, width: 200, theme: theme, typography: .default))
         #expect(narrow.height > wide.height)
         #expect(narrow.lines.allSatisfy { CGFloat(CTLineGetTypographicBounds($0.line, nil, nil, nil)) <= 200 + 0.5 })
+        #expect(narrow.lines.allSatisfy { line in
+            var ascent: CGFloat = 0, descent: CGFloat = 0
+            CTLineGetTypographicBounds(line.line, &ascent, &descent, nil)
+            return line.height >= ascent + descent
+        })
     }
 
     @Test func blocksAreSpacedAndCodeGetsABackground() throws {

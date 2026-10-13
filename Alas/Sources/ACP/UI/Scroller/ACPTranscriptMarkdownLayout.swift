@@ -167,7 +167,12 @@ struct ACPTranscriptMarkdownLayout {
                 // Trailing whitespace hangs past the width; the drawn line leaves it off.
                 let visible = Self.lengthWithoutTrailingWhitespace(text.string as NSString, from: start, count: count)
                 let line = CTTypesetterCreateLine(typesetter, CFRange(location: start, length: visible))
-                let height = Self.lineHeight(of: text, range: NSRange(location: start, length: count)) + lineSpacing
+                // A fallback font (emoji, CJK) can be taller than any `.font` attribute, and a
+                // range without one measures 0; the line's own bounds are the floor.
+                var ascent: CGFloat = 0, descent: CGFloat = 0
+                CTLineGetTypographicBounds(line, &ascent, &descent, nil)
+                let measured = max(Self.lineHeight(of: text, range: NSRange(location: start, length: count)), ascent + descent)
+                let height = (measured > 0 ? measured : typography.paragraphSize) + lineSpacing
                 lines.append(Line(line: line, origin: CGPoint(x: x, y: y), height: height))
                 y += height
                 start += count
