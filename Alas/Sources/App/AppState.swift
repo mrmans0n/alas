@@ -243,7 +243,10 @@ final class AppState {
     /// Repo-local `.alas/` config, read per worktree with its own change cache.
     let repoConfigStore = RepoConfigStore()
     let repoHookApprovalQueue = RepoHookApprovalQueue()
-    @ObservationIgnored var repoHookLoader = RepoHookLoader()
+    var repoHookLoader: RepoHookLoader {
+        get { core.repoHookLoader }
+        set { core.repoHookLoader = newValue }
+    }
     /// Project icons already resolved from repo files, keyed by the identity of
     /// the file that supplied them.
     let repoIconDisplayCache = RepoIconDisplayCache()
@@ -409,7 +412,7 @@ final class AppState {
     private static let logger = Logger(subsystem: "io.nlopez.alas", category: "AppState")
     struct OpenedTerminalSession {
         let id: String
-        let foregroundPid: () -> pid_t?
+        let foregroundPid: @Sendable () -> pid_t?
     }
 
     func beginCenterGitMutation(worktreeId: String) {
@@ -1727,6 +1730,8 @@ final class AppState {
         core.quiesceWorktree = { [weak self] worktree in
             try await self?.quiesceWorktreeForRemoval(worktree)
         }
+        core.repoHookPrompter = .queue(repoHookApprovalQueue)
+        core.globalTerminalConfig = { [weak self] in self?.config.terminal ?? AppConfig.defaults.terminal }
         core.runHistory.onFailure = { [weak self] message in
             self?.showFileActionError(title: "Run History Failed", message: message)
         }
@@ -2580,7 +2585,7 @@ final class AppState {
             guard !isOfflineHost else { return }
             for worktree in projectsManager.visibleWorktrees(projectId: project.id) {
                 switch projectsManager.operationState(forWorktreeId: worktree.id, projectId: project.id) {
-                case .creating, .preparingDelete, .deleting, .createFailed:
+                case .creating, .preparingDelete, .deleting, .archiving, .createFailed:
                     continue
                 case nil, .launchFailed, .deleteFailed:
                     guard let worktreeGeneration = projectScanToken.worktreeGeneration(worktreeID: worktree.id)
@@ -2624,7 +2629,7 @@ final class AppState {
             let isOfflineHost = project.host.map { RemoteHostStatusStore.shared.offlineHosts.contains($0) } ?? false
             guard !isOfflineHost else { return }
             switch self.projectsManager.operationState(forWorktreeId: worktree.id, projectId: project.id) {
-            case .creating, .preparingDelete, .deleting, .createFailed:
+            case .creating, .preparingDelete, .deleting, .archiving, .createFailed:
                 return
             case nil, .launchFailed, .deleteFailed:
                 break
@@ -3021,7 +3026,7 @@ final class AppState {
                 // for them) but keep preflight and deleteFailed rows selectable.
                 return self.projectsManager.visibleWorktrees(projectId: projectId).filter {
                     switch self.projectsManager.operationState(forWorktreeId: $0.id, projectId: projectId) {
-                    case .creating, .deleting, .createFailed:
+                    case .creating, .deleting, .archiving, .createFailed:
                         return false
                     case nil, .preparingDelete, .launchFailed, .deleteFailed:
                         return true
@@ -3468,9 +3473,7 @@ final class AppState {
             cfg: config.terminal,
             theme: themeStore.current
         )
-        harness.detector.register(sessionId: session.id) { [weak session] in
-            session?.surface.foregroundPid
-        }
+        session.registerForegroundPid(with: harness.detector)
         return tabs.appendTerminal(owner: context.owner, title: "Terminal", sessionId: session.id)
     }
 
@@ -3527,9 +3530,7 @@ final class AppState {
             cfg: config.terminal,
             theme: themeStore.current
         )
-        harness.detector.register(sessionId: session.id) { [weak session] in
-            session?.surface.foregroundPid
-        }
+        session.registerForegroundPid(with: harness.detector)
         return tabs.appendTerminal(owner: context.owner, title: agent.displayName, sessionId: session.id)
     }
 
@@ -3571,7 +3572,7 @@ final class AppState {
                 remoteCwdAlreadyValidated: restoredCwd != nil,
                 leafId: leafID
             )
-            harness.detector.register(sessionId: newSession.id) { [weak newSession] in newSession?.surface.foregroundPid }
+            newSession.registerForegroundPid(with: harness.detector)
             _ = tabs.splitFocusedLeaf(
                 owner: owner,
                 tabId: tabID,
@@ -3768,7 +3769,7 @@ final class AppState {
                 forcedCwdLocation: leaf.lastCwdLocation,
                 leafId: leaf.id
             )
-            harness.detector.register(sessionId: session.id) { [weak session] in session?.surface.foregroundPid }
+            session.registerForegroundPid(with: harness.detector)
         }
         return tabs.tabs(for: owner).first(where: { $0.id == tabID })
     }
@@ -4100,34 +4101,12 @@ final class AppState {
         return checkout
     }
 
+    /// The coordinator takes the member projects' mutation gates and refuses
+    /// while a member worktree is held by another operation.
     private func unarchiveWorkspaceCheckoutUnderProjectMutationGate(id: UUID) async throws -> WorkspaceCheckout {
-        guard let checkout = workspacesManager.checkout(id: id) else {
-            throw WorkspaceCheckoutCoordinatorError.checkoutMissing
-        }
-        let coordinator = workspaceCoordinator()
-        return try await ProjectMutationGate.shared.withMainActorMutations(
-            projectIDs: checkout.members.map(\.projectID)
-        ) {
-            guard let current = self.workspacesManager.checkout(id: id) else {
-                throw WorkspaceCheckoutCoordinatorError.checkoutMissing
-            }
-            let memberOperationIsInFlight = current.members.contains { member in
-                let worktreeID = Worktree.makeId(path: URL(fileURLWithPath: current.inAppWorktreePath(member.worktreePath)))
-                return Self.blocksWorktreeSessionAdmission(
-                    self.projectsManager.operationState(
-                        forWorktreeId: worktreeID,
-                        projectId: member.projectID
-                    )
-                )
-            }
-            guard !memberOperationIsInFlight else {
-                throw WorkspaceCheckoutCoordinatorError.operationInProgress
-            }
-
-            let unarchived = try await coordinator.unarchive(checkoutID: id)
-            await self.workspacesManager.refreshCheckoutSnapshots()
-            return unarchived
-        }
+        let unarchived = try await workspaceCoordinator().unarchive(checkoutID: id)
+        await workspacesManager.refreshCheckoutSnapshots()
+        return unarchived
     }
 
     func stopWorkspaceCheckoutAfterCurrentOperations(id: UUID) async throws {
@@ -4206,6 +4185,12 @@ final class AppState {
 
     func deleteWorkspaceCheckoutMember(checkoutID: UUID, memberID: UUID, confirmingRisks: Bool = false) async throws -> WorkspaceCheckout {
         guard workspacesManager.canMutate else { throw WorkspaceStoreError.recoveryRequired }
+        // Claimed before the dirty-buffer prompt and save, so nothing new is
+        // admitted into the member while it is being removed.
+        let claimed = try claimWorkspaceMembersForDeletion(
+            workspacesManager.checkout(id: checkoutID).flatMap { workspaceMemberWorktrees($0)[memberID] }.map { [$0] } ?? []
+        )
+        defer { releaseWorkspaceMemberDeletionClaims(claimed) }
         let resolvedWorktree = try await resolveDirtyBuffersBeforeWorkspaceMemberDeletion(checkoutID: checkoutID, memberID: memberID)
         guard workspacesManager.canMutate else { throw WorkspaceStoreError.recoveryRequired }
         if let resolvedWorktree {
@@ -4277,11 +4262,38 @@ final class AppState {
         return MemberReviewRollupBuilder(gg: WorkspaceCachedGGStackReader(stacksByWorktreeID: stacks))
     }
 
+    /// Claims each member worktree `.deleting`, all or none: a member another
+    /// operation holds refuses the deletion and releases what was claimed.
+    private func claimWorkspaceMembersForDeletion(_ worktrees: [Worktree]) throws -> [Worktree] {
+        var claimed: [Worktree] = []
+        for worktree in worktrees {
+            switch projectsManager.operationState(for: worktree) {
+            case nil, .deleteFailed:
+                projectsManager.setOperationState(for: worktree, state: .deleting(projectId: worktree.projectId))
+                claimed.append(worktree)
+            default:
+                releaseWorkspaceMemberDeletionClaims(claimed)
+                throw WorkspaceCheckoutCoordinatorError.operationInProgress
+            }
+        }
+        return claimed
+    }
+
+    /// Releases only claims still held by this deletion; one a checkout
+    /// recreated at the same path installed meanwhile is left alone.
+    private func releaseWorkspaceMemberDeletionClaims(_ worktrees: [Worktree]) {
+        for worktree in worktrees where projectsManager.operationState(for: worktree) == .deleting(projectId: worktree.projectId) {
+            projectsManager.setOperationState(for: worktree, state: nil)
+        }
+    }
+
     private func cleanupDeletedWorkspaceMemberRuntime(_ worktree: Worktree) async {
         cleanupWorktreeState(worktreeId: worktree.id)
-        projectsManager.setOperationState(for: worktree, state: nil)
         removePersistedGGWorktreeMode(projectId: worktree.projectId, worktreeId: worktree.id)
+        // The claim outlives the refresh: until then the removed row is still
+        // listed and must not admit new work.
         _ = try? await refreshProjectWorktrees(projectId: worktree.projectId)
+        releaseWorkspaceMemberDeletionClaims([worktree])
         if selectedWorktreeId == worktree.id {
             selectedWorktreeId = nil
         }
@@ -4466,6 +4478,9 @@ final class AppState {
             checkouts: workspacesManager.checkouts
         )
         let nearest = WorkspaceCheckoutDetailModel.nearestPeer(afterDeleting: id, orderedCheckoutIDs: ordered)
+        // Every member is claimed for the whole deletion, before any prompt.
+        let claimed = try claimWorkspaceMembersForDeletion(Array(workspaceMemberWorktrees(before).values))
+        defer { releaseWorkspaceMemberDeletionClaims(claimed) }
         var resolvedWorktrees: [UUID: Worktree] = [:]
         for member in before.members {
             if let worktree = try await resolveDirtyBuffersBeforeWorkspaceMemberDeletion(checkoutID: id, memberID: member.id) {
@@ -4908,30 +4923,11 @@ final class AppState {
                     )
                     saveProjects()
                 }
-                let repoStartupScript = try await self.preparedRepoHook(
-                    event: .worktreeCreate,
+                try await core.runWorktreeCreateScripts(
                     project: project,
                     worktree: newWorktree,
-                    context: .worktreeCreate,
                     includeUserStartupScript: runStartup
                 )
-                let startupScript = StartupScriptResolver.worktreeCreateScript(
-                    global: self.config.terminal,
-                    repoScript: repoStartupScript,
-                    project: project
-                )
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-                if runStartup && !startupScript.isEmpty {
-                    if let host = project.host ?? RemoteHostRegistry.shared.host(forPath: newWorktree.path.path) {
-                        _ = try? await RemoteExec.run(host: host, cwd: newWorktree.path.path, command: startupScript)
-                    } else {
-                        _ = try? await Process.run(
-                            "/bin/zsh",
-                            args: ["-c", startupScript],
-                            cwd: newWorktree.path
-                        )
-                    }
-                }
                 guard projects.contains(where: { $0.id == projectId }) else { return }
 
                 do {
@@ -6726,6 +6722,10 @@ final class AppState {
     /// it, marks the path hidden in `ProjectConfig`, and re-points selection if
     /// the archived worktree was selected. Does NOT touch git or disk.
     func archiveWorktree(_ worktree: Worktree) {
+        if let refusal = archiveRefusal(for: worktree) {
+            showFileActionError(title: "Archive Failed", message: refusal)
+            return
+        }
         let dirty = dirtyEditorTabIds(worktreeId: worktree.id)
         if !dirty.isEmpty {
             switch promptForDirtyBuffers(
@@ -6735,9 +6735,28 @@ final class AppState {
                 onDiskDestructive: false
             ) {
             case .save:
+                // The prompt's run loop can let another operation claim the
+                // worktree; never overwrite that claim.
+                if let refusal = archiveRefusal(for: worktree) {
+                    showFileActionError(title: "Archive Failed", message: refusal)
+                    return
+                }
+                // Claimed while buffers save, so nothing new starts or adopts
+                // the worktree before it is hidden.
+                let claim = WorktreeOperationState.archiving(projectId: worktree.projectId)
+                projectsManager.setOperationState(for: worktree, state: claim)
                 Task { @MainActor in
+                    defer {
+                        if projectsManager.operationState(for: worktree) == claim {
+                            projectsManager.setOperationState(for: worktree, state: nil)
+                        }
+                    }
                     guard await saveDirtyBuffers(in: worktree) else { return }
-                    archiveWorktreeAfterSaving(worktree)
+                    if let refusal = archiveRefusal(for: worktree, holdingClaim: claim) {
+                        showFileActionError(title: "Archive Failed", message: refusal)
+                        return
+                    }
+                    archiveWorktreeAfterSaving(worktree, holdingClaim: claim)
                 }
                 return
             case .discard:
@@ -6750,7 +6769,25 @@ final class AppState {
         archiveWorktreeAfterSaving(worktree)
     }
 
-    private func archiveWorktreeAfterSaving(_ worktree: Worktree) {
+    /// Why `worktree` cannot be archived now: another operation holds it, or
+    /// an active Workspace checkout manages it.
+    func archiveRefusal(for worktree: Worktree, holdingClaim claim: WorktreeOperationState? = nil) -> String? {
+        if let state = projectsManager.operationState(for: worktree), state != claim, state.blocksAdmission {
+            return "Wait for the current worktree operation to finish before archiving."
+        }
+        guard workspacesManager.canMutate else {
+            return "Workspace Checkout ownership could not be verified. Try again once Workspace storage is available."
+        }
+        if let owner = worktreeCleanupWorkspaceOwners(for: worktree).first(where: { $0.state == .active }) {
+            return "This worktree is owned by Workspace checkout \u{201C}\(owner.name)\u{201D}. Archive it from the checkout instead."
+        }
+        return nil
+    }
+
+    /// Returns false, archiving nothing, when `archiveRefusal` objects.
+    @discardableResult
+    private func archiveWorktreeAfterSaving(_ worktree: Worktree, holdingClaim claim: WorktreeOperationState? = nil) -> Bool {
+        guard archiveRefusal(for: worktree, holdingClaim: claim) == nil else { return false }
         // Snapshot index in the visible list BEFORE we mutate anything, so we
         // can pick a sensible follow-up selection.
         let siblingsBefore = projectsManager.visibleWorktrees(projectId: worktree.projectId)
@@ -6763,6 +6800,7 @@ final class AppState {
         )
         saveProjects()
         finishArchivingWorktree(worktree, removedIndex: removedIndex)
+        return true
     }
 
     private func finishArchivingWorktree(
@@ -6786,6 +6824,13 @@ final class AppState {
     /// Restore an archived worktree. Tabs/terminals are NOT recreated — they
     /// were torn down at archive time and the user re-opens what they need.
     func unarchiveWorktree(projectId: String, path: URL) {
+        guard projectsManager.operationState(forWorktreeId: Worktree.makeId(path: path), projectId: projectId)?.blocksAdmission != true else {
+            showFileActionError(
+                title: "Unarchive Failed",
+                message: "Wait for the current worktree operation to finish before unarchiving."
+            )
+            return
+        }
         projectsManager.setWorktreeHidden(projectId: projectId, path: path, hidden: false)
         saveProjects()
         if let restored = projectsManager.visibleWorktrees(projectId: projectId).first(where: {
@@ -7015,11 +7060,11 @@ final class AppState {
                 continue
             }
 
-            archiveWorktreeAfterSaving(worktree)
+            let archived = archiveWorktreeAfterSaving(worktree)
             results.append(WorktreeBatchResult(
                 worktreeId: worktree.id,
                 branch: worktree.branch,
-                outcome: .archived
+                outcome: archived ? .archived : .skipped(reason: archiveRefusal(for: worktree) ?? "Could not archive")
             ))
         }
         return results
@@ -8172,9 +8217,7 @@ final class AppState {
                 repoStartupScript: repoStartupScript,
                 leafId: newLeafId
             )
-            harness.detector.register(sessionId: session.id) { [weak session] in
-                session?.surface.foregroundPid
-            }
+            session.registerForegroundPid(with: harness.detector)
             _ = tabs.splitFocusedLeaf(
                 worktreeId: worktreeId, tabId: activeId, axis: axis,
                 newLeafId: newLeafId, newSessionId: newLeafId
@@ -8752,9 +8795,7 @@ final class AppState {
                 remoteCwdAlreadyValidated: forcedCwd != nil,
                 leafId: leaf.id
             )
-            harness.detector.register(sessionId: session.id) { [weak session] in
-                session?.surface.foregroundPid
-            }
+            session.registerForegroundPid(with: harness.detector)
         }
         return tabs.tabs(for: owner).first(where: { $0.id == tabID })
     }
@@ -8861,9 +8902,7 @@ final class AppState {
                 allowLegacyAttach: allowLegacyAttach,
                 preResolvedZmxSessionName: preResolvedZmxSessionName
             )
-            harness.detector.register(sessionId: session.id) { [weak session] in
-                session?.surface.foregroundPid
-            }
+            session.registerForegroundPid(with: harness.detector)
         }
         return tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == tabId })
     }
@@ -11662,8 +11701,12 @@ final class AppState {
                 ))
                 continue
             }
-            archiveWorktreeAfterSaving(worktree)
-            results.append(.init(worktreeId: worktree.id, branch: worktree.branch, outcome: .archived))
+            let archived = archiveWorktreeAfterSaving(worktree)
+            results.append(.init(
+                worktreeId: worktree.id,
+                branch: worktree.branch,
+                outcome: archived ? .archived : .skipped(reason: archiveRefusal(for: worktree) ?? "Could not archive")
+            ))
         }
         return results
     }
@@ -11795,6 +11838,8 @@ final class AppState {
         switch projectsManager.operationState(for: worktree) {
         case .deleting:
             return .ok
+        case .archiving:
+            return .error("the worktree is being archived")
         case .preparingDelete:
             // A delete confirmation this call does not own is already on
             // screen for this worktree (`NSAlert.runModal()`'s nested run
@@ -15401,7 +15446,7 @@ extension AppState: RemoteSessionsProvider {
         for project in projects {
             for worktree in projectsManager.visibleWorktrees(projectId: project.id) {
                 switch projectsManager.operationState(forWorktreeId: worktree.id, projectId: project.id) {
-                case .creating, .preparingDelete, .deleting, .createFailed:
+                case .creating, .preparingDelete, .deleting, .archiving, .createFailed:
                     continue
                 case nil, .launchFailed, .deleteFailed:
                     out.append(await remoteWorktreeOption(project: project, worktree: worktree))
@@ -15475,7 +15520,7 @@ extension AppState: RemoteSessionsProvider {
             return .failure(Self.checkpointRecoveryBlocksACPMessage)
         }
         switch projectsManager.operationState(forWorktreeId: worktreeId, projectId: resolved.project.id) {
-        case .creating, .preparingDelete, .deleting, .createFailed:
+        case .creating, .preparingDelete, .deleting, .archiving, .createFailed:
             return .failure("Worktree is no longer available.")
         case nil, .launchFailed, .deleteFailed:
             break

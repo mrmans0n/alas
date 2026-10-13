@@ -137,4 +137,11 @@ final class TerminalSession {
         self.remoteHost = remoteHost
         self.createdAt = Date()
     }
+
+    /// Lets `detector` poll this session's foreground pid. The detector calls
+    /// the provider off the main actor; it holds the session weakly so a
+    /// closed pane reports nil.
+    func registerForegroundPid(with detector: HarnessDetector) {
+        detector.register(sessionId: id) { [weak self] in self?.surface.foregroundPid }
+    }
 }

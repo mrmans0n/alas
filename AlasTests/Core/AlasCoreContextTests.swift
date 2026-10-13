@@ -93,6 +93,14 @@ struct AlasCoreContextTests {
         }
         #expect(text.contains("hello from feature"))
 
+        try await context.archiveWorktree(worktree)
+        #expect(!context.projects.visibleWorktrees(projectId: project.id).map(\.id).contains(worktree.id))
+        #expect(context.sessionManagers[.worktree(worktree.id)] == nil)
+        #expect(try await context.runHistory.store?.entry(id: record.id) != nil, "archiving keeps run history")
+        #expect(context.projects.operationState(for: worktree) == nil, "the archive claim is released")
+        try context.unarchiveWorktree(path: worktree.path, projectID: project.id)
+        #expect(context.projects.visibleWorktrees(projectId: project.id).map(\.id).contains(worktree.id))
+
         let longURL = root.appendingPathComponent("long.sh")
         try "sleep 300\n".write(to: longURL, atomically: true, encoding: .utf8)
         let long = RunScript(
@@ -330,5 +338,68 @@ struct AlasCoreContextTests {
             try await context.deleteWorktree(worktree)
         }
         #expect(context.runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status == .running)
+    }
+
+    enum HookApproval: CaseIterable {
+        case approvedEarlier, unapproved, cancelled
+    }
+
+    /// A headless create runs the repository's create hook only when it was
+    /// already approved: there is nobody to ask. A cancelled approval still
+    /// leaves a created, listed worktree.
+    @Test(arguments: HookApproval.allCases)
+    func createRunsOnlyApprovedRepoHooks(_ approval: HookApproval) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-core-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let repo = root.appendingPathComponent("repo")
+        try FileManager.default.copyItem(at: try await Self.repoTemplate.value, to: repo)
+        let context = AlasCoreContext(
+            projects: ProjectsManager(persistedProjects: []),
+            store: TestPersistenceStore(),
+            projectsFile: root.appendingPathComponent("projects.json"),
+            runHistoryStore: nil
+        )
+        context.repoHookLoader = RepoHookLoader { _, _, _ in .data(Data("touch hook-ran\n".utf8)) }
+        let project = try await context.addProject(path: repo, displayName: "repo", icon: .default(color: "blue"))
+        if approval == .cancelled {
+            context.repoHookPrompter = RepoHookPrompter(decide: { _, _, _ in .cancel }, decideFailure: { _, _ in .cancel })
+        }
+        if approval == .approvedEarlier {
+            guard case let .loaded(hook) = await context.repoHookLoader.load(event: .worktreeCreate, worktreeRoot: repo, host: nil) else {
+                Issue.record("the fake hook loads")
+                return
+            }
+            try context.persistRepoHookApproval(projectId: project.id, hash: hook.hash)
+        }
+
+        let worktree = try await context.createWorktree(
+            projectID: project.id, branch: "feature", base: "main", destination: root.appendingPathComponent("feature")
+        )
+
+        #expect(FileManager.default.fileExists(atPath: worktree.path.appendingPathComponent("hook-ran").path) == (approval == .approvedEarlier))
+        #expect(context.projects.worktrees(projectId: project.id).map(\.id).contains(worktree.id))
+    }
+
+    /// Archiving claims the worktree, so nothing new starts in it and it
+    /// cannot be unarchived until the archive is done.
+    @Test func archiveClaimRefusesUnarchive() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-core-\(UUID().uuidString)")
+        let project = ProjectConfig(id: "p", name: "p", path: root.path, color: "blue", addedAt: Date())
+        let worktree = Worktree(
+            id: Worktree.makeId(path: root), projectId: "p", name: "main", branch: "main", path: root,
+            status: .clean, lastActivity: Date()
+        )
+        let context = AlasCoreContext(
+            projects: ProjectsManager(persistedProjects: [project]),
+            store: TestPersistenceStore(),
+            runHistoryStore: nil
+        )
+        context.projects.setOperationState(for: worktree, state: .archiving(projectId: "p"))
+
+        #expect(throws: WorktreeArchiveRefusal.operationInProgress) {
+            try context.unarchiveWorktree(path: root, projectID: "p")
+        }
+        #expect(!context.projects.admitsNewWork(in: worktree))
     }
 }
