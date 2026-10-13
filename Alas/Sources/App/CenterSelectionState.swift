@@ -79,7 +79,7 @@ struct CenterSelectionStateResolver {
             if let wt = candidateWorktrees(projectId: project.id).first(where: { $0.id == id }) {
                 if let op = projectsManager.operationState(forWorktreeId: wt.id, projectId: wt.projectId) {
                     switch op {
-                    case .creating, .deleting, .createFailed:
+                    case .creating, .deleting, .archiving, .createFailed:
                         return nil
                     case .preparingDelete, .launchFailed, .deleteFailed:
                         break

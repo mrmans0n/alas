@@ -70,13 +70,7 @@ extension AlasCoreContext {
         }
 
         // Nothing may keep using the checkout while its files go.
-        let running = headlessRuns.values.filter { $0.worktreeID == worktree.id }.map(\.task)
-        for run in running {
-            run.cancel()
-        }
-        for run in running {
-            _ = try? await run.value
-        }
+        await stopHeadlessRuns(worktreeID: worktree.id)
         do {
             try await quiesceWorktree(worktree)
         } catch {
@@ -129,6 +123,83 @@ extension AlasCoreContext {
         return .removed
     }
 
+    /// Cancels the worktree's headless runs and waits until their records
+    /// have settled.
+    func stopHeadlessRuns(worktreeID: String) async {
+        let running = headlessRuns.values.filter { $0.worktreeID == worktreeID }.map(\.task)
+        for run in running {
+            run.cancel()
+        }
+        for run in running {
+            _ = try? await run.value
+        }
+    }
+
+    // MARK: - Archive
+
+    /// Archives a worktree whose `.archiving` claim the caller holds: stops
+    /// its headless runs and quiesces it like a removal, then hides it and
+    /// persists that. Its runs settle as lost but keep their history, and
+    /// nothing leaves the disk. Throws, leaving the worktree visible, when it
+    /// cannot be quiesced or the save fails.
+    public func performArchive(_ worktree: Worktree) async throws {
+        await stopHeadlessRuns(worktreeID: worktree.id)
+        try await quiesceWorktree(worktree)
+        let wasHidden = projects.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path)
+        projects.setWorktreeHidden(projectId: worktree.projectId, path: worktree.path, hidden: true)
+        do {
+            try saveProjects()
+        } catch {
+            projects.setWorktreeHidden(projectId: worktree.projectId, path: worktree.path, hidden: wasHidden)
+            throw error
+        }
+        discardRuns(worktreeID: worktree.id, deletingHistory: false)
+    }
+
+    /// Archives `worktree` through the same routine as the app, claiming it
+    /// so nothing new starts in it meanwhile. The main checkout and members of
+    /// an active Workspace checkout are refused.
+    public func archiveWorktree(_ worktree: Worktree) async throws {
+        guard let project = projects.projects.first(where: { $0.id == worktree.projectId }) else {
+            throw ProjectCreationError.projectNotFound
+        }
+        guard !projects.isMain(worktree, in: project) else { throw WorktreeArchiveRefusal.mainWorktree }
+        switch projects.operationState(for: worktree) {
+        case nil, .deleteFailed: break
+        default: throw WorktreeArchiveRefusal.operationInProgress
+        }
+        let claim = WorktreeOperationState.archiving(projectId: project.id)
+        projects.setOperationState(for: worktree, state: claim)
+        defer {
+            if projects.operationState(for: worktree) == claim {
+                projects.setOperationState(for: worktree, state: nil)
+            }
+        }
+        if let refusal = await workspaceOwnershipRefusal(for: worktree) {
+            throw WorktreeArchiveRefusal.ownedByWorkspaceCheckout(refusal)
+        }
+        try await performArchive(worktree)
+    }
+
+    /// Shows an archived worktree again. Sessions and runs are not restored.
+    /// Refused while any operation holds the worktree.
+    public func unarchiveWorktree(path: URL, projectID: String) throws {
+        guard projects.projects.contains(where: { $0.id == projectID }) else {
+            throw ProjectCreationError.projectNotFound
+        }
+        guard projects.admitsNewWork(worktreeId: Worktree.makeId(path: path)) else {
+            throw WorktreeArchiveRefusal.operationInProgress
+        }
+        let wasHidden = projects.isWorktreeHidden(projectId: projectID, path: path)
+        projects.setWorktreeHidden(projectId: projectID, path: path, hidden: false)
+        do {
+            try saveProjects()
+        } catch {
+            projects.setWorktreeHidden(projectId: projectID, path: path, hidden: wasHidden)
+            throw error
+        }
+    }
+
     /// Whether an interrupted checkpoint restore references the checkout.
     /// An unreadable journal store counts as one.
     public static func hasPendingCheckpointRecovery(_ worktree: Worktree) async -> Bool {
@@ -139,6 +210,16 @@ extension AlasCoreContext {
         }
         return !journals.isEmpty
     }
+}
+
+/// Why `AlasCoreContext.archiveWorktree` or `unarchiveWorktree` refused.
+public enum WorktreeArchiveRefusal: Error, Equatable {
+    /// The project's main checkout is never archived.
+    case mainWorktree
+    /// Another operation holds the worktree.
+    case operationInProgress
+    /// An active Workspace checkout manages this worktree.
+    case ownedByWorkspaceCheckout(String)
 }
 
 /// Why `AlasCoreContext.deleteWorktree` did not delete.

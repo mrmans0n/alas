@@ -50,8 +50,8 @@ struct RightPaneSelectionStateResolver {
                 return .active(wt)
             case .creating:
                 return .creating(wt)
-            case .deleting:
-                // The worktree is being removed. Returning `.empty` unmounts
+            case .deleting, .archiving:
+                // The worktree is being removed or archived. Returning `.empty` unmounts
                 // the right pane (rail included) for this deletion only; the
                 // global `rightPaneVisible` preference is untouched, so the
                 // sibling the selection reconciles to reopens the pane. A
