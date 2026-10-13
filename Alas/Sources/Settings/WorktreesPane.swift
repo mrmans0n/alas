@@ -107,7 +107,7 @@ struct WorktreesPane: View {
                                         // Failed states stay actionable so the user can retry.
                                         if state.isDeletingArchivedWorktrees { return true }
                                         switch state.projectsManager.operationState(for: wt) {
-                                        case .creating, .preparingDelete, .deleting: return true
+                                        case .creating, .preparingDelete, .deleting, .archiving: return true
                                         default: return false
                                         }
                                     }
