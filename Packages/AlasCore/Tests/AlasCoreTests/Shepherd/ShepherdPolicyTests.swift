@@ -36,18 +36,16 @@ private let threadOnly = ShepherdFixRequest(hasConflict: false, failingChecks: [
 /// Same head comment as `F.trustedThread`, so only the reply differs.
 private let repliedThread = F.thread("PRRT_1", comments: [
     F.comment("PRRT_1-c1", author: "maintainer", body: "Please back off.", trust: .trusted),
-    F.comment("c2", author: "me", body: "Backoff already lives in RetryPolicy.", trust: .untrusted,
-              viewer: true, createdAt: F.now),
+    F.comment("c2", author: "me", body: "Backoff already lives in RetryPolicy.", trust: .untrusted, viewer: true),
 ])
-private let staleReplyThread = F.thread("PRRT_1", comments: [
+private let secondReplyThread = F.thread("PRRT_1", comments: [
     F.comment("PRRT_1-c1", author: "maintainer", body: "Please back off.", trust: .trusted),
-    F.comment("c2", author: "me", body: "Earlier answer.", trust: .untrusted,
-              viewer: true, createdAt: F.earlier.addingTimeInterval(-600)),
+    F.comment("c2", author: "me", body: "Backoff already lives in RetryPolicy.", trust: .untrusted, viewer: true),
+    F.comment("c4", author: "me", body: "Uploads now share it too.", trust: .untrusted, viewer: true),
 ])
 private let replyThenDriveByThread = F.thread("PRRT_1", comments: [
     F.comment("PRRT_1-c1", author: "maintainer", body: "Please back off.", trust: .trusted),
-    F.comment("c2", author: "me", body: "Backoff already lives in RetryPolicy.", trust: .untrusted,
-              viewer: true, createdAt: F.now),
+    F.comment("c2", author: "me", body: "Backoff already lives in RetryPolicy.", trust: .untrusted, viewer: true),
     F.comment("c3", author: "passerby", body: "+1", trust: .untrusted),
 ])
 private let followUpThread = F.thread("PRRT_1", comments: [
@@ -135,19 +133,24 @@ private let policyCases: [ShepherdPolicyCase] = [
                            lastDispatched: F.fingerprint(failingOnly)),
           observation: F.observation(F.snapshot(F.request(head: F.newHead, checks: [F.failing]), localHead: F.newHead)),
           action: .dispatchFix(failingOnly), phase: .fixing(dispatchedAt: F.now)),
-    .init(testDescription: "a reply on a dispatched thread is progress",
+    .init(testDescription: "a new viewer reply on a dispatched thread is progress",
           record: F.record(phase: .awaitingPush(turnEndedAt: F.earlier, pollsWithoutProgress: 0), fixAttempts: 1,
-                           lastDispatched: F.fingerprint(threadOnly), lastDispatchedAt: F.earlier),
+                           lastDispatched: F.fingerprint(threadOnly), viewerCommentIDs: []),
           observation: F.observation(F.snapshot(F.request(threads: [repliedThread]))),
           action: .wait, phase: .watching),
-    .init(testDescription: "a viewer reply older than the dispatch is not progress",
+    .init(testDescription: "a viewer reply that existed at dispatch is not progress",
           record: F.record(phase: .awaitingPush(turnEndedAt: F.earlier, pollsWithoutProgress: 0), fixAttempts: 1,
-                           lastDispatched: F.fingerprint(threadOnly), lastDispatchedAt: F.earlier),
-          observation: F.observation(F.snapshot(F.request(threads: [staleReplyThread]))),
+                           lastDispatched: F.fingerprint(threadOnly), viewerCommentIDs: ["c2"]),
+          observation: F.observation(F.snapshot(F.request(threads: [repliedThread]))),
           action: .wait, phase: .awaitingPush(turnEndedAt: F.earlier, pollsWithoutProgress: 1)),
+    .init(testDescription: "a viewer reply id not seen at dispatch is progress",
+          record: F.record(phase: .awaitingPush(turnEndedAt: F.earlier, pollsWithoutProgress: 0), fixAttempts: 1,
+                           lastDispatched: F.fingerprint(threadOnly), viewerCommentIDs: ["c2"]),
+          observation: F.observation(F.snapshot(F.request(threads: [secondReplyThread]))),
+          action: .wait, phase: .watching),
     .init(testDescription: "a viewer reply followed by an untrusted comment is progress",
           record: F.record(phase: .awaitingPush(turnEndedAt: F.earlier, pollsWithoutProgress: 0), fixAttempts: 1,
-                           lastDispatched: F.fingerprint(threadOnly), lastDispatchedAt: F.earlier),
+                           lastDispatched: F.fingerprint(threadOnly), viewerCommentIDs: []),
           observation: F.observation(F.snapshot(F.request(threads: [replyThenDriveByThread]))),
           action: .wait, phase: .watching),
     .init(testDescription: "awaitingPush with a pending check holds without counting",
@@ -173,7 +176,7 @@ private let policyCases: [ShepherdPolicyCase] = [
           action: .wait, phase: .awaitingPush(turnEndedAt: F.earlier, pollsWithoutProgress: 1)),
     .init(testDescription: "an untrusted non-viewer comment on a dispatched thread is not progress",
           record: F.record(phase: .awaitingPush(turnEndedAt: F.earlier, pollsWithoutProgress: 0), fixAttempts: 1,
-                           lastDispatched: F.fingerprint(threadOnly)),
+                           lastDispatched: F.fingerprint(threadOnly), viewerCommentIDs: []),
           observation: F.observation(F.snapshot(F.request(threads: [driveByThread]))),
           action: .wait, phase: .awaitingPush(turnEndedAt: F.earlier, pollsWithoutProgress: 1)),
     // Rule 7
@@ -280,19 +283,45 @@ private let policyCases: [ShepherdPolicyCase] = [
         #expect(decision.record.lastDispatchedFingerprint == ShepherdFingerprint(
             headSHA: F.head, hasConflict: false, failingCheckIDs: ["unit-tests"], threadIDs: []
         ))
-        #expect(decision.record.lastDispatchedAt == F.now)
+        #expect(decision.record.viewerCommentIDsAtDispatch == [])
         #expect(decision.record.updatedAt == F.now)
+    }
+
+    @Test("dispatch captures the viewer's existing comment ids")
+    func dispatchCapturesViewerComments() {
+        let decision = ShepherdPolicy.decide(F.record(), F.observation(F.snapshot(F.request(threads: [secondReplyThread]))))
+        #expect(decision.action == .dispatchFix(ShepherdFixRequest(hasConflict: false, failingChecks: [], threads: [secondReplyThread])))
+        #expect(decision.record.viewerCommentIDsAtDispatch == ["c2", "c4"])
+    }
+
+    @Test("a resolved thread reopened while an unrelated check is pending redispatches")
+    func reopenedThreadRedispatches() {
+        let resolved = ShepherdPolicy.decide(
+            F.record(fixAttempts: 1, lastDispatched: F.fingerprint(threadOnly), viewerCommentIDs: []),
+            F.observation(F.snapshot(F.request(checks: [F.pending])))
+        )
+        #expect(resolved.action == .wait)
+        #expect(resolved.record.lastDispatchedFingerprint == nil)
+        #expect(resolved.record.viewerCommentIDsAtDispatch == nil)
+        #expect(resolved.record.fixAttempts == 1)
+
+        let reopened = ShepherdPolicy.decide(
+            resolved.record,
+            F.observation(F.snapshot(F.request(checks: [F.pending], threads: [F.trustedThread])))
+        )
+        #expect(reopened.action == .dispatchFix(threadOnly))
+        #expect(reopened.record.fixAttempts == 2)
     }
 
     @Test("a recurring identical failure after a conclusive green redispatches")
     func recurringFailureRedispatches() {
         let green = ShepherdPolicy.decide(
-            F.record(fixAttempts: 1, lastDispatched: F.fingerprint(failingOnly), lastDispatchedAt: F.earlier),
+            F.record(fixAttempts: 1, lastDispatched: F.fingerprint(failingOnly), viewerCommentIDs: []),
             F.observation(F.snapshot(F.request()))
         )
         #expect(green.record.fixAttempts == 0)
         #expect(green.record.lastDispatchedFingerprint == nil)
-        #expect(green.record.lastDispatchedAt == nil)
+        #expect(green.record.viewerCommentIDsAtDispatch == nil)
 
         let again = ShepherdPolicy.decide(green.record, F.observation(F.snapshot(F.request(checks: [F.failing]))))
         #expect(again.action == .dispatchFix(failingOnly))

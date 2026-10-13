@@ -263,7 +263,7 @@ public final class ReviewShepherd {
         record.phase = .watching
         record.fixAttempts = 0
         record.lastDispatchedFingerprint = nil
-        record.lastDispatchedAt = nil
+        record.viewerCommentIDsAtDispatch = nil
         record.updatedAt = now
         put(record)
         failureCounts[id] = nil
@@ -308,7 +308,7 @@ public final class ReviewShepherd {
             $0.phase = .watching
             $0.fixAttempts = 0
             $0.lastDispatchedFingerprint = nil
-            $0.lastDispatchedAt = nil
+            $0.viewerCommentIDsAtDispatch = nil
         }
     }
 
@@ -552,7 +552,7 @@ public final class ReviewShepherd {
             // after Resume the same problems are dispatched again.
             failed.fixAttempts = before.fixAttempts
             failed.lastDispatchedFingerprint = before.lastDispatchedFingerprint
-            failed.lastDispatchedAt = before.lastDispatchedAt
+            failed.viewerCommentIDsAtDispatch = before.viewerCommentIDsAtDispatch
             put(failed)
             escalate(id, .deliveryFailed, title: request.title)
         case .merge:

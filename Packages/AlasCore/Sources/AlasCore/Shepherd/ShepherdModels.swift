@@ -90,9 +90,11 @@ public struct ShepherdRecord: Codable, Equatable, Sendable {
     public var autoMerge: Bool
     public var phase: ShepherdPhase
     public var lastDispatchedFingerprint: ShepherdFingerprint?
-    /// When the last fix turn was dispatched; nil in records saved before
-    /// this field existed. Cleared with the fingerprint.
-    public var lastDispatchedAt: Date?
+    /// Sorted ids of the viewer's comments in the dispatched threads at
+    /// dispatch time, so a later viewer comment reads as the agent's reply.
+    /// Nil in records saved before this field existed. Cleared with the
+    /// fingerprint.
+    public var viewerCommentIDsAtDispatch: [String]?
     public var fixAttempts: Int
     public var lastSeenHeadSHA: String?
     /// Consecutive polls that saw `lastSeenHeadSHA` with no pending or
@@ -123,7 +125,7 @@ public struct ShepherdRecord: Codable, Equatable, Sendable {
         self.autoMerge = autoMerge
         self.phase = .watching
         self.lastDispatchedFingerprint = nil
-        self.lastDispatchedAt = nil
+        self.viewerCommentIDsAtDispatch = nil
         self.fixAttempts = 0
         self.lastSeenHeadSHA = nil
         self.stableHeadPolls = 0
