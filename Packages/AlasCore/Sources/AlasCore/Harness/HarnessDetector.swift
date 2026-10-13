@@ -18,15 +18,15 @@ import Darwin
 ///    the confinement domain for `_providers`, which was unenforceable from
 ///    the type's public API.
 /// 2. **Registered providers and `onUpdate` are snapshotted, then called with
-///    the lock released.** Providers are `@Sendable` because `tick` calls them
-///    on `queue`. A non-Sendable closure written in main-actor app code is
-///    inferred main-actor isolated and, when it crosses into this module,
-///    gets a runtime executor check that traps off-main. `@Sendable` makes the
-///    closure nonisolated and lets the compiler verify it only touches
-///    nonisolated state. `onUpdate` is deliberately not `Sendable`: it is
-///    wired from `HarnessService.start` on the main actor and closes over
-///    main-actor state, so it is only ever invoked from `deliverUpdate`, which
-///    runs inside `DispatchQueue.main.async`.
+///    the lock released.** Providers are `@Sendable` and therefore
+///    nonisolated: they are called on `queue`, off-main, and an unannotated
+///    closure formed inside a `@MainActor` method would be inferred
+///    main-actor-isolated and trap in the runtime executor check on that
+///    queue. They read a terminal session's foreground pid, an atomic query.
+///    `onUpdate` is deliberately not `Sendable` — it is wired from
+///    `HarnessService.start` on the main actor and closes over main-actor
+///    state — so it is only ever invoked from `deliverUpdate`, which runs
+///    inside `DispatchQueue.main.async`.
 public final class HarnessDetector: @unchecked Sendable {
     public typealias PidProvider = @Sendable () -> pid_t?
     /// Called every poll with the latest detected kind for a session (or nil).

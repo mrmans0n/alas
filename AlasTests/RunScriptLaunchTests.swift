@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 import UserNotifications
 @testable import Alas
@@ -908,7 +909,7 @@ struct RunScriptLaunchTests {
 
     @MainActor
     @Test func transientMissingPidDoesNotCancelRunMonitor() async throws {
-        let pidChecks = LockedCounter()
+        let pidChecks = Mutex(0)
         let fixture = try makeAppStateFixture(
             waiter: { _ in
                 try await Task.sleep(for: .seconds(5))
@@ -916,7 +917,10 @@ struct RunScriptLaunchTests {
             },
             terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
                 AppState.OpenedTerminalSession(id: "session", foregroundPid: {
-                    pidChecks.increment() == 1 ? nil : 123
+                    pidChecks.withLock { checks in
+                        checks += 1
+                        return checks == 1 ? nil : 123
+                    }
                 })
             },
             localMonitorGrace: Self.localMonitorGrace
@@ -1207,11 +1211,9 @@ private final class LockedCounter: @unchecked Sendable {
         return count
     }
 
-    @discardableResult
-    func increment() -> Int {
+    func increment() {
         lock.lock()
-        defer { lock.unlock() }
         count += 1
-        return count
+        lock.unlock()
     }
 }
