@@ -109,6 +109,16 @@ public final class ReviewShepherd {
         case superseded
     }
 
+    /// How an archive-after-merge attempt ended.
+    public enum ArchiveResult: Equatable, Sendable {
+        case archived
+        /// The owner session is still working; tried again when its turn
+        /// ends or on the next launch.
+        case deferredBusy
+        /// The setting is off, the worktree is gone or can't be archived.
+        case declined
+    }
+
     public struct Effects {
         /// Nil when the worktree is gone or archived; its records are dropped.
         public var worktreeContext: @MainActor (_ worktreeID: String) -> WorktreeContext?
@@ -126,7 +136,7 @@ public final class ReviewShepherd {
         public var refreshPaneIfCached: @MainActor (_ worktreeID: String) -> Void
         /// Checks the archive-after-merge setting and the finished record's
         /// owner session (`sessionID`) itself.
-        public var archiveWorktreeIfAllowed: @MainActor (_ worktreeID: String, _ sessionID: String) async -> Void
+        public var archiveWorktreeIfAllowed: @MainActor (_ worktreeID: String, _ sessionID: String) async -> ArchiveResult
 
         public init(
             worktreeContext: @escaping @MainActor (_ worktreeID: String) -> WorktreeContext?,
@@ -140,7 +150,7 @@ public final class ReviewShepherd {
             rules: @escaping @MainActor (_ worktreeID: String) -> ShepherdRules,
             notify: @escaping @MainActor (Event) -> Void,
             refreshPaneIfCached: @escaping @MainActor (_ worktreeID: String) -> Void,
-            archiveWorktreeIfAllowed: @escaping @MainActor (_ worktreeID: String, _ sessionID: String) async -> Void
+            archiveWorktreeIfAllowed: @escaping @MainActor (_ worktreeID: String, _ sessionID: String) async -> ArchiveResult
         ) {
             self.worktreeContext = worktreeContext
             self.sessionState = sessionState
@@ -173,6 +183,7 @@ public final class ReviewShepherd {
     @ObservationIgnored private var dueAt: [ShepherdRecordID: Date] = [:]
     @ObservationIgnored private var failureCounts: [ShepherdRecordID: Int] = [:]
     @ObservationIgnored private var inFlight: Set<ShepherdRecordID> = []
+    @ObservationIgnored private var archivesInFlight: Set<ShepherdRecordID> = []
     /// Bumped by every change made outside an evaluation and by every
     /// committed decision. An action that suspends (delivery, merge) goes on
     /// only while its record keeps the generation captured when the decision
@@ -209,6 +220,7 @@ public final class ReviewShepherd {
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
         makeAllDue()
+        retryPendingArchives { _ in true }
         guard let wake = Self.wakeNotification else { return }
         wakeObserver = wake.center.addObserver(
             forName: wake.name,
@@ -356,7 +368,8 @@ public final class ReviewShepherd {
     }
 
     /// A turn of `sessionID` ended. Any fix it was working on now waits for
-    /// the push to show up on the provider, starting with the next poll.
+    /// the push to show up on the provider, starting with the next poll, and
+    /// an archive held back while it worked is tried again.
     public func turnCompleted(sessionID: String) {
         let now = self.now()
         for record in records.values where record.sessionID == sessionID {
@@ -368,6 +381,7 @@ public final class ReviewShepherd {
             bumpGeneration(record.id)
             dueAt[record.id] = now
         }
+        retryPendingArchives { $0.sessionID == sessionID }
         pump()
     }
 
@@ -717,7 +731,7 @@ public final class ReviewShepherd {
             case .merged:
                 effects.notify(.merged(next, title: request.title))
                 loops[id] = nil
-                await effects.archiveWorktreeIfAllowed(id.worktreeID, next.sessionID)
+                await archiveAfterMerge(id)
             case .queued:
                 effects.notify(.queued(next, title: request.title))
             default:
@@ -731,7 +745,7 @@ public final class ReviewShepherd {
             switch outcome {
             case .merged:
                 effects.notify(.merged(record, title: request.title))
-                await effects.archiveWorktreeIfAllowed(id.worktreeID, record.sessionID)
+                await archiveAfterMerge(id)
             case .closed:
                 effects.notify(.closed(record, title: request.title))
             }
@@ -851,6 +865,34 @@ public final class ReviewShepherd {
     }
 
     // MARK: - Transitions outside the policy
+
+    /// Runs the archive-after-merge step for a merged record. A busy owner
+    /// marks it pending so `turnCompleted` or the next `start()` tries again;
+    /// archiving or any other answer (setting off, worktree gone) clears it.
+    private func archiveAfterMerge(_ id: ShepherdRecordID) async {
+        guard let effects, let record = records[id], record.phase == .merged,
+              !archivesInFlight.contains(id)
+        else { return }
+        archivesInFlight.insert(id)
+        defer { archivesInFlight.remove(id) }
+        let result = await effects.archiveWorktreeIfAllowed(id.worktreeID, record.sessionID)
+        guard var latest = records[id] else { return }
+        let pending: Bool? = result == .deferredBusy ? true : nil
+        guard latest.archivePending != pending else { return }
+        latest.archivePending = pending
+        latest.updatedAt = now()
+        put(latest)
+    }
+
+    private func retryPendingArchives(where matches: (ShepherdRecord) -> Bool) {
+        guard effects != nil else { return }
+        for record in records.values where record.archivePending == true && matches(record) {
+            let id = record.id
+            Task { @MainActor [weak self] in
+                await self?.archiveAfterMerge(id)
+            }
+        }
+    }
 
     private func escalate(_ id: ShepherdRecordID, _ reason: ShepherdEscalation, title: String?) {
         guard var record = records[id] else { return }

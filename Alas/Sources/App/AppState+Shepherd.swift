@@ -31,7 +31,7 @@ extension AppState {
                 Task { await self.rightPaneStore.refresh(worktreeId: worktreeID, forceReviewLoopRemote: true) }
             },
             archiveWorktreeIfAllowed: { [weak self] worktreeID, sessionID in
-                await self?.archiveShepherdWorktreeIfAllowed(worktreeID, sessionID: sessionID)
+                await self?.archiveShepherdWorktreeIfAllowed(worktreeID, sessionID: sessionID) ?? .declined
             }
         )
     }
@@ -393,21 +393,20 @@ extension AppState {
     /// Settings > Changes > "Archive worktree after its PR merges": the
     /// normal archive path, which hides the worktree and stops its tabs
     /// without touching disk. `sessionID` owns the finished record; the
-    /// worktree may hold other records owned by other sessions.
-    private func archiveShepherdWorktreeIfAllowed(_ worktreeID: String, sessionID: String) async {
+    /// worktree may hold other records owned by other sessions. A busy owner
+    /// defers quietly: the shepherd tries again when its turn ends.
+    private func archiveShepherdWorktreeIfAllowed(
+        _ worktreeID: String,
+        sessionID: String
+    ) async -> ReviewShepherd.ArchiveResult {
         guard config.changes.shepherd.archiveAfterMerge,
               let resolved = projectAndWorktree(withWorktreeId: worktreeID),
               !projectsManager.isMain(resolved.worktree, in: resolved.project),
               !projectsManager.isWorktreeHidden(projectId: resolved.project.id, path: resolved.worktree.path)
-        else { return }
+        else { return .declined }
         let worktree = resolved.worktree
         if await shepherdSessionState(sessionID: sessionID, worktreeID: worktreeID) == .busy {
-            inAppNotifications.post(
-                "Kept \(worktree.branch): its chat session is still working.",
-                severity: .information,
-                worktreeID: worktreeID
-            )
-            return
+            return .deferredBusy
         }
         // `archiveWorktree` would ask about unsaved edits in a modal prompt.
         guard tabs.tabIdsWithUnsavedChanges(forWorktree: worktreeID).isEmpty else {
@@ -416,8 +415,9 @@ extension AppState {
                 severity: .information,
                 worktreeID: worktreeID
             )
-            return
+            return .declined
         }
         archiveWorktree(worktree)
+        return .archived
     }
 }

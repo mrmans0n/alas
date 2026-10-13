@@ -108,6 +108,10 @@ public struct ShepherdRecord: Codable, Equatable, Sendable {
     public var stableHeadPolls: Int
     public var notifiedReadyHeadSHA: String?
     public var finishedAt: Date?
+    /// The request merged while its owner session was busy, so the
+    /// archive-after-merge step waits for that session's turn to end (or the
+    /// next launch). Nil otherwise, including records saved before this field.
+    public var archivePending: Bool?
     public var createdAt: Date
     public var updatedAt: Date
 
