@@ -8,6 +8,22 @@ import Foundation
 enum ACPTranscriptNativeRows {
     static let isEnabled: Bool = ProcessInfo.processInfo.environment["ALAS_TRANSCRIPT_CORETEXT"] == "1"
 
+    private static let supportCache: NSCache<NSString, NSNumber> = {
+        let cache = NSCache<NSString, NSNumber>()
+        cache.countLimit = 4096
+        return cache
+    }()
+
+    /// Parsing is the expensive part and specs rebuild on every publish, so
+    /// each source string is parsed once.
+    private static func supportsMarkdown(_ source: String) -> Bool {
+        let key = source as NSString
+        if let cached = supportCache.object(forKey: key) { return cached.boolValue }
+        let supported = ACPTranscriptMarkdownLayout.supports(ACPMarkdownParser.parse(source))
+        supportCache.setObject(NSNumber(value: supported), forKey: key)
+        return supported
+    }
+
     /// The native content for `message`, or nil when it must stay SwiftUI.
     /// `isLive` is the live narration flag; tool calls decide liveness from
     /// their own status.
@@ -23,12 +39,12 @@ enum ACPTranscriptNativeRows {
                   !text.hasPrefix("/"),
                   text.range(of: #"(^|\s)/[A-Za-z]"#, options: .regularExpression) == nil,
                   text.range(of: #"#\d"#, options: .regularExpression) == nil,
-                  ACPTranscriptMarkdownLayout.supports(ACPMarkdownParser.parse(text))
+                  supportsMarkdown(text)
             else { return nil }
             return .user(markdown: text)
         case .agent(_, _, let buffer):
             let markdown = buffer.value
-            guard ACPTranscriptMarkdownLayout.supports(ACPMarkdownParser.parse(markdown)) else { return nil }
+            guard supportsMarkdown(markdown) else { return nil }
             return .agent(markdown: markdown, commentary: isCommentary)
         case .thought(_, _, let buffer):
             return .thought(label: ACPThoughtView.inlineLabel(for: buffer.value) ?? "Thinking…")
