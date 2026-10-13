@@ -169,6 +169,30 @@ import Testing
         }
     }
 
+    @Test func escapeAfterAPlainClickReachesTheNextResponder() {
+        let view = row(.agent(markdown: "Plain text to click", commentary: false))
+        let height = view.measuredHeight(forWidth: 1_000)
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1_000, height: 200), styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView?.addSubview(view)
+        view.frame = NSRect(x: 0, y: 0, width: 1_000, height: height)
+        let point = view.convert(NSPoint(x: view.columnRect.minX + 20, y: 10), to: nil)
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            let event = NSEvent.mouseEvent(
+                with: type, location: point, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 0, clickCount: 1, pressure: 1
+            )!
+            type == .leftMouseDown ? view.mouseDown(with: event) : view.mouseUp(with: event)
+        }
+        let probe = CancelProbe()
+        view.nextResponder = probe
+        view.cancelOperation(nil)
+        #expect(probe.cancelled)
+    }
+
     @Test func draggingAcrossBlocksCopiesTheSourceText() throws {
         let view = row(.agent(markdown: "First paragraph.\n\nSecond `code` here.\n\n```swift\nlet x = 1\n```", commentary: false))
         _ = view.measuredHeight(forWidth: 800)
@@ -278,6 +302,11 @@ import Testing
         #expect(toggled == [true])
         #expect(view.contentForTesting != nil)
     }
+}
+
+private final class CancelProbe: NSResponder {
+    private(set) var cancelled = false
+    override func cancelOperation(_ sender: Any?) { cancelled = true }
 }
 
 extension ACPTranscriptNativeRows.Actions {

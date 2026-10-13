@@ -323,9 +323,10 @@ extension ACPTranscriptCoreTextRowView {
         nextResponder?.insertText(insertString)
     }
 
-    /// Escape clears the selection first.
+    /// Escape clears the selection first. A plain click leaves an empty
+    /// one, kept as the anchor for a shift-click, that Escape passes over.
     override func cancelOperation(_ sender: Any?) {
-        if textSelection != nil {
+        if textSelection.map({ !$0.isEmpty }) ?? false {
             textSelection = nil
         } else {
             nextResponder?.cancelOperation(sender)
