@@ -3,6 +3,7 @@ import SwiftUI
 struct SidebarHeaderView: View {
     let onSettings: () -> Void
     let onAddProject: () -> Void
+    var onAddFolder: (() -> Void)? = nil
     let onSearch: () -> Void
     let onHideSidebar: () -> Void
     var onNewWorkspace: (() -> Void)? = nil
@@ -22,6 +23,7 @@ struct SidebarHeaderView: View {
     var attentionRollUpSummarizer: AttentionRollUpSummarizer? = nil
     init(onSettings: @escaping () -> Void,
          onAddProject: @escaping () -> Void,
+         onAddFolder: (() -> Void)? = nil,
          onSearch: @escaping () -> Void,
          onHideSidebar: @escaping () -> Void,
          onNewWorkspace: (() -> Void)? = nil,
@@ -41,6 +43,7 @@ struct SidebarHeaderView: View {
          attentionRollUpSummarizer: AttentionRollUpSummarizer? = nil) {
         self.onSettings = onSettings
         self.onAddProject = onAddProject
+        self.onAddFolder = onAddFolder
         self.onSearch = onSearch
         self.onHideSidebar = onHideSidebar
         self.onNewWorkspace = onNewWorkspace
@@ -82,6 +85,17 @@ struct SidebarHeaderView: View {
         .frame(height: 38)
     }
 
+    @ViewBuilder
+    private var addMenuItems: some View {
+        Button("Add repository...", systemImage: "folder.badge.plus", action: onAddProject)
+        if let onAddFolder {
+            Button("Add folder...", systemImage: "folder", action: onAddFolder)
+        }
+        if let onNewWorkspace {
+            Button("New workspace...", systemImage: "square.grid.2x2", action: onNewWorkspace)
+        }
+    }
+
     private func attentionToolbarButton(metrics: ToolbarControlMetrics = .standard) -> some View {
         AttentionToolbarButton(count: attentionCount, isOpen: $attentionInboxOpen, metrics: metrics) {
             AttentionInboxView(
@@ -111,10 +125,9 @@ struct SidebarHeaderView: View {
                 if showsAttentionInbox {
                     attentionToolbarButton(metrics: .sidebarHeader)
                 }
-                if let onNewWorkspace {
+                if onAddFolder != nil || onNewWorkspace != nil {
                     Menu {
-                        Button("Add repository...", systemImage: "folder.badge.plus", action: onAddProject)
-                        Button("New workspace...", systemImage: "square.grid.2x2", action: onNewWorkspace)
+                        addMenuItems
                     } label: {
                         Icon(name: "folder-plus", size: 13, color: theme.color(addMenuHovered ? "fg" : "fg-muted"))
                             .toolbarControlSurface(
@@ -134,8 +147,8 @@ struct SidebarHeaderView: View {
                             .updating($addMenuPressed) { _, state, _ in state = true }
                     )
                     .onHover { addMenuHovered = $0 }
-                    .help("Add repository or workspace")
-                    .accessibilityLabel("Add repository or workspace")
+                    .help("Add project or workspace")
+                    .accessibilityLabel("Add project or workspace")
                 } else {
                     ToolbarBtn(icon: "folder-plus", tooltip: "Add repository",
                                metrics: .sidebarHeader, action: onAddProject)
@@ -159,10 +172,7 @@ struct SidebarHeaderView: View {
                     attentionToolbarButton()
                 }
                 Menu {
-                    Button("Add repository...", systemImage: "folder.badge.plus", action: onAddProject)
-                    if let onNewWorkspace {
-                        Button("New workspace...", systemImage: "square.grid.2x2", action: onNewWorkspace)
-                    }
+                    addMenuItems
                     Divider()
                     Button("Settings", systemImage: "gear", action: onSettings)
                     Button("Hide sidebar", systemImage: "sidebar.left", action: onHideSidebar)

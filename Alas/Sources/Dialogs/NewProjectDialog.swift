@@ -5,9 +5,10 @@ import UniformTypeIdentifiers
 struct NewProjectDialog: View {
     @Bindable var state: AppState
     @Binding var presented: Bool
+    var kind: ProjectKind = .git
 
     var body: some View {
-        ProjectDialog(state: state, presented: $presented, mode: .add)
+        ProjectDialog(state: state, presented: $presented, mode: .add(kind))
     }
 }
 
@@ -22,7 +23,7 @@ struct EditProjectDialog: View {
 }
 
 private enum ProjectDialogMode {
-    case add
+    case add(ProjectKind)
     case edit(ProjectConfig)
 }
 
@@ -94,10 +95,16 @@ private struct ProjectDialog: View {
         var clonesRepository: Bool {
             self == .github || self == .gitlab || self == .gitURL
         }
+
+        /// Folders are registered in place, so cloning locations do not apply.
+        static func available(for kind: ProjectKind) -> [ProjectLocation] {
+            switch kind {
+            case .git: allCases
+            case .folder: [.local, .remoteSSH]
+            }
+        }
     }
     @State private var location: ProjectLocation = .local
-    /// Register a plain directory instead of a git repository (local or SSH).
-    @State private var addsFolder = false
     @State private var sshHost: String = ""
     @State private var showHostPicker = false
     @State private var sshHosts: [SSHConfigHost] = []
@@ -313,14 +320,9 @@ private struct ProjectDialog: View {
 
     @ViewBuilder
     private var generalSettings: some View {
-        if case .add = mode {
+        if case .add(let kind) = mode {
             DialogField(label: "Location") {
-                Seg(value: $location, options: ProjectLocation.allCases.map { ($0, $0.rawValue) })
-            }
-            if !location.clonesRepository {
-                DialogField(label: "Kind") {
-                    Seg(value: $addsFolder, options: [(false, "Git repository"), (true, "Plain folder")])
-                }
+                Seg(value: $location, options: ProjectLocation.available(for: kind).map { ($0, $0.rawValue) })
             }
         }
         DialogField(label: locationFieldLabel) {
@@ -362,14 +364,16 @@ private struct ProjectDialog: View {
 
     private var title: String {
         switch mode {
-        case .add: "Add project"
+        case .add(.git): "Add repository"
+        case .add(.folder): "Add folder"
         case .edit: "Edit project"
         }
     }
 
     private var subtitle: String {
         switch mode {
-        case .add: "Register a git repository or a plain folder as an Alas project."
+        case .add(.git): "Register or clone a git repository as an Alas project."
+        case .add(.folder): "Register a plain folder as an Alas project. Folders have no git status or worktrees."
         case .edit: "Update this project's settings."
         }
     }
@@ -377,7 +381,7 @@ private struct ProjectDialog: View {
     private var isFolderProject: Bool {
         switch mode {
         case .edit(let project): project.isFolder
-        case .add: addsFolder && !location.clonesRepository
+        case .add(let kind): kind == .folder
         }
     }
 
@@ -414,8 +418,8 @@ private struct ProjectDialog: View {
         case .edit: isFolderProject ? "Folder path" : "Repository path"
         case .add:
             switch location {
-            case .local where addsFolder: "Folder path"
-            case .remoteSSH where addsFolder: "Remote folder path"
+            case .local where isFolderProject: "Folder path"
+            case .remoteSSH where isFolderProject: "Remote folder path"
             case .local: "Repository path"
             case .github, .gitlab: "Repository"
             case .gitURL: "Git remote"
@@ -429,7 +433,7 @@ private struct ProjectDialog: View {
         switch location {
         case .local:
             HStack(spacing: 6) {
-                AlasField(text: $path, placeholder: "/path/to/repo", monospaced: true)
+                AlasField(text: $path, placeholder: isFolderProject ? "/path/to/folder" : "/path/to/repo", monospaced: true)
                 AlasButton(title: "Choose…", action: choose)
             }
         case .github, .gitlab:
@@ -469,7 +473,7 @@ private struct ProjectDialog: View {
                         )
                     }
                 }
-                AlasField(text: $path, placeholder: "/home/me/repo", monospaced: true)
+                AlasField(text: $path, placeholder: isFolderProject ? "/home/me/folder" : "/home/me/repo", monospaced: true)
             }
         }
     }
@@ -561,8 +565,10 @@ private struct ProjectDialog: View {
         case .add:
             if location.clonesRepository {
                 isValidating ? "Cloning…" : "Clone and add"
+            } else if isFolderProject {
+                isValidating ? "Adding…" : "Add folder"
             } else {
-                isValidating ? "Adding…" : "Add project"
+                isValidating ? "Adding…" : "Add repository"
             }
         case .edit: "Save changes"
         }
@@ -1144,7 +1150,7 @@ private struct ProjectDialog: View {
     private func suggestName(for newPath: String) async {
         guard !newPath.isEmpty else { return }
         let url = URL(fileURLWithPath: newPath)
-        if addsFolder {
+        if isFolderProject {
             if name.isEmpty { name = url.lastPathComponent }
             return
         }

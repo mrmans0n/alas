@@ -6,6 +6,11 @@ struct NewWorktreePresentation: Identifiable, Equatable {
     let projectId: String?
 }
 
+struct NewProjectPresentation: Identifiable, Equatable {
+    let id = UUID()
+    let kind: ProjectKind
+}
+
 struct WorktreeCleanupPresentation: Identifiable, Equatable {
     let id = UUID()
     let projectId: String
@@ -31,7 +36,7 @@ enum RootWorkspaceVisibilityPolicy {
 
 struct RootView: View {
     @Bindable var state: AppState
-    @State private var showNewProject = false
+    @State private var newProjectPresentation: NewProjectPresentation?
     @State private var approvalStackHeight: CGFloat = 0
     @State private var editingProject: ProjectConfig?
     @State private var removingProject: ProjectConfig?
@@ -69,13 +74,13 @@ struct RootView: View {
             .modifier(RootCommandHandlers(
                 state: state,
                 newWorktreePresentation: $newWorktreePresentation,
-                showNewProject: $showNewProject,
+                newProjectPresentation: $newProjectPresentation,
                 selectedWorktree: selectedWorktree,
                 openSettings: openSettingsWindow
             ))
             .modifier(RootPresentationHandlers(
                 state: state,
-                showNewProject: $showNewProject,
+                newProjectPresentation: $newProjectPresentation,
                 editingProject: $editingProject,
                 removingProject: $removingProject,
                 newWorktreePresentation: $newWorktreePresentation,
@@ -194,7 +199,8 @@ struct RootView: View {
     private var mainContent: some View {
         if state.isPreviewingFirstRunScreen {
             EmptyState(
-                onAddProject: { showNewProject = true },
+                onAddProject: { newProjectPresentation = NewProjectPresentation(kind: .git) },
+                onAddFolder: { newProjectPresentation = NewProjectPresentation(kind: .folder) },
                 onExitPreview: { state.isPreviewingFirstRunScreen = false }
             )
         } else if !RootWorkspaceVisibilityPolicy.showsWorkspace(
@@ -204,7 +210,10 @@ struct RootView: View {
             hasAttentionHistoryLoadError: state.attentionStore.loadError != nil,
             hasPeerGroups: state.nativePeerSessions?.hasGroups == true
         ) {
-            EmptyState(onAddProject: { showNewProject = true })
+            EmptyState(
+                onAddProject: { newProjectPresentation = NewProjectPresentation(kind: .git) },
+                onAddFolder: { newProjectPresentation = NewProjectPresentation(kind: .folder) }
+            )
         } else {
             let rightPaneSelection = rightPaneSelectionState
             let rightPaneRailExists = rightPaneSelection.showsRightPane
@@ -251,7 +260,8 @@ struct RootView: View {
                 }
             ),
             onSettings: { openSettingsWindow() },
-            onAddProject: { showNewProject = true },
+            onAddProject: { newProjectPresentation = NewProjectPresentation(kind: .git) },
+            onAddFolder: { newProjectPresentation = NewProjectPresentation(kind: .folder) },
             onEditProject: { projectId in
                 editingProject = state.projects.first { $0.id == projectId }
             },
@@ -670,7 +680,7 @@ private struct WorkspaceOverviewView: View {
 
 private struct RootPresentationHandlers: ViewModifier {
     @Bindable var state: AppState
-    @Binding var showNewProject: Bool
+    @Binding var newProjectPresentation: NewProjectPresentation?
     @Binding var editingProject: ProjectConfig?
     @Binding var removingProject: ProjectConfig?
     @Binding var newWorktreePresentation: NewWorktreePresentation?
@@ -680,7 +690,7 @@ private struct RootPresentationHandlers: ViewModifier {
         content
             .modifier(RootProjectPresentationHandlers(
                 state: state,
-                showNewProject: $showNewProject,
+                newProjectPresentation: $newProjectPresentation,
                 editingProject: $editingProject,
                 removingProject: $removingProject
             ))
@@ -710,14 +720,21 @@ private struct RootRepoHookApprovalPresentationHandler: ViewModifier {
 
 private struct RootProjectPresentationHandlers: ViewModifier {
     @Bindable var state: AppState
-    @Binding var showNewProject: Bool
+    @Binding var newProjectPresentation: NewProjectPresentation?
     @Binding var editingProject: ProjectConfig?
     @Binding var removingProject: ProjectConfig?
 
     func body(content: Content) -> some View {
         content
-            .sheet(isPresented: $showNewProject) {
-                NewProjectDialog(state: state, presented: $showNewProject)
+            .sheet(item: $newProjectPresentation) { presentation in
+                NewProjectDialog(
+                    state: state,
+                    presented: Binding(
+                        get: { newProjectPresentation != nil },
+                        set: { if !$0 { newProjectPresentation = nil } }
+                    ),
+                    kind: presentation.kind
+                )
             }
             .sheet(item: $editingProject) { project in
                 EditProjectDialog(
@@ -1060,7 +1077,7 @@ private struct RootGGSheetHandlers: ViewModifier {
 private struct RootCommandHandlers: ViewModifier {
     @Bindable var state: AppState
     @Binding var newWorktreePresentation: NewWorktreePresentation?
-    @Binding var showNewProject: Bool
+    @Binding var newProjectPresentation: NewProjectPresentation?
     let selectedWorktree: () -> Worktree?
     let openSettings: () -> Void
 
@@ -1069,7 +1086,7 @@ private struct RootCommandHandlers: ViewModifier {
             .modifier(RootBaseHandlers(
                 state: state,
                 newWorktreePresentation: $newWorktreePresentation,
-                showNewProject: $showNewProject,
+                newProjectPresentation: $newProjectPresentation,
                 selectedWorktree: selectedWorktree,
                 openSettings: openSettings
             ))
@@ -1083,7 +1100,7 @@ private struct RootCommandHandlers: ViewModifier {
 private struct RootBaseHandlers: ViewModifier {
     @Bindable var state: AppState
     @Binding var newWorktreePresentation: NewWorktreePresentation?
-    @Binding var showNewProject: Bool
+    @Binding var newProjectPresentation: NewProjectPresentation?
     let selectedWorktree: () -> Worktree?
     let openSettings: () -> Void
 
@@ -1099,7 +1116,7 @@ private struct RootBaseHandlers: ViewModifier {
         let a = aRightPane
         let b = a
             .onReceive(NotificationCenter.default.publisher(for: .alasCreateProject)) { _ in
-                showNewProject = true
+                newProjectPresentation = NewProjectPresentation(kind: .git)
             }
         let c = b
             .onReceive(NotificationCenter.default.publisher(for: .alasNewWorktree)) { notification in
