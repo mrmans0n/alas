@@ -519,6 +519,117 @@ struct GitHubCLIProviderTests {
         #expect(threads[1].isActionable == false)
     }
 
+    struct GitHubAuthorTrustCase: Sendable, CustomTestStringConvertible {
+        let testDescription: String
+        let headCommentFields: String
+        let expected: ReviewAuthorTrust
+    }
+
+    @Test(
+        "Review thread comments map author association, bot type and viewer to author trust",
+        arguments: [
+            GitHubAuthorTrustCase(
+                testDescription: "owner",
+                headCommentFields: #""author": {"__typename": "User", "login": "owner"}, "authorAssociation": "OWNER", "viewerDidAuthor": false"#,
+                expected: .trusted
+            ),
+            GitHubAuthorTrustCase(
+                testDescription: "organization member",
+                headCommentFields: #""author": {"__typename": "User", "login": "maintainer"}, "authorAssociation": "MEMBER", "viewerDidAuthor": false"#,
+                expected: .trusted
+            ),
+            GitHubAuthorTrustCase(
+                testDescription: "collaborator",
+                headCommentFields: #""author": {"__typename": "User", "login": "collab"}, "authorAssociation": "COLLABORATOR", "viewerDidAuthor": false"#,
+                expected: .trusted
+            ),
+            GitHubAuthorTrustCase(
+                testDescription: "contributor",
+                headCommentFields: #""author": {"__typename": "User", "login": "drive-by"}, "authorAssociation": "CONTRIBUTOR", "viewerDidAuthor": false"#,
+                expected: .untrusted
+            ),
+            GitHubAuthorTrustCase(
+                testDescription: "first timer",
+                headCommentFields: #""author": {"__typename": "User", "login": "newcomer"}, "authorAssociation": "FIRST_TIMER", "viewerDidAuthor": false"#,
+                expected: .untrusted
+            ),
+            GitHubAuthorTrustCase(
+                testDescription: "no association",
+                headCommentFields: #""author": {"__typename": "User", "login": "stranger"}, "authorAssociation": "NONE", "viewerDidAuthor": false"#,
+                expected: .untrusted
+            ),
+            GitHubAuthorTrustCase(
+                testDescription: "GitHub App bot without association",
+                headCommentFields: #""author": {"__typename": "Bot", "login": "chatgpt-codex-connector"}, "authorAssociation": "NONE", "viewerDidAuthor": false"#,
+                expected: .trusted
+            ),
+            GitHubAuthorTrustCase(
+                testDescription: "viewer who is a member",
+                headCommentFields: #""author": {"__typename": "User", "login": "viewer"}, "authorAssociation": "MEMBER", "viewerDidAuthor": true"#,
+                expected: .untrusted
+            ),
+            GitHubAuthorTrustCase(
+                testDescription: "missing association",
+                headCommentFields: #""author": {"__typename": "User", "login": "maintainer"}, "viewerDidAuthor": false"#,
+                expected: .unknown
+            ),
+            GitHubAuthorTrustCase(
+                testDescription: "missing viewerDidAuthor",
+                headCommentFields: #""author": {"__typename": "User", "login": "maintainer"}, "authorAssociation": "MEMBER""#,
+                expected: .unknown
+            ),
+        ]
+    )
+    func reviewThreadCommentAuthorTrust(_ testCase: GitHubAuthorTrustCase) throws {
+        let threads = try GitHubCLIProvider.parseReviewThreads(
+            Self.authorTrustReviewThreadOutput(headCommentFields: testCase.headCommentFields)
+        )
+
+        let thread = try #require(threads.first)
+        #expect(thread.comments.first?.authorTrust == testCase.expected)
+        #expect(thread.comments.last?.authorTrust == .untrusted)
+        #expect(thread.headAuthorTrust == testCase.expected)
+    }
+
+    private static func authorTrustReviewThreadOutput(headCommentFields: String) -> String {
+        """
+        {
+          "data": {
+            "repository": {
+              "pullRequest": {
+                "reviewThreads": {
+                  "nodes": [
+                    {
+                      "id": "PRRT_trust",
+                      "isResolved": false,
+                      "isOutdated": false,
+                      "comments": {
+                        "nodes": [
+                          {
+                            "id": "PRRC_head",
+                            "body": "Please rename this.",
+                            \(headCommentFields)
+                          },
+                          {
+                            "id": "PRRC_reply",
+                            "body": "Done.",
+                            "author": { "__typename": "User", "login": "viewer" },
+                            "authorAssociation": "OWNER",
+                            "viewerDidAuthor": true
+                          }
+                        ]
+                      }
+                    }
+                  ],
+                  "pageInfo": { "hasNextPage": false, "endCursor": null }
+                }
+              }
+            }
+          }
+        }
+        """
+    }
+
     @Test func githubPublishReviewUsesGraphQLPayloadAndRefreshesPR() async throws {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: Self.pullRequestNodeOutput, stderr: ""),

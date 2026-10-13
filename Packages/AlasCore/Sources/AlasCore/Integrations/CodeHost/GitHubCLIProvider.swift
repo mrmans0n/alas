@@ -92,8 +92,10 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
                   createdAt
                   diffHunk
                   author {
+                    __typename
                     login
                   }
+                  authorAssociation
                   viewerDidAuthor
                 }
               }
@@ -1769,7 +1771,12 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
                     createdAt: try? parseOptionalDate(c.createdAt),
                     viewerCanUpdate: c.viewerDidAuthor ?? false,
                     viewerCanDelete: c.viewerDidAuthor ?? false,
-                    isPending: false
+                    isPending: false,
+                    authorTrust: authorTrust(
+                        viewerDidAuthor: c.viewerDidAuthor,
+                        authorAssociation: c.authorAssociation,
+                        authorTypename: c.author?.typename
+                    )
                 )
             }
             let comments = allComments.filter { !$0.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
@@ -1796,6 +1803,29 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
             )
         }
         return ReviewThreadsPage(threads: threads, pageInfo: connection.pageInfo)
+    }
+
+    /// Repository owners, organization members, collaborators and GitHub Apps
+    /// (`Bot`) are trusted. The viewer's own comments never are: the shepherd
+    /// must not act on its own replies. Without the viewer flag or the
+    /// association (for a non-bot) the author can't be classified.
+    private static func authorTrust(
+        viewerDidAuthor: Bool?,
+        authorAssociation: String?,
+        authorTypename: String?
+    ) -> ReviewAuthorTrust {
+        if viewerDidAuthor == true { return .untrusted }
+        if authorTypename == "Bot" { return .trusted }
+        guard viewerDidAuthor == false,
+              let association = authorAssociation?.uppercased(),
+              !association.isEmpty
+        else { return .unknown }
+        switch association {
+        case "OWNER", "MEMBER", "COLLABORATOR":
+            return .trusted
+        default:
+            return .untrusted
+        }
     }
 
     private static func parseAddThreadReplyResponse(_ json: String) throws -> ReviewComment {
@@ -2713,15 +2743,26 @@ private struct ReviewThreadCommentNode: Decodable {
     let createdAt: String?
     let diffHunk: String?
     let author: ReviewThreadAuthor?
+    let authorAssociation: String?
     let viewerDidAuthor: Bool?
 
-    public init(id: String?, body: String, url: String?, createdAt: String?, diffHunk: String?, author: ReviewThreadAuthor?, viewerDidAuthor: Bool?) {
+    public init(
+        id: String?,
+        body: String,
+        url: String?,
+        createdAt: String?,
+        diffHunk: String?,
+        author: ReviewThreadAuthor?,
+        authorAssociation: String? = nil,
+        viewerDidAuthor: Bool?
+    ) {
         self.id = id
         self.body = body
         self.url = url
         self.createdAt = createdAt
         self.diffHunk = diffHunk
         self.author = author
+        self.authorAssociation = authorAssociation
         self.viewerDidAuthor = viewerDidAuthor
     }
 }
@@ -2756,9 +2797,17 @@ private struct GitHubPullRequestMarker: Decodable {
 
 private struct ReviewThreadAuthor: Decodable {
     let login: String
+    /// GraphQL `Actor` concrete type: `User`, `Bot`, `Mannequin`, ...
+    let typename: String?
 
-    public init(login: String) {
+    private enum CodingKeys: String, CodingKey {
+        case login
+        case typename = "__typename"
+    }
+
+    public init(login: String, typename: String? = nil) {
         self.login = login
+        self.typename = typename
     }
 }
 

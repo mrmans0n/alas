@@ -41,7 +41,8 @@ enum ReviewThreadMutations {
                 createdAt: comment.createdAt,
                 viewerCanUpdate: comment.viewerCanUpdate,
                 viewerCanDelete: comment.viewerCanDelete,
-                isPending: comment.isPending
+                isPending: comment.isPending,
+                authorTrust: comment.authorTrust
             )
             return thread.replacingComment(id: commentID, with: updated)
         }
