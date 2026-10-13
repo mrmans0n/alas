@@ -273,7 +273,7 @@ final class AppState {
     var autoNamingWorktreeIds: Set<String> = []
     /// Follow-up composers outlive the conditional Agent pane and worktree navigation.
     var agentSidebarFollowUps: [String: [ACPSession.ID: AgentSidebarFollowUpDraft]] = [:]
-    let attentionStore: AttentionStore
+    var attentionStore: AttentionStore { core.attention.store }
     /// Debug: show the first-run screen even when projects exist.
     var isPreviewingFirstRunScreen = false
     /// Debug: cycle the center pane through the forest loading and empty states.
@@ -290,7 +290,10 @@ final class AppState {
     @ObservationIgnored var attentionNavigationDepth = 0
     var attentionNavigationErrors: [UUID: String] = [:]
     @ObservationIgnored var attentionNavigationEnvironment: AttentionNavigationEnvironment?
-    @ObservationIgnored var attentionSuppressedStartupSignals: [AttentionSourceKey: String] = [:]
+    var attentionSuppressedStartupSignals: [AttentionSourceKey: String] {
+        get { core.attention.suppressedStartupSignals }
+        set { core.attention.suppressedStartupSignals = newValue }
+    }
     @ObservationIgnored var attentionInitializedSnapshotSources: Set<String> = []
     @ObservationIgnored var attentionPendingReviewReveal: AttentionPendingReviewReveal?
     @ObservationIgnored var attentionAliasRetryTask: Task<Void, Never>?
@@ -1550,7 +1553,6 @@ final class AppState {
         self.nextPromptInferenceOverride = nextPromptInference
         self.localTextSupported = localTextSupported
         self.workspaceRemoteTransport = workspaceRemoteTransport
-        self.attentionStore = attentionStore ?? AttentionStore()
         self.attentionNavigationEnvironment = attentionNavigationEnvironment
         self.harnessAttentionSettleInterval = harnessAttentionSettleInterval
         restoreActiveTabsOnNextReload = restoreActiveTabsOnStartup
@@ -1596,6 +1598,7 @@ final class AppState {
             runScheduler: runScheduler,
             localTextModelStore: suggestionStore,
             localText: localTextInference,
+            attentionStore: attentionStore,
             runCompletionWaiter: runScriptCompletionWaiter
         )
         let spacesManager = spacesFile.map(SpacesManager.init(file:))
@@ -1716,6 +1719,9 @@ final class AppState {
         core.resolveWorkspaceRepoHook = { [weak self] request in
             guard let self else { return nil }
             return try await self.preparedWorkspaceRepoHook(request)
+        }
+        core.attention.onAdmit = { [weak self] signal in
+            self?.registerAttentionAlias(for: signal)
         }
         core.runHistory.onFailure = { [weak self] message in
             self?.showFileActionError(title: "Run History Failed", message: message)

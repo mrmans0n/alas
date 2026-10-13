@@ -1,15 +1,15 @@
 import AppKit
 import SwiftUI
 
-/// Top-level coordinator view for the 3-way merge editor. Replaces
-/// the old `body3Columns` HStack. Composes:
+/// Top-level view for the 3-way merge editor. Composes:
+/// - A header naming each column and its branch.
 /// - Three text panes: LOCAL (`MergeSidePane`), RESULT
 ///   (`MergeResultPane`), REMOTE (`MergeSidePane`).
-/// - Two action gutters (`MergeActionGutter`) between the panes.
+/// - Two action gutters (`MergeActionGutter`) with ribbons between the panes.
 /// - The existing `MergeConflictMinimap` on the far right edge.
 ///
-/// All children read scroll state from a single
-/// `MergeScrollCoordinator` instance so scrolling stays in lockstep.
+/// All panes report to a single `MergeScrollCoordinator`, which keeps
+/// corresponding content aligned while any of them scrolls.
 struct MergeView3Way: View {
     @Bindable var model: MergeConflictTabModel
     let fileExtension: String
@@ -19,11 +19,9 @@ struct MergeView3Way: View {
     let onJumpToConflict: (Int) -> Void
 
     @State private var coordinator = MergeScrollCoordinator()
+    @State private var highlighter = MergeSyntaxHighlighter()
+    @State private var wordMarkCache = MergeWordMarkCache()
     @Environment(\.theme) var theme
-
-    private var layout: MergeRegionVisualLayout.Layout {
-        MergeRegionVisualLayout.compute(regions: model.regions, showBase: showBase)
-    }
 
     /// Whether the model's last MEANINGFUL region's RENDERED content
     /// ends with `\n`. Mirrors `renderMarkerlessBuffer`'s LOCAL → (BASE
@@ -33,29 +31,14 @@ struct MergeView3Way: View {
     /// for files whose merged content ends with `\n`; reading from it
     /// directly would falsely report no-EOF-newline).
     private var lastRegionEndsWithNewline: Bool {
-        // Find the index of the last meaningful region.
-        var idx = model.regions.count - 1
-        while idx >= 0 {
-            switch model.regions[idx] {
-            case .text(let t):
-                if !t.isEmpty { break }
-            case .conflict:
-                break  // conflicts always meaningful
-            }
-            // .text("") fall-through: keep walking back.
-            if case .text(let t) = model.regions[idx], t.isEmpty {
-                idx -= 1
-                continue
-            }
-            break
-        }
-        guard idx >= 0 else { return false }
-        switch model.regions[idx] {
+        guard let last = model.regions.last(where: { region in
+            if case .text(let t) = region { return !t.isEmpty }
+            return true
+        }) else { return false }
+        switch last {
         case .text(let t):
             return t.hasSuffix("\n")
         case .conflict(let block):
-            // Walk render order LOCAL → BASE (if showBase) → REMOTE;
-            // the last non-empty side determines the EOF newline state.
             var trailing: Bool? = nil
             if !block.local.isEmpty { trailing = block.local.hasSuffix("\n") }
             if showBase, let base = block.base, !base.isEmpty {
@@ -67,80 +50,165 @@ struct MergeView3Way: View {
     }
 
     var body: some View {
-        let layout = self.layout
-        let hunkPairs = model.allConflictBlocks().map { (local: $0.local, remote: $0.remote) }
-        MergeThreeWayLayout {
-            MergeSidePane(
-                side: .local,
-                rows: layout.local,
-                hunkRanges: layout.conflictRanges.map(\.localRows),
-                codeFontFamily: codeFontFamily,
-                codeFontSize: codeFontSize,
-                coordinator: coordinator
-            )
-            MergeActionGutter(
-                side: .localToResult,
-                conflictRanges: layout.conflictRanges,
-                coordinator: coordinator,
-                onAccept: { ordinal in acceptLocal(at: ordinal) },
-                onReject: { ordinal in acceptRemote(at: ordinal) }
-            )
-            .frame(width: 28)
-            MergeResultPane(
-                rows: layout.result,
-                conflictRanges: layout.conflictRanges,
-                hunkPairs: hunkPairs,
-                wordDiffMode: model.wordDiffMode,
-                fileExtension: fileExtension,
-                codeFontFamily: codeFontFamily,
-                codeFontSize: codeFontSize,
-                coordinator: coordinator,
-                endsWithNewline: lastRegionEndsWithNewline,
-                onEditFullText: { newText in
-                    model.applyEditedFullText(newText, showBase: showBase)
-                }
-            )
-            MergeActionGutter(
-                side: .resultToRemote,
-                conflictRanges: layout.conflictRanges,
-                coordinator: coordinator,
-                onAccept: { ordinal in acceptRemote(at: ordinal) },
-                onReject: { ordinal in acceptLocal(at: ordinal) }
-            )
-            .frame(width: 28)
-            MergeSidePane(
-                side: .remote,
-                rows: layout.remote,
-                hunkRanges: layout.conflictRanges.map(\.remoteRows),
-                codeFontFamily: codeFontFamily,
-                codeFontSize: codeFontSize,
-                coordinator: coordinator
-            )
-            MergeConflictMinimap(
-                conflictCount: model.conflictCount,
-                resolvedCount: max(model.initialConflictCount - model.conflictCount, 0),
-                currentConflictIndex: model.currentConflictIndex,
-                onJump: onJumpToConflict
-            )
-            .frame(width: 13)
+        let layout = MergeRegionVisualLayout.compute(regions: model.regions, showBase: showBase)
+        let current = model.currentConflictIndex
+        let bands = MergeView3WayDecorations.bands(for: layout.conflictRanges, current: current)
+        let marks = wordMarkCache.marks(for: layout, mode: model.wordDiffMode)
+        let syntaxInput = MergeSyntaxHighlighter.Input(
+            local: layout.local.map(\.content),
+            remote: layout.remote.map(\.content),
+            base: showBase ? layout.base.map(\.content) : [],
+            fileExtension: fileExtension
+        )
+        let _ = highlighter.revision
+        let localLines = highlighter.lines(for: syntaxInput.local, pane: .local)
+        let remoteLines = highlighter.lines(for: syntaxInput.remote, pane: .remote)
+        let baseLines = showBase ? highlighter.lines(for: syntaxInput.base, pane: nil) : []
+        let resultLines = MergeSyntaxHighlighter.resultLines(
+            origins: layout.resultOrigins,
+            local: localLines,
+            remote: remoteLines,
+            base: baseLines
+        )
+        let labels = branchLabels
+        VStack(spacing: 0) {
+            MergeThreeWayLayout {
+                MergePaneHeader(
+                    title: "Local",
+                    branch: labels.local,
+                    detail: "ours",
+                    tint: Color(nsColor: MergePalette(theme: theme).local)
+                )
+                headerSpacer
+                MergePaneHeader(
+                    title: "Result",
+                    branch: nil,
+                    detail: model.conflictCount == 0 ? "all resolved" : "\(model.conflictCount) unresolved",
+                    tint: nil
+                )
+                headerSpacer
+                MergePaneHeader(
+                    title: "Remote",
+                    branch: labels.remote,
+                    detail: "theirs",
+                    tint: Color(nsColor: MergePalette(theme: theme).remote)
+                )
+                headerSpacer
+            }
+            .frame(height: 26)
+            .overlay(Divider(), alignment: .bottom)
+            MergeThreeWayLayout {
+                MergeSidePane(
+                    side: .local,
+                    rows: layout.local,
+                    bands: bands.local,
+                    lineSpans: localLines,
+                    wordMarks: marks.local,
+                    codeFontFamily: codeFontFamily,
+                    codeFontSize: codeFontSize,
+                    coordinator: coordinator
+                )
+                MergeActionGutter(
+                    side: .localToResult,
+                    conflictRanges: layout.conflictRanges,
+                    currentOrdinal: current,
+                    codeFontFamily: codeFontFamily,
+                    codeFontSize: codeFontSize,
+                    coordinator: coordinator,
+                    onAccept: { ordinal in acceptLocal(at: ordinal) },
+                    onReject: { ordinal in acceptRemote(at: ordinal) }
+                )
+                MergeResultPane(
+                    rows: layout.result,
+                    bands: bands.result,
+                    lineSpans: resultLines,
+                    wordMarks: marks.result,
+                    codeFontFamily: codeFontFamily,
+                    codeFontSize: codeFontSize,
+                    coordinator: coordinator,
+                    endsWithNewline: lastRegionEndsWithNewline,
+                    onEditFullText: { newText in
+                        model.applyEditedFullText(newText, showBase: showBase)
+                    }
+                )
+                MergeActionGutter(
+                    side: .resultToRemote,
+                    conflictRanges: layout.conflictRanges,
+                    currentOrdinal: current,
+                    codeFontFamily: codeFontFamily,
+                    codeFontSize: codeFontSize,
+                    coordinator: coordinator,
+                    onAccept: { ordinal in acceptRemote(at: ordinal) },
+                    onReject: { ordinal in acceptLocal(at: ordinal) }
+                )
+                MergeSidePane(
+                    side: .remote,
+                    rows: layout.remote,
+                    bands: bands.remote,
+                    lineSpans: remoteLines,
+                    wordMarks: marks.remote,
+                    codeFontFamily: codeFontFamily,
+                    codeFontSize: codeFontSize,
+                    coordinator: coordinator
+                )
+                MergeConflictMinimap(
+                    conflictCount: model.conflictCount,
+                    resolvedCount: max(model.initialConflictCount - model.conflictCount, 0),
+                    currentConflictIndex: model.currentConflictIndex,
+                    onJump: onJumpToConflict
+                )
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
+        .onChange(of: layout, initial: true) { _, newLayout in
+            coordinator.layout = newLayout
+            // Accepting or editing a hunk changes the row mapping without a
+            // scroll; re-anchor the other panes on RESULT once the panes
+            // have laid out the new text.
+            Task { @MainActor in
+                await Task.yield()
+                coordinator.scroll(.result, toY: coordinator.offset(for: .result))
+            }
+        }
         .onChange(of: model.currentConflictIndex, initial: true) { _, _ in
-            scrollToCurrentConflict()
+            // Defer one turn so a freshly loaded document is laid out
+            // before the panes are asked to scroll into it.
+            Task { @MainActor in
+                await Task.yield()
+                scrollToCurrentConflict()
+            }
+        }
+        .task(id: syntaxInput) {
+            if highlighter.hasResults {
+                // Debounce re-parses while the user types in RESULT.
+                try? await Task.sleep(for: .milliseconds(120))
+                guard !Task.isCancelled else { return }
+            }
+            await highlighter.update(syntaxInput)
         }
     }
 
+    private var headerSpacer: some View {
+        Color(nsColor: MergePalette(theme: theme).gutterBackground)
+    }
+
+    private var branchLabels: (local: String?, remote: String?) {
+        guard let block = model.allConflictBlocks().first else { return (nil, nil) }
+        return (block.localLabel.isEmpty ? nil : block.localLabel, block.remoteLabel.isEmpty ? nil : block.remoteLabel)
+    }
+
     private func scrollToCurrentConflict() {
-        guard let ordinal = model.currentConflictIndex else { return }
-        let layout = MergeRegionVisualLayout.compute(regions: model.regions, showBase: showBase)
-        guard ordinal < layout.conflictRanges.count else { return }
+        guard let ordinal = model.currentConflictIndex,
+              let layout = coordinator.layout,
+              ordinal < layout.conflictRanges.count
+        else { return }
         let row = layout.conflictRanges[ordinal].resultRows.lowerBound
-        coordinator.setLogicalRow(row)
-        let y = coordinator.paneY()
-        coordinator.onSyncLocal?(y)
-        coordinator.onSyncResult?(y)
-        coordinator.onSyncRemote?(y)
+        let top = MergePaneMetrics.contentInset.height
+            + CGFloat(row) * MergePaneMetrics(fontFamily: codeFontFamily, fontSize: codeFontSize).rowHeight
+        // Park the hunk a third of the way down so the lines leading into
+        // it stay visible.
+        coordinator.scroll(.result, toY: top - coordinator.viewportHeight / 3)
     }
 
     private func acceptLocal(at ordinal: Int) {
@@ -156,8 +224,141 @@ struct MergeView3Way: View {
     }
 }
 
+enum MergeView3WayDecorations {
+    struct PaneBands: Equatable {
+        var local: [MergeBand] = []
+        var result: [MergeBand] = []
+        var remote: [MergeBand] = []
+    }
+
+    static func bands(
+        for ranges: [MergeRegionVisualLayout.VisualConflictRange],
+        current: Int?
+    ) -> PaneBands {
+        var bands = PaneBands()
+        for range in ranges {
+            let isCurrent = range.conflictOrdinal == current
+            bands.local.append(MergeBand(rows: range.localRows, kind: .local, isCurrent: isCurrent))
+            bands.remote.append(MergeBand(rows: range.remoteRows, kind: .remote, isCurrent: isCurrent))
+            bands.result.append(MergeBand(rows: range.resultLocalRows, kind: .local, isCurrent: isCurrent))
+            if !range.baseRows.isEmpty {
+                bands.result.append(MergeBand(rows: range.baseRows, kind: .base, isCurrent: isCurrent))
+            }
+            bands.result.append(MergeBand(rows: range.resultRemoteRows, kind: .remote, isCurrent: isCurrent))
+        }
+        return bands
+    }
+}
+
+/// Memoizes intra-line change marks. They run an LCS per hunk line pair on
+/// the main actor, so results are cached per hunk (an edit only recomputes
+/// the hunk it touched) and fresh work per render is capped file-wide.
+@MainActor
+final class MergeWordMarkCache {
+    struct Marks {
+        var local: [Int: MergePaneText.WordMark] = [:]
+        var result: [Int: MergePaneText.WordMark] = [:]
+        var remote: [Int: MergePaneText.WordMark] = [:]
+    }
+
+    private struct HunkKey: Hashable {
+        let local: [String]
+        let remote: [String]
+        let mode: MergeWordDiff.Mode
+    }
+
+    private var key: (layout: MergeRegionVisualLayout.Layout, mode: MergeWordDiff.Mode)?
+    private var cached = Marks()
+    private var isComplete = false
+    private var hunks: [HunkKey: MergeWordDiff.HunkResult] = [:]
+
+    func marks(for layout: MergeRegionVisualLayout.Layout, mode: MergeWordDiff.Mode) -> Marks {
+        if isComplete, let key, key.mode == mode, key.layout == layout { return cached }
+        var marks = Marks()
+        var budget = MergeWordDiff.fileCellBudget
+        var complete = true
+        var nextHunks: [HunkKey: MergeWordDiff.HunkResult] = [:]
+        for range in layout.conflictRanges {
+            let hunkKey = HunkKey(
+                local: range.localRows.map { layout.local[$0].content },
+                remote: range.remoteRows.map { layout.remote[$0].content },
+                mode: mode
+            )
+            let hunk: MergeWordDiff.HunkResult
+            if let known = hunks[hunkKey] ?? nextHunks[hunkKey] {
+                hunk = known
+                nextHunks[hunkKey] = known
+            } else {
+                var hunkBudget = min(MergeWordDiff.hunkCellBudget, max(budget, 0))
+                let start = hunkBudget
+                hunk = MergeWordDiff.hunk(local: hunkKey.local, remote: hunkKey.remote, mode: mode, budget: &hunkBudget)
+                budget -= hunkBudget < 0 ? start : start - hunkBudget
+                // A hunk cut short by the file-wide budget gets another try
+                // on a later render; one that hit its own cap is final.
+                if hunk.isComplete || start == MergeWordDiff.hunkCellBudget {
+                    nextHunks[hunkKey] = hunk
+                } else {
+                    complete = false
+                }
+            }
+            for (index, ranges) in hunk.local.enumerated() where !ranges.isEmpty {
+                let mark = MergePaneText.WordMark(ranges: ranges, kind: .local)
+                marks.local[range.localRows.lowerBound + index] = mark
+                marks.result[range.resultLocalRows.lowerBound + index] = mark
+            }
+            for (index, ranges) in hunk.remote.enumerated() where !ranges.isEmpty {
+                let mark = MergePaneText.WordMark(ranges: ranges, kind: .remote)
+                marks.remote[range.remoteRows.lowerBound + index] = mark
+                marks.result[range.resultRemoteRows.lowerBound + index] = mark
+            }
+        }
+        hunks = nextHunks
+        key = (layout, mode)
+        cached = marks
+        isComplete = complete
+        return marks
+    }
+}
+
+private struct MergePaneHeader: View {
+    let title: String
+    let branch: String?
+    let detail: String
+    let tint: Color?
+    @Environment(\.theme) var theme
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if let tint {
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(tint)
+                    .frame(width: 8, height: 8)
+            }
+            Text(title.uppercased())
+                .font(.system(size: 10, weight: .semibold))
+                .tracking(0.6)
+                .foregroundColor(theme.color("fg-muted"))
+            if let branch {
+                Text(branch)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(theme.color("fg"))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer(minLength: 4)
+            Text(detail)
+                .font(.system(size: 10))
+                .foregroundColor(theme.color("fg-faint"))
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 10)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(theme.color("bg-2"))
+    }
+}
+
 private struct MergeThreeWayLayout: Layout {
-    private let actionGutterWidth: CGFloat = 28
+    private let actionGutterWidth = MergeActionGutter.width
     private let minimapWidth: CGFloat = 13
 
     func sizeThatFits(

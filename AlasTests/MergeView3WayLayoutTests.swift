@@ -51,6 +51,28 @@ struct MergeView3WayLayoutTests {
         #expect(documentFrames.allSatisfy { $0.height > 100 })
     }
 
+    @Test func wordMarksCapWorkPerRenderAndFillInOnLaterRenders() {
+        let regions: [ConflictRegion] = (0..<6).map { hunk in
+            let line = String(repeating: "word ", count: 60)
+            return .conflict(ConflictBlock(
+                local: (0..<20).map { "\(line)\(hunk) a\($0)\n" }.joined(),
+                base: nil,
+                remote: (0..<20).map { "\(line)\(hunk) b\($0)\n" }.joined(),
+                localLabel: "HEAD",
+                remoteLabel: "feature",
+                lineRangeInMerged: 0 ... 41
+            ))
+        }
+        let layout = MergeRegionVisualLayout.compute(regions: regions)
+        let cache = MergeWordMarkCache()
+
+        let first = cache.marks(for: layout, mode: .words).local.count
+        let second = cache.marks(for: layout, mode: .words).local.count
+
+        #expect(first > 0)
+        #expect(second > first)
+    }
+
     private static func longConflictText(lineCount: Int) -> String {
         let prefix = (0..<lineCount).map { "let before\($0) = \($0)" }.joined(separator: "\n")
         let suffix = (0..<lineCount).map { "let after\($0) = \($0)" }.joined(separator: "\n")

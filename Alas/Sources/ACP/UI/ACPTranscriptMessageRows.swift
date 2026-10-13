@@ -326,7 +326,7 @@ struct AgentMessageRow: View {
     var body: some View {
         ACPMarkdownText(
             raw: buffer.value,
-            cache: transcript.markdownCache(forMessage: messageId),
+            cache: ACPTranscriptRenderCaches.of(transcript).cache(forMessage: messageId),
             knownAppendedSuffix: buffer.lastAppendedSuffix,
             updateRevision: buffer.revision,
             updateSourceID: ObjectIdentifier(buffer),

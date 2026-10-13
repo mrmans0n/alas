@@ -157,9 +157,15 @@ public final class ACPTranscript: ChangeTracking {
         didSet { if oldValue != lastContentTouchIndex { willChange.send() } }
     }
 
-    // MARK: - Per-message markdown caches
+    // MARK: - Render state
 
-    private var markdownCaches: [String: ACPMarkdownBlockCache] = [:]
+    /// Whatever the renderer keeps per transcript, such as parsed markdown.
+    /// Opaque to core; the renderer installs it on first use.
+    public var renderState: (any ACPTranscriptRenderState)?
+    /// Fires with the stable ids of rows that left the visible window, so
+    /// render state for them can be dropped.
+    public let rowsLeftWindow = ChangeSignal<[String]>()
+
     private var stableIdCache: [ACPMessage.StableIdentityKey: String] = [:]
     private var messageCreatedAts: [String: Date] = [:]
 
@@ -173,29 +179,10 @@ public final class ACPTranscript: ChangeTracking {
         return stableId
     }
 
-    public func markdownCache(forMessage id: String) -> ACPMarkdownBlockCache {
-        if let c = markdownCaches[id] { return c }
-        let c = ACPMarkdownBlockCache()
-        markdownCaches[id] = c
-        return c
-    }
-
-    public func dropMarkdownCache(forMessage id: String) {
-        markdownCaches.removeValue(forKey: id)
-    }
-
-    #if DEBUG
-    /// Sum of `byteEstimate` over every retained cache. Bounded by the number
-    /// of messages with at least one render pass.
-    public var markdownCacheByteEstimate: UInt64 {
-        markdownCaches.values.reduce(0) { $0 + $1.byteEstimate }
-    }
-    #endif
-
-    /// Clear all per-message caches; call when the transcript itself is
-    /// discarded (e.g. session close).
-    public func resetMarkdownCaches() {
-        markdownCaches.removeAll()
+    /// Drops the render state; call when the transcript itself is discarded
+    /// (e.g. session close).
+    public func discardRenderState() {
+        renderState = nil
         streamingTickDrain?.cancel()
         streamingTickDrain = nil
     }
@@ -784,9 +771,10 @@ public final class ACPTranscript: ChangeTracking {
         guard !ranges.isEmpty else { return }
         var updatedMessages = messages
         var didChangeMessages = false
+        var leftWindow: [String] = []
         for range in ranges {
             for index in range {
-                markdownCaches.removeValue(forKey: updatedMessages[index].stableId)
+                leftWindow.append(updatedMessages[index].stableId)
                 if case .toolCall(var tc) = updatedMessages[index],
                    tc.status != "in_progress", tc.status != "pending" {
                     let revision = tc.contentRevision
@@ -802,14 +790,17 @@ public final class ACPTranscript: ChangeTracking {
             pendingMessagesMutation = .planNeutral
             messages = updatedMessages
         }
+        rowsLeftWindow.send(leftWindow)
     }
-
-    #if DEBUG
-    public var markdownCacheCountForTests: Int { markdownCaches.count }
-    public func hasMarkdownCacheForTests(messageId: String) -> Bool {
-        markdownCaches[messageId] != nil
-    }
-    #endif
 
     public init() {}
+}
+
+/// Per-transcript state a renderer keeps alongside the transcript.
+@MainActor
+public protocol ACPTranscriptRenderState: AnyObject {
+    #if DEBUG
+    /// Approximate retained bytes, for `MemoryDiagnostics`.
+    var byteEstimate: UInt64 { get }
+    #endif
 }

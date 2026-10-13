@@ -2,19 +2,50 @@ import Foundation
 
 /// Pure precomputation of per-pane visual rows for the 3-way merge
 /// editor. Given the parsed `regions` from `MergeConflictTabModel`,
-/// produces three same-length arrays (one per pane) where each row is
-/// either a real source line or a blank padding row used to keep
-/// corresponding conflict hunks vertically aligned across the panes.
+/// produces one row array per pane. Side panes show their version of the
+/// file contiguously (no padding rows); RESULT stacks LOCAL, optional
+/// BASE, and REMOTE inside each conflict.
 ///
-/// Also emits per-conflict `VisualConflictRange` entries that the two
-/// action gutters use to position their accept/reject glyphs + diagonal
-/// SVG paths.
+/// Panes have different lengths, so alignment is expressed through
+/// `chunks`: corresponding row ranges in every pane. Scroll sync maps a
+/// row across panes chunk by chunk, and the action gutters draw ribbons
+/// between corresponding hunks using `conflictRanges`.
 enum MergeRegionVisualLayout {
     struct VisualRow: Equatable {
         let content: String
         let sourceLineNumber: Int?
 
         var isPadding: Bool { sourceLineNumber == nil }
+    }
+
+    enum Pane: Hashable, CaseIterable {
+        case local, result, remote
+    }
+
+    /// Where a RESULT row's text comes from. Lets RESULT reuse syntax
+    /// highlighting computed on the coherent LOCAL / REMOTE / BASE versions
+    /// instead of parsing the stacked buffer, which is not valid code.
+    enum RowOrigin: Equatable {
+        case local(Int)
+        case base(Int)
+        case remote(Int)
+    }
+
+    /// Corresponding rows in every pane. Shared text is one chunk with
+    /// equal counts; a conflict is one chunk whose RESULT span covers the
+    /// stacked LOCAL + BASE + REMOTE rows.
+    struct Chunk: Equatable {
+        let local: Range<Int>
+        let result: Range<Int>
+        let remote: Range<Int>
+
+        func rows(in pane: Pane) -> Range<Int> {
+            switch pane {
+            case .local: local
+            case .result: result
+            case .remote: remote
+            }
+        }
     }
 
     struct VisualConflictRange: Equatable {
@@ -31,83 +62,116 @@ enum MergeRegionVisualLayout {
         let local: [VisualRow]
         let result: [VisualRow]
         let remote: [VisualRow]
+        /// Shared text plus every conflict's BASE hunk, in file order. Only
+        /// used for syntax highlighting BASE rows shown in RESULT.
+        let base: [VisualRow]
+        let resultOrigins: [RowOrigin]
+        let chunks: [Chunk]
         let conflictRanges: [VisualConflictRange]
+
+        func rows(in pane: Pane) -> [VisualRow] {
+            switch pane {
+            case .local: local
+            case .result: result
+            case .remote: remote
+            }
+        }
+
+        /// Maps a fractional row position in `source` to the corresponding
+        /// position in `target`. Inside a chunk the position is interpolated
+        /// linearly, so panes stay aligned at chunk boundaries and scroll
+        /// continuously through hunks of different heights.
+        func mapRow(_ row: Double, from source: Pane, to target: Pane) -> Double {
+            guard source != target, !chunks.isEmpty else { return row }
+            for chunk in chunks {
+                let from = chunk.rows(in: source)
+                guard !from.isEmpty, row < Double(from.upperBound) else { continue }
+                let to = chunk.rows(in: target)
+                guard row >= Double(from.lowerBound) else {
+                    // Before the first non-empty chunk in `source`.
+                    return Double(to.lowerBound) - (Double(from.lowerBound) - row)
+                }
+                let fraction = (row - Double(from.lowerBound)) / Double(from.count)
+                return Double(to.lowerBound) + fraction * Double(to.count)
+            }
+            let last = chunks[chunks.count - 1]
+            return Double(last.rows(in: target).upperBound) + (row - Double(last.rows(in: source).upperBound))
+        }
     }
 
     static func compute(regions: [ConflictRegion], showBase: Bool = false) -> Layout {
         var local: [VisualRow] = []
         var result: [VisualRow] = []
         var remote: [VisualRow] = []
+        var base: [VisualRow] = []
+        var resultOrigins: [RowOrigin] = []
+        var chunks: [Chunk] = []
         var conflictRanges: [VisualConflictRange] = []
-        var localLine = 1
-        var resultLine = 1
-        var remoteLine = 1
         var ordinal = 0
         for region in regions {
+            let localStart = local.count
+            let resultStart = result.count
+            let remoteStart = remote.count
             switch region {
             case .text(let text):
-                for line in splitPreservingTrailingEmpty(text) {
-                    local.append(.init(content: line, sourceLineNumber: localLine))
-                    result.append(.init(content: line, sourceLineNumber: resultLine))
-                    remote.append(.init(content: line, sourceLineNumber: remoteLine))
-                    localLine += 1
-                    resultLine += 1
-                    remoteLine += 1
+                let lines = splitPreservingTrailingEmpty(text)
+                guard !lines.isEmpty else { continue }
+                for line in lines {
+                    resultOrigins.append(.local(local.count))
+                    local.append(.init(content: line, sourceLineNumber: local.count + 1))
+                    result.append(.init(content: line, sourceLineNumber: result.count + 1))
+                    remote.append(.init(content: line, sourceLineNumber: remote.count + 1))
+                    base.append(.init(content: line, sourceLineNumber: base.count + 1))
                 }
             case .conflict(let block):
                 let localLines = splitPreservingTrailingEmpty(block.local)
-                let baseLines = (showBase && block.base != nil)
-                    ? splitPreservingTrailingEmpty(block.base!) : []
+                let allBaseLines = block.base.map(splitPreservingTrailingEmpty) ?? []
+                let shownBaseLines = showBase ? allBaseLines : []
                 let remoteLines = splitPreservingTrailingEmpty(block.remote)
-                let localStart = local.count
-                let remoteStart = remote.count
-                let resultStart = result.count
-
-                // LOCAL pane: real local rows, then padding for BASE + REMOTE rows
                 for line in localLines {
-                    local.append(.init(content: line, sourceLineNumber: localLine))
-                    localLine += 1
-                }
-                for _ in 0 ..< (baseLines.count + remoteLines.count) {
-                    local.append(.init(content: "", sourceLineNumber: nil))
-                }
-                // REMOTE pane: padding for LOCAL + BASE rows, then real remote rows
-                for _ in 0 ..< (localLines.count + baseLines.count) {
-                    remote.append(.init(content: "", sourceLineNumber: nil))
-                }
-                for line in remoteLines {
-                    remote.append(.init(content: line, sourceLineNumber: remoteLine))
-                    remoteLine += 1
-                }
-                // RESULT pane: LOCAL hunk + BASE hunk (if showBase) + REMOTE hunk
-                for line in localLines {
+                    resultOrigins.append(.local(local.count))
+                    local.append(.init(content: line, sourceLineNumber: local.count + 1))
                     result.append(.init(content: line, sourceLineNumber: nil))
                 }
-                for line in baseLines {
+                let baseStart = base.count
+                for line in allBaseLines {
+                    base.append(.init(content: line, sourceLineNumber: base.count + 1))
+                }
+                for (index, line) in shownBaseLines.enumerated() {
+                    resultOrigins.append(.base(baseStart + index))
                     result.append(.init(content: line, sourceLineNumber: nil))
                 }
                 for line in remoteLines {
+                    resultOrigins.append(.remote(remote.count))
+                    remote.append(.init(content: line, sourceLineNumber: remote.count + 1))
                     result.append(.init(content: line, sourceLineNumber: nil))
                 }
                 let localCount = localLines.count
-                let baseCount = baseLines.count
-                let remoteCount = remoteLines.count
+                let baseCount = shownBaseLines.count
                 conflictRanges.append(.init(
                     conflictOrdinal: ordinal,
-                    localRows: localStart ..< (localStart + localCount),
+                    localRows: localStart ..< local.count,
                     baseRows: (resultStart + localCount) ..< (resultStart + localCount + baseCount),
-                    resultRows: resultStart ..< (resultStart + localCount + baseCount + remoteCount),
+                    resultRows: resultStart ..< result.count,
                     resultLocalRows: resultStart ..< (resultStart + localCount),
-                    resultRemoteRows: (resultStart + localCount + baseCount) ..< (resultStart + localCount + baseCount + remoteCount),
-                    remoteRows: (remoteStart + localCount + baseCount) ..< (remoteStart + localCount + baseCount + remoteCount)
+                    resultRemoteRows: (resultStart + localCount + baseCount) ..< result.count,
+                    remoteRows: remoteStart ..< remote.count
                 ))
                 ordinal += 1
             }
+            chunks.append(Chunk(
+                local: localStart ..< local.count,
+                result: resultStart ..< result.count,
+                remote: remoteStart ..< remote.count
+            ))
         }
         return Layout(
             local: local,
             result: result,
             remote: remote,
+            base: base,
+            resultOrigins: resultOrigins,
+            chunks: chunks,
             conflictRanges: conflictRanges
         )
     }

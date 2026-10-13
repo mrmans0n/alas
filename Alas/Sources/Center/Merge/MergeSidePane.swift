@@ -1,10 +1,9 @@
 import AppKit
 import SwiftUI
 
-/// LOCAL or REMOTE pane in the 3-way merge editor. Renders the full
-/// file for that side with per-hunk tint and blank padding rows so
-/// corresponding conflict hunks stay vertically aligned across the
-/// three panes (see `MergeRegionVisualLayout`).
+/// LOCAL or REMOTE pane in the 3-way merge editor. Renders that side's
+/// version of the file with syntax highlighting, a full-width band per
+/// conflict hunk, and intra-line change marks against the other side.
 ///
 /// Read-only — users edit only in `MergeResultPane`. Scroll position
 /// is driven externally by `MergeScrollCoordinator`.
@@ -15,41 +14,27 @@ struct MergeSidePane: NSViewRepresentable {
 
     let side: Side
     let rows: [MergeRegionVisualLayout.VisualRow]
-    /// Conflict ranges in THIS pane's row space (`localRows` if
-    /// `.local`, `remoteRows` if `.remote`).
-    let hunkRanges: [Range<Int>]
+    let bands: [MergeBand]
+    let lineSpans: [[MergeSyntaxHighlighter.LineSpan]]
+    let wordMarks: [Int: MergePaneText.WordMark]
     let codeFontFamily: String
     let codeFontSize: CGFloat
     let coordinator: MergeScrollCoordinator
     @Environment(\.theme) var theme
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scroll = NSScrollView()
+        let scroll = MergeRulerScrollView()
+        scroll.clipsToBounds = true
         scroll.hasVerticalScroller = true
         scroll.hasHorizontalScroller = true
         scroll.autohidesScrollers = true
         scroll.borderType = .noBorder
 
-        let textView = NSTextView()
-        textView.isEditable = false
-        textView.isSelectable = true
-        textView.isVerticallyResizable = true
-        textView.isHorizontallyResizable = true
-        textView.drawsBackground = true
-        textView.backgroundColor = EditorTheme(theme: theme).bg
-        textView.textContainerInset = NSSize(width: 6, height: 6)
-        textView.textContainer?.widthTracksTextView = false
-        textView.textContainer?.containerSize = NSSize(
-            width: CGFloat.greatestFiniteMagnitude,
-            height: CGFloat.greatestFiniteMagnitude
-        )
-        textView.autoresizingMask = [.width]
+        let textView = MergeCodeTextView.make(editable: false)
         scroll.documentView = textView
         scroll.hasVerticalRuler = true
         scroll.rulersVisible = true
         scroll.verticalRulerView = MergeSourceLineNumberRulerView(scrollView: scroll, theme: theme)
-        context.coordinator.textView = textView
-        // Forward scroll changes to the coordinator.
         context.coordinator.scrollBridge = MergePaneScrollBridge(
             scroll: scroll,
             source: side == .local ? .local : .remote,
@@ -59,38 +44,47 @@ struct MergeSidePane: NSViewRepresentable {
     }
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
-        guard let textView = scroll.documentView as? NSTextView else { return }
-        // Scroll-only updates re-run updateNSView via observable
-        // coordinator state. Skip the O(file size) attributed-string
-        // rebuild when none of the inputs that affect rendering have
-        // changed — only the bg color tracks the theme cheaply.
-        let bg = EditorTheme(theme: theme).bg
-        let fg = EditorTheme(theme: theme).defaultFG
+        guard let textView = scroll.documentView as? MergeCodeTextView else { return }
+        let metrics = MergePaneMetrics(fontFamily: codeFontFamily, fontSize: codeFontSize)
+        let palette = MergePalette(theme: theme)
+        // Scroll-only updates re-run updateNSView. Skip the O(file size)
+        // attributed-string rebuild when nothing that affects text changed.
         let key = Coordinator.CacheKey(
             rows: rows,
-            hunkRanges: hunkRanges,
-            side: side,
-            fontFamily: codeFontFamily,
-            fontSize: codeFontSize,
-            fg: fg
+            lineSpans: lineSpans,
+            wordMarks: wordMarks,
+            metrics: metrics,
+            theme: theme
         )
-        if context.coordinator.lastKey != key {
-            let attr = buildAttributedString(theme: theme)
-            textView.textStorage?.setAttributedString(attr)
+        if context.coordinator.lastKey != key, let storage = textView.textStorage {
+            let rendered = MergePaneText.render(rows: rows, endsWithNewline: true)
+            let attributed = MergePaneText.attributedString(
+                rendered: rendered,
+                lineSpans: lineSpans,
+                wordMarks: wordMarks,
+                metrics: metrics,
+                theme: theme,
+                palette: palette
+            )
+            if storage.string == rendered.text {
+                MergePaneText.applyAttributes(attributed, to: storage)
+            } else {
+                storage.setAttributedString(attributed)
+            }
             context.coordinator.lastKey = key
         }
+        textView.bands = bands
+        textView.palette = palette
+        textView.rowHeight = metrics.rowHeight
+        textView.backgroundColor = palette.background
+        textView.selectedTextAttributes = [.backgroundColor: EditorTheme(theme: theme).selection]
         if let ruler = scroll.verticalRulerView as? MergeSourceLineNumberRulerView {
-            ruler.update(
-                rows: rows,
-                rowHeight: lineHeight(),
-                contentTopInset: textView.textContainerInset.height,
-                theme: theme
-            )
+            let thickness = ruler.ruleThickness
+            ruler.update(rows: rows, bands: bands, rowHeight: metrics.rowHeight, theme: theme, palette: palette)
+            if ruler.ruleThickness != thickness { scroll.tile() }
         }
-        textView.backgroundColor = bg
-        context.coordinator.lastRowHeight = lineHeight()
-        coordinator.rowHeight = lineHeight()
-        coordinator.contentTopInset = textView.textContainerInset.height
+        coordinator.rowHeight = metrics.rowHeight
+        coordinator.contentTopInset = MergePaneMetrics.contentInset.height
     }
 
     func makeCoordinator() -> Coordinator {
@@ -101,64 +95,54 @@ struct MergeSidePane: NSViewRepresentable {
     final class Coordinator: NSObject {
         struct CacheKey: Equatable {
             let rows: [MergeRegionVisualLayout.VisualRow]
-            let hunkRanges: [Range<Int>]
-            let side: Side
-            let fontFamily: String
-            let fontSize: CGFloat
-            let fg: NSColor
+            let lineSpans: [[MergeSyntaxHighlighter.LineSpan]]
+            let wordMarks: [Int: MergePaneText.WordMark]
+            let metrics: MergePaneMetrics
+            let theme: Theme
         }
-        weak var textView: NSTextView?
-        var lastRowHeight: CGFloat = 16
         var lastKey: CacheKey?
         fileprivate var scrollBridge: MergePaneScrollBridge?
     }
+}
 
-    private func lineHeight() -> CGFloat {
-        let font = CenterTypography.resolveCodeFont(family: codeFontFamily, size: codeFontSize)
-        return ceil(font.ascender + abs(font.descender) + font.leading)
-    }
-
-    private func buildAttributedString(theme: Theme) -> NSAttributedString {
-        let result = NSMutableAttributedString()
-        let tint: NSColor
-        switch side {
-        case .local:  tint = NSColor.systemGreen.withAlphaComponent(0.14)
-        case .remote: tint = NSColor.systemBlue.withAlphaComponent(0.14)
+/// Current AppKit lays the clip view out underneath a vertical ruler, which
+/// hides the start of every line. Shift the clip view past the ruler, as
+/// `DiffPaneTextDocumentView` does.
+@MainActor
+private final class MergeRulerScrollView: NSScrollView {
+    override func tile() {
+        super.tile()
+        guard rulersVisible, let ruler = verticalRulerView else { return }
+        let rulerWidth = ruler.ruleThickness
+        var clipFrame = contentView.frame
+        if clipFrame.minX < rulerWidth - 0.5 {
+            clipFrame.origin.x = rulerWidth
+            clipFrame.size.width = max(bounds.width - rulerWidth, 1)
+            contentView.frame = clipFrame
+            ruler.frame = NSRect(x: 0, y: clipFrame.minY, width: rulerWidth, height: clipFrame.height)
         }
-        let font = CenterTypography.resolveCodeFont(family: codeFontFamily, size: codeFontSize)
-        let pad = NSAttributedString(string: "\n", attributes: [
-            .font: font,
-            .foregroundColor: NSColor.clear,
-            .backgroundColor: NSColor.clear,
-        ])
-        let hunkIndexSet = hunkRanges.isEmpty ? Set<Int>() : Set(hunkRanges.flatMap { $0 })
-        let attrs: [NSAttributedString.Key: Any] = [
-            .font: font,
-            .foregroundColor: EditorTheme(theme: theme).defaultFG,
-        ]
-        for (i, row) in rows.enumerated() {
-            if row.isPadding {
-                result.append(pad)
-                continue
+        // Shrinking the clip autoresizes the text view narrower than it, and
+        // AppKit then offsets the bounds origin to a negative x, opening a
+        // gap after the ruler. Keep the document at least clip-wide.
+        if let textView = documentView as? NSTextView {
+            textView.minSize = NSSize(width: clipFrame.width, height: 0)
+            if textView.frame.width < clipFrame.width {
+                textView.setFrameSize(NSSize(width: clipFrame.width, height: textView.frame.height))
             }
-            let content = row.content + "\n"
-            let line = NSMutableAttributedString(string: content, attributes: attrs)
-            if hunkIndexSet.contains(i) {
-                line.addAttribute(.backgroundColor, value: tint,
-                                  range: NSRange(location: 0, length: line.length))
-            }
-            result.append(line)
         }
-        return result
+        if contentView.bounds.origin.x < 0 {
+            contentView.setBoundsOrigin(NSPoint(x: 0, y: contentView.bounds.origin.y))
+        }
     }
 }
 
 @MainActor
 private final class MergeSourceLineNumberRulerView: NSRulerView {
     private var rows: [MergeRegionVisualLayout.VisualRow] = []
+    private var bands: [MergeBand] = []
     private var theme: Theme
+    private var palette: MergePalette
     private var rowHeight: CGFloat = 16
-    private var contentTopInset: CGFloat = 6
     private var boundsObserver: NSObjectProtocol?
 
     private let minimumThickness: CGFloat = 34
@@ -166,6 +150,7 @@ private final class MergeSourceLineNumberRulerView: NSRulerView {
 
     init(scrollView: NSScrollView, theme: Theme) {
         self.theme = theme
+        self.palette = MergePalette(theme: theme)
         super.init(scrollView: scrollView, orientation: .verticalRuler)
         ruleThickness = minimumThickness
         reservedThicknessForMarkers = 0
@@ -181,38 +166,52 @@ private final class MergeSourceLineNumberRulerView: NSRulerView {
 
     func update(
         rows: [MergeRegionVisualLayout.VisualRow],
+        bands: [MergeBand],
         rowHeight: CGFloat,
-        contentTopInset: CGFloat,
-        theme: Theme
+        theme: Theme,
+        palette: MergePalette
     ) {
+        guard rows != self.rows || bands != self.bands || rowHeight != self.rowHeight
+            || theme != self.theme || palette != self.palette
+        else { return }
         self.rows = rows
+        self.bands = bands
         self.rowHeight = rowHeight
-        self.contentTopInset = contentTopInset
         self.theme = theme
+        self.palette = palette
         updateThickness()
         needsDisplay = true
     }
 
     override func drawHashMarksAndLabels(in rect: NSRect) {
-        NSColor(theme.color("bg-2")).setFill()
+        palette.gutterBackground.setFill()
         bounds.fill()
 
-        guard
-            let scrollView,
-            rowHeight > 0,
-            !rows.isEmpty
-        else { return }
-
+        guard let scrollView, rowHeight > 0 else { return }
         let visible = scrollView.contentView.bounds
-        let firstRow = max(0, Int(floor((visible.minY - contentTopInset) / rowHeight)))
-        let lastRow = min(rows.count - 1, Int(ceil((visible.maxY - contentTopInset) / rowHeight)))
+        let inset = MergePaneMetrics.contentInset.height
+        let rowHeight = rowHeight
+        MergeBandPainter.draw(
+            bands,
+            palette: palette,
+            rowTop: { inset + CGFloat($0) * rowHeight - visible.minY },
+            rowHeight: rowHeight,
+            minX: bounds.minX,
+            maxX: bounds.maxX,
+            dirtyRect: bounds,
+            accentBar: true
+        )
+
+        guard !rows.isEmpty else { return }
+        let firstRow = max(0, Int(floor((visible.minY - inset) / rowHeight)))
+        let lastRow = min(rows.count - 1, Int(ceil((visible.maxY - inset) / rowHeight)))
         guard firstRow <= lastRow else { return }
 
         let attributes = labelAttributes()
         let textHeight = ("8" as NSString).size(withAttributes: attributes).height
         for index in firstRow...lastRow {
             guard let number = rows[index].sourceLineNumber else { continue }
-            let y = contentTopInset + CGFloat(index) * rowHeight - visible.minY
+            let y = inset + CGFloat(index) * rowHeight - visible.minY
             let drawRect = NSRect(
                 x: 0,
                 y: y + max((rowHeight - textHeight) / 2, 0),
@@ -246,7 +245,7 @@ private final class MergeSourceLineNumberRulerView: NSRulerView {
         paragraph.alignment = .right
         return [
             .font: NSFont.monospacedSystemFont(ofSize: 10, weight: .regular),
-            .foregroundColor: NSColor(theme.color("fg-faint")),
+            .foregroundColor: palette.lineNumber,
             .paragraphStyle: paragraph,
         ]
     }

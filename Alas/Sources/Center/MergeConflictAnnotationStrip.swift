@@ -1,80 +1,148 @@
 import SwiftUI
 
-/// Strip below the merge-conflict toolbar that shows the advisory local-model
-/// explanation for the current hunk. Collapsed it shows the hunk citation and
-/// the cause; tapping expands to each side's intent. The `×` hides the strip
-/// for this hunk only.
-///
-/// Dismissal is keyed by `conflictKey` rather than the text so two hunks with
-/// identical explanations don't share dismissal state.
+/// Bar below the merge-conflict toolbar that explains the current hunk with
+/// the on-device model. Explanations run automatically as conflicts become
+/// current; the bar shows progress, the result, or a retry affordance.
+/// Collapsing keeps a one-line summary and persists while the tab is open.
 struct MergeConflictAnnotationStrip: View {
-    let explanation: MergeConflictExplanation
-    /// Identifies the hunk the explanation describes, e.g. "Conflict 2 of 5, lines 40–52".
+    enum Status: Equatable {
+        case explaining
+        case explained(MergeConflictExplanation)
+        case failed
+    }
+
+    let status: Status
+    /// Identifies the hunk, e.g. "Conflict 2 of 5, lines 40–52".
     let citation: String
     let localLabel: String
     let remoteLabel: String
-    /// `MergeConflictTabModel.conflictKey(for:)` of the current hunk.
-    let conflictKey: String
-    /// Owned by the parent so dismissal survives this strip unmounting while
-    /// the user visits a hunk with no explanation.
-    @Binding var dismissedKeys: Set<String>
-
-    @State private var isExpanded = false
+    let onRetry: () -> Void
+    @Binding var isExpanded: Bool
 
     @Environment(\.theme) var theme
 
     var body: some View {
-        if dismissedKeys.contains(conflictKey) {
-            EmptyView()
-        } else {
-            HStack(alignment: .top, spacing: 6) {
-                Image(systemName: "text.bubble")
-                    .foregroundColor(theme.color("fg-dim"))
-                    .font(.system(size: 10))
-                    .padding(.top, 2)
-                Button(action: { isExpanded.toggle() }) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        (Text(verbatim: "Advisory · \(citation): ").fontWeight(.medium) + Text(explanation.cause))
-                            .lineLimit(isExpanded ? nil : 1)
-                            .truncationMode(.tail)
-                        if isExpanded {
-                            Text(verbatim: "LOCAL (\(localLabel)): \(explanation.localIntent)")
-                            Text(verbatim: "REMOTE (\(remoteLabel)): \(explanation.remoteIntent)")
-                            Text("On-device explanation. It may be wrong and changes nothing in the file.")
-                                .foregroundColor(theme.color("fg-dim"))
-                        }
-                    }
-                    .font(.system(size: 11))
-                    .italic()
-                    .foregroundColor(theme.color("fg-dim"))
-                    .multilineTextAlignment(.leading)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                statusIcon
+                    .frame(width: 14, height: 14)
+                    .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 3 }
+                Text(citation)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(theme.color("fg-muted"))
+                    .fixedSize()
+                headline
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-                    .textSelection(.enabled)
+                if case .explained = status {
+                    Text("On-device · advisory")
+                        .font(.system(size: 10))
+                        .foregroundColor(theme.color("fg-faint"))
+                        .fixedSize()
+                        .help("Generated on this Mac. It may be wrong and changes nothing in the file.")
+                    Button(action: { isExpanded.toggle() }) {
+                        Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundColor(theme.color("fg-dim"))
+                            .frame(width: 18, height: 18)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(isExpanded ? "Show less" : "Show what each side intends")
                 }
-                .buttonStyle(.plain)
-                .help(isExpanded ? "Collapse" : "Click to expand")
-                Button(action: {
-                    dismissedKeys.insert(conflictKey)
-                    // The `.onChange(of: conflictKey)` below only fires while
-                    // this branch is mounted, so reset here for dismiss-then-navigate.
-                    isExpanded = false
-                }) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 9, weight: .medium))
+            }
+            if case .explained(let explanation) = status, isExpanded {
+                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 8, verticalSpacing: 4) {
+                    intentRow(
+                        side: "LOCAL",
+                        label: localLabel,
+                        tint: Color(nsColor: MergePalette(theme: theme).local),
+                        text: explanation.localIntent
+                    )
+                    intentRow(
+                        side: "REMOTE",
+                        label: remoteLabel,
+                        tint: Color(nsColor: MergePalette(theme: theme).remote),
+                        text: explanation.remoteIntent
+                    )
+                }
+                .padding(.leading, 22)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(theme.color("bg-2"))
+        .overlay(Divider(), alignment: .bottom)
+        .animation(.easeOut(duration: 0.15), value: status)
+        .animation(.easeOut(duration: 0.15), value: isExpanded)
+    }
+
+    @ViewBuilder
+    private var statusIcon: some View {
+        switch status {
+        case .explaining:
+            Spinner(lineWidth: 1.5, duration: 0.7)
+        case .explained:
+            Image(systemName: "sparkles")
+                .font(.system(size: 11))
+                .foregroundColor(theme.color("accent"))
+        case .failed:
+            Image(systemName: "exclamationmark.circle")
+                .font(.system(size: 11))
+                .foregroundColor(theme.color("fg-dim"))
+        }
+    }
+
+    @ViewBuilder
+    private var headline: some View {
+        switch status {
+        case .explaining:
+            Text("Reading both sides…")
+                .font(.system(size: 12))
+                .foregroundColor(theme.color("fg-dim"))
+        case .explained(let explanation):
+            Text(explanation.cause)
+                .font(.system(size: 12))
+                .foregroundColor(theme.color("fg"))
+                .lineLimit(isExpanded ? nil : 1)
+                .truncationMode(.tail)
+                .textSelection(.enabled)
+        case .failed:
+            HStack(spacing: 8) {
+                Text("Couldn't explain this conflict.")
+                    .font(.system(size: 12))
+                    .foregroundColor(theme.color("fg-dim"))
+                Button("Retry", action: onRetry)
+                    .buttonStyle(.link)
+                    .font(.system(size: 12))
+            }
+        }
+    }
+
+    private func intentRow(side: String, label: String, tint: Color, text: String) -> some View {
+        GridRow {
+            HStack(spacing: 5) {
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(tint)
+                    .frame(width: 8, height: 8)
+                Text(side)
+                    .font(.system(size: 10, weight: .semibold))
+                    .tracking(0.6)
+                    .foregroundColor(theme.color("fg-muted"))
+                if !label.isEmpty {
+                    Text(label)
+                        .font(.system(size: 11, design: .monospaced))
                         .foregroundColor(theme.color("fg-dim"))
-                        .padding(.top, 2)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: 160, alignment: .leading)
                 }
-                .buttonStyle(.plain)
-                .help("Dismiss this explanation")
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(theme.color("bg-2"))
-            .overlay(Divider(), alignment: .bottom)
-            .onChange(of: conflictKey) { _, _ in
-                isExpanded = false
-            }
+            Text(text)
+                .font(.system(size: 12))
+                .foregroundColor(theme.color("fg"))
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
         }
     }
 }

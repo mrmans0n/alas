@@ -415,6 +415,23 @@ struct MergeConflictTabModelTests {
         #expect(model.explanation(for: remaining[0])?.cause == "Both edit b.")
     }
 
+    @Test func failedExplanationIsNotRepeatedUntilRetried() async {
+        let model = Self.twoConflictModel()
+        let calls = CallCounter()
+        let explainer = Self.appleExplainer { _ in
+            await calls.increment()
+            return "not json"
+        }
+
+        await model.explainCurrentConflict(using: explainer)
+        await model.explainCurrentConflict(using: explainer)
+        #expect(await calls.value == 1)
+        #expect(model.failedExplanationKeys.count == 1)
+
+        await model.explainCurrentConflict(using: explainer, retry: true)
+        #expect(await calls.value == 2)
+    }
+
     @Test func editingTheHunkDuringExplanationCancelsAndDiscardsIt() async {
         let model = Self.twoConflictModel()
         let gate = GenerationGate()
@@ -542,18 +559,6 @@ struct MergeConflictTabModelTests {
         #expect(remaining.local.contains("L1 main"))
     }
 
-    @Test func wordDiffModeDefaultsToCharacters() async throws {
-        let repo = try await Self.conflictedRepo(.singleConflict)
-        defer { try? FileManager.default.removeItem(at: repo) }
-        let model = MergeConflictTabModel(
-            worktreePath: repo,
-            relativePath: "a.txt",
-            gitService: GitService()
-        )
-        await model.load()
-        #expect(model.wordDiffMode == .characters)
-    }
-
     @Test func wordDiffModeIsMutableAndDoesNotResetOnReload() async throws {
         let repo = try await Self.conflictedRepo(.singleConflict)
         defer { try? FileManager.default.removeItem(at: repo) }
@@ -563,9 +568,9 @@ struct MergeConflictTabModelTests {
             gitService: GitService()
         )
         await model.load()
-        model.wordDiffMode = .words
+        model.wordDiffMode = .characters
         await model.load()
-        #expect(model.wordDiffMode == .words)
+        #expect(model.wordDiffMode == .characters)
     }
 
     @Test func flatTextForWritingSerializesRegionsWithoutMarkers() async throws {
@@ -919,4 +924,9 @@ struct MergeConflictTabModelTests {
         #expect(updated.remote.contains("tweaked"))
         _ = block // silence unused
     }
+}
+
+private actor CallCounter {
+    private(set) var value = 0
+    func increment() { value += 1 }
 }

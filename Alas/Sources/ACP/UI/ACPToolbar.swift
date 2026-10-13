@@ -60,7 +60,9 @@ struct ACPToolbar: View {
                 }
             )
             ACPRecoveryPill(session: session)
-            ACPGoalControl(session: session) { action, objective in
+            ACPGoalControl(session: session, onDraftChange: { objective in
+                manager.persistGoalDraft(objective, for: session)
+            }) { action, objective in
                 try await manager.controlGoal(for: session.id, action: action, objective: objective)
             }
             ACPPlanPill(transcript: session.transcript)

@@ -131,6 +131,7 @@ struct ACPGoalPill: View {
 
 struct ACPGoalControl: View {
     @ObservedObject var session: ACPSession
+    let onDraftChange: (String) -> Void
     let onAction: (ACPGoalAction, String?) async throws -> Void
 
     @Environment(\.theme) private var theme
@@ -157,7 +158,7 @@ struct ACPGoalControl: View {
             .onHover { hovering = $0 }
             .accessibilityLabel(session.currentGoal == nil ? "Set goal" : "View and control goal")
             .popover(isPresented: $isPresented, arrowEdge: .top) {
-                ACPGoalPopover(session: session, capability: capability, onAction: onAction)
+                ACPGoalPopover(session: session, capability: capability, onDraftChange: onDraftChange, onAction: onAction)
             }
         } else if let goal = session.currentGoal {
             ACPGoalPill(goal: goal)
@@ -213,10 +214,11 @@ struct ACPGoalControl: View {
 private struct ACPGoalPopover: View {
     @ObservedObject var session: ACPSession
     let capability: ACPGoalCapability
+    let onDraftChange: (String) -> Void
     let onAction: (ACPGoalAction, String?) async throws -> Void
 
     @Environment(\.theme) private var theme
-    @State private var objective = ""
+    private var objective: String { session.goalDraft }
     @State private var isEditing = false
     @State private var confirmsClear = false
     @State private var isSubmitting = false
@@ -239,7 +241,7 @@ private struct ACPGoalPopover: View {
     var body: some View {
         let goal = session.currentGoal
         let actions = ACPGoalPill.actions(for: goal, capability: capability)
-        let showsEditor = (goal == nil || isEditing) && actions.contains(.set)
+        let showsEditor = (goal == nil || isEditing || !objective.isEmpty) && actions.contains(.set)
         VStack(alignment: .leading, spacing: 0) {
             header(goal: goal, showsEditor: showsEditor)
             VStack(alignment: .leading, spacing: 10) {
@@ -315,7 +317,7 @@ private struct ACPGoalPopover: View {
     // MARK: Editor
 
     private var editor: some View {
-        TextField("Describe what done looks like…", text: $objective, axis: .vertical)
+        TextField("Describe what done looks like…", text: Binding(get: { objective }, set: onDraftChange), axis: .vertical)
             .textFieldStyle(.plain)
             .font(.system(size: 12))
             .foregroundStyle(theme.color("fg"))
@@ -453,12 +455,11 @@ private struct ACPGoalPopover: View {
             } else if showsEditor {
                 Spacer(minLength: 0)
                 progressIndicator
-                if goal != nil {
-                    ACPGoalFooterButton(title: "Cancel", kind: .ghost) {
-                        isEditing = false
-                        objective = ""
-                    }
+                ACPGoalFooterButton(title: "Cancel", kind: .ghost) {
+                    isEditing = false
+                    onDraftChange("")
                 }
+                .disabled(isSubmitting)
                 Text("↩")
                     .font(.system(size: 10, weight: .medium, design: .monospaced))
                     .foregroundStyle(theme.color("fg-dim"))
@@ -484,7 +485,7 @@ private struct ACPGoalPopover: View {
                 }
                 if actions.contains(.set) {
                     ACPGoalFooterButton(title: "Change", icon: "pencil", kind: .ghost) {
-                        objective = goal?.objective ?? ""
+                        onDraftChange(goal?.objective ?? "")
                         errorMessage = nil
                         isEditing = true
                     }
@@ -519,14 +520,14 @@ private struct ACPGoalPopover: View {
     private func perform(_ action: ACPGoalAction) {
         guard canMutate else { return }
         if action == .set, trimmedObjective.isEmpty { return }
+        let submittedObjective = objective
         isSubmitting = true
         errorMessage = nil
         Task {
             do {
-                try await onAction(action, action == .set ? objective : nil)
+                try await onAction(action, action == .set ? submittedObjective : nil)
                 switch action {
                 case .set:
-                    objective = ""
                     isEditing = false
                 case .clear:
                     confirmsClear = false
