@@ -9,7 +9,8 @@ private struct PRShepherdCLIError: Error {
 /// calling ACP session and its worktree, and rejected Workspace checkout owners.
 extension AppState {
     /// Pushes the exact HEAD, opens the PR/MR (or adopts the open one for this
-    /// branch), and binds the shepherd to the calling session.
+    /// branch), and binds the shepherd to the calling session. One call per
+    /// worktree at a time.
     func cliPRCreate(
         sessionID: String,
         worktreeID: String,
@@ -18,6 +19,10 @@ extension AppState {
         draft: Bool,
         base: String?
     ) async -> AlasCLIResponse {
+        guard prCreateWorktreeIDsInFlight.insert(worktreeID).inserted else {
+            return .error("pr_create is already running for this worktree. Wait for it to finish, then call pr_status.")
+        }
+        defer { prCreateWorktreeIDsInFlight.remove(worktreeID) }
         do {
             let result = try await createShepherdedPR(
                 sessionID: sessionID, worktreeID: worktreeID,
@@ -49,7 +54,15 @@ extension AppState {
         base: String?
     ) async throws -> PRCreateResultWire {
         let (_, context) = try prShepherdTarget(worktreeID)
-        let baseBranch = base ?? context.baseBranch
+        let git = GitService()
+        // The local probe fails outright on an unborn branch, so say so first.
+        if let head = try? await Process.git(["rev-parse", "--verify", "--quiet", "HEAD"], cwd: context.path),
+           head.exitCode == 1 {
+            let branch = (try? await git.currentBranch(worktreePath: context.path)) ?? ""
+            throw PRShepherdCLIError(message: "\(branch.isEmpty ? "This branch" : branch) has no commits yet.")
+        }
+        let remoteNames = Set(((try? await git.remotes(worktreePath: context.path)) ?? []).map(\.name))
+        let baseBranch = Self.normalizedBaseBranch(base ?? context.baseBranch, remoteNames: remoteNames)
         guard let snapshot = await reviewShepherd.fetchSnapshot(worktreePath: context.path, baseBranch: baseBranch) else {
             throw PRShepherdCLIError(message: "Alas could not read this worktree's Git state.")
         }
@@ -67,13 +80,16 @@ extension AppState {
             throw PRShepherdCLIError(message: "Could not check for an existing pull request: \(message)")
         }
         let hasUncommittedChanges = local.hasWorkingTreeChanges || local.hasStagedChanges
-
-        if let existing = snapshot.reviewRequest, existing.state == .open {
-            let record = await bindPRShepherd(sessionID: sessionID, worktreeID: worktreeID, request: existing)
+        func bound(_ request: ReviewRequest, created: Bool) async -> PRCreateResultWire {
+            let record = await bindPRShepherd(sessionID: sessionID, worktreeID: worktreeID, request: request)
             return PRCreateResultWire(
-                request: existing, headSHA: existing.headSHA ?? local.headSHA, created: false,
+                request: request, headSHA: request.headSHA ?? local.headSHA, created: created,
                 uncommittedChanges: hasUncommittedChanges, record: record
             )
+        }
+
+        if let existing = snapshot.reviewRequest, existing.state == .open {
+            return await bound(existing, created: false)
         }
 
         // Same exact-SHA publish path as Commit & publish: capture validates the
@@ -88,47 +104,65 @@ extension AppState {
             refreshAfterCompletion: {},
             runGit: run
         )
-        let url: URL
         do {
             let target = try await CommitPublishReviewTarget.capture(snapshot: snapshot, createAsDraft: draft, runGit: run)
             if try await !operations.remoteBranchContainsCommit(target, local.headSHA) {
                 try await operations.push(target, local.headSHA)
             }
             try await operations.configureUpstreamTracking(target)
-            url = try await operations.createReviewRequest(target, title, body)
+            // A request opened since the first lookup (by an earlier call whose
+            // reply timed out on the agent side, say) is adopted, not duplicated.
+            if let existing = await openReviewRequest(worktreePath: context.path, baseBranch: baseBranch) {
+                return await bound(existing, created: false)
+            }
+            let url: URL
+            do {
+                url = try await operations.createReviewRequest(target, title, body)
+            } catch {
+                // The provider may have opened it anyway, or it already exists.
+                if let existing = await openReviewRequest(worktreePath: context.path, baseBranch: baseBranch) {
+                    return await bound(existing, created: false)
+                }
+                throw error
+            }
+            guard let created = await openReviewRequest(worktreePath: context.path, baseBranch: baseBranch) else {
+                throw PRShepherdCLIError(
+                    message: "Created \(url.absoluteString), but Alas could not load it yet. Call pr_create again to start watching it."
+                )
+            }
+            return await bound(created, created: true)
         } catch let error as CodeHostProviderError {
             throw PRShepherdCLIError(message: Self.prProviderErrorMessage(error, kind: remote.kind))
         }
-
-        guard let created = await reviewShepherd.fetchSnapshot(
-            worktreePath: context.path, baseBranch: baseBranch
-        )?.reviewRequest else {
-            throw PRShepherdCLIError(
-                message: "Created \(url.absoluteString), but Alas could not load it yet. Call pr_create again to start watching it."
-            )
-        }
-        let record = await bindPRShepherd(sessionID: sessionID, worktreeID: worktreeID, request: created)
-        return PRCreateResultWire(
-            request: created, headSHA: created.headSHA ?? local.headSHA, created: true,
-            uncommittedChanges: hasUncommittedChanges, record: record
-        )
     }
 
+    /// The open request the branch lookup finds for this worktree right now.
+    private func openReviewRequest(worktreePath: URL, baseBranch: String) async -> ReviewRequest? {
+        guard let request = await reviewShepherd.fetchSnapshot(worktreePath: worktreePath, baseBranch: baseBranch)?.reviewRequest,
+              request.state == .open
+        else { return nil }
+        return request
+    }
+
+    /// Read-only: neither path runs the shepherd's policy or changes its record.
     private func shepherdedPRStatus(sessionID: String, worktreeID: String) async throws -> PRStatusWire {
         let (effects, context) = try prShepherdTarget(worktreeID)
         let bound = reviewShepherd.record(forSession: sessionID).flatMap { $0.id.worktreeID == worktreeID ? $0 : nil }
-        var snapshot: ReviewLoopSnapshot?
+        let snapshot: ReviewLoopSnapshot
         if let bound {
-            await reviewShepherd.evaluateNow(bound.id)
-            snapshot = reviewShepherd.snapshots[bound.id]
-        }
-        if snapshot == nil {
-            snapshot = await reviewShepherd.fetchSnapshot(
-                worktreePath: context.path, baseBranch: bound?.baseBranch ?? context.baseBranch
-            )
-        }
-        guard let snapshot else {
-            throw PRShepherdCLIError(message: "Alas could not read this worktree's Git state.")
+            guard let fresh = await reviewShepherd.statusSnapshot(for: bound.id) else {
+                throw PRShepherdCLIError(
+                    message: "Alas could not load pull request #\(bound.id.requestNumber). Try again in a moment."
+                )
+            }
+            snapshot = fresh
+        } else {
+            guard let fresh = await reviewShepherd.fetchSnapshot(
+                worktreePath: context.path, baseBranch: context.baseBranch
+            ) else {
+                throw PRShepherdCLIError(message: "Alas could not read this worktree's Git state.")
+            }
+            snapshot = fresh
         }
         let rules = effects.rules(worktreeID)
         var pullRequest: PRStatusWire.PullRequest?
@@ -140,10 +174,10 @@ extension AppState {
             pullRequest = PRStatusWire.PullRequest(request: request, rules: rules, headReviewers: headReviewers)
         } else if let problem = Self.prProviderSetupProblem(snapshot) {
             throw PRShepherdCLIError(message: problem)
-        } else if snapshot.remote != nil, let message = snapshot.errorMessage {
+        } else if let message = snapshot.errorMessage, snapshot.remote != nil || bound != nil {
             throw PRShepherdCLIError(message: "Could not load the pull request: \(message)")
         }
-        // evaluateNow may have advanced or finished the record; report it as it is now.
+        // The record may have changed while the fetch ran; report it as it is now.
         let shepherd = bound
             .flatMap { reviewShepherd.records[$0.id] }
             .map { PRStatusWire.Shepherd(record: $0, rules: rules) }
@@ -168,9 +202,11 @@ extension AppState {
     }
 
     /// Re-binding a PR this session already shepherds keeps its toggles; a new
-    /// binding takes the Settings defaults.
+    /// binding, including one taken over from another session, takes the
+    /// Settings defaults.
     private func bindPRShepherd(sessionID: String, worktreeID: String, request: ReviewRequest) async -> ShepherdRecord {
         let current = reviewShepherd.records[ShepherdRecordID(worktreeID: worktreeID, request: request)]
+            .flatMap { $0.sessionID == sessionID ? $0 : nil }
         let defaults = config.changes.shepherd
         return await reviewShepherd.bind(
             sessionID: sessionID,
@@ -183,12 +219,19 @@ extension AppState {
         )
     }
 
+    /// `base` without a leading `<remote>/` that names a configured remote,
+    /// so `origin/main` and `main` are one base for the push-safety checks.
+    static func normalizedBaseBranch(_ base: String, remoteNames: Set<String>) -> String {
+        guard let remote = remoteNames.filter({ base.hasPrefix($0 + "/") }).max(by: { $0.count < $1.count }),
+              base.count > remote.count + 1
+        else { return base }
+        return String(base.dropFirst(remote.count + 1))
+    }
+
+    /// `baseBranch` must already be normalized (`normalizedBaseBranch`).
     static func prCreateBranchBlocker(_ local: ReviewLoopLocalState, baseBranch: String) -> String? {
         if local.branchName.isEmpty {
             return "HEAD is detached. Check out a branch before opening a pull request."
-        }
-        if local.headSHA.isEmpty {
-            return "\(local.branchName) has no commits yet."
         }
         if local.branchName == baseBranch {
             return "This worktree is on the base branch \(baseBranch). Open a pull request from a feature branch."

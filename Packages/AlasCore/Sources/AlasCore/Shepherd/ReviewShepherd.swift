@@ -370,6 +370,69 @@ public final class ReviewShepherd {
         return loop.snapshot
     }
 
+    /// A fresh fetch of the record's own request, for `pr_status`. Read-only:
+    /// no policy, no record change, no scheduling. The branch lookup is used
+    /// when it finds this record's request; otherwise (the worktree moved to
+    /// another branch, or the request is merged or closed) the request is read
+    /// by number. A missing or signed-out provider CLI leaves the request out
+    /// and keeps the provider flags; a failed by-number read leaves it out
+    /// with `errorMessage` set. Nil when the record or its worktree is gone or
+    /// the worktree's git state cannot be read.
+    public func statusSnapshot(for id: ShepherdRecordID) async -> ReviewLoopSnapshot? {
+        guard let record = records[id],
+              let context = effects?.worktreeContext(id.worktreeID),
+              context.isEligible,
+              let snapshot = await fetchSnapshot(worktreePath: context.path, baseBranch: record.baseBranch)
+        else { return nil }
+        if let request = snapshot.reviewRequest,
+           ShepherdRecordID(worktreeID: id.worktreeID, request: request) == id {
+            return snapshot
+        }
+        func withoutRequest(available: Bool, authenticated: Bool, error: String?) -> ReviewLoopSnapshot {
+            ReviewLoopSnapshot(
+                local: snapshot.local,
+                remote: snapshot.remote,
+                reviewRequest: nil,
+                providerAvailable: available,
+                providerAuthenticated: authenticated,
+                providerCapabilities: snapshot.providerCapabilities,
+                errorMessage: error
+            )
+        }
+        if snapshot.remote != nil, !snapshot.providerAvailable || !snapshot.providerAuthenticated {
+            return withoutRequest(
+                available: snapshot.providerAvailable,
+                authenticated: snapshot.providerAuthenticated,
+                error: nil
+            )
+        }
+        guard let provider = providerRegistry.provider(for: id.providerKind) else {
+            return withoutRequest(
+                available: false,
+                authenticated: false,
+                error: CodeHostProviderError.unsupportedProvider(id.providerKind).localizedDescription
+            )
+        }
+        do {
+            let request = try await provider.reviewRequest(remote: record.remote, number: id.requestNumber, cwd: context.path)
+            return ReviewLoopSnapshot(
+                local: snapshot.local,
+                remote: snapshot.remote,
+                reviewRequest: request,
+                providerAvailable: true,
+                providerAuthenticated: true,
+                providerCapabilities: snapshot.providerCapabilities,
+                errorMessage: nil
+            )
+        } catch CodeHostProviderError.cliMissing(let message) {
+            return withoutRequest(available: false, authenticated: false, error: message)
+        } catch CodeHostProviderError.unauthenticated(let message) {
+            return withoutRequest(available: true, authenticated: false, error: message)
+        } catch {
+            return withoutRequest(available: true, authenticated: true, error: error.localizedDescription)
+        }
+    }
+
     /// Lowercased logins that reviewed the request's current head. Nil when
     /// the provider could not say, which keeps a required-reviewer gate closed.
     public func headReviewers(for snapshot: ReviewLoopSnapshot, worktreePath: URL) async -> Set<String>? {

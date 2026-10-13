@@ -299,6 +299,9 @@ final class AppState {
     @ObservationIgnored var attentionAliasRetryTask: Task<Void, Never>?
     @ObservationIgnored var attentionAliasRetryAttempts = 0
     @ObservationIgnored var attentionAliasRetryNotBefore: Date?
+    /// Worktrees with a `pr_create` running, so a retry can't push or open a
+    /// second request while the first is still in flight.
+    @ObservationIgnored var prCreateWorktreeIDsInFlight: Set<String> = []
     /// How long a local run-script completion monitor outlives its exited or
     /// closed terminal before it is cancelled. Injectable so tests don't wait
     /// out the production grace.
