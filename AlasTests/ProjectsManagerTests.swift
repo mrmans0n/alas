@@ -94,6 +94,28 @@ struct ProjectsManagerTests {
         #expect(mgr.operationState(for: worktree) == nil)
     }
 
+    /// A claim over a failed delete gives the failure back when its operation
+    /// does not go ahead, so the retry UI survives; one that completed clears it.
+    @Test(arguments: [false, true])
+    func releasingAClaimRestoresWhatItReplacedButFinishingClearsIt(finishes: Bool) {
+        let path = URL(fileURLWithPath: "/srv/checkouts/failed")
+        let worktree = Worktree(
+            id: Worktree.makeId(path: path), projectId: "p", name: "failed", branch: "failed",
+            path: path, status: .clean, lastActivity: .distantPast
+        )
+        let mgr = ProjectsManager(persistedProjects: [])
+        mgr.setOperationState(for: worktree, state: .deleteFailed(message: "busy"))
+        let claim = mgr.claimOperation(.archiving(projectId: "p"), for: worktree)
+
+        if finishes {
+            mgr.finishOperation(claim, for: worktree)
+        } else {
+            mgr.releaseOperation(claim, for: worktree)
+        }
+
+        #expect(mgr.operationState(for: worktree) == (finishes ? nil : .deleteFailed(message: "busy")))
+    }
+
     @Test func addProjectAppendsToList() async throws {
         let repo = try await makeRepo(name: "alpha")
         defer { try? FileManager.default.removeItem(at: repo) }

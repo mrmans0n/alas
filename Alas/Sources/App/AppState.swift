@@ -4292,7 +4292,11 @@ final class AppState {
         // The claim outlives the refresh: until then the removed row is still
         // listed and must not admit new work.
         _ = try? await refreshProjectWorktrees(projectId: worktree.projectId)
-        releaseWorkspaceMemberDeletionClaims(claimed.filter { $0.0.id == worktree.id && $0.0.projectId == worktree.projectId })
+        // Deleted: finished, not released, so no state it replaced returns
+        // for the removed path.
+        for (claimedWorktree, claim) in claimed where claimedWorktree.id == worktree.id && claimedWorktree.projectId == worktree.projectId {
+            projectsManager.finishOperation(claim, for: claimedWorktree)
+        }
         if selectedWorktreeId == worktree.id {
             selectedWorktreeId = nil
         }

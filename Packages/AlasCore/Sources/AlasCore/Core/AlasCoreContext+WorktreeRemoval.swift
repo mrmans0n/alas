@@ -193,7 +193,7 @@ extension AlasCoreContext {
     }
 
     /// Releases a claim a `begin…` call returned, when its operation does
-    /// not go ahead.
+    /// not go ahead. Whatever state the claim replaced comes back.
     public func releaseWorktreeClaim(_ claim: UUID, for worktree: Worktree) {
         projects.releaseOperation(claim, for: worktree)
     }
@@ -210,6 +210,7 @@ extension AlasCoreContext {
             guard projects.holdsClaim(claim, for: worktree) else { return WorktreeArchiveRefusal.operationInProgress }
             return await workspaceOwnershipRefusal(for: worktree).map(WorktreeArchiveRefusal.ownedByWorkspaceCheckout)
         })
+        projects.finishOperation(claim, for: worktree)
     }
 
     /// Shows an archived worktree again. Sessions and runs are not restored.
@@ -362,6 +363,9 @@ extension AlasCoreContext {
             projects.dropRemovedWorktree(id: worktree.id, projectId: project.id)
             changed = true
         }
+        // Held until the refresh dropped the row; finished, not released,
+        // so nothing the claim replaced returns for the removed path.
+        projects.finishOperation(claim, for: worktree)
         if changed {
             try saveProjects()
         }

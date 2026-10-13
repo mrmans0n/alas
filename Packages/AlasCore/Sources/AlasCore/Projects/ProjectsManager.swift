@@ -111,7 +111,7 @@ public final class ProjectsManager {
     public private(set) var worktreeOperationStates: [WorktreeOperationKey: WorktreeOperationState] = [:]
     /// Who opened each claim through `claimOperation`. Any other write to a
     /// claim drops its token.
-    @ObservationIgnored private var claimTokens: [WorktreeOperationKey: UUID] = [:]
+    @ObservationIgnored private var claimTokens: [WorktreeOperationKey: (token: UUID, replaced: WorktreeOperationState?)] = [:]
     public private(set) var worktreeRefreshFailures: Set<String> = []
     /// Rows a project lists but does not show because another local project
     /// owns the same directory: `[losing projectId][worktree id] = winner`.
@@ -461,23 +461,34 @@ public final class ProjectsManager {
     /// recreated at the same path and deleted again gets the same claim, and
     /// the first deletion must not release the second one's.
     public func claimOperation(_ state: WorktreeOperationState, for worktree: Worktree) -> UUID {
+        let replaced = operationState(for: worktree)
         setOperationState(for: worktree, state: state)
         let token = UUID()
-        claimTokens[WorktreeOperationKey(projectId: worktree.projectId, worktreeId: worktree.id)] = token
+        claimTokens[WorktreeOperationKey(projectId: worktree.projectId, worktreeId: worktree.id)] = (token, replaced)
         return token
     }
 
     /// Whether the claim on `worktree` is still the one `token` opened.
     public func holdsClaim(_ token: UUID, for worktree: Worktree) -> Bool {
         let key = WorktreeOperationKey(projectId: worktree.projectId, worktreeId: worktree.id)
-        return claimTokens[key] == token && worktreeOperationStates[key] != nil
+        return claimTokens[key]?.token == token && worktreeOperationStates[key] != nil
     }
 
-    /// Clears the claim on `worktree` only if `token` still holds it. The
-    /// token is dropped even when a refresh already cleared the claim.
+    /// Gives up the claim `token` opened, for an operation that did not go
+    /// ahead: the state it replaced (such as a failed delete awaiting retry)
+    /// comes back. The token is dropped even when a refresh already cleared
+    /// the claim, and then nothing is restored.
     public func releaseOperation(_ token: UUID, for worktree: Worktree) {
         let key = WorktreeOperationKey(projectId: worktree.projectId, worktreeId: worktree.id)
-        guard claimTokens[key] == token else { return }
+        guard let claim = claimTokens[key], claim.token == token else { return }
+        let restored = worktreeOperationStates[key] == nil ? nil : claim.replaced
+        setOperationState(for: worktree, state: restored)
+    }
+
+    /// Clears the claim `token` opened, for an operation that completed.
+    public func finishOperation(_ token: UUID, for worktree: Worktree) {
+        let key = WorktreeOperationKey(projectId: worktree.projectId, worktreeId: worktree.id)
+        guard claimTokens[key]?.token == token else { return }
         setOperationState(for: worktree, state: nil)
     }
 
