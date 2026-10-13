@@ -4100,34 +4100,12 @@ final class AppState {
         return checkout
     }
 
+    /// The coordinator takes the member projects' mutation gates and refuses
+    /// while a member worktree is held by another operation.
     private func unarchiveWorkspaceCheckoutUnderProjectMutationGate(id: UUID) async throws -> WorkspaceCheckout {
-        guard let checkout = workspacesManager.checkout(id: id) else {
-            throw WorkspaceCheckoutCoordinatorError.checkoutMissing
-        }
-        let coordinator = workspaceCoordinator()
-        return try await ProjectMutationGate.shared.withMainActorMutations(
-            projectIDs: checkout.members.map(\.projectID)
-        ) {
-            guard let current = self.workspacesManager.checkout(id: id) else {
-                throw WorkspaceCheckoutCoordinatorError.checkoutMissing
-            }
-            let memberOperationIsInFlight = current.members.contains { member in
-                let worktreeID = Worktree.makeId(path: URL(fileURLWithPath: current.inAppWorktreePath(member.worktreePath)))
-                return Self.blocksWorktreeSessionAdmission(
-                    self.projectsManager.operationState(
-                        forWorktreeId: worktreeID,
-                        projectId: member.projectID
-                    )
-                )
-            }
-            guard !memberOperationIsInFlight else {
-                throw WorkspaceCheckoutCoordinatorError.operationInProgress
-            }
-
-            let unarchived = try await coordinator.unarchive(checkoutID: id)
-            await self.workspacesManager.refreshCheckoutSnapshots()
-            return unarchived
-        }
+        let unarchived = try await workspaceCoordinator().unarchive(checkoutID: id)
+        await workspacesManager.refreshCheckoutSnapshots()
+        return unarchived
     }
 
     func stopWorkspaceCheckoutAfterCurrentOperations(id: UUID) async throws {
@@ -4210,6 +4188,25 @@ final class AppState {
         guard workspacesManager.canMutate else { throw WorkspaceStoreError.recoveryRequired }
         if let resolvedWorktree {
             try await requireCheckpointWorktreeRemovalAllowedAfterDiscovery(resolvedWorktree)
+        }
+        // Nothing new may start in the member while it is being removed.
+        var claimedWorktree: Worktree?
+        if let resolvedWorktree {
+            switch projectsManager.operationState(for: resolvedWorktree) {
+            case nil, .deleteFailed: break
+            default: throw WorkspaceCheckoutCoordinatorError.operationInProgress
+            }
+            projectsManager.setOperationState(
+                for: resolvedWorktree,
+                state: .deleting(projectId: resolvedWorktree.projectId)
+            )
+            claimedWorktree = resolvedWorktree
+        }
+        defer {
+            if let claimedWorktree,
+               projectsManager.operationState(for: claimedWorktree) == .deleting(projectId: claimedWorktree.projectId) {
+                projectsManager.setOperationState(for: claimedWorktree, state: nil)
+            }
         }
         let checkout = try await workspaceCoordinator().deleteMember(checkoutID: checkoutID, memberID: memberID, confirmingRisks: confirmingRisks)
         if let resolvedWorktree,
