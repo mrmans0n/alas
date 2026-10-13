@@ -714,6 +714,14 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             guard snapshot.messages.indices.contains(row.index) else { return nil }
             let message = snapshot.messages[row.index]
             let expansion = Self.rowExpansion(of: message, stableId: row.stableId, store: rowExpansionStore)
+            // `mayBeNative` is false for any row that stays live.
+            let nativeContent = mayBeNative ? ACPTranscriptNativeRows.content(
+                for: message,
+                isLive: snapshot.liveNarrationIndex == row.index,
+                isCommentary: ACPTranscriptRowContent.presentationPhase(of: message) == .commentary,
+                isExpanded: expansion?.isExpanded ?? false,
+                createdAt: host.transcript.createdAt(forStableId: row.stableId)
+            ) : nil
             let rowToken = token(
                 MessageRowTokenInputs(
                     key: Self.messageRowKey(
@@ -724,7 +732,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                     inToolCallGroup: inToolCallGroup,
                     canCancelSubagent: host.onCancelSubagent != nil,
                     isExpanded: expansion?.isExpanded ?? false,
-                    showsActionsPermanently: snapshot.showsActionsPermanently && Self.hasActionsMenu(message)
+                    showsActionsPermanently: snapshot.showsActionsPermanently && Self.hasActionsMenu(message),
+                    isNative: nativeContent != nil
                 ),
                 host: host
             )
@@ -750,15 +759,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                     }
                 }
             )
-            // `mayBeNative` is false for any row that stays live.
-            if mayBeNative,
-               let content = ACPTranscriptNativeRows.content(
-                   for: message,
-                   isLive: snapshot.liveNarrationIndex == row.index,
-                   isCommentary: ACPTranscriptRowContent.presentationPhase(of: message) == .commentary,
-                   isExpanded: expansion?.isExpanded ?? false,
-                   createdAt: host.transcript.createdAt(forStableId: row.stableId)
-               ) {
+            if let content = nativeContent {
                 spec.native = ACPTranscriptNativeRows.row(
                     content, contentMaxWidth: host.contentMaxWidth, inToolCallGroup: inToolCallGroup,
                     theme: host.theme, typography: host.typography,
@@ -872,6 +873,10 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             /// Assistive tech keeps the actions button visible on rows that
             /// have a menu; a change must reconfigure mounted rows.
             let showsActionsPermanently: Bool
+            /// Which renderer the row uses. A row that stops being live (its
+            /// turn ended) can switch to native with every other input equal;
+            /// without this the mounted SwiftUI view would stay until remount.
+            let isNative: Bool
         }
 
         private static func hasActionsMenu(_ message: ACPMessage) -> Bool {
@@ -1022,6 +1027,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             let hiddenMemberCount = expanded
                 ? max(0, memberStableIds.count - (expansionSeeds.memberLimit(group) ?? memberStableIds.count))
                 : 0
+            let isNativeHeader = mayBeNative && !group.isLive && hiddenMemberCount == 0
             var spec = ACPTranscriptRowSpec(
                 id: group.id,
                 equalityToken: token(
@@ -1029,7 +1035,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                         summary: summary,
                         expanded: expanded,
                         hiddenMemberCount: hiddenMemberCount,
-                        memberStableIds: memberStableIds
+                        memberStableIds: memberStableIds,
+                        isNative: isNativeHeader
                     ),
                     host: host
                 ),
@@ -1045,7 +1052,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 }
             )
             // The native header has no "Show N earlier" button.
-            if mayBeNative, !group.isLive, hiddenMemberCount == 0 {
+            if isNativeHeader {
                 spec.native = ACPTranscriptNativeRows.row(
                     .toolGroupHeader(label: summary.label, iconSystemName: summary.iconSystemName, expanded: expanded),
                     contentMaxWidth: host.contentMaxWidth, inToolCallGroup: false,
@@ -1068,6 +1075,9 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             // Thinking can extend a group without changing its tool count.
             // Refresh the toggle closure so expansion includes those members.
             let memberStableIds: [String]
+            /// Which renderer the header uses, so a group that stops being
+            /// live swaps its mounted SwiftUI header for the native one.
+            let isNative: Bool
         }
 
         static func messageRow(

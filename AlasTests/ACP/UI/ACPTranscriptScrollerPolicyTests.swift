@@ -107,6 +107,23 @@ struct ACPTranscriptScrollerRowSpecsTests {
         #expect(!ACPTranscriptNativeRows.hasParsed(streaming))
     }
 
+    @Test("a row whose turn ends changes token as it becomes native, so the mounted view is replaced")
+    func endingATurnChangesTheTokenOfRowsThatBecomeNative() throws {
+        let host = makeHost()
+        let prompt = ACPMessage.user(id: UUID(), text: "please fix the tests", attachments: [])
+        host.transcript.messages = [prompt, .agent(id: UUID(), StreamingText("working"))]
+        func spec() throws -> ACPTranscriptRowSpec {
+            try #require(ACPTranscriptScroller.Coordinator.rowSpecs(host: host, nativeRowsEnabled: true).first { $0.id == prompt.stableId })
+        }
+        host.transcript.streamingState = .streaming
+        let active = try spec()
+        host.transcript.streamingState = .idle
+        let idle = try spec()
+        #expect(active.native == nil)
+        #expect(idle.native != nil)
+        #expect(!active.equalityToken.isEqual(to: idle.equalityToken))
+    }
+
     @Test("idle tool rows park only after both tool and terminal finish", arguments: ["pending", "in_progress", "completed", "failed"])
     func idleToolParkingPolicy(status: String) {
         let host = makeHost()
