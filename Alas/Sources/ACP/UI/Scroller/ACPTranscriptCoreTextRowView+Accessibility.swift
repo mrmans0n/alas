@@ -88,7 +88,7 @@ extension ACPTranscriptCoreTextRowView {
         guard let textElement else { return }
         for case .markdown(let markdown, _, _) in layout.items where markdown.texts == textElement.texts {
             if textElement.updateLines(Self.lineStarts(of: markdown)) {
-                NSAccessibility.post(element: self, notification: .layoutChanged)
+                NSAccessibility.post(element: textElement, notification: .layoutChanged)
             }
             return
         }

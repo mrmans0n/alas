@@ -223,6 +223,8 @@ import Testing
         // The same reference, with no fresh query of the children.
         _ = view.measuredHeight(forWidth: 300)
         #expect(element.accessibilityRange(forLine: 1) != wide)
+        let after = try #require(view.accessibilityChildren()?.compactMap { $0 as? NSAccessibilityElement }.first)
+        #expect(after === element)
     }
 
     @Test func reconfiguringContentReplacesTheTextArea() throws {
