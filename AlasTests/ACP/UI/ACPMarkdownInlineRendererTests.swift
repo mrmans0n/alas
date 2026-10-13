@@ -20,6 +20,26 @@ struct ACPMarkdownInlineRendererTests {
         #expect(ACPMarkdownText.inlineCacheInsertionCountForTesting == 0)
     }
 
+    @Test("text with an attachment stays in the text view")
+    func attachmentsKeepTheTextView() {
+        let text = NSMutableAttributedString(string: "before ")
+        text.append(NSAttributedString(attachment: NSTextAttachment()))
+        #expect(ACPMarkdownInlineText.plainText(text) == nil)
+        #expect(ACPMarkdownInlineText.plainText(NSAttributedString(string: "plain")).map { String($0.characters) } == "plain")
+    }
+
+    @Test("SwiftUI text styles links as the text view does")
+    func plainTextStylesLinks() throws {
+        let text = NSMutableAttributedString(string: "see docs", attributes: [.foregroundColor: NSColor.gray])
+        text.addAttribute(.link, value: URL(string: "https://example.com")!, range: NSRange(location: 4, length: 4))
+        let plain = try #require(ACPMarkdownInlineText.plainText(text))
+        let link = try #require(plain.runs.first { $0.link != nil })
+        #expect(String(plain[link.range].characters) == "docs")
+        #expect(link.appKit.foregroundColor == NSColor.linkColor)
+        #expect(link.appKit.underlineStyle == .single)
+        #expect(plain.runs.first { $0.link == nil }?.appKit.foregroundColor == NSColor.gray)
+    }
+
     @Test("badge image size is capped with aspect ratio")
     func badgeImageSizeIsCapped() {
         let size = ACPMarkdownInlineRenderer.displaySize(
@@ -232,6 +252,8 @@ struct ACPMarkdownInlineRendererTests {
         let host = NSHostingView(
             rootView: DiffInlineCommentCard(thread: thread)
                 .environment(\.theme, try Theme.loadBundled(id: "cool-slate"))
+                // Read back through the text views, which chipping keeps.
+                .environment(\.acpAbsolutePathChipping, true)
                 .frame(width: 620, height: 260)
         )
         host.frame = NSRect(x: 0, y: 0, width: 620, height: 260)
@@ -296,6 +318,7 @@ struct ACPMarkdownInlineRendererTests {
         let host = NSHostingView(
             rootView: OutdatedThreadsDrawer(threads: [thread], initiallyExpanded: true)
                 .environment(\.theme, try Theme.loadBundled(id: "cool-slate"))
+                .environment(\.acpAbsolutePathChipping, true)
                 .frame(width: 620, height: 360)
         )
         host.frame = NSRect(x: 0, y: 0, width: 620, height: 360)
@@ -484,6 +507,7 @@ struct ACPMarkdownInlineRendererTests {
             - [x] `Done` task
             """)
             .environment(\.theme, try Theme.loadBundled(id: "cool-slate"))
+            .environment(\.acpAbsolutePathChipping, true)
             .frame(width: 620, height: 140)
         )
         host.frame = NSRect(x: 0, y: 0, width: 620, height: 140)
