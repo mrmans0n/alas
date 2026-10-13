@@ -12323,7 +12323,6 @@ final class AppState {
         )
     }
 
-
     nonisolated static func worktreeDeleteContentFingerprint(worktreePath: URL) async throws -> String {
         try await WorktreeService.worktreeDeleteContentFingerprint(worktreePath: worktreePath)
     }
