@@ -572,6 +572,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 if isActiveTurnRow || Self.hasLiveTool(in: renderRow, messages: messages, host: host) {
                     specs[specs.count - 1].parksWhenReleased = false
                 }
+                // A live row keeps streaming into its SwiftUI graph, so it is never native.
+                if !specs[specs.count - 1].parksWhenReleased { specs[specs.count - 1].native = nil }
                 // A parked graph would keep the visual's web page and its process alive.
                 if case .message(let row) = renderRow,
                    messages.indices.contains(row.index),
@@ -662,7 +664,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 ),
                 host: host
             )
-            return ACPTranscriptRowSpec(
+            var spec = ACPTranscriptRowSpec(
                 id: row.stableId,
                 equalityToken: rowToken,
                 build: {
@@ -682,6 +684,19 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                     }
                 }
             )
+            // `rowSpecs` clears this again for any row that stays live.
+            if ACPTranscriptNativeRows.isEnabled,
+               let content = ACPTranscriptNativeRows.content(
+                   for: message,
+                   isLive: snapshot.liveNarrationIndex == row.index,
+                   isCommentary: ACPTranscriptRowContent.presentationPhase(of: message) == .commentary
+               ) {
+                spec.native = ACPTranscriptNativeRows.row(
+                    content, contentMaxWidth: host.contentMaxWidth, inToolCallGroup: inToolCallGroup,
+                    theme: host.theme, typography: host.typography
+                )
+            }
+            return spec
         }
 
         private struct MessageRowTokenInputs: Equatable {
@@ -837,7 +852,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             let hiddenMemberCount = expanded
                 ? max(0, memberStableIds.count - (expansionSeeds.memberLimit(group) ?? memberStableIds.count))
                 : 0
-            return ACPTranscriptRowSpec(
+            var spec = ACPTranscriptRowSpec(
                 id: group.id,
                 equalityToken: token(
                     ToolCallGroupTokenInputs(
@@ -859,6 +874,14 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                     }
                 }
             )
+            if ACPTranscriptNativeRows.isEnabled, !group.isLive {
+                spec.native = ACPTranscriptNativeRows.row(
+                    .toolGroupHeader(label: summary.label, iconSystemName: summary.iconSystemName, expanded: expanded),
+                    contentMaxWidth: host.contentMaxWidth, inToolCallGroup: false,
+                    theme: host.theme, typography: host.typography
+                )
+            }
+            return spec
         }
 
         private struct ToolCallGroupTokenInputs: Equatable {
