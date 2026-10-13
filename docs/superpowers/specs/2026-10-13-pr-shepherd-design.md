@@ -65,7 +65,7 @@ AppState ──start/stop──▶ ReviewShepherd (AlasCore, @MainActor @Observa
                                 escalate / notify                     → NotificationService + harness attention
                                 refreshPaneIfCached(worktreeID)       → RightPaneStore
                                 archiveWorktree(worktreeID)           → existing archive path
-                                localState(worktreePath)              → shared local-state builder
+                                localState(worktreePath)              → ReviewLoopLocalProbe (AlasCore)
 ACPSessionManager.onTurnCompleted ──▶ ReviewShepherd.turnCompleted(sessionID:)
 MCP pr_create / pr_status ──▶ AlasCLICommandRouter ──▶ AppState ──▶ ReviewShepherd
 ```
@@ -76,9 +76,11 @@ the package.
 
 Each record owns a headless `ReviewLoopState`, so the shepherd reuses the
 existing snapshot model, `ReviewReadinessModel.canMergeReviewRequest` and the
-final merge revalidation in `ReviewLoopState.merge(snapshot:)`. The local-state
-builder that `RightPaneState` uses today (clean tree, local HEAD, ahead/behind
-against upstream) moves into AlasCore so both callers share it.
+final merge revalidation in `ReviewLoopState.merge(snapshot:)`. A new
+`ReviewLoopLocalProbe` in AlasCore reads the same local facts `RightPaneState`
+uses (clean tree, local HEAD, ahead/behind against upstream). `RightPaneState`
+keeps its own assembly, because it shares those git calls with the file tree
+refresh and switching would double them.
 
 After each shepherd poll, if `RightPaneStore` has a cached `RightPaneState` for
 that worktree, the shepherd calls `refresh(forceReviewLoopRemote: true)` on it.
@@ -89,9 +91,10 @@ own 45 s throttle is unchanged.
 
 ```swift
 public struct ShepherdRecordID: Hashable, Codable, Sendable {
-    public let owner: SessionOwnerID
-    public let worktreeID: String
-    public let remote: CodeHostRemote      // host + repository slug
+    public let worktreeID: String          // owner is always .worktree(worktreeID) in v1
+    public let providerKind: CodeHostKind
+    public let host: String
+    public let repositorySlug: String
     public let requestNumber: Int
 }
 
@@ -124,7 +127,7 @@ public struct ShepherdRecord: Codable, Equatable, Sendable {
     public var lastSeenHeadSHA: String?
     public var stableHeadPolls: Int        // consecutive polls with the same head and complete checks
     public var notifiedReadyHeadSHA: String?
-    public var gitLabMemberAccess: [String: Int]   // username -> access level, cached per PR
+    public var finishedAt: Date?           // set on merged/closed; drives 7-day retention
     public var createdAt: Date
     public var updatedAt: Date
 }
@@ -185,7 +188,8 @@ Rules run in order. The first one that produces an action wins.
    Threads do not wait for checks. A trusted thread on a head with running CI
    dispatches right away, which is lassie's "feedback before CI" rule.
 
-   No problems: reset `fixAttempts` to 0 and continue to rule 8. Problems
+   No problems and no pending check: reset `fixAttempts` to 0. No problems:
+   continue to rule 8. Problems
    whose fingerprint equals `lastDispatchedFingerprint`: `wait`. Otherwise:
    - if `fixAttempts >= 3`: `escalate(.attemptsExhausted)`;
    - else `dispatchFix` with all current problems, ordered conflict, checks,
@@ -215,13 +219,13 @@ changed state (head moved, gate no longer passes) return the record to
 - GitHub. The review-thread GraphQL query adds `authorAssociation` and the
   author's `__typename`. Trusted when `viewerDidAuthor == false` and the
   association is `OWNER`, `MEMBER` or `COLLABORATOR`, or the author is a `Bot`.
-- GitLab. Decode `author.bot` from discussion notes. For non-bot authors,
-  resolve the access level with
-  `glab api projects/:id/members/all/:user_id`, cached per record in
-  `gitLabMemberAccess`. Trusted when the author is not the authenticated user
-  and the access level is at least 30 (Developer), or the author is a bot. If
-  the note payload lacks `author.bot`, the implementation adds one users-API
-  lookup per author; this is verified against a real MR during implementation.
+- GitLab. Note authors carry no `bot` flag (notes use GitLab's `UserBasic`
+  entity), so the provider resolves each thread-head author's access level
+  with `glab api projects/:id/members/all/:user_id`, and calls
+  `glab api users/:id` for the `bot` flag only when that returns 404 or a level
+  below 30. Results are cached in the provider for one hour. Trusted when the
+  author is not the authenticated user and the access level is at least 30
+  (Developer), or the author is a bot.
 - Anything the provider can't classify is `unknown`.
 
 ### Required reviewers
@@ -255,26 +259,28 @@ record to `paused` and escalates once with `.authFailed`.
 
 ## Session integration
 
-AppState gets `deliverShepherdPrompt(sessionID:owner:text:) async -> Bool`,
+AppState gets `deliverShepherdPrompt(sessionID:worktreeID:text:) async -> Bool`,
 modeled on `ACPSessionOrchestrationCoordinator.resolveDeliveryTarget`:
 
 1. Load the persisted row. Archived or missing returns `false`.
 2. `placeholderSession(id:)`, then `hydrateIfNeeded(id:)`.
-3. `ACPSessionManager.sendPrompt(for:text:attachments:normalUserTurn: false, ...)`.
+3. `ACPSessionManager.enqueueDelegatedPrompt(text:source:into:)` with a
+   shepherd `ACPDelegatedPromptSource`, then `reattach(to:)` when the agent is
+   idle, disconnected or failed.
 
-`submit` already queues and reattaches when the session is idle, disconnected
-or failed, so the session does not need an open tab. A `false` result escalates
-with `.deliveryFailed`.
+`sendPrompt` cannot be used here: it requires a writer lease that only an
+attached session holds. The enqueue-then-reattach route is the one the
+orchestration coordinator uses for a child's first prompt, so the session does
+not need an open tab. A `false` result escalates with `.deliveryFailed`.
 
 AppState adds `reviewShepherd.turnCompleted(sessionID:)` to its existing
 `onTurnCompleted` fan-out next to scheduled turns and orchestration.
 `ACPTurnCompletion` carries no commit identity, so progress is measured from
 the provider head on the next polls (rule 6).
 
-Shepherd prompts start with an `Alas PR shepherd` header line. The
-implementation checks how `normalUserTurn: false` renders in the transcript
-and adds a small "from Alas" label to the user-message row if it renders as a
-plain user message.
+Shepherd prompts start with an `Alas PR shepherd` header line, and the
+shepherd source makes the transcript render them through the existing
+`DelegatedPromptRow` with the caption "Alas PR shepherd".
 
 ### Fix prompt
 
@@ -378,7 +384,8 @@ user will want reviewed, and call it only after the user agrees or asks."
 Behavior:
 
 1. Reject with a plain message when the worktree is not local, is a Workspace
-   checkout, has a detached HEAD, is on the base branch, has no commits ahead
+   checkout, has a detached HEAD, is on the base branch, tracks the base
+   branch as its upstream (the push would land on base), has no commits ahead
    of base, or `gh`/`glab` is missing or unauthenticated (the message names
    the install or `auth login` command).
 2. If an open PR/MR already exists for the branch, bind it and return
@@ -431,9 +438,8 @@ provider fetch that bypasses the 45 s throttle.
 `threads` lists actionable threads from trusted reviewers only. `shepherd` is
 null when the PR is not bound.
 
-The `alas` CLI gets `alas pr create` and `alas pr status` only if the shared
-`Command` enum exposes them to the CLI without extra code. No CLI-specific work
-is planned.
+No `alas pr` terminal command. The Rust CLI parser is handwritten, so the
+subcommand would not come for free, and agents reach these tools through MCP.
 
 ## UI
 
@@ -547,8 +553,10 @@ drawer block carry the signal in that case.
   returns to `watching`.
 - Worktree deleted or archived by the user: the record is dropped on the next
   evaluation.
-- Persistence decode failure: log, start with no records, and keep the corrupt
-  file as `review-shepherds.json.bad` so it can be inspected.
+- Persistence decode failure: the existing `PersistenceStore` recovery moves
+  the unreadable file to `review-shepherds.json.broken-<timestamp>`; the
+  shepherd logs it and starts with no records. Records decode one by one, so a
+  single bad record does not drop the rest.
 
 ## Testing
 
