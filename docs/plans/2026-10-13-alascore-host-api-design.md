@@ -52,7 +52,18 @@ public final class AlasHost {
 
     /// Current state plus the cursor its events continue from.
     public func snapshot() -> (HostSnapshot, HostCursor)
-    public func events(after cursor: HostCursor) -> AsyncStream<HostEvent>
+    /// One subscriber's stream. List-level events always flow; transcript
+    /// events only for the sessions the subscription follows.
+    public func subscribe(after cursor: HostCursor) -> HostSubscription
+}
+
+@MainActor
+public final class HostSubscription {
+    public var events: AsyncStream<HostEvent> { get }
+    public func follow(_ session: SessionID, from revision: TranscriptRevision?)
+    public func unfollow(_ session: SessionID)
+    /// Ends the stream and releases every followed session.
+    public func cancel()
 }
 ```
 
@@ -83,6 +94,13 @@ public struct SessionsAPI {
 
 Sessions are addressed by `SessionID` and owned by the existing `SessionOwnerID` (a worktree or a Workspace checkout), treated the same everywhere. `WorktreeRef` is `(projectID, path)`, matching the claim key, since a path can exist under more than one host's project. `HostCaller` names who asked: the app, a CLI/MCP origin (session id or cwd), a Remote peer, or a plugin. It is used for authorization and attribution only, never for presentation.
 
+`HostCaller` is never part of a wire message. Each transport adapter builds it from what it authenticated:
+- the Remote adapter from the paired peer identity of the connection;
+- the socket adapter from the connection's local user, plus a session id or cwd that it resolves against the host's own registry, refusing ones that resolve to nothing;
+- the plugin host from the plugin's identity and its project scope.
+
+A client can name a target, but it can never name who it is.
+
 Errors are per-domain enums, extending the ones that exist (`WorktreeDeletionRefusal`, `WorktreeArchiveRefusal`, `WorkspaceCheckoutCoordinatorError`).
 
 ### Snapshots and events
@@ -95,15 +113,16 @@ public enum HostEvent: Sendable, Codable {
     case sessionChanged(SessionSummary), sessionRemoved(SessionID)
     case transcript(SessionID, TranscriptDelta)
     case pendingRequest(SessionID, PendingRequest), pendingRequestResolved(SessionID, PendingRequestID)
-    case runChanged(RunSnapshot)
+    case runChanged(RunSnapshot), runRemoved(RunID)
     case attentionChanged(AttentionSnapshot)
     case resync
 }
 ```
 
+- Every keyed kind has a removal event, including runs, whose finished records and history are purged.
 - `WorktreeSnapshot` carries the operation state (`creating`, `deleting`, `archiving`, failures), so clients see claims instead of inferring them.
 - Events coalesce per key. A slow subscriber gets `resync` and re-reads the snapshot instead of an unbounded backlog.
-- Transcripts reuse `ACPTranscriptChangeLog`'s epoch and revision model. Transcript events flow only for sessions a subscriber asked for.
+- Transcripts reuse `ACPTranscriptChangeLog`'s epoch and revision model. A subscription receives `transcript` and pending-request events only for sessions it follows, like Remote's `subscribe`/`unsubscribe` today. Following retains the session's change log, and unfollowing or cancelling releases it, so a transcript is tracked exactly while someone follows it.
 - The in-process app does not need the stream. It keeps observing core stores directly, but every mutation it makes goes through the same verbs, so the two cannot diverge.
 
 ### Environment
@@ -143,7 +162,8 @@ This is where `AlasActionService`'s closures go: the domain half to the host, th
 
 ### Enforcing the boundary
 
-- **App plumbing** that stays public for the app only is marked `@_spi(AppHost) public`. The app imports `@_spi(AppHost) import AlasCore`; nothing else does, and adding to that list shows up in review.
+- **Core stores are read-only outside the core.** Views keep binding to `ProjectsManager`, `ACPSessionManager`, `RunRecordStore` and the other stores, but only through their reads. Their mutators (claims, hidden state, session lifecycle, run records) become `internal` as the verbs for each domain land, so the app cannot change state except through `AlasHost`. Each phase's exit includes making its domain's mutators internal.
+- **App plumbing** that must stay public for the app only (environment integration, presenter wiring) is marked `@_spi(AppHost) public`. The app imports `@_spi(AppHost) import AlasCore`; nothing else does. SPI is for integration seams, never for mutators, which would reopen the bypass.
 - **Out-of-process clients** see only the wire protocol, so the boundary there is the message set.
 
 Sealing the whole package is out of scope. Many value types are rightly public.
@@ -189,13 +209,14 @@ Two shapes sit on top of the host protocol:
 
 Each phase is one or more independent PRs. It is done when its exit criterion holds on `main`.
 
-1. **Converge worktree lifecycle onto the core.** `AppState`'s create, delete, archive and unarchive call the core verbs, and the duplicated logic is deleted. *Exit:* `AppState` keeps only dialogs and selection for worktree lifecycle.
+1. **Converge worktree lifecycle onto the core.** `AppState`'s create, delete, archive and unarchive call the core verbs, and the duplicated logic is deleted. Claims the app opens before a verb runs (the `.preparingDelete` claim held while a confirmation is up, the optimistic `.creating` row) come from core verbs that return the claim token, so the app never writes operation state itself. *Exit:* `AppState` keeps only dialogs and selection for worktree lifecycle, and `ProjectsManager`'s claim and hidden-state mutators are internal.
 2. **Environment and SPI.** Introduce `AlasHostEnvironment` and `HeadlessHostEnvironment` in place of the hook closures. Mark the remaining app plumbing `@_spi(AppHost)`. *Exit:* `AlasCoreContext` has no settable closure properties, and a test target importing `AlasCore` without SPI cannot reach the plumbing.
 3. **Runs.** Introduce `RunLauncher`; terminal-backed and process-backed runs share start, settle and record. *Exit:* no run observation or settlement call remains in `AppState+RunScripts`.
 4. **Host facade and snapshots.** Add `AlasHost` with `projects`, `worktrees`, `workspaces` and `runs` as value-typed APIs and `snapshot()`. *Exit:* the CLI's `wt list`, `wt new`, `wt delete` and `workspace_list/show` go through the host.
 5. **Events and the host protocol.**
    - Add `HostEvent` with cursors, coalescing and resync.
-   - Add the host message set (snapshot, events, and the verbs from phase 4), served on a local Unix socket and as a versioned namespace on the Remote server.
+   - Add read-only session summaries to the host (`sessions.list`, `sessionChanged`, `sessionRemoved`). Session verbs and transcripts stay in phase 6.
+   - Add the host message set (snapshot, events, the phase 4 verbs and the session list), served on a local Unix socket and as a versioned namespace on the Remote server.
    - The Remote layer subscribes to host events instead of polling.
    - *Exit:* the web client's and federation's 15 s list polls are gone, and a host-protocol client can list and mutate projects, worktrees and workspaces.
 6. **Sessions.** `SessionsAPI` over the session managers. Session verbs, transcripts and pending requests join the host protocol. Remote's session messages become a layer over them, and `RemoteSessionsProvider` is retired. *Exit:* no Remote session path reaches `AppState` except through the presenter, and no API returns `ACPSession`.
