@@ -148,7 +148,7 @@ extension AlasCoreContext {
     /// persists that. Its runs settle as lost but keep their history, and
     /// nothing leaves the disk. Throws, leaving the worktree visible, when it
     /// cannot be quiesced or the save fails.
-    public func performArchive(
+    func performArchive(
         _ worktree: Worktree,
         revalidate: @MainActor () async -> (any Error)? = { nil }
     ) async throws {
@@ -174,6 +174,13 @@ extension AlasCoreContext {
     /// so nothing new starts in it meanwhile. The main checkout and members of
     /// an active Workspace checkout are refused.
     public func archiveWorktree(_ worktree: Worktree) async throws {
+        try await archiveWorktree(worktree, claim: beginArchive(worktree))
+    }
+
+    /// Claims `worktree` for archiving, for callers that ask the user
+    /// something (such as saving buffers) before `archiveWorktree(_:claim:)`.
+    /// Release the claim if the archive does not go ahead.
+    public func beginArchive(_ worktree: Worktree) throws -> UUID {
         guard let project = projects.projects.first(where: { $0.id == worktree.projectId }) else {
             throw ProjectCreationError.projectNotFound
         }
@@ -182,14 +189,31 @@ extension AlasCoreContext {
         case nil, .deleteFailed: break
         default: throw WorktreeArchiveRefusal.operationInProgress
         }
-        let claim = projects.claimOperation(.archiving(projectId: project.id), for: worktree)
+        return projects.claimOperation(.archiving(projectId: project.id), for: worktree)
+    }
+
+    /// Releases a claim a `begin…` call returned, when its operation does
+    /// not go ahead. Whatever state the claim replaced comes back.
+    public func releaseWorktreeClaim(_ claim: UUID, for worktree: Worktree) {
+        projects.releaseOperation(claim, for: worktree)
+    }
+
+    /// Archives a worktree claimed by `beginArchive`, and releases the claim.
+    public func archiveWorktree(_ worktree: Worktree, claim: UUID) async throws {
         defer { projects.releaseOperation(claim, for: worktree) }
+        // Each check reads the claim after the ownership await: a refresh can
+        // clear it meanwhile, and whatever is listed then is not this claim's.
         if let refusal = await workspaceOwnershipRefusal(for: worktree) {
             throw WorktreeArchiveRefusal.ownedByWorkspaceCheckout(refusal)
         }
+        guard projects.holdsClaim(claim, for: worktree) else { throw WorktreeArchiveRefusal.operationInProgress }
         try await performArchive(worktree, revalidate: { [weak self] in
-            await self?.workspaceOwnershipRefusal(for: worktree).map(WorktreeArchiveRefusal.ownedByWorkspaceCheckout)
+            guard let self else { return nil }
+            let refusal = await workspaceOwnershipRefusal(for: worktree)
+            guard projects.holdsClaim(claim, for: worktree) else { return WorktreeArchiveRefusal.operationInProgress }
+            return refusal.map(WorktreeArchiveRefusal.ownedByWorkspaceCheckout)
         })
+        projects.finishOperation(claim, for: worktree)
     }
 
     /// Shows an archived worktree again. Sessions and runs are not restored.
@@ -247,13 +271,21 @@ extension AlasCoreContext {
 }
 
 /// Why `AlasCoreContext.archiveWorktree` or `unarchiveWorktree` refused.
-public enum WorktreeArchiveRefusal: Error, Equatable {
+public enum WorktreeArchiveRefusal: LocalizedError, Equatable {
     /// The project's main checkout is never archived.
     case mainWorktree
     /// Another operation holds the worktree.
     case operationInProgress
     /// An active Workspace checkout manages this worktree.
     case ownedByWorkspaceCheckout(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .mainWorktree: "The main checkout cannot be archived."
+        case .operationInProgress: "Wait for the current worktree operation to finish."
+        case .ownedByWorkspaceCheckout(let reason): "\(reason)."
+        }
+    }
 }
 
 /// Why `AlasCoreContext.deleteWorktree` did not delete.
@@ -334,6 +366,9 @@ extension AlasCoreContext {
             projects.dropRemovedWorktree(id: worktree.id, projectId: project.id)
             changed = true
         }
+        // Held until the refresh dropped the row; finished, not released,
+        // so nothing the claim replaced returns for the removed path.
+        projects.finishOperation(claim, for: worktree)
         if changed {
             try saveProjects()
         }

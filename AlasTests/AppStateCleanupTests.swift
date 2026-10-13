@@ -1815,33 +1815,23 @@ struct AppStateCleanupTests {
 
     // MARK: - Archive from delete-failed state
 
-    @Test func archiveWorktreeFromDeleteFailedStateHidesWorktree() async throws {
+    @Test func archiveFromDeleteFailedStateHidesTheWorktreeAndClosesItsTabs() async throws {
         let repo = try await makeRepo(name: "archive-from-failed")
         defer { try? FileManager.default.removeItem(at: repo) }
-
         let state = AppState()
-        let project = try await state.projectsManager.addProject(path: repo, displayName: "archive", color: "#5fb7c4")
-        try await state.projectsManager.refreshWorktrees(projectId: project.id)
-
-        let trees = state.projectsManager.worktrees(projectId: project.id)
-        #expect(trees.count == 1)
-        let wt = trees[0]
-
-        // Simulate a failed delete.
-        state.projectsManager.setOperationState(forWorktreeId: wt.id, projectId: project.id, state: .deleteFailed(message: "permission denied"))
+        let (project, wt) = try await addProjectWithLinkedWorktree(state, repo: repo, branch: "archive-from-failed")
+        state.tabs.appendTerminal(worktreeId: wt.id, title: "term", sessionId: "s1")
+        state.projectsManager.setOperationState(for: wt, state: .deleteFailed(message: "permission denied"))
         state.projectsManager.setGGWorktreeMode(projectId: project.id, worktreeId: wt.id, mode: .on)
         state.selectedWorktreeId = wt.id
 
-        // Archive should succeed and hide the worktree.
-        state.archiveWorktree(wt)
+        await state.archiveWorktree(wt)?.value
 
         #expect(state.projectsManager.isWorktreeHidden(projectId: project.id, path: wt.path))
-        #expect(state.projectsManager.archivedWorktrees(projectId: project.id).count == 1)
-        #expect(state.projectsManager.visibleWorktrees(projectId: project.id).isEmpty)
+        #expect(state.projectsManager.archivedWorktrees(projectId: project.id).map(\.id) == [wt.id])
         #expect(state.projectsManager.ggWorktreeMode(projectId: project.id, worktreeId: wt.id) == .on)
-        // Operation state should be cleared.
-        #expect(state.projectsManager.operationState(forWorktreeId: wt.id, projectId: project.id) == nil)
-        // Selection should move away because the worktree is no longer visible.
+        #expect(state.projectsManager.operationState(for: wt) == nil)
+        #expect(state.tabs.tabs(forWorktree: wt.id).isEmpty)
         #expect(state.selectedWorktreeId != wt.id)
     }
 
@@ -1853,39 +1843,30 @@ struct AppStateCleanupTests {
 
         var refusal: String?
         let state = AppState(fileActionErrorHandler: { _, message in refusal = message })
-        let project = try await state.projectsManager.addProject(path: repo, displayName: "archive", color: "#5fb7c4")
-        try await state.projectsManager.refreshWorktrees(projectId: project.id)
-        let wt = state.projectsManager.worktrees(projectId: project.id)[0]
+        let (project, wt) = try await addProjectWithLinkedWorktree(state, repo: repo, branch: "archive-while-deleting")
         state.projectsManager.setOperationState(for: wt, state: .deleting(projectId: project.id))
 
-        state.archiveWorktree(wt)
+        await state.archiveWorktree(wt)?.value
 
         #expect(refusal != nil)
         #expect(!state.projectsManager.isWorktreeHidden(projectId: project.id, path: wt.path))
         #expect(state.projectsManager.operationState(for: wt) == .deleting(projectId: project.id))
     }
 
-    @Test func archiveWorktreeFromDeleteFailedStateClosesTabs() async throws {
-        let repo = try await makeRepo(name: "archive-from-failed-tabs")
-        defer { try? FileManager.default.removeItem(at: repo) }
-
-        let state = AppState()
-        let project = try await state.projectsManager.addProject(path: repo, displayName: "archive-tabs", color: "#5fb7c4")
+    /// Only linked worktrees can be archived; the main checkout never is.
+    private func addProjectWithLinkedWorktree(
+        _ state: AppState,
+        repo: URL,
+        branch: String
+    ) async throws -> (ProjectConfig, Worktree) {
+        let project = try await state.projectsManager.addProject(path: repo, displayName: branch, color: "#5fb7c4")
+        let linked = repo.appendingPathComponent(".linked-\(branch)")
+        _ = try await Process.git(["worktree", "add", "-q", "-b", branch, linked.path, "HEAD"], cwd: repo)
         try await state.projectsManager.refreshWorktrees(projectId: project.id)
-
-        let wt = state.projectsManager.worktrees(projectId: project.id)[0]
-        state.tabs.appendTerminal(worktreeId: wt.id, title: "term", sessionId: "s1")
-        #expect(state.tabs.tabs(forWorktree: wt.id).count == 1)
-
-        state.projectsManager.setOperationState(forWorktreeId: wt.id, projectId: project.id, state: .deleteFailed(message: "permission denied"))
-        state.selectedWorktreeId = wt.id
-
-        state.archiveWorktree(wt)
-
-        // Tabs should be closed.
-        #expect(state.tabs.tabs(forWorktree: wt.id).isEmpty)
-        // And selection updated.
-        #expect(state.selectedWorktreeId != wt.id)
+        let worktree = try #require(state.projectsManager.worktrees(projectId: project.id).first {
+            $0.path.standardizedFileURL.path == linked.standardizedFileURL.path
+        })
+        return (project, worktree)
     }
 
     @Test func createWorktreeAfterProjectRemovalDoesNotMutateState() async throws {

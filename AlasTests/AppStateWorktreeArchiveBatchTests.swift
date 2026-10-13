@@ -9,7 +9,7 @@ struct AppStateWorktreeArchiveBatchTests {
         defer { fixture.cleanUpAfterTest() }
         let targets = Array(fixture.worktrees.dropFirst())
 
-        let results = fixture.state.batchArchiveWorktrees(targets)
+        let results = await fixture.state.batchArchiveWorktrees(targets)
 
         #expect(results.allSatisfy { $0.outcome == .archived })
         #expect(fixture.state.projectsManager
@@ -28,11 +28,42 @@ struct AppStateWorktreeArchiveBatchTests {
         defer { fixture.cleanUpAfterTest() }
         let main = fixture.worktrees[0]
 
-        let results = fixture.state.batchArchiveWorktrees([main])
+        let results = await fixture.state.batchArchiveWorktrees([main])
 
         #expect(results[0].outcome == .skipped(reason: "Main worktree"))
         #expect(fixture.state.projectsManager
             .archivedWorktrees(projectId: fixture.project.id).isEmpty)
+    }
+
+    /// An open buffer can still be edited while the archive awaits; those
+    /// edits were never acknowledged, so the archive is refused rather than
+    /// closing their editor.
+    @Test func archiveRefusesEditsMadeAfterTheUnsavedChangesWereAcknowledged() async throws {
+        let fixture = try await makeCleanupFixture(worktreeCount: 2)
+        defer { fixture.cleanUpAfterTest() }
+        let target = fixture.worktrees[1]
+        try "disk\n".write(to: target.path.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        let tab = fixture.state.tabs.appendEditor(worktreeId: target.id, title: "a.txt", relativePath: "a.txt")
+        let buffer = fixture.state.tabs.buffer(worktreeId: target.id, tabId: tab.id, worktreeRoot: target.path, relativePath: "a.txt")
+        await buffer.awaitLoadForTesting()
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "acknowledged ")
+        let authorization = WorktreeCleanupArchiveAuthorization(
+            dirtyTabsByWorktree: [target.id: [tab.id: buffer.editGeneration]],
+            sessionIDsByWorktree: [:],
+            unavailableReasons: [:],
+            bufferResolution: .discard
+        )
+        let quiesce = fixture.state.core.quiesceWorktree
+        fixture.state.core.quiesceWorktree = { worktree in
+            buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "later ")
+            try await quiesce(worktree)
+        }
+
+        let results = await fixture.state.batchArchiveWorktrees(authorization, [target])
+
+        #expect(results.map(\.outcome) == [.skipped(reason: AppState.UnacknowledgedEditsError().localizedDescription)])
+        #expect(!fixture.state.projectsManager.isWorktreeHidden(projectId: fixture.project.id, path: target.path))
+        #expect(fixture.state.tabs.tabs(forWorktree: target.id).contains { $0.id == tab.id })
     }
 
     @Test func archiveRoundTripRestoresTheWorktree() async throws {
@@ -40,7 +71,7 @@ struct AppStateWorktreeArchiveBatchTests {
         defer { fixture.cleanUpAfterTest() }
         let target = fixture.worktrees[1]
 
-        _ = fixture.state.batchArchiveWorktrees([target])
+        _ = await fixture.state.batchArchiveWorktrees([target])
         #expect(fixture.state.projectsManager
             .visibleWorktrees(projectId: fixture.project.id)
             .contains { $0.id == target.id } == false)
