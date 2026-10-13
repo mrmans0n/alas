@@ -792,8 +792,9 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         return super.becomeFirstResponder()
     }
 
+    /// The selection stays, drawn inactive, as a text view keeps it.
     override func resignFirstResponder() -> Bool {
-        textSelection = nil
+        if let textSelection, !textSelection.isEmpty { invalidateTiles() }
         return super.resignFirstResponder()
     }
 
@@ -1036,6 +1037,17 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
                 element.selection = { [weak self] in
                     guard let self, let textSelection, textSelection.side == side else { return nil }
                     return (textSelection.start, textSelection.end)
+                }
+                element.visibleLines = { [weak self] in
+                    guard let self else { return nil }
+                    let visible = visibleRect.intersection(codeRect(side))
+                    let count = lines(side).code.count
+                    let tops = layout(forWidth: bounds.width).tops
+                    guard !visible.isEmpty, count > 0 else { return nil }
+                    let first = min(Self.row(containing: max(0, visible.minY - codeTop), rowTops: tops), count - 1)
+                    let last = min(Self.row(containing: max(0, visible.maxY - codeTop - 0.5), rowTops: tops), count - 1)
+                    guard first <= last else { return nil }
+                    return (.init(row: first, index: 0), .init(row: last, index: (lines(side).codeStrings[last] as NSString).length))
                 }
                 element.select = { [weak self] start, end in
                     self?.textSelection = .init(side: side, anchor: start, focus: end)
@@ -1974,7 +1986,15 @@ final class CodeAccessibilityElement: NSAccessibilityElement, @unchecked Sendabl
 
     override func accessibilityValue() -> Any? { text as String }
     override func accessibilityNumberOfCharacters() -> Int { text.length }
-    override func accessibilityVisibleCharacterRange() -> NSRange { NSRange(location: 0, length: text.length) }
+    /// The lines the enclosing scroll view shows, set by the row.
+    var visibleLines: (@MainActor @Sendable () -> (start: DiffSplitCoreTextRowView.TextSelection.Position, end: DiffSplitCoreTextRowView.TextSelection.Position)?)?
+
+    override func accessibilityVisibleCharacterRange() -> NSRange {
+        guard let visibleLines else { return NSRange(location: 0, length: text.length) }
+        guard let lines = MainActor.assumeIsolated({ visibleLines() }) else { return NSRange(location: 0, length: 0) }
+        let start = lineStarts[lines.start.row] + lines.start.index
+        return NSRange(location: start, length: lineStarts[lines.end.row] + lines.end.index - start)
+    }
 
     override func accessibilityString(for range: NSRange) -> String? {
         guard NSMaxRange(range) <= text.length else { return nil }

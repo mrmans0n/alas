@@ -335,6 +335,27 @@ import Testing
         #expect(view.horizontalScroll.offset(.old) == 0)
     }
 
+    @Test func selectionSurvivesLosingFocus() throws {
+        let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 200))
+        view.configure(result: result(old: [], new: ["let alpha = 1"]), font: font, theme: theme)
+        let point = newCodePoint(view, x: { $0.minX + 20 }, row: 0)
+        view.mouseDown(with: try click(view, .leftMouseDown, at: point, count: 3))
+        view.mouseUp(with: try click(view, .leftMouseUp, at: point, count: 3))
+        _ = view.resignFirstResponder()
+        #expect(view.selectedText() == "let alpha = 1")
+    }
+
+    @Test func accessibilityReportsOnlyTheLinesInTheViewport() throws {
+        let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 400))
+        view.configure(result: result(old: [], new: (0..<20).map { "let v\($0) = \($0)" }), font: font, theme: theme)
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 800, height: DiffSplitCoreTextRowView.verticalInset + 3 * view.lineHeight))
+        scrollView.documentView = view
+        let new = try #require(view.codeAccessibilityElements().last)
+        let visible = new.accessibilityVisibleCharacterRange()
+        #expect(visible.location == 0)
+        #expect(new.accessibilityLine(for: NSMaxRange(visible) - 1) <= 3)
+    }
+
     @Test func pointerOnASurrogatePairsTrailingHalfResolvesItsStart() throws {
         let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 200))
         view.configure(result: result(old: [], new: ["a\u{1D465}b"]), font: font, theme: theme)
