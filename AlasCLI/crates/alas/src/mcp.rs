@@ -1010,7 +1010,10 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
             title: required_string(args, "title")?,
             body: required_string(args, "body")?,
             draft: optional_bool(args, "draft")?.unwrap_or(false),
-            base: optional_string(args, "base"),
+            base: match args.get("base") {
+                None | Some(Value::Null) | Some(Value::String(_)) => optional_string(args, "base"),
+                Some(_) => return Err("base must be a string".into()),
+            },
         }),
         "pr_status" => Ok(Command::PrStatus),
         "workspace_list" => Ok(Command::WorkspaceList),
@@ -3753,6 +3756,7 @@ mod tests {
             json!({"title": "   ", "body": "Why."}),
             json!({"title": "fix: retry"}),
             json!({"title": "fix: retry", "body": "Why.", "draft": "yes"}),
+            json!({"title": "fix: retry", "body": "Why.", "base": 123}),
         ] {
             assert!(
                 command_for_tool("pr_create", &bad, "/wt").is_err(),
