@@ -258,13 +258,14 @@ struct ACPTranscriptMarkdownLayout {
             let backgroundIndex = backgrounds.count - 1
 
             // The header is as tall as the taller of its label and the button.
+            // SwiftUI rounds a font's ascent and descent up separately; its symbol
+            // image is two points taller than that, which TextKit and `NSImage` miss
+            // at small sizes.
             let buttonFont = NSFont.systemFont(ofSize: typography.labelSize, weight: .medium)
-            let buttonHeight = TextKitLineHeight.of(buttonFont) + 2 * L.copyButtonVerticalPadding
-            // `CodeBlockView`'s button also holds an icon, which can be taller than its label.
-            let icon = NSImage(systemSymbolName: "doc.on.doc", accessibilityDescription: nil)?
-                .withSymbolConfiguration(.init(pointSize: typography.labelSize, weight: .regular))
-            let iconHeight = (icon?.size.height ?? 0) + 2 * L.copyButtonVerticalPadding
-            let headerContentHeight = max(buttonHeight, iconHeight)
+            let iconFont = NSFont.systemFont(ofSize: typography.labelSize, weight: .regular)
+            let buttonHeight = max(Self.swiftUILineHeight(of: buttonFont), Self.swiftUILineHeight(of: iconFont) + 2)
+                + 2 * L.copyButtonVerticalPadding
+            let headerContentHeight = buttonHeight
             y += L.codeHeaderVerticalPadding
             let headerTop = y
             var headerHeight = max(L.codeEmptyHeaderContentHeight, headerContentHeight)
@@ -306,9 +307,12 @@ struct ACPTranscriptMarkdownLayout {
                 ])
             }
             let firstCodeLine = lines.count
+            // SwiftUI's line can be a point taller than TextKit's box.
+            let codeFont = CenterTypography.resolveCodeFont(family: typography.fontFamily, size: typography.codeSize)
             addBlockText(
                 code, x: L.codeBodyHorizontalPadding, width: max(1, width - 2 * L.codeBodyHorizontalPadding),
-                lineSpacing: L.codeLineSpacing
+                lineSpacing: L.codeLineSpacing,
+                lineHeight: Self.swiftUILineHeight(of: codeFont)
             )
             // Line spacing goes between lines, not after the last one.
             if lines.count > firstCodeLine {
@@ -325,14 +329,17 @@ struct ACPTranscriptMarkdownLayout {
         }
 
         /// Adds a selectable block: its lines map back into `texts`.
-        private mutating func addBlockText(_ text: NSAttributedString, x: CGFloat, width: CGFloat, lineSpacing: CGFloat = 0) {
+        private mutating func addBlockText(
+            _ text: NSAttributedString, x: CGFloat, width: CGFloat, lineSpacing: CGFloat = 0, lineHeight: CGFloat? = nil
+        ) {
             texts.append(text.string)
-            addText(text, x: x, width: width, lineSpacing: lineSpacing, block: texts.count - 1)
+            addText(text, x: x, width: width, lineSpacing: lineSpacing, lineHeight: lineHeight, block: texts.count - 1)
         }
 
         /// Breaks `text` to `width` and stacks its lines from the current `y`.
         private mutating func addText(
-            _ text: NSAttributedString, x: CGFloat, width: CGFloat, lineSpacing: CGFloat = 0, block: Int? = nil
+            _ text: NSAttributedString, x: CGFloat, width: CGFloat, lineSpacing: CGFloat = 0, lineHeight: CGFloat? = nil,
+            block: Int? = nil
         ) {
             guard text.length > 0 else { return }
             let typesetter = CTTypesetterCreateWithAttributedString(text)
@@ -350,7 +357,7 @@ struct ACPTranscriptMarkdownLayout {
                 // range without one measures 0; the line's own bounds are the floor.
                 var ascent: CGFloat = 0, descent: CGFloat = 0
                 CTLineGetTypographicBounds(line, &ascent, &descent, nil)
-                let measured = max(Self.lineHeight(of: text, range: NSRange(location: start, length: count)), ascent + descent)
+                let measured = max(lineHeight ?? Self.lineHeight(of: text, range: NSRange(location: start, length: count)), ascent + descent)
                 let height = (measured > 0 ? measured : typography.paragraphSize) + lineSpacing
                 lines.append(Line(
                     line: line, origin: CGPoint(x: x, y: y), height: height, underlines: Self.underlines(of: line),
@@ -359,6 +366,11 @@ struct ACPTranscriptMarkdownLayout {
                 y += height
                 start += count
             }
+        }
+
+        /// A line of `font` as SwiftUI sizes it: ascent, descent and leading each rounded up.
+        private static func swiftUILineHeight(of font: NSFont) -> CGFloat {
+            ceil(font.ascender) + ceil(-font.descender) + ceil(font.leading)
         }
 
         private static func lengthWithoutTrailingWhitespace(_ string: NSString, from start: Int, count: Int) -> Int {

@@ -43,11 +43,12 @@ import Testing
         #expect(colors.count > 1)
     }
 
-    @Test(arguments: ["let a = 1", "let a = 1\nlet b = 2", "let a = 1\n\nlet b = 2"])
-    func codeBlockHeightMatchesTheSwiftUIBlock(code: String) throws {
+    @Test(arguments: ["let a = 1", "let a = 1\nlet b = 2", "let a = 1\n\nlet b = 2"], [11, 13, 16])
+    func codeBlockHeightMatchesTheSwiftUIBlock(code: String, fontSize: Int) throws {
         let language = "swift"
-        let layout = try #require(ACPTranscriptMarkdownLayout.make(source: "```\(language)\n\(code)\n```", width: 500, theme: theme, typography: .default))
-        let host = NSHostingView(rootView: CodeBlockView(language: language, code: code, typography: .default)
+        let typography = ACPChatTypography(fontFamily: "", fontSize: fontSize)
+        let layout = try #require(ACPTranscriptMarkdownLayout.make(source: "```\(language)\n\(code)\n```", width: 500, theme: theme, typography: typography))
+        let host = NSHostingView(rootView: CodeBlockView(language: language, code: code, typography: typography)
             .environment(\.theme, theme).frame(width: 500))
         let background = try #require(layout.backgrounds.first)
         #expect(abs(background.rect.height - host.fittingSize.height) < 1)
