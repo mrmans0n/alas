@@ -429,10 +429,16 @@ extension ACPTranscriptCoreTextRowView {
         }
         // A tool row shows its timestamp while hovered; it is one line, so
         // only its first tile changes.
-        if case .toolCall(_, _, _, let timestamp?, _) = content, !timestamp.isEmpty {
+        if hoverChangesLayout {
             cachedLayout = nil
             tiles[0]?.setNeedsDisplay()
         }
+    }
+
+    /// Only a tool row with a timestamp lays out differently while hovered.
+    private var hoverChangesLayout: Bool {
+        if case .toolCall(_, _, _, let timestamp?, _) = content { return !timestamp.isEmpty }
+        return false
     }
 
     /// Detaching a retained row clears hover without the pointer-exit delay.
@@ -442,7 +448,7 @@ extension ACPTranscriptCoreTextRowView {
         isHovering = false
         hover.reset()
         isMenuOpen = false
-        if wasHovering { cachedLayout = nil }
+        if wasHovering, hoverChangesLayout { cachedLayout = nil }
     }
 
     /// Creates, updates, or removes the button for the latest `actions`.
