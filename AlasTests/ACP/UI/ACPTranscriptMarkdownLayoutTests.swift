@@ -39,4 +39,12 @@ import Testing
         let cut = CGRect(x: 0, y: second.origin.y + second.height / 2, width: 300, height: 1)
         #expect(layout.linesIntersecting(cut).map(\.origin.y) == [second.origin.y])
     }
+
+    @Test func blankCodeLinesDrawNothingOfTheirNeighbours() throws {
+        let layout = try #require(ACPTranscriptMarkdownLayout.make(source: "```\na\n\nb\n```", width: 400, theme: theme, typography: .default))
+        #expect(layout.lines.count == 3)
+        // "a", the blank line, and "b": only the two letters are drawn, each once.
+        #expect(layout.lines.map { CTLineGetStringRange($0.line).length } == [1, 0, 1])
+        #expect(layout.lines.map(\.origin.y) == layout.lines.map(\.origin.y).sorted())
+    }
 }
