@@ -7459,7 +7459,10 @@ final class AppState {
                 autoRunDefault: { [weak self] in
                     self?.config.harness.acpAutoRunByDefault ?? false
                 },
-                notifyChanged: { }
+                notifyChanged: { },
+                admitsNewSessions: { [weak self] worktree in
+                    self?.projectsManager.admitsNewWork(in: worktree) ?? false
+                }
             )
         )
     }

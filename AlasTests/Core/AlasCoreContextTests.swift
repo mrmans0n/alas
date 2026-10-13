@@ -171,7 +171,7 @@ struct AlasCoreContextTests {
     }
 
     /// The headless context admits no run or agent session into a worktree
-    /// that is being created or deleted.
+    /// that is being created or deleted, not even through a cached manager.
     @Test func nothingNewStartsInAWorktreeBeingDeleted() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-core-\(UUID().uuidString)")
         let project = ProjectConfig(id: "p", name: "p", path: root.path, color: "blue", addedAt: Date())
@@ -186,8 +186,19 @@ struct AlasCoreContextTests {
         let context = AlasCoreContext(
             projects: ProjectsManager(persistedProjects: [project]),
             runs: RunService(launch: { _, _ in 0 }),
-            runHistoryStore: nil
+            runHistoryStore: nil,
+            makeSessionManager: { owner, worktree in
+                ACPSessionManager(
+                    worktreeId: worktree.id,
+                    worktreePath: worktree.path.path,
+                    owner: owner,
+                    persistence: ACPSessionPersistence(
+                        path: FileManager.default.temporaryDirectory.appendingPathComponent("alas-core-\(UUID().uuidString).sqlite").path
+                    )
+                )
+            }
         )
+        _ = try context.sessionManager(for: worktree)
         context.projects.setOperationState(for: worktree, state: .deleting(projectId: "p"))
 
         await #expect(throws: AlasCoreContext.WorktreeOperationInProgress.self) {
