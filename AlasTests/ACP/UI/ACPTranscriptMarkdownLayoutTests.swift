@@ -8,7 +8,7 @@ import Testing
 @Suite struct ACPTranscriptMarkdownLayoutTests {
     private var theme: Theme { try! Theme.loadBundled(id: "cool-slate") }
 
-    @Test(arguments: ["| a | b |\n|---|---|\n| 1 | 2 |", "![alt](https://x/y.png)", "- [ ] task", "```mermaid\ngraph TD\n```"])
+    @Test(arguments: ["| a | b |\n|---|---|\n| 1 | 2 |", "![alt](https://x/y.png)", "Build: ![badge](https://x/b.png)", "- [ ] task", "```mermaid\ngraph TD\n```"])
     func unsupportedBlocksFallBack(source: String) {
         #expect(ACPTranscriptMarkdownLayout.make(source: source, width: 400, theme: theme, typography: .default) == nil)
     }

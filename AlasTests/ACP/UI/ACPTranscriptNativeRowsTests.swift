@@ -21,4 +21,20 @@ import Testing
         }
         #expect((ACPTranscriptNativeRows.content(for: message, isLive: isLive, isCommentary: false) != nil) == expected)
     }
+
+    @Test(arguments: [
+        ("Build: ![badge](https://example.com/badge.png)", false, false),
+        ("## ![badge](b.png) title", false, false),
+        ("see !34", true, false),
+        ("open ~/notes.txt", true, false),
+        ("details at https://gitlab.example.com/g/p/-/merge_requests/7", true, false),
+        ("no images or chips here", true, true),
+        ("no images or chips here", false, true),
+    ])
+    func inlineImagesAndChipFormsStayInSwiftUI(text: String, isUser: Bool, expected: Bool) {
+        let message: ACPMessage = isUser
+            ? .user(id: UUID(), messageId: nil, text: text, attachments: [])
+            : .agent(id: UUID(), messageId: nil, StreamingText(text))
+        #expect((ACPTranscriptNativeRows.content(for: message, isLive: false, isCommentary: false) != nil) == expected)
+    }
 }

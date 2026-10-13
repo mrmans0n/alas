@@ -92,12 +92,16 @@ struct ACPTranscriptMarkdownLayout {
     let copyButtonStyle: CopyButtonStyle
 
     /// Whether every block can be drawn here. Tables, images, Mermaid diagrams
-    /// and task lists need views of their own.
+    /// and task lists need views of their own, and so does prose with an
+    /// inline image: the SwiftUI renderer turns it into a text attachment that
+    /// `CTLineDraw` cannot show. `![` is a conservative stand-in for the inline
+    /// renderer's image matching, which needs a theme.
     static func supports(_ blocks: [ACPMarkdownParser.Block]) -> Bool {
         blocks.allSatisfy { block in
             switch block {
             case .table, .image, .mermaid, .taskList: false
-            case .heading, .paragraph, .quote, .code, .streamingCode: true
+            case .heading(_, let text), .paragraph(let text), .quote(let text): !text.contains("![")
+            case .code, .streamingCode: true
             }
         }
     }

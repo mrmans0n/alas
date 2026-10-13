@@ -54,6 +54,11 @@ enum ACPTranscriptNativeRows {
                   !text.hasPrefix("/"),
                   text.range(of: #"(^|\s)/[A-Za-z]"#, options: .regularExpression) == nil,
                   text.range(of: #"#\d"#, options: .regularExpression) == nil,
+                  // Chip forms that depend on the workspace (GitLab `!34`, an
+                  // existing `~/file`, a PR/MR URL); the real detectors need
+                  // the code host and file system, so reject conservatively.
+                  text.range(of: #"!\d"#, options: .regularExpression) == nil,
+                  !text.contains("~/"), !text.contains("://"),
                   supportsMarkdown(text)
             else { return nil }
             return .user(markdown: text)
