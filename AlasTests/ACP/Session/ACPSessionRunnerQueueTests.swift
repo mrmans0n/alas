@@ -171,6 +171,25 @@ struct ACPSessionRunnerQueueTests {
         }
     }
 
+    @Test("a queued prompt waits while new turns are refused and drains once they are admitted")
+    func queuedPromptWaitsForAdmission() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        mock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
+        var admits = false
+        runner.admitsNewTurns = { admits }
+        session.enqueue(blocks: [.text("later")])
+        runner.persistQueue()
+        runner.flushQueueIfIdle()
+        #expect(!mock.sent.contains { $0.method == "session/prompt" })
+
+        admits = true
+        let deadline = ContinuousClock.now + .seconds(10)
+        while !mock.sent.contains(where: { $0.method == "session/prompt" }), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        #expect(mock.sent.contains { $0.method == "session/prompt" }, "the retry wake drains the queue")
+    }
+
     @Test("a resume that succeeds clears the Limited state and the queue drains")
     func usageLimitResumeSucceeds() async throws {
         let (runner, mock, session, _) = try mkRunner()

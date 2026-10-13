@@ -160,6 +160,9 @@ public final class ACPSessionRunner {
     private let canWrite: () -> Bool
     private let validateLease: () async -> Bool
     private let leaseFenceProvider: () -> ACPSessionLeaseFence?
+    /// Whether a new turn may start now. The manager installs its worktree
+    /// operation gate here when it registers the runner.
+    public var admitsNewTurns: () -> Bool = { true }
     private let onAuthRequired: ((ACPSessionRunner, String) async -> Void)?
     private let onPersist: (() -> Void)?
     /// Fires only when a message row was actually written (a normal
@@ -3259,6 +3262,12 @@ extension ACPSessionRunner {
         guard isConnectionCurrent() else { return }
         guard !stopped else { return }
         guard holdsLeaseForWrite() else { return }
+        // A queued or scheduled prompt must not start a turn in a worktree
+        // being deleted; retry once the claim is released or this runner stops.
+        guard admitsNewTurns() else {
+            if !session.queue.isEmpty { scheduleQueueWake(at: Date().addingTimeInterval(2)) }
+            return
+        }
         guard !backgroundCancellationInProgress,
               !nativeForkBarrierActive,
               !session.holdsPromptsForDelegatedSelection,

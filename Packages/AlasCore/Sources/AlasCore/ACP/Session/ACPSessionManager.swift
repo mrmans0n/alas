@@ -6405,6 +6405,14 @@ extension ACPSessionManager {
                 cwd: worktreePath
             )
             guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { return }
+            // Everything above can suspend, so the worktree operation gate is
+            // read again right before the agent process exists.
+            guard admitsNewWork() else {
+                session.lastError = Self.worktreeOperationInProgressMessage
+                session.agentState = .failed(Self.worktreeOperationInProgressMessage)
+                await releaseWriterLease(sessionId: sessionId, attempt: attempt)
+                return
+            }
             agentEnvironment = ACPProcessEnvironment.sanitizedForACP(extra: launchSpec.extraEnv)
             if let injectedConnectionFactory {
                 connection = try injectedConnectionFactory(launchSpec, host, worktreePath)
@@ -7741,6 +7749,7 @@ extension ACPSessionManager {
                 attachingConnections[sessionId] = nil
             }
             modelModeRestorationGates[sessionId] = ModelModeRestorationGate(token: UUID())
+            runner.admitsNewTurns = { [weak self] in self?.admitsNewWork() ?? false }
             runners[sessionId] = runner
             keepElicitationCoordinator = true
             attachSucceeded = true
