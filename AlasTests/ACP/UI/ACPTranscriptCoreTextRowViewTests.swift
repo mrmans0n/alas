@@ -215,6 +215,26 @@ import Testing
         #expect(element.accessibilitySelectedText() == "bold world\nSeco")
     }
 
+    @Test func textLineRangesFollowTheCurrentWrappingWithAStableElement() throws {
+        let view = row(.agent(markdown: String(repeating: "Words that wrap. ", count: 40), commentary: false))
+        _ = view.measuredHeight(forWidth: 800)
+        let element = try #require(view.accessibilityChildren()?.compactMap { $0 as? NSAccessibilityElement }.first)
+        let wide = element.accessibilityRange(forLine: 1)
+        _ = view.measuredHeight(forWidth: 300)
+        let narrowElement = try #require(view.accessibilityChildren()?.compactMap { $0 as? NSAccessibilityElement }.first)
+        #expect(narrowElement === element)
+        #expect(element.accessibilityRange(forLine: 1) != wide)
+    }
+
+    @Test func reconfiguringToOneLineContentDropsTheTextArea() {
+        let view = row(.agent(markdown: "Hi", commentary: false))
+        _ = view.measuredHeight(forWidth: 800)
+        #expect(view.accessibilityChildren()?.isEmpty == false)
+        view.configure(content: .thought(label: "Planning"), contentMaxWidth: 720, inToolCallGroup: false, theme: theme, typography: .default)
+        _ = view.measuredHeight(forWidth: 800)
+        #expect(view.accessibilityChildren()?.isEmpty ?? true)
+    }
+
     @Test func theActionsButtonIsAnAccessibilityChildOfTextRows() throws {
         var actions = ACPTranscriptNativeRows.Actions.testing(menu: true)
         actions.showsActionsPermanently = true

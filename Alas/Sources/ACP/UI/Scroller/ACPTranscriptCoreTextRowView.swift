@@ -133,6 +133,7 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
             textSelection = nil
             codeCopyFeedbackTask?.cancel()
             copiedCodeBlock = nil
+            textElement = nil
         }
         self.content = content
         self.contentMaxWidth = contentMaxWidth
@@ -1148,13 +1149,14 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
 
     private func textAccessibilityElements() -> [ACPTranscriptTextAccessibilityElement] {
         guard hasTextArea, let (markdown, origin) = markdown, !markdown.texts.isEmpty else { return [] }
+        let lines = markdown.lines.compactMap { line in
+            line.block.map { TextSelection.Position(block: $0, index: line.range.location) }
+        }
         let element: ACPTranscriptTextAccessibilityElement
         if let textElement, textElement.texts == markdown.texts {
             element = textElement
+            element.updateLines(lines)
         } else {
-            let lines = markdown.lines.compactMap { line in
-                line.block.map { TextSelection.Position(block: $0, index: line.range.location) }
-            }
             element = ACPTranscriptTextAccessibilityElement(texts: markdown.texts, lines: lines)
             element.setAccessibilityRole(.textArea)
             element.setAccessibilityParent(self)

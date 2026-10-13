@@ -13,8 +13,9 @@ final class ACPTranscriptTextAccessibilityElement: NSAccessibilityElement, @unch
     private let text: NSString
     /// Where each block starts in `text`.
     private let blockStarts: [Int]
-    /// Where each visual line starts in `text`.
-    private let lineStarts: [Int]
+    /// Where each visual line starts in `text`. Refreshed on relayout, so
+    /// the element keeps its identity while the wrapping changes.
+    private var lineStarts: [Int] = []
 
     /// `lines` are the (block, offset in block) starts of the drawn lines.
     init(texts: [String], lines: [Position]) {
@@ -27,10 +28,15 @@ final class ACPTranscriptTextAccessibilityElement: NSAccessibilityElement, @unch
         self.texts = texts
         text = texts.joined(separator: "\n") as NSString
         blockStarts = starts
-        var lineStarts = lines.compactMap { line in starts.indices.contains(line.block) ? starts[line.block] + line.index : nil }
-        if lineStarts.first != 0 { lineStarts.insert(0, at: 0) }
-        self.lineStarts = lineStarts
         super.init()
+        updateLines(lines)
+    }
+
+    /// Replaces the visual line starts after the text re-wrapped.
+    func updateLines(_ lines: [Position]) {
+        var starts = lines.compactMap { line in blockStarts.indices.contains(line.block) ? blockStarts[line.block] + line.index : nil }
+        if starts.first != 0 { starts.insert(0, at: 0) }
+        lineStarts = starts
     }
 
     override func accessibilityValue() -> Any? { text as String }
