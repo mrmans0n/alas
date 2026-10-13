@@ -64,7 +64,7 @@ struct AlasCoreContextTests {
         _ = try await reloaded.projects.refreshWorktrees(projectId: project.id)
         #expect(reloaded.projects.worktrees(projectId: project.id).map(\.id).contains(worktree.id))
 
-        let sessions = context.sessionManager(for: worktree)
+        let sessions = try context.sessionManager(for: worktree)
         defer { sessions.shutdownBackgroundTasks() }
         let session = sessions.createSession(agentId: "gemini")
         await sessions.attach(to: session.id, freshlyCreated: true)
@@ -147,5 +147,45 @@ struct AlasCoreContextTests {
             try await context.runScript(script, in: worktree)
         }
         #expect(context.runRecords.record(worktreeID: worktree.id, scriptKey: script.key) == running)
+    }
+
+    /// The headless context admits no run or agent session into a worktree
+    /// that is being created or deleted, not even through a cached manager.
+    @Test func nothingNewStartsInAWorktreeBeingDeleted() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-core-\(UUID().uuidString)")
+        let project = ProjectConfig(id: "p", name: "p", path: root.path, color: "blue", addedAt: Date())
+        let worktree = Worktree(
+            id: root.path, projectId: "p", name: "main", branch: "main", path: root,
+            status: .clean, lastActivity: Date()
+        )
+        let script = RunScript(
+            scope: .repo, fileName: "noop.sh", fileURL: root.appendingPathComponent("noop.sh"),
+            displayName: "Noop", onExit: .close, cwd: nil, isExecutable: false
+        )
+        let context = AlasCoreContext(
+            projects: ProjectsManager(persistedProjects: [project]),
+            runs: RunService(launch: { _, _ in 0 }),
+            runHistoryStore: nil,
+            makeSessionManager: { owner, worktree in
+                ACPSessionManager(
+                    worktreeId: worktree.id,
+                    worktreePath: worktree.path.path,
+                    owner: owner,
+                    persistence: ACPSessionPersistence(
+                        path: FileManager.default.temporaryDirectory.appendingPathComponent("alas-core-\(UUID().uuidString).sqlite").path
+                    )
+                )
+            }
+        )
+        _ = try context.sessionManager(for: worktree)
+        context.projects.setOperationState(for: worktree, state: .deleting(projectId: "p"))
+
+        await #expect(throws: AlasCoreContext.WorktreeOperationInProgress.self) {
+            try await context.runScript(script, in: worktree)
+        }
+        #expect(throws: AlasCoreContext.WorktreeOperationInProgress.self) {
+            try context.sessionManager(for: worktree)
+        }
+        #expect(context.runRecords.record(worktreeID: worktree.id, scriptKey: script.key) == nil)
     }
 }

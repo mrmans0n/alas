@@ -299,6 +299,10 @@ public final class ACPSessionManager: ChangeTracking {
     private var persistenceTail: Task<Void, Never>?
     private var persistenceGeneration = 0
     private var draftFlushHandoffSequence: UInt64 = 0
+    /// Whether new agent work may start for this manager's owner. Its
+    /// creator installs one that refuses while the worktree is being created
+    /// or deleted.
+    public var admitsNewWork: () -> Bool = { true }
     public private(set) var runners: [ACPSession.ID: ACPSessionRunner] = [:]
     private var elicitationCoordinators: [ACPSession.ID: ACPElicitationCoordinator] = [:]
     private var autoReconnectTasks: [ACPSession.ID: Task<Void, Never>] = [:] {
@@ -5905,6 +5909,9 @@ extension ACPSessionManager {
 // MARK: - Process lifecycle
 
 extension ACPSessionManager {
+    public static let worktreeOperationInProgressMessage =
+        "Wait for the current worktree operation to finish before starting sessions."
+
     /// Ensures the session has a live connection. Idempotent — if a runner
     /// already exists for this session, returns immediately. On cold start,
     /// runs the setup check; if ready, spawns the process, initialises ACP,
@@ -5912,6 +5919,12 @@ extension ACPSessionManager {
     @discardableResult
     public func attach(to sessionId: ACPSession.ID, freshlyCreated: Bool) async -> UUID? {
         await previousManagerDisposal?.value
+        // Every path that starts an agent ends here, so a worktree operation
+        // (a delete being confirmed or carried out) is enforced once.
+        guard admitsNewWork() else {
+            sessions[sessionId]?.lastError = Self.worktreeOperationInProgressMessage
+            return nil
+        }
         if let attempt = attachmentAttempts[sessionId] {
             let retryAfterDetachedAttachment = await withCheckedContinuation { continuation in
                 attempt.waiters.append(.init(
@@ -6392,6 +6405,14 @@ extension ACPSessionManager {
                 cwd: worktreePath
             )
             guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { return }
+            // Everything above can suspend, so the worktree operation gate is
+            // read again right before the agent process exists.
+            guard admitsNewWork() else {
+                session.lastError = Self.worktreeOperationInProgressMessage
+                session.agentState = .failed(Self.worktreeOperationInProgressMessage)
+                await releaseWriterLease(sessionId: sessionId, attempt: attempt)
+                return
+            }
             agentEnvironment = ACPProcessEnvironment.sanitizedForACP(extra: launchSpec.extraEnv)
             if let injectedConnectionFactory {
                 connection = try injectedConnectionFactory(launchSpec, host, worktreePath)
@@ -7728,6 +7749,7 @@ extension ACPSessionManager {
                 attachingConnections[sessionId] = nil
             }
             modelModeRestorationGates[sessionId] = ModelModeRestorationGate(token: UUID())
+            runner.admitsNewTurns = { [weak self] in self?.admitsNewWork() ?? false }
             runners[sessionId] = runner
             keepElicitationCoordinator = true
             attachSucceeded = true
@@ -9293,6 +9315,12 @@ extension ACPSessionManager {
         onDispatchRegistered: (@Sendable () -> Void)? = nil
     ) -> Bool {
         guard !isDisposed, !mergingForks.contains(sessionId), let session = sessions[sessionId] else { return false }
+        // Prompts into an attached session start turns without attaching, so
+        // the worktree operation gate is enforced here too.
+        guard admitsNewWork() else {
+            session.lastError = Self.worktreeOperationInProgressMessage
+            return false
+        }
         session.nextPromptActivity.send()
         if case .needsAuth = session.setupState {
             return false
