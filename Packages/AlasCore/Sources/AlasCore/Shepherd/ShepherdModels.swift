@@ -90,9 +90,13 @@ public struct ShepherdRecord: Codable, Equatable, Sendable {
     public var autoMerge: Bool
     public var phase: ShepherdPhase
     public var lastDispatchedFingerprint: ShepherdFingerprint?
+    /// When the last fix turn was dispatched; nil in records saved before
+    /// this field existed. Cleared with the fingerprint.
+    public var lastDispatchedAt: Date?
     public var fixAttempts: Int
     public var lastSeenHeadSHA: String?
-    /// Consecutive polls that saw `lastSeenHeadSHA` with no pending check,
+    /// Consecutive polls that saw `lastSeenHeadSHA` with no pending or
+    /// unknown check,
     /// capped at `ShepherdPolicy.requiredStablePolls`.
     public var stableHeadPolls: Int
     public var notifiedReadyHeadSHA: String?
@@ -119,6 +123,7 @@ public struct ShepherdRecord: Codable, Equatable, Sendable {
         self.autoMerge = autoMerge
         self.phase = .watching
         self.lastDispatchedFingerprint = nil
+        self.lastDispatchedAt = nil
         self.fixAttempts = 0
         self.lastSeenHeadSHA = nil
         self.stableHeadPolls = 0

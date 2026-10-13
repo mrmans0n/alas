@@ -29,9 +29,10 @@ enum ShepherdFixtures {
     }
 
     static func comment(
-        _ id: String, author: String, body: String, trust: ReviewAuthorTrust, viewer: Bool = false
+        _ id: String, author: String, body: String, trust: ReviewAuthorTrust,
+        viewer: Bool = false, createdAt: Date? = nil
     ) -> ReviewComment {
-        ReviewComment(id: id, author: author, body: body, url: nil, createdAt: nil,
+        ReviewComment(id: id, author: author, body: body, url: nil, createdAt: createdAt,
                       viewerCanUpdate: viewer, viewerCanDelete: viewer, isPending: false,
                       authorTrust: trust, viewerDidAuthor: viewer)
     }
@@ -57,6 +58,7 @@ enum ShepherdFixtures {
         mergeState: ReviewMergeState = .clean,
         checks: [ReviewCheck] = [ShepherdFixtures.check("build", .pass)],
         threads: [ReviewThread] = [],
+        threadsComplete: Bool = true,
         isMergeQueueEnabled: Bool = false,
         isInMergeQueue: Bool = false
     ) -> ReviewRequest {
@@ -65,7 +67,7 @@ enum ShepherdFixtures {
             remote: host, number: 7, title: "Fix login", url: host.reviewRequestURL(number: 7),
             state: state, isDraft: false, headRefName: "fix-login", baseRefName: "main",
             headSHA: head, reviewDecision: .approved, mergeState: mergeState,
-            checks: checks, threads: threads,
+            checks: checks, threads: threads, areThreadsComplete: threadsComplete,
             isMergeQueueEnabled: isMergeQueueEnabled, isInMergeQueue: isInMergeQueue
         )
     }
@@ -95,6 +97,7 @@ enum ShepherdFixtures {
         autoMerge: Bool = false,
         fixAttempts: Int = 0,
         lastDispatched: ShepherdFingerprint? = nil,
+        lastDispatchedAt: Date? = nil,
         lastSeenHead: String? = nil,
         stablePolls: Int = 0,
         notifiedReady: String? = nil
@@ -109,6 +112,7 @@ enum ShepherdFixtures {
         record.phase = phase
         record.fixAttempts = fixAttempts
         record.lastDispatchedFingerprint = lastDispatched
+        record.lastDispatchedAt = lastDispatchedAt
         record.lastSeenHeadSHA = lastSeenHead
         record.stableHeadPolls = stablePolls
         record.notifiedReadyHeadSHA = notifiedReady

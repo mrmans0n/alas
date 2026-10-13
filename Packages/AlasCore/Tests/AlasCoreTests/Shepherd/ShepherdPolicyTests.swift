@@ -26,6 +26,7 @@ private let stabilityCases: [ShepherdStabilityCase] = [
     .init(lastSeen: F.head, polls: 1, bucket: .pass, expected: 2),
     .init(lastSeen: F.head, polls: 2, bucket: .pass, expected: 2),
     .init(lastSeen: F.head, polls: 1, bucket: .pending, expected: 0),
+    .init(lastSeen: F.head, polls: 1, bucket: .unknown, expected: 0),
     .init(lastSeen: "0ld", polls: 1, bucket: .pass, expected: 1),
     .init(lastSeen: "0ld", polls: 1, bucket: .pending, expected: 0),
 ]
@@ -35,7 +36,19 @@ private let threadOnly = ShepherdFixRequest(hasConflict: false, failingChecks: [
 /// Same head comment as `F.trustedThread`, so only the reply differs.
 private let repliedThread = F.thread("PRRT_1", comments: [
     F.comment("PRRT_1-c1", author: "maintainer", body: "Please back off.", trust: .trusted),
-    F.comment("c2", author: "me", body: "Backoff already lives in RetryPolicy.", trust: .untrusted, viewer: true),
+    F.comment("c2", author: "me", body: "Backoff already lives in RetryPolicy.", trust: .untrusted,
+              viewer: true, createdAt: F.now),
+])
+private let staleReplyThread = F.thread("PRRT_1", comments: [
+    F.comment("PRRT_1-c1", author: "maintainer", body: "Please back off.", trust: .trusted),
+    F.comment("c2", author: "me", body: "Earlier answer.", trust: .untrusted,
+              viewer: true, createdAt: F.earlier.addingTimeInterval(-600)),
+])
+private let replyThenDriveByThread = F.thread("PRRT_1", comments: [
+    F.comment("PRRT_1-c1", author: "maintainer", body: "Please back off.", trust: .trusted),
+    F.comment("c2", author: "me", body: "Backoff already lives in RetryPolicy.", trust: .untrusted,
+              viewer: true, createdAt: F.now),
+    F.comment("c3", author: "passerby", body: "+1", trust: .untrusted),
 ])
 private let followUpThread = F.thread("PRRT_1", comments: [
     F.comment("PRRT_1-c1", author: "maintainer", body: "Please back off.", trust: .trusted),
@@ -124,13 +137,39 @@ private let policyCases: [ShepherdPolicyCase] = [
           action: .dispatchFix(failingOnly), phase: .fixing(dispatchedAt: F.now)),
     .init(testDescription: "a reply on a dispatched thread is progress",
           record: F.record(phase: .awaitingPush(turnEndedAt: F.earlier, pollsWithoutProgress: 0), fixAttempts: 1,
-                           lastDispatched: F.fingerprint(threadOnly)),
+                           lastDispatched: F.fingerprint(threadOnly), lastDispatchedAt: F.earlier),
           observation: F.observation(F.snapshot(F.request(threads: [repliedThread]))),
+          action: .wait, phase: .watching),
+    .init(testDescription: "a viewer reply older than the dispatch is not progress",
+          record: F.record(phase: .awaitingPush(turnEndedAt: F.earlier, pollsWithoutProgress: 0), fixAttempts: 1,
+                           lastDispatched: F.fingerprint(threadOnly), lastDispatchedAt: F.earlier),
+          observation: F.observation(F.snapshot(F.request(threads: [staleReplyThread]))),
+          action: .wait, phase: .awaitingPush(turnEndedAt: F.earlier, pollsWithoutProgress: 1)),
+    .init(testDescription: "a viewer reply followed by an untrusted comment is progress",
+          record: F.record(phase: .awaitingPush(turnEndedAt: F.earlier, pollsWithoutProgress: 0), fixAttempts: 1,
+                           lastDispatched: F.fingerprint(threadOnly), lastDispatchedAt: F.earlier),
+          observation: F.observation(F.snapshot(F.request(threads: [replyThenDriveByThread]))),
           action: .wait, phase: .watching),
     .init(testDescription: "awaitingPush with a pending check holds without counting",
           record: F.record(phase: .awaitingPush(turnEndedAt: F.earlier, pollsWithoutProgress: 1), fixAttempts: 1,
                            lastDispatched: F.fingerprint(failingOnly)),
           observation: F.observation(F.snapshot(F.request(checks: [F.failing, F.pending]))),
+          action: .wait, phase: .awaitingPush(turnEndedAt: F.earlier, pollsWithoutProgress: 1)),
+    .init(testDescription: "an unrelated pending check does not freeze a thread-only awaitingPush",
+          record: F.record(phase: .awaitingPush(turnEndedAt: F.earlier, pollsWithoutProgress: 2), fixAttempts: 1,
+                           lastDispatched: F.fingerprint(threadOnly)),
+          observation: F.observation(F.snapshot(F.request(checks: [F.pending], threads: [F.trustedThread]))),
+          action: .escalate(.noProgress), phase: .escalated(.noProgress)),
+    .init(testDescription: "awaitingPush escalates after the timeout while checks stay pending",
+          record: F.record(phase: .awaitingPush(turnEndedAt: F.now.addingTimeInterval(-ShepherdPolicy.awaitingPushTimeout),
+                                                pollsWithoutProgress: 0),
+                           fixAttempts: 1, lastDispatched: F.fingerprint(failingOnly)),
+          observation: F.observation(F.snapshot(F.request(checks: [F.failing, F.pending]))),
+          action: .escalate(.noProgress), phase: .escalated(.noProgress)),
+    .init(testDescription: "an incomplete thread list with missing threads is not progress",
+          record: F.record(phase: .awaitingPush(turnEndedAt: F.earlier, pollsWithoutProgress: 1), fixAttempts: 1,
+                           lastDispatched: F.fingerprint(threadOnly)),
+          observation: F.observation(F.snapshot(F.request(threads: [], threadsComplete: false))),
           action: .wait, phase: .awaitingPush(turnEndedAt: F.earlier, pollsWithoutProgress: 1)),
     .init(testDescription: "an untrusted non-viewer comment on a dispatched thread is not progress",
           record: F.record(phase: .awaitingPush(turnEndedAt: F.earlier, pollsWithoutProgress: 0), fixAttempts: 1,
@@ -152,6 +191,9 @@ private let policyCases: [ShepherdPolicyCase] = [
           action: .dispatchFix(threadOnly), phase: .fixing(dispatchedAt: F.now)),
     .init(testDescription: "failed check waits for pending checks",
           record: F.record(), observation: F.observation(F.snapshot(F.request(checks: [F.failing, F.pending]))),
+          action: .wait, phase: .watching),
+    .init(testDescription: "a failed check next to an unknown check does not dispatch",
+          record: F.record(), observation: F.observation(F.snapshot(F.request(checks: [F.failing, F.check("ci", .unknown)]))),
           action: .wait, phase: .watching),
     .init(testDescription: "untrusted thread is ignored",
           record: F.record(), observation: F.observation(F.snapshot(F.request(threads: [F.thread("PRRT_2", trust: .untrusted)]))),
@@ -238,17 +280,19 @@ private let policyCases: [ShepherdPolicyCase] = [
         #expect(decision.record.lastDispatchedFingerprint == ShepherdFingerprint(
             headSHA: F.head, hasConflict: false, failingCheckIDs: ["unit-tests"], threadIDs: []
         ))
+        #expect(decision.record.lastDispatchedAt == F.now)
         #expect(decision.record.updatedAt == F.now)
     }
 
     @Test("a recurring identical failure after a conclusive green redispatches")
     func recurringFailureRedispatches() {
         let green = ShepherdPolicy.decide(
-            F.record(fixAttempts: 1, lastDispatched: F.fingerprint(failingOnly)),
+            F.record(fixAttempts: 1, lastDispatched: F.fingerprint(failingOnly), lastDispatchedAt: F.earlier),
             F.observation(F.snapshot(F.request()))
         )
         #expect(green.record.fixAttempts == 0)
         #expect(green.record.lastDispatchedFingerprint == nil)
+        #expect(green.record.lastDispatchedAt == nil)
 
         let again = ShepherdPolicy.decide(green.record, F.observation(F.snapshot(F.request(checks: [F.failing]))))
         #expect(again.action == .dispatchFix(failingOnly))
