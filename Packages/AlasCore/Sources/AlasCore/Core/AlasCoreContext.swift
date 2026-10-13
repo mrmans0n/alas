@@ -286,6 +286,10 @@ public final class AlasCoreContext {
             resolveRepoHook: { [weak self] request in
                 guard let resolve = await self?.resolveWorkspaceRepoHook else { return nil }
                 return try await resolve(request)
+            },
+            memberAdmitsWork: { [weak self] projectID, path in
+                let worktreeID = Worktree.makeId(path: URL(fileURLWithPath: path))
+                return await self?.projects.operationState(forWorktreeId: worktreeID, projectId: projectID)?.blocksAdmission != true
             }
         )
         workspaceCheckoutCoordinator = coordinator

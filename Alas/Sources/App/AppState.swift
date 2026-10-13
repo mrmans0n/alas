@@ -4105,34 +4105,12 @@ final class AppState {
         return checkout
     }
 
+    /// The coordinator takes the member projects' mutation gates and refuses
+    /// while a member worktree is held by another operation.
     private func unarchiveWorkspaceCheckoutUnderProjectMutationGate(id: UUID) async throws -> WorkspaceCheckout {
-        guard let checkout = workspacesManager.checkout(id: id) else {
-            throw WorkspaceCheckoutCoordinatorError.checkoutMissing
-        }
-        let coordinator = workspaceCoordinator()
-        return try await ProjectMutationGate.shared.withMainActorMutations(
-            projectIDs: checkout.members.map(\.projectID)
-        ) {
-            guard let current = self.workspacesManager.checkout(id: id) else {
-                throw WorkspaceCheckoutCoordinatorError.checkoutMissing
-            }
-            let memberOperationIsInFlight = current.members.contains { member in
-                let worktreeID = Worktree.makeId(path: URL(fileURLWithPath: current.inAppWorktreePath(member.worktreePath)))
-                return Self.blocksWorktreeSessionAdmission(
-                    self.projectsManager.operationState(
-                        forWorktreeId: worktreeID,
-                        projectId: member.projectID
-                    )
-                )
-            }
-            guard !memberOperationIsInFlight else {
-                throw WorkspaceCheckoutCoordinatorError.operationInProgress
-            }
-
-            let unarchived = try await coordinator.unarchive(checkoutID: id)
-            await self.workspacesManager.refreshCheckoutSnapshots()
-            return unarchived
-        }
+        let unarchived = try await workspaceCoordinator().unarchive(checkoutID: id)
+        await workspacesManager.refreshCheckoutSnapshots()
+        return unarchived
     }
 
     func stopWorkspaceCheckoutAfterCurrentOperations(id: UUID) async throws {
@@ -4211,6 +4189,12 @@ final class AppState {
 
     func deleteWorkspaceCheckoutMember(checkoutID: UUID, memberID: UUID, confirmingRisks: Bool = false) async throws -> WorkspaceCheckout {
         guard workspacesManager.canMutate else { throw WorkspaceStoreError.recoveryRequired }
+        // Claimed before the dirty-buffer prompt and save, so nothing new is
+        // admitted into the member while it is being removed.
+        let claimed = try claimWorkspaceMembersForDeletion(
+            workspacesManager.checkout(id: checkoutID).flatMap { workspaceMemberWorktrees($0)[memberID] }.map { [$0] } ?? []
+        )
+        defer { releaseWorkspaceMemberDeletionClaims(claimed) }
         let resolvedWorktree = try await resolveDirtyBuffersBeforeWorkspaceMemberDeletion(checkoutID: checkoutID, memberID: memberID)
         guard workspacesManager.canMutate else { throw WorkspaceStoreError.recoveryRequired }
         if let resolvedWorktree {
@@ -4282,11 +4266,38 @@ final class AppState {
         return MemberReviewRollupBuilder(gg: WorkspaceCachedGGStackReader(stacksByWorktreeID: stacks))
     }
 
+    /// Claims each member worktree `.deleting`, all or none: a member another
+    /// operation holds refuses the deletion and releases what was claimed.
+    private func claimWorkspaceMembersForDeletion(_ worktrees: [Worktree]) throws -> [Worktree] {
+        var claimed: [Worktree] = []
+        for worktree in worktrees {
+            switch projectsManager.operationState(for: worktree) {
+            case nil, .deleteFailed:
+                projectsManager.setOperationState(for: worktree, state: .deleting(projectId: worktree.projectId))
+                claimed.append(worktree)
+            default:
+                releaseWorkspaceMemberDeletionClaims(claimed)
+                throw WorkspaceCheckoutCoordinatorError.operationInProgress
+            }
+        }
+        return claimed
+    }
+
+    /// Releases only claims still held by this deletion; one a checkout
+    /// recreated at the same path installed meanwhile is left alone.
+    private func releaseWorkspaceMemberDeletionClaims(_ worktrees: [Worktree]) {
+        for worktree in worktrees where projectsManager.operationState(for: worktree) == .deleting(projectId: worktree.projectId) {
+            projectsManager.setOperationState(for: worktree, state: nil)
+        }
+    }
+
     private func cleanupDeletedWorkspaceMemberRuntime(_ worktree: Worktree) async {
         cleanupWorktreeState(worktreeId: worktree.id)
-        projectsManager.setOperationState(for: worktree, state: nil)
         removePersistedGGWorktreeMode(projectId: worktree.projectId, worktreeId: worktree.id)
+        // The claim outlives the refresh: until then the removed row is still
+        // listed and must not admit new work.
         _ = try? await refreshProjectWorktrees(projectId: worktree.projectId)
+        releaseWorkspaceMemberDeletionClaims([worktree])
         if selectedWorktreeId == worktree.id {
             selectedWorktreeId = nil
         }
@@ -4471,6 +4482,9 @@ final class AppState {
             checkouts: workspacesManager.checkouts
         )
         let nearest = WorkspaceCheckoutDetailModel.nearestPeer(afterDeleting: id, orderedCheckoutIDs: ordered)
+        // Every member is claimed for the whole deletion, before any prompt.
+        let claimed = try claimWorkspaceMembersForDeletion(Array(workspaceMemberWorktrees(before).values))
+        defer { releaseWorkspaceMemberDeletionClaims(claimed) }
         var resolvedWorktrees: [UUID: Worktree] = [:]
         for member in before.members {
             if let worktree = try await resolveDirtyBuffersBeforeWorkspaceMemberDeletion(checkoutID: id, memberID: member.id) {
@@ -6725,13 +6739,28 @@ final class AppState {
                 onDiskDestructive: false
             ) {
             case .save:
+                // The prompt's run loop can let another operation claim the
+                // worktree; never overwrite that claim.
+                if let refusal = archiveRefusal(for: worktree) {
+                    showFileActionError(title: "Archive Failed", message: refusal)
+                    return
+                }
+                // Claimed while buffers save, so nothing new starts or adopts
+                // the worktree before it is hidden.
+                let claim = WorktreeOperationState.archiving(projectId: worktree.projectId)
+                projectsManager.setOperationState(for: worktree, state: claim)
                 Task { @MainActor in
+                    defer {
+                        if projectsManager.operationState(for: worktree) == claim {
+                            projectsManager.setOperationState(for: worktree, state: nil)
+                        }
+                    }
                     guard await saveDirtyBuffers(in: worktree) else { return }
-                    if let refusal = archiveRefusal(for: worktree) {
+                    if let refusal = archiveRefusal(for: worktree, holdingClaim: claim) {
                         showFileActionError(title: "Archive Failed", message: refusal)
                         return
                     }
-                    archiveWorktreeAfterSaving(worktree)
+                    archiveWorktreeAfterSaving(worktree, holdingClaim: claim)
                 }
                 return
             case .discard:
@@ -6746,8 +6775,8 @@ final class AppState {
 
     /// Why `worktree` cannot be archived now: another operation holds it, or
     /// an active Workspace checkout manages it.
-    func archiveRefusal(for worktree: Worktree) -> String? {
-        if projectsManager.operationState(for: worktree)?.blocksAdmission == true {
+    func archiveRefusal(for worktree: Worktree, holdingClaim claim: WorktreeOperationState? = nil) -> String? {
+        if let state = projectsManager.operationState(for: worktree), state != claim, state.blocksAdmission {
             return "Wait for the current worktree operation to finish before archiving."
         }
         guard workspacesManager.canMutate else {
@@ -6761,8 +6790,8 @@ final class AppState {
 
     /// Returns false, archiving nothing, when `archiveRefusal` objects.
     @discardableResult
-    private func archiveWorktreeAfterSaving(_ worktree: Worktree) -> Bool {
-        guard archiveRefusal(for: worktree) == nil else { return false }
+    private func archiveWorktreeAfterSaving(_ worktree: Worktree, holdingClaim claim: WorktreeOperationState? = nil) -> Bool {
+        guard archiveRefusal(for: worktree, holdingClaim: claim) == nil else { return false }
         // Snapshot index in the visible list BEFORE we mutate anything, so we
         // can pick a sensible follow-up selection.
         let siblingsBefore = projectsManager.visibleWorktrees(projectId: worktree.projectId)
