@@ -2580,7 +2580,7 @@ final class AppState {
             guard !isOfflineHost else { return }
             for worktree in projectsManager.visibleWorktrees(projectId: project.id) {
                 switch projectsManager.operationState(forWorktreeId: worktree.id, projectId: project.id) {
-                case .creating, .preparingDelete, .deleting, .createFailed:
+                case .creating, .preparingDelete, .deleting, .archiving, .createFailed:
                     continue
                 case nil, .launchFailed, .deleteFailed:
                     guard let worktreeGeneration = projectScanToken.worktreeGeneration(worktreeID: worktree.id)
@@ -2624,7 +2624,7 @@ final class AppState {
             let isOfflineHost = project.host.map { RemoteHostStatusStore.shared.offlineHosts.contains($0) } ?? false
             guard !isOfflineHost else { return }
             switch self.projectsManager.operationState(forWorktreeId: worktree.id, projectId: project.id) {
-            case .creating, .preparingDelete, .deleting, .createFailed:
+            case .creating, .preparingDelete, .deleting, .archiving, .createFailed:
                 return
             case nil, .launchFailed, .deleteFailed:
                 break
@@ -3021,7 +3021,7 @@ final class AppState {
                 // for them) but keep preflight and deleteFailed rows selectable.
                 return self.projectsManager.visibleWorktrees(projectId: projectId).filter {
                     switch self.projectsManager.operationState(forWorktreeId: $0.id, projectId: projectId) {
-                    case .creating, .deleting, .createFailed:
+                    case .creating, .deleting, .archiving, .createFailed:
                         return false
                     case nil, .preparingDelete, .launchFailed, .deleteFailed:
                         return true
@@ -6723,6 +6723,10 @@ final class AppState {
     /// it, marks the path hidden in `ProjectConfig`, and re-points selection if
     /// the archived worktree was selected. Does NOT touch git or disk.
     func archiveWorktree(_ worktree: Worktree) {
+        if let refusal = archiveRefusal(for: worktree) {
+            showFileActionError(title: "Archive Failed", message: refusal)
+            return
+        }
         let dirty = dirtyEditorTabIds(worktreeId: worktree.id)
         if !dirty.isEmpty {
             switch promptForDirtyBuffers(
@@ -6734,6 +6738,10 @@ final class AppState {
             case .save:
                 Task { @MainActor in
                     guard await saveDirtyBuffers(in: worktree) else { return }
+                    if let refusal = archiveRefusal(for: worktree) {
+                        showFileActionError(title: "Archive Failed", message: refusal)
+                        return
+                    }
                     archiveWorktreeAfterSaving(worktree)
                 }
                 return
@@ -6747,7 +6755,25 @@ final class AppState {
         archiveWorktreeAfterSaving(worktree)
     }
 
-    private func archiveWorktreeAfterSaving(_ worktree: Worktree) {
+    /// Why `worktree` cannot be archived now: another operation holds it, or
+    /// an active Workspace checkout manages it.
+    func archiveRefusal(for worktree: Worktree) -> String? {
+        if projectsManager.operationState(for: worktree)?.blocksAdmission == true {
+            return "Wait for the current worktree operation to finish before archiving."
+        }
+        guard workspacesManager.canMutate else {
+            return "Workspace Checkout ownership could not be verified. Try again once Workspace storage is available."
+        }
+        if let owner = worktreeCleanupWorkspaceOwners(for: worktree).first(where: { $0.state == .active }) {
+            return "This worktree is owned by Workspace checkout \u{201C}\(owner.name)\u{201D}. Archive it from the checkout instead."
+        }
+        return nil
+    }
+
+    /// Returns false, archiving nothing, when `archiveRefusal` objects.
+    @discardableResult
+    private func archiveWorktreeAfterSaving(_ worktree: Worktree) -> Bool {
+        guard archiveRefusal(for: worktree) == nil else { return false }
         // Snapshot index in the visible list BEFORE we mutate anything, so we
         // can pick a sensible follow-up selection.
         let siblingsBefore = projectsManager.visibleWorktrees(projectId: worktree.projectId)
@@ -6760,6 +6786,7 @@ final class AppState {
         )
         saveProjects()
         finishArchivingWorktree(worktree, removedIndex: removedIndex)
+        return true
     }
 
     private func finishArchivingWorktree(
@@ -6783,6 +6810,13 @@ final class AppState {
     /// Restore an archived worktree. Tabs/terminals are NOT recreated — they
     /// were torn down at archive time and the user re-opens what they need.
     func unarchiveWorktree(projectId: String, path: URL) {
+        guard projectsManager.operationState(forWorktreeId: Worktree.makeId(path: path), projectId: projectId)?.blocksAdmission != true else {
+            showFileActionError(
+                title: "Unarchive Failed",
+                message: "Wait for the current worktree operation to finish before unarchiving."
+            )
+            return
+        }
         projectsManager.setWorktreeHidden(projectId: projectId, path: path, hidden: false)
         saveProjects()
         if let restored = projectsManager.visibleWorktrees(projectId: projectId).first(where: {
@@ -7012,11 +7046,11 @@ final class AppState {
                 continue
             }
 
-            archiveWorktreeAfterSaving(worktree)
+            let archived = archiveWorktreeAfterSaving(worktree)
             results.append(WorktreeBatchResult(
                 worktreeId: worktree.id,
                 branch: worktree.branch,
-                outcome: .archived
+                outcome: archived ? .archived : .skipped(reason: archiveRefusal(for: worktree) ?? "Could not archive")
             ))
         }
         return results
@@ -11659,8 +11693,12 @@ final class AppState {
                 ))
                 continue
             }
-            archiveWorktreeAfterSaving(worktree)
-            results.append(.init(worktreeId: worktree.id, branch: worktree.branch, outcome: .archived))
+            let archived = archiveWorktreeAfterSaving(worktree)
+            results.append(.init(
+                worktreeId: worktree.id,
+                branch: worktree.branch,
+                outcome: archived ? .archived : .skipped(reason: archiveRefusal(for: worktree) ?? "Could not archive")
+            ))
         }
         return results
     }
@@ -11792,6 +11830,8 @@ final class AppState {
         switch projectsManager.operationState(for: worktree) {
         case .deleting:
             return .ok
+        case .archiving:
+            return .error("the worktree is being archived")
         case .preparingDelete:
             // A delete confirmation this call does not own is already on
             // screen for this worktree (`NSAlert.runModal()`'s nested run
@@ -15398,7 +15438,7 @@ extension AppState: RemoteSessionsProvider {
         for project in projects {
             for worktree in projectsManager.visibleWorktrees(projectId: project.id) {
                 switch projectsManager.operationState(forWorktreeId: worktree.id, projectId: project.id) {
-                case .creating, .preparingDelete, .deleting, .createFailed:
+                case .creating, .preparingDelete, .deleting, .archiving, .createFailed:
                     continue
                 case nil, .launchFailed, .deleteFailed:
                     out.append(await remoteWorktreeOption(project: project, worktree: worktree))
@@ -15472,7 +15512,7 @@ extension AppState: RemoteSessionsProvider {
             return .failure(Self.checkpointRecoveryBlocksACPMessage)
         }
         switch projectsManager.operationState(forWorktreeId: worktreeId, projectId: resolved.project.id) {
-        case .creating, .preparingDelete, .deleting, .createFailed:
+        case .creating, .preparingDelete, .deleting, .archiving, .createFailed:
             return .failure("Worktree is no longer available.")
         case nil, .launchFailed, .deleteFailed:
             break
