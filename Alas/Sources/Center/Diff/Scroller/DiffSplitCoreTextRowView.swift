@@ -93,6 +93,8 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
     static let headerButtonSize = NSSize(width: 22, height: 20)
     static let headerButtonSpacing: CGFloat = 8
     static let hunkCornerRadius: CGFloat = 7
+    /// How far an expansion pill reaches past its text, as `expandPillRect` pads it.
+    static let expansionPillPadding: CGFloat = 12
     static let cardCornerRadius: CGFloat = 8
 
     var representedRowID: String?
@@ -1023,6 +1025,13 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
                     if end.row != start.row { rect = rect.union(textRect(side, row: end.row, from: 0, to: end.index)) }
                     return window.convertToScreen(convert(rect, to: nil))
                 }
+                element.selection = { [weak self] in
+                    guard let self, let textSelection, textSelection.side == side else { return nil }
+                    return (textSelection.start, textSelection.end)
+                }
+                element.select = { [weak self] start, end in
+                    self?.textSelection = .init(side: side, anchor: start, focus: end)
+                }
                 codeElements[side] = element
                 return element
             }()
@@ -1802,7 +1811,10 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
             side.code.append(ctLine)
             side.attributed.append(line)
             side.codeStrings.append(line.string)
-            side.widest = max(side.widest, CGFloat(CTLineGetTypographicBounds(ctLine, nil, nil, nil)))
+            // Expansion rows draw indented, inside a pill that pads past the text.
+            let extent = CGFloat(CTLineGetTypographicBounds(ctLine, nil, nil, nil)) + (side.indents[side.code.count - 1] ?? 0)
+                + (metadata.contextExpansionActions.isEmpty ? 0 : Self.expansionPillPadding)
+            side.widest = max(side.widest, extent)
         }
         let labels = gutter.string.components(separatedBy: "\n")
         side.gutterWidth = DiffPaneLineNumberGutterGeometry.thickness(labels: labels)
@@ -1974,6 +1986,34 @@ final class CodeAccessibilityElement: NSAccessibilityElement, @unchecked Sendabl
     /// The screen rect of the text from one (line, offset) to another, set
     /// by the row that draws it.
     var frameForLines: (@MainActor @Sendable (_ start: (row: Int, index: Int), _ end: (row: Int, index: Int)) -> NSRect?)?
+
+    typealias Position = DiffSplitCoreTextRowView.TextSelection.Position
+    /// The row's selection on this side, and a way to replace it, so
+    /// assistive apps can read and set it as in a text view.
+    var selection: (@MainActor @Sendable () -> (start: Position, end: Position)?)?
+    var select: (@MainActor @Sendable (_ start: Position, _ end: Position) -> Void)?
+
+    private func position(at offset: Int) -> Position {
+        let offset = min(max(0, offset), text.length)
+        let row = accessibilityLine(for: offset)
+        return Position(row: row, index: offset - lineStarts[row])
+    }
+
+    override func accessibilitySelectedTextRange() -> NSRange {
+        guard let selection, let span = MainActor.assumeIsolated({ selection() }) else { return NSRange(location: 0, length: 0) }
+        let start = lineStarts[span.start.row] + span.start.index
+        return NSRange(location: start, length: lineStarts[span.end.row] + span.end.index - start)
+    }
+
+    override func setAccessibilitySelectedTextRange(_ range: NSRange) {
+        guard let select, range.location != NSNotFound else { return }
+        let start = position(at: range.location), end = position(at: NSMaxRange(range))
+        MainActor.assumeIsolated { select(start, end) }
+    }
+
+    override func accessibilitySelectedText() -> String? {
+        accessibilityString(for: accessibilitySelectedTextRange())
+    }
 
     override func accessibilityFrame(for range: NSRange) -> NSRect {
         guard range.location != NSNotFound, range.location <= text.length else { return accessibilityFrame() }

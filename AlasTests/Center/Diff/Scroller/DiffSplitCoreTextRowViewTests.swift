@@ -367,6 +367,16 @@ import Testing
         #expect(all.contains(second.insetBy(dx: 0.5, dy: 0.5)))
     }
 
+    @Test func accessibilitySelectionIsTheRowsSelection() throws {
+        let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 200))
+        view.configure(result: result(old: [], new: ["let a = 1", "let b = 2"]), font: font, theme: theme)
+        let new = try #require(view.codeAccessibilityElements().last)
+        new.setAccessibilitySelectedTextRange(NSRange(location: 4, length: 11))
+        #expect(view.selectedText() == "a = 1\nlet b")
+        #expect(new.accessibilitySelectedTextRange() == NSRange(location: 4, length: 11))
+        #expect(new.accessibilitySelectedText() == "a = 1\nlet b")
+    }
+
     @Test func accessibilityHitTestingReachesTheVisibleScroller() throws {
         let (view, window) = mountedRow(newLine: String(repeating: "w", count: 300))
         defer { window.close() }
@@ -401,6 +411,18 @@ import Testing
             contextExpansion: DiffContextExpansionRow(key: expansionKey, boundary: .above, remainingLineCount: 20)
         ), at: 0)
         return DiffPaneTextDocumentBuilder.buildSplit(rows: rows, fileExtension: "swift", font: font, showWhitespace: false, theme: theme)
+    }
+
+    @Test func scrollableWidthCoversAnExpansionRowsIndentAndPill() throws {
+        let split = expandableSplit()
+        let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 200))
+        view.configure(result: split, font: font, theme: theme)
+        let row = try #require(split.newCode.lines.first { !$0.contextExpansionActions.isEmpty })
+        let text = split.newCode.attributedString.attributedSubstring(from: row.range)
+        let style = text.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+        let indent = style?.firstLineHeadIndent ?? 0
+        let glyphs = CGFloat(CTLineGetTypographicBounds(CTLineCreateWithAttributedString(text), nil, nil, nil))
+        #expect(view.widestLineWidth(side: .new) >= glyphs + indent + 12)
     }
 
     @Test func draggingDownTheGutterSelectsThoseLinesOnThatSide() throws {
