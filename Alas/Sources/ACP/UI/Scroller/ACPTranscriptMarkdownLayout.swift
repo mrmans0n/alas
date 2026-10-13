@@ -9,10 +9,38 @@ struct ACPTranscriptMarkdownLayout {
     struct Line {
         let line: CTLine
         /// Top-left of the line's box, in a flipped space.
-        let origin: CGPoint
+        var origin: CGPoint
         let height: CGFloat
         /// Underlined runs, which `CTLineDraw` leaves undrawn.
         var underlines: [Underline] = []
+        /// The index into `texts` of the block this line shows, or nil for
+        /// drawn-only text such as a code block's language label.
+        var block: Int?
+        /// The line's range in its block's text, including the whitespace
+        /// it hangs past its end.
+        var range = NSRange(location: 0, length: 0)
+        /// How much of `range` the line draws, without that whitespace.
+        var visibleLength = 0
+    }
+
+    /// A code block's "Copy" button in its header.
+    struct CodeBlock {
+        let code: String
+        /// The button's right edge, top, and height; its width follows its label.
+        let maxX: CGFloat
+        let minY: CGFloat
+        let height: CGFloat
+    }
+
+    /// The "Copy" and "Copied" labels and colors every code block's button shares.
+    struct CopyButtonStyle {
+        let copy: CTLine
+        let copied: CTLine
+        let ascent: CGFloat
+        let fill: NSColor
+        let copiedFill: NSColor
+        let stroke: NSColor
+        let copiedStroke: NSColor
     }
 
     /// A rule under one run, relative to its line's origin and baseline.
@@ -48,10 +76,20 @@ struct ACPTranscriptMarkdownLayout {
     static let codeEmptyHeaderContentHeight: CGFloat = 1
     static let codeLineSpacing: CGFloat = 2
     static let codeLabelTracking: CGFloat = 0.4
+    static let copyButtonHorizontalPadding: CGFloat = 6
+    static let copyButtonVerticalPadding: CGFloat = 2
+    static let copyButtonCornerRadius: CGFloat = 4
+    static let copyButtonStrokeWidth: CGFloat = 0.5
 
+    let width: CGFloat
     let height: CGFloat
     let lines: [Line]
     let backgrounds: [Background]
+    /// The selectable text of each block, in order: rendered inline markdown
+    /// (no backticks or asterisks) and code bodies.
+    let texts: [String]
+    let codeBlocks: [CodeBlock]
+    let copyButtonStyle: CopyButtonStyle
 
     /// Whether every block can be drawn here. Tables, images, Mermaid diagrams
     /// and task lists need views of their own.
@@ -72,7 +110,18 @@ struct ACPTranscriptMarkdownLayout {
             if index > 0 { builder.y += blockSpacing }
             builder.add(block)
         }
-        return ACPTranscriptMarkdownLayout(height: builder.y, lines: builder.lines, backgrounds: builder.backgrounds)
+        return ACPTranscriptMarkdownLayout(
+            width: max(1, width), height: builder.y, lines: builder.lines, backgrounds: builder.backgrounds,
+            texts: builder.texts, codeBlocks: builder.codeBlocks, copyButtonStyle: builder.copyButtonStyle
+        )
+    }
+
+    /// Code block `index`'s "Copy" button, sized for the label it shows.
+    func copyButtonRect(_ index: Int, copied: Bool) -> CGRect {
+        let block = codeBlocks[index]
+        let label = copied ? copyButtonStyle.copied : copyButtonStyle.copy
+        let width = ceil(CGFloat(CTLineGetTypographicBounds(label, nil, nil, nil))) + 2 * Self.copyButtonHorizontalPadding
+        return CGRect(x: block.maxX - width, y: block.minY, width: width, height: block.height)
     }
 
     /// The lines whose boxes overlap `rect` vertically, including ones it only cuts.
@@ -120,18 +169,42 @@ struct ACPTranscriptMarkdownLayout {
         var y: CGFloat = 0
         var lines: [Line] = []
         var backgrounds: [Background] = []
+        var texts: [String] = []
+        var codeBlocks: [CodeBlock] = []
+        let copyButtonStyle: CopyButtonStyle
+
+        init(width: CGFloat, theme: Theme, typography: ACPChatTypography) {
+            self.width = width
+            self.theme = theme
+            self.typography = typography
+            // As `CodeBlockView.copyButton`, without its icon.
+            let font = NSFont.systemFont(ofSize: typography.labelSize, weight: .medium)
+            func label(_ string: String, _ color: NSColor) -> CTLine {
+                CTLineCreateWithAttributedString(NSAttributedString(string: string, attributes: [.font: font, .foregroundColor: color]))
+            }
+            let add = theme.nsColor("add")
+            copyButtonStyle = CopyButtonStyle(
+                copy: label("Copy", theme.nsColor("fg-muted")),
+                copied: label("Copied", add),
+                ascent: font.ascender,
+                fill: theme.nsColor("bg-3").withAlphaComponent(0.6),
+                copiedFill: theme.nsColor("bg-3").withAlphaComponent(0.4),
+                stroke: theme.nsColor("line"),
+                copiedStroke: add.withAlphaComponent(0.5)
+            )
+        }
 
         mutating func add(_ block: ACPMarkdownParser.Block) {
             switch block {
             case .heading(let level, let text):
                 y += level == 1 ? ACPTranscriptMarkdownLayout.h1TopPadding : ACPTranscriptMarkdownLayout.headingTopPadding
-                addText(inline(text, role: .heading(level: level)), x: 0, width: width)
+                addBlockText(inline(text, role: .heading(level: level)), x: 0, width: width)
             case .paragraph(let text):
-                addText(inline(text, role: .body), x: 0, width: width)
+                addBlockText(inline(text, role: .body), x: 0, width: width)
             case .quote(let text):
                 let top = y
                 let x = ACPTranscriptMarkdownLayout.quoteBarWidth + ACPTranscriptMarkdownLayout.quoteBarGap
-                addText(inline(text, role: .quote), x: x, width: max(1, width - x))
+                addBlockText(inline(text, role: .quote), x: x, width: max(1, width - x))
                 backgrounds.append(Background(
                     rect: CGRect(x: 0, y: top, width: ACPTranscriptMarkdownLayout.quoteBarWidth, height: y - top),
                     color: theme.nsColor("accent").withAlphaComponent(ACPTranscriptMarkdownLayout.quoteBarAlpha),
@@ -182,25 +255,38 @@ struct ACPTranscriptMarkdownLayout {
             backgrounds.append(Background(rect: .zero, color: .clear, cornerRadius: 0))
             let backgroundIndex = backgrounds.count - 1
 
+            // The header is as tall as the taller of its label and the button.
+            let buttonFont = NSFont.systemFont(ofSize: typography.labelSize, weight: .medium)
+            let buttonHeight = TextKitLineHeight.of(buttonFont) + 2 * L.copyButtonVerticalPadding
+            y += L.codeHeaderVerticalPadding
+            let headerTop = y
+            var headerHeight = max(L.codeEmptyHeaderContentHeight, buttonHeight)
             if let language, !language.isEmpty {
                 let label = NSAttributedString(string: language.uppercased(), attributes: [
                     .font: typography.appKitFont(size: typography.labelSize, traits: .boldFontMask),
                     .foregroundColor: theme.nsColor("fg-faint"),
                     .kern: L.codeLabelTracking,
                 ])
-                y += L.codeHeaderVerticalPadding
+                let first = lines.count
                 addText(label, x: L.codeHeaderHorizontalPadding, width: max(1, width - 2 * L.codeHeaderHorizontalPadding), lineSpacing: 0)
-                y += L.codeHeaderVerticalPadding
-            } else {
-                y += L.codeEmptyHeaderContentHeight + 2 * L.codeHeaderVerticalPadding
+                let labelHeight = y - headerTop
+                headerHeight = max(labelHeight, buttonHeight)
+                for index in first..<lines.count {
+                    lines[index].origin.y += (headerHeight - labelHeight) / 2
+                }
             }
+            codeBlocks.append(CodeBlock(
+                code: body, maxX: width - L.codeHeaderHorizontalPadding,
+                minY: headerTop + (headerHeight - buttonHeight) / 2, height: buttonHeight
+            ))
+            y = headerTop + headerHeight + L.codeHeaderVerticalPadding
 
             y += L.codeBodyVerticalPadding
             let code = NSAttributedString(string: body, attributes: [
                 .font: CenterTypography.resolveCodeFont(family: typography.fontFamily, size: typography.codeSize),
                 .foregroundColor: theme.nsColor("fg"),
             ])
-            addText(
+            addBlockText(
                 code, x: L.codeBodyHorizontalPadding, width: max(1, width - 2 * L.codeBodyHorizontalPadding),
                 lineSpacing: L.codeLineSpacing
             )
@@ -213,8 +299,16 @@ struct ACPTranscriptMarkdownLayout {
             )
         }
 
+        /// Adds a selectable block: its lines map back into `texts`.
+        private mutating func addBlockText(_ text: NSAttributedString, x: CGFloat, width: CGFloat, lineSpacing: CGFloat = 0) {
+            texts.append(text.string)
+            addText(text, x: x, width: width, lineSpacing: lineSpacing, block: texts.count - 1)
+        }
+
         /// Breaks `text` to `width` and stacks its lines from the current `y`.
-        private mutating func addText(_ text: NSAttributedString, x: CGFloat, width: CGFloat, lineSpacing: CGFloat = 0) {
+        private mutating func addText(
+            _ text: NSAttributedString, x: CGFloat, width: CGFloat, lineSpacing: CGFloat = 0, block: Int? = nil
+        ) {
             guard text.length > 0 else { return }
             let typesetter = CTTypesetterCreateWithAttributedString(text)
             var start = 0
@@ -233,7 +327,10 @@ struct ACPTranscriptMarkdownLayout {
                 CTLineGetTypographicBounds(line, &ascent, &descent, nil)
                 let measured = max(Self.lineHeight(of: text, range: NSRange(location: start, length: count)), ascent + descent)
                 let height = (measured > 0 ? measured : typography.paragraphSize) + lineSpacing
-                lines.append(Line(line: line, origin: CGPoint(x: x, y: y), height: height, underlines: Self.underlines(of: line)))
+                lines.append(Line(
+                    line: line, origin: CGPoint(x: x, y: y), height: height, underlines: Self.underlines(of: line),
+                    block: block, range: NSRange(location: start, length: count), visibleLength: visible
+                ))
                 y += height
                 start += count
             }

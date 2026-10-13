@@ -164,7 +164,44 @@ import Testing
             if dragDistance > 0 { send(.leftMouseDragged, at: end) }
             send(.leftMouseUp, at: start)
             #expect(opened == (opens ? [URL(string: "https://example.com")!] : []))
+            // A drag that starts on a link selects text instead.
+            #expect(view.selectedText().isEmpty == opens)
         }
+    }
+
+    @Test func draggingAcrossBlocksCopiesTheSourceText() throws {
+        let view = row(.agent(markdown: "First paragraph.\n\nSecond `code` here.\n\n```swift\nlet x = 1\n```", commentary: false))
+        _ = view.measuredHeight(forWidth: 800)
+        view.selectAllForTesting()
+        // Rendered text, as SwiftUI's selection copies it: no backticks, no
+        // code-block language label or "Copy".
+        #expect(view.selectedText() == "First paragraph.\nSecond code here.\nlet x = 1")
+    }
+
+    @Test func codeBlockCopyCopiesOnlyTheCodeAndShowsCopiedUntilTheDelayEnds() async throws {
+        let view = row(.agent(markdown: "```swift\nlet x = 1\n```", commentary: false))
+        _ = view.measuredHeight(forWidth: 800)
+        let (wait, release) = AsyncStream<Void>.makeStream()
+        view.codeCopyFeedbackWait = { for await _ in wait { break } }
+        let pasteboard = NSPasteboard(name: .init("acp-native-copy-\(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+        #expect(view.clickCodeCopyForTesting(block: 0, pasteboard: pasteboard))
+        #expect(pasteboard.string(forType: .string) == "let x = 1")
+        #expect(view.copiedCodeBlockForTesting == 0)
+        release.yield()
+        await view.codeCopyFeedbackTaskForTesting?.value
+        #expect(view.copiedCodeBlockForTesting == nil)
+    }
+
+    @Test(arguments: [true, false])
+    func reconfiguringKeepsTheSelectionOnlyForTheSameContent(sameContent: Bool) {
+        let content = ACPTranscriptCoreTextRowView.Content.agent(markdown: "Keep me", commentary: false)
+        let view = row(content)
+        _ = view.measuredHeight(forWidth: 800)
+        view.selectAllForTesting()
+        view.configure(content: sameContent ? content : .agent(markdown: "Other", commentary: false), contentMaxWidth: 720,
+                       inToolCallGroup: false, theme: theme, typography: .default, actions: .testing(menu: false))
+        #expect(view.selectedText().isEmpty == !sameContent)
     }
 }
 

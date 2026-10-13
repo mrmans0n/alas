@@ -6,7 +6,8 @@ import CoreText
 /// SwiftUI host: agent prose, commentary, a collapsed thought, a collapsed
 /// tool call, a tool-call group header, and the user bubble. Hover reveals
 /// the message actions button and a tool row's timestamp; clicking a tool
-/// row, thought, or group header expands it. There is no selection or
+/// row, thought, or group header expands it. Agent and user text can be
+/// selected and copied, and code blocks have a "Copy" button. There is no
 /// accessibility yet.
 @MainActor
 final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
@@ -97,7 +98,8 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
             resetHover()
             armedHitTarget = nil
             pressOrigin = nil
-            isPointerOverLink = false
+            isSelectingText = false
+            pointerCursor = .arrow
         } else {
             updateTileScale()
             needsDisplay = true
@@ -126,6 +128,12 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
         let sizeChanged = content != self.content || contentMaxWidth != self.contentMaxWidth
             || inToolCallGroup != self.inToolCallGroup || typography != self.typography
         guard sizeChanged || theme != self.theme else { return }
+        if content != self.content {
+            // Offsets into the old text mean nothing in the new.
+            textSelection = nil
+            codeCopyFeedbackTask?.cancel()
+            copiedCodeBlock = nil
+        }
         self.content = content
         self.contentMaxWidth = contentMaxWidth
         self.inToolCallGroup = inToolCallGroup
@@ -581,6 +589,7 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
             }
         }
         let lines = markdown.linesIntersecting(local)
+        drawTextSelection(markdown, origin: origin, lines: lines, context: context)
         for index in lines.indices {
             let line = markdown.lines[index]
             context.textPosition = CGPoint(x: origin.x + line.origin.x, y: origin.y + line.origin.y + ascents[index])
@@ -593,6 +602,67 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
                     width: underline.width, height: underline.thickness
                 ).fill()
             }
+        }
+        drawCopyButtons(markdown, origin: origin, dirtyRect: dirtyRect, context: context)
+    }
+
+    /// The selected text's background, in the system selection color, dimmed
+    /// when this row is not the focused view, as `NSTextView` draws it.
+    private func drawTextSelection(
+        _ markdown: ACPTranscriptMarkdownLayout, origin: CGPoint, lines: ArraySlice<ACPTranscriptMarkdownLayout.Line>,
+        context: CGContext
+    ) {
+        guard let selection = textSelection, !selection.isEmpty else { return }
+        let focused = window?.firstResponder === self && window?.isKeyWindow == true
+        var color = CGColor.clear
+        // System colors are dynamic; resolve against the row's appearance.
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            color = (focused ? NSColor.selectedTextBackgroundColor : NSColor.unemphasizedSelectedTextBackgroundColor).cgColor
+        }
+        context.setFillColor(color)
+        // A selection running past a line's end fills to the text's edge;
+        // the bubble's edge is its widest line, not the width it wraps to.
+        var edge = markdown.width
+        if case .user = content { edge = Self.usedWidth(of: markdown) }
+        for line in lines {
+            guard let block = line.block,
+                  let span = selection.span(inBlock: block, length: (markdown.texts[block] as NSString).length)
+            else { continue }
+            let visibleEnd = line.range.location + line.visibleLength
+            let breakPosition = TextSelection.Position(block: block, index: visibleEnd)
+            let runsOn = selection.start <= breakPosition && selection.end > breakPosition
+            let lower = max(span.lowerBound, line.range.location)
+            let upper = min(span.upperBound, visibleEnd)
+            guard span.lowerBound <= visibleEnd, span.upperBound >= line.range.location, lower < upper || runsOn else { continue }
+            let minX = line.visibleLength > 0 ? CTLineGetOffsetForStringIndex(line.line, lower, nil) : 0
+            let maxX = runsOn ? edge - line.origin.x : CTLineGetOffsetForStringIndex(line.line, upper, nil)
+            context.fill(CGRect(
+                x: origin.x + line.origin.x + minX, y: origin.y + line.origin.y, width: max(0, maxX - minX), height: line.height
+            ))
+        }
+    }
+
+    /// Each code block's "Copy" button, or "Copied" just after a click.
+    private func drawCopyButtons(_ markdown: ACPTranscriptMarkdownLayout, origin: CGPoint, dirtyRect: CGRect, context: CGContext) {
+        typealias L = ACPTranscriptMarkdownLayout
+        let style = markdown.copyButtonStyle
+        for index in markdown.codeBlocks.indices {
+            let copied = copiedCodeBlock == index
+            let rect = markdown.copyButtonRect(index, copied: copied).offsetBy(dx: origin.x, dy: origin.y)
+            guard rect.intersects(dirtyRect) else { continue }
+            (copied ? style.copiedFill : style.fill).setFill()
+            NSBezierPath(roundedRect: rect, xRadius: L.copyButtonCornerRadius, yRadius: L.copyButtonCornerRadius).fill()
+            let inset = L.copyButtonStrokeWidth / 2
+            let border = NSBezierPath(
+                roundedRect: rect.insetBy(dx: inset, dy: inset), xRadius: L.copyButtonCornerRadius, yRadius: L.copyButtonCornerRadius
+            )
+            border.lineWidth = L.copyButtonStrokeWidth
+            (copied ? style.copiedStroke : style.stroke).setStroke()
+            border.stroke()
+            context.textPosition = CGPoint(
+                x: rect.minX + L.copyButtonHorizontalPadding, y: rect.minY + L.copyButtonVerticalPadding + style.ascent
+            )
+            CTLineDraw(copied ? style.copied : style.copy, context)
         }
     }
 
@@ -639,6 +709,8 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
     private enum HitTarget: Equatable {
         case expansionToggle
         case link(URL)
+        /// The "Copy" button of the code block at this index.
+        case codeCopy(Int)
     }
 
     private var armedHitTarget: HitTarget?
@@ -646,7 +718,31 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
     private var pressOrigin: NSPoint?
     /// Farther than this from the press, a drag is not a click.
     private static let clickSlop: CGFloat = 3
-    private var isPointerOverLink = false
+
+    private enum PointerCursor {
+        case arrow, pointingHand, iBeam
+    }
+
+    /// The cursor this row last set; cursors are set on moves rather than
+    /// through cursor rects, as the diff rows do.
+    private var pointerCursor = PointerCursor.arrow
+
+    /// The row's markdown and its origin, for the rows that have text.
+    private var markdown: (layout: ACPTranscriptMarkdownLayout, origin: CGPoint)? {
+        let width = bounds.width > 0 ? bounds.width : lastMeasuredWidth ?? 0
+        guard width > 0 else { return nil }
+        for case .markdown(let markdown, let origin, _) in layout(forWidth: width).items {
+            return (markdown, origin)
+        }
+        return nil
+    }
+
+    private func codeCopyIndex(at point: NSPoint) -> Int? {
+        guard let (markdown, origin) = markdown else { return nil }
+        return markdown.codeBlocks.indices.first { index in
+            markdown.copyButtonRect(index, copied: copiedCodeBlock == index).offsetBy(dx: origin.x, dy: origin.y).contains(point)
+        }
+    }
 
     private func link(at point: NSPoint) -> URL? {
         guard bounds.width > 0 else { return nil }
@@ -658,6 +754,7 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
 
     private func hitTarget(at point: NSPoint) -> HitTarget? {
         guard bounds.width > 0 else { return nil }
+        if let index = codeCopyIndex(at: point) { return .codeCopy(index) }
         if let url = link(at: point) { return .link(url) }
         guard actions.toggleExpanded != nil,
               layout(forWidth: bounds.width).toggleRect?.contains(point) == true
@@ -672,28 +769,57 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
             pressOrigin = point
             return
         }
+        if let position = textPosition(at: point, inside: true) {
+            window?.makeFirstResponder(self)
+            beginTextSelection(
+                at: position, point: point, clickCount: event.clickCount, extending: event.modifierFlags.contains(.shift)
+            )
+            return
+        }
         super.mouseDown(with: event)
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard case .link = armedHitTarget, let pressOrigin else { return super.mouseDragged(with: event) }
         let point = convert(event.locationInWindow, from: nil)
-        if hypot(point.x - pressOrigin.x, point.y - pressOrigin.y) > Self.clickSlop {
-            // A drag from a link is not a click. Text selection will take it
-            // over from here; until then it is ignored.
+        if case .link = armedHitTarget, let pressOrigin {
+            guard hypot(point.x - pressOrigin.x, point.y - pressOrigin.y) > Self.clickSlop else { return }
+            // A drag from a link is not a click: it selects text from where it began.
             armedHitTarget = nil
             self.pressOrigin = nil
+            guard let start = textPosition(at: pressOrigin) else { return }
+            window?.makeFirstResponder(self)
+            beginTextSelection(at: start, point: pressOrigin, clickCount: 1, extending: false)
+        }
+        guard isSelectingText else { return super.mouseDragged(with: event) }
+        if let position = textPosition(at: point) {
+            textSelection?.focus = position
+        }
+        autoscroll(with: event)
+    }
+
+    private func updateCursor(at point: NSPoint?) {
+        var wanted = PointerCursor.arrow
+        if let point {
+            if link(at: point) != nil || codeCopyIndex(at: point) != nil {
+                wanted = .pointingHand
+            } else if textPosition(at: point, inside: true) != nil {
+                wanted = .iBeam
+            }
+        }
+        guard wanted != pointerCursor else { return }
+        pointerCursor = wanted
+        switch wanted {
+        case .arrow: NSCursor.arrow.set()
+        case .pointingHand: NSCursor.pointingHand.set()
+        case .iBeam: NSCursor.iBeam.set()
         }
     }
 
-    private func updateLinkCursor(at point: NSPoint?) {
-        let over = point.map { link(at: $0) != nil } ?? false
-        guard over != isPointerOverLink else { return }
-        isPointerOverLink = over
-        (over ? NSCursor.pointingHand : NSCursor.arrow).set()
-    }
-
     override func mouseUp(with event: NSEvent) {
+        if isSelectingText {
+            isSelectingText = false
+            return
+        }
         guard let armed = armedHitTarget else { return super.mouseUp(with: event) }
         armedHitTarget = nil
         pressOrigin = nil
@@ -705,6 +831,8 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
         switch target {
         case .link(let url):
             actions.openURL(url)
+        case .codeCopy(let index):
+            copyCode(index, to: .general)
         case .expansionToggle:
             // A native tool call or thought is always collapsed; a group
             // header draws either state.
@@ -715,6 +843,269 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
             }
         }
     }
+
+    // MARK: - Text selection (ported from `DiffSplitCoreTextRowView`)
+
+    /// Selected text, as UTF-16 offsets into the markdown's block texts.
+    struct TextSelection: Equatable {
+        struct Position: Comparable {
+            var block: Int
+            var index: Int
+
+            static func < (lhs: Position, rhs: Position) -> Bool {
+                (lhs.block, lhs.index) < (rhs.block, rhs.index)
+            }
+        }
+
+        var anchor: Position
+        var focus: Position
+
+        var start: Position { min(anchor, focus) }
+        var end: Position { max(anchor, focus) }
+        var isEmpty: Bool { anchor == focus }
+
+        /// The selected offsets within `block`, whose text is `length` long.
+        func span(inBlock block: Int, length: Int) -> Range<Int>? {
+            guard block >= start.block, block <= end.block else { return nil }
+            let lower = block == start.block ? min(start.index, length) : 0
+            let upper = block == end.block ? min(end.index, length) : length
+            return lower..<max(lower, upper)
+        }
+
+        /// The selected text, blocks joined by newlines.
+        func text(in texts: [String]) -> String {
+            guard !isEmpty else { return "" }
+            return (start.block...end.block).compactMap { block -> String? in
+                guard texts.indices.contains(block) else { return nil }
+                let text = texts[block] as NSString
+                guard let span = span(inBlock: block, length: text.length) else { return nil }
+                return text.substring(with: NSRange(location: span.lowerBound, length: span.count))
+            }.joined(separator: "\n")
+        }
+    }
+
+    private var isSelectingText = false
+    private var textSelection: TextSelection? {
+        didSet {
+            guard textSelection != oldValue else { return }
+            // Only the lines either selection covers, so a drag does not
+            // redraw every tile of a long message on each event.
+            let rects = [oldValue, textSelection].compactMap { $0.flatMap(rect(covering:)) }
+            guard let first = rects.first else { return }
+            invalidateTiles(rects.dropFirst().reduce(first) { $0.union($1) })
+        }
+    }
+
+    /// The lines `selection` touches, full width, in view coordinates.
+    private func rect(covering selection: TextSelection) -> CGRect? {
+        guard !selection.isEmpty, let (markdown, origin) = markdown else { return nil }
+        var minY = CGFloat.infinity, maxY = -CGFloat.infinity
+        for line in markdown.lines {
+            guard let block = line.block,
+                  TextSelection.Position(block: block, index: line.range.location) <= selection.end,
+                  TextSelection.Position(block: block, index: NSMaxRange(line.range)) >= selection.start
+            else { continue }
+            minY = min(minY, line.origin.y)
+            maxY = max(maxY, line.origin.y + line.height)
+        }
+        guard minY < maxY else { return nil }
+        return CGRect(x: 0, y: origin.y + minY, width: bounds.width, height: maxY - minY)
+    }
+
+    /// Agent and user text is selectable; one-line rows are click targets.
+    override var acceptsFirstResponder: Bool {
+        switch content {
+        case .agent, .user: true
+        default: false
+        }
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        // The selection's color depends on focus.
+        if let rect = textSelection.flatMap(rect(covering:)) { invalidateTiles(rect) }
+        return super.becomeFirstResponder()
+    }
+
+    /// The selection stays, drawn inactive, as a text view keeps it.
+    override func resignFirstResponder() -> Bool {
+        if let rect = textSelection.flatMap(rect(covering:)) { invalidateTiles(rect) }
+        return super.resignFirstResponder()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        if let rect = textSelection.flatMap(rect(covering:)) { invalidateTiles(rect) }
+    }
+
+    /// The selectable line whose box is under or after `y`, in markdown coordinates.
+    private static func selectableLine(atOrAfter y: CGFloat, in markdown: ACPTranscriptMarkdownLayout) -> ACPTranscriptMarkdownLayout.Line? {
+        markdown.lines.first { $0.block != nil && y < $0.origin.y + $0.height }
+    }
+
+    /// The block and offset nearest `point`. Points above or below the text
+    /// clamp to its start or end, as a drag past the edge does; with
+    /// `inside`, only points over the markdown resolve.
+    private func textPosition(at point: NSPoint, inside: Bool = false) -> TextSelection.Position? {
+        guard let (markdown, origin) = markdown else { return nil }
+        let local = CGPoint(x: point.x - origin.x, y: point.y - origin.y)
+        if inside, !CGRect(x: 0, y: 0, width: markdown.width, height: markdown.height).contains(local) { return nil }
+        guard let line = Self.selectableLine(atOrAfter: local.y, in: markdown), let block = line.block else {
+            guard let last = markdown.texts.indices.last else { return nil }
+            return .init(block: last, index: (markdown.texts[last] as NSString).length)
+        }
+        // Between blocks, the next block's start.
+        guard local.y >= line.origin.y, line.visibleLength > 0 else { return .init(block: block, index: line.range.location) }
+        let index = CTLineGetStringIndexForPosition(line.line, CGPoint(x: local.x - line.origin.x, y: 0))
+        guard index != kCFNotFound else { return .init(block: block, index: line.range.location) }
+        return .init(block: block, index: min(max(index, line.range.location), line.range.location + line.visibleLength))
+    }
+
+    /// The offset of the character under `point`, not the nearest caret
+    /// position, as `NSTextView` picks a double-clicked word.
+    private func characterIndex(at point: NSPoint, near position: TextSelection.Position) -> Int {
+        guard let (markdown, origin) = markdown else { return position.index }
+        let local = CGPoint(x: point.x - origin.x, y: point.y - origin.y)
+        guard let line = Self.selectableLine(atOrAfter: local.y, in: markdown), line.block == position.block,
+              line.visibleLength > 0, position.index > line.range.location,
+              local.x - line.origin.x < CTLineGetOffsetForStringIndex(line.line, position.index, nil)
+        else { return position.index }
+        return (markdown.texts[position.block] as NSString).rangeOfComposedCharacterSequence(at: position.index - 1).location
+    }
+
+    private func beginTextSelection(at position: TextSelection.Position, point: NSPoint, clickCount: Int, extending: Bool) {
+        isSelectingText = true
+        if extending, var selection = textSelection {
+            selection.focus = position
+            textSelection = selection
+            return
+        }
+        guard let texts = markdown?.layout.texts, texts.indices.contains(position.block) else { return }
+        let text = texts[position.block] as NSString
+        func select(_ range: NSRange) {
+            textSelection = .init(
+                anchor: .init(block: position.block, index: range.location), focus: .init(block: position.block, index: NSMaxRange(range))
+            )
+        }
+        switch clickCount {
+        case 2 where text.length > 0:
+            let under = min(characterIndex(at: point, near: position), text.length - 1)
+            select(NSAttributedString(string: text as String).doubleClick(at: under))
+        case 3...:
+            // The paragraph, as a text view's triple-click: a code line or a whole prose block.
+            var paragraph = text.paragraphRange(for: NSRange(location: min(position.index, text.length), length: 0))
+            while paragraph.length > 0, text.character(at: NSMaxRange(paragraph) - 1) == 0x0A {
+                paragraph.length -= 1
+            }
+            select(paragraph)
+        default:
+            textSelection = .init(anchor: position, focus: position)
+        }
+    }
+
+    func selectedText() -> String {
+        guard let textSelection, let texts = markdown?.layout.texts else { return "" }
+        return textSelection.text(in: texts)
+    }
+
+    /// Copies the selection to `pasteboard`; false when nothing is selected.
+    @discardableResult
+    func copySelection(to pasteboard: NSPasteboard) -> Bool {
+        let text = selectedText()
+        guard !text.isEmpty else { return false }
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+        return true
+    }
+
+    @objc func copy(_ sender: Any?) {
+        copySelection(to: .general)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        interpretKeyEvents([event])
+    }
+
+    /// The key commands this row handles; arrows and paging go on to the
+    /// transcript's scroll view.
+    private static let keyCommands: Set<Selector> = [#selector(cancelOperation(_:)), #selector(selectAll(_:))]
+
+    override func doCommand(by selector: Selector) {
+        if Self.keyCommands.contains(selector) {
+            perform(selector, with: nil)
+        } else {
+            nextResponder?.doCommand(by: selector)
+        }
+    }
+
+    override func insertText(_ insertString: Any) {
+        nextResponder?.insertText(insertString)
+    }
+
+    /// Escape clears the selection first.
+    override func cancelOperation(_ sender: Any?) {
+        if textSelection != nil {
+            textSelection = nil
+        } else {
+            nextResponder?.cancelOperation(sender)
+        }
+    }
+
+    /// All of this row's text, not the transcript's.
+    override func selectAll(_ sender: Any?) {
+        guard let texts = markdown?.layout.texts, let last = texts.indices.last else { return }
+        textSelection = .init(anchor: .init(block: 0, index: 0), focus: .init(block: last, index: (texts[last] as NSString).length))
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        guard textSelection.map({ !$0.isEmpty }) ?? false else { return super.menu(for: event) }
+        let menu = NSMenu()
+        menu.addItem(withTitle: "Copy", action: #selector(copy(_:)), keyEquivalent: "")
+        return menu
+    }
+
+    func selectAllForTesting() {
+        selectAll(nil)
+    }
+
+    // MARK: - Code block copy
+
+    /// The code block showing "Copied".
+    private var copiedCodeBlock: Int? {
+        didSet {
+            guard copiedCodeBlock != oldValue, let (markdown, origin) = markdown else { return }
+            for index in [oldValue, copiedCodeBlock].compactMap({ $0 }) where markdown.codeBlocks.indices.contains(index) {
+                let rect = markdown.copyButtonRect(index, copied: true).union(markdown.copyButtonRect(index, copied: false))
+                invalidateTiles(rect.offsetBy(dx: origin.x, dy: origin.y))
+            }
+        }
+    }
+
+    /// How long "Copied" shows, as `CodeBlockView`; tests replace it.
+    var codeCopyFeedbackWait: @MainActor () async -> Void = { try? await Task.sleep(for: .seconds(1.5)) }
+    private var codeCopyFeedbackTask: Task<Void, Never>?
+
+    private func copyCode(_ index: Int, to pasteboard: NSPasteboard) {
+        guard let markdown = markdown?.layout, markdown.codeBlocks.indices.contains(index) else { return }
+        pasteboard.clearContents()
+        pasteboard.setString(markdown.codeBlocks[index].code, forType: .string)
+        copiedCodeBlock = index
+        codeCopyFeedbackTask?.cancel()
+        let wait = codeCopyFeedbackWait
+        codeCopyFeedbackTask = Task { @MainActor [weak self] in
+            await wait()
+            guard !Task.isCancelled else { return }
+            self?.copiedCodeBlock = nil
+        }
+    }
+
+    func clickCodeCopyForTesting(block: Int, pasteboard: NSPasteboard) -> Bool {
+        guard let markdown = markdown?.layout, markdown.codeBlocks.indices.contains(block) else { return false }
+        copyCode(block, to: pasteboard)
+        return true
+    }
+
+    var copiedCodeBlockForTesting: Int? { copiedCodeBlock }
+    var codeCopyFeedbackTaskForTesting: Task<Void, Never>? { codeCopyFeedbackTask }
 
     // MARK: - Hover and actions
 
@@ -752,7 +1143,7 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
         isPointerCovered = false
-        updateLinkCursor(at: nil)
+        updateCursor(at: nil)
         setHovering(false)
     }
 
@@ -762,13 +1153,13 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
         guard isTopmostHitTarget(atWindowLocation: location) else {
             if !isPointerCovered {
                 isPointerCovered = true
-                updateLinkCursor(at: nil)
+                updateCursor(at: nil)
                 setHovering(false)
             }
             return
         }
         isPointerCovered = false
-        updateLinkCursor(at: convert(location, from: nil))
+        updateCursor(at: convert(location, from: nil))
         setHovering(true)
     }
 
@@ -1019,9 +1410,10 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
         tileRect(index).insetBy(dx: 0, dy: -1).intersection(bounds)
     }
 
-    /// Redraws every tile and lets `updateLayer` add any that are now needed.
-    private func invalidateTiles() {
-        for tile in tiles.values {
+    /// Redraws the tiles under `rect`, or every tile, and lets
+    /// `updateLayer` add any that are now needed.
+    private func invalidateTiles(_ rect: NSRect? = nil) {
+        for (index, tile) in tiles where rect.map({ tileRect(index).intersects($0) }) ?? true {
             tile.setNeedsDisplay()
         }
         needsDisplay = true
@@ -1090,6 +1482,13 @@ private final class TileDelegate: NSObject, @preconcurrency CALayerDelegate {
     /// No implicit fades when tiles appear or change.
     func action(for layer: CALayer, forKey event: String) -> CAAction? {
         NSNull()
+    }
+}
+
+extension ACPTranscriptCoreTextRowView: NSMenuItemValidation {
+    /// Copy only with something selected.
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        menuItem.action == #selector(copy(_:)) ? !selectedText().isEmpty : true
     }
 }
 
