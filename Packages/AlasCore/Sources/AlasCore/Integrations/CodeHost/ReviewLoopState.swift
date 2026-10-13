@@ -485,7 +485,13 @@ public final class ReviewLoopState {
         }
     }
 
-    public func merge(snapshot: ReviewLoopSnapshot) async -> ReviewMergeOutcome? {
+    /// `shouldProceed` runs after the fresh provider reads, right before the
+    /// merge command; false returns nil without merging, so a caller whose
+    /// reason to merge went away during those reads can still back out.
+    public func merge(
+        snapshot: ReviewLoopSnapshot,
+        shouldProceed: (@MainActor () -> Bool)? = nil
+    ) async -> ReviewMergeOutcome? {
         guard
             let remote = snapshot.remote,
             let provider = providerRegistry.provider(for: remote.kind)
@@ -523,6 +529,10 @@ public final class ReviewLoopState {
                   let request = freshSnapshot.reviewRequest
             else {
                 lastError = "Merge is no longer available — the review state changed."
+                return nil
+            }
+            if let shouldProceed, !shouldProceed() {
+                lastError = "The merge was no longer wanted."
                 return nil
             }
             try await provider.mergeReviewRequest(

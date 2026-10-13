@@ -779,7 +779,9 @@ public final class ReviewShepherd {
             put(decision.record)
         }
         snapshots[id] = latest
-        return .finished(await loop.merge(snapshot: latest))
+        return .finished(await loop.merge(snapshot: latest) { [weak self] in
+            self?.mayStillMerge(id, generation) ?? false
+        })
     }
 
     /// The decision to merge still stands: same generation, still merging,
