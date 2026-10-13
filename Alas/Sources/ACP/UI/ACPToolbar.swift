@@ -140,11 +140,10 @@ struct ACPToolbar: View {
         return false
     }
 
-    /// v1 shepherds local git worktrees only: no Workspace checkouts,
-    /// remote worktrees, or folder projects.
+    /// Same eligibility the shepherd service enforces (local git worktrees,
+    /// no folders or Workspace checkout members), plus checkout-owned sessions.
     private var showsShepherdButton: Bool {
-        guard !isWorkspaceCheckoutOwner, !worktree.path.isRemoteAlasPath else { return false }
-        return state.projectsManager.projects.first(where: { $0.id == worktree.projectId })?.isFolder != true
+        !isWorkspaceCheckoutOwner && state.isShepherdEligible(worktree)
     }
 
     private func reconnectSession() {

@@ -62,7 +62,8 @@ struct ACPShepherdButton: View {
 /// What the toolbar knows about one session's PR: the session's own record,
 /// another session's live record for the same worktree, and the freshest
 /// snapshot (the shepherd's, else the Changes pane's cached one, else a
-/// fetch the popover made).
+/// fetch the popover made). With a bound record, only a snapshot carrying
+/// that exact request counts.
 @MainActor
 struct ShepherdSessionContext {
     let record: ShepherdRecord?
@@ -80,20 +81,26 @@ struct ShepherdSessionContext {
         } else {
             otherRecord = nil
         }
-        if let bound = own ?? otherRecord, let shepherdSnapshot = shepherd.snapshots[bound.id] {
-            snapshot = shepherdSnapshot
+        let pane = state.rightPaneStore.activeState(worktreeId: worktree.id)?.reviewLoop.snapshot
+        if let bound = own ?? otherRecord {
+            // The pane may cache another PR, or none, for this worktree.
+            snapshot = [shepherd.snapshots[bound.id], pane, fetched]
+                .lazy
+                .compactMap { $0 }
+                .first { Self.carries(bound.id, $0) }
         } else {
-            snapshot = state.rightPaneStore.activeState(worktreeId: worktree.id)?.reviewLoop.snapshot ?? fetched
+            snapshot = pane ?? fetched
         }
     }
 
-    /// The request this context describes. A cached pane snapshot for a
-    /// different PR than the bound one is ignored.
-    var request: ReviewRequest? {
-        guard let request = snapshot?.reviewRequest else { return nil }
-        guard let bound = record ?? otherRecord else { return request }
-        return request.number == bound.id.requestNumber && request.provider == bound.id.providerKind ? request : nil
+    private static func carries(_ id: ShepherdRecordID, _ snapshot: ReviewLoopSnapshot) -> Bool {
+        guard let request = snapshot.reviewRequest else { return false }
+        return ShepherdRecordID(worktreeID: id.worktreeID, request: request) == id
     }
+
+    /// The request this context describes; with a bound record, always that
+    /// record's request.
+    var request: ReviewRequest? { snapshot?.reviewRequest }
 
     /// The readiness half of the merge gate. Required reviewers need a
     /// provider call, so the popover reports them separately.
@@ -141,8 +148,7 @@ private struct ShepherdPopover: View {
     @State private var fetchedSnapshot: ReviewLoopSnapshot?
     @State private var isLoading = true
     @State private var rules: ShepherdRules = .none
-    @State private var headReviewers: Set<String>?
-    @State private var reviewersChecked = false
+    @State private var reviewerResult: ReviewerResult?
 
     /// Narrower than the composer options popover (164 pt): the toggle
     /// titles here are long and the popover is 300 pt wide.
@@ -167,6 +173,7 @@ private struct ShepherdPopover: View {
         .frame(maxHeight: 520)
         .background(theme.color("bg-1"))
         .task(id: session.id) { await load() }
+        .task(id: isLoading ? nil : reviewerKey(context)) { await loadReviewers() }
     }
 
     // MARK: Loading
@@ -178,24 +185,52 @@ private struct ShepherdPopover: View {
             ShepherdRulesResolver.load(worktreePath: root, projectSettings: settings)
         }.value
         let context = ShepherdSessionContext(sessionID: session.id, worktree: worktree, state: state)
-        if context.snapshot == nil {
-            // Read-only fetches: the UI never runs the shepherd policy.
-            if let bound = context.record ?? context.otherRecord {
-                fetchedSnapshot = await state.reviewShepherd.statusSnapshot(for: bound.id)
-            } else {
-                fetchedSnapshot = await state.reviewShepherd.fetchSnapshot(
-                    worktreePath: worktree.path,
-                    baseBranch: state.shepherdBaseBranch(for: worktree)
-                )
-            }
+        // Read-only fetches: the UI never runs the shepherd policy.
+        if context.request == nil, let bound = context.record ?? context.otherRecord {
+            fetchedSnapshot = await state.reviewShepherd.statusSnapshot(for: bound.id)
+        } else if context.snapshot == nil {
+            fetchedSnapshot = await state.reviewShepherd.fetchSnapshot(
+                worktreePath: worktree.path,
+                baseBranch: state.shepherdBaseBranch(for: worktree)
+            )
         }
         isLoading = false
-        let current = ShepherdSessionContext(
+    }
+
+    /// Required-reviewer evidence belongs to one bound request head. A new
+    /// head or a different record changes the key, which restarts the load
+    /// and hides the old result.
+    private struct ReviewerKey: Hashable {
+        let id: ShepherdRecordID
+        let headSHA: String?
+    }
+
+    private struct ReviewerResult {
+        let key: ReviewerKey
+        /// Lowercased logins, or nil when the provider couldn't tell.
+        let logins: Set<String>?
+    }
+
+    private func reviewerKey(_ context: ShepherdSessionContext) -> ReviewerKey? {
+        guard let record = context.record, let request = context.request else { return nil }
+        return ReviewerKey(id: record.id, headSHA: request.headSHA)
+    }
+
+    /// The loaded evidence for the context's current head, or nil while it loads.
+    private func reviewers(for context: ShepherdSessionContext) -> ReviewerResult? {
+        guard let key = reviewerKey(context), let reviewerResult, reviewerResult.key == key else { return nil }
+        return reviewerResult
+    }
+
+    private func loadReviewers() async {
+        guard !isLoading, !rules.requiredReviewers.isEmpty else { return }
+        let context = ShepherdSessionContext(
             sessionID: session.id, worktree: worktree, state: state, fetched: fetchedSnapshot
         )
-        guard !rules.requiredReviewers.isEmpty, let snapshot = current.snapshot, current.request != nil else { return }
-        headReviewers = await state.reviewShepherd.headReviewers(for: snapshot, worktreePath: worktree.path)
-        reviewersChecked = true
+        guard let key = reviewerKey(context), let snapshot = context.snapshot else { return }
+        let logins = await state.reviewShepherd.headReviewers(for: snapshot, worktreePath: worktree.path)
+        guard !Task.isCancelled else { return }
+        reviewerResult = ReviewerResult(key: key, logins: logins)
     }
 
     // MARK: Bound
@@ -212,7 +247,7 @@ private struct ShepherdPopover: View {
             } else {
                 CIStatusStrip(checks: request.checks)
             }
-            reviewLines(request: request)
+            reviewLines(request: request, reviewers: reviewers(for: context))
         } else {
             infoLine("Waiting for the first status check.", systemImage: "hourglass")
         }
@@ -260,13 +295,13 @@ private struct ShepherdPopover: View {
     /// Once `load()` has the rules and head reviewers, use the policy's exact
     /// merge gate (required reviewers and head stability included) instead of
     /// the readiness-only approximation the toolbar badge uses. Until the
-    /// reviewers arrive, `headReviewers` is nil and the gate fails closed when
+    /// reviewers for the current head arrive, `headReviewers` is nil and the gate fails closed when
     /// the rules require any.
     private func exactPresentation(record: ShepherdRecord, context: ShepherdSessionContext) -> ShepherdPresentation {
         guard !isLoading, let snapshot = context.snapshot, context.request != nil else { return context.presentation }
         let observation = ShepherdObservation(
             snapshot: snapshot,
-            headReviewers: headReviewers,
+            headReviewers: reviewers(for: context)?.logins,
             session: isBusy ? .busy : .idle,
             rules: rules,
             now: Date()
@@ -313,7 +348,7 @@ private struct ShepherdPopover: View {
         .padding(.vertical, 10)
     }
 
-    private func reviewLines(request: ReviewRequest) -> some View {
+    private func reviewLines(request: ReviewRequest, reviewers: ReviewerResult?) -> some View {
         let openThreads = request.threads.filter(\.isActionable)
         let trusted = openThreads.filter { $0.headAuthorTrust == .trusted }.count
         let threadText = openThreads.isEmpty
@@ -321,7 +356,7 @@ private struct ShepherdPopover: View {
             : "\(openThreads.count) open thread\(openThreads.count == 1 ? "" : "s"), \(trusted) from trusted reviewers"
         return VStack(alignment: .leading, spacing: 4) {
             Text(threadText)
-            if let reviewersText = requiredReviewersText {
+            if let reviewersText = requiredReviewersText(reviewers) {
                 Text(reviewersText)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -332,10 +367,10 @@ private struct ShepherdPopover: View {
         .padding(.vertical, 7)
     }
 
-    private var requiredReviewersText: String? {
+    private func requiredReviewersText(_ reviewers: ReviewerResult?) -> String? {
         guard !rules.requiredReviewers.isEmpty else { return nil }
-        guard reviewersChecked else { return "Checking required reviewers…" }
-        guard let headReviewers else { return "Couldn't check required reviewers." }
+        guard let reviewers else { return "Checking required reviewers…" }
+        guard let headReviewers = reviewers.logins else { return "Couldn't check required reviewers." }
         let missing = rules.requiredReviewers.filter { !headReviewers.contains($0.lowercased()) }
         if missing.isEmpty { return "Required reviewers have reviewed this head." }
         return "Waiting on this head: " + missing.map { "@\($0)" }.joined(separator: ", ")
