@@ -2,9 +2,8 @@ import AppKit
 import CoreText
 
 /// A split or stacked hunk drawn with CoreText in one view: no text views,
-/// scroll views, or rulers. Behind `ALAS_DIFF_CORETEXT`; no selection, hover,
-/// LSP, or expansion pills yet. A stacked hunk is one full-width pane, held as
-/// the new side.
+/// scroll views, or rulers. A stacked hunk is one full-width pane, held as the
+/// new side. `ALAS_DIFF_CORETEXT=0` falls back to the text-view rows.
 @MainActor
 final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
     enum Side { case old, new }
@@ -39,6 +38,47 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         var onSelect: @MainActor (DiffReviewLineAnchor) -> Void = { _ in }
     }
 
+    /// Selected code on one side, as UTF-16 offsets into its rows' lines.
+    /// Like the text-view panes, a selection stays on one side.
+    struct TextSelection: Equatable {
+        struct Position: Comparable {
+            var row: Int
+            var index: Int
+
+            static func < (lhs: Position, rhs: Position) -> Bool {
+                (lhs.row, lhs.index) < (rhs.row, rhs.index)
+            }
+        }
+
+        let side: Side
+        var anchor: Position
+        var focus: Position
+
+        var start: Position { min(anchor, focus) }
+        var end: Position { max(anchor, focus) }
+        var isEmpty: Bool { anchor == focus }
+
+        /// The selected offsets within `row`, whose line is `length` long,
+        /// and whether the selection runs on past the line's end.
+        func span(inRow row: Int, length: Int) -> (range: Range<Int>, continues: Bool)? {
+            guard row >= start.row, row <= end.row else { return nil }
+            let lower = row == start.row ? min(start.index, length) : 0
+            let upper = row == end.row ? min(end.index, length) : length
+            return (lower..<max(lower, upper), row < end.row)
+        }
+
+        /// The selected text, rows joined by newlines as the panes' documents are.
+        func text(in lines: [String]) -> String {
+            guard !isEmpty else { return "" }
+            return (start.row...end.row).compactMap { row -> String? in
+                guard lines.indices.contains(row) else { return nil }
+                let line = lines[row] as NSString
+                guard let span = span(inRow: row, length: line.length) else { return nil }
+                return line.substring(with: NSRange(location: span.range.lowerBound, length: span.range.count))
+            }.joined(separator: "\n")
+        }
+    }
+
     /// A gutter drag in progress, in rows of one side.
     struct GutterSelection: Equatable {
         let side: Side
@@ -53,6 +93,8 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
     static let headerButtonSize = NSSize(width: 22, height: 20)
     static let headerButtonSpacing: CGFloat = 8
     static let hunkCornerRadius: CGFloat = 7
+    /// How far an expansion pill reaches past its text, as `expandPillRect` pads it.
+    static let expansionPillPadding: CGFloat = 12
     static let cardCornerRadius: CGFloat = 8
 
     var representedRowID: String?
@@ -96,6 +138,20 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
     private(set) var isStacked = false
     private(set) var wraps = false
     private var review = ReviewLines()
+    private(set) var textSelection: TextSelection? {
+        didSet {
+            guard textSelection != oldValue else { return }
+            // Only the rows either selection covers, so a drag does not
+            // redraw every tile of a long hunk on each event.
+            let rows = [oldValue, textSelection].compactMap { $0 }.flatMap { [$0.start.row, $0.end.row] }
+            guard let first = rows.min(), let last = rows.max() else { return }
+            let tops = layout(forWidth: bounds.width).tops
+            guard tops.indices.contains(first), tops.indices.contains(min(last + 1, tops.count - 1)) else { return invalidateTiles() }
+            invalidateTiles(NSRect(x: 0, y: codeTop + tops[first], width: bounds.width, height: tops[min(last + 1, tops.count - 1)] - tops[first]))
+        }
+    }
+    private var isPointerCovered = false
+    private var isSelectingText = false
     private(set) var gutterSelection: GutterSelection? {
         didSet { if gutterSelection != oldValue { invalidateTiles() } }
     }
@@ -123,6 +179,14 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
     private var armedExpansion: (target: ExpansionTarget, optionKey: Bool)?
     private var didSetPointingHand = false
     private var palette: Palette?
+    private var theme: Theme?
+    var hoverHandler: ((NSPoint) -> Void)?
+    var commandClickHandler: ((NSPoint) -> Void)?
+    var flagsChangedHandler: ((NSEvent) -> Void)?
+    var mouseExitedHandler: (() -> Void)?
+    private var lspController: DiffPaneLSPController?
+    /// The new side's code, which LSP offsets index.
+    private var lspDocument: NSString = ""
     /// The documents the lines were built from. The same documents mean the
     /// same lines, so overlays (highlights, chrome) can change without a
     /// rebuild or a horizontal-scroll reset.
@@ -164,6 +228,8 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         super.viewDidMoveToWindow()
         updateTileScale()
         observeClipView()
+        // Parked rows leave the window; their hover panels must not linger.
+        if window == nil { lspController?.notifyScrolled() }
     }
 
     override func viewDidMoveToSuperview() {
@@ -185,9 +251,12 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         chrome: HunkChrome? = nil,
         wraps: Bool = false,
         review: ReviewLines = ReviewLines(),
-        onContextExpansion: @escaping DiffContextExpansionHandler = { _, _, _ in }
+        onContextExpansion: @escaping DiffContextExpansionHandler = { _, _, _ in },
+        lspContext: DiffPaneLSPContext? = nil
     ) {
         let sources = [result.oldCode.attributedString, result.oldGutter, result.newCode.attributedString, result.newGutter]
+        lspDocument = result.newCode.attributedString.string as NSString
+        defer { updateLSP(lspContext, theme: theme) }
         let changed = contentChanged(sources: sources, stacked: false, wraps: wraps, font: font)
         self.onContextExpansion = onContextExpansion
         self.review = review
@@ -208,9 +277,12 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         chrome: HunkChrome? = nil,
         wraps: Bool = false,
         review: ReviewLines = ReviewLines(),
-        onContextExpansion: @escaping DiffContextExpansionHandler = { _, _, _ in }
+        onContextExpansion: @escaping DiffContextExpansionHandler = { _, _, _ in },
+        lspContext: DiffPaneLSPContext? = nil
     ) {
         let changed = contentChanged(sources: [result.code.attributedString, result.gutter], stacked: true, wraps: wraps, font: font)
+        lspDocument = result.code.attributedString.string as NSString
+        defer { updateLSP(lspContext, theme: theme) }
         self.onContextExpansion = onContextExpansion
         self.review = review
         let palette = Palette(theme: theme)
@@ -250,6 +322,7 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
             baselineOffset = metrics.baselineOffset
             rowLayout = nil
             gutterSelection = nil
+            textSelection = nil
             hoveredGutterRow = nil
             // Wrapped lines fit their pane, so there is nothing to scroll sideways.
             horizontalScroll.oldContentWidth = isStacked || wraps ? 0 : old.widest + 2 * Self.textInset
@@ -261,6 +334,7 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         updateViewportWidths()
         layoutSubviewsForContent()
         invalidateTiles()
+        if contentChanged { codeElements = [:] }
     }
 
     func widestLineWidth(side: Side) -> CGFloat {
@@ -542,6 +616,22 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         review.allowsSelection && lines(side).metadata.reviewLineAnchor(fromRow: row, toRow: row) != nil
     }
 
+    var allowsReviewLineSelection: Bool { review.allowsSelection }
+
+    /// Rows a gutter press could comment on, old side first, as the rulers
+    /// list them.
+    func commentableRowsForTesting() -> [(side: Side, row: Int)] {
+        (isStacked ? [Side.new] : [.old, .new]).flatMap { side in
+            lines(side).metadata.indices.filter { isCommentable(side: side, row: $0) }.map { (side, $0) }
+        }
+    }
+
+    func selectReviewLineForTesting(side: Side, row: Int) {
+        if let anchor = lines(side).metadata.reviewLineAnchor(fromRow: row, toRow: row) {
+            review.onSelect(anchor)
+        }
+    }
+
     /// Starts a gutter drag; returns false when `point` is not on a gutter row.
     func beginGutterSelection(at point: NSPoint) -> Bool {
         guard review.allowsSelection, let hit = gutterRow(at: point) else { return false }
@@ -580,15 +670,30 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
             pressedExpansion = target
             return
         }
-        if !beginGutterSelection(at: point) {
-            super.mouseDown(with: event)
+        if event.modifierFlags.contains(.command), let commandClickHandler, codeRect(.new).contains(point) {
+            commandClickHandler(point)
+            return
         }
+        if beginGutterSelection(at: point) { return }
+        if let hit = textHit(at: point) {
+            window?.makeFirstResponder(self)
+            beginTextSelection(side: hit.side, at: hit.position, point: point, clickCount: event.clickCount, extending: event.modifierFlags.contains(.shift))
+            return
+        }
+        super.mouseDown(with: event)
     }
 
     override func mouseDragged(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         if let armed = armedExpansion {
             pressedExpansion = expansionTarget(at: point) == armed.target ? armed.target : nil
+            return
+        }
+        if isSelectingText, let selection = textSelection {
+            if let position = textPosition(at: point, side: selection.side) {
+                textSelection?.focus = position
+            }
+            autoscroll(with: event)
             return
         }
         guard gutterSelection != nil else { return super.mouseDragged(with: event) }
@@ -602,6 +707,10 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
             if expansionTarget(at: convert(event.locationInWindow, from: nil)) == armed.target {
                 armed.target.action.invoke(optionKey: armed.optionKey, handler: onContextExpansion)
             }
+            return
+        }
+        if isSelectingText {
+            isSelectingText = false
             return
         }
         guard gutterSelection != nil else { return super.mouseUp(with: event) }
@@ -619,12 +728,33 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
 
     override func mouseMoved(with event: NSEvent) {
         super.mouseMoved(with: event)
+        // Tracking areas still fire under overlays (launcher, palettes); a
+        // covered move behaves like leaving the view, once.
+        guard isTopmostHitTarget(atWindowLocation: event.locationInWindow) else {
+            if !isPointerCovered {
+                isPointerCovered = true
+                clearPointerHover()
+            }
+            return
+        }
+        isPointerCovered = false
         let point = convert(event.locationInWindow, from: nil)
+        // A visible scroller over the code is its own target: no hover behind it.
+        if [oldScroller, newScroller].contains(where: { !$0.isHidden && $0.frame.contains(point) }) {
+            clearPointerHover()
+            return
+        }
         let hit = gutterRow(at: point)
         hoveredGutterRow = hit.flatMap { isCommentable(side: $0.side, row: $0.row) ? $0 : nil }
         hoveredExpansion = expansionTarget(at: point)
+        hoverHandler?(point)
+        // Cursors are set here rather than through cursor rects: rects on
+        // every mounted row make AppKit recompute them each display cycle.
         if hoveredExpansion != nil {
             NSCursor.pointingHand.set()
+            didSetPointingHand = true
+        } else if textHit(at: point) != nil {
+            NSCursor.iBeam.set()
             didSetPointingHand = true
         } else if didSetPointingHand {
             NSCursor.arrow.set()
@@ -632,8 +762,18 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         }
     }
 
+    override func flagsChanged(with event: NSEvent) {
+        super.flagsChanged(with: event)
+        flagsChangedHandler?(event)
+    }
+
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
+        clearPointerHover()
+    }
+
+    private func clearPointerHover() {
+        mouseExitedHandler?()
         hoveredGutterRow = nil
         hoveredExpansion = nil
         if didSetPointingHand {
@@ -642,17 +782,310 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         }
     }
 
+    // MARK: - Text selection
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override func becomeFirstResponder() -> Bool {
+        // The selection's color depends on focus.
+        if let textSelection, !textSelection.isEmpty { invalidateTiles() }
+        return super.becomeFirstResponder()
+    }
+
+    /// The selection stays, drawn inactive, as a text view keeps it.
+    override func resignFirstResponder() -> Bool {
+        if let textSelection, !textSelection.isEmpty { invalidateTiles() }
+        return super.resignFirstResponder()
+    }
+
+    /// The side, row and offset under `point`, or nil outside the code columns.
+    func textHit(at point: NSPoint) -> (side: Side, position: TextSelection.Position)? {
+        let side = side(at: point)
+        guard codeRect(side).contains(point), let row = row(at: point.y), row < lines(side).code.count,
+              !isWrapPadding(point, side: side), let position = textPosition(at: point, side: side)
+        else { return nil }
+        return (side, position)
+    }
+
+    /// Whether `point` is in the blank space below `side`'s last visual line,
+    /// where the other side wrapped to more lines and made the row taller.
+    private func isWrapPadding(_ point: NSPoint, side: Side) -> Bool {
+        guard wraps else { return false }
+        let layout = layout(forWidth: bounds.width)
+        let offset = point.y - codeTop
+        guard offset >= 0, let last = layout.tops.last, offset < last else { return false }
+        let row = Self.row(containing: offset, rowTops: layout.tops)
+        guard let parts = side == .old ? layout.old : layout.new, parts.indices.contains(row), !parts[row].isEmpty else { return false }
+        return Int((offset - layout.tops[row]) / lineHeight) >= parts[row].count
+    }
+
+    /// The row and offset on `side` nearest `point`. Points above or below
+    /// the rows clamp to the first or last line, as a drag past the edge does.
+    /// With `characterUnder`, only a glyph actually under `point` counts: the
+    /// padding below a side that wraps to fewer lines resolves to nothing.
+    func textPosition(at point: NSPoint, side: Side, characterUnder: Bool = false) -> TextSelection.Position? {
+        let sideLines = lines(side)
+        let code = codeRect(side)
+        guard !sideLines.code.isEmpty, code.width > 0 else { return nil }
+        let tops = layout(forWidth: bounds.width).tops
+        let offset = point.y - codeTop
+        if offset < 0 { return characterUnder ? nil : .init(row: 0, index: 0) }
+        if offset >= tops[tops.count - 1] {
+            guard !characterUnder else { return nil }
+            let last = sideLines.code.count - 1
+            return .init(row: last, index: (sideLines.codeStrings[last] as NSString).length)
+        }
+        let containing = Self.row(containing: offset, rowTops: tops)
+        if characterUnder, containing >= sideLines.code.count { return nil }
+        let row = min(containing, sideLines.code.count - 1)
+        var line = sideLines.code[row]
+        if wraps, let parts = (side == .old ? layout(forWidth: bounds.width).old : layout(forWidth: bounds.width).new)?[row], !parts.isEmpty {
+            if characterUnder, isWrapPadding(point, side: side) { return nil }
+            let part = Int((offset - tops[row]) / lineHeight)
+            line = parts[min(max(0, part), parts.count - 1)]
+        }
+        let x = point.x - code.minX - Self.textInset - (sideLines.indents[row] ?? 0) + (wraps ? 0 : horizontalScroll.offset(side))
+        var index = CTLineGetStringIndexForPosition(line, CGPoint(x: x, y: 0))
+        let length = (sideLines.codeStrings[row] as NSString).length
+        if characterUnder {
+            // The glyph the pointer is over, not the nearest caret position;
+            // nothing past the line's last glyph, as the text view requires.
+            guard index != kCFNotFound, x >= 0, x <= CTLineGetTypographicBounds(line, nil, nil, nil) else { return nil }
+            if index > 0, x < CTLineGetOffsetForStringIndex(line, index, nil) {
+                // The glyph's first code unit, not the middle of a surrogate pair.
+                index = (sideLines.codeStrings[row] as NSString).rangeOfComposedCharacterSequence(at: index - 1).location
+            }
+            guard index < length else { return nil }
+        }
+        return .init(row: row, index: index == kCFNotFound ? 0 : min(max(0, index), length))
+    }
+
+    private func beginTextSelection(side: Side, at position: TextSelection.Position, point: NSPoint, clickCount: Int, extending: Bool) {
+        isSelectingText = true
+        if extending, var selection = textSelection, selection.side == side {
+            selection.focus = position
+            textSelection = selection
+            return
+        }
+        let line = lines(side).codeStrings[position.row] as NSString
+        switch clickCount {
+        case 2:
+            // The word under the pointer, as NSTextView picks it, not the one
+            // after the nearest caret position.
+            // Blank space past the line's end selects nothing.
+            guard line.length > 0, let under = textPosition(at: point, side: side, characterUnder: true)?.index else {
+                textSelection = .init(side: side, anchor: position, focus: position)
+                return
+            }
+            let word = NSAttributedString(string: line as String).doubleClick(at: min(max(0, under), line.length - 1))
+            textSelection = .init(side: side, anchor: .init(row: position.row, index: word.location), focus: .init(row: position.row, index: NSMaxRange(word)))
+        case 3...:
+            textSelection = .init(side: side, anchor: .init(row: position.row, index: 0), focus: .init(row: position.row, index: line.length))
+        default:
+            textSelection = .init(side: side, anchor: position, focus: position)
+        }
+    }
+
+    func selectedText() -> String {
+        guard let selection = textSelection else { return "" }
+        return selection.text(in: lines(selection.side).codeStrings)
+    }
+
+    /// Copies the selection to `pasteboard`; false when nothing is selected.
+    @discardableResult
+    func copySelection(to pasteboard: NSPasteboard) -> Bool {
+        let text = selectedText()
+        guard !text.isEmpty else { return false }
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+        return true
+    }
+
+    @objc func copy(_ sender: Any?) {
+        copySelection(to: .general)
+    }
+
+    // MARK: - Keyboard
+
+    /// Keys reach this row once a click focuses it. Paging and arrows scroll
+    /// the review as they did over the read-only text views; Escape clears
+    /// the selection first.
+    override func keyDown(with event: NSEvent) {
+        interpretKeyEvents([event])
+    }
+
+    override func doCommand(by selector: Selector) {
+        if responds(to: selector) {
+            perform(selector, with: nil)
+        } else {
+            nextResponder?.doCommand(by: selector)
+        }
+    }
+
+    override func cancelOperation(_ sender: Any?) {
+        if textSelection != nil {
+            textSelection = nil
+        } else {
+            nextResponder?.cancelOperation(sender)
+        }
+    }
+
+    override func insertText(_ insertString: Any) {
+        nextResponder?.insertText(insertString)
+    }
+
+    override func scrollPageUp(_ sender: Any?) { scrollReview(byPages: -1) }
+    override func scrollPageDown(_ sender: Any?) { scrollReview(byPages: 1) }
+    override func pageUp(_ sender: Any?) { scrollReview(byPages: -1) }
+    override func pageDown(_ sender: Any?) { scrollReview(byPages: 1) }
+    // Sideways arrows scroll the focused side's long lines, as moving the
+    // caret along them did in the text views.
+    override func moveLeft(_ sender: Any?) { scrollFocusedSide(byPoints: -lineHeight) }
+    override func moveRight(_ sender: Any?) { scrollFocusedSide(byPoints: lineHeight) }
+    override func moveUp(_ sender: Any?) { scrollReview(byPoints: -lineHeight) }
+    override func moveDown(_ sender: Any?) { scrollReview(byPoints: lineHeight) }
+    override func scrollLineUp(_ sender: Any?) { scrollReview(byPoints: -lineHeight) }
+    override func scrollLineDown(_ sender: Any?) { scrollReview(byPoints: lineHeight) }
+    override func scrollToBeginningOfDocument(_ sender: Any?) { scrollReview(to: -.greatestFiniteMagnitude) }
+    override func scrollToEndOfDocument(_ sender: Any?) { scrollReview(to: .greatestFiniteMagnitude) }
+
+    private func scrollFocusedSide(byPoints delta: CGFloat) {
+        let side = textSelection?.side ?? .new
+        guard !wraps, horizontalScroll.scroll(side, byPoints: delta) else { return }
+        invalidateTiles(codeRect(side))
+        updateScroller(side)
+        lspController?.notifyScrolled()
+    }
+
+    private func scrollReview(byPages pages: CGFloat) {
+        guard let clip = enclosingScrollView?.contentView else { return }
+        scrollReview(byPoints: pages * max(lineHeight, clip.bounds.height - 2 * lineHeight))
+    }
+
+    private func scrollReview(byPoints delta: CGFloat) {
+        guard let clip = enclosingScrollView?.contentView else { return }
+        scrollReview(to: clip.bounds.minY + delta)
+    }
+
+    private func scrollReview(to y: CGFloat) {
+        guard let scrollView = enclosingScrollView, let document = scrollView.documentView else { return }
+        let clip = scrollView.contentView
+        let maxY = max(0, document.frame.height - clip.bounds.height)
+        clip.scroll(to: NSPoint(x: clip.bounds.minX, y: min(max(0, y), maxY)))
+        scrollView.reflectScrolledClipView(clip)
+    }
+
+    override func selectAll(_ sender: Any?) {
+        let side = textSelection?.side ?? .new
+        let strings = lines(side).codeStrings
+        guard let last = strings.indices.last else { return }
+        textSelection = .init(side: side, anchor: .init(row: 0, index: 0), focus: .init(row: last, index: (strings[last] as NSString).length))
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        guard textSelection.map({ !$0.isEmpty }) ?? false else { return super.menu(for: event) }
+        let menu = NSMenu()
+        menu.addItem(withTitle: "Copy", action: #selector(copy(_:)), keyEquivalent: "")
+        return menu
+    }
+
+    // MARK: - Accessibility
+
+    /// One read-only text area per side, kept while the content is, so
+    /// VoiceOver keeps its place. It reads and moves by line like the
+    /// text-view panes did.
+    private var codeElements: [Side: CodeAccessibilityElement] = [:]
+
+    override func accessibilityChildren() -> [Any]? {
+        (super.accessibilityChildren() ?? []) + codeAccessibilityElements()
+    }
+
+    override func accessibilityHitTest(_ point: NSPoint) -> Any? {
+        // AppKit asks on the main thread.
+        let hit: (scroller: NSScroller?, element: CodeAccessibilityElement?) = MainActor.assumeIsolated {
+            guard let window else { return (nil, nil) }
+            let local = convert(window.convertPoint(fromScreen: point), from: nil)
+            // A visible scroller sits over its code column and answers for itself.
+            if let scroller = [oldScroller, newScroller].first(where: { !$0.isHidden && $0.frame.contains(local) }) {
+                return (scroller, nil)
+            }
+            return (nil, codeAccessibilityElements().first { $0.accessibilityFrameInParentSpace().contains(local) })
+        }
+        if let scroller = hit.scroller { return scroller }
+        let element = hit.element
+        return element ?? super.accessibilityHitTest(point)
+    }
+
+    func codeAccessibilityElements() -> [CodeAccessibilityElement] {
+        (isStacked ? [Side.new] : [.old, .new]).compactMap { side in
+            let code = codeRect(side)
+            guard code.width > 0 else { return nil }
+            let element = codeElements[side] ?? {
+                let element = CodeAccessibilityElement(lines: lines(side).codeStrings)
+                element.setAccessibilityRole(.textArea)
+                element.setAccessibilityLabel(isStacked ? "Code" : side == .old ? "Old code" : "New code")
+                element.setAccessibilityParent(self)
+                element.frameForLines = { [weak self] start, end in
+                    guard let self, let window else { return nil }
+                    var rect = textRect(side, row: start.row, from: start.index, to: start.row == end.row ? end.index : .max)
+                    for row in start.row + 1..<max(start.row + 1, end.row) {
+                        rect = rect.union(textRect(side, row: row, from: 0, to: .max))
+                    }
+                    if end.row != start.row { rect = rect.union(textRect(side, row: end.row, from: 0, to: end.index)) }
+                    return window.convertToScreen(convert(rect, to: nil))
+                }
+                element.selection = { [weak self] in
+                    guard let self, let textSelection, textSelection.side == side else { return nil }
+                    return (textSelection.start, textSelection.end)
+                }
+                element.visibleLines = { [weak self] in
+                    guard let self else { return nil }
+                    let visible = visibleRect.intersection(codeRect(side))
+                    let count = lines(side).code.count
+                    let tops = layout(forWidth: bounds.width).tops
+                    guard !visible.isEmpty, count > 0 else { return nil }
+                    let first = min(Self.row(containing: max(0, visible.minY - codeTop), rowTops: tops), count - 1)
+                    let last = min(Self.row(containing: max(0, visible.maxY - codeTop - 0.5), rowTops: tops), count - 1)
+                    guard first <= last else { return nil }
+                    return (.init(row: first, index: 0), .init(row: last, index: (lines(side).codeStrings[last] as NSString).length))
+                }
+                element.select = { [weak self] start, end in
+                    self?.textSelection = .init(side: side, anchor: start, focus: end)
+                }
+                codeElements[side] = element
+                return element
+            }()
+            element.setAccessibilityFrameInParentSpace(code)
+            return element
+        }
+    }
+
     // MARK: - Context expansion
 
     /// A gutter click on an expansion row expands it, as the ruler does.
     private func expandFromGutter(at point: NSPoint, optionKey: Bool) -> Bool {
         guard let hit = gutterRow(at: point) else { return false }
-        let metadata = lines(hit.side).metadata
-        guard metadata.indices.contains(hit.row), let key = metadata[hit.row].expansionKey else { return false }
-        let edge = metadata[hit.row].expansionEdge
+        return expand(side: hit.side, row: hit.row, optionKey: optionKey)
+    }
+
+    private func expand(side: Side, row: Int, optionKey: Bool) -> Bool {
+        let metadata = lines(side).metadata
+        guard metadata.indices.contains(row), let key = metadata[row].expansionKey else { return false }
+        let edge = metadata[row].expansionEdge
         let all = optionKey || (key.isShared && edge == nil)
         onContextExpansion(key, all ? .all : .chunk(size: diffContextExpansionChunkSize), edge)
         return true
+    }
+
+    /// Clicks the first side's gutter on `row`, as the ruler's
+    /// `invokeExpansionForTesting` does.
+    func invokeExpansionForTesting(row: Int, optionKey: Bool) {
+        _ = expand(side: isStacked ? .new : .old, row: row, optionKey: optionKey)
+    }
+
+    /// Both sides' lines, as the text views' strings read.
+    func renderedTextForTesting() -> String {
+        (old.codeStrings + new.codeStrings).joined(separator: "\n")
     }
 
     func expansionTarget(at point: NSPoint) -> ExpansionTarget? {
@@ -741,6 +1174,7 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         let side: Side = sender === oldScroller ? .old : .new
         if horizontalScroll.scroll(side, toFraction: CGFloat(sender.doubleValue)) {
             invalidateTiles(codeRect(side))
+            lspController?.notifyScrolled()
         }
         updateScroller(side)
     }
@@ -794,6 +1228,7 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         if horizontalScroll.scroll(side, byPoints: delta) {
             invalidateTiles(codeRect(side))
             updateScroller(side)
+            lspController?.notifyScrolled()
         }
         return true
     }
@@ -831,10 +1266,12 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         observedClipView = clipView
         guard let clipView else { return }
         clipView.postsBoundsChangedNotifications = true
-        clipObserver = NotificationCenter.default.addObserver(
-            forName: NSView.boundsDidChangeNotification, object: clipView, queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.requestMissingTiles() }
+        clipObserver = NotificationCenter.default.addMainActorObserver(
+            forName: NSView.boundsDidChangeNotification, object: clipView
+        ) { [weak self] in
+            self?.requestMissingTiles()
+            // Hover and definition popovers anchor to a symbol that just moved.
+            self?.lspController?.notifyScrolled()
         }
     }
 
@@ -845,14 +1282,17 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         }
     }
 
-    /// The tiles to have drawn: the visible part plus a viewport each way.
+    /// The tiles to have drawn: the visible part plus a quarter viewport
+    /// each way, so a tall row entering the screen draws a tile or two per
+    /// frame rather than several viewports at once.
     private func wantedTiles() -> Range<Int> {
-        let margin = max(visibleRect.height, enclosingScrollView?.contentView.bounds.height ?? 0)
+        let margin = (enclosingScrollView?.contentView.bounds.height ?? visibleRect.height) / 4
         return Self.tileRange(covering: visibleRect.insetBy(dx: 0, dy: -margin), height: bounds.height, tileHeight: Self.tileHeight)
     }
 
     isolated deinit {
         if let clipObserver { NotificationCenter.default.removeObserver(clipObserver) }
+        lspController?.tearDown()
     }
 
     /// AppKit calls this for its own scroll invalidations as well as ours,
@@ -1041,11 +1481,8 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
             let tone = side.tones.indices.contains(index) ? side.tones[index] : .context
             if let fill = palette.codeFills[tone] {
                 let codeRow = NSRect(x: pane.minX + gutter, y: y, width: max(0, pane.width - gutter), height: rowHeight)
-                fill.setFill()
+                (tone == .placeholder ? palette.hatchPattern : fill).setFill()
                 codeRow.fill()
-                if tone == .placeholder {
-                    Self.drawPlaceholderHatch(in: codeRow, color: palette.hatch)
-                }
             }
             let gutterRow = NSRect(x: pane.minX, y: y, width: gutter, height: rowHeight)
             if let fill = palette.gutterFills[tone] {
@@ -1069,6 +1506,7 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
             }
         }
         context.clip(to: CGRect(x: pane.minX + gutter, y: headerHeight, width: max(0, pane.width - gutter), height: max(0, bounds.height - headerHeight)))
+        drawTextSelection(which, wrapped: wrapped, tops: tops, rows: rows)
         // Under the labels, as `DiffPaneCodeTextView` draws them with the row backgrounds.
         drawExpansionPills(which, rows: rows, palette: palette)
         for index in rows {
@@ -1085,6 +1523,36 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
             }
         }
         context.restoreGState()
+    }
+
+    /// The selected text's background, in the system selection color, dimmed
+    /// when this row is not the focused view, as `NSTextView` draws it.
+    private func drawTextSelection(_ which: Side, wrapped: [[CTLine]]?, tops: [CGFloat], rows: Range<Int>) {
+        guard let selection = textSelection, selection.side == which, !selection.isEmpty else { return }
+        let side = lines(which)
+        let code = codeRect(which)
+        let focused = window?.firstResponder === self && window?.isKeyWindow == true
+        (focused ? NSColor.selectedTextBackgroundColor : NSColor.unemphasizedSelectedTextBackgroundColor).setFill()
+        for row in rows {
+            let length = (side.codeStrings[row] as NSString).length
+            guard let span = selection.span(inRow: row, length: length) else { continue }
+            let originX = code.minX + Self.textInset + (side.indents[row] ?? 0) - (wraps ? 0 : horizontalScroll.offset(which))
+            let parts = wrapped?[row] ?? [side.code[row]]
+            let partHeight = wrapped == nil ? tops[row + 1] - tops[row] : lineHeight
+            for (part, line) in parts.enumerated() {
+                let range = CTLineGetStringRange(line)
+                let lower = max(span.range.lowerBound, range.location)
+                let upper = min(span.range.upperBound, range.location + range.length)
+                let runsOn = span.continues && part == parts.count - 1
+                guard lower < upper || runsOn else { continue }
+                let minX = CTLineGetOffsetForStringIndex(line, min(lower, upper), nil)
+                let maxX = runsOn ? code.maxX - originX : CTLineGetOffsetForStringIndex(line, upper, nil)
+                NSRect(
+                    x: originX + minX, y: codeTop + tops[row] + CGFloat(part) * lineHeight,
+                    width: max(0, maxX - minX), height: partHeight
+                ).fill()
+            }
+        }
     }
 
     /// Distance from a row's top to its first baseline, as TextKit places it.
@@ -1202,27 +1670,14 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         return path
     }
 
-    /// Same hatch as `DiffPaneCodeTextView.drawPlaceholderHatch`.
-    private static func drawPlaceholderHatch(in rect: NSRect, color: NSColor) {
-        NSGraphicsContext.saveGraphicsState()
-        NSBezierPath(rect: rect).addClip()
-        defer { NSGraphicsContext.restoreGraphicsState() }
-        let path = NSBezierPath()
-        var x = rect.minX - rect.height
-        while x < rect.maxX {
-            path.move(to: NSPoint(x: x, y: rect.maxY))
-            path.line(to: NSPoint(x: x + rect.height, y: rect.minY))
-            x += 8
-        }
-        path.lineWidth = 1
-        color.setStroke()
-        path.stroke()
-    }
-
     /// Theme colors resolved once per configure: `Theme.nsColor` bridges from
     /// SwiftUI on every call, too slow to repeat per row on every frame.
     private struct Palette {
         let bg0, bg1, bg2, line, hatch, add, del, accent, accentGutter, accentCode, accentStroke, pillTint, fgMuted, fgFaint: NSColor
+        /// The placeholder hatch as a pattern fill: the same 45° lines 8pt
+        /// apart that `DiffPaneCodeTextView` strokes one by one, at a
+        /// fraction of the cost of stroking them on every tile draw.
+        let hatchPattern: NSColor
         /// Row fills for the code, and the ruler's slightly lighter ones.
         let codeFills: [DiffPaneLineTone: NSColor]
         let gutterFills: [DiffPaneLineTone: NSColor]
@@ -1233,6 +1688,24 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
             bg2 = theme.nsColor("bg-2")
             line = theme.nsColor("line")
             hatch = line.withAlphaComponent(0.35)
+            let stroke = hatch
+            let placeholder = Self.opaque(bg2.withAlphaComponent(0.55), over: bg1)
+            hatchPattern = NSColor(patternImage: NSImage(size: NSSize(width: 8, height: 8), flipped: false) { rect in
+                placeholder.setFill()
+                rect.fill()
+                stroke.setStroke()
+                let path = NSBezierPath()
+                // One period of the diagonal, plus its neighbors so the corners
+                // join. Rows draw flipped, so this runs bottom-left to top-right
+                // on screen, as the text view's hatch does.
+                for offset: CGFloat in [-8, 0, 8] {
+                    path.move(to: NSPoint(x: offset, y: 8))
+                    path.line(to: NSPoint(x: offset + 8, y: 0))
+                }
+                path.lineWidth = 1
+                path.stroke()
+                return true
+            })
             add = theme.nsColor("add")
             del = theme.nsColor("del")
             accent = theme.nsColor("accent")
@@ -1242,16 +1715,34 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
             pillTint = theme.nsColor("seg-pill-active-fg")
             fgMuted = theme.nsColor("fg-muted")
             fgFaint = theme.nsColor("fg-faint")
-            let placeholder = bg2.withAlphaComponent(0.55)
             let collapsed = theme.nsColor("bg-3").withAlphaComponent(0.72)
+            // Code rows sit on bg-1 and gutter rows on bg-0, so their tints are
+            // flattened onto those: an opaque fill copies pixels instead of
+            // blending them, and these rows span the whole pane.
             codeFills = [
-                .add: add.withAlphaComponent(0.18), .delete: del.withAlphaComponent(0.18),
-                .placeholder: placeholder, .collapsed: collapsed,
+                .add: Self.opaque(add.withAlphaComponent(0.18), over: bg1),
+                .delete: Self.opaque(del.withAlphaComponent(0.18), over: bg1),
+                .placeholder: placeholder, .collapsed: Self.opaque(collapsed, over: bg1),
             ]
             gutterFills = [
-                .add: add.withAlphaComponent(0.16), .delete: del.withAlphaComponent(0.16),
-                .placeholder: placeholder, .collapsed: collapsed,
+                .add: Self.opaque(add.withAlphaComponent(0.16), over: bg0),
+                .delete: Self.opaque(del.withAlphaComponent(0.16), over: bg0),
+                .placeholder: Self.opaque(bg2.withAlphaComponent(0.55), over: bg0),
+                .collapsed: Self.opaque(collapsed, over: bg0),
             ]
+        }
+
+        /// `top` composited onto `base` in sRGB, or `top` itself when `base`
+        /// is translucent and the result would depend on what lies beneath.
+        static func opaque(_ top: NSColor, over base: NSColor) -> NSColor {
+            guard let top = top.usingColorSpace(.sRGB), let base = base.usingColorSpace(.sRGB),
+                  base.alphaComponent >= 1 else { return top }
+            let a = top.alphaComponent
+            func mix(_ t: CGFloat, _ b: CGFloat) -> CGFloat { t * a + b * (1 - a) }
+            return NSColor(
+                srgbRed: mix(top.redComponent, base.redComponent), green: mix(top.greenComponent, base.greenComponent),
+                blue: mix(top.blueComponent, base.blueComponent), alpha: 1
+            )
         }
 
         /// Same coloring as `DiffPaneLineNumberRulerView.labelAttributes`.
@@ -1340,7 +1831,10 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
             side.code.append(ctLine)
             side.attributed.append(line)
             side.codeStrings.append(line.string)
-            side.widest = max(side.widest, CGFloat(CTLineGetTypographicBounds(ctLine, nil, nil, nil)))
+            // Expansion rows draw indented, inside a pill that pads past the text.
+            let extent = CGFloat(CTLineGetTypographicBounds(ctLine, nil, nil, nil)) + (side.indents[side.code.count - 1] ?? 0)
+                + (metadata.contextExpansionActions.isEmpty ? 0 : Self.expansionPillPadding)
+            side.widest = max(side.widest, extent)
         }
         let labels = gutter.string.components(separatedBy: "\n")
         side.gutterWidth = DiffPaneLineNumberGutterGeometry.thickness(labels: labels)
@@ -1389,5 +1883,181 @@ private final class TileDelegate: NSObject, @preconcurrency CALayerDelegate {
     /// No implicit fades when tiles appear or change.
     func action(for layer: CALayer, forKey event: String) -> CAAction? {
         NSNull()
+    }
+}
+
+extension DiffSplitCoreTextRowView: DiffPaneLSPHost {
+    /// LSP serves the new side, as it does in the text-view panes; stacked
+    /// rows hold all their lines there.
+    var lineMetadata: [DiffPaneTextDocumentBuilder.LineMetadata] { new.metadata }
+    var lspTheme: Theme? { theme }
+    var lspFont: NSFont? { codeFont }
+
+    fileprivate func updateLSP(_ context: DiffPaneLSPContext?, theme: Theme) {
+        self.theme = theme
+        guard let context else {
+            lspController?.tearDown()
+            lspController = nil
+            return
+        }
+        if lspController == nil {
+            lspController = DiffPaneLSPController(textView: self)
+        }
+        lspController?.update(context: context, allowedSide: .new)
+    }
+
+    func characterIndex(at point: NSPoint) -> Int? {
+        guard side(at: point) == .new, codeRect(.new).contains(point),
+              let position = textPosition(at: point, side: .new, characterUnder: true),
+              new.metadata.indices.contains(position.row)
+        else { return nil }
+        return new.metadata[position.row].range.location + position.index
+    }
+
+    func symbolRange(at point: NSPoint) -> NSRange? {
+        guard let index = characterIndex(at: point) else { return nil }
+        let range = lspDocument.rangeOfWord(at: index)
+        return range.length == 0 ? nil : range
+    }
+
+    /// The first glyph of `range`, where hover panels anchor.
+    /// Where `row`'s characters `start..<end` on `side` draw: the glyphs'
+    /// own span on one visual line, or the full width of the visual lines
+    /// a wrapped range crosses.
+    func textRect(_ side: Side, row: Int, from start: Int, to end: Int) -> NSRect {
+        let sideLines = lines(side)
+        let code = codeRect(side)
+        guard sideLines.code.indices.contains(row) else { return code }
+        let layout = layout(forWidth: bounds.width)
+        let length = (sideLines.codeStrings[row] as NSString).length
+        let start = min(max(0, start), length), end = min(max(start, end), length)
+        let parts = wraps ? ((side == .old ? layout.old : layout.new)?[row] ?? []) : [sideLines.code[row]]
+        guard !parts.isEmpty else { return code }
+        let part = { (index: Int) in parts.lastIndex { CTLineGetStringRange($0).location <= index } ?? 0 }
+        let first = part(start), last = part(max(start, end - 1))
+        let top = codeTop + layout.tops[row] + CGFloat(first) * lineHeight
+        guard first == last else {
+            return NSRect(x: code.minX, y: top, width: code.width, height: CGFloat(last - first + 1) * lineHeight)
+        }
+        let originX = code.minX + Self.textInset + (sideLines.indents[row] ?? 0) - (wraps ? 0 : horizontalScroll.offset(side))
+        let minX = CTLineGetOffsetForStringIndex(parts[first], start, nil)
+        let maxX = CTLineGetOffsetForStringIndex(parts[first], end, nil)
+        return NSRect(x: originX + minX, y: top, width: max(1, maxX - minX), height: lineHeight)
+    }
+
+    func symbolAnchorRect(for range: NSRange) -> NSRect? {
+        guard range.length > 0,
+              let row = new.metadata.firstIndex(where: { NSLocationInRange(range.location, $0.range) })
+        else { return nil }
+        let local = range.location - new.metadata[row].range.location
+        let tops = layout(forWidth: bounds.width).tops
+        var line = new.code[row]
+        var part = 0
+        if wraps, let parts = layout(forWidth: bounds.width).new?[row] {
+            part = parts.lastIndex(where: { CTLineGetStringRange($0).location <= local }) ?? 0
+            line = parts[part]
+        }
+        let originX = codeRect(.new).minX + Self.textInset + (new.indents[row] ?? 0) - (wraps ? 0 : horizontalScroll.offset(.new))
+        let minX = CTLineGetOffsetForStringIndex(line, local, nil)
+        let maxX = CTLineGetOffsetForStringIndex(line, local + 1, nil)
+        return NSRect(x: originX + minX, y: codeTop + tops[row] + CGFloat(part) * lineHeight, width: max(1, maxX - minX), height: lineHeight)
+    }
+}
+
+/// A side's code as navigable static text: whole value, characters, and
+/// lines, which is how VoiceOver reads a read-only text view. Its own state
+/// is immutable after init, and AppKit only uses it on the main thread.
+final class CodeAccessibilityElement: NSAccessibilityElement, @unchecked Sendable {
+    private let text: NSString
+    /// Where each line starts in `text`.
+    private let lineStarts: [Int]
+
+    init(lines: [String]) {
+        var starts: [Int] = []
+        var location = 0
+        for line in lines {
+            starts.append(location)
+            location += (line as NSString).length + 1
+        }
+        text = lines.joined(separator: "\n") as NSString
+        lineStarts = starts
+        super.init()
+    }
+
+    override func accessibilityValue() -> Any? { text as String }
+    override func accessibilityNumberOfCharacters() -> Int { text.length }
+    /// The lines the enclosing scroll view shows, set by the row.
+    var visibleLines: (@MainActor @Sendable () -> (start: DiffSplitCoreTextRowView.TextSelection.Position, end: DiffSplitCoreTextRowView.TextSelection.Position)?)?
+
+    override func accessibilityVisibleCharacterRange() -> NSRange {
+        guard let visibleLines else { return NSRange(location: 0, length: text.length) }
+        guard let lines = MainActor.assumeIsolated({ visibleLines() }) else { return NSRange(location: 0, length: 0) }
+        let start = lineStarts[lines.start.row] + lines.start.index
+        return NSRange(location: start, length: lineStarts[lines.end.row] + lines.end.index - start)
+    }
+
+    override func accessibilityString(for range: NSRange) -> String? {
+        guard NSMaxRange(range) <= text.length else { return nil }
+        return text.substring(with: range)
+    }
+
+    override func accessibilityLine(for index: Int) -> Int {
+        max(0, (lineStarts.lastIndex { $0 <= index }) ?? 0)
+    }
+
+    override func accessibilityRange(forLine line: Int) -> NSRange {
+        guard lineStarts.indices.contains(line) else { return NSRange(location: NSNotFound, length: 0) }
+        let end = line + 1 < lineStarts.count ? lineStarts[line + 1] : text.length
+        return NSRange(location: lineStarts[line], length: end - lineStarts[line])
+    }
+
+    /// The screen rect of the text from one (line, offset) to another, set
+    /// by the row that draws it.
+    var frameForLines: (@MainActor @Sendable (_ start: (row: Int, index: Int), _ end: (row: Int, index: Int)) -> NSRect?)?
+
+    typealias Position = DiffSplitCoreTextRowView.TextSelection.Position
+    /// The row's selection on this side, and a way to replace it, so
+    /// assistive apps can read and set it as in a text view.
+    var selection: (@MainActor @Sendable () -> (start: Position, end: Position)?)?
+    var select: (@MainActor @Sendable (_ start: Position, _ end: Position) -> Void)?
+
+    private func position(at offset: Int) -> Position {
+        let offset = min(max(0, offset), text.length)
+        let row = accessibilityLine(for: offset)
+        return Position(row: row, index: offset - lineStarts[row])
+    }
+
+    override func accessibilitySelectedTextRange() -> NSRange {
+        guard let selection, let span = MainActor.assumeIsolated({ selection() }) else { return NSRange(location: 0, length: 0) }
+        let start = lineStarts[span.start.row] + span.start.index
+        return NSRange(location: start, length: lineStarts[span.end.row] + span.end.index - start)
+    }
+
+    override func setAccessibilitySelectedTextRange(_ range: NSRange) {
+        guard let select, range.location != NSNotFound else { return }
+        let start = position(at: range.location), end = position(at: NSMaxRange(range))
+        MainActor.assumeIsolated { select(start, end) }
+    }
+
+    override func accessibilitySelectedText() -> String? {
+        accessibilityString(for: accessibilitySelectedTextRange())
+    }
+
+    override func accessibilityFrame(for range: NSRange) -> NSRect {
+        guard range.location != NSNotFound, range.location <= text.length else { return accessibilityFrame() }
+        let startRow = accessibilityLine(for: range.location)
+        let endRow = accessibilityLine(for: max(range.location, NSMaxRange(range) - 1))
+        let start = (row: startRow, index: range.location - lineStarts[startRow])
+        let end = (row: endRow, index: NSMaxRange(range) - lineStarts[endRow])
+        // AppKit asks on the main thread.
+        guard let frameForLines else { return accessibilityFrame() }
+        return MainActor.assumeIsolated { frameForLines(start, end) } ?? accessibilityFrame()
+    }
+}
+
+extension DiffSplitCoreTextRowView: NSMenuItemValidation {
+    /// Copy only with something selected.
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        menuItem.action == #selector(copy(_:)) ? textSelection.map { !$0.isEmpty } ?? false : true
     }
 }

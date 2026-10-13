@@ -408,8 +408,9 @@ struct AppKitDiffReviewLineTargets {
 
 @MainActor
 enum AppKitDiffReviewRowPlanBuilder {
-    /// Spike: draws hunks and comment segments with `DiffSplitCoreTextRowView`.
-    static var usesCoreTextRows = ProcessInfo.processInfo.environment["ALAS_DIFF_CORETEXT"] == "1"
+    /// Draws hunks and comment segments with `DiffSplitCoreTextRowView`.
+    /// `ALAS_DIFF_CORETEXT=0` falls back to the text-view rows.
+    static var usesCoreTextRows = ProcessInfo.processInfo.environment["ALAS_DIFF_CORETEXT"] != "0"
 
     static func build(
         inputs: [AppKitDiffReviewRowInput],
@@ -558,6 +559,7 @@ enum AppKitDiffReviewRowPlanBuilder {
         let wraps = input.wrapLines
         let state = input.state
         let onContextExpansion = input.loadContextAndExpand
+        let lspContext = input.lspContext
         let review = DiffSplitCoreTextRowView.ReviewLines(
             allowsSelection: input.allowsDraftCommentCreation,
             activeHighlight: input.activeHighlight(for: highlightRows),
@@ -582,7 +584,7 @@ enum AppKitDiffReviewRowPlanBuilder {
                     )
                     view.configure(
                         result: result, font: font, theme: theme, chrome: chrome, wraps: wraps,
-                        review: review, onContextExpansion: onContextExpansion
+                        review: review, onContextExpansion: onContextExpansion, lspContext: lspContext
                     )
                 } else {
                     let result = DiffPaneDocumentCache.shared.stackedResult(
@@ -591,7 +593,7 @@ enum AppKitDiffReviewRowPlanBuilder {
                     )
                     view.configure(
                         stacked: result, font: font, theme: theme, chrome: chrome, wraps: wraps,
-                        review: review, onContextExpansion: onContextExpansion
+                        review: review, onContextExpansion: onContextExpansion, lspContext: lspContext
                     )
                 }
             }

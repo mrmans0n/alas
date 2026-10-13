@@ -217,6 +217,221 @@ import Testing
         #expect(lines.allSatisfy { CTLineGetTypographicBounds($0, nil, nil, nil) - CTLineGetTrailingWhitespaceWidth($0) <= 200 })
     }
 
+    typealias Position = DiffSplitCoreTextRowView.TextSelection.Position
+
+    @Test(arguments: [
+        // Within a line, in either drag direction.
+        (Position(row: 0, index: 4), Position(row: 0, index: 9), "alpha"),
+        (Position(row: 0, index: 9), Position(row: 0, index: 4), "alpha"),
+        // Across lines: the tail of the first, the head of the last, joined by a newline.
+        (Position(row: 0, index: 10), Position(row: 1, index: 3), "= 1\nlet"),
+        // Offsets past a line's end clamp to it.
+        (Position(row: 1, index: 8), Position(row: 1, index: 99), " = 2"),
+        (Position(row: 0, index: 2), Position(row: 0, index: 2), ""),
+    ])
+    func selectionsCopyTheTextBetweenTheirEnds(anchor: Position, focus: Position, expected: String) {
+        let selection = DiffSplitCoreTextRowView.TextSelection(side: .new, anchor: anchor, focus: focus)
+        #expect(selection.text(in: ["let alpha = 1", "let beta = 2"]) == expected)
+    }
+
+    private func click(_ view: NSView, _ type: NSEvent.EventType, at point: NSPoint, count: Int = 1) throws -> NSEvent {
+        try #require(NSEvent.mouseEvent(
+            with: type, location: view.convert(point, to: nil), modifierFlags: [], timestamp: 0, windowNumber: 0,
+            context: nil, eventNumber: 0, clickCount: count, pressure: 1
+        ))
+    }
+
+    @Test(arguments: [(1, "let alpha = 1\nlet beta = 2"), (3, "let beta = 2")])
+    func draggingOrTripleClickingCodeCopiesIt(clickCount: Int, expected: String) throws {
+        let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 200))
+        view.configure(result: result(old: [], new: ["let alpha = 1", "let beta = 2"]), font: font, theme: theme)
+        let code = DiffSplitCoreTextRowView.codeColumn(.new, containerWidth: 800, stacked: false, gutter: 42)
+        let rowY = { (row: Int) in DiffSplitCoreTextRowView.verticalInset + (CGFloat(row) + 0.5) * view.lineHeight }
+        if clickCount == 1 {
+            view.mouseDown(with: try click(view, .leftMouseDown, at: NSPoint(x: code.minX + DiffSplitCoreTextRowView.textInset, y: rowY(0))))
+            view.mouseDragged(with: try click(view, .leftMouseDragged, at: NSPoint(x: code.minX + code.width - 5, y: rowY(1))))
+        } else {
+            view.mouseDown(with: try click(view, .leftMouseDown, at: NSPoint(x: code.minX + 30, y: rowY(1)), count: clickCount))
+        }
+        view.mouseUp(with: try click(view, .leftMouseUp, at: NSPoint(x: code.minX + 30, y: rowY(1)), count: clickCount))
+        let pasteboard = NSPasteboard(name: .init("diff-coretext-\(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+        #expect(view.copySelection(to: pasteboard))
+        #expect(pasteboard.string(forType: .string) == expected)
+    }
+
+    /// The new side's code column and line `row`'s vertical middle, in a row 800pt wide.
+    private func newCodePoint(_ view: DiffSplitCoreTextRowView, x: (NSRect) -> CGFloat, row: Int) -> NSPoint {
+        let code = DiffSplitCoreTextRowView.codeColumn(.new, containerWidth: 800, stacked: false, gutter: 42)
+        let rect = NSRect(x: code.minX + DiffSplitCoreTextRowView.textInset, y: 0, width: code.width, height: 0)
+        return NSPoint(x: x(rect), y: DiffSplitCoreTextRowView.verticalInset + (CGFloat(row) + 0.5) * view.lineHeight)
+    }
+
+    @Test(arguments: [(0, CGFloat(0), "alpha"), (1, 0, ""), (0, 200, "")])
+    func doubleClickingSelectsTheWordUnderThePointer(row: Int, past: CGFloat, expected: String) throws {
+        let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 200))
+        view.configure(result: result(old: [], new: ["let alpha = 1", ""]), font: font, theme: theme)
+        let line = CTLineCreateWithAttributedString(NSAttributedString(string: "let alpha = 1", attributes: [.font: font]))
+        // The right half of alpha's last character: the nearest caret falls after the word.
+        let x = CTLineGetOffsetForStringIndex(line, 9, nil) - 1 + past
+        let point = newCodePoint(view, x: { $0.minX + x }, row: row)
+        view.mouseDown(with: try click(view, .leftMouseDown, at: point, count: 2))
+        view.mouseUp(with: try click(view, .leftMouseUp, at: point, count: 2))
+        #expect(view.selectedText() == expected)
+    }
+
+    @Test func escapeClearsTheSelection() throws {
+        let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 200))
+        view.configure(result: result(old: [], new: ["let alpha = 1"]), font: font, theme: theme)
+        let point = newCodePoint(view, x: { $0.minX + 20 }, row: 0)
+        view.mouseDown(with: try click(view, .leftMouseDown, at: point, count: 3))
+        view.mouseUp(with: try click(view, .leftMouseUp, at: point, count: 3))
+        #expect(!view.selectedText().isEmpty)
+        view.cancelOperation(nil)
+        #expect(view.selectedText().isEmpty)
+    }
+
+    @Test func pointerOverNewSideCodeResolvesTheSymbolForLSP() throws {
+        let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 200))
+        view.configure(result: result(old: ["let gamma = 0"], new: ["let alpha = 1"]), font: font, theme: theme)
+        let line = CTLineCreateWithAttributedString(NSAttributedString(string: "let alpha = 1", attributes: [.font: font]))
+        let y = DiffSplitCoreTextRowView.verticalInset + view.lineHeight / 2
+        let textX = { (side: DiffSplitCoreTextRowView.Side, index: Int) in
+            DiffSplitCoreTextRowView.codeColumn(side, containerWidth: 800, stacked: false, gutter: 42).minX
+                + DiffSplitCoreTextRowView.textInset + CTLineGetOffsetForStringIndex(line, index, nil) + 2
+        }
+        let start = try #require(view.lineMetadata.first).range.location
+        #expect(view.characterIndex(at: NSPoint(x: textX(.new, 6), y: y)) == start + 6)
+        #expect(view.symbolRange(at: NSPoint(x: textX(.new, 6), y: y)) == NSRange(location: start + 4, length: 5))
+        #expect(view.characterIndex(at: NSPoint(x: textX(.new, 13) + 40, y: y)) == nil)
+        #expect(view.characterIndex(at: NSPoint(x: textX(.old, 6), y: y)) == nil)
+    }
+
+    @Test func pointerBelowAShorterWrappedSideHitsNothing() throws {
+        let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 200))
+        let long = Array(repeating: "alpha", count: 40).joined(separator: " ")
+        view.configure(result: result(old: [long], new: ["let alpha = 1"]), font: font, theme: theme, wraps: true)
+        // The old side wraps, so the row is taller than the new side's one line.
+        let below = newCodePoint(view, x: { $0.minX + 20 }, row: 1)
+        #expect(view.characterIndex(at: below) == nil)
+        #expect(view.textHit(at: below) == nil)
+        #expect(view.characterIndex(at: newCodePoint(view, x: { $0.minX + 20 }, row: 0)) != nil)
+    }
+
+    @Test(arguments: [#selector(NSResponder.moveRight(_:)), #selector(NSResponder.moveLeft(_:))])
+    func horizontalArrowsScrollTheFocusedSide(selector: Selector) throws {
+        let (view, window) = mountedRow(newLine: String(repeating: "w", count: 300))
+        defer { window.close() }
+        let point = NSPoint(x: 900, y: DiffSplitCoreTextRowView.verticalInset + view.lineHeight / 2)
+        view.mouseDown(with: try click(view, .leftMouseDown, at: point))
+        view.mouseUp(with: try click(view, .leftMouseUp, at: point))
+        if selector == #selector(NSResponder.moveLeft(_:)) {
+            _ = view.scroll(deltaX: -200, deltaY: 0, isPrecise: true, at: point)
+        }
+        let before = view.horizontalScroll.offset(.new)
+        view.doCommand(by: selector)
+        let after = view.horizontalScroll.offset(.new)
+        #expect(selector == #selector(NSResponder.moveRight(_:)) ? after > before : after < before)
+        #expect(view.horizontalScroll.offset(.old) == 0)
+    }
+
+    @Test func selectionSurvivesLosingFocus() throws {
+        let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 200))
+        view.configure(result: result(old: [], new: ["let alpha = 1"]), font: font, theme: theme)
+        let point = newCodePoint(view, x: { $0.minX + 20 }, row: 0)
+        view.mouseDown(with: try click(view, .leftMouseDown, at: point, count: 3))
+        view.mouseUp(with: try click(view, .leftMouseUp, at: point, count: 3))
+        _ = view.resignFirstResponder()
+        #expect(view.selectedText() == "let alpha = 1")
+    }
+
+    @Test func accessibilityReportsOnlyTheLinesInTheViewport() throws {
+        let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 400))
+        view.configure(result: result(old: [], new: (0..<20).map { "let v\($0) = \($0)" }), font: font, theme: theme)
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 800, height: DiffSplitCoreTextRowView.verticalInset + 3 * view.lineHeight))
+        scrollView.documentView = view
+        let new = try #require(view.codeAccessibilityElements().last)
+        let visible = new.accessibilityVisibleCharacterRange()
+        #expect(visible.location == 0)
+        #expect(new.accessibilityLine(for: NSMaxRange(visible) - 1) <= 3)
+    }
+
+    @Test func pointerOnASurrogatePairsTrailingHalfResolvesItsStart() throws {
+        let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 200))
+        view.configure(result: result(old: [], new: ["a\u{1D465}b"]), font: font, theme: theme)
+        let line = CTLineCreateWithAttributedString(NSAttributedString(string: "a\u{1D465}b", attributes: [.font: font]))
+        // Just left of the caret after the pair: the glyph's trailing half.
+        let x = CTLineGetOffsetForStringIndex(line, 3, nil) - 1
+        let start = try #require(view.lineMetadata.first).range.location
+        #expect(view.characterIndex(at: newCodePoint(view, x: { $0.minX + x }, row: 0)) == start + 1)
+    }
+
+    @Test func pointerOverAVisibleScrollerSendsNoHover() throws {
+        let (view, window) = mountedRow(newLine: String(repeating: "w", count: 300))
+        defer { window.close() }
+        var hovered: [NSPoint] = []
+        view.hoverHandler = { hovered.append($0) }
+        let scroller = view.scrollerForTesting(.new)
+        let location = view.convert(NSPoint(x: scroller.frame.midX, y: scroller.frame.midY), to: nil)
+        view.mouseMoved(with: try #require(NSEvent.mouseEvent(
+            with: .mouseMoved, location: location, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+            context: nil, eventNumber: 0, clickCount: 0, pressure: 0
+        )))
+        #expect(hovered.isEmpty)
+    }
+
+    @Test func eachSideReadsItsCodeToAccessibility() throws {
+        let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 200))
+        view.configure(result: result(old: ["let a = 0"], new: ["let a = 1", "let b = 2"]), font: font, theme: theme)
+        let elements = view.codeAccessibilityElements()
+        let values = elements.map { "\($0.accessibilityLabel() ?? ""): \($0.accessibilityValue() as? String ?? "")" }
+        #expect(values == ["Old code: let a = 0\n ", "New code: let a = 1\nlet b = 2"])
+        // Stable identity, so VoiceOver keeps its place, and navigable by line.
+        #expect(zip(elements, view.codeAccessibilityElements()).allSatisfy { $0 === $1 })
+        let new = try #require(elements.last)
+        #expect(new.accessibilityString(for: new.accessibilityRange(forLine: 1)) == "let b = 2")
+        #expect(new.accessibilityLine(for: 11) == 1)
+    }
+
+    @Test func accessibilityFramesFollowTheRequestedLine() throws {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 200), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 200))
+        window.contentView?.addSubview(view)
+        view.configure(result: result(old: [], new: ["a", "let middle = 2", "c"]), font: font, theme: theme)
+        let new = try #require(view.codeAccessibilityElements().last)
+        let first = new.accessibilityFrame(for: new.accessibilityRange(forLine: 0))
+        let second = new.accessibilityFrame(for: new.accessibilityRange(forLine: 1))
+        #expect(abs(first.height - view.lineHeight) < 1)
+        // Screen space runs upward, so the later line sits one line lower.
+        #expect(abs(first.minY - second.minY - view.lineHeight) < 1)
+        #expect(second.width < new.accessibilityFrame().width)
+        // A range over three lines covers the middle one too.
+        let all = new.accessibilityFrame(for: NSRange(location: 0, length: new.accessibilityNumberOfCharacters()))
+        #expect(all.contains(second.insetBy(dx: 0.5, dy: 0.5)))
+    }
+
+    @Test func accessibilitySelectionIsTheRowsSelection() throws {
+        let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 200))
+        view.configure(result: result(old: [], new: ["let a = 1", "let b = 2"]), font: font, theme: theme)
+        let new = try #require(view.codeAccessibilityElements().last)
+        new.setAccessibilitySelectedTextRange(NSRange(location: 4, length: 11))
+        #expect(view.selectedText() == "a = 1\nlet b")
+        #expect(new.accessibilitySelectedTextRange() == NSRange(location: 4, length: 11))
+        #expect(new.accessibilitySelectedText() == "a = 1\nlet b")
+    }
+
+    @Test func accessibilityHitTestingReachesTheVisibleScroller() throws {
+        let (view, window) = mountedRow(newLine: String(repeating: "w", count: 300))
+        defer { window.close() }
+        let scroller = view.scrollerForTesting(.new)
+        #expect(!scroller.isHidden)
+        let center = NSPoint(x: scroller.frame.midX, y: scroller.frame.midY)
+        let screen = window.convertPoint(toScreen: view.convert(center, to: nil))
+        #expect(!(view.accessibilityHitTest(screen) is CodeAccessibilityElement))
+    }
+
     @Test(arguments: [DiffReviewInlineFeedbackSide.old, .new])
     func lineJumpsLandOnTheLineInsideTheHunk(side: DiffReviewInlineFeedbackSide) throws {
         let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 200))
@@ -241,6 +456,18 @@ import Testing
             contextExpansion: DiffContextExpansionRow(key: expansionKey, boundary: .above, remainingLineCount: 20)
         ), at: 0)
         return DiffPaneTextDocumentBuilder.buildSplit(rows: rows, fileExtension: "swift", font: font, showWhitespace: false, theme: theme)
+    }
+
+    @Test func scrollableWidthCoversAnExpansionRowsIndentAndPill() throws {
+        let split = expandableSplit()
+        let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 800, height: 200))
+        view.configure(result: split, font: font, theme: theme)
+        let row = try #require(split.newCode.lines.first { !$0.contextExpansionActions.isEmpty })
+        let text = split.newCode.attributedString.attributedSubstring(from: row.range)
+        let style = text.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+        let indent = style?.firstLineHeadIndent ?? 0
+        let glyphs = CGFloat(CTLineGetTypographicBounds(CTLineCreateWithAttributedString(text), nil, nil, nil))
+        #expect(view.widestLineWidth(side: .new) >= glyphs + indent + 12)
     }
 
     @Test func draggingDownTheGutterSelectsThoseLinesOnThatSide() throws {

@@ -520,7 +520,9 @@ struct DiffReviewSurfaceTests {
         )
 
         let rulers = allSubviews(of: view).compactMap { $0 as? DiffPaneLineNumberRulerView }
-        #expect(!rulers.isEmpty)
+        let coreTextRows = allSubviews(of: view).compactMap { $0 as? DiffSplitCoreTextRowView }
+        #expect(!rulers.isEmpty || !coreTextRows.isEmpty)
+        #expect(coreTextRows.allSatisfy { !$0.allowsReviewLineSelection })
         for ruler in rulers {
             #expect(!ruler.allowsReviewLineSelection)
         }
@@ -685,8 +687,7 @@ struct DiffReviewSurfaceTests {
             height: 500
         )
 
-        let materializedSegments = allSubviews(of: view)
-            .compactMap { $0 as? DiffPaneTextDocumentContainerView }
+        let materializedSegments = allSubviews(of: view).filter(isCodeRow)
         let initialIdentities = Set(materializedSegments.map(ObjectIdentifier.init))
         #expect(!materializedSegments.isEmpty)
         #expect(materializedSegments.count < groups.count)
@@ -697,7 +698,7 @@ struct DiffReviewSurfaceTests {
         }
 
         let settledIdentities = Set(allSubviews(of: view)
-            .compactMap { $0 as? DiffPaneTextDocumentContainerView }
+            .filter(isCodeRow)
             .map(ObjectIdentifier.init))
         #expect(settledIdentities == initialIdentities)
     }
@@ -2353,7 +2354,7 @@ struct DiffReviewSurfaceTests {
             in: view
         ) != nil)
         #expect(accessibilityLabel(in: view, containing: "Large review diff deferred for performance") != nil)
-        #expect(!allSubviews(of: view).contains { $0 is DiffPaneTextScrollView })
+        #expect(!allSubviews(of: view).contains(where: isCodeView))
 
         #expect(pressAccessibilityElement(
             withAccessibilityIdentifier: "diff-review-show-full-diff-\(file.id.rawValue)",
@@ -2361,7 +2362,7 @@ struct DiffReviewSurfaceTests {
         ))
         await drainSwiftUI(view)
 
-        #expect(allSubviews(of: view).contains { $0 is DiffPaneTextScrollView })
+        #expect(allSubviews(of: view).contains(where: isCodeView))
     }
 
     @Test func narrowSurfaceMovesDraftSummaryAfterTheDiffStack() async throws {
@@ -3567,18 +3568,33 @@ struct DiffReviewSurfaceTests {
         return false
     }
 
+    /// A view drawing a hunk's code, in either renderer.
+    private func isCodeView(_ view: NSView) -> Bool {
+        view is DiffPaneTextScrollView || view is DiffSplitCoreTextRowView
+    }
+
+    /// A materialized hunk or segment row, in either renderer.
+    private func isCodeRow(_ view: NSView) -> Bool {
+        view is DiffPaneTextDocumentContainerView || view is DiffSplitCoreTextRowView
+    }
+
+    /// Selects the `selectionIndex`th commentable line on screen, through the
+    /// rulers or the CoreText rows, whichever renders the review.
     private func selectReviewLine(selectionIndex: Int, in view: NSView) throws {
-        let selectableRows = allSubviews(of: view)
-            .compactMap { $0 as? DiffPaneLineNumberRulerView }
-            .filter(\.allowsReviewLineSelection)
-            .flatMap { ruler -> [(ruler: DiffPaneLineNumberRulerView, row: Int)] in
-                guard let textView = ruler.scrollView?.documentView as? DiffPaneCodeTextView else { return [] }
+        let selectableRows = allSubviews(of: view).flatMap { subview -> [() -> Void] in
+            if let ruler = subview as? DiffPaneLineNumberRulerView, ruler.allowsReviewLineSelection,
+               let textView = ruler.scrollView?.documentView as? DiffPaneCodeTextView {
                 return (0..<200).compactMap { row in
-                    textView.reviewLineAnchor(atRow: row).map { _ in (ruler, row) }
+                    textView.reviewLineAnchor(atRow: row).map { _ in { ruler.invokeReviewLineSelectionForTesting(row: row) } }
                 }
             }
-        let selection = try #require(selectableRows.dropFirst(selectionIndex).first)
-        selection.ruler.invokeReviewLineSelectionForTesting(row: selection.row)
+            if let row = subview as? DiffSplitCoreTextRowView, row.allowsReviewLineSelection {
+                return row.commentableRowsForTesting().map { hit in { row.selectReviewLineForTesting(side: hit.side, row: hit.row) } }
+            }
+            return []
+        }
+        let select = try #require(selectableRows.dropFirst(selectionIndex).first)
+        select()
     }
 
     private func draftComposerTextView(in view: NSView) -> NSTextView? {
