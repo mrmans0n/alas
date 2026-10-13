@@ -109,6 +109,9 @@ public final class ProjectsManager {
     /// the other's, so cancelling a delete on one host would silently reopen
     /// admission for a worktree the other host is still removing.
     public private(set) var worktreeOperationStates: [WorktreeOperationKey: WorktreeOperationState] = [:]
+    /// Who opened each claim through `claimOperation`. Any other write to a
+    /// claim drops its token.
+    @ObservationIgnored private var claimTokens: [WorktreeOperationKey: UUID] = [:]
     public private(set) var worktreeRefreshFailures: Set<String> = []
     /// Rows a project lists but does not show because another local project
     /// owns the same directory: `[losing projectId][worktree id] = winner`.
@@ -453,6 +456,31 @@ public final class ProjectsManager {
         setOperationState(forWorktreeId: worktree.id, projectId: worktree.projectId, state: state)
     }
 
+    /// Opens `state` as a claim only the returned token releases. Equal
+    /// states are not enough to tell operations apart: a worktree deleted,
+    /// recreated at the same path and deleted again gets the same claim, and
+    /// the first deletion must not release the second one's.
+    public func claimOperation(_ state: WorktreeOperationState, for worktree: Worktree) -> UUID {
+        setOperationState(for: worktree, state: state)
+        let token = UUID()
+        claimTokens[WorktreeOperationKey(projectId: worktree.projectId, worktreeId: worktree.id)] = token
+        return token
+    }
+
+    /// Whether the claim on `worktree` is still the one `token` opened.
+    public func holdsClaim(_ token: UUID, for worktree: Worktree) -> Bool {
+        let key = WorktreeOperationKey(projectId: worktree.projectId, worktreeId: worktree.id)
+        return claimTokens[key] == token && worktreeOperationStates[key] != nil
+    }
+
+    /// Clears the claim on `worktree` only if `token` still holds it. The
+    /// token is dropped even when a refresh already cleared the claim.
+    public func releaseOperation(_ token: UUID, for worktree: Worktree) {
+        let key = WorktreeOperationKey(projectId: worktree.projectId, worktreeId: worktree.id)
+        guard claimTokens[key] == token else { return }
+        setOperationState(for: worktree, state: nil)
+    }
+
     /// Whether new terminals, agent sessions and runs may start in `worktree`.
     public func admitsNewWork(in worktree: Worktree) -> Bool {
         operationState(for: worktree)?.blocksAdmission != true
@@ -472,6 +500,7 @@ public final class ProjectsManager {
 
     public func setOperationState(forWorktreeId worktreeId: String, projectId: String, state: WorktreeOperationState?) {
         let key = WorktreeOperationKey(projectId: projectId, worktreeId: worktreeId)
+        claimTokens.removeValue(forKey: key)
         if let state {
             worktreeOperationStates[key] = state
         } else {

@@ -182,13 +182,8 @@ extension AlasCoreContext {
         case nil, .deleteFailed: break
         default: throw WorktreeArchiveRefusal.operationInProgress
         }
-        let claim = WorktreeOperationState.archiving(projectId: project.id)
-        projects.setOperationState(for: worktree, state: claim)
-        defer {
-            if projects.operationState(for: worktree) == claim {
-                projects.setOperationState(for: worktree, state: nil)
-            }
-        }
+        let claim = projects.claimOperation(.archiving(projectId: project.id), for: worktree)
+        defer { projects.releaseOperation(claim, for: worktree) }
         if let refusal = await workspaceOwnershipRefusal(for: worktree) {
             throw WorktreeArchiveRefusal.ownedByWorkspaceCheckout(refusal)
         }
@@ -276,13 +271,8 @@ extension AlasCoreContext {
         case nil, .deleteFailed: break
         default: throw WorktreeDeletionRefusal.operationInProgress
         }
-        let claim = WorktreeOperationState.deleting(projectId: project.id)
-        projects.setOperationState(for: worktree, state: claim)
-        defer {
-            if projects.operationState(for: worktree) == claim {
-                projects.setOperationState(for: worktree, state: nil)
-            }
-        }
+        let claim = projects.claimOperation(.deleting(projectId: project.id), for: worktree)
+        defer { projects.releaseOperation(claim, for: worktree) }
 
         let result = await removeWorktree(WorktreeRemovalRequest(
             worktree: worktree,
