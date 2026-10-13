@@ -4,8 +4,8 @@ import AppKit
 /// diff's `CodeAccessibilityElement`: whole value, characters, and visual
 /// lines, with the selection bound to the row's. The value is the rendered
 /// block texts joined by newlines, the same text copy puts on the pasteboard.
-/// Its own state is immutable after init, and AppKit only uses it on the main
-/// thread.
+/// The text is immutable after init; the line starts are refreshed only on the
+/// main actor by the owning row, and AppKit only reads it on the main thread.
 final class ACPTranscriptTextAccessibilityElement: NSAccessibilityElement, @unchecked Sendable {
     typealias Position = ACPTranscriptCoreTextRowView.TextSelection.Position
 
@@ -33,10 +33,12 @@ final class ACPTranscriptTextAccessibilityElement: NSAccessibilityElement, @unch
     }
 
     /// Replaces the visual line starts after the text re-wrapped.
-    func updateLines(_ lines: [Position]) {
+    @discardableResult
+    func updateLines(_ lines: [Position]) -> Bool {
         var starts = lines.compactMap { line in blockStarts.indices.contains(line.block) ? blockStarts[line.block] + line.index : nil }
         if starts.first != 0 { starts.insert(0, at: 0) }
-        lineStarts = starts
+        defer { lineStarts = starts }
+        return starts != lineStarts
     }
 
     override func accessibilityValue() -> Any? { text as String }

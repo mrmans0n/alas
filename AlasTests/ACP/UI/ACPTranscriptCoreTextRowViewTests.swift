@@ -220,16 +220,19 @@ import Testing
         _ = view.measuredHeight(forWidth: 800)
         let element = try #require(view.accessibilityChildren()?.compactMap { $0 as? NSAccessibilityElement }.first)
         let wide = element.accessibilityRange(forLine: 1)
+        // The same reference, with no fresh query of the children.
         _ = view.measuredHeight(forWidth: 300)
-        let narrowElement = try #require(view.accessibilityChildren()?.compactMap { $0 as? NSAccessibilityElement }.first)
-        #expect(narrowElement === element)
         #expect(element.accessibilityRange(forLine: 1) != wide)
     }
 
-    @Test func reconfiguringToOneLineContentDropsTheTextArea() {
+    @Test func reconfiguringContentReplacesTheTextArea() throws {
         let view = row(.agent(markdown: "Hi", commentary: false))
         _ = view.measuredHeight(forWidth: 800)
-        #expect(view.accessibilityChildren()?.isEmpty == false)
+        let first = try #require(view.accessibilityChildren()?.compactMap { $0 as? NSAccessibilityElement }.first)
+        view.configure(content: .agent(markdown: "Hi", commentary: true), contentMaxWidth: 720, inToolCallGroup: false, theme: theme, typography: .default)
+        _ = view.measuredHeight(forWidth: 800)
+        let second = try #require(view.accessibilityChildren()?.compactMap { $0 as? NSAccessibilityElement }.first)
+        #expect(second !== first)
         view.configure(content: .thought(label: "Planning"), contentMaxWidth: 720, inToolCallGroup: false, theme: theme, typography: .default)
         _ = view.measuredHeight(forWidth: 800)
         #expect(view.accessibilityChildren()?.isEmpty ?? true)

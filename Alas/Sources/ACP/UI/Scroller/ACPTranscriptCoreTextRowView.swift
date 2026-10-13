@@ -193,6 +193,7 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
         if let cachedLayout, cachedLayout.width == width { return cachedLayout }
         let layout = makeLayout(width: width)
         cachedLayout = layout
+        refreshTextElement(from: layout)
         return layout
     }
 
@@ -1147,11 +1148,27 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
         return element ?? super.accessibilityHitTest(point)
     }
 
-    private func textAccessibilityElements() -> [ACPTranscriptTextAccessibilityElement] {
-        guard hasTextArea, let (markdown, origin) = markdown, !markdown.texts.isEmpty else { return [] }
-        let lines = markdown.lines.compactMap { line in
+    private static func lineStarts(of markdown: ACPTranscriptMarkdownLayout) -> [TextSelection.Position] {
+        markdown.lines.compactMap { line in
             line.block.map { TextSelection.Position(block: $0, index: line.range.location) }
         }
+    }
+
+    /// Keeps a held element's lines current when the text re-wraps, since
+    /// assistive apps may query it without asking the row for its children.
+    private func refreshTextElement(from layout: Layout) {
+        guard let textElement else { return }
+        for case .markdown(let markdown, _, _) in layout.items where markdown.texts == textElement.texts {
+            if textElement.updateLines(Self.lineStarts(of: markdown)) {
+                NSAccessibility.post(element: self, notification: .layoutChanged)
+            }
+            return
+        }
+    }
+
+    private func textAccessibilityElements() -> [ACPTranscriptTextAccessibilityElement] {
+        guard hasTextArea, let (markdown, origin) = markdown, !markdown.texts.isEmpty else { return [] }
+        let lines = Self.lineStarts(of: markdown)
         let element: ACPTranscriptTextAccessibilityElement
         if let textElement, textElement.texts == markdown.texts {
             element = textElement
