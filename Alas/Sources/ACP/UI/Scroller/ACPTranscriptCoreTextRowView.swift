@@ -96,6 +96,8 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
             dropTiles()
             resetHover()
             armedHitTarget = nil
+            pressOrigin = nil
+            isPointerOverLink = false
         } else {
             updateTileScale()
             needsDisplay = true
@@ -582,7 +584,15 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
         for index in lines.indices {
             let line = markdown.lines[index]
             context.textPosition = CGPoint(x: origin.x + line.origin.x, y: origin.y + line.origin.y + ascents[index])
+            let linePosition = context.textPosition
             CTLineDraw(line.line, context)
+            for underline in line.underlines {
+                underline.color.setFill()
+                CGRect(
+                    x: linePosition.x + underline.minX, y: linePosition.y + underline.offset,
+                    width: underline.width, height: underline.thickness
+                ).fill()
+            }
         }
     }
 
@@ -628,34 +638,73 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
     /// diff's expansion pills.
     private enum HitTarget: Equatable {
         case expansionToggle
+        case link(URL)
     }
 
     private var armedHitTarget: HitTarget?
+    /// Where the armed press began, to tell a click from a drag.
+    private var pressOrigin: NSPoint?
+    /// Farther than this from the press, a drag is not a click.
+    private static let clickSlop: CGFloat = 3
+    private var isPointerOverLink = false
+
+    private func link(at point: NSPoint) -> URL? {
+        guard bounds.width > 0 else { return nil }
+        for case .markdown(let markdown, let origin, _) in layout(forWidth: bounds.width).items {
+            if let url = markdown.link(at: CGPoint(x: point.x - origin.x, y: point.y - origin.y)) { return url }
+        }
+        return nil
+    }
 
     private func hitTarget(at point: NSPoint) -> HitTarget? {
-        guard bounds.width > 0, actions.toggleExpanded != nil,
+        guard bounds.width > 0 else { return nil }
+        if let url = link(at: point) { return .link(url) }
+        guard actions.toggleExpanded != nil,
               layout(forWidth: bounds.width).toggleRect?.contains(point) == true
         else { return nil }
         return .expansionToggle
     }
 
     override func mouseDown(with event: NSEvent) {
-        if let target = hitTarget(at: convert(event.locationInWindow, from: nil)) {
+        let point = convert(event.locationInWindow, from: nil)
+        if let target = hitTarget(at: point) {
             armedHitTarget = target
+            pressOrigin = point
             return
         }
         super.mouseDown(with: event)
     }
 
+    override func mouseDragged(with event: NSEvent) {
+        guard case .link = armedHitTarget, let pressOrigin else { return super.mouseDragged(with: event) }
+        let point = convert(event.locationInWindow, from: nil)
+        if hypot(point.x - pressOrigin.x, point.y - pressOrigin.y) > Self.clickSlop {
+            // A drag from a link is not a click. Text selection will take it
+            // over from here; until then it is ignored.
+            armedHitTarget = nil
+            self.pressOrigin = nil
+        }
+    }
+
+    private func updateLinkCursor(at point: NSPoint?) {
+        let over = point.map { link(at: $0) != nil } ?? false
+        guard over != isPointerOverLink else { return }
+        isPointerOverLink = over
+        (over ? NSCursor.pointingHand : NSCursor.arrow).set()
+    }
+
     override func mouseUp(with event: NSEvent) {
         guard let armed = armedHitTarget else { return super.mouseUp(with: event) }
         armedHitTarget = nil
+        pressOrigin = nil
         guard hitTarget(at: convert(event.locationInWindow, from: nil)) == armed else { return }
         perform(armed)
     }
 
     private func perform(_ target: HitTarget) {
         switch target {
+        case .link(let url):
+            actions.openURL(url)
         case .expansionToggle:
             // A native tool call or thought is always collapsed; a group
             // header draws either state.
@@ -703,6 +752,7 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
         isPointerCovered = false
+        updateLinkCursor(at: nil)
         setHovering(false)
     }
 
@@ -712,11 +762,13 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
         guard isTopmostHitTarget(atWindowLocation: location) else {
             if !isPointerCovered {
                 isPointerCovered = true
+                updateLinkCursor(at: nil)
                 setHovering(false)
             }
             return
         }
         isPointerCovered = false
+        updateLinkCursor(at: convert(location, from: nil))
         setHovering(true)
     }
 

@@ -124,6 +124,48 @@ import Testing
         send(.leftMouseUp, at: header)
         #expect(toggles == [expected])
     }
+
+    @Test(arguments: [(0.0, true), (2.0, true), (6.0, false)])
+    func aLinkOpensOnClickButNotAfterADrag(dragDistance: Double, opens: Bool) {
+        for content in [
+            ACPTranscriptCoreTextRowView.Content.agent(markdown: "[docs](https://example.com)", commentary: false),
+            .user(markdown: "[docs](https://example.com)"),
+        ] {
+            var opened: [URL] = []
+            var actions = ACPTranscriptNativeRows.Actions.inert
+            actions.openURL = { opened.append($0) }
+            let view = row(content, actions: actions)
+            let height = view.measuredHeight(forWidth: 1_000)
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 1_000, height: 200), styleMask: [.titled], backing: .buffered, defer: false
+            )
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            window.contentView?.addSubview(view)
+            view.frame = NSRect(x: 0, y: 0, width: 1_000, height: height)
+            // Agent text starts at the column's left edge; the bubble hugs the right edge.
+            let x: CGFloat
+            if case .user = content { x = view.columnRect.maxX - 30 } else { x = view.columnRect.minX + 8 }
+            let start = view.convert(NSPoint(x: x, y: 10), to: nil)
+            func send(_ type: NSEvent.EventType, at point: NSPoint) {
+                let event = NSEvent.mouseEvent(
+                    with: type, location: point, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                    context: nil, eventNumber: 0, clickCount: 1, pressure: 1
+                )!
+                switch type {
+                case .leftMouseDown: view.mouseDown(with: event)
+                case .leftMouseDragged: view.mouseDragged(with: event)
+                default: view.mouseUp(with: event)
+                }
+            }
+            // A drag that wanders and returns still counts as a drag.
+            let end = NSPoint(x: start.x + dragDistance, y: start.y)
+            send(.leftMouseDown, at: start)
+            if dragDistance > 0 { send(.leftMouseDragged, at: end) }
+            send(.leftMouseUp, at: start)
+            #expect(opened == (opens ? [URL(string: "https://example.com")!] : []))
+        }
+    }
 }
 
 extension ACPTranscriptNativeRows.Actions {

@@ -33,6 +33,21 @@ import Testing
         #expect(layout.backgrounds[0].rect.minY > layout.lines[1].origin.y + layout.lines[1].height + 7.5)
     }
 
+    @Test func linksAreStyledAndHitTestable() throws {
+        let layout = try #require(ACPTranscriptMarkdownLayout.make(source: "See [docs](https://example.com) now.", width: 400, theme: theme, typography: .default))
+        let line = try #require(layout.lines.first)
+        let runs = CTLineGetGlyphRuns(line.line) as! [CTRun]
+        let linkRun = try #require(runs.first { (CTRunGetAttributes($0) as NSDictionary)[NSAttributedString.Key.link] != nil })
+        let attributes = CTRunGetAttributes(linkRun) as NSDictionary
+        #expect((attributes[NSAttributedString.Key.underlineStyle] as? Int) == NSUnderlineStyle.single.rawValue)
+        #expect(layout.lines[0].underlines.count == 1)
+        let x = CTLineGetOffsetForStringIndex(line.line, CTRunGetStringRange(linkRun).location + 1, nil)
+        #expect(layout.link(at: CGPoint(x: x, y: line.origin.y + line.height / 2)) == URL(string: "https://example.com"))
+        #expect(layout.link(at: CGPoint(x: 1, y: line.origin.y + line.height / 2)) == nil)
+        #expect(layout.link(at: CGPoint(x: 399, y: line.origin.y + line.height / 2)) == nil)
+        #expect(layout.link(at: CGPoint(x: x, y: line.origin.y + line.height + 50)) == nil)
+    }
+
     @Test func linesIntersectingIncludesLinesCutByTheRect() throws {
         let layout = try #require(ACPTranscriptMarkdownLayout.make(source: String(repeating: "word ", count: 400), width: 300, theme: theme, typography: .default))
         let second = layout.lines[1]

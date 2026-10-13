@@ -11,6 +11,18 @@ struct ACPTranscriptMarkdownLayout {
         /// Top-left of the line's box, in a flipped space.
         let origin: CGPoint
         let height: CGFloat
+        /// Underlined runs, which `CTLineDraw` leaves undrawn.
+        var underlines: [Underline] = []
+    }
+
+    /// A rule under one run, relative to its line's origin and baseline.
+    struct Underline {
+        let minX: CGFloat
+        let width: CGFloat
+        /// Distance below the baseline to the rule's top edge.
+        let offset: CGFloat
+        let thickness: CGFloat
+        let color: NSColor
     }
 
     struct Background {
@@ -71,6 +83,23 @@ struct ACPTranscriptMarkdownLayout {
         return first < last ? lines[first..<last] : lines[first..<first]
     }
 
+    /// The link under `point`, in layout coordinates; nil outside link glyphs.
+    func link(at point: CGPoint) -> URL? {
+        let lines = linesIntersecting(CGRect(x: point.x, y: point.y, width: 0, height: 0))
+        guard let line = lines.first(where: { $0.origin.y <= point.y && point.y < $0.origin.y + $0.height }) else { return nil }
+        let x = point.x - line.origin.x
+        guard x >= 0, x < CGFloat(CTLineGetTypographicBounds(line.line, nil, nil, nil)) else { return nil }
+        let index = CTLineGetStringIndexForPosition(line.line, CGPoint(x: x, y: 0))
+        guard index != kCFNotFound else { return nil }
+        for run in CTLineGetGlyphRuns(line.line) as! [CTRun] {
+            let range = CTRunGetStringRange(run)
+            guard index >= range.location, index < range.location + range.length else { continue }
+            let value = (CTRunGetAttributes(run) as NSDictionary)[NSAttributedString.Key.link]
+            return (value as? URL) ?? (value as? String).flatMap(URL.init(string:))
+        }
+        return nil
+    }
+
     /// The first index whose line fails `predicate`, which holds for a prefix.
     private func partitionPoint(_ predicate: (Line) -> Bool) -> Int {
         var low = 0, high = lines.count
@@ -116,7 +145,34 @@ struct ACPTranscriptMarkdownLayout {
         }
 
         private func inline(_ text: String, role: ACPMarkdownInlineRole) -> NSAttributedString {
-            ACPMarkdownInlineRenderer.makeAttributedString(source: text, theme: theme, typography: typography, role: role)
+            let rendered = ACPMarkdownInlineRenderer.makeAttributedString(source: text, theme: theme, typography: typography, role: role)
+            // As `ACPMarkdownInlineText.plainText` styles links for SwiftUI text.
+            rendered.enumerateAttribute(.link, in: NSRange(location: 0, length: rendered.length)) { link, range, _ in
+                guard link != nil else { return }
+                rendered.addAttributes([.foregroundColor: NSColor.linkColor, .underlineStyle: NSUnderlineStyle.single.rawValue], range: range)
+            }
+            return rendered
+        }
+
+        private static func underlines(of line: CTLine) -> [Underline] {
+            var result: [Underline] = []
+            for run in CTLineGetGlyphRuns(line) as! [CTRun] {
+                let attributes = CTRunGetAttributes(run) as NSDictionary
+                guard let style = attributes[NSAttributedString.Key.underlineStyle] as? Int, style != 0,
+                      let font = attributes[NSAttributedString.Key.font] as? NSFont
+                else { continue }
+                var position = CGPoint.zero
+                CTRunGetPositions(run, CFRange(location: 0, length: 1), &position)
+                let thickness = max(1, font.underlineThickness)
+                result.append(Underline(
+                    minX: position.x,
+                    width: CGFloat(CTRunGetTypographicBounds(run, CFRange(location: 0, length: 0), nil, nil, nil)),
+                    offset: -font.underlinePosition - thickness / 2,
+                    thickness: thickness,
+                    color: attributes[NSAttributedString.Key.foregroundColor] as? NSColor ?? .linkColor
+                ))
+            }
+            return result
         }
 
         private mutating func addCode(language: String?, body: String) {
@@ -177,7 +233,7 @@ struct ACPTranscriptMarkdownLayout {
                 CTLineGetTypographicBounds(line, &ascent, &descent, nil)
                 let measured = max(Self.lineHeight(of: text, range: NSRange(location: start, length: count)), ascent + descent)
                 let height = (measured > 0 ? measured : typography.paragraphSize) + lineSpacing
-                lines.append(Line(line: line, origin: CGPoint(x: x, y: y), height: height))
+                lines.append(Line(line: line, origin: CGPoint(x: x, y: y), height: height, underlines: Self.underlines(of: line)))
                 y += height
                 start += count
             }
