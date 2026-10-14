@@ -366,6 +366,7 @@ final class AppState {
     var workspaceNavigationState = WorkspaceNavigationState()
     @ObservationIgnored private var workspaceSpaceCheckpointTask: Task<Void, Never>?
     @ObservationIgnored private var worktreeStatusRescanTask: Task<Void, Never>?
+    @ObservationIgnored private var archivedWorktreePruneTask: Task<Void, Never>?
     @ObservationIgnored private lazy var ggSidebarRefresh = GGSidebarRefreshController()
     @ObservationIgnored private var ggSidebarPreparationTask: Task<Void, Never>?
     private var ggSidebarSnapshots: [String: GGConfigReader.SidebarSnapshot] = [:]
@@ -6449,6 +6450,9 @@ final class AppState {
         defer { isRefreshingProjectTopologies = false }
         let previousPaths = Dictionary(uniqueKeysWithValues: projectsManager.projects.map { ($0.id, $0.path) })
         let previousOperationStates = projectsManager.operationStatesSnapshot()
+        // Before the refresh, which forgets archived paths git no longer
+        // lists and with them the paths whose registration needs removing.
+        await projectsManager.pruneStaleArchivedWorktrees()
         let changed = await projectsManager.refreshAll()
         reconcileSelectionAfterOwnershipChange()
         var completedCreateFailure = false
@@ -6468,6 +6472,25 @@ final class AppState {
             await refreshMainWorktreeUpstreamStatuses(projectId: project.id)
         }
         return changed || completedCreateFailure
+    }
+
+    /// Archived worktrees are hidden and no watcher reloads a project when
+    /// one's directory is deleted, so check for stale ones periodically.
+    func startArchivedWorktreePruning() {
+        guard archivedWorktreePruneTask == nil else { return }
+        archivedWorktreePruneTask = Task { @MainActor [weak self] in
+            while (try? await Task.sleep(for: .seconds(300))) != nil {
+                guard let self else { return }
+                await self.pruneStaleArchivedWorktrees()
+            }
+        }
+    }
+
+    /// Forgets archived worktrees whose directory or checkout is gone.
+    func pruneStaleArchivedWorktrees() async {
+        for projectId in await projectsManager.pruneStaleArchivedWorktrees() {
+            await refreshProjectTopology(projectId: projectId)
+        }
     }
 
     private func restartProjectGitWatchers(previousPaths: [String: String]) {

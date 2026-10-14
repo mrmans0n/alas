@@ -168,6 +168,7 @@ struct RootView: View {
                 // Schedules need reconciled worktrees to resolve their
                 // targets, so the clock starts only once topology is loaded.
                 state.startRunScheduler()
+                state.startArchivedWorktreePruning()
             }
             .onChange(of: state.selectedWorktreeId) { _, _ in
                 state.completeStartupRecoveryIfCenterPaneWillNotAppear()

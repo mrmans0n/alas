@@ -764,6 +764,44 @@ public final class ProjectsManager {
         return worktrees(projectId: projectId).filter { hidden.contains(canonical($0.path)) }
     }
 
+    /// Archived paths of local git projects whose directory is gone or no
+    /// longer holds a checkout. Archived rows are hidden, so nothing else
+    /// notices when they disappear; this reads the persisted paths, so it
+    /// works before the first refresh too.
+    public func staleArchivedWorktreePaths(projectId: String) -> [String] {
+        guard let project = projects.first(where: { $0.id == projectId }),
+              project.host == nil, !project.isFolder
+        else { return [] }
+        return project.hiddenWorktreePaths.filter { path in
+            operationState(forWorktreeId: path, projectId: projectId) == nil
+                && (!Self.isDirectory(path)
+                    || !FileManager.default.fileExists(atPath: URL(fileURLWithPath: path).appendingPathComponent(".git").path))
+        }
+    }
+
+    /// Drops git's registration of every stale archived worktree whose
+    /// directory is gone, and returns the projects that had stale archived
+    /// paths. A refresh of those projects then forgets the archived rows,
+    /// since git no longer lists them as live. `git worktree remove` without
+    /// `--force` only touches the administrative files of a missing
+    /// directory, keeps the branch, and leaves locked worktrees alone. A
+    /// directory that is still there but lost its `.git` keeps git's
+    /// registration: removing it would delete the files left inside.
+    @discardableResult
+    public func pruneStaleArchivedWorktrees() async -> Set<String> {
+        var pruned: Set<String> = []
+        for project in projects {
+            let stale = staleArchivedWorktreePaths(projectId: project.id)
+            guard !stale.isEmpty else { continue }
+            pruned.insert(project.id)
+            let repo = localGitAnchor(project)
+            for path in stale where !FileManager.default.fileExists(atPath: path) {
+                _ = try? await Process.git(["worktree", "remove", path], cwd: repo)
+            }
+        }
+        return pruned
+    }
+
     public func visibleMainWorktree(projectId: String) -> Worktree? {
         guard let project = projects.first(where: { $0.id == projectId }) else { return nil }
         return visibleWorktrees(projectId: projectId).first { isMainWorktree($0, project: project) }
@@ -874,23 +912,29 @@ public final class ProjectsManager {
         !worktreeRefreshFailures.contains(projectId)
     }
 
+    /// Where to run git for a local project. gg clean, or deleting an
+    /// archived worktree, can remove the linked worktree stored as the
+    /// project path; another checkout that still exists answers instead, so
+    /// the deleted row can be reconciled. Cached rows count too, since the
+    /// live list is empty until the first refresh after launch. A directory
+    /// that lost its `.git` is no checkout, and git would run from whatever
+    /// repository encloses it.
+    private func localGitAnchor(_ project: ProjectConfig) -> URL {
+        let configured = URL(fileURLWithPath: project.path)
+        // `HEAD` admits a bare repository.
+        func isRepository(_ url: URL) -> Bool {
+            [".git", "HEAD"].contains { FileManager.default.fileExists(atPath: url.appendingPathComponent($0).path) }
+        }
+        guard project.host == nil, !isRepository(configured) else { return configured }
+        return (worktreesByProject[project.id, default: []] + project.cachedWorktrees)
+            .map(\.path)
+            .first(where: isRepository) ?? configured
+    }
+
     private func refreshWorktreesImpl(projectId: String) async throws -> Bool {
         guard let project = projects.first(where: { $0.id == projectId }) else { return false }
         let configuredURL = URL(fileURLWithPath: project.path)
-        let url: URL
-        // gg clean can remove the linked worktree stored as the project path.
-        // Query from another cached checkout so the deleted row can be reconciled.
-        if project.isFolder {
-            url = configuredURL
-        } else if project.host == nil,
-           !FileManager.default.fileExists(atPath: configuredURL.path),
-           let survivingWorktree = worktreesByProject[projectId, default: []].first(where: {
-               FileManager.default.fileExists(atPath: $0.path.path)
-           }) {
-            url = survivingWorktree.path
-        } else {
-            url = configuredURL
-        }
+        let url = project.isFolder ? configuredURL : localGitAnchor(project)
         // A deleted local folder fails like a deleted repository, so stale
         // project cleanup can find it.
         if project.isFolder, project.host == nil, !Self.isDirectory(configuredURL.path) {

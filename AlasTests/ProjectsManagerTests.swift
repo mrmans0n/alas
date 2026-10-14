@@ -376,11 +376,19 @@ struct ProjectsManagerTests {
         #expect(trees.first?.branch == "main")
     }
 
-    @Test func refreshWorktreesFallsBackWhenConfiguredLinkedWorktreeDisappears() async throws {
+    /// After a relaunch the live list is empty, so the fallback comes from
+    /// the cached rows. A directory left behind without its `.git` is no
+    /// checkout either; it sits outside the repository so git cannot find
+    /// the repository from it.
+    @Test(arguments: [(false, false), (true, false), (true, true)])
+    func refreshWorktreesFallsBackWhenConfiguredLinkedWorktreeDisappears(afterRelaunch: Bool, keepsDirectory: Bool) async throws {
         let repo = try await makeRepo(name: "linked-anchor")
-        defer { try? FileManager.default.removeItem(at: repo) }
+        let linkedPath = URL(fileURLWithPath: repo.path + "-linked")
+        defer {
+            try? FileManager.default.removeItem(at: repo)
+            try? FileManager.default.removeItem(at: linkedPath)
+        }
         let service = WorktreeService()
-        let linkedPath = repo.appendingPathComponent("linked-anchor")
         let projectId = "linked-anchor-project"
         let linkedWorktree = try await service.add(
             repoPath: repo,
@@ -396,16 +404,21 @@ struct ProjectsManagerTests {
             color: "#5fb7c4",
             addedAt: Date()
         )
-        let manager = ProjectsManager(persistedProjects: [project])
+        var manager = ProjectsManager(persistedProjects: [project])
         try await manager.refreshWorktrees(projectId: projectId)
         #expect(manager.worktrees(projectId: projectId).count == 2)
 
-        try await service.remove(
-            repoPath: repo,
-            worktree: linkedWorktree,
-            deleteBranchIfMerged: false,
-            force: false
-        )
+        if keepsDirectory {
+            try FileManager.default.removeItem(at: linkedPath.appendingPathComponent(".git"))
+        } else {
+            try await service.remove(
+                repoPath: repo,
+                worktree: linkedWorktree,
+                deleteBranchIfMerged: false,
+                force: false
+            )
+        }
+        if afterRelaunch { manager = ProjectsManager(persistedProjects: manager.projects) }
         let projectChanged = try await manager.refreshWorktrees(projectId: projectId)
 
         let remaining = manager.worktrees(projectId: projectId)
@@ -628,6 +641,35 @@ extension ProjectsManagerTests {
         // Refresh should drop the orphan since git worktree list doesn't include it.
         #expect(gcDropped)
         #expect(!mgr.isWorktreeHidden(projectId: project.id, path: bogus))
+    }
+
+    @Test func pruningForgetsArchivedWorktreesWhoseDirectoryIsGone() async throws {
+        let repo = try await makeRepo(name: "archive-prune")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let svc = WorktreeService()
+        let gone = try await svc.add(
+            repoPath: repo, base: "main", branch: "gone",
+            destination: repo.appendingPathComponent("wt-gone"), projectId: "p"
+        )
+        let kept = try await svc.add(
+            repoPath: repo, base: "main", branch: "kept",
+            destination: repo.appendingPathComponent("wt-kept"), projectId: "p"
+        )
+        let manager = ProjectsManager(persistedProjects: [ProjectConfig(
+            id: "p", name: "archive-prune", path: repo.path, color: "#5fb7c4", addedAt: Date(),
+            hiddenWorktreePaths: [gone.path.path, kept.path.path]
+        )])
+        try FileManager.default.removeItem(at: gone.path)
+
+        #expect(manager.staleArchivedWorktreePaths(projectId: "p") == [gone.path.path])
+        #expect(await manager.pruneStaleArchivedWorktrees() == ["p"])
+        try await manager.refreshWorktrees(projectId: "p")
+
+        #expect(manager.projects[0].hiddenWorktreePaths == [kept.path.path])
+        let listed = try await Process.git(["worktree", "list", "--porcelain"], cwd: repo).stdout
+        #expect(!listed.contains(gone.path.path))
+        let branches = try await Process.git(["branch", "--list", "gone"], cwd: repo).stdout
+        #expect(branches.contains("gone"))
     }
 
     @Test func refreshPrunesOnlyMissingGGWorktreeOverrides() async throws {
