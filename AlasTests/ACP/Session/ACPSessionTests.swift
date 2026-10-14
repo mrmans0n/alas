@@ -1690,6 +1690,11 @@ struct ACPSessionTests {
         session.apply(.agentMessageChunk(.init(messageId: "m-2", content: .text("Goal set: Ship phase 3"))))
         #expect(lastRowIsNotice("Goal set: Ship phase 3"))
 
+        session.allowsStreamingBoundaryCrossing = false
+        session.apply(.agentMessageChunk(.init(messageId: "m-2", content: .text("Goal set: Ship phase 3"))))
+        #expect(session.transcript.messages.count == 2)
+        session.allowsStreamingBoundaryCrossing = true
+
         session.apply(.agentMessageChunk(.init(messageId: "m-3", content: .text("Goal set: something else"))))
         #expect(!lastRowIsNotice("Goal set: something else"))
 

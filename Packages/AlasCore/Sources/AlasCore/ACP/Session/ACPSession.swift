@@ -1028,6 +1028,11 @@ public final class ACPSession: ChangeTracking, Identifiable {
             if let notice = Self.goalCommandNotice(
                 txt, currentObjective: currentGoal?.objective, clearedObjective: clearedGoalObjective
             ) {
+                // A late replay after load-replay suppression ends re-sends the
+                // confirmation; like `appendStreaming`, drop what is already shown.
+                if !allowsStreamingBoundaryCrossing, transcript.messages.contains(where: {
+                    if case .systemNotice(_, notice) = $0 { true } else { false }
+                }) { return [] }
                 let flushedForNotice = flushPendingReplayCandidates()
                 transcript.appendMessage(.systemNotice(id: UUID(), text: notice))
                 didAppendTranscriptMessage()
