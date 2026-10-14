@@ -244,10 +244,12 @@ extension ACPTranscriptCoreTextRowView {
         let shown = markdown.lines.filter { line in
             line.block != nil && line.origin.y + origin.y + line.height > visible.minY && line.origin.y + origin.y < visible.maxY
         }
-        guard let first = shown.first, let last = shown.last, let firstBlock = first.block, let lastBlock = last.block else { return nil }
-        return (
-            .init(block: firstBlock, index: first.range.location),
-            .init(block: lastBlock, index: last.range.location + last.visibleLength)
-        )
+        // Text order, not y order: a table row's cells share one band.
+        let starts = shown.compactMap { line in line.block.map { TextSelection.Position(block: $0, index: line.range.location) } }
+        let ends = shown.compactMap { line in
+            line.block.map { TextSelection.Position(block: $0, index: line.range.location + line.visibleLength) }
+        }
+        guard let start = starts.min(), let end = ends.max() else { return nil }
+        return (start, end)
     }
 }
