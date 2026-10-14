@@ -162,7 +162,8 @@ This is where `AlasActionService`'s closures go: the domain half to the host, th
 
 ### Enforcing the boundary
 
-- **Core stores are read-only outside the core.** Views keep binding to `ProjectsManager`, `ACPSessionManager`, `RunRecordStore` and the other stores, but only through their reads. Their mutators (claims, hidden state, session lifecycle, run records) become `internal` as the verbs for each domain land, so the app cannot change state except through `AlasHost`. Each phase's exit includes making its domain's mutators internal.
+- **Core stores are read-only outside the core.** Views keep binding to `ProjectsManager`, `ACPSessionManager`, `RunRecordStore` and the other stores, but only through their reads. Their mutators (claims, hidden state, session lifecycle, run records) leave the app's reach as the verbs for each domain land (internal, or test-only SPI when tests seed them), so the app cannot change state except through `AlasHost`. Each phase's exit includes sealing its domain's mutators.
+- **Test fixtures** that seed such states use mutators marked `@_spi(Testing) public`: public, as the package boundary requires for anything tests use, but imported only by tests (`@_spi(Testing) import AlasCore`). App code never imports `Testing`.
 - **App plumbing** that must stay public for the app only (environment integration, presenter wiring) is marked `@_spi(AppHost) public`. The app imports `@_spi(AppHost) import AlasCore`; nothing else does. SPI is for integration seams, never for mutators, which would reopen the bypass.
 - **Out-of-process clients** see only the wire protocol, so the boundary there is the message set.
 
@@ -209,7 +210,7 @@ Two shapes sit on top of the host protocol:
 
 Each phase is one or more independent PRs. It is done when its exit criterion holds on `main`.
 
-1. **Converge worktree lifecycle onto the core.** `AppState`'s create, delete, archive and unarchive call the core verbs, and the duplicated logic is deleted. Claims the app opens before a verb runs (the `.preparingDelete` claim held while a confirmation is up, the optimistic `.creating` row) come from core verbs that return the claim token, so the app never writes operation state itself. *Exit:* `AppState` keeps only dialogs and selection for worktree lifecycle, and `ProjectsManager`'s claim and hidden-state mutators are internal.
+1. **Converge worktree lifecycle onto the core.** `AppState`'s create, delete, archive and unarchive call the core verbs, and the duplicated logic is deleted. Claims the app opens before a verb runs (the `.preparingDelete` claim held while a confirmation is up, the optimistic `.creating` row) come from core verbs that return the claim token, so the app never writes operation state itself. *Exit:* `AppState` keeps only dialogs and selection for worktree lifecycle, and `ProjectsManager`'s claim and hidden-state mutators are out of the app's reach.
 2. **Environment and SPI.** Introduce `AlasHostEnvironment` and `HeadlessHostEnvironment` in place of the hook closures. Mark the remaining app plumbing `@_spi(AppHost)`. *Exit:* `AlasCoreContext` has no settable closure properties, and a test target importing `AlasCore` without SPI cannot reach the plumbing.
 3. **Runs.** Introduce `RunLauncher`; terminal-backed and process-backed runs share start, settle and record. *Exit:* no run observation or settlement call remains in `AppState+RunScripts`.
 4. **Host facade and snapshots.** Add `AlasHost` with `projects`, `worktrees`, `workspaces` and `runs` as value-typed APIs and `snapshot()`. *Exit:* the CLI's `wt list`, `wt new`, `wt delete` and `workspace_list/show` go through the host.

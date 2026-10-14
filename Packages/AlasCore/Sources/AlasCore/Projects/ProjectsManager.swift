@@ -461,7 +461,7 @@ public final class ProjectsManager {
     }
 
     /// Opens or clears a claim for a worktree value.
-    func setOperationState(for worktree: Worktree, state: WorktreeOperationState?) {
+    @_spi(Testing) public func setOperationState(for worktree: Worktree, state: WorktreeOperationState?) {
         setOperationState(forWorktreeId: worktree.id, projectId: worktree.projectId, state: state)
     }
 
@@ -469,7 +469,7 @@ public final class ProjectsManager {
     /// states are not enough to tell operations apart: a worktree deleted,
     /// recreated at the same path and deleted again gets the same claim, and
     /// the first deletion must not release the second one's.
-    func claimOperation(_ state: WorktreeOperationState, for worktree: Worktree) -> UUID {
+    @_spi(Testing) public func claimOperation(_ state: WorktreeOperationState, for worktree: Worktree) -> UUID {
         let replaced = operationState(for: worktree)
         setOperationState(for: worktree, state: state)
         let token = UUID()
@@ -487,7 +487,7 @@ public final class ProjectsManager {
     /// ahead: the state it replaced (such as a failed delete awaiting retry)
     /// comes back. The token is dropped even when a refresh already cleared
     /// the claim, and then nothing is restored.
-    func releaseOperation(_ token: UUID, for worktree: Worktree) {
+    @_spi(Testing) public func releaseOperation(_ token: UUID, for worktree: Worktree) {
         let key = WorktreeOperationKey(projectId: worktree.projectId, worktreeId: worktree.id)
         guard let claim = claimTokens[key], claim.token == token else { return }
         let restored = worktreeOperationStates[key] == nil ? nil : claim.replaced
@@ -496,7 +496,7 @@ public final class ProjectsManager {
 
     /// Ends the claim `token` opened, for an operation that ran: cleared, or
     /// left as `state` (such as a failure to retry), which no claim holds.
-    func finishOperation(_ token: UUID, for worktree: Worktree, leaving state: WorktreeOperationState? = nil) {
+    @_spi(Testing) public func finishOperation(_ token: UUID, for worktree: Worktree, leaving state: WorktreeOperationState? = nil) {
         let key = WorktreeOperationKey(projectId: worktree.projectId, worktreeId: worktree.id)
         guard claimTokens[key]?.token == token else { return }
         setOperationState(for: worktree, state: state)
@@ -504,7 +504,7 @@ public final class ProjectsManager {
 
     /// Moves the claim `token` holds to another stage of its operation,
     /// keeping the token and the state it replaced.
-    func updateClaim(_ token: UUID, to state: WorktreeOperationState, for worktree: Worktree) {
+    @_spi(Testing) public func updateClaim(_ token: UUID, to state: WorktreeOperationState, for worktree: Worktree) {
         let key = WorktreeOperationKey(projectId: worktree.projectId, worktreeId: worktree.id)
         guard let claim = claimTokens[key], claim.token == token, worktreeOperationStates[key] != nil else { return }
         worktreeOperationStates[key] = state
@@ -527,7 +527,7 @@ public final class ProjectsManager {
         worktreeOperationStates
     }
 
-    func setOperationState(forWorktreeId worktreeId: String, projectId: String, state: WorktreeOperationState?) {
+    @_spi(Testing) public func setOperationState(forWorktreeId worktreeId: String, projectId: String, state: WorktreeOperationState?) {
         let key = WorktreeOperationKey(projectId: projectId, worktreeId: worktreeId)
         claimTokens.removeValue(forKey: key)
         if let state {
@@ -844,7 +844,7 @@ public final class ProjectsManager {
         ))
     }
 
-    func setWorktreeHidden(projectId: String, path: URL, hidden: Bool) {
+    @_spi(Testing) public func setWorktreeHidden(projectId: String, path: URL, hidden: Bool) {
         guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
         let key = canonical(path)
         var paths = projects[idx].hiddenWorktreePaths

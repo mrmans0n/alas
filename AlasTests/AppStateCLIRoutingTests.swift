@@ -1,7 +1,7 @@
 import Combine
 import Foundation
 import Testing
-@testable import AlasCore
+@_spi(Testing) import AlasCore
 @testable import Alas
 
 @Suite(.serialized)

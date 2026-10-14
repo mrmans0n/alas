@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-@testable import AlasCore
+@_spi(Testing) import AlasCore
 @testable import Alas
 
 // Serialize: each test creates an ephemeral repo and shells out to git.
