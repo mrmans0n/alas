@@ -26,7 +26,12 @@ struct ProjectAgentSettingsView: View {
                     Text("Use global setting · \(globalName)").tag(ProjectAgentSelection.global)
                     Text("None").tag(ProjectAgentSelection.none)
                     ForEach(enabledAgents) { agent in
-                        Text(agent.displayName).tag(ProjectAgentSelection.agent(agent.id))
+                        Label {
+                            Text(agent.displayName)
+                        } icon: {
+                            Image(nsImage: AgentLogoView.menuImage(for: agent, size: 14))
+                        }
+                        .tag(ProjectAgentSelection.agent(agent.id))
                     }
                     if case .agent(let id) = scripts.agentSelection,
                        !enabledAgents.contains(where: { $0.id == id }) {
