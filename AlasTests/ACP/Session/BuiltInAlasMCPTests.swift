@@ -54,6 +54,21 @@ struct BuiltInAlasMCPTests {
         #expect(make(configuredServers: [.stdio(name: "other", command: "npx")]) != nil)
     }
 
+    @Test("an SSH session requests the relayed visual tool unless disabled, overridden, or unreachable through its adapter",
+          arguments: [
+              (true, [], ACPMCPInjectionSupport.sessionNew, true),
+              (false, [], .sessionNew, false),
+              (true, [ProjectMCPServer.stdio(name: " alas ", command: "/dev/alas")], .sessionNew, false),
+              (true, [], .external(hint: "Pi ignores ACP MCP config."), false),
+          ] as [(Bool, [ProjectMCPServer], ACPMCPInjectionSupport, Bool)])
+    func remoteVisualInjectionPolicy(
+        enabled: Bool, configuredServers: [ProjectMCPServer], injectionSupport: ACPMCPInjectionSupport, expected: Bool
+    ) {
+        #expect(BuiltInAlasMCP.injectsRemoteVisual(
+            enabled: enabled, configuredServers: configuredServers, injectionSupport: injectionSupport
+        ) == expected)
+    }
+
     @Test("is dropped for remote sessions like any stdio server")
     func remoteFilterDropsIt() {
         let injection = make()!

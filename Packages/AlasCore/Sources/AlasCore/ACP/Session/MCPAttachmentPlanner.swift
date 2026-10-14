@@ -21,6 +21,9 @@ public enum MCPAttachmentSkipReason: Equatable, Sendable {
     case repoDeclined
     /// Repo-defined server the user disabled for this project.
     case repoDisabled
+    /// The SSH host cannot relay the built-in visual tool (e.g. an outdated
+    /// helper or lost session ownership).
+    case remoteRelayUnavailable(String)
 }
 
 public enum MCPAttachmentDisposition: Equatable, Sendable {

@@ -36,8 +36,10 @@ public struct RemoteHelperCapabilities: Codable, Equatable, Sendable {
     public let acp: Bool?
     public let ping: Bool
     public var sessionCoordination: Int? = nil
+    /// `1` when the helper relays the visual-only MCP server (`mcp/*`).
+    public var visualMCPRelay: Int? = nil
 
-    public init(watchKinds: [RemoteHelperWatchKind], fs: RemoteHelperFSCapabilities, search: Bool?, proc: Bool?, acp: Bool?, ping: Bool, sessionCoordination: Int? = nil) {
+    public init(watchKinds: [RemoteHelperWatchKind], fs: RemoteHelperFSCapabilities, search: Bool?, proc: Bool?, acp: Bool?, ping: Bool, sessionCoordination: Int? = nil, visualMCPRelay: Int? = nil) {
         self.watchKinds = watchKinds
         self.fs = fs
         self.search = search
@@ -45,6 +47,7 @@ public struct RemoteHelperCapabilities: Codable, Equatable, Sendable {
         self.acp = acp
         self.ping = ping
         self.sessionCoordination = sessionCoordination
+        self.visualMCPRelay = visualMCPRelay
     }
 }
 
@@ -558,4 +561,120 @@ public struct RemoteHelperProcAttachHandle: Sendable {
         self.stderrOffset = stderrOffset
         self.events = events
     }
+}
+
+// MARK: Visual MCP relay (`mcp/*`)
+
+/// Byte limits of the visual MCP relay. A raw MCP frame is bounded so that
+/// its base64 form plus envelope metadata stays under the envelope limit.
+public enum RemoteMCPRelayLimits: Sendable {
+    public static let protocolVersion = 1
+    public static let maxFrameBytes = 4 * 1024 * 1024
+    public static let maxEnvelopeBytes = 6 * 1024 * 1024
+}
+
+/// The app's local identity for one relay route. It survives helper
+/// reconnects; each helper registration behind it gets a fresh relay id.
+public struct RemoteMCPRouteHandle: Hashable, Sendable {
+    public let id: UUID
+
+    public init(id: UUID = UUID()) {
+        self.id = id
+    }
+}
+
+/// The `mcp/register` result: the stable stdio command the remote agent runs.
+public struct RemoteMCPRouteDescriptor: Codable, Equatable, Sendable {
+    public let recordId: String
+    public let relayId: String
+    public let proxyCommand: String
+    public let proxyArgs: [String]
+    public let relayProtocolVersion: Int
+
+    public init(recordId: String, relayId: String, proxyCommand: String, proxyArgs: [String], relayProtocolVersion: Int) {
+        self.recordId = recordId
+        self.relayId = relayId
+        self.proxyCommand = proxyCommand
+        self.proxyArgs = proxyArgs
+        self.relayProtocolVersion = relayProtocolVersion
+    }
+}
+
+/// Where a relayed request came from. Only the helper client creates one,
+/// and a completion is accepted only for the registration and helper
+/// generation that delivered it.
+public struct RemoteMCPRelayOrigin: Equatable, Sendable {
+    public let route: RemoteMCPRouteHandle
+    public let relayId: String
+    public let helperGeneration: Int
+    public let requestId: String
+
+    public init(route: RemoteMCPRouteHandle, relayId: String, helperGeneration: Int, requestId: String) {
+        self.route = route
+        self.relayId = relayId
+        self.helperGeneration = helperGeneration
+        self.requestId = requestId
+    }
+}
+
+public enum RemoteMCPRelayEvent: Equatable, Sendable {
+    case available
+    case request(origin: RemoteMCPRelayOrigin, frame: Data)
+    case unavailable
+}
+
+public enum RemoteMCPRelayCompletion: Equatable, Sendable {
+    /// The MCP response bytes for an inner request.
+    case frame(Data)
+    /// Acknowledges an inner notification; the proxy writes nothing.
+    case notification
+    case failed(code: Int, message: String)
+}
+
+struct RemoteMCPRegisterParams: Codable, Equatable, Sendable {
+    let fence: RemoteSessionFence
+    let relayId: String
+}
+
+struct RemoteMCPRequestParams: Codable, Equatable, Sendable {
+    let requestId: String
+    let recordId: String
+    let relayId: String
+    let frameBase64: String
+}
+
+struct RemoteMCPCompleteParams: Encodable, Sendable {
+    let fence: RemoteSessionFence
+    let relayId: String
+    let requestId: String
+    let completion: RemoteMCPRelayCompletion
+
+    private enum CodingKeys: String, CodingKey {
+        case fence, relayId, requestId, responseBase64, error
+    }
+
+    private struct Failure: Encodable {
+        let code: Int
+        let message: String
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(fence, forKey: .fence)
+        try container.encode(relayId, forKey: .relayId)
+        try container.encode(requestId, forKey: .requestId)
+        switch completion {
+        case .frame(let data):
+            try container.encode(data.base64EncodedString(), forKey: .responseBase64)
+        case .notification:
+            // An explicit null, distinct from an omitted field, acknowledges a notification.
+            try container.encodeNil(forKey: .responseBase64)
+        case .failed(let code, let message):
+            try container.encode(Failure(code: code, message: message), forKey: .error)
+        }
+    }
+}
+
+struct RemoteMCPOKResult: Codable, Equatable, Sendable {
+    let ok: Bool
 }

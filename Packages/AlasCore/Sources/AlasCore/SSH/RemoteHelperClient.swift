@@ -54,6 +54,19 @@ private struct RemoteHelperProcOffsets {
     }
 }
 
+private struct ActiveRemoteMCPRoute {
+    let fence: RemoteSessionFence
+    /// The helper registration currently serving the route; nil while the
+    /// helper is down or before a replay registers it again.
+    var registration: (relayId: String, generation: Int)?
+    let continuation: AsyncStream<RemoteMCPRelayEvent>.Continuation
+
+    init(fence: RemoteSessionFence, continuation: AsyncStream<RemoteMCPRelayEvent>.Continuation) {
+        self.fence = fence
+        self.continuation = continuation
+    }
+}
+
 public enum RemoteHelperClientError: LocalizedError, Equatable, Sendable {
     case notRunning
     case unavailable(String)
@@ -102,7 +115,7 @@ public actor RemoteHelperClient {
     private var dispatchTask: Task<Void, Never>?
     private var idleShutdownTask: Task<Void, Never>?
     private var generation = 0
-    private var coordinationCapability: (generation: Int, supported: Bool)?
+    private var helperCapabilities: (generation: Int, capabilities: RemoteHelperCapabilities)?
     private var nextId = 0
     private var nextClientSubscriptionId = 0
     private var pending: [JSONRPCID: CheckedContinuation<Data, Error>] = [:]
@@ -114,6 +127,7 @@ public actor RemoteHelperClient {
     private var procOffsets: [String: RemoteHelperProcOffsets] = [:]
     private var detachedProcIds: Set<String> = []
     private var pluginProcStreams: [String: AsyncStream<RemotePluginProcEvent>.Continuation] = [:]
+    private var mcpRoutes: [RemoteMCPRouteHandle: ActiveRemoteMCPRoute] = [:]
     private var subscriptionReplayTask: Task<Void, Error>?
     private var subscriptionsNeedReplay = false
     private var lastExitStatus: Int32?
@@ -159,7 +173,7 @@ public actor RemoteHelperClient {
         let helloGeneration = generation
         let result: RemoteHelperHelloResult = try await request(method: "hello", params: params)
         if generation == helloGeneration {
-            coordinationCapability = (helloGeneration, result.capabilities.sessionCoordination == 1)
+            helperCapabilities = (helloGeneration, result.capabilities)
         }
         return result
     }
@@ -582,11 +596,144 @@ public actor RemoteHelperClient {
         try await request(method: "acp/list", params: RemoteHelperNoParams(), replaySubscriptionsOnStart: false)
     }
 
+    // MARK: Visual MCP relay (`mcp/*`)
+
+    /// Registers a relay route for a fenced remote session record. The
+    /// returned descriptor is stable for the record; the route keeps
+    /// following helper reconnects (with fresh relay ids) until it is closed.
+    /// Relayed MCP bytes are opaque and never path-rewritten.
+    public func openMCPRoute(fence: RemoteSessionFence) async throws -> (
+        handle: RemoteMCPRouteHandle,
+        descriptor: RemoteMCPRouteDescriptor,
+        events: AsyncStream<RemoteMCPRelayEvent>
+    ) {
+        _ = try ensureStarted()
+        if helperCapabilities?.generation != generation { _ = try await hello() }
+        guard helperCapabilities?.generation == generation,
+              helperCapabilities?.capabilities.visualMCPRelay == RemoteMCPRelayLimits.protocolVersion
+        else { throw RemoteSessionUnavailable.visualRelayRequired }
+        let handle = RemoteMCPRouteHandle()
+        let (events, continuation) = AsyncStream.makeStream(of: RemoteMCPRelayEvent.self)
+        mcpRoutes[handle] = ActiveRemoteMCPRoute(fence: fence, continuation: continuation)
+        do {
+            let descriptor = try await registerMCPRoute(handle)
+            return (handle, descriptor, events)
+        } catch {
+            mcpRoutes.removeValue(forKey: handle)
+            continuation.finish()
+            scheduleIdleShutdownIfPossible()
+            throw error
+        }
+    }
+
+    /// Answers one relayed request on the helper process that delivered it.
+    /// A completion for a closed route, a replaced registration, or an
+    /// earlier helper generation is dropped: it never restarts the helper or
+    /// reaches a successor.
+    public func completeMCPRoute(origin: RemoteMCPRelayOrigin, completion: RemoteMCPRelayCompletion) async throws {
+        guard let route = mcpRoutes[origin.route],
+              let registration = route.registration,
+              registration.relayId == origin.relayId,
+              registration.generation == origin.helperGeneration
+        else { throw RemoteHelperClientError.notRunning }
+        var completion = completion
+        if case .frame(let data) = completion, data.count > RemoteMCPRelayLimits.maxFrameBytes {
+            completion = .failed(code: -32000, message: "Alas visual relay response is too large")
+        }
+        let _: RemoteMCPOKResult = try await request(
+            method: "mcp/complete",
+            params: RemoteMCPCompleteParams(
+                fence: route.fence,
+                relayId: origin.relayId,
+                requestId: origin.requestId,
+                completion: completion
+            ),
+            replaySubscriptionsOnStart: false,
+            stripVirtualPaths: false,
+            requiredGeneration: origin.helperGeneration
+        )
+    }
+
+    /// Forgets the route first, then unregisters it best effort on the
+    /// helper process that registered it. Never starts a helper.
+    public func closeMCPRoute(_ handle: RemoteMCPRouteHandle) async {
+        guard let route = mcpRoutes.removeValue(forKey: handle) else { return }
+        route.continuation.finish()
+        defer { scheduleIdleShutdownIfPossible() }
+        guard let registration = route.registration else { return }
+        let _: RemoteMCPOKResult? = try? await request(
+            method: "mcp/unregister",
+            params: RemoteMCPRegisterParams(fence: route.fence, relayId: registration.relayId),
+            replaySubscriptionsOnStart: false,
+            stripVirtualPaths: false,
+            requiredGeneration: registration.generation
+        )
+    }
+
+    private func registerMCPRoute(_ handle: RemoteMCPRouteHandle) async throws -> RemoteMCPRouteDescriptor {
+        _ = try ensureStarted()
+        guard let fence = mcpRoutes[handle]?.fence else { throw CancellationError() }
+        let relayId = UUID().uuidString.lowercased()
+        let registrationGeneration = generation
+        // The helper can relay a request before its register reply arrives.
+        mcpRoutes[handle]?.registration = (relayId, registrationGeneration)
+        let descriptor: RemoteMCPRouteDescriptor
+        do {
+            descriptor = try await request(
+                method: "mcp/register",
+                params: RemoteMCPRegisterParams(fence: fence, relayId: relayId),
+                replaySubscriptionsOnStart: false,
+                stripVirtualPaths: false,
+                requiredGeneration: registrationGeneration
+            )
+        } catch {
+            if mcpRoutes[handle]?.registration?.relayId == relayId {
+                mcpRoutes[handle]?.registration = nil
+            }
+            throw error
+        }
+        guard mcpRoutes[handle]?.registration?.relayId == relayId, generation == registrationGeneration else {
+            throw RemoteHelperClientError.notRunning
+        }
+        guard descriptor.relayId == relayId, descriptor.recordId == fence.recordId,
+              descriptor.relayProtocolVersion == RemoteMCPRelayLimits.protocolVersion
+        else {
+            mcpRoutes[handle]?.registration = nil
+            throw RemoteHelperClientError.decoding("mcp/register returned a mismatched route")
+        }
+        mcpRoutes[handle]?.continuation.yield(.available)
+        return descriptor
+    }
+
+    private func emitMCPRequest(_ data: Data) {
+        guard data.count <= RemoteMCPRelayLimits.maxEnvelopeBytes,
+              let env = try? JSONDecoder().decode(JSONRPCEnvelope<RemoteMCPRequestParams>.self, from: data),
+              let params = env.params,
+              params.frameBase64.utf8.count <= (RemoteMCPRelayLimits.maxFrameBytes + 2) / 3 * 4,
+              let frame = Data(base64Encoded: params.frameBase64),
+              frame.count <= RemoteMCPRelayLimits.maxFrameBytes,
+              let (handle, route) = mcpRoutes.first(where: {
+                  $0.value.registration?.relayId == params.relayId
+                      && $0.value.registration?.generation == generation
+                      && $0.value.fence.recordId == params.recordId
+              })
+        else { return }
+        route.continuation.yield(.request(
+            origin: RemoteMCPRelayOrigin(
+                route: handle,
+                relayId: params.relayId,
+                helperGeneration: generation,
+                requestId: params.requestId
+            ),
+            frame: frame
+        ))
+    }
+
     public func reconnectAfterUpgrade() {
         guard let previousTransport = transport else { return }
         // Retire this generation before the old transport's asynchronous exit.
         generation += 1
-        coordinationCapability = nil
+        helperCapabilities = nil
         dispatchTask?.cancel()
         handleExit(0)
         previousTransport.terminate()
@@ -603,6 +750,11 @@ public actor RemoteHelperClient {
             subscription.updatesContinuation.finish()
         }
         activeSubscriptions.removeAll()
+        for route in mcpRoutes.values {
+            route.continuation.yield(.unavailable)
+            route.continuation.finish()
+        }
+        mcpRoutes.removeAll()
         for search in activeSearches.values {
             search.continuation.finish(throwing: RemoteHelperClientError.notRunning)
         }
@@ -636,11 +788,21 @@ public actor RemoteHelperClient {
         params: Params,
         replaySubscriptionsOnStart: Bool = true,
         stripVirtualPaths: Bool = true,
-        requiresSessionCoordination: Bool = false
+        requiresSessionCoordination: Bool = false,
+        requiredGeneration: Int? = nil
     ) async throws -> Result {
-        let didStart = try ensureStarted()
+        let didStart: Bool
+        if let requiredGeneration {
+            // Bound to one helper process: never start or reach a successor.
+            guard transport != nil, generation == requiredGeneration else {
+                throw RemoteHelperClientError.notRunning
+            }
+            didStart = false
+        } else {
+            didStart = try ensureStarted()
+        }
         if replaySubscriptionsOnStart {
-            if didStart, !activeSubscriptions.isEmpty {
+            if didStart, !activeSubscriptions.isEmpty || !mcpRoutes.isEmpty {
                 subscriptionsNeedReplay = true
             }
             if subscriptionsNeedReplay {
@@ -651,9 +813,9 @@ public actor RemoteHelperClient {
             }
         }
         if requiresSessionCoordination {
-            if coordinationCapability?.generation != generation { _ = try await hello() }
-            guard coordinationCapability?.generation == generation,
-                  coordinationCapability?.supported == true else { throw RemoteSessionUnavailable.helperRequired }
+            if helperCapabilities?.generation != generation { _ = try await hello() }
+            guard helperCapabilities?.generation == generation,
+                  helperCapabilities?.capabilities.sessionCoordination == 1 else { throw RemoteSessionUnavailable.helperRequired }
         }
         idleShutdownTask?.cancel()
         idleShutdownTask = nil
@@ -716,7 +878,7 @@ public actor RemoteHelperClient {
     }
 
     private func startSubscriptionReplayIfNeeded() {
-        guard subscriptionReplayTask == nil, !activeSubscriptions.isEmpty else { return }
+        guard subscriptionReplayTask == nil, !activeSubscriptions.isEmpty || !mcpRoutes.isEmpty else { return }
         subscriptionReplayTask = Task { [weak self] in
             guard let self else { return }
             try await self.replayActiveSubscriptions()
@@ -746,7 +908,8 @@ public actor RemoteHelperClient {
             _ = try ensureStarted()
             let replayGeneration = generation
             let subscriptions = activeSubscriptions
-            guard !subscriptions.isEmpty else {
+            let routes = mcpRoutes.keys.filter { mcpRoutes[$0]?.registration == nil }
+            guard !subscriptions.isEmpty || !routes.isEmpty else {
                 subscriptionsNeedReplay = false
                 return
             }
@@ -794,13 +957,29 @@ public actor RemoteHelperClient {
                 )
                 subscription.updatesContinuation.yield(.available)
             }
+            // Only registrations are replayed, never relayed MCP frames. A
+            // route whose fence went stale stays unavailable instead of
+            // failing the replay that unrelated requests wait on.
+            for handle in routes where !shouldRestartReplay {
+                guard transport != nil, generation == replayGeneration else {
+                    shouldRestartReplay = true
+                    break
+                }
+                do {
+                    _ = try await registerMCPRoute(handle)
+                } catch where transport == nil || generation != replayGeneration {
+                    shouldRestartReplay = true
+                } catch {
+                    continue
+                }
+            }
 
             guard shouldRestartReplay else {
                 subscriptionsNeedReplay = false
                 return
             }
             restartCount += 1
-            guard restartCount <= subscriptions.count + 1 else {
+            guard restartCount <= subscriptions.count + routes.count + 1 else {
                 throw RemoteHelperClientError.notRunning
             }
         }
@@ -878,6 +1057,10 @@ public actor RemoteHelperClient {
                 stream.finish()
             }
             scheduleIdleShutdownIfPossible()
+            return
+        }
+        if head.method == "mcp/request" {
+            emitMCPRequest(data)
             return
         }
         if head.method == "proc/output",
@@ -964,12 +1147,18 @@ public actor RemoteHelperClient {
         lastExitStatus = status
         transport = nil
         dispatchTask = nil
-        subscriptionsNeedReplay = !activeSubscriptions.isEmpty
+        subscriptionsNeedReplay = !activeSubscriptions.isEmpty || !mcpRoutes.isEmpty
         idleShutdownTask?.cancel()
         idleShutdownTask = nil
         drainPending(with: RemoteHelperClientError.notRunning)
         for subscription in activeSubscriptions.values {
             subscription.updatesContinuation.yield(.unavailable)
+        }
+        // The helper's pending exchanges died with it; only the registration
+        // is replayed, under a fresh relay id.
+        for handle in mcpRoutes.keys {
+            mcpRoutes[handle]?.registration = nil
+            mcpRoutes[handle]?.continuation.yield(.unavailable)
         }
         for search in activeSearches.values {
             search.continuation.finish(throwing: RemoteHelperClientError.notRunning)
@@ -1040,6 +1229,7 @@ public actor RemoteHelperClient {
               activeSearches.isEmpty,
               activeProcAttachments.isEmpty,
               pluginProcStreams.isEmpty,
+              mcpRoutes.isEmpty,
               transport != nil else { return }
         idleShutdownTask?.cancel()
         let delay = idleShutdownNanoseconds
@@ -1054,7 +1244,8 @@ public actor RemoteHelperClient {
               activeSubscriptions.isEmpty,
               activeSearches.isEmpty,
               activeProcAttachments.isEmpty,
-              pluginProcStreams.isEmpty else { return }
+              pluginProcStreams.isEmpty,
+              mcpRoutes.isEmpty else { return }
         shutdown()
     }
 

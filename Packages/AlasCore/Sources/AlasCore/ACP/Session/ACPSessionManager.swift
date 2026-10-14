@@ -149,10 +149,8 @@ public final class ACPSessionManager: ChangeTracking {
         unavailableDescriptorIDs: Set<String>
     )?
     public typealias BuiltInMCPProvider = @MainActor (
-        _ worktreePath: String,
-        _ sessionId: ACPSession.ID,
-        _ adapterSupportsHTTP: Bool
-    ) async -> BuiltInAlasMCP.Injection?
+        _ context: BuiltInMCPAttachmentContext
+    ) async -> BuiltInMCPAttachment
     /// Builds the gg-mcp server entry for a worktree path, or nil when gg
     /// integration is disabled/unavailable for that worktree. Mirrors
     /// `BuiltInMCPProvider` but is synchronous — gg gating needs no async work.
@@ -225,11 +223,14 @@ public final class ACPSessionManager: ChangeTracking {
     private let mcpProjectContextProvider: MCPProjectContextProvider?
     private let frozenMCPAttachmentProvider: FrozenMCPAttachmentProvider?
     private let launchSpecTransformer: ACPLaunchSpecTransformer
-    /// Builds the app-provided "alas" MCP server entry for a worktree path
-    /// and local ACP session id,
-    /// or nil when injection is disabled/unavailable. Fetched per attach so
-    /// the settings toggle applies to the next (re)connect.
+    /// Builds the app-provided "alas" MCP server entry for an attach: the
+    /// full local server, the visual-only relay for an SSH session, or why
+    /// there is none. Fetched per attach so the settings toggle applies to
+    /// the next (re)connect.
     private let builtInMCPProvider: BuiltInMCPProvider?
+    /// The prepared built-in server of each session's current connection,
+    /// keyed by the connection owner (attach attempt) that requested it.
+    private var builtInMCPAttachments: [ACPSession.ID: (ownerID: UUID, attachment: PreparedBuiltInMCPAttachment)] = [:]
     /// The built-in MCP server's last hello for a local session id, or nil
     /// without one. Read after the post-attach grace to decide between
     /// `.registered` and `.notRegistered`, and at attach to tell whether a
@@ -1652,6 +1653,7 @@ public final class ACPSessionManager: ChangeTracking {
             let replacement = AttachmentAttempt()
             attachmentAttempts[sessionId] = replacement
             connectionOwnerIDs[sessionId] = replacement.id
+            retireBuiltInMCPAttachment(sessionId: sessionId)
             brokerCallbackOwnerIDs[sessionId] = nil
             session.agentState = .idle
             await runAttachmentAttempt(replacement, to: sessionId, freshlyCreated: false)
@@ -5402,6 +5404,7 @@ extension ACPSessionManager {
                 let previousRunner = runners.removeValue(forKey: sessionId)
                 recordUnreportedUsage(of: previousRunner)
                 connectionOwnerIDs[sessionId] = nil
+                retireBuiltInMCPAttachment(sessionId: sessionId)
                 brokerCallbackOwnerIDs[sessionId] = nil
                 previousRunner?.stop()
                 previousAttempt?.connectionShutdownRequested = true
@@ -5483,6 +5486,7 @@ extension ACPSessionManager {
     /// in-flight prompt, tear down the runner/agent, and become a mirror.
     private func standDown(sessionId: ACPSession.ID, leaseToken: String) async {
         guard _ownedLeases.contains(sessionId), ownedLeaseTokens[sessionId] == leaseToken else { return }
+        retireBuiltInMCPAttachment(sessionId: sessionId)
         stopHeartbeat(sessionId: sessionId)
         stopWriterWatch(sessionId: sessionId)
         remoteCoordinator?.markUnavailable(sessionId: sessionId)
@@ -5606,6 +5610,7 @@ extension ACPSessionManager {
     /// Remote writer heartbeats end with their lease release, not with preparation.
     public func prepareForDisposal() {
         isDisposed = true   // must be first: in-flight attach resumes after this and checks the flag
+        for sid in Array(builtInMCPAttachments.keys) { retireBuiltInMCPAttachment(sessionId: sid) }
         for session in sessions.values {
             session.nextPromptActivity.send()
             session.nextPromptTeardown.send()
@@ -5956,6 +5961,7 @@ extension ACPSessionManager {
         attempt.requiresFreshBrokerNamespace = pendingFreshBrokerNamespaces.contains(sessionId)
         attachmentAttempts[sessionId] = attempt
         connectionOwnerIDs[sessionId] = attempt.id
+        retireBuiltInMCPAttachment(sessionId: sessionId)
         brokerCallbackOwnerIDs[sessionId] = nil
         await runAttachmentAttempt(
             attempt,
@@ -5990,7 +5996,54 @@ extension ACPSessionManager {
             return
         }
         await performAttach(to: sessionId, freshlyCreated: freshlyCreated, attempt: attempt)
+        if connectionOwnerIDs[sessionId] != attempt.id || runners[sessionId] == nil {
+            retireBuiltInMCPAttachment(sessionId: sessionId, ownerID: attempt.id)
+        }
         await detachRetiringConnectionIfNeeded(for: attempt, sessionId: sessionId)
+    }
+
+    /// Ends the built-in server prepared for a session's connection; with
+    /// `ownerID`, only that attach's, so a stale cleanup never ends a
+    /// replacement's. Relayed calls are refused from here on, since the
+    /// attachment's authorization checks the connection owner synchronously;
+    /// releasing the helper route finishes in the background.
+    private func retireBuiltInMCPAttachment(sessionId: ACPSession.ID, ownerID: UUID? = nil) {
+        guard let entry = builtInMCPAttachments[sessionId],
+              ownerID == nil || entry.ownerID == ownerID
+        else { return }
+        builtInMCPAttachments.removeValue(forKey: sessionId)
+        Task { await entry.attachment.invalidate() }
+    }
+
+    private func builtInMCPAttachmentContext(
+        sessionId: ACPSession.ID,
+        attempt: AttachmentAttempt,
+        injectionSupport: ACPMCPInjectionSupport,
+        location: BuiltInMCPAttachmentContext.Location
+    ) -> BuiltInMCPAttachmentContext {
+        let ownerID = attempt.id
+        let remoteFence: RemoteSessionFence?
+        if case .ssh(_, let fence) = location { remoteFence = fence } else { remoteFence = nil }
+        return BuiltInMCPAttachmentContext(
+            worktreePath: worktreePath,
+            sessionId: sessionId,
+            injectionSupport: injectionSupport,
+            location: location,
+            isCurrent: { [weak self] in
+                guard let self, !self.isDisposed,
+                      self.connectionOwnerIDs[sessionId] == ownerID,
+                      self.isWriter(for: sessionId)
+                else { return false }
+                guard let remoteFence else { return true }
+                return self.remoteCoordinator?.fence(sessionId: sessionId) == remoteFence
+            },
+            noteRegistered: { [weak self] in
+                guard let self, self.connectionOwnerIDs[sessionId] == ownerID,
+                      let session = self.sessions[sessionId]
+                else { return }
+                session.builtInMCPRegistration = .registered
+            }
+        )
     }
 
     private func isCurrentAttachment(
@@ -6743,20 +6796,50 @@ extension ACPSessionManager {
                 repoTrust: projectContext.repoTrust
             ))
             // The built-in alas server composes after planning (it is not
-            // user configuration). It is local-only by construction — its
-            // command and socket live on this machine — so remote sessions
-            // skip it entirely instead of reporting it unavailable on every
-            // connect.
+            // user configuration). A local session gets the full local
+            // server. An SSH session gets only `visual_show`, through a stdio
+            // proxy the remote helper relays back to this Mac under the
+            // session's current remote fence; local commands and sockets never
+            // reach the remote agent.
             let remoteHost = self.effectiveRemoteHost()
-            let builtInMCP: BuiltInAlasMCP.Injection?
-            if remoteHost == nil {
-                builtInMCP = await builtInMCPProvider?(worktreePath, sessionId, initialized.mcpCapabilities.http)
-                guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
-                    await connection.shutdown()
-                    return
-                }
+            let builtInLocation: BuiltInMCPAttachmentContext.Location?
+            if let remoteHost {
+                builtInLocation = remoteCoordinator?.hasAuthority(sessionId: sessionId) == true
+                    ? remoteCoordinator?.fence(sessionId: sessionId).map { .ssh(host: remoteHost, fence: $0) }
+                    : nil
             } else {
+                builtInLocation = .local(adapterSupportsHTTP: initialized.mcpCapabilities.http)
+            }
+            let builtInAttachment: BuiltInMCPAttachment
+            if let builtInMCPProvider, let builtInLocation {
+                builtInAttachment = await builtInMCPProvider(builtInMCPAttachmentContext(
+                    sessionId: sessionId,
+                    attempt: attempt,
+                    injectionSupport: spec.mcpInjection,
+                    location: builtInLocation
+                ))
+            } else {
+                builtInAttachment = .omitted
+            }
+            let builtInMCP: BuiltInAlasMCP.Injection?
+            let builtInSkippedStatus: MCPAttachmentServerStatus?
+            switch builtInAttachment {
+            case .prepared(let prepared):
+                builtInMCP = prepared.injection
+                builtInSkippedStatus = nil
+                retireBuiltInMCPAttachment(sessionId: sessionId)
+                builtInMCPAttachments[sessionId] = (attempt.id, prepared)
+            case .skipped(let status):
                 builtInMCP = nil
+                builtInSkippedStatus = status
+            case .omitted:
+                builtInMCP = nil
+                builtInSkippedStatus = nil
+            }
+            guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
+                retireBuiltInMCPAttachment(sessionId: sessionId, ownerID: attempt.id)
+                await connection.shutdown()
+                return
             }
             // `.external` adapters (e.g. Pi) ignore the ACP `mcpServers` wire
             // config entirely and reach Alas tools through the injected CLI
@@ -6777,6 +6860,7 @@ extension ACPSessionManager {
             // said its one hello back then and won't again, so this attach
             // must not demand a fresh one (see `MCPRegistrationDecision`).
             let helloBeforeAttach = builtInMCPHello?(sessionId)
+            let builtInToolScope = builtInMCP?.toolScope ?? .full
             var reattachedToRunningServer = shouldTrackBuiltInRegistration
                 && MCPRegistrationDecision.reattachesRunningServer(
                     builtInTransport: builtInMCP?.status.transport,
@@ -6814,10 +6898,12 @@ extension ACPSessionManager {
             if let builtInMCP {
                 plannedWireServers.append(builtInMCP.server)
                 plannedStatuses.append(builtInMCP.status)
+            } else if let builtInSkippedStatus {
+                plannedStatuses.append(builtInSkippedStatus)
             }
-            // gg-mcp composes the same way as the alas built-in: after
-            // planning, local-only, suppressed by a user-configured server
-            // of the same name (checked inside the injection).
+            // gg-mcp composes after planning like the alas built-in and is
+            // suppressed by a user-configured server of the same name
+            // (checked inside the injection), but it stays local-only.
             let ggMCP = remoteHost == nil ? ggMCPProvider?(worktreePath) : nil
             if let ggMCP {
                 plannedWireServers.append(ggMCP.server)
@@ -6872,10 +6958,14 @@ extension ACPSessionManager {
             } else {
                 session.mcpExternalStatus = nil
             }
+            // User and project servers are filtered strictly; the trusted
+            // helper relay is appended afterwards, so a configured stdio
+            // server never passes because it resembles the relay.
             let mcpSplit = remoteHost.map { _ in
-                ACPRemoteMCPFilter.split(plannedWireServers)
+                ACPRemoteMCPFilter.split(plannedWireServers.filter { $0 != builtInMCP?.server })
             }
-            let wireMCPServers = mcpSplit?.kept ?? plannedWireServers
+            let wireMCPServers = mcpSplit.map { $0.kept + (builtInMCP.map { [$0.server] } ?? []) }
+                ?? plannedWireServers
             let remoteMCPNotice: String?
             if let mcpSplit, !mcpSplit.droppedStdio.isEmpty {
                 remoteMCPNotice = "MCP servers unavailable on remote host: \(mcpSplit.droppedStdio.joined(separator: ", "))"
@@ -7605,7 +7695,7 @@ extension ACPSessionManager {
                         staleSequence: staleHelloSequence)
                     session.builtInMCPRegistration = MCPRegistrationDecision.resolve(
                         evidence: helloSeen ? .hello : .none,
-                        graceElapsed: true,
+                        graceElapsed: MCPRegistrationDecision.graceCanWarn(toolScope: builtInToolScope),
                         reattachedToRunningServer: reattachedToRunningServer)
                     mcpRegistrationLogger.notice(
                         "grace elapsed session=\(sessionId, privacy: .public) epoch=\(mcpRegistrationEpoch) afterAttach=\(ContinuousClock.now - mcpAttachStartedAt, privacy: .public) resolved=\("\(session.builtInMCPRegistration)", privacy: .public) recordedHello=\(record.map { "\($0.transport.rawValue)#\($0.sequence)" } ?? "none", privacy: .public) staleSequence=\(staleHelloSequence.map(String.init) ?? "none", privacy: .public)"
@@ -7650,7 +7740,9 @@ extension ACPSessionManager {
                     }
                 }()
                 let preamble = ACPMCPPromptPreamble.text(
-                    builtInInjected: preambleMode == .mcp ? (builtInMCP != nil) : cliEnvActive,
+                    builtInTools: preambleMode == .mcp
+                        ? builtInMCP?.toolScope
+                        : (cliEnvActive ? .full : nil),
                     isDelegated: preambleMode == .mcp
                         ? (builtInMCP?.isDelegated == true)
                         : (cliParentSessionId != nil),
@@ -8212,6 +8304,7 @@ extension ACPSessionManager {
             }
         }
         connectionOwnerIDs[sessionId] = replacementAttempt.id
+        retireBuiltInMCPAttachment(sessionId: sessionId)
         brokerCallbackOwnerIDs[sessionId] = nil
 
         let oldLeaseToken = oldAttempt?.leaseToken ?? ownedLeaseTokens[sessionId]
@@ -9069,8 +9162,16 @@ extension ACPSessionManager {
     public func showVisualAid(_ visual: ACPVisualAid, in sessionId: ACPSession.ID) async -> Bool {
         guard !mergingForks.contains(sessionId), sessions[sessionId] != nil else { return false }
         await awaitBackfill(id: sessionId)
-        guard !mergingForks.contains(sessionId), sessions[sessionId] != nil,
+        guard !mergingForks.contains(sessionId), let session = sessions[sessionId],
               let runner = runners[sessionId], isWriter(for: sessionId)
+        else { return false }
+        // The call may be relayed from an SSH host, so the cached writer
+        // observation is not enough: confirm authority, then make sure
+        // neither the session nor its runner was replaced meanwhile. A
+        // takeover landing during the confirmation leaves nothing appended.
+        guard await confirmedWriterLease(for: sessionId),
+              !mergingForks.contains(sessionId), sessions[sessionId] === session,
+              runners[sessionId] === runner, isWriter(for: sessionId)
         else { return false }
         return await runner.appendAndPersistVisualAidAwaitingResult(visual)
     }
@@ -9885,6 +9986,7 @@ extension ACPSessionManager {
             isolatedStartupID = nil
         }
         connectionOwnerIDs[sessionId] = nil
+        retireBuiltInMCPAttachment(sessionId: sessionId)
         brokerCallbackOwnerIDs[sessionId] = nil
         let attaching = attachingConnections.removeValue(forKey: sessionId)
         if attemptConnection != nil || attaching != nil {

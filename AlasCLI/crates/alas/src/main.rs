@@ -79,15 +79,18 @@ fn describe(err: &DispatchError) -> (String, u8) {
 enum McpMode {
     Stdio,
     Http,
+    VisualOnly,
 }
 
 /// `alas mcp` runs the stdio MCP server; `alas mcp --http` runs the same
-/// server over localhost HTTP. Anything else falls through to the normal
+/// server over localhost HTTP; `alas mcp --visual-only` runs the stdio server
+/// exposing only `visual_show`. Anything else falls through to the normal
 /// parser, which rejects it with usage text.
 fn mcp_mode(args: &[String]) -> Option<McpMode> {
     match args {
         [only] if only == "mcp" => Some(McpMode::Stdio),
         [first, second] if first == "mcp" && second == "--http" => Some(McpMode::Http),
+        [first, second] if first == "mcp" && second == "--visual-only" => Some(McpMode::VisualOnly),
         _ => None,
     }
 }
@@ -100,11 +103,13 @@ fn run_mcp(mode: McpMode) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    if matches!(mode, McpMode::Http) {
-        env.transport = "http";
+    match mode {
+        McpMode::Http => env.transport = "http",
+        McpMode::VisualOnly => env.visual_only = true,
+        McpMode::Stdio => {}
     }
     let result = match mode {
-        McpMode::Stdio => mcp::serve(&env),
+        McpMode::Stdio | McpMode::VisualOnly => mcp::serve(&env),
         McpMode::Http => mcp::serve_http(&env),
     };
     match result {
@@ -164,6 +169,10 @@ mod tests {
     fn mcp_mode_detection() {
         assert_eq!(mcp_mode(&["mcp".into()]), Some(McpMode::Stdio));
         assert_eq!(mcp_mode(&["mcp".into(), "--http".into()]), Some(McpMode::Http));
+        assert_eq!(
+            mcp_mode(&["mcp".into(), "--visual-only".into()]),
+            Some(McpMode::VisualOnly)
+        );
         assert_eq!(mcp_mode(&["open".into()]), None);
     }
 
@@ -174,6 +183,10 @@ mod tests {
         assert_eq!(mcp_mode(&[]), None);
         assert_eq!(
             mcp_mode(&["mcp".into(), "--http".into(), "extra".into()]),
+            None
+        );
+        assert_eq!(
+            mcp_mode(&["mcp".into(), "--http".into(), "--visual-only".into()]),
             None
         );
     }

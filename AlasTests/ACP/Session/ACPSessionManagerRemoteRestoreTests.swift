@@ -652,14 +652,168 @@ struct ACPSessionManagerRemoteRestoreTests {
         if action != .cleanup { await manager.detach(sessionId: session.id) }
     }
 
+    @Test("SSH sessions attach the built-in visual relay and still drop local stdio servers",
+          arguments: SSHLifecycleOperation.allCases)
+    func sshSessionAttachesBuiltInVisualRelay(operation: SSHLifecycleOperation) async throws {
+        let endpoint = ReplicaEndpoint()
+        let coordinator = ACPRemoteSessionCoordinator(owner: .init(serverId: "mac-a", instanceId: "A")) {
+            method, data in try await endpoint.request(method, data)
+        }
+        let relay = ACPMCPServer.stdio(
+            name: BuiltInAlasMCP.serverName,
+            command: "/home/dev/.alas/bin/alas-helper",
+            args: ["mcp-proxy", "--state-dir", "/home/dev/.alas", "--record-id", "record"],
+            env: []
+        )
+        let (manager, _, client, session) = try await fixture(
+            origin: operation == .load ? .agentImported : .alasCreated,
+            remoteSessionId: operation == .new ? nil : "remote-id",
+            instanceId: "A",
+            remoteCoordinator: coordinator,
+            mcpProjectContextProvider: {
+                MCPProjectContext(projectDirectory: "/tmp/wt", configuredServers: [
+                    ProjectMCPServer(id: "local", name: "local-only-tool",
+                                     transport: .stdio(command: "/usr/local/bin/tool", args: [], environment: [])),
+                ])
+            },
+            builtInMCPProvider: { context in
+                guard case .ssh(_, let fence) = context.location else { return .omitted }
+                return .prepared(PreparedBuiltInMCPAttachment(injection: BuiltInAlasMCP.remoteVisualInjection(
+                    descriptor: .init(recordId: fence.recordId, relayId: "relay",
+                                      proxyCommand: "/home/dev/.alas/bin/alas-helper",
+                                      proxyArgs: ["mcp-proxy", "--state-dir", "/home/dev/.alas", "--record-id", fence.recordId],
+                                      relayProtocolVersion: 1)
+                )))
+            }
+        )
+        defer {
+            manager.shutdownBackgroundTasks()
+            coordinator.shutdown()
+        }
+        scriptInitialize(client, canLoad: true, canResume: operation == .resume)
+        scriptSessionResult(client, method: "session/new", sessionId: "remote-id")
+        scriptSessionResult(client, method: "session/load", sessionId: "remote-id")
+        client.script(method: "session/resume") { _ in Data("{}".utf8) }
+
+        await manager.hydrateIfNeeded(id: session.id)
+        await manager.attach(to: session.id, freshlyCreated: operation == .new)
+        try #require(session.agentState == .ready)
+
+        let request = try #require(client.sent.first { $0.method == operation.method })
+        let servers: [ACPMCPServer]
+        switch request.params {
+        case let params as ACPSessionNewParams: servers = params.mcpServers
+        case let params as ACPSessionLoadParams: servers = params.mcpServers
+        case let params as ACPSessionResumeParams: servers = params.mcpServers
+        default:
+            Issue.record("Unexpected \(operation.method) params")
+            return
+        }
+        #expect(servers.contains(relay))
+        #expect(!servers.contains { $0.name == "local-only-tool" })
+        await manager.detach(sessionId: session.id)
+    }
+
+    @Test("an SSH relay that cannot be prepared leaves the session ready and says why")
+    func unavailableSSHRelayDoesNotFailAttach() async throws {
+        let endpoint = ReplicaEndpoint()
+        let coordinator = ACPRemoteSessionCoordinator(owner: .init(serverId: "mac-a", instanceId: "A")) {
+            method, data in try await endpoint.request(method, data)
+        }
+        let unavailable = BuiltInAlasMCP.unavailableStatus("Update the Alas helper on this SSH host to use visual aids.")
+        let (manager, _, client, session) = try await fixture(
+            origin: .alasCreated, instanceId: "A", remoteCoordinator: coordinator,
+            builtInMCPProvider: { _ in .skipped(unavailable) }
+        )
+        defer {
+            manager.shutdownBackgroundTasks()
+            coordinator.shutdown()
+        }
+        scriptInitialize(client, canLoad: true, canResume: true)
+        client.script(method: "session/resume") { _ in Data("{}".utf8) }
+
+        await manager.hydrateIfNeeded(id: session.id)
+        await manager.attach(to: session.id, freshlyCreated: false)
+
+        #expect(session.agentState == .ready)
+        let params = try #require(client.sent.first { $0.method == "session/resume" }?.params as? ACPSessionResumeParams)
+        #expect(!params.mcpServers.contains { $0.name == BuiltInAlasMCP.serverName })
+        #expect(session.mcpAttachmentSummary?.statuses.contains(unavailable) == true)
+        await manager.detach(sessionId: session.id)
+    }
+
+    @Test("an SSH relay serves only the attach that prepared it and ends with its connection")
+    func sshRelayLifetimeFollowsItsConnection() async throws {
+        let endpoint = ReplicaEndpoint()
+        let coordinator = ACPRemoteSessionCoordinator(owner: .init(serverId: "mac-a", instanceId: "A")) {
+            method, data in try await endpoint.request(method, data)
+        }
+        let relays = RelayLog()
+        var clients = [ACPMockClient(), ACPMockClient()]
+        for client in clients {
+            scriptInitialize(client, canLoad: true, canResume: true)
+            client.script(method: "session/resume") { _ in Data("{}".utf8) }
+        }
+        let (manager, _, _, session) = try await fixture(
+            origin: .alasCreated, instanceId: "A", remoteCoordinator: coordinator,
+            builtInMCPProvider: { context in
+                guard case .ssh(_, let fence) = context.location else { return .omitted }
+                let index = relays.contexts.count
+                relays.contexts.append(context)
+                return .prepared(PreparedBuiltInMCPAttachment(
+                    injection: BuiltInAlasMCP.remoteVisualInjection(descriptor: .init(
+                        recordId: fence.recordId, relayId: "relay-\(index)", proxyCommand: "/home/dev/.alas/bin/alas-helper",
+                        proxyArgs: ["mcp-proxy", "--record-id", fence.recordId], relayProtocolVersion: 1)),
+                    cleanup: { await relays.invalidated(index) }
+                ))
+            },
+            connectionFactory: { _, _, _ in ACPConnection(client: clients.removeFirst()) }
+        )
+        defer {
+            manager.shutdownBackgroundTasks()
+            coordinator.shutdown()
+        }
+        await manager.hydrateIfNeeded(id: session.id)
+
+        await manager.attach(to: session.id, freshlyCreated: false)
+        try #require(session.agentState == .ready)
+        let first = try #require(relays.contexts.first)
+        #expect(first.isCurrent())
+
+        await manager.detach(sessionId: session.id)
+        try await waitUntil { relays.invalidatedIndices == [0] }
+        #expect(!first.isCurrent())
+
+        let reopened = try #require(manager.placeholderSession(id: session.id))
+        await manager.hydrateIfNeeded(id: reopened.id)
+        await manager.attach(to: reopened.id, freshlyCreated: false)
+        try await waitUntil { reopened.agentState == .ready && relays.contexts.count == 2 }
+        let second = try #require(relays.contexts.last)
+        #expect(second.isCurrent())
+        #expect(!first.isCurrent())
+        // A late registration proof from the first attach cannot mark the replacement.
+        reopened.builtInMCPRegistration = .unknown
+        first.noteRegistered()
+        #expect(reopened.builtInMCPRegistration == .unknown)
+        second.noteRegistered()
+        #expect(reopened.builtInMCPRegistration == .registered)
+        #expect(relays.invalidatedIndices == [0])
+
+        await manager.detach(sessionId: session.id)
+        try await waitUntil { relays.invalidatedIndices == [0, 1] }
+    }
+
     private func fixture(
         origin: ACPSessionOrigin,
         localMessage: ACPMessage? = nil,
         localId: String = "local-id",
+        remoteSessionId: String? = "remote-id",
         instanceId: String = UUID().uuidString,
         pid: Int64 = Int64(getpid()),
         ephemeralParentId: String? = nil,
         remoteCoordinator: ACPRemoteSessionCoordinator? = nil,
+        mcpProjectContextProvider: ACPSessionManager.MCPProjectContextProvider? = nil,
+        builtInMCPProvider: ACPSessionManager.BuiltInMCPProvider? = nil,
         connectionFactory: ACPSessionManager.ACPConnectionFactory? = nil
     ) async throws -> (ACPSessionManager, ACPSessionStore, ACPMockClient, ACPSession) {
         let url = FileManager.default.temporaryDirectory
@@ -670,7 +824,7 @@ struct ACPSessionManagerRemoteRestoreTests {
             agentId: "claude",
             title: "Session",
             titleSource: .generated,
-            remoteSessionId: "remote-id",
+            remoteSessionId: remoteSessionId,
             origin: origin,
             currentModel: nil,
             currentMode: nil,
@@ -710,7 +864,9 @@ struct ACPSessionManagerRemoteRestoreTests {
             remoteAdapterResolver: { _, _, _ in
                 .ready(.init(adapterPath: "/home/dev/.alas/acp/claude/bin/claude-agent-acp", nodeBinDirectory: ""))
             },
-            connectionFactory: connectionFactory ?? { _, _, _ in ACPConnection(client: client) }
+            connectionFactory: connectionFactory ?? { _, _, _ in ACPConnection(client: client) },
+            mcpProjectContextProvider: mcpProjectContextProvider,
+            builtInMCPProvider: builtInMCPProvider
         )
         _ = await manager.persistedSessionRow(id: localId)
         let session = try #require(manager.placeholderSession(id: localId))
@@ -765,6 +921,20 @@ struct ACPSessionManagerRemoteRestoreTests {
             try await Task.sleep(nanoseconds: 5_000_000)
         }
     }
+}
+
+@MainActor
+private final class RelayLog {
+    var contexts: [BuiltInMCPAttachmentContext] = []
+    var invalidatedIndices: [Int] = []
+
+    func invalidated(_ index: Int) { invalidatedIndices.append(index) }
+}
+
+enum SSHLifecycleOperation: CaseIterable, Sendable {
+    case new, load, resume
+
+    var method: String { "session/\(self)" }
 }
 
 enum RecoveryCrashBoundary: CaseIterable, Sendable {
