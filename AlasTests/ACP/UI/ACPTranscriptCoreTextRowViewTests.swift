@@ -110,7 +110,7 @@ import Testing
         let container = NSView()
         container.addSubview(view)
         withExtendedLifetime(container) {
-            text.replace(with: "Short\n\n| a | b |\n|---|---|\n| 1 | 2 |")
+            text.replace(with: "Short\n\n| a | b | c | d | e | f |\n|---|---|---|---|---|---|\n| 1 | 2 | 3 | 4 | 5 | 6 |")
             #expect(respecs == 1)
             #expect(view.content == .agent(markdown: "Short", commentary: true))
         }
@@ -222,6 +222,14 @@ import Testing
         #expect(!view.tiles.keys.contains(0))
     }
 
+    @Test func tableLinesReachAccessibilityInReadingOrder() throws {
+        let view = row(.agent(markdown: "| a cell long enough to wrap across lines in its column | b |\n|---|---|\n| 1 | 2 |", commentary: false))
+        _ = view.measuredHeight(forWidth: 320)
+        let element = try #require(view.accessibilityChildren()?.compactMap { $0 as? ACPTranscriptTextAccessibilityElement }.first)
+        let starts = element.lineStartsForTesting
+        #expect(starts == starts.sorted())
+    }
+
     @Test func aShortUserBubbleKeepsItsTextInsideTheBubble() throws {
         let view = row(.user(markdown: "Can you fix the bug?"))
         _ = view.measuredHeight(forWidth: 1_000)
@@ -230,6 +238,21 @@ import Testing
         // The bubble hugs the text and sits at the column's trailing edge.
         #expect(frame.width < 200)
         #expect(frame.maxX <= view.columnRect.maxX)
+    }
+
+    @Test func aTableInAUserBubbleFillsTheBubble() throws {
+        typealias V = ACPTranscriptCoreTextRowView
+        let view = row(.user(markdown: "| a | b |\n|---|---|\n| 1 | 2 |"))
+        _ = view.measuredHeight(forWidth: 1_000)
+        let layout = view.layout(forWidth: 1_000)
+        let bubble = try #require(layout.items.lazy.compactMap { item -> CGRect? in
+            if case .bubble(let rect) = item { rect } else { nil }
+        }.first)
+        let (markdown, origin) = try #require(view.markdown)
+        let table = try #require(markdown.tables.first)
+        // As the SwiftUI bubble, whose table takes all the width it is offered.
+        #expect(bubble.width == 720 * V.bubbleMaxWidthFraction)
+        #expect(abs(origin.x + table.rect.maxX - (bubble.maxX - V.bubbleHorizontalPadding)) < 0.5)
     }
 
     @Test func aWrappedLinkHitTestsOnlyItsOwnText() throws {
@@ -341,6 +364,36 @@ import Testing
         #expect(view.selectedText() == "First paragraph.\nSecond code here.\nlet x = 1")
     }
 
+    @Test func aClickResolvesToTheCellUnderThePoint() throws {
+        let view = row(.agent(markdown: "| first | second |\n|---|---|\n| left | right |", commentary: false))
+        _ = view.measuredHeight(forWidth: 800)
+        let (layout, origin) = try #require(view.markdown)
+        let right = try #require(layout.lines.first { $0.block.map { layout.texts[$0] } == "right" })
+        let point = NSPoint(x: origin.x + right.origin.x + 2, y: origin.y + right.origin.y + right.height / 2)
+        #expect(view.textPosition(at: point)?.block == right.block)
+    }
+
+    @Test func aClickInACellsPaddingResolvesToThatCell() throws {
+        let view = row(.agent(markdown: "| a | b | c |\n|---|---|---|\n| x | y | z |", commentary: false))
+        _ = view.measuredHeight(forWidth: 800)
+        let (layout, origin) = try #require(view.markdown)
+        let table = try #require(layout.tables.first)
+        let block = try #require(layout.texts.firstIndex(of: "z"))
+        // Column 2's top padding in the body row, clear of any line.
+        let point = NSPoint(
+            x: origin.x + (table.columnXs[1] + table.rect.maxX) / 2,
+            y: origin.y + table.rowBottoms[0] + ACPTranscriptMarkdownLayout.tableDividerWidth + 2
+        )
+        #expect(view.textPosition(at: point) == .init(block: block, index: 0))
+    }
+
+    @Test func copyingATableKeepsItsShape() throws {
+        let view = row(.agent(markdown: "| a | b |\n|---|---|\n| 1 |", commentary: false))
+        _ = view.measuredHeight(forWidth: 800)
+        view.selectAllForTesting()
+        #expect(view.selectedText() == "a\tb\n1\t")
+    }
+
     @Test func codeBlockCopyIsAnAccessibleButton() throws {
         let view = row(.agent(markdown: "Intro.\n\n```swift\nlet x = 1\n```", commentary: false))
         _ = view.measuredHeight(forWidth: 800)
@@ -366,6 +419,21 @@ import Testing
         ))
         let extent = ACPTranscriptCoreTextRowView.selectionExtent(of: line, from: 0, to: 4, hasText: true, runsTo: nil)
         #expect(extent.upperBound - extent.lowerBound > 10)
+    }
+
+    @Test func aSelectionRunningPastATableCellStopsAtTheCellEdge() throws {
+        typealias V = ACPTranscriptCoreTextRowView
+        let layout = try #require(ACPTranscriptMarkdownLayout.make(
+            source: "Intro.\n\n| a | b |\n|---|---|\n| 1 | 2 |", width: 400, theme: theme, typography: .default
+        ))
+        let intro = try #require(layout.lines.first { $0.block == 0 })
+        let cell = try #require(layout.lines.first { $0.block.map { layout.texts[$0] } == "a" })
+        #expect(V.selectionRunOnEdge(of: intro, in: layout, edge: 400) == 400)
+        let cellEdge = V.selectionRunOnEdge(of: cell, in: layout, edge: 400)
+        #expect(cellEdge == cell.maxX + ACPTranscriptMarkdownLayout.tableCellHorizontalPadding)
+        let extent = V.selectionExtent(of: cell.line, from: 0, to: 1, hasText: true, runsTo: cellEdge - cell.origin.x)
+        let divider = try #require(layout.tables.first?.columnXs.first)
+        #expect(cell.origin.x + extent.upperBound <= divider)
     }
 
     @Test func codeBlockLanguageIsAccessibleStaticText() throws {

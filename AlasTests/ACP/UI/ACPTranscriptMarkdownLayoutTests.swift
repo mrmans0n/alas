@@ -8,7 +8,7 @@ import Testing
 @Suite struct ACPTranscriptMarkdownLayoutTests {
     private var theme: Theme { try! Theme.loadBundled(id: "cool-slate") }
 
-    @Test(arguments: ["| a | b |\n|---|---|\n| 1 | 2 |", "![alt](https://x/y.png)", "Build: ![badge](https://x/b.png)", "- [ ] task", "```mermaid\ngraph TD\n```"])
+    @Test(arguments: ["![alt](https://x/y.png)", "Build: ![badge](https://x/b.png)", "- [ ] task", "```mermaid\ngraph TD\n```"])
     func unsupportedBlocksFallBack(source: String) {
         #expect(ACPTranscriptMarkdownLayout.make(source: source, width: 400, theme: theme, typography: .default) == nil)
     }
@@ -52,6 +52,59 @@ import Testing
             .environment(\.theme, theme).frame(width: 500))
         let background = try #require(layout.backgrounds.first)
         #expect(abs(background.rect.height - host.fittingSize.height) < 1)
+    }
+
+    @Test(arguments: [
+        "| a | b |\n|---|---|\n| 1 | 2 |",
+        "| Scenario | p95 | Note |\n|---|---|---|\n| fling | **12 ms** | a longer note that wraps onto a second line in its column |\n| stream | `9 ms` | short |",
+        "| | |\n|---|---|\n| a | b |",
+        "Intro.\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\nOutro.",
+    ], [400, 640])
+    func tableHeightMatchesTheSwiftUITable(source: String, width: Int) throws {
+        let layout = try #require(ACPTranscriptMarkdownLayout.make(
+            source: source, width: CGFloat(width), theme: theme, typography: .default
+        ))
+        let host = NSHostingView(rootView: ACPMarkdownText(raw: source, typography: .default)
+            .environment(\.theme, theme).frame(width: CGFloat(width)))
+        host.frame.size = host.fittingSize
+        host.layoutSubtreeIfNeeded() // the SwiftUI table reads its viewport width on the next pass
+        #expect(abs(layout.height - host.fittingSize.height) < 1)
+    }
+
+    @Test func raggedRowsKeepTheirColumns() throws {
+        let layout = try #require(ACPTranscriptMarkdownLayout.make(
+            source: "| a | b | c |\n|---|---|---|\n| 1 |\n| 1 | 2 | 3 |", width: 600, theme: theme, typography: .default
+        ))
+        #expect(layout.texts.count == 9)
+        #expect(layout.tables.first?.columnXs.count == 2)
+    }
+
+    @Test func aTableNarrowerThanItsColumnsFitsTheWidth() throws {
+        let layout = try #require(ACPTranscriptMarkdownLayout.make(
+            source: "| a | b | c | d | e |\n|---|---|---|---|---|\n| 1 | 2 | 3 | 4 | 5 |", width: 300, theme: theme, typography: .default
+        ))
+        let table = try #require(layout.tables.first)
+        #expect(table.rect.maxX <= 300)
+        #expect(layout.lines.allSatisfy { $0.maxX <= 300 + 0.5 })
+    }
+
+    @Test func everyLineOfAVisibleRowIsFound() throws {
+        let layout = try #require(ACPTranscriptMarkdownLayout.make(
+            source: "Intro.\n\n| a | b |\n|---|---|\n| a cell long enough to wrap onto two lines here | 2 |", width: 300, theme: theme, typography: .default
+        ))
+        let lastRowTop = try #require(layout.tables.first?.rowBottoms.dropLast().last)
+        // Past the row's top padding, into its first line of text.
+        let found = layout.linesIntersecting(CGRect(
+            x: 0, y: lastRowTop + ACPTranscriptMarkdownLayout.tableCellVerticalPadding + 1, width: 300, height: 4
+        ))
+        #expect(Set(found.compactMap(\.block)).count == 2)
+    }
+
+    @Test(arguments: [(5, true), (6, false)])
+    func tablesAreSupportedUpToTheColumnCap(columns: Int, expected: Bool) {
+        let row = "|" + String(repeating: " x |", count: columns)
+        let source = row + "\n|" + String(repeating: "---|", count: columns) + "\n" + row
+        #expect(ACPTranscriptMarkdownLayout.supports(ACPMarkdownParser.parse(source)) == expected)
     }
 
     @Test func aLongCodeLanguageLabelStaysClearOfTheCopyButton() throws {
@@ -141,6 +194,16 @@ import Testing
         #expect((spans.first?.rects.count ?? 0) > 1)
     }
 
+    @Test func aLinkWrappedInACellIsOneSpanBesideALinkInTheNextCell() throws {
+        let layout = try #require(ACPTranscriptMarkdownLayout.make(
+            source: "| a | b |\n|---|---|\n| [the full migration guide for this release](https://example.com/guide) | [docs](https://example.com/docs) |",
+            width: 240, theme: theme, typography: .default
+        ))
+        let spans = layout.linkSpans()
+        #expect(spans.map(\.text) == ["the full migration guide for this release", "docs"])
+        #expect((spans.first?.rects.count ?? 0) > 1)
+    }
+
     @Test func linksAreStyledAndHitTestable() throws {
         let layout = try #require(ACPTranscriptMarkdownLayout.make(source: "See [docs](https://example.com) now.", width: 400, theme: theme, typography: .default))
         let line = try #require(layout.lines.first)
@@ -154,6 +217,14 @@ import Testing
         #expect(layout.link(at: CGPoint(x: 1, y: line.origin.y + line.height / 2)) == nil)
         #expect(layout.link(at: CGPoint(x: 399, y: line.origin.y + line.height / 2)) == nil)
         #expect(layout.link(at: CGPoint(x: x, y: line.origin.y + line.height + 50)) == nil)
+    }
+
+    @Test func linksInLaterColumnsAreHitTested() throws {
+        let layout = try #require(ACPTranscriptMarkdownLayout.make(
+            source: "| a | b |\n|---|---|\n| plain | [docs](https://example.com) |", width: 400, theme: theme, typography: .default
+        ))
+        let span = try #require(layout.linkSpans().first)
+        #expect(layout.link(at: CGPoint(x: span.rects[0].midX, y: span.rects[0].midY))?.absoluteString == "https://example.com")
     }
 
     /// A caret index past the glyph's midpoint is the run's end, so hit

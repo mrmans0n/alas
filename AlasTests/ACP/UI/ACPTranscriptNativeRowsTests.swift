@@ -7,7 +7,7 @@ import Testing
 @Suite struct ACPTranscriptNativeRowsTests {
     @Test(arguments: [
         ("plain agent", false, true),
-        ("agent with table", false, false),
+        ("agent with table", false, true),
         ("live agent", true, false),
         ("user with path", false, false),
         ("plain user", false, true),

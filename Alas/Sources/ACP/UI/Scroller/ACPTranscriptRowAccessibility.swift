@@ -32,6 +32,8 @@ final class ACPTranscriptTextAccessibilityElement: NSAccessibilityElement, @unch
         updateLines(lines)
     }
 
+    var lineStartsForTesting: [Int] { lineStarts }
+
     /// Replaces the visual line starts after the text re-wrapped.
     @discardableResult
     func updateLines(_ lines: [Position]) -> Bool {

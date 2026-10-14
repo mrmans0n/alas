@@ -272,11 +272,12 @@ extension ACPTranscriptCoreTextRowView {
         }
     }
 
-    /// How wide the markdown actually draws: its widest line or background.
+    /// How wide the markdown actually draws: its widest line, background, or
+    /// table, which fills the width it is given as the SwiftUI table does.
     private static func usedWidth(of markdown: ACPTranscriptMarkdownLayout) -> CGFloat {
         let lines = markdown.lines.map { $0.origin.x + width(of: $0.line) }
         let backgrounds = markdown.backgrounds.map(\.rect.maxX)
-        return (lines + backgrounds).max() ?? 0
+        return (lines + backgrounds + markdown.tables.map(\.rect.maxX)).max() ?? 0
     }
 
     // MARK: - Symbols
@@ -447,6 +448,9 @@ extension ACPTranscriptCoreTextRowView {
                 outline.stroke()
             }
         }
+        for table in markdown.tables where table.rect.intersects(local) {
+            drawTable(table, origin: origin)
+        }
         let lines = markdown.linesIntersecting(local)
         drawTextSelection(markdown, origin: origin, lines: lines, context: context)
         for index in lines.indices {
@@ -463,6 +467,38 @@ extension ACPTranscriptCoreTextRowView {
             }
         }
         drawCopyButtons(markdown, origin: origin, dirtyRect: dirtyRect, context: context)
+    }
+
+    /// A table's fill, header band, rules, column dividers and outline, clipped to its rounded rect.
+    private func drawTable(_ table: ACPTranscriptMarkdownLayout.Table, origin: CGPoint) {
+        typealias L = ACPTranscriptMarkdownLayout
+        let rect = table.rect.offsetBy(dx: origin.x, dy: origin.y)
+        let radius = L.tableCornerRadius
+        let hairline = L.tableDividerWidth
+        let shape = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
+        table.fill.setFill()
+        shape.fill()
+        NSGraphicsContext.saveGraphicsState()
+        shape.addClip()
+        if let headerBottom = table.rowBottoms.first {
+            table.headerFill.setFill()
+            CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: headerBottom - table.rect.minY).fill()
+            table.headerRule.setFill()
+            CGRect(x: rect.minX, y: origin.y + headerBottom, width: rect.width, height: hairline).fill()
+        }
+        table.divider.setFill()
+        for bottom in table.rowBottoms.dropFirst().dropLast() {
+            CGRect(x: rect.minX, y: origin.y + bottom, width: rect.width, height: hairline).fill()
+        }
+        for x in table.columnXs {
+            CGRect(x: rect.minX + x, y: rect.minY, width: hairline, height: rect.height).fill()
+        }
+        NSGraphicsContext.restoreGraphicsState()
+        table.stroke.setStroke()
+        let inset = rect.insetBy(dx: hairline / 2, dy: hairline / 2)
+        let outline = NSBezierPath(roundedRect: inset, xRadius: radius - hairline / 2, yRadius: radius - hairline / 2)
+        outline.lineWidth = hairline
+        outline.stroke()
     }
 
     /// The selected text's background, in the system selection color, dimmed
@@ -493,14 +529,25 @@ extension ACPTranscriptCoreTextRowView {
             let lower = max(span.lowerBound, line.range.location)
             let upper = min(span.upperBound, visibleEnd)
             guard span.lowerBound <= visibleEnd, span.upperBound >= line.range.location, lower < upper || runsOn else { continue }
+            let runsTo = runsOn ? Self.selectionRunOnEdge(of: line, in: markdown, edge: edge) - line.origin.x : nil
             let extent = Self.selectionExtent(
-                of: line.line, from: lower, to: upper, hasText: line.visibleLength > 0, runsTo: runsOn ? edge - line.origin.x : nil
+                of: line.line, from: lower, to: upper, hasText: line.visibleLength > 0, runsTo: runsTo
             )
             context.fill(CGRect(
                 x: origin.x + line.origin.x + extent.lowerBound, y: origin.y + line.origin.y,
                 width: extent.upperBound - extent.lowerBound, height: line.height
             ))
         }
+    }
+
+    /// Where a selection running past `line`'s end stops, in markdown
+    /// coordinates: a table cell's right edge, so it never paints over the
+    /// next column, or `edge` for any other text.
+    static func selectionRunOnEdge(
+        of line: ACPTranscriptMarkdownLayout.Line, in markdown: ACPTranscriptMarkdownLayout, edge: CGFloat
+    ) -> CGFloat {
+        guard let block = line.block, markdown.table(containing: block) != nil else { return edge }
+        return line.maxX + ACPTranscriptMarkdownLayout.tableCellHorizontalPadding
     }
 
     /// The x range to highlight for `lower..<upper` of `line`, or from `lower` to
