@@ -168,7 +168,7 @@ public final class RemotePluginProcess: PluginRemoteProcessHandle, @unchecked Se
                 throw error
             }
         } catch {
-            // The helper's own refusals (a macOS host, a kernel without pidfds, a command it can't find) pass through.
+            // The helper's own refusals (an unsupported host, a kernel without pidfds, a command it can't find) pass through.
             throw PluginProcessError.refused(
                 PluginFiles.remoteFailure(error, host: host, need: "run commands there").message)
         }
