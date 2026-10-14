@@ -12688,15 +12688,17 @@ final class AppState {
 
     /// Brings an open chat tab's session up so a prompt can be handed to it.
     /// A restored tab that was never selected has no live session or writer
-    /// lease until its view mounts. Attaching here coalesces with the attach
-    /// the mounting tab starts, and never takes a lease another live instance
-    /// holds, so the send that follows fails instead of taking over.
+    /// lease until its view mounts, and a restored checkout tab may not have
+    /// its manager yet. Attaching here coalesces with the attach the mounting
+    /// tab starts, and never takes a lease another live instance holds, so
+    /// the send that follows fails instead of taking over.
     func prepareACPSessionForPrompt(sessionId: ACPSession.ID, owner: SessionOwnerID) async {
-        let manager: ACPSessionManager? = switch owner {
+        let manager: ACPSessionManager?
+        switch owner {
         case .worktree(let worktreeId):
-            worktree(withId: worktreeId).flatMap { acpManager(for: $0) }
+            manager = worktree(withId: worktreeId).flatMap { acpManager(for: $0) }
         case .workspaceCheckout:
-            acpManager(for: owner)
+            manager = await checkoutACPManagerForPrompt(owner: owner)
         }
         guard let manager, !manager.isWriter(for: sessionId) else { return }
         // A cold restored tab's row is not cached yet, and the synchronous
@@ -12708,6 +12710,22 @@ final class AppState {
         // attach before the send could report it. The activated tab retains it.
         guard manager.placeholderSession(id: sessionId) != nil else { return }
         await hydrateAndAttachACP(manager: manager, sessionId: sessionId)
+    }
+
+    /// The checkout's ACP manager, created when restoration has not made it
+    /// yet (e.g. an SSH location still being validated). Mirrors
+    /// `openWorkspaceCheckoutACPSession`: a checkout that stops being
+    /// authoritative meanwhile gets its new manager disposed.
+    private func checkoutACPManagerForPrompt(owner: SessionOwnerID) async -> ACPSessionManager? {
+        if let existing = acpManager(for: owner) { return existing }
+        guard let checkout = workspaceCheckout(for: owner),
+              case .ready(let manager) = await workspaceACPManager(for: checkout)
+        else { return nil }
+        guard await authoritativeCheckoutForWorkspaceACPSessionCreation(checkout) != nil else {
+            await disposeACPManagerAndWait(owner: owner)
+            return nil
+        }
+        return manager
     }
 
     // MARK: Session references

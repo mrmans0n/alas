@@ -2,18 +2,81 @@ import Foundation
 import Testing
 @testable import Alas
 
+private struct AvailableMemberObserver: WorkspaceCheckoutObserving {
+    func observe(_ member: WorkspaceCheckoutMember, in checkout: WorkspaceCheckout) async -> WorkspaceCheckoutMemberObservation {
+        .exactLineage("test-lineage")
+    }
+}
+
 @Suite("Workspace ACP session ownership", .serialized)
 struct WorkspaceACPSessionTests {
     @MainActor
     @Test func reviewFeedbackFindsAndActivatesCheckoutAgent() async throws {
-        struct AvailableMemberObserver: WorkspaceCheckoutObserving {
-            func observe(_ member: WorkspaceCheckoutMember, in checkout: WorkspaceCheckout) async -> WorkspaceCheckoutMemberObservation {
-                .exactLineage("test-lineage")
-            }
-        }
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
+        let (state, checkout, worktree) = try await makeCheckoutState(root: root)
+        state.selectWorkspaceCheckout(id: checkout.id)
+        #expect(state.checkoutFocusedWorktreeScope?.worktreeID == worktree.id)
+        guard case let .ready(manager) = await state.workspaceACPManager(for: checkout) else {
+            Issue.record("Expected checkout manager")
+            return
+        }
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, .local)
+        let session = manager.createSession(agentId: "test")
+        #expect(await manager.acquireWriterLease(sessionId: session.id))
+        let tab = state.tabs.append(acpSession: .init(sessionId: session.id, title: "Workspace agent"), to: owner)
+        let sender = ReviewFeedbackAgentSender.production(appState: state, worktreeID: worktree.id)
+        let target = try #require(sender.availableTargets().first)
+        #expect(target == .existingSession(worktreeID: worktree.id, sessionID: session.id, title: "Workspace agent"))
+        #expect(ReviewFeedbackAgentSender.production(appState: state, worktreeID: "unrelated").availableTargets().isEmpty)
+        state.tabs.clearActiveTab(owner: owner)
+
+        sender.send("Review feedback", target) { _ in }
+
+        #expect(state.tabs.activeTabId(for: owner) == tab.id)
+        #expect(state.selectedWorkspaceCheckout?.id == checkout.id)
+
+        let result = await withCheckedContinuation { continuation in
+            sender.send("New review feedback", .newChat(agentID: "claude", title: "New chat")) {
+                continuation.resume(returning: $0)
+            }
+        }
+        try result.get()
+        #expect(state.tabs.tabs(for: owner).count == 2)
+        #expect(state.tabs.tabs(forWorktree: worktree.id).isEmpty)
+        let newSession = try #require(manager.sessions.values.first { $0.id != session.id })
+        #expect(newSession.composerDraft == ACPComposerDraft(segments: [.text("New review feedback")]))
+    }
+
+    @MainActor
+    @Test func preparingARestoredCheckoutChatCreatesItsManager() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (state, checkout, _) = try await makeCheckoutState(root: root)
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, .local)
+        let dbPath = Paths.acpSessionsDB(for: owner)
+        defer { try? FileManager.default.removeItem(at: dbPath) }
+        let seed = ACPSessionManager(
+            worktreeId: owner.storageKey,
+            worktreePath: checkout.rootPath,
+            owner: owner,
+            store: try ACPSessionStore(path: dbPath.path)
+        )
+        let session = seed.createSession(agentId: "test")
+        await seed.flushPersistence()
+        // Restored before the checkout's manager exists, as during an SSH location check.
+        _ = state.tabs.append(acpSession: .init(sessionId: session.id, title: "Workspace agent"), to: owner)
+        try #require(state.acpManager(for: owner) == nil)
+
+        await state.prepareACPSessionForPrompt(sessionId: session.id, owner: owner)
+
+        #expect(state.session(for: session.id) != nil)
+    }
+
+    @MainActor
+    private func makeCheckoutState(root: URL) async throws -> (AppState, WorkspaceCheckout, Worktree) {
         let project = ProjectConfig(id: UUID().uuidString, name: "Repo", path: root.path, color: "blue", addedAt: Date())
         let worktree = Worktree(id: UUID().uuidString, projectId: project.id, name: "topic", branch: "topic", path: root.appendingPathComponent("repo"), status: .clean, lastActivity: Date())
         let checkout = WorkspaceCheckout(
@@ -49,37 +112,7 @@ struct WorkspaceACPSessionTests {
         )
         state.config.changes.aiToolId = AppConfig.Changes.disabledAIToolID
         _ = await workspacesManager.load(spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
-        state.selectWorkspaceCheckout(id: checkout.id)
-        #expect(state.checkoutFocusedWorktreeScope?.worktreeID == worktree.id)
-        guard case let .ready(manager) = await state.workspaceACPManager(for: checkout) else {
-            Issue.record("Expected checkout manager")
-            return
-        }
-        let owner = SessionOwnerID.workspaceCheckout(checkout.id, .local)
-        let session = manager.createSession(agentId: "test")
-        #expect(await manager.acquireWriterLease(sessionId: session.id))
-        let tab = state.tabs.append(acpSession: .init(sessionId: session.id, title: "Workspace agent"), to: owner)
-        let sender = ReviewFeedbackAgentSender.production(appState: state, worktreeID: worktree.id)
-        let target = try #require(sender.availableTargets().first)
-        #expect(target == .existingSession(worktreeID: worktree.id, sessionID: session.id, title: "Workspace agent"))
-        #expect(ReviewFeedbackAgentSender.production(appState: state, worktreeID: "unrelated").availableTargets().isEmpty)
-        state.tabs.clearActiveTab(owner: owner)
-
-        sender.send("Review feedback", target) { _ in }
-
-        #expect(state.tabs.activeTabId(for: owner) == tab.id)
-        #expect(state.selectedWorkspaceCheckout?.id == checkout.id)
-
-        let result = await withCheckedContinuation { continuation in
-            sender.send("New review feedback", .newChat(agentID: "claude", title: "New chat")) {
-                continuation.resume(returning: $0)
-            }
-        }
-        try result.get()
-        #expect(state.tabs.tabs(for: owner).count == 2)
-        #expect(state.tabs.tabs(forWorktree: worktree.id).isEmpty)
-        let newSession = try #require(manager.sessions.values.first { $0.id != session.id })
-        #expect(newSession.composerDraft == ACPComposerDraft(segments: [.text("New review feedback")]))
+        return (state, checkout, worktree)
     }
 
     @Test func checkoutOwnerUsesAnIsolatedDatabaseWhileWorktreesKeepLegacyPath() {
