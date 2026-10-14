@@ -295,7 +295,7 @@ struct AppStateRunRecordTests {
         // The row must not sit on "Not run" while the terminal opens.
         #expect(runRecord(fixture)?.status == .starting)
         await awaitLaunches(fixture)
-        await fixture.state.waitForRunScriptCompletionTasksForTesting()
+        await fixture.state.core.waitForObservedRunsForTesting()
 
         let record = try #require(runRecord(fixture))
         #expect(record.status == .finished(.succeeded))
@@ -314,7 +314,7 @@ struct AppStateRunRecordTests {
 
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
         await awaitLaunches(fixture)
-        await fixture.state.waitForRunScriptCompletionTasksForTesting()
+        await fixture.state.core.waitForObservedRunsForTesting()
         await fixture.state.flushRunHistoryPersistence()
 
         let record = try #require(runRecord(fixture))
@@ -334,7 +334,7 @@ struct AppStateRunRecordTests {
 
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
         await awaitLaunches(fixture)
-        await fixture.state.waitForRunScriptCompletionTasksForTesting()
+        await fixture.state.core.waitForObservedRunsForTesting()
         await fixture.state.flushRunHistoryPersistence()
 
         let record = try #require(runRecord(fixture))
@@ -353,7 +353,7 @@ struct AppStateRunRecordTests {
         let beforeLaunch = Date()
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
         await awaitLaunches(fixture)
-        await fixture.state.waitForRunScriptCompletionTasksForTesting()
+        await fixture.state.core.waitForObservedRunsForTesting()
 
         let record = try #require(runRecord(fixture))
         let finishedAt = try #require(record.finishedAt)
@@ -393,7 +393,7 @@ struct AppStateRunRecordTests {
 
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
         await awaitLaunches(fixture)
-        await fixture.state.waitForRunScriptCompletionTasksForTesting()
+        await fixture.state.core.waitForObservedRunsForTesting()
 
         let record = try #require(runRecord(fixture))
         #expect(record.status == .finished(.failed(exitCode: 42)))
@@ -421,7 +421,7 @@ struct AppStateRunRecordTests {
         )
         fixture.state.runOrFocusScript(other, in: fixture.worktree)
         await awaitLaunches(fixture)
-        await fixture.state.waitForRunScriptCompletionTasksForTesting()
+        await fixture.state.core.waitForObservedRunsForTesting()
 
         #expect(fixture.state.runRecords.record(
             worktreeID: fixture.worktree.id, scriptKey: other.key
@@ -433,7 +433,7 @@ struct AppStateRunRecordTests {
 
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
         await awaitLaunches(fixture)
-        await fixture.state.waitForRunScriptCompletionTasksForTesting()
+        await fixture.state.core.waitForObservedRunsForTesting()
 
         #expect(runRecord(fixture)?.status == .finished(.succeeded))
         let afterRerun = fixture.state.attentionAggregation
@@ -452,13 +452,13 @@ struct AppStateRunRecordTests {
 
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
         await awaitLaunches(fixture)
-        await fixture.state.waitForRunScriptCompletionTasksForTesting()
+        await fixture.state.core.waitForObservedRunsForTesting()
         let firstFailure = try #require(runRecord(fixture)?.failureID)
         let firstItem = try #require(fixture.state.attentionAggregation.items.first)
 
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
         await awaitLaunches(fixture)
-        await fixture.state.waitForRunScriptCompletionTasksForTesting()
+        await fixture.state.core.waitForObservedRunsForTesting()
         let secondFailure = try #require(runRecord(fixture)?.failureID)
         #expect(secondFailure != firstFailure)
 
@@ -492,7 +492,7 @@ struct AppStateRunRecordTests {
         // second runOrFocusScript below lands as "already starting" (a no-op)
         // instead of a genuine relaunch attempt.
         await awaitLaunches(fixture)
-        await fixture.state.waitForRunScriptCompletionTasksForTesting()
+        await fixture.state.core.waitForObservedRunsForTesting()
         #expect(runRecord(fixture)?.status == .finished(.failed(exitCode: 7)))
 
         // Delete the script out from under the next launch.
@@ -540,7 +540,7 @@ struct AppStateRunRecordTests {
         await awaitLaunches(fixture)
 
         #expect(runRecord(fixture)?.status == .running)
-        #expect(fixture.state.runScriptCompletionTaskCountForTesting == 1)
+        #expect(fixture.state.core.observedRunCountForTesting == 1)
     }
 
     /// A restart supersedes the previous run. When the old monitor finally
@@ -675,7 +675,7 @@ struct AppStateRunRecordTests {
 
         fixture.state.stopScript(fixture.script, in: fixture.worktree)
 
-        #expect(fixture.state.runScriptCompletionTaskCountForTesting == 0)
+        #expect(fixture.state.core.observedRunCountForTesting == 0)
         await fixture.state.flushRunHistoryPersistence()
         let stopped = try #require(try await fixture.history.entry(id: runID))
         #expect(stopped.outcome == .stopped)
@@ -905,7 +905,7 @@ struct AppStateRunRecordTests {
 
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
         await awaitLaunches(fixture)
-        await fixture.state.waitForRunScriptCompletionTasksForTesting()
+        await fixture.state.core.waitForObservedRunsForTesting()
 
         #expect(runRecord(fixture)?.status == .finished(.unknown))
         #expect(fixture.state.runScriptFailures(in: fixture.worktree.id).isEmpty)
@@ -1002,7 +1002,7 @@ struct AppStateRunRecordTests {
         fixture.state.rightPaneStore.deactivate()
 
         #expect(runRecord(fixture)?.status == .running)
-        #expect(fixture.state.runScriptCompletionTaskCountForTesting == 1)
+        #expect(fixture.state.core.observedRunCountForTesting == 1)
         #expect(scriptTabCount(fixture) == 1)
     }
 

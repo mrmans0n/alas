@@ -1,4 +1,3 @@
-@_spi(AppHost) import AlasCore
 import Foundation
 import os
 

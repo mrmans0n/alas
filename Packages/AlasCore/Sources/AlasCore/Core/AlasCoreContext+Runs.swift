@@ -465,6 +465,15 @@ extension AlasCoreContext {
         }
     }
 
+    /// Waits until every observed run has settled.
+    @_spi(Testing) public func waitForObservedRunsForTesting() async {
+        for task in runObservations.values.map(\.task) {
+            await task.value
+        }
+    }
+
+    @_spi(Testing) public var observedRunCountForTesting: Int { runObservations.count }
+
     /// Waits until every launch now starting has started or failed.
     @_spi(Testing) public func waitForStartingRunsForTesting() async {
         for task in pendingRunLaunches.values.compactMap(\.task) {

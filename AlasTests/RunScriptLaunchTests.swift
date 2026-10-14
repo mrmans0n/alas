@@ -560,7 +560,7 @@ struct RunScriptLaunchTests {
 
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
         await finishPendingLaunches(fixture.state)
-        await fixture.state.waitForRunScriptCompletionTasksForTesting()
+        await fixture.state.core.waitForObservedRunsForTesting()
 
         let failures = fixture.state.runScriptFailures(in: fixture.worktree.id)
         #expect(failures.count == 1)
@@ -581,7 +581,7 @@ struct RunScriptLaunchTests {
         fixture.state.harness.notifications.notificationAdder = { _ in }
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
         await finishPendingLaunches(fixture.state)
-        await fixture.state.waitForRunScriptCompletionTasksForTesting()
+        await fixture.state.core.waitForObservedRunsForTesting()
 
         let failure = try #require(fixture.state.runScriptFailures(in: fixture.worktree.id).first)
         let beforeRemoval = fixture.state.attentionAggregation
@@ -615,7 +615,7 @@ struct RunScriptLaunchTests {
 
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
         await finishPendingLaunches(fixture.state)
-        await fixture.state.waitForRunScriptCompletionTasksForTesting()
+        await fixture.state.core.waitForObservedRunsForTesting()
 
         #expect(fixture.state.runScriptFailures(in: fixture.worktree.id).isEmpty)
         #expect(fixture.state.attentionStore.events.isEmpty)
@@ -635,7 +635,7 @@ struct RunScriptLaunchTests {
 
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
         await finishPendingLaunches(fixture.state)
-        await fixture.state.waitForRunScriptCompletionTasksForTesting()
+        await fixture.state.core.waitForObservedRunsForTesting()
 
         fixture.state.closeAllTabs(worktreeId: fixture.worktree.id)
 
@@ -657,7 +657,7 @@ struct RunScriptLaunchTests {
 
         fixture.state.closeAllTabs(worktreeId: fixture.worktree.id)
         await gate.open()
-        await fixture.state.waitForRunScriptCompletionTasksForTesting()
+        await fixture.state.core.waitForObservedRunsForTesting()
 
         #expect(fixture.state.runScriptFailures(in: fixture.worktree.id).count == 1)
     }
@@ -677,7 +677,7 @@ struct RunScriptLaunchTests {
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
         await finishPendingLaunches(fixture.state)
 
-        #expect(fixture.state.runScriptCompletionTaskCountForTesting == 0)
+        #expect(fixture.state.core.observedRunCountForTesting == 0)
         #expect(fixture.state.runScriptFailures(in: fixture.worktree.id).isEmpty)
     }
 
@@ -694,9 +694,9 @@ struct RunScriptLaunchTests {
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
         await finishPendingLaunches(fixture.state)
 
-        #expect(fixture.state.runScriptCompletionTaskCountForTesting == 1)
-        try await waitUntil { fixture.state.runScriptCompletionTaskCountForTesting == 0 }
-        #expect(fixture.state.runScriptCompletionTaskCountForTesting == 0)
+        #expect(fixture.state.core.observedRunCountForTesting == 1)
+        try await waitUntil { fixture.state.core.observedRunCountForTesting == 0 }
+        #expect(fixture.state.core.observedRunCountForTesting == 0)
     }
 
     @MainActor
@@ -715,9 +715,9 @@ struct RunScriptLaunchTests {
 
         fixture.state.closeTab(worktreeId: fixture.worktree.id, tabId: tab.id)
 
-        #expect(fixture.state.runScriptCompletionTaskCountForTesting == 1)
-        try await waitUntil { fixture.state.runScriptCompletionTaskCountForTesting == 0 }
-        #expect(fixture.state.runScriptCompletionTaskCountForTesting == 0)
+        #expect(fixture.state.core.observedRunCountForTesting == 1)
+        try await waitUntil { fixture.state.core.observedRunCountForTesting == 0 }
+        #expect(fixture.state.core.observedRunCountForTesting == 0)
     }
 
     @MainActor
@@ -749,9 +749,9 @@ struct RunScriptLaunchTests {
 
         fixture.state.closeFocusedPane(worktreeId: fixture.worktree.id)
 
-        #expect(fixture.state.runScriptCompletionTaskCountForTesting == 1)
-        try await waitUntil { fixture.state.runScriptCompletionTaskCountForTesting == 0 }
-        #expect(fixture.state.runScriptCompletionTaskCountForTesting == 0)
+        #expect(fixture.state.core.observedRunCountForTesting == 1)
+        try await waitUntil { fixture.state.core.observedRunCountForTesting == 0 }
+        #expect(fixture.state.core.observedRunCountForTesting == 0)
     }
 
     @MainActor
@@ -789,7 +789,7 @@ struct RunScriptLaunchTests {
         state.closeFocusedPane(worktreeId: worktree.id)
 
         try await Task.sleep(for: Self.pastLocalMonitorGrace)
-        #expect(state.runScriptCompletionTaskCountForTesting == 1)
+        #expect(state.core.observedRunCountForTesting == 1)
         state.cancelAllRunScriptCompletionTasks()
     }
 
@@ -809,7 +809,7 @@ struct RunScriptLaunchTests {
 
         fixture.state.closeTab(worktreeId: fixture.worktree.id, tabId: tab.id)
         await gate.open()
-        await fixture.state.waitForRunScriptCompletionTasksForTesting()
+        await fixture.state.core.waitForObservedRunsForTesting()
 
         #expect(fixture.state.runScriptFailures(in: fixture.worktree.id).count == 1)
     }
@@ -836,7 +836,7 @@ struct RunScriptLaunchTests {
         }
 
         fixture.state.closePaneForProcessExit(worktreeId: fixture.worktree.id, leafId: terminal.focusedLeafId)
-        await fixture.state.waitForRunScriptCompletionTasksForTesting()
+        await fixture.state.core.waitForObservedRunsForTesting()
 
         #expect(fixture.state.runScriptFailures(in: fixture.worktree.id).count == 1)
         #expect(notifications.count == 1)
@@ -856,7 +856,7 @@ struct RunScriptLaunchTests {
         state.core.stopObservingRuns(hostedBy: "session", after: .milliseconds(1), includeRemote: false)
 
         try await Task.sleep(for: .milliseconds(20))
-        #expect(state.runScriptCompletionTaskCountForTesting == 1)
+        #expect(state.core.observedRunCountForTesting == 1)
         state.cancelAllRunScriptCompletionTasks()
     }
 
@@ -873,8 +873,8 @@ struct RunScriptLaunchTests {
 
         state.core.stopObservingRuns(hostedBy: "session", after: .milliseconds(30))
 
-        try await waitUntil { state.runScriptCompletionTaskCountForTesting == 0 }
-        #expect(state.runScriptCompletionTaskCountForTesting == 0)
+        try await waitUntil { state.core.observedRunCountForTesting == 0 }
+        #expect(state.core.observedRunCountForTesting == 0)
     }
 
     @MainActor
@@ -899,7 +899,7 @@ struct RunScriptLaunchTests {
 
         state.cancelAllRunScriptCompletionTasks()
 
-        #expect(state.runScriptCompletionTaskCountForTesting == 0)
+        #expect(state.core.observedRunCountForTesting == 0)
         #expect(!FileManager.default.fileExists(atPath: paths.transcript))
         #expect(!FileManager.default.fileExists(atPath: paths.completion))
         #expect(!FileManager.default.fileExists(atPath: "\(paths.completion).tmp"))
@@ -927,9 +927,9 @@ struct RunScriptLaunchTests {
 
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
         await finishPendingLaunches(fixture.state)
-        #expect(fixture.state.runScriptCompletionTaskCountForTesting == 1)
+        #expect(fixture.state.core.observedRunCountForTesting == 1)
         try await Task.sleep(for: Self.pastLocalMonitorGrace)
-        #expect(fixture.state.runScriptCompletionTaskCountForTesting == 1)
+        #expect(fixture.state.core.observedRunCountForTesting == 1)
         fixture.state.cancelAllRunScriptCompletionTasks()
     }
 
@@ -955,9 +955,9 @@ struct RunScriptLaunchTests {
         fixture.state.closeTabsToLeft(worktreeId: fixture.worktree.id, of: otherTab.id)
 
         #expect(!fixture.state.tabs.tabs(forWorktree: fixture.worktree.id).contains(where: { $0.id == runTab.id }))
-        #expect(fixture.state.runScriptCompletionTaskCountForTesting == 1)
-        try await waitUntil { fixture.state.runScriptCompletionTaskCountForTesting == 0 }
-        #expect(fixture.state.runScriptCompletionTaskCountForTesting == 0)
+        #expect(fixture.state.core.observedRunCountForTesting == 1)
+        try await waitUntil { fixture.state.core.observedRunCountForTesting == 0 }
+        #expect(fixture.state.core.observedRunCountForTesting == 0)
     }
 
     @MainActor
@@ -971,7 +971,7 @@ struct RunScriptLaunchTests {
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
         await finishPendingLaunches(fixture.state)
-        await fixture.state.waitForRunScriptCompletionTasksForTesting()
+        await fixture.state.core.waitForObservedRunsForTesting()
 
         #expect(waitCount.value == 1)
     }
@@ -1046,7 +1046,7 @@ struct RunScriptLaunchTests {
 
         fixture.state.runOrFocusScript(script, in: fixture.worktree, console: override)
         await finishPendingLaunches(fixture.state)
-        await fixture.state.waitForRunScriptCompletionTasksForTesting()
+        await fixture.state.core.waitForObservedRunsForTesting()
 
         let runTab = try #require(fixture.state.scriptTab(for: script, in: fixture.worktree))
         #expect(runTab.isHiddenRunTab == startsHidden)
@@ -1063,12 +1063,12 @@ struct RunScriptLaunchTests {
         script.console = .hidden
         fixture.state.runOrFocusScript(script, in: fixture.worktree)
         await finishPendingLaunches(fixture.state)
-        await fixture.state.waitForRunScriptCompletionTasksForTesting()
+        await fixture.state.core.waitForObservedRunsForTesting()
         let firstRunID = try #require(fixture.state.runRecords.record(worktreeID: fixture.worktree.id, scriptKey: script.key)?.id)
 
         fixture.state.runOrFocusScript(script, in: fixture.worktree)
         await finishPendingLaunches(fixture.state)
-        await fixture.state.waitForRunScriptCompletionTasksForTesting()
+        await fixture.state.core.waitForObservedRunsForTesting()
 
         let record = try #require(fixture.state.runRecords.record(worktreeID: fixture.worktree.id, scriptKey: script.key))
         #expect(record.id != firstRunID)
@@ -1090,11 +1090,11 @@ struct RunScriptLaunchTests {
         script.console = .hidden
         fixture.state.runOrFocusScript(script, in: fixture.worktree, console: .shown)
         await finishPendingLaunches(fixture.state)
-        await fixture.state.waitForRunScriptCompletionTasksForTesting()
+        await fixture.state.core.waitForObservedRunsForTesting()
 
         fixture.state.restartScript(script, in: fixture.worktree)
         await finishPendingLaunches(fixture.state)
-        await fixture.state.waitForRunScriptCompletionTasksForTesting()
+        await fixture.state.core.waitForObservedRunsForTesting()
 
         let runTab = try #require(fixture.state.scriptTab(for: script, in: fixture.worktree))
         #expect(!runTab.isHiddenRunTab)
@@ -1129,7 +1129,7 @@ struct RunScriptLaunchTests {
         // The first launch has not opened its terminal yet.
         fixture.state.restartScript(script, in: fixture.worktree)
         await finishPendingLaunches(fixture.state)
-        await fixture.state.waitForRunScriptCompletionTasksForTesting()
+        await fixture.state.core.waitForObservedRunsForTesting()
 
         let runTab = try #require(fixture.state.scriptTab(for: script, in: fixture.worktree))
         #expect(!runTab.isHiddenRunTab)

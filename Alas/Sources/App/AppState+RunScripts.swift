@@ -1,4 +1,3 @@
-@_spi(AppHost) import AlasCore
 import Foundation
 
 /// What `startScriptLaunch` did with a request.
@@ -344,17 +343,6 @@ extension AppState {
             }
             tabs.closeRunReports(worktreeId: worktreeID)
         }
-    }
-
-    func waitForRunScriptCompletionTasksForTesting() async {
-        let tasks = core.runObservations.values.map(\.task)
-        for task in tasks {
-            await task.value
-        }
-    }
-
-    var runScriptCompletionTaskCountForTesting: Int {
-        core.runObservations.count
     }
 
     func flushRunHistoryPersistence(worktreeID: String? = nil) async {

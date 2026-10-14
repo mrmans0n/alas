@@ -35,7 +35,7 @@ extension AlasCoreContext {
 
     /// Registers interest in how one run ends. The handler fires exactly once
     /// and is then dropped.
-    @_spi(AppHost) public func awaitRunSettlement(
+    func awaitRunSettlement(
         runID: String,
         worktreeID: String,
         notify: @escaping (RunScriptSettlement) -> Void
@@ -45,7 +45,7 @@ extension AlasCoreContext {
 
     /// Hands a waiting caller the run's final state. A no-op when nobody is
     /// waiting, so every teardown path can call it unconditionally.
-    @_spi(AppHost) public func resolveRunSettlement(runID: String, _ settlement: RunScriptSettlement) {
+    func resolveRunSettlement(runID: String, _ settlement: RunScriptSettlement) {
         runSettlementHandlers.removeValue(forKey: runID)?.notify(settlement)
     }
 
@@ -53,7 +53,7 @@ extension AlasCoreContext {
     /// teardown paths that discard runs wholesale instead of finishing them —
     /// without it, a scheduled run in a deleted worktree would wait forever
     /// and its schedule would never fire again.
-    @_spi(AppHost) public func resolveRunSettlements(worktreeID: String, _ settlement: RunScriptSettlement) {
+    func resolveRunSettlements(worktreeID: String, _ settlement: RunScriptSettlement) {
         for (runID, entry) in runSettlementHandlers where entry.worktreeID == worktreeID {
             resolveRunSettlement(runID: runID, settlement)
         }
@@ -64,7 +64,7 @@ extension AlasCoreContext {
     /// main place a waiting scheduler learns how the command ended. Paths that
     /// end observation *without* finishing a record resolve the settlement
     /// themselves.
-    @_spi(AppHost) public func finalizeRun(_ record: RunRecord?, capture: RunHistoryCapture) {
+    func finalizeRun(_ record: RunRecord?, capture: RunHistoryCapture) {
         if let record, case .finished(let outcome) = record.status {
             resolveRunSettlement(runID: record.id, .finished(outcome))
         }
@@ -78,7 +78,7 @@ extension AlasCoreContext {
     /// finishes its record from it. `onFinished` is called with the finished
     /// record once it is archived; a failed run's record carries the run ID
     /// as its failure ID.
-    @_spi(AppHost) public func observeRun(
+    func observeRun(
         runID: String,
         sessionID: String?,
         location: RunScriptCaptureLocation,
@@ -146,7 +146,7 @@ extension AlasCoreContext {
     /// shell went away before the command reported an exit status, so the
     /// record settles on `unknown` — never on success. Without an observation,
     /// `location` is the capture to release.
-    @_spi(AppHost) public func stopObservingRun(runID: String, location: RunScriptCaptureLocation? = nil) {
+    func stopObservingRun(runID: String, location: RunScriptCaptureLocation? = nil) {
         let entry = runObservations.removeValue(forKey: runID)
         guard let location = entry?.location ?? location else { return }
         let capture = RunHistoryCapture.beforeCancelling(location)
@@ -156,7 +156,7 @@ extension AlasCoreContext {
 
     /// Stops observing a run that is being stopped on purpose, returning the
     /// capture to archive it with.
-    @_spi(AppHost) public func takeRunCapture(runID: String) -> RunHistoryCapture {
+    func takeRunCapture(runID: String) -> RunHistoryCapture {
         guard let entry = runObservations.removeValue(forKey: runID) else { return .unavailable }
         let capture = RunHistoryCapture.beforeCancelling(entry.location)
         entry.task.cancel()
@@ -165,7 +165,7 @@ extension AlasCoreContext {
 
     /// Ends every observation, as quitting does: each observed run settles on
     /// `unknown`, and so does anyone still waiting.
-    @_spi(AppHost) public func stopObservingAllRuns() {
+    func stopObservingAllRuns() {
         let now = Date()
         for (runID, entry) in runObservations {
             let capture = RunHistoryCapture.beforeCancelling(entry.location)
@@ -188,7 +188,7 @@ extension AlasCoreContext {
     /// `deletingHistory`, by the returned task; otherwise observed runs are
     /// archived as lost first.
     @discardableResult
-    @_spi(AppHost) public func discardRuns(worktreeID: String, deletingHistory: Bool) -> Task<Void, Never>? {
+    func discardRuns(worktreeID: String, deletingHistory: Bool) -> Task<Void, Never>? {
         for (runID, entry) in runObservations where entry.worktreeID == worktreeID {
             let capture = deletingHistory ? .location(entry.location) : RunHistoryCapture.beforeCancelling(entry.location)
             runObservations.removeValue(forKey: runID)?.task.cancel()
@@ -207,7 +207,7 @@ extension AlasCoreContext {
     }
 
     /// The observed runs hosted by `sessionID`, optionally only local ones.
-    @_spi(AppHost) public func observedRunIDs(sessionID: String, includeRemote: Bool = true) -> [String] {
+    func observedRunIDs(sessionID: String, includeRemote: Bool = true) -> [String] {
         runObservations.compactMap { runID, entry in
             if !includeRemote, case .remote = entry.location { return nil }
             return entry.sessionID == sessionID ? runID : nil
