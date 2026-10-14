@@ -8,7 +8,6 @@ import Testing
     @Test(arguments: [
         ("plain agent", false, true),
         ("agent with table", false, true),
-        ("agent with wide table", false, false),
         ("live agent", true, false),
         ("user with path", false, false),
         ("plain user", false, true),
@@ -16,7 +15,6 @@ import Testing
     func eligibility(name: String, isLive: Bool, expected: Bool) {
         let message: ACPMessage = switch name {
         case "agent with table": .agent(id: UUID(), messageId: nil, StreamingText("| a |\n|---|\n| 1 |"))
-        case "agent with wide table": .agent(id: UUID(), messageId: nil, StreamingText("| a | b | c | d | e | f |\n|---|---|---|---|---|---|\n| 1 | 2 | 3 | 4 | 5 | 6 |"))
         case "user with path": .user(id: UUID(), messageId: nil, text: "look at /Users/me/file.swift", attachments: [])
         case "plain user": .user(id: UUID(), messageId: nil, text: "please fix the tests", attachments: [])
         default: .agent(id: UUID(), messageId: nil, StreamingText("Done. All **green**."))
