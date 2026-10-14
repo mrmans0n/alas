@@ -128,6 +128,9 @@ struct AlasCoreContextTests {
     /// its run is recorded with an unknown outcome instead of being undone.
     @Test func runThatExecutedWithoutReportingKeepsAnUnknownRecord() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-core-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try "true\n".write(to: root.appendingPathComponent("noop.sh"), atomically: true, encoding: .utf8)
         let project = ProjectConfig(id: "p", name: "p", path: root.path, color: "blue", addedAt: Date())
         let worktree = Worktree(
             id: root.path, projectId: "p", name: "main", branch: "main", path: root,
@@ -147,6 +150,253 @@ struct AlasCoreContextTests {
             try await context.runScript(script, in: worktree)
         }
         #expect(context.runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status == .finished(.unknown))
+    }
+
+    /// A process that ends with a cancellation nobody asked for is a run that
+    /// never reported, not a deliberate stop: it settles, and the caller learns why.
+    @Test(.timeLimit(.minutes(1)))
+    func processCancellingItselfSettlesTheRun() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-core-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try "true\n".write(to: root.appendingPathComponent("noop.sh"), atomically: true, encoding: .utf8)
+        let project = ProjectConfig(id: "p", name: "p", path: root.path, color: "blue", addedAt: Date())
+        let worktree = Worktree(
+            id: root.path, projectId: "p", name: "main", branch: "main", path: root,
+            status: .clean, lastActivity: Date()
+        )
+        let script = RunScript(
+            scope: .repo, fileName: "noop.sh", fileURL: root.appendingPathComponent("noop.sh"),
+            displayName: "Noop", onExit: .close, cwd: nil, isExecutable: false
+        )
+        let context = AlasCoreContext(
+            projects: ProjectsManager(persistedProjects: [project]),
+            runs: RunService(launch: { _, _ in throw CancellationError() }),
+            runHistoryStore: nil
+        )
+
+        await #expect(throws: CancellationError.self) {
+            try await context.runScript(script, in: worktree)
+        }
+        #expect(context.runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status == .finished(.unknown))
+    }
+
+    /// A shell that never spawned ran nothing: the previous outcome stays,
+    /// and the caller gets the spawn error.
+    @Test func processThatNeverSpawnedLeavesThePreviousRecord() async throws {
+        struct SpawnFailed: Error {}
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-core-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try "true\n".write(to: root.appendingPathComponent("noop.sh"), atomically: true, encoding: .utf8)
+        let project = ProjectConfig(id: "p", name: "p", path: root.path, color: "blue", addedAt: Date())
+        let worktree = Worktree(
+            id: root.path, projectId: "p", name: "main", branch: "main", path: root,
+            status: .clean, lastActivity: Date()
+        )
+        let script = RunScript(
+            scope: .repo, fileName: "noop.sh", fileURL: root.appendingPathComponent("noop.sh"),
+            displayName: "Noop", onExit: .close, cwd: nil, isExecutable: false
+        )
+        let context = AlasCoreContext(
+            projects: ProjectsManager(persistedProjects: [project]),
+            runs: RunService(launch: { _, _ in throw SpawnFailed() }),
+            runHistoryStore: nil
+        )
+        var previous = RunRecord(
+            id: "previous", scriptKey: script.key, scriptName: "Noop", worktreeID: worktree.id, branch: "main",
+            target: RunExecutionTarget(host: nil, workingDirectory: root.path), status: .running, startedAt: Date()
+        )
+        context.runRecords.begin(previous)
+        let finished = context.runRecords.finish(runID: "previous", outcome: .succeeded, at: Date())
+        previous = try #require(finished)
+
+        await #expect(throws: SpawnFailed.self) {
+            try await context.runScript(script, in: worktree)
+        }
+        #expect(context.runRecords.record(worktreeID: worktree.id, scriptKey: script.key) == previous)
+    }
+
+    /// Cancelling a headless run stops that run, never one that replaced it
+    /// before the stop got to run.
+    @Test(.timeLimit(.minutes(1)))
+    func cancellingARunLeavesTheRunThatReplacedIt() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-core-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try "sleep 300\n".write(to: root.appendingPathComponent("long.sh"), atomically: true, encoding: .utf8)
+        let project = ProjectConfig(id: "p", name: "p", path: root.path, color: "blue", addedAt: Date())
+        let worktree = Worktree(
+            id: root.path, projectId: "p", name: "main", branch: "main", path: root,
+            status: .clean, lastActivity: Date()
+        )
+        let script = RunScript(
+            scope: .repo, fileName: "long.sh", fileURL: root.appendingPathComponent("long.sh"),
+            displayName: "Long", onExit: .close, cwd: nil, isExecutable: false
+        )
+        let context = AlasCoreContext(projects: ProjectsManager(persistedProjects: [project]), runHistoryStore: nil)
+        let first = Task { try await context.runScript(script, in: worktree) }
+        while context.runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status != .running {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        // Same turn: the restart takes the slot before the cancellation's stop runs.
+        first.cancel()
+        let replacement = context.restartRun(script, in: worktree, isHidden: true)
+        defer { context.stopRun(scriptKey: script.key, in: worktree) }
+
+        await #expect(throws: CancellationError.self) { _ = try await first.value }
+        guard case .started(let replacementID) = replacement else {
+            Issue.record("Expected the restart to start, got \(replacement)")
+            return
+        }
+        let current = context.runRecords.record(worktreeID: worktree.id, scriptKey: script.key)
+        #expect(current?.id == replacementID)
+        #expect(current?.status.isActive == true)
+    }
+
+    /// Giving up on every run, as quitting does, ends their processes too,
+    /// not only the waiting for them.
+    @Test(.timeLimit(.minutes(1)))
+    func abandoningAllRunsEndsTheirProcesses() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-core-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let pidFile = root.appendingPathComponent("pid")
+        try "echo $$ > '\(pidFile.path)'\nsleep 300\n".write(to: root.appendingPathComponent("long.sh"), atomically: true, encoding: .utf8)
+        let project = ProjectConfig(id: "p", name: "p", path: root.path, color: "blue", addedAt: Date())
+        let worktree = Worktree(
+            id: root.path, projectId: "p", name: "main", branch: "main", path: root,
+            status: .clean, lastActivity: Date()
+        )
+        let script = RunScript(
+            scope: .repo, fileName: "long.sh", fileURL: root.appendingPathComponent("long.sh"),
+            displayName: "Long", onExit: .close, cwd: nil, isExecutable: false
+        )
+        let context = AlasCoreContext(projects: ProjectsManager(persistedProjects: [project]), runHistoryStore: nil)
+        let run = Task { try await context.runScript(script, in: worktree) }
+        var pid: pid_t?
+        while pid == nil {
+            pid = (try? String(contentsOf: pidFile, encoding: .utf8)).flatMap { pid_t($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let shell = try #require(pid)
+
+        context.abandonAllRuns()
+        _ = try? await run.value
+
+        // SIGTERM first, SIGKILL after a two second grace.
+        let deadline = ContinuousClock.now + .seconds(10)
+        while kill(shell, 0) == 0, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        #expect(kill(shell, 0) != 0, "the run's shell is still alive")
+    }
+
+    /// A run stopped on purpose stays stopped even when its shell, cancelled,
+    /// then reports it never spawned.
+    @Test(.timeLimit(.minutes(1)))
+    func stoppedRunStaysStoppedWhenItsSpawnFailsLate() async throws {
+        struct SpawnFailed: Error {}
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-core-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try "true\n".write(to: root.appendingPathComponent("noop.sh"), atomically: true, encoding: .utf8)
+        let project = ProjectConfig(id: "p", name: "p", path: root.path, color: "blue", addedAt: Date())
+        let worktree = Worktree(
+            id: root.path, projectId: "p", name: "main", branch: "main", path: root,
+            status: .clean, lastActivity: Date()
+        )
+        let script = RunScript(
+            scope: .repo, fileName: "noop.sh", fileURL: root.appendingPathComponent("noop.sh"),
+            displayName: "Noop", onExit: .close, cwd: nil, isExecutable: false
+        )
+        let context = AlasCoreContext(
+            projects: ProjectsManager(persistedProjects: [project]),
+            runs: RunService(launch: { _, _ in
+                try? await Task.sleep(for: .seconds(300))
+                throw SpawnFailed()
+            }),
+            runHistoryStore: nil
+        )
+        let run = Task { try await context.runScript(script, in: worktree) }
+        while context.runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status != .running {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        run.cancel()
+        _ = try? await run.value
+        // The cancelled shell's late failure reaches the observation shortly;
+        // a rollback would replace the stopped record within that window.
+        let deadline = ContinuousClock.now + .seconds(1)
+        while context.runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status == .finished(.stopped),
+              ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        #expect(context.runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status == .finished(.stopped))
+    }
+
+    /// A caller cancelled before its run even started still stops that run.
+    @Test(.timeLimit(.minutes(1)))
+    func runScriptCancelledBeforeStartingStopsItsRun() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-core-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try "sleep 300\n".write(to: root.appendingPathComponent("long.sh"), atomically: true, encoding: .utf8)
+        let project = ProjectConfig(id: "p", name: "p", path: root.path, color: "blue", addedAt: Date())
+        let worktree = Worktree(
+            id: root.path, projectId: "p", name: "main", branch: "main", path: root,
+            status: .clean, lastActivity: Date()
+        )
+        let script = RunScript(
+            scope: .repo, fileName: "long.sh", fileURL: root.appendingPathComponent("long.sh"),
+            displayName: "Long", onExit: .close, cwd: nil, isExecutable: false
+        )
+        let context = AlasCoreContext(projects: ProjectsManager(persistedProjects: [project]), runHistoryStore: nil)
+
+        let run = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await context.runScript(script, in: worktree)
+        }
+
+        await #expect(throws: CancellationError.self) { _ = try await run.value }
+        #expect(context.runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status == .finished(.stopped))
+    }
+
+    /// A script still running is not started a second time next to it.
+    @Test(.timeLimit(.minutes(1)))
+    func startRunRefusesAScriptStillRunning() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-core-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try "sleep 300\n".write(to: root.appendingPathComponent("long.sh"), atomically: true, encoding: .utf8)
+        let project = ProjectConfig(id: "p", name: "p", path: root.path, color: "blue", addedAt: Date())
+        let worktree = Worktree(
+            id: root.path, projectId: "p", name: "main", branch: "main", path: root,
+            status: .clean, lastActivity: Date()
+        )
+        let script = RunScript(
+            scope: .repo, fileName: "long.sh", fileURL: root.appendingPathComponent("long.sh"),
+            displayName: "Long", onExit: .close, cwd: nil, isExecutable: false
+        )
+        let context = AlasCoreContext(projects: ProjectsManager(persistedProjects: [project]), runHistoryStore: nil)
+        guard case .started(let firstID) = context.startRun(script, in: worktree, isHidden: true) else {
+            Issue.record("Expected the first run to start")
+            return
+        }
+        defer { context.stopRun(scriptKey: script.key, in: worktree) }
+        while context.runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status != .running {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        let second = context.startRun(script, in: worktree, isHidden: true)
+
+        guard case .refused = second else {
+            Issue.record("Expected the second run to be refused, got \(second)")
+            return
+        }
+        #expect(context.runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.id == firstID)
     }
 
     /// A second run of a script that is still running would displace the

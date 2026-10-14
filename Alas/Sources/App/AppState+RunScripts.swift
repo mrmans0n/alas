@@ -2,16 +2,7 @@
 import Foundation
 
 /// What `startScriptLaunch` did with a request.
-enum RunScriptLaunchStart: Equatable, Sendable {
-    /// A run slot was claimed under this run ID; the terminal is opening.
-    case started(runID: String)
-    /// A launch for the same (worktree, script) is already in flight.
-    case alreadyStarting
-    /// The worktree's project is gone; nothing to run against.
-    case projectUnavailable
-    /// The launch cannot proceed; `message` explains why to the user.
-    case refused(title: String, message: String)
-}
+typealias RunScriptLaunchStart = RunStart
 
 extension AppState {
     // MARK: - Launch
@@ -67,8 +58,7 @@ extension AppState {
     /// How the script's current run is shown: a launch still starting keeps its
     /// mode, otherwise the tab's visibility. Nil when there is nothing to repeat.
     func currentRunConsole(scriptKey: String, worktreeID: String) -> RunScriptConsole? {
-        let launchKey = PendingRunScriptLaunchKey(worktreeID: worktreeID, scriptKey: scriptKey)
-        if let pending = pendingScriptLaunches[launchKey] { return pending.isHidden ? .hidden : .shown }
+        if let isHidden = core.startingRunIsHidden(scriptKey: scriptKey, worktreeID: worktreeID) { return isHidden ? .hidden : .shown }
         guard let tab = scriptTab(scriptKey: scriptKey, worktreeID: worktreeID) else { return nil }
         return tab.isHiddenRunTab ? .hidden : .shown
     }
@@ -82,19 +72,17 @@ extension AppState {
         presentsLaunchFailure: Bool = true,
         console: RunScriptConsole? = nil
     ) -> RunScriptLaunchStart {
-        let launchKey = PendingRunScriptLaunchKey(worktreeID: worktree.id, scriptKey: script.key)
         let resolvedConsole = console ?? currentRunConsole(scriptKey: script.key, worktreeID: worktree.id)
-        if pendingScriptLaunches[launchKey] != nil {
-            stopScript(script, in: worktree)
-            return launchScript(script, in: worktree, presentsLaunchFailure: presentsLaunchFailure, console: resolvedConsole)
+        let result = core.restartRun(
+            script,
+            in: worktree,
+            isHidden: (resolvedConsole ?? script.console) == .hidden,
+            onSettled: launchFailureAlert(presents: presentsLaunchFailure)
+        )
+        if presentsLaunchFailure, case let .refused(title, message) = result {
+            showFileActionError(title: title, message: message)
         }
-        if let existing = scriptTab(for: script, in: worktree) {
-            let capture = stoppedRunHistoryCapture(worktreeID: worktree.id, scriptKey: script.key)
-            let finalized = runRecords.markStopped(worktreeID: worktree.id, scriptKey: script.key, at: Date())
-            core.finalizeRun(finalized, capture: capture)
-            closeTab(worktreeId: worktree.id, tabId: existing.id)
-        }
-        return launchScript(script, in: worktree, presentsLaunchFailure: presentsLaunchFailure, console: resolvedConsole)
+        return result
     }
 
     /// Restart from a run record, which only knows the script key. Resolves
@@ -133,28 +121,9 @@ extension AppState {
         stopScript(scriptKey: script.key, in: worktree)
     }
 
-    /// Stop an in-flight run by closing the terminal that hosts it. The record
-    /// is marked stopped *before* the close so the monitor-cancellation path
-    /// can't relabel a deliberate stop as a lost process.
+    /// Stop an in-flight run by closing the terminal that hosts it.
     func stopScript(scriptKey: String, in worktree: Worktree) {
-        let launchKey = PendingRunScriptLaunchKey(worktreeID: worktree.id, scriptKey: scriptKey)
-        if let pending = pendingScriptLaunches.removeValue(forKey: launchKey) {
-            let finalized = runRecords.markStopped(worktreeID: worktree.id, scriptKey: scriptKey, at: Date())
-            core.finalizeRun(finalized, capture: .unavailable)
-            pendingScriptLaunchTasks.removeValue(forKey: pending.id)?.cancel()
-            return
-        }
-        guard let existing = scriptTab(scriptKey: scriptKey, worktreeID: worktree.id) else {
-            // Nothing left to stop: whatever we thought was running is gone,
-            // and we never saw it exit.
-            let finalized = runRecords.markLostObservation(worktreeID: worktree.id, scriptKey: scriptKey, at: Date())
-            core.finalizeRun(finalized, capture: .unavailable)
-            return
-        }
-        let capture = stoppedRunHistoryCapture(worktreeID: worktree.id, scriptKey: scriptKey)
-        let finalized = runRecords.markStopped(worktreeID: worktree.id, scriptKey: scriptKey, at: Date())
-        core.finalizeRun(finalized, capture: capture)
-        closeTab(worktreeId: worktree.id, tabId: existing.id)
+        core.stopRun(scriptKey: scriptKey, in: worktree)
     }
 
     func focusScriptTerminal(_ script: RunScript, in worktree: Worktree) {
@@ -173,24 +142,11 @@ extension AppState {
     /// Run tab appears, so reconnecting to a worktree settles uncertain runs
     /// instead of leaving them stuck on "Running".
     func reconcileRunRecords(worktreeID: String) {
-        let now = Date()
-        for record in runRecords.records(worktreeID: worktreeID) where record.status.isActive {
-            guard let sessionID = record.sessionID else { continue }
-            guard terminal.registry.session(for: sessionID) == nil else { continue }
-            // A monitor may still be waiting on a completion file that outlives
-            // the shell; only give up once nothing is observing the run.
-            guard core.observedRunIDs(sessionID: sessionID).isEmpty else { continue }
-            let finalized = runRecords.markLostObservation(runID: record.id, at: now)
-            core.finalizeRun(finalized, capture: .unavailable)
-        }
+        core.reconcileRuns(worktreeID: worktreeID)
     }
 
     func runExecutionTarget(for script: RunScript, in worktree: Worktree) -> RunExecutionTarget {
-        RunExecutionTarget(
-            host: projects.first(where: { $0.id == worktree.projectId })?.host,
-            workingDirectory: script.cwd.map { worktree.path.appendingPathComponent($0).path }
-                ?? worktree.path.path
-        )
+        core.runExecutionTarget(for: script, in: worktree)
     }
 
     func webPreviewRemoteHost(for worktree: Worktree) -> String? {
@@ -227,26 +183,6 @@ extension AppState {
         }
     }
 
-    /// Who else holds the run's endpoint port right now. Reported, never acted
-    /// on — Alas does not terminate a process it does not own.
-    private func detectPortConflict(
-        endpoint: URL?,
-        target: RunExecutionTarget,
-        excludingRunID: String
-    ) -> RunPortConflict? {
-        guard let port = endpoint?.runEndpointPort else { return nil }
-        if let owner = runRecords.activeRunOwningPort(port, host: target.host, excludingRunID: excludingRunID) {
-            return .ownedByRun(
-                worktreeID: owner.worktreeID,
-                branch: owner.branch,
-                scriptName: owner.scriptName
-            )
-        }
-        // A bind probe only means something for ports on this machine.
-        guard !target.isRemote, RunPortProbe.isLocalPortInUse(port) else { return nil }
-        return .externalProcess
-    }
-
     /// `presentsLaunchFailure` false hands a refusal back to the caller instead of alerting the user.
     @discardableResult
     func launchScript(
@@ -276,158 +212,30 @@ extension AppState {
         _ script: RunScript,
         in worktree: Worktree,
         presentsLaunchFailure: Bool = true,
-        console: RunScriptConsole? = nil
+        console: RunScriptConsole? = nil,
+        onSettled: ((RunScriptSettlement) -> Void)? = nil
     ) -> RunScriptLaunchStart {
-        // The tab that would satisfy `runningScriptTab` isn't registered
-        // until this launch's async Task finishes, so two invocations before
-        // that (double-click, repeated Enter) would both see "not running"
-        // and both launch. Close that window with a synchronous in-flight
-        // guard instead.
-        let launchKey = PendingRunScriptLaunchKey(worktreeID: worktree.id, scriptKey: script.key)
-        guard pendingScriptLaunches[launchKey] == nil else { return .alreadyStarting }
-
-        // Global scripts live in local Application Support and are read by
-        // path, not content — launching one into a remote worktree would ship
-        // a Mac-only path into the SSH-launched remote shell, which can't see
-        // it. Remote repo scripts are discovered through the remote file layer,
-        // so their absolute path is intentionally not local-file-system
-        // reachable here.
-        if script.scope == .global, worktree.path.isRemoteAlasPath {
-            return .refused(
-                title: "Run Script Failed",
-                message: "Global scripts run on your Mac and can't be launched on a remote worktree yet."
-            )
-        }
-        let requiresLocalScriptPath = !(script.scope == .repo && worktree.path.isRemoteAlasPath)
-        guard !requiresLocalScriptPath || FileManager.default.fileExists(atPath: script.fileURL.path) else {
-            return .refused(
-                title: "Run Script Failed",
-                message: "\(script.fileName) no longer exists on disk."
-            )
-        }
-        // The run command only ever reaches the shell via the same rc-file
-        // injection StartupScriptInstaller uses for every other startup
-        // script — for a shell it doesn't know how to inject into, `plan`
-        // silently drops the script and just opens a bare login shell. Fail
-        // loudly here instead of leaving the user staring at an empty pane.
-        guard StartupScriptInstaller.supportsStartupScriptInjection(shell: config.terminal.shell) else {
-            return .refused(
-                title: "Run Script Failed",
-                message: "Run scripts require zsh or bash as your configured terminal shell (currently \((config.terminal.shell as NSString).lastPathComponent))."
-            )
-        }
-        guard let project = projects.first(where: { $0.id == worktree.projectId }) else { return .projectUnavailable }
-        // Refused before a record exists, so the row never flips to Starting.
-        guard projectsManager.admitsNewWork(in: worktree) else {
-            return .refused(
-                title: "Run Script Failed",
-                message: "Wait for the current worktree operation to finish before running scripts."
-            )
-        }
-        // Claim the slot synchronously, alongside `pendingScriptLaunches`, so
-        // the row flips to "Starting" on the same turn the user clicked and a
-        // second click can't open a second run behind the first one's back.
-        let runID = UUID().uuidString
-        let target = runExecutionTarget(for: script, in: worktree)
-        let conflict = detectPortConflict(endpoint: script.endpoint, target: target, excludingRunID: runID)
-        let displacedRecord = runRecords.begin(RunRecord(
-            id: runID,
-            scriptKey: script.key,
-            scriptName: script.displayName,
-            worktreeID: worktree.id,
-            branch: worktree.branch,
-            target: target,
-            endpoint: script.endpoint,
-            status: .starting,
-            startedAt: Date(),
-            portConflict: conflict
-        ))
-
-        let isHidden = (console ?? script.console) == .hidden
-        let launchID = UUID()
-        pendingScriptLaunches[launchKey] = PendingRunScriptLaunch(
-            id: launchID,
-            worktreeID: worktree.id,
-            scriptKey: script.key,
-            isHidden: isHidden
+        let alert = launchFailureAlert(presents: presentsLaunchFailure)
+        return core.startRun(
+            script,
+            in: worktree,
+            isHidden: (console ?? script.console) == .hidden,
+            onSettled: alert == nil && onSettled == nil ? nil : { settlement in
+                alert?(settlement)
+                onSettled?(settlement)
+            }
         )
-        let launchTask = Task { @MainActor in
-            defer {
-                if pendingScriptLaunches[launchKey]?.id == launchID {
-                    pendingScriptLaunches.removeValue(forKey: launchKey)
-                }
-                pendingScriptLaunchTasks.removeValue(forKey: launchID)
-            }
-            let captureLocation: RunScriptCaptureLocation
-            do {
-                captureLocation = try RunScriptCompletionMonitor.paths(runID: runID, host: project.host)
-                let suffix = try RunScriptCommand.runScriptStartupScript(
-                    script: script,
-                    worktreeRoot: worktree.path,
-                    branch: worktree.branch,
-                    projectName: project.name,
-                    repoRoot: project.path,
-                    capturePaths: captureLocation.paths
-                )
-                do {
-                    let tab = try await openTerminalTabPreparingRemoteZmxIfNeeded(
-                        for: worktree,
-                        startupScriptSuffix: suffix,
-                        includeUserStartupScript: true,
-                        titleOverride: script.displayName,
-                        runScriptKey: script.key,
-                        isHidden: isHidden
-                    )
-                    if Task.isCancelled {
-                        closeTab(worktreeId: worktree.id, tabId: tab.id)
-                        return
-                    }
-                    guard case .terminal(let terminalState) = tab,
-                          let sessionID = terminalState.runScriptLeafId
-                    else {
-                        // A terminal with no run leaf gives us nothing to
-                        // observe; say so instead of leaving the row starting.
-                        core.stopObservingRun(runID: runID, location: captureLocation)
-                        return
-                    }
-                    core.observeRun(
-                        runID: runID,
-                        sessionID: sessionID,
-                        location: captureLocation,
-                        scriptKey: script.key,
-                        worktreeID: worktree.id
-                    ) { [weak self] record, completion in
-                        self?.runScriptFinished(
-                            record,
-                            completion: completion,
-                            script: script,
-                            worktree: worktree,
-                            sessionID: sessionID
-                        )
-                    }
-                    runRecords.markRunning(runID: runID, sessionID: sessionID)
-                    runFailureBriefs.cancelInFlight(worktreeID: worktree.id, scriptKey: script.key)
-                    if runScriptSessionForegroundPidIsMissing(sessionID: sessionID) {
-                        cancelRunScriptCompletionTasksIfSessionStillExited(sessionID: sessionID, after: runScriptLocalMonitorGrace, includeRemote: false)
-                        cancelRunScriptCompletionTasksIfSessionStillExited(sessionID: sessionID, after: runScriptMonitorGrace)
-                    }
-                } catch {
-                    RunHistory.releaseInBackground(.location(captureLocation))
-                    throw error
-                }
-            } catch {
-                if Task.isCancelled { return }
-                // The command never started, so the previous outcome is still
-                // the most recent thing we actually observed — put it back.
-                runRecords.rollback(runID: runID, to: displacedRecord)
-                core.resolveRunSettlement(runID: runID, .launchFailed(error.localizedDescription))
-                if presentsLaunchFailure {
-                    showFileActionError(title: "Run Script Failed", message: error.localizedDescription)
-                }
+    }
+
+    /// Alerts the user when a launch fails after it was claimed, such as an
+    /// unreachable SSH host. Nil for runs nobody is watching, like scheduled ones.
+    private func launchFailureAlert(presents: Bool) -> ((RunScriptSettlement) -> Void)? {
+        guard presents else { return nil }
+        return { [weak self] settlement in
+            if case .launchFailed(let message) = settlement {
+                self?.showFileActionError(title: "Run Script Failed", message: message)
             }
         }
-        pendingScriptLaunchTasks[launchID] = launchTask
-        return .started(runID: runID)
     }
 
     // MARK: - Settlement
@@ -549,18 +357,13 @@ extension AppState {
         core.runObservations.count
     }
 
-    private func stoppedRunHistoryCapture(worktreeID: String, scriptKey: String) -> RunHistoryCapture {
-        guard let runID = runRecords.record(worktreeID: worktreeID, scriptKey: scriptKey)?.id else { return .unavailable }
-        return core.takeRunCapture(runID: runID)
-    }
-
     func flushRunHistoryPersistence(worktreeID: String? = nil) async {
         await runHistory.flush(worktreeID: worktreeID)
     }
 
     /// Reacts to an observed run finishing: notifications, attention and the
     /// failure queue.
-    private func runScriptFinished(
+    fileprivate func runScriptFinished(
         _ record: RunRecord,
         completion: RunScriptCompletion,
         script: RunScript,
@@ -606,48 +409,7 @@ extension AppState {
         }
     }
 
-    func cancelRunScriptCompletionTasks(
-        sessionID: String,
-        after delay: Duration? = nil,
-        includeRemote: Bool = true
-    ) {
-        let runIDs = core.observedRunIDs(sessionID: sessionID, includeRemote: includeRemote)
-        guard let delay else {
-            for runID in runIDs { core.stopObservingRun(runID: runID) }
-            return
-        }
-        for runID in runIDs {
-            Task { @MainActor [weak self] in
-                try? await Task.sleep(for: delay)
-                guard self?.core.runObservations[runID]?.sessionID == sessionID else { return }
-                self?.core.stopObservingRun(runID: runID)
-            }
-        }
-    }
-
-    func scheduleRunScriptCompletionCancellation(sessionID: String) {
-        cancelRunScriptCompletionTasks(sessionID: sessionID, after: runScriptLocalMonitorGrace, includeRemote: false)
-        cancelRunScriptCompletionTasks(sessionID: sessionID, after: runScriptMonitorGrace)
-    }
-
-    private func cancelRunScriptCompletionTasksIfSessionStillExited(
-        sessionID: String,
-        after delay: Duration,
-        includeRemote: Bool = true
-    ) {
-        for runID in core.observedRunIDs(sessionID: sessionID, includeRemote: includeRemote) {
-            Task { @MainActor [weak self] in
-                try? await Task.sleep(for: delay)
-                guard let self,
-                      self.core.runObservations[runID]?.sessionID == sessionID,
-                      self.runScriptSessionForegroundPidIsMissing(sessionID: sessionID)
-                else { return }
-                self.core.stopObservingRun(runID: runID)
-            }
-        }
-    }
-
-    private func runScriptSessionForegroundPidIsMissing(sessionID: String) -> Bool {
+    fileprivate func runScriptSessionForegroundPidIsMissing(sessionID: String) -> Bool {
         terminal.registry.session(for: sessionID)?.surface.foregroundPid == nil
             && harness.detector.foregroundPid(sessionId: sessionID) == nil
     }
@@ -658,17 +420,8 @@ extension AppState {
         purgeFailures: Bool = true,
         purgeHistory: Bool = true
     ) -> Task<Void, Never>? {
-        cancelPendingRunScriptLaunches(worktreeID: worktreeID)
         guard purgeFailures else {
-            for runID in core.runObservations.filter({ $0.value.worktreeID == worktreeID }).keys {
-                core.stopObservingRun(runID: runID)
-            }
-            let now = Date()
-            for record in runRecords.records(worktreeID: worktreeID) where record.status.isActive {
-                let finalized = runRecords.markLostObservation(runID: record.id, at: now)
-                core.finalizeRun(finalized, capture: .unavailable)
-            }
-            core.resolveRunSettlements(worktreeID: worktreeID, .finished(.unknown))
+            core.abandonRuns(worktreeID: worktreeID)
             return nil
         }
         // The worktree itself is going away, so its run history goes with
@@ -687,31 +440,15 @@ extension AppState {
         runScriptFailureQueue.purge(worktreeID: worktreeID)
         runFailureBriefs.retain(runIDs: runScriptFailureQueue.runIDs)
         tabs.closeRunReports(worktreeId: worktreeID)
-        return core.discardRuns(worktreeID: worktreeID, deletingHistory: purgeHistory)
+        return core.forgetRuns(worktreeID: worktreeID, deletingHistory: purgeHistory)
     }
 
     func cancelPendingRunScriptLaunches(worktreeID: String? = nil) {
-        let now = Date()
-        let pendingKeys = pendingScriptLaunches.compactMap { key, pending -> PendingRunScriptLaunchKey? in
-            guard let worktreeID else { return key }
-            return pending.worktreeID == worktreeID ? key : nil
-        }
-        for key in pendingKeys {
-            guard let pending = pendingScriptLaunches.removeValue(forKey: key) else { continue }
-            pendingScriptLaunchTasks.removeValue(forKey: pending.id)?.cancel()
-            let runID = runRecords.record(worktreeID: pending.worktreeID, scriptKey: pending.scriptKey)?.id
-            let finalized = runRecords.markStopped(worktreeID: pending.worktreeID, scriptKey: pending.scriptKey, at: now)
-            core.finalizeRun(finalized, capture: .unavailable)
-            // The cancelled launch task will never reach its own error path,
-            // so a waiting caller is told here that the command never ran.
-            if finalized == nil, let runID {
-                core.resolveRunSettlement(runID: runID, .finished(.stopped))
-            }
-        }
+        core.cancelStartingRuns(worktreeID: worktreeID)
     }
 
     func cancelAllRunScriptCompletionTasks() {
-        core.stopObservingAllRuns()
+        core.abandonAllRuns()
     }
 
     // MARK: - Edit
@@ -865,5 +602,71 @@ extension AppState {
             edit: { [weak self] script in self?.editScript(script, in: worktree) },
             newScript: { [weak self] scope in self?.newRunScript(scope: scope, in: worktree) }
         )
+    }
+}
+
+/// Hosts the app's runs in run tabs: a terminal whose run leaf the core
+/// observes, closed when the run is stopped or restarted.
+@MainActor
+final class AppRunLauncher: RunLauncher {
+    weak var app: AppState?
+
+    func refusal(for script: RunScript, in worktree: Worktree, project: ProjectConfig) -> String? {
+        // The run command reaches the shell only through the rc-file
+        // injection every startup script uses; any other shell would open
+        // bare, so refuse instead of leaving an empty pane.
+        guard let shell = app?.config.terminal.shell,
+              !StartupScriptInstaller.supportsStartupScriptInjection(shell: shell)
+        else { return nil }
+        return "Run scripts require zsh or bash as your configured terminal shell (currently \((shell as NSString).lastPathComponent))."
+    }
+
+    func launch(_ request: RunLaunchRequest, in core: AlasCoreContext) async throws -> RunLaunch {
+        guard let app else { throw CancellationError() }
+        let tab = try await app.openTerminalTabPreparingRemoteZmxIfNeeded(
+            for: request.worktree,
+            startupScriptSuffix: request.command,
+            includeUserStartupScript: true,
+            titleOverride: request.script.displayName,
+            runScriptKey: request.script.key,
+            isHidden: request.isHidden
+        )
+        // A terminal with no run leaf gives nothing to observe.
+        guard case .terminal(let terminalState) = tab, let sessionID = terminalState.runScriptLeafId else {
+            return .unobservable
+        }
+        app.runFailureBriefs.cancelInFlight(worktreeID: request.worktree.id, scriptKey: request.script.key)
+        return .hosted(sessionID: sessionID)
+    }
+
+    func hostsRun(scriptKey: String, worktreeID: String) -> Bool {
+        app?.scriptTab(scriptKey: scriptKey, worktreeID: worktreeID) != nil
+    }
+
+    func endRunHost(scriptKey: String, worktreeID: String) {
+        guard let app, let tab = app.scriptTab(scriptKey: scriptKey, worktreeID: worktreeID) else { return }
+        app.closeTab(worktreeId: worktreeID, tabId: tab.id)
+    }
+
+    func endRunHost(sessionID: String, worktreeID: String) {
+        guard let app,
+              let tab = app.tabs.tabs(forWorktree: worktreeID).first(where: { tab in
+                  guard case .terminal(let state) = tab else { return false }
+                  return state.root.find(leafId: sessionID) != nil
+              })
+        else { return }
+        app.closeTab(worktreeId: worktreeID, tabId: tab.id)
+    }
+
+    func hostSessionExists(_ sessionID: String) -> Bool {
+        app?.terminal.registry.session(for: sessionID) != nil
+    }
+
+    func hostSessionIsIdle(_ sessionID: String) -> Bool {
+        app?.runScriptSessionForegroundPidIsMissing(sessionID: sessionID) ?? false
+    }
+
+    func runDidFinish(_ record: RunRecord, completion: RunScriptCompletion, script: RunScript, worktree: Worktree, sessionID: String?) {
+        app?.runScriptFinished(record, completion: completion, script: script, worktree: worktree, sessionID: sessionID ?? "")
     }
 }
