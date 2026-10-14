@@ -1020,6 +1020,12 @@ struct ChangesTabView: View {
                 }
             },
             onReview: { appKitActionRelay.onReviewCommit($0) },
+            onReviewRange: { [appState, rps] commit in
+                appState.openReviewPaletteOverlay(prefill: rps.worktree, rangeAnchorSHA: commit.sha)
+            },
+            onChooseReviewScope: { [appState, rps] in
+                appState.openReviewPaletteOverlay(prefill: rps.worktree)
+            },
             onLoadOlder: { Task { @MainActor in await rps.loadOlder() } },
             onSelectBaseBranch: { rps.selectBaseBranch($0) },
             onOpenBaseBranchSelector: { Task { @MainActor in await rps.fetchBranches() } },

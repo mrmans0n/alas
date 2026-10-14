@@ -3,7 +3,7 @@ import Foundation
 
 extension AppState {
     @MainActor
-    func openReviewPaletteOverlay(prefill worktree: Worktree? = nil) {
+    func openReviewPaletteOverlay(prefill worktree: Worktree? = nil, rangeAnchorSHA: String? = nil) {
         search.close()
         isSearchOpen = false
         repoSelector.close()
@@ -13,7 +13,7 @@ extension AppState {
         runScriptPalette.reset()
         isRunScriptPaletteOpen = false
         if let worktree {
-            reviewPalette.open(prefill: worktree)
+            reviewPalette.open(prefill: worktree, rangeAnchorSHA: rangeAnchorSHA)
         } else {
             reviewPalette.open()
         }
