@@ -173,7 +173,7 @@ struct ACPTranscriptMarkdownLayout {
                 // same URL, same block, and nothing but wrapped-away whitespace
                 // between them in the source. Two links to one URL stay apart.
                 if let last = spans.last, last.url == url, last.block == block, last.end <= range.location,
-                   Self.isSameLink(url, in: attributedTexts[block], from: last.end, to: range.location) {
+                   Self.isSameLink(in: attributedTexts[block], endingAt: last.end, startingAt: range.location) {
                     let gap = blockText.substring(with: NSRange(location: last.end, length: range.location - last.end))
                     spans[spans.count - 1] = LinkSpan(
                         url: url, text: last.text + gap + text, rects: last.rects + [rect], block: block, end: end
@@ -186,20 +186,16 @@ struct ACPTranscriptMarkdownLayout {
         return spans
     }
 
-    /// Whether the source between two runs belongs to one link: only
-    /// whitespace a wrap left out, still carrying that link. Two adjacent
-    /// links to one URL are separated by text without the attribute.
-    private static func isSameLink(_ url: URL, in text: NSAttributedString, from start: Int, to end: Int) -> Bool {
-        guard start <= end, end <= text.length else { return false }
-        let string = text.string as NSString
-        for index in start..<end {
-            guard let scalar = Unicode.Scalar(string.character(at: index)), CharacterSet.whitespacesAndNewlines.contains(scalar) else {
-                return false
-            }
-            let value = text.attribute(.link, at: index, effectiveRange: nil)
-            guard ((value as? URL) ?? (value as? String).flatMap(URL.init(string:))) == url else { return false }
-        }
-        return true
+    /// Marks which source link each rendered link character came from.
+    static let linkOrdinal = NSAttributedString.Key("alas.acp.nativeLinkOrdinal")
+
+    /// Whether the runs ending at `end` and starting at `start` belong to one
+    /// source link (a wrap or a style change inside it), not two links.
+    private static func isSameLink(in text: NSAttributedString, endingAt end: Int, startingAt start: Int) -> Bool {
+        guard end > 0, end <= start, start < text.length else { return false }
+        let before = text.attribute(linkOrdinal, at: end - 1, effectiveRange: nil) as? Int
+        let after = text.attribute(linkOrdinal, at: start, effectiveRange: nil) as? Int
+        return before != nil && before == after
     }
 
     /// The link under `point`, in layout coordinates; nil outside link glyphs.
@@ -299,7 +295,42 @@ struct ACPTranscriptMarkdownLayout {
                 guard link != nil else { return }
                 rendered.addAttributes([.foregroundColor: NSColor.linkColor, .underlineStyle: NSUnderlineStyle.single.rawValue], range: range)
             }
+            Self.markLinkBoundaries(in: rendered, source: text)
             return rendered
+        }
+
+        /// Equal `.link` values coalesce, so two links to one URL written back to
+        /// back render as one range. Each source link gets its own ordinal so
+        /// accessibility can tell them apart; a range whose labels don't add up
+        /// stays one link.
+        private static func markLinkBoundaries(in rendered: NSMutableAttributedString, source: String) {
+            let pattern = #"\[((?:[^\[\]]|\[[^\]]*\])*)\]\(\s*<?([^)\s>]+)>?(?:\s+"[^"]*")?\s*\)"#
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { return }
+            let nsSource = source as NSString
+            var sourceLinks = regex.matches(in: source, range: NSRange(location: 0, length: nsSource.length)).map {
+                (label: nsSource.substring(with: $0.range(at: 1)), url: nsSource.substring(with: $0.range(at: 2)))
+            }
+            var ordinal = 0
+            rendered.enumerateAttribute(.link, in: NSRange(location: 0, length: rendered.length)) { value, range, _ in
+                guard let url = (value as? URL) ?? (value as? String).flatMap(URL.init(string:)) else { return }
+                // The source links this range was rendered from, in order.
+                var lengths: [Int] = []
+                var total = 0
+                while total < range.length, let next = sourceLinks.first,
+                      URL(string: next.url)?.absoluteString == url.absoluteString || next.url == url.absoluteString {
+                    sourceLinks.removeFirst()
+                    let length = (ACPMarkdownInlineRenderer.plainText(next.label) as NSString).length
+                    lengths.append(length)
+                    total += length
+                }
+                if total != range.length || lengths.isEmpty { lengths = [range.length] }
+                var location = range.location
+                for length in lengths {
+                    rendered.addAttribute(linkOrdinal, value: ordinal, range: NSRange(location: location, length: length))
+                    ordinal += 1
+                    location += length
+                }
+            }
         }
 
         private static func underlines(of line: CTLine) -> [Underline] {
