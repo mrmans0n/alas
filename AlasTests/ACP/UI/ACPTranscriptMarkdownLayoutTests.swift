@@ -83,12 +83,16 @@ import Testing
         #expect(layout.linkSpans().count == 2)
     }
 
-    @Test func linkSyntaxInsideCodeDoesNotShiftLinkBoundaries() throws {
+    @Test(arguments: [
+        ("`[decoy](https://example.com)` ", [String]()),
+        ("https://example.com ", ["https://example.com"]),
+    ])
+    func linkLikeTextBeforeLinksDoesNotShiftTheirBoundaries(prefix: String, leadingSpans: [String]) throws {
         let layout = try #require(ACPTranscriptMarkdownLayout.make(
-            source: "`[decoy](https://example.com)` [first](https://example.com)[second](https://example.com)",
+            source: prefix + "[first](https://example.com)[second](https://example.com)",
             width: 800, theme: theme, typography: .default
         ))
-        #expect(layout.linkSpans().map(\.text) == ["first", "second"])
+        #expect(layout.linkSpans().map(\.text) == leadingSpans + ["first", "second"])
     }
 
     @Test func aWrappedLinkIsOneSpan() throws {

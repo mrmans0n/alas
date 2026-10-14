@@ -321,18 +321,26 @@ struct ACPTranscriptMarkdownLayout {
             rendered.enumerateAttribute(.link, in: NSRange(location: 0, length: rendered.length)) { value, range, _ in
                 guard let url = (value as? URL) ?? (value as? String).flatMap(URL.init(string:)) else { return }
                 // The source links this range was rendered from, in order.
+                // Candidates are consumed only when their lengths add up to the range, so a range
+                // with no source link of its own (a bare URL the renderer autolinked) leaves the
+                // explicit links that follow it for their own range.
                 var lengths: [Int] = []
                 var total = 0
-                while total < range.length, let next = sourceLinks.first,
-                      URL(string: next.url)?.absoluteString == url.absoluteString || next.url == url.absoluteString {
-                    sourceLinks.removeFirst()
+                for next in sourceLinks {
+                    guard total < range.length,
+                          URL(string: next.url)?.absoluteString == url.absoluteString || next.url == url.absoluteString
+                    else { break }
                     let length = next.isAutolink
                         ? (next.label as NSString).length
                         : (ACPMarkdownInlineRenderer.plainText(next.label) as NSString).length
                     lengths.append(length)
                     total += length
                 }
-                if total != range.length || lengths.isEmpty { lengths = [range.length] }
+                if total == range.length, !lengths.isEmpty {
+                    sourceLinks.removeFirst(lengths.count)
+                } else {
+                    lengths = [range.length]
+                }
                 var location = range.location
                 for length in lengths {
                     rendered.addAttribute(linkOrdinal, value: ordinal, range: NSRange(location: location, length: length))

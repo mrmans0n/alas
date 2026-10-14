@@ -27,6 +27,7 @@ import Testing
         ("## ![badge](b.png) title", false, false),
         ("see !34", true, false),
         ("open ~/notes.txt", true, false),
+        ("please /review this", true, false),
         ("inspect (/tmp)", true, false),
         ("inspect (/.project)", true, false),
         ("see &num;12", true, false),
