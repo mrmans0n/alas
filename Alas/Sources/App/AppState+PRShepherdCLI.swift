@@ -122,7 +122,15 @@ extension AppState {
             )
         }
 
-        if let existing = await openRequestAnyBase(probe: snapshot, worktreePath: context.path) {
+        if let existing = snapshot.reviewRequest, existing.state == .open {
+            return await bound(existing, created: false)
+        }
+        // A failed lookup aborts: treating it as "no request" could open a second
+        // one against another base.
+        if let existing = try await openRequest(
+            remote: remote, branch: local.branchName, headOwner: local.headRemoteOwner,
+            bases: [""], worktreePath: context.path
+        ) {
             return await bound(existing, created: false)
         }
 
@@ -148,9 +156,17 @@ extension AppState {
                 try await operations.push(target, local.headSHA)
             }
             try await operations.configureUpstreamTracking(target)
-            // A request opened since the first lookup (by an earlier call whose
-            // reply timed out on the agent side, say) is adopted, not duplicated.
-            if let existing = await openReviewRequest(worktreePath: context.path, baseBranch: baseBranch) {
+            // Reconcile against the branch that was captured and pushed, not
+            // whatever the worktree has checked out by now. A request opened
+            // since the first lookup (by an earlier call whose reply timed out
+            // on the agent side, say) is adopted, not duplicated.
+            func pushedBranchRequest() async throws -> ReviewRequest? {
+                try await openRequest(
+                    remote: target.remote, branch: target.branch, headOwner: target.headOwner,
+                    bases: [baseBranch, ""], worktreePath: context.path
+                )
+            }
+            if let existing = try await pushedBranchRequest() {
                 return await bound(existing, created: false)
             }
             let url: URL
@@ -158,12 +174,12 @@ extension AppState {
                 url = try await operations.createReviewRequest(target, title, body)
             } catch {
                 // The provider may have opened it anyway, or it already exists.
-                if let existing = await openReviewRequest(worktreePath: context.path, baseBranch: baseBranch) {
+                if let existing = try? await pushedBranchRequest() {
                     return await bound(existing, created: false)
                 }
                 throw error
             }
-            guard let created = await openReviewRequest(worktreePath: context.path, baseBranch: baseBranch) else {
+            guard let created = try? await pushedBranchRequest() else {
                 throw PRShepherdCLIError(
                     message: "Created \(url.absoluteString), but Alas could not load it yet. Call pr_create again to start watching it."
                 )
@@ -174,27 +190,36 @@ extension AppState {
         }
     }
 
-    /// The open request for this worktree's branch right now, whatever base it
-    /// targets.
-    private func openReviewRequest(worktreePath: URL, baseBranch: String) async -> ReviewRequest? {
-        guard let probe = await reviewShepherd.fetchSnapshot(worktreePath: worktreePath, baseBranch: baseBranch) else {
-            return nil
+    /// The open request for `branch`, trying each base in order (an empty base
+    /// matches any). Throws when the provider can't answer, so a failed lookup
+    /// is never mistaken for "no request".
+    private func openRequest(
+        remote: CodeHostRemote,
+        branch: String,
+        headOwner: String?,
+        bases: [String],
+        worktreePath: URL
+    ) async throws -> ReviewRequest? {
+        let lookup = ReviewLoopState(worktreePath: worktreePath, baseBranch: bases.first ?? "")
+        for base in bases {
+            if let request = try await lookup.currentReviewRequest(
+                remote: remote, branch: branch, headOwner: headOwner, baseBranch: base
+            ), request.state == .open {
+                return request
+            }
         }
-        return await openRequestAnyBase(probe: probe, worktreePath: worktreePath)
+        return nil
     }
 
-    /// `probe`'s open request, else the branch's open request targeting any
-    /// other base: both providers filter the branch lookup by base, so a PR
-    /// opened against another base would otherwise be missed and duplicated.
+    /// `probe`'s open request, else the branch's open request against any other
+    /// base. Read-only callers only: a lookup failure reads as no request.
     private func openRequestAnyBase(probe: ReviewLoopSnapshot, worktreePath: URL) async -> ReviewRequest? {
         if let request = probe.reviewRequest, request.state == .open { return request }
         guard let remote = probe.remote, !probe.local.branchName.isEmpty else { return nil }
-        let lookup = ReviewLoopState(worktreePath: worktreePath, baseBranch: probe.local.baseBranch)
-        guard let request = try? await lookup.currentReviewRequest(
-            remote: remote, branch: probe.local.branchName, headOwner: probe.local.headRemoteOwner, baseBranch: ""
-        ), request.state == .open
-        else { return nil }
-        return request
+        return try? await openRequest(
+            remote: remote, branch: probe.local.branchName, headOwner: probe.local.headRemoteOwner,
+            bases: [""], worktreePath: worktreePath
+        )
     }
 
     /// Read-only: neither path runs the shepherd's policy or changes its record.
@@ -229,7 +254,10 @@ extension AppState {
         if let request = snapshot.reviewRequest {
             var headReviewers: Set<String>?
             if !rules.requiredReviewers.isEmpty {
-                headReviewers = await reviewShepherd.headReviewers(for: snapshot, worktreePath: context.path)
+                headReviewers = await reviewShepherd.headReviewers(
+                    for: snapshot, worktreePath: context.path,
+                    notBefore: bound.flatMap { reviewShepherd.records[$0.id]?.headFirstSeenAt(of: request.headSHA) }
+                )
             }
             pullRequest = PRStatusWire.PullRequest(request: request, rules: rules, headReviewers: headReviewers)
         } else if let problem = Self.prProviderSetupProblem(snapshot) {
