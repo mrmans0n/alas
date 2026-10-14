@@ -197,8 +197,16 @@ extension ACPTranscriptCoreTextRowView {
         mutating func addUserBubble(_ source: String, contentMaxWidth: CGFloat, theme: Theme, typography: ACPChatTypography) {
             let maxBubble = max(0, min(contentMaxWidth * V.bubbleMaxWidthFraction, maxX - x - V.bubbleLeadingMinSpace))
             let textWidth = max(1, maxBubble - 2 * V.bubbleHorizontalPadding)
-            let markdown = ACPTranscriptMarkdownLayout.make(source: source, width: textWidth, theme: theme, typography: typography)
+            var markdown = ACPTranscriptMarkdownLayout.make(source: source, width: textWidth, theme: theme, typography: typography)
             let used = markdown.map(V.usedWidth(of:)) ?? 0
+            // Refit a short prompt to the bubble, so hit testing, selection and
+            // the accessibility frame end where the bubble does. Every line fits
+            // `used`, so the breaks and height are the same.
+            if let wide = markdown, ceil(used) < textWidth,
+               let fitted = ACPTranscriptMarkdownLayout.make(source: source, width: ceil(used), theme: theme, typography: typography),
+               fitted.height == wide.height {
+                markdown = fitted
+            }
             let bubbleWidth = min(maxBubble, ceil(used) + 2 * V.bubbleHorizontalPadding)
             let bubble = CGRect(
                 x: maxX - bubbleWidth, y: y, width: bubbleWidth,

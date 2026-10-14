@@ -205,6 +205,16 @@ import Testing
         #expect(toggles == [expected])
     }
 
+    @Test func aShortUserBubbleKeepsItsTextInsideTheBubble() throws {
+        let view = row(.user(markdown: "Can you fix the bug?"))
+        _ = view.measuredHeight(forWidth: 1_000)
+        let text = try #require(view.accessibilityChildren()?.compactMap { $0 as? ACPTranscriptTextAccessibilityElement }.first)
+        let frame = text.accessibilityFrameInParentSpace()
+        // The bubble hugs the text and sits at the column's trailing edge.
+        #expect(frame.width < 200)
+        #expect(frame.maxX <= view.columnRect.maxX)
+    }
+
     @Test func aWrappedLinkHitTestsOnlyItsOwnText() throws {
         let view = row(.agent(markdown: "Plain words before [the full migration guide for this release](https://example.com) and after.", commentary: false))
         _ = view.measuredHeight(forWidth: 420)
