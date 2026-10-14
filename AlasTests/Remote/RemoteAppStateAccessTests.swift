@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import Darwin
+@testable import AlasCore
 @testable import Alas
 
 @MainActor

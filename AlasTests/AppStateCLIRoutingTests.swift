@@ -1,6 +1,7 @@
 import Combine
 import Foundation
 import Testing
+@testable import AlasCore
 @testable import Alas
 
 @Suite(.serialized)

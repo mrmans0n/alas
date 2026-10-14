@@ -76,7 +76,7 @@ extension AlasCoreContext {
         let pending = try await beginCreate(request)
         switch await finishCreate(pending) {
         case .created(let worktree), .createdButNotSaved(let worktree, _): return worktree
-        case .failed(let message, _): throw WorktreeCreationFailure(message: message)
+        case .failed(let message, _): throw WorktreeCreationError(message: message)
         case .projectRemoved: throw ProjectCreationError.projectNotFound
         }
     }
@@ -254,7 +254,7 @@ extension AlasCoreContext {
 }
 
 /// A headless creation that failed; its row keeps the failure for retry.
-public struct WorktreeCreationFailure: LocalizedError, Equatable {
+public struct WorktreeCreationError: LocalizedError, Equatable {
     public let message: String
     public var errorDescription: String? { message }
 }

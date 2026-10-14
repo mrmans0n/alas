@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+@testable import AlasCore
 @testable import Alas
 
 /// The plain worktree-delete path (CLI and, by extension, the sidebar's

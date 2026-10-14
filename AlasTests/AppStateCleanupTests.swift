@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+@testable import AlasCore
 @testable import Alas
 
 @MainActor

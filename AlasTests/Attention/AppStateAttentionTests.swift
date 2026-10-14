@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+@testable import AlasCore
 @testable import Alas
 
 @Suite("AppState attention", .serialized)
