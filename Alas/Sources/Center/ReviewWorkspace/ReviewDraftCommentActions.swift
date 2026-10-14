@@ -40,6 +40,15 @@ struct ReviewDraftCommentActionAvailability: Equatable, Sendable {
     )
 }
 
+enum ReviewSendToAgentHelp {
+    /// Tooltip for a send control: `title`, or why it is disabled when
+    /// nothing can receive the review.
+    static func text(_ title: String, targets: [ReviewFeedbackAgentTarget]) -> String {
+        guard targets.isEmpty else { return title }
+        return "No agent to send to. Open an agent chat in this worktree, or pick an available agent in Settings → Changes."
+    }
+}
+
 struct ReviewDraftCommentActions {
     var availability: (ReviewDraftComment) -> ReviewDraftCommentActionAvailability
     var canPublishReview: () -> Bool

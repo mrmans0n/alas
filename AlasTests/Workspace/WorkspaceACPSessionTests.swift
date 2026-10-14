@@ -47,7 +47,7 @@ struct WorkspaceACPSessionTests {
             )],
             installedIds: ["test"]
         )
-        state.config.changes.aiToolId = "none"
+        state.config.changes.aiToolId = AppConfig.Changes.disabledAIToolID
         _ = await workspacesManager.load(spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
         state.selectWorkspaceCheckout(id: checkout.id)
         #expect(state.checkoutFocusedWorktreeScope?.worktreeID == worktree.id)

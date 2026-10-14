@@ -211,6 +211,22 @@ struct ReviewLoopHandoffRoutingTests {
         #expect(sender.agent(target)?.id == "other-agent")
     }
 
+    @Test func reviewFeedbackOffersOpenChatBeforeItsTabAttaches() throws {
+        let state = makeState()
+        state.openNewACPSession(agentID: "test-agent")
+        let tab = try #require(acpTabs(in: state).first)
+        let worktreeId = try #require(state.selectedWorktreeId)
+        let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
+        try #require(!manager.isWriter(for: tab.sessionId))
+
+        let sender = ReviewFeedbackAgentSender.production(appState: state, worktreeID: worktreeId)
+
+        #expect(sender.availableTargets().contains { target in
+            if case .existingSession(_, let sessionID, _) = target { return sessionID == tab.sessionId }
+            return false
+        })
+    }
+
     @Test func reviewFeedbackDoesNotOfferUnavailablePinnedAgent() async throws {
         let state = makeState(installedAgentIDs: ["other-agent"])
         let worktreeId = try #require(state.selectedWorktreeId)
@@ -232,6 +248,15 @@ struct ReviewLoopHandoffRoutingTests {
             return
         }
         #expect(acpTabs(in: state).isEmpty)
+    }
+
+    @Test func automaticReviewFeedbackOffersNewChatWithFirstAvailableAgent() throws {
+        let state = makeState(installedAgentIDs: ["other-agent"])
+        state.config.changes.aiToolId = AppConfig.Changes.automaticAIToolID
+        let worktreeId = try #require(state.selectedWorktreeId)
+        let sender = ReviewFeedbackAgentSender.production(appState: state, worktreeID: worktreeId)
+
+        #expect(sender.availableTargets() == [.newChat(agentID: "other-agent", title: "New chat")])
     }
 
     private func makeState(installedAgentIDs: Set<String> = ["test-agent", "other-agent"]) -> AppState {

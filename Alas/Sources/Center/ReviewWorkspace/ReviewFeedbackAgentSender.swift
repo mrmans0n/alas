@@ -22,22 +22,25 @@ struct ReviewFeedbackAgentSender {
                 if let checkout = selectedCheckout(appState: appState, worktreeID: worktreeID) {
                     sessionTabs += appState.tabs.tabs(for: .workspaceCheckout(checkout.id, checkout.executionLocation))
                 }
+                // Every open chat tab qualifies, attached or not: a restored tab
+                // gets its session and writer lease only once its view mounts,
+                // and that lease is not observable from the review UI, so gating
+                // on it here hides chats the user can see. `send` attaches first.
                 let sessionTargets = sessionTabs.compactMap { tab -> ReviewFeedbackAgentTarget? in
-                    guard case .acpSession(let state) = tab,
-                          let session = appState.session(for: state.sessionId),
-                          appState.isWriter(for: state.sessionId)
-                    else { return nil }
+                    guard case .acpSession(let state) = tab else { return nil }
+                    let agentName = appState.session(for: state.sessionId)
+                        .flatMap { appState.agent(id: $0.agentId)?.displayName }
                     return .existingSession(
                         worktreeID: worktreeID,
                         sessionID: state.sessionId,
-                        title: state.title.isEmpty ? appState.agent(id: session.agentId)?.displayName ?? "Existing chat" : state.title
+                        title: state.title.isEmpty ? agentName ?? "Existing chat" : state.title
                     )
                 }
                 targets.append(contentsOf: sessionTargets)
 
-                let agentID = appState.config.changes.aiToolId
-                if Self.availableAgent(appState: appState, worktreeID: worktreeID, agentID: agentID) != nil {
-                    targets.append(.newChat(agentID: agentID, title: "New chat"))
+                let selectedID = appState.config.changes.aiToolId
+                if let agent = Self.availableAgent(appState: appState, worktreeID: worktreeID, agentID: selectedID) {
+                    targets.append(.newChat(agentID: agent.id, title: "New chat"))
                 }
                 return targets
             },
@@ -63,7 +66,8 @@ struct ReviewFeedbackAgentSender {
                     appState.openNewACPSession(agentID: agentID, initialPrompt: prompt)
                     completion(.success(()))
                 case .existingSession(let targetWorktreeID, let sessionID, _):
-                    if let owner = appState.session(for: sessionID)?.owner, case .workspaceCheckout = owner {
+                    let owner = Self.sessionOwner(appState: appState, worktreeID: targetWorktreeID, sessionID: sessionID)
+                    if case .workspaceCheckout = owner {
                         appState.activateHarnessSession(owner: owner, sessionId: sessionID)
                     } else if let resolved = Self.projectAndWorktree(appState: appState, worktreeID: targetWorktreeID) {
                         appState.activateHarnessSession(
@@ -73,6 +77,7 @@ struct ReviewFeedbackAgentSender {
                         )
                     }
                     Task { @MainActor in
+                        await appState.prepareACPSessionForPrompt(sessionId: sessionID, owner: owner)
                         await appState.sendPrompt(for: sessionID, text: prompt, attachments: [], normalUserTurn: false) { accepted in
                             completion(accepted ? .success(()) : .failure(ReviewFeedbackAgentSendError.rejected))
                         }
@@ -102,6 +107,21 @@ struct ReviewFeedbackAgentSender {
     private static func selectedCheckout(appState: AppState, worktreeID: String) -> WorkspaceCheckout? {
         guard appState.checkoutFocusedWorktreeScope?.worktreeID == worktreeID else { return nil }
         return appState.selectedWorkspaceCheckout
+    }
+
+    /// The owner whose tab holds `sessionID`. A session that is not live yet
+    /// is resolved from the open tabs of the focused checkout, else the worktree.
+    private static func sessionOwner(appState: AppState, worktreeID: String, sessionID: String) -> SessionOwnerID {
+        if let owner = appState.session(for: sessionID)?.owner { return owner }
+        if let checkout = selectedCheckout(appState: appState, worktreeID: worktreeID) {
+            let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+            let hasTab = appState.tabs.tabs(for: owner).contains { tab in
+                guard case .acpSession(let state) = tab else { return false }
+                return state.sessionId == sessionID
+            }
+            if hasTab { return owner }
+        }
+        return .worktree(worktreeID)
     }
 
     private static func projectAndWorktree(
@@ -222,7 +242,7 @@ enum ReviewDraftWorkspaceActions {
                     canResolve: comment.isActive,
                     canDismiss: comment.isActive,
                     canCopyPrompt: comment.isActive,
-                    canShowSendToAgent: hasCurrentSendTarget,
+                    canShowSendToAgent: true,
                     canSendToAgent: comment.isActive && hasCurrentSendTarget
                 )
             },

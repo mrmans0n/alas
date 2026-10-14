@@ -489,7 +489,8 @@ public struct AppConfig: Codable, Equatable, Sendable {
     }
 
     public struct Changes: Codable, Equatable, Sendable {
-        public var aiToolId: String   // "claude" | "codex" | "cursor-agent" | "pi" | "none"
+        /// Agent id for AI features, `automaticAIToolID`, or `disabledAIToolID`.
+        public var aiToolId: String
         public var prompt: String
         public var reviewRequestPrompt: String
         /// Workspace-level "fix every merge conflict in this repo"
@@ -534,6 +535,20 @@ public struct AppConfig: Codable, Equatable, Sendable {
             self.diffLayoutMode = diffLayoutMode
             self.diffShowWhitespace = diffShowWhitespace
             self.stackedDiffsEnabled = stackedDiffsEnabled
+        }
+
+        /// Use the first available agent that fits the feature.
+        public static let automaticAIToolID = ""
+        /// AI features off, chosen explicitly in Settings → Changes.
+        public static let disabledAIToolID = "off"
+
+        /// Before Automatic existed, "none" was both the default and the
+        /// explicit opt-out, so a stored "none" cannot be told apart from an
+        /// untouched default. It decodes as Automatic; opting out again is
+        /// stored as `disabledAIToolID`.
+        static func migratedAIToolID(_ stored: String?) -> String {
+            guard let stored, stored != "none" else { return automaticAIToolID }
+            return stored
         }
     }
 
@@ -675,7 +690,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         ),
         markdown: Markdown(defaultViewMode: .editor),
         changes: Changes(
-            aiToolId: "none",
+            aiToolId: Changes.automaticAIToolID,
             prompt: AppConfig.defaultCommitPrompt,
             reviewRequestPrompt: AppConfig.defaultReviewRequestPrompt,
             mergeBulkResolvePrompt: AppConfig.defaultMergeBulkResolvePrompt,
@@ -974,7 +989,7 @@ extension AppConfig {
             markdown = Markdown(defaultViewMode: .editor)
         }
         if let changesContainer = try? c.nestedContainer(keyedBy: AppConfig.Changes.CodingKeys.self, forKey: .changes) {
-            let toolId = (try? changesContainer.decode(String.self, forKey: .aiToolId)) ?? "none"
+            let toolId = Changes.migratedAIToolID(try? changesContainer.decode(String.self, forKey: .aiToolId))
             let prompt = (try? changesContainer.decode(String.self, forKey: .prompt)) ?? AppConfig.defaultCommitPrompt
             let reviewRequestPrompt = (try? changesContainer.decode(String.self, forKey: .reviewRequestPrompt))
                 ?? AppConfig.defaultReviewRequestPrompt
@@ -1008,7 +1023,7 @@ extension AppConfig {
                 (try? changesContainer.decode(Bool.self, forKey: .stackedDiffsEnabled)) ?? true
         } else {
             changes = Changes(
-                aiToolId: "none",
+                aiToolId: Changes.automaticAIToolID,
                 prompt: AppConfig.defaultCommitPrompt,
                 reviewRequestPrompt: AppConfig.defaultReviewRequestPrompt,
                 mergeBulkResolvePrompt: AppConfig.defaultMergeBulkResolvePrompt,

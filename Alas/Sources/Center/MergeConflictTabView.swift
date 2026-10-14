@@ -242,21 +242,14 @@ struct MergeConflictTabView: View {
         LanguageRegistry.highlighterExtension(forPath: tabState.relativePath)
     }
 
-    /// Resolves the agent to use for merge-conflict assistance. Prefers the
-    /// user's pinned tool from Settings → Changes → AI tool, then falls back
-    /// to any enabled agent. Returns nil when the user explicitly chose
-    /// "none" (AI disabled) or when no agents are configured.
+    /// Resolves the agent to use for merge-conflict assistance from
+    /// Settings → Changes → AI tool: the pinned agent, or the first available
+    /// one on Automatic. Nil when AI is disabled or nothing is available.
     private var resolvedAgent: AgentDefinition? {
-        let id = state.config.changes.aiToolId
-        if id == "none" { return nil }
-        let agents = state.agentAvailability(for: worktree).agents
-        if !id.isEmpty, let agent = agents.first(where: { $0.id == id }) {
-            return agent
-        }
-        if !id.isEmpty {
-            return nil
-        }
-        return agents.first
+        RepositoryAgentSelectionPolicy.selection(
+            selectedID: state.config.changes.aiToolId,
+            availability: state.agentAvailability(for: worktree)
+        ).agent
     }
 
     private var agentExecutionTarget: AgentExecutionTarget {
