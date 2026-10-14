@@ -224,9 +224,18 @@ Same messages, limits and error codes as API 6. Differences:
   cgroups are not required. The helper probes `pidfd_open` and
   `pidfd_send_signal` (Linux 5.3 and later) before accepting remote
   `process.*`, and refuses older kernels with the reason rather than falling
-  back to numeric pids. macOS has no subreaper, so remote `process.*` is
-  refused on macOS SSH hosts until a race-free mechanism exists; remote
-  `file/*` still works there.
+  back to numeric pids. macOS hosts run plugin processes too, with the same
+  cleanup the local launcher gives them on this Mac, plus a catch for
+  orphans. macOS has no pidfds and no subreaper, so the helper tracks each
+  process by its pid and start time (`proc_pidinfo`) and checks both again
+  immediately before every signal; the anchor polls for its parent instead of
+  a parent-death signal. Orphans reparent to launchd at once, so every run's
+  environment carries `ALAS_PLUGIN_PROC=<proc id>.<nonce>`, and cleanup also
+  signals any process of the user's, started after the supervisor, whose
+  initial environment (`KERN_PROCARGS2`) holds that marker. What can escape
+  on macOS: a descendant that leaves the group, clears its environment and is
+  orphaned before a sample sees it; and, in principle, a pid reused in the
+  microseconds between the check and the signal.
 - Processes see EOF. Today `proc/write` only appends to `stdin.log` and
   the child's stdin stays open until it exits, so `cat` or a formatter waits
   for the 10-minute limit. R3 adds a spawn mode that writes the `stdin`
