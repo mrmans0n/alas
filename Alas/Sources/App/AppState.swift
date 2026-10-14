@@ -10480,6 +10480,8 @@ final class AppState {
             rawPath = url.path
             isLocalPathForm = true
         } else if url.scheme == nil {
+            // `//host/path` names an authority, not a local path.
+            guard url.host == nil else { return .unhandled }
             rawPath = url.path.removingPercentEncoding ?? url.path
             isLocalPathForm = true
         } else if !url.absoluteString.contains("://") {

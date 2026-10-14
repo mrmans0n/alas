@@ -722,7 +722,7 @@ struct AppStateCLIRoutingTests {
 
     /// A missing local path is claimed instead of falling through to the
     /// system, which rejects a schemeless path with a paramErr (-50) dialog.
-    /// `scheme:rest` destinations stay with the system when nothing matches.
+    /// `scheme:rest` and `//host/path` destinations stay with the system.
     /// `{root}` stands for the session worktree's path; a nil path expects
     /// `.unhandled`.
     @Test(arguments: [
@@ -730,6 +730,7 @@ struct AppStateCLIRoutingTests {
         ("file://{root}/nope.kt", "{root}/nope.kt"),
         ("docs/nope.md", "docs/nope.md"),
         ("mailto:a@b.c", nil),
+        ("//example.com/nope.md", nil),
     ] as [(String, String?)])
     func routeTranscriptOpenURLClaimsMissingLocalPaths(raw: String, missingPath: String?) async throws {
         let (state, _, worktree) = try await makeStateWithWorktree(name: "transcript-missing")
