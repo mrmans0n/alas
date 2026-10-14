@@ -558,8 +558,9 @@ private enum TextKitLineHeight {
 }
 
 /// Finds the inline links in Markdown source, in order: `[label](destination "title")`,
-/// with brackets and parentheses balanced to any depth, and `<scheme:…>` autolinks, whose
-/// label is their URL. Backslash escapes and code spans are skipped, as the renderer skips them.
+/// with brackets and parentheses balanced to any depth; `[label][ref]`, `[ref][]`, and `[ref]`
+/// for references the source defines; and `<scheme:…>` and email autolinks, whose label is
+/// their address. Backslash escapes and code spans are skipped, as the renderer skips them.
 private enum MarkdownLinkScanner {
     struct Link {
         let label: String
@@ -568,7 +569,8 @@ private enum MarkdownLinkScanner {
     }
 
     static func links(in source: String) -> [Link] {
-        let chars = Array(source)
+        let (references, body) = referenceDefinitions(in: source)
+        let chars = Array(body)
         var links: [Link] = []
         var index = 0
         while index < chars.count {
@@ -578,7 +580,7 @@ private enum MarkdownLinkScanner {
             case "`":
                 index = codeSpanEnd(chars, at: index)
             case "[":
-                if let (link, end) = inlineLink(chars, at: index) {
+                if let (link, end) = inlineLink(chars, at: index, references: references) {
                     links.append(link)
                     index = end
                 } else {
@@ -616,7 +618,55 @@ private enum MarkdownLinkScanner {
         return start + run
     }
 
-    private static func inlineLink(_ chars: [Character], at start: Int) -> (Link, Int)? {
+    /// The `[label]: destination` definitions in `source`, keyed by normalized label, and the
+    /// source without them so they aren't read as shortcut references.
+    private static func referenceDefinitions(in source: String) -> ([String: String], String) {
+        guard source.contains("]:"),
+              let regex = try? NSRegularExpression(
+                  pattern: #"(?m)^ {0,3}\[((?:[^\[\]\\]|\\.)+)\]:[ \t]*\n?[ \t]*(?:<([^<>\n]*)>|(\S+))(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?[ \t]*$"#
+              )
+        else { return ([:], source) }
+        let nsSource = source as NSString
+        let matches = regex.matches(in: source, range: NSRange(location: 0, length: nsSource.length))
+        guard !matches.isEmpty else { return ([:], source) }
+        var references: [String: String] = [:]
+        for match in matches {
+            let destination = match.range(at: 2).location != NSNotFound ? match.range(at: 2) : match.range(at: 3)
+            let key = referenceKey(nsSource.substring(with: match.range(at: 1)))
+            if references[key] == nil { references[key] = nsSource.substring(with: destination) }
+        }
+        let body = regex.stringByReplacingMatches(in: source, range: NSRange(location: 0, length: nsSource.length), withTemplate: "")
+        return (references, body)
+    }
+
+    private static func referenceKey(_ label: String) -> String {
+        label.lowercased().split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    }
+
+    /// `[label][ref]`, `[ref][]`, or `[ref]` whose label closes at `labelEnd`.
+    private static func referenceLink(
+        _ chars: [Character], label: String, labelEnd: Int, references: [String: String]
+    ) -> (Link, Int)? {
+        guard !references.isEmpty else { return nil }
+        var ref = label
+        var end = labelEnd + 1
+        if end < chars.count, chars[end] == "[" {
+            var index = end + 1
+            while index < chars.count, chars[index] != "]" {
+                guard chars[index] != "[" else { return nil }
+                if chars[index] == "\\" { index += 1 }
+                index += 1
+            }
+            guard index < chars.count else { return nil }
+            let inner = String(chars[(end + 1) ..< index])
+            if !inner.isEmpty { ref = inner }
+            end = index + 1
+        }
+        guard let url = references[referenceKey(ref)] else { return nil }
+        return (Link(label: label, url: url, isAutolink: false), end)
+    }
+
+    private static func inlineLink(_ chars: [Character], at start: Int, references: [String: String]) -> (Link, Int)? {
         // Label: balanced brackets.
         var index = start + 1
         var depth = 1
@@ -631,8 +681,11 @@ private enum MarkdownLinkScanner {
             if depth == 0 { break }
             index += 1
         }
-        guard depth == 0, index + 1 < chars.count, chars[index + 1] == "(" else { return nil }
+        guard depth == 0 else { return nil }
         let label = String(chars[(start + 1) ..< index])
+        guard index + 1 < chars.count, chars[index + 1] == "(" else {
+            return referenceLink(chars, label: label, labelEnd: index, references: references)
+        }
         index = skipWhitespace(chars, from: index + 2)
 
         // Destination: `<…>`, or a run without spaces whose parentheses balance.

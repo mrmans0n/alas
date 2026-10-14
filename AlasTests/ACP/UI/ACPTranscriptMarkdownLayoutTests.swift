@@ -69,6 +69,8 @@ import Testing
         "[first](https://example.com/x(y))[second](https://example.com/x(y))",
         "[first](https://example.com/x((y)))[second](https://example.com/x((y)))",
         "[first](<https://example.com>)[second](<https://example.com>)",
+        "[ref]: https://example.com\n[first][ref][second][ref]",
+        "[first]: https://example.com\n[second]: https://example.com\n[first][][second][]",
     ])
     func adjacentLinksToOneURLStayDistinct(source: String) throws {
         let layout = try #require(ACPTranscriptMarkdownLayout.make(source: source, width: 600, theme: theme, typography: .default))
