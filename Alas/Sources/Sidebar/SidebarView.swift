@@ -4,8 +4,9 @@ import AppKit
 struct SidebarAttentionPresentation {
     let count: Int
 
-    init(aggregation: AttentionAggregation, peerRows: [RemoteSessionSummary] = [], pluginUpdateCount: Int = 0) {
-        count = aggregation.unresolvedCount + peerRows.count + pluginUpdateCount
+    init(aggregation: AttentionAggregation, peerRows: [RemoteSessionSummary] = [], pluginUpdateCount: Int = 0,
+         appUpdate: ReleaseInfo? = nil) {
+        count = aggregation.unresolvedCount + peerRows.count + pluginUpdateCount + (appUpdate == nil ? 0 : 1)
     }
 }
 
@@ -499,9 +500,10 @@ private struct SidebarAttentionHeader: View {
         let aggregation = state.attentionAggregation
         let peerRows = state.nativePeerSessions?.snapshot.attentionRows ?? []
         let pluginUpdates = state.pluginManager?.catalogUpdates ?? []
+        let appUpdate = state.updates.availableUpdate
         let presentation = SidebarAttentionPresentation(
             aggregation: aggregation,
-            peerRows: peerRows, pluginUpdateCount: pluginUpdates.count
+            peerRows: peerRows, pluginUpdateCount: pluginUpdates.count, appUpdate: appUpdate
         )
         SidebarHeaderView(
             onSettings: onSettings,
@@ -515,6 +517,7 @@ private struct SidebarAttentionHeader: View {
             attentionAggregation: aggregation,
             peerAttentionRows: peerRows,
             pluginUpdates: pluginUpdates,
+            appUpdate: appUpdate,
             attentionLoadError: state.attentionStore.loadError?.localizedDescription,
             attentionWriteError: state.attentionStore.writeError?.localizedDescription,
             attentionNavigationErrors: state.attentionNavigationErrors,
@@ -528,6 +531,10 @@ private struct SidebarAttentionHeader: View {
                 state.isAttentionInboxOpen = false
                 state.pendingSettingsSection = .plugins
                 onSettings()
+            },
+            onOpenAppUpdate: {
+                state.isAttentionInboxOpen = false
+                state.updates.presentAvailableUpdate()
             },
             attentionRollUpSummarizer: state.makeAttentionRollUpSummarizer()
         )

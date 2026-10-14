@@ -155,7 +155,7 @@ struct AlasApp: App {
             }
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates…") {
-                    state.updates.checkManually()
+                    Task { await state.updates.checkManually() }
                 }
                 Divider()
                 Button(AppQuitAction.terminateSessionsTitle) {

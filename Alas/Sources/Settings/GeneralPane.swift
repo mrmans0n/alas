@@ -16,7 +16,7 @@ struct GeneralPane: View {
                 SettingsGroup(title: "Updates") {
                     SettingsRow(
                         name: "Automatically check for updates",
-                        desc: "Check GitHub for new releases on launch, at most once a day."
+                        desc: "Check GitHub on launch and while Alas is running, at most once a day. New releases appear in Needs Attention."
                     ) {
                         AlasToggle(on: state.bind(\.general.autoUpdate))
                     }

@@ -10,11 +10,17 @@ final class UpdateController {
     /// Non-nil when an update sheet should be presented.
     var presentedUpdate: ReleaseInfo?
 
+    /// Last successfully detected update, independent of sheet presentation.
+    private(set) var availableUpdate: ReleaseInfo?
+
     private let identity: BuildIdentity
     private let checker: ReleaseChecker
     private let installSource: InstallSource
     private let defaults: UserDefaults
     private let isEnabled: () -> Bool
+    private let now: () -> Date
+    @ObservationIgnored private var checkTask: Task<Void, Never>?
+    @ObservationIgnored private var announceCheckResult = false
 
     private let lastCheckedKey = "io.nlopez.alas.updates.lastCheckedAt"
 
@@ -23,6 +29,7 @@ final class UpdateController {
         checker: ReleaseChecker = ReleaseChecker(),
         installSource: InstallSource = .detect(),
         defaults: UserDefaults = AlasProfile.userDefaults,
+        now: @escaping () -> Date = Date.init,
         isEnabled: @escaping () -> Bool
     ) {
         self.identity = identity
@@ -30,6 +37,7 @@ final class UpdateController {
         self.installSource = installSource
         self.defaults = defaults
         self.isEnabled = isEnabled
+        self.now = now
     }
 
     /// Where this copy was installed — used by the sheet to tailor the action.
@@ -39,34 +47,69 @@ final class UpdateController {
     /// the nightly variant can force the direct action row.
     var track: ReleaseTrack { identity.track }
 
-    /// Throttled, silent-on-no-update check intended for app launch.
-    func checkOnLaunch() {
+    /// Owned by the root view's task, so disabling automatic checks stops the loop.
+    func monitorAutomatically(
+        waitForNextCheck: () async throws -> Void = {
+            try await Task.sleep(for: .seconds(15 * 60))
+        }
+    ) async {
+        while !Task.isCancelled && isEnabled() {
+            await checkAutomatically()
+            do {
+                try await waitForNextCheck()
+            } catch {
+                return
+            }
+        }
+    }
+
+    func checkAutomatically() async {
         let last = defaults.object(forKey: lastCheckedKey) as? Date
-        guard UpdateThrottle.shouldCheck(enabled: isEnabled(), lastCheckedAt: last, now: Date()) else { return }
-        Task { await runCheck(announceNoUpdate: false) }
+        guard !Task.isCancelled,
+              UpdateThrottle.shouldCheck(enabled: isEnabled(), lastCheckedAt: last, now: now()) else { return }
+        await runCheck(manually: false)
     }
 
-    /// User-initiated check from the menu. Always runs; gives feedback either way.
-    func checkManually() {
-        Task { await runCheck(announceNoUpdate: true) }
+    /// User-initiated checks bypass the throttle and join an existing fetch.
+    func checkManually() async {
+        await runCheck(manually: true)
     }
 
-    private func runCheck(announceNoUpdate: Bool) async {
+    func presentAvailableUpdate() {
+        presentedUpdate = availableUpdate
+    }
+
+    private func runCheck(manually: Bool) async {
+        announceCheckResult = announceCheckResult || manually
+        if let checkTask {
+            await checkTask.value
+            return
+        }
+        let task = Task { await performCheck() }
+        checkTask = task
+        await task.value
+    }
+
+    private func performCheck() async {
+        defer {
+            checkTask = nil
+            announceCheckResult = false
+        }
         let result = await checker.check(identity: identity)
         switch result {
         case .updateAvailable(let info):
-            // Stamp only on a successful fetch — a failed check must not consume
-            // the throttle budget, or a transient network error on launch would
-            // suppress auto-checks for a full interval.
-            defaults.set(Date(), forKey: lastCheckedKey)
-            presentedUpdate = info
+            // Only a successful fetch consumes the daily throttle.
+            defaults.set(now(), forKey: lastCheckedKey)
+            availableUpdate = info
+            if announceCheckResult { presentedUpdate = info }
         case .upToDate:
-            defaults.set(Date(), forKey: lastCheckedKey)
-            if announceNoUpdate {
+            defaults.set(now(), forKey: lastCheckedKey)
+            availableUpdate = nil
+            if announceCheckResult {
                 presentInfo(title: "You're up to date", message: upToDateMessage())
             }
         case .failed(let message):
-            if announceNoUpdate { presentInfo(title: "Couldn't check for updates", message: message) }
+            if announceCheckResult { presentInfo(title: "Couldn't check for updates", message: message) }
         }
     }
 
