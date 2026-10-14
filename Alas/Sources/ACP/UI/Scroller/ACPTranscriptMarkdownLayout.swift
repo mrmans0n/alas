@@ -26,6 +26,8 @@ struct ACPTranscriptMarkdownLayout {
     /// A code block's "Copy" button in its header.
     struct CodeBlock {
         let code: String
+        /// The language label as drawn in the header, and where.
+        var label: (text: String, rect: CGRect)?
         /// The button's right edge, top, and height; its width follows its label.
         let maxX: CGFloat
         let minY: CGFloat
@@ -382,6 +384,7 @@ struct ACPTranscriptMarkdownLayout {
             y += L.codeHeaderVerticalPadding
             let headerTop = y
             var headerHeight = max(L.codeEmptyHeaderContentHeight, headerContentHeight)
+            var labelRect: (text: String, rect: CGRect)?
             if let language, !language.isEmpty {
                 let label = NSAttributedString(string: language.uppercased(), attributes: [
                     .font: typography.appKitFont(size: typography.labelSize, traits: .boldFontMask),
@@ -395,9 +398,13 @@ struct ACPTranscriptMarkdownLayout {
                 for index in first..<lines.count {
                     lines[index].origin.y += (headerHeight - labelHeight) / 2
                 }
+                let rect = lines[first...].map { line in
+                    CGRect(origin: line.origin, size: CGSize(width: CTLineGetTypographicBounds(line.line, nil, nil, nil), height: line.height))
+                }.reduce(CGRect.null) { $0.union($1) }
+                labelRect = (label.string, rect)
             }
             codeBlocks.append(CodeBlock(
-                code: body, maxX: width - L.codeHeaderHorizontalPadding,
+                code: body, label: labelRect, maxX: width - L.codeHeaderHorizontalPadding,
                 minY: headerTop + (headerHeight - buttonHeight) / 2, height: buttonHeight
             ))
             y = headerTop + headerHeight + L.codeHeaderVerticalPadding
@@ -633,10 +640,16 @@ private enum MarkdownLinkScanner {
         for match in matches {
             let destination = match.range(at: 2).location != NSNotFound ? match.range(at: 2) : match.range(at: 3)
             let key = referenceKey(nsSource.substring(with: match.range(at: 1)))
-            if references[key] == nil { references[key] = nsSource.substring(with: destination) }
+            if references[key] == nil { references[key] = decodingEntities(nsSource.substring(with: destination)) }
         }
         let body = regex.stringByReplacingMatches(in: source, range: NSRange(location: 0, length: nsSource.length), withTemplate: "")
         return (references, body)
+    }
+
+    /// The destination with `&amp;` and other character references decoded, as the renderer's URL has them.
+    private static func decodingEntities(_ destination: String) -> String {
+        guard destination.contains("&") else { return destination }
+        return CFXMLCreateStringByUnescapingEntities(nil, destination as CFString, nil) as String? ?? destination
     }
 
     private static func referenceKey(_ label: String) -> String {
@@ -731,7 +744,7 @@ private enum MarkdownLinkScanner {
             index = skipWhitespace(chars, from: index + 1)
         }
         guard index < chars.count, chars[index] == ")" else { return nil }
-        return (Link(label: label, url: url, isAutolink: false), index + 1)
+        return (Link(label: label, url: decodingEntities(url), isAutolink: false), index + 1)
     }
 
     /// `<scheme:…>`, or `<address@domain>`, which renders as a `mailto:` link.

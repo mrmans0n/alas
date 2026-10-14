@@ -69,6 +69,7 @@ import Testing
         "[first](https://example.com/x(y))[second](https://example.com/x(y))",
         "[first](https://example.com/x((y)))[second](https://example.com/x((y)))",
         "[first](<https://example.com>)[second](<https://example.com>)",
+        "[first](https://example.com/?x=1&amp;y=2)[second](https://example.com/?x=1&amp;y=2)",
         "[ref]: https://example.com\n[first][ref][second][ref]",
         "[first]: https://example.com\n[second]: https://example.com\n[first][][second][]",
     ])
