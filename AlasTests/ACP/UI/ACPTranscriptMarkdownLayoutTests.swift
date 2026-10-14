@@ -76,6 +76,13 @@ import Testing
         #expect(layout.linkSpans().map(\.text) == ["first", "second", "a bold link"])
     }
 
+    @Test func backToBackAutolinksStayDistinct() throws {
+        let layout = try #require(ACPTranscriptMarkdownLayout.make(
+            source: "<https://example.com><https://example.com>", width: 800, theme: theme, typography: .default
+        ))
+        #expect(layout.linkSpans().count == 2)
+    }
+
     @Test func linkSyntaxInsideCodeDoesNotShiftLinkBoundaries() throws {
         let layout = try #require(ACPTranscriptMarkdownLayout.make(
             source: "`[decoy](https://example.com)` [first](https://example.com)[second](https://example.com)",

@@ -304,13 +304,18 @@ struct ACPTranscriptMarkdownLayout {
         /// accessibility can tell them apart; a range whose labels don't add up
         /// stays one link.
         private static func markLinkBoundaries(in rendered: NSMutableAttributedString, source: String) {
-            let pattern = #"\[((?:[^\[\]]|\[[^\]]*\])*)\]\(\s*<?([^)\s>]+)>?(?:\s+"[^"]*")?\s*\)"#
+            // `[label](destination)` or an angle-bracket autolink, whose label is its URL.
+            let pattern = #"\[((?:[^\[\]]|\[[^\]]*\])*)\]\(\s*<?([^)\s>]+)>?(?:\s+"[^"]*")?\s*\)|<([A-Za-z][A-Za-z0-9+.-]*:[^<>\s]+)>"#
             guard let regex = try? NSRegularExpression(pattern: pattern) else { return }
             // Link syntax inside a code span renders as code, not as a link.
             let withoutCode = source.replacingOccurrences(of: #"(`+)[\s\S]*?\1"#, with: " ", options: .regularExpression)
             let nsSource = withoutCode as NSString
-            var sourceLinks = regex.matches(in: withoutCode, range: NSRange(location: 0, length: nsSource.length)).map {
-                (label: nsSource.substring(with: $0.range(at: 1)), url: nsSource.substring(with: $0.range(at: 2)))
+            var sourceLinks = regex.matches(in: withoutCode, range: NSRange(location: 0, length: nsSource.length)).map { match in
+                if match.range(at: 3).location != NSNotFound {
+                    let url = nsSource.substring(with: match.range(at: 3))
+                    return (label: url, url: url, isAutolink: true)
+                }
+                return (label: nsSource.substring(with: match.range(at: 1)), url: nsSource.substring(with: match.range(at: 2)), isAutolink: false)
             }
             var ordinal = 0
             rendered.enumerateAttribute(.link, in: NSRange(location: 0, length: rendered.length)) { value, range, _ in
@@ -321,7 +326,9 @@ struct ACPTranscriptMarkdownLayout {
                 while total < range.length, let next = sourceLinks.first,
                       URL(string: next.url)?.absoluteString == url.absoluteString || next.url == url.absoluteString {
                     sourceLinks.removeFirst()
-                    let length = (ACPMarkdownInlineRenderer.plainText(next.label) as NSString).length
+                    let length = next.isAutolink
+                        ? (next.label as NSString).length
+                        : (ACPMarkdownInlineRenderer.plainText(next.label) as NSString).length
                     lengths.append(length)
                     total += length
                 }
