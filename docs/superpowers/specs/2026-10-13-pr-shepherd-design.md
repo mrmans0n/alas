@@ -505,13 +505,19 @@ this session" in place of Create PR.
 
 ### Changes review drawer
 
+When the drawer's PR has a record, `ChangesTabView` shows
+`ReviewShepherdBanner` directly above `ReviewLoopDrawer`: a full-width strip
+with an accent tint and an accent top hairline, the owner's agent logo, "<agent>
+· <session title> is shepherding #N · <phase line>" (truncated in the middle)
+and a Jump action that focuses the owner's tab. While the record is fixing or
+merging the strip runs the AI beam. With the owner archived or missing it
+reads "Owner session archived or missing" in `warn` with a "Shepherd with…"
+menu.
+
 In `ReviewLoopDrawer`:
 
-- Collapsed row: a `pawprint` symbol chip when the PR is shepherded, tinted by
-  the same state as the toolbar badge.
-- Expanded body, above the actions: a shepherd block with the owning session
-  (title plus agent) and a Jump action that focuses its tab, the phase line,
-  and the two toggles.
+- Expanded body, above the actions: a shepherd block with the phase line, the
+  two toggles, Resume/Stop, and "Move to…".
 - Unbound PR: a "Shepherd with…" menu listing the worktree's non-archived
   sessions sorted by `updatedAt` (the history list sorts by `lastOpenedAt`,
   so this sort is explicit), plus "New session" which launches the default

@@ -134,6 +134,10 @@ struct ChangesTabView: View {
             if isGGDrawerActive, !isRevealingAttentionReview {
                 GGStackDrawer(rps: rps, appState: appState)
             } else {
+                let shepherd = shepherdDrawerModel
+                if let shepherd, shepherd.record != nil {
+                    ReviewShepherdBanner(model: shepherd)
+                }
                 ReviewLoopDrawer(
                     state: rps.reviewLoop,
                     canOpenAgentHandoff: rps.canOpenReviewLoopHandoff(appState: appState),
@@ -141,7 +145,7 @@ struct ChangesTabView: View {
                     onRevealReviewRequest: { number in
                         appState.acknowledgeAttentionSurface(worktreeID: rps.worktree.id, target: .reviewRequest(number: number))
                     },
-                    shepherd: shepherdDrawerModel
+                    shepherd: shepherd
                 )
             }
         }
@@ -262,7 +266,7 @@ struct ChangesTabView: View {
             record: record,
             presentation: ShepherdPresentation.make(record: record, request: request, mergeGatePasses: gatePasses),
             ownerTitle: owner?.title,
-            ownerAgent: owner.flatMap { appState.agent(id: $0.agentId)?.displayName },
+            ownerAgent: owner.flatMap { appState.agent(id: $0.agentId) },
             candidates: candidates,
             setAutoFix: { on in
                 guard let recordID else { return }
