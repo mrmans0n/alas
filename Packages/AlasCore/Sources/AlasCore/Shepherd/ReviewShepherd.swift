@@ -205,6 +205,10 @@ public final class ReviewShepherd {
     /// never repeat, so a deleted and rebound record can't match a stale one.
     @ObservationIgnored private var generations: [ShepherdRecordID: Int] = [:]
     @ObservationIgnored private var lastGeneration = 0
+    /// Records whose fix prompt is being prepared or delivered, with the
+    /// generation of the dispatch. A turn the owner ends meanwhile is not the
+    /// fix's turn, so `turnCompleted` leaves these records alone.
+    @ObservationIgnored private var deliveringFix: [ShepherdRecordID: Int] = [:]
 
     public init(
         store: any PersistenceStoreProtocol,
@@ -327,6 +331,7 @@ public final class ReviewShepherd {
         record.updatedAt = now
         put(record)
         let generation = bumpGeneration(id)
+        deliveringFix[id] = nil
         failureCounts[id] = nil
         dueAt[id] = now
         if sendContext, let effects {
@@ -383,11 +388,13 @@ public final class ReviewShepherd {
 
     /// A turn of `sessionID` ended. Any fix it was working on now waits for
     /// the push to show up on the provider, starting with the next poll, and
-    /// an archive held back while it worked is tried again.
+    /// an archive held back while it worked is tried again. A record whose
+    /// fix prompt is still on its way is left fixing: the turn that ended
+    /// is not the one working on that fix.
     public func turnCompleted(sessionID: String) {
         let now = self.now()
         for record in records.values where record.sessionID == sessionID {
-            guard case .fixing = record.phase else { continue }
+            guard case .fixing = record.phase, !isDeliveringFix(record.id) else { continue }
             var next = record
             next.phase = .awaitingPush(turnEndedAt: now, pollsWithoutProgress: 0)
             next.updatedAt = now
@@ -701,6 +708,10 @@ public final class ReviewShepherd {
         case .wait:
             return
         case .dispatchFix(let fix):
+            deliveringFix[id] = generation
+            defer {
+                if deliveringFix[id] == generation { deliveringFix[id] = nil }
+            }
             let logs = await checkLogs(for: fix, request: request, remote: record.remote, worktreePath: context.path)
             guard isCurrent(id, generation, before: "fix delivery") else { return }
             let prompt = ShepherdPromptBuilder.fixPrompt(request: request, fix: fix, logs: logs, rules: rules)
@@ -1055,7 +1066,15 @@ public final class ReviewShepherd {
         dueAt[id] = nil
         failureCounts[id] = nil
         generations[id] = nil
+        deliveringFix[id] = nil
         persist()
+    }
+
+    /// A fix prompt for `id` is still being prepared or delivered under the
+    /// record's current generation.
+    private func isDeliveringFix(_ id: ShepherdRecordID) -> Bool {
+        guard let generation = deliveringFix[id] else { return false }
+        return generations[id] == generation
     }
 
     private func load() {
