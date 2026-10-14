@@ -418,8 +418,10 @@ extension AlasCoreContext {
     }
 
     /// Stops a worktree's runs in plain processes and waits until they have
-    /// ended, before the worktree goes.
+    /// ended, before the worktree goes. Launches still starting are cancelled
+    /// first, so none can start a process in the worktree afterwards.
     func stopProcessRuns(worktreeID: String) async {
+        cancelStartingRuns(worktreeID: worktreeID)
         let stopping = processRuns.filter { $0.value.worktreeID == worktreeID }
         for (_, run) in stopping {
             if let worktree = projects.worktrees(projectId: run.projectID).first(where: { $0.id == worktreeID }) {

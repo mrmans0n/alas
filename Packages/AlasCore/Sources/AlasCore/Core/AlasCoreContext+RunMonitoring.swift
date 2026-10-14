@@ -117,9 +117,11 @@ extension AlasCoreContext {
                     )
                     finalizeRun(finalized, capture: .completion(completion))
                     if let finalized { onFinished(finalized, completion) }
-                } catch is CancellationError {
+                } catch is CancellationError where Task.isCancelled {
                     // `stopObservingRun` already recorded the lost
-                    // observation; it owns that transition.
+                    // observation; it owns that transition. A cancellation
+                    // thrown by the completion source alone is a lost run
+                    // like any other failure below.
                 } catch {
                     // The waiter failed (dropped SSH, unreadable completion
                     // file). We never saw an exit status, so we can't claim one.
