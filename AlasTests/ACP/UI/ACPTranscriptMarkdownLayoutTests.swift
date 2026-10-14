@@ -43,7 +43,7 @@ import Testing
         #expect(colors.count > 1)
     }
 
-    @Test(arguments: ["let a = 1", "let a = 1\nlet b = 2", "let a = 1\n\nlet b = 2"], [11, 13, 16])
+    @Test(arguments: ["let a = 1", "let a = 1\nlet b = 2", "let a = 1\n\nlet b = 2", "let a = 1\n"], [11, 13, 16])
     func codeBlockHeightMatchesTheSwiftUIBlock(code: String, fontSize: Int) throws {
         let language = "swift"
         let typography = ACPChatTypography(fontFamily: "", fontSize: fontSize)

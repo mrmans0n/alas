@@ -469,8 +469,26 @@ struct ACPTranscriptMarkdownLayout {
         ) {
             guard text.length > 0 else { return }
             let typesetter = CTTypesetterCreateWithAttributedString(text)
+            // A final newline ends the line before it, so the blank line after it gets a pass of its own.
+            let endsInNewline = text.string.last?.isNewline == true
             var start = 0
-            while start < text.length {
+            while start < text.length || (start == text.length && endsInNewline) {
+                guard start < text.length else {
+                    let line = CTLineCreateWithAttributedString(
+                        NSAttributedString(string: "", attributes: text.attributes(at: text.length - 1, effectiveRange: nil))
+                    )
+                    var ascent: CGFloat = 0, descent: CGFloat = 0
+                    CTLineGetTypographicBounds(line, &ascent, &descent, nil)
+                    let measured = max(
+                        lineHeight ?? Self.lineHeight(of: text, range: NSRange(location: text.length - 1, length: 1)), ascent + descent
+                    )
+                    lines.append(Line(
+                        line: line, origin: CGPoint(x: x, y: y), height: (measured > 0 ? measured : typography.paragraphSize) + lineSpacing,
+                        block: block, range: NSRange(location: start, length: 0), visibleLength: 0
+                    ))
+                    y += lines[lines.count - 1].height
+                    break
+                }
                 let count = max(1, CTTypesetterSuggestLineBreak(typesetter, start, Double(width)))
                 // Trailing whitespace hangs past the width; the drawn line leaves it off.
                 let visible = Self.lengthWithoutTrailingWhitespace(text.string as NSString, from: start, count: count)
