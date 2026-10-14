@@ -722,20 +722,25 @@ struct AppStateCLIRoutingTests {
 
     /// A missing local path is claimed instead of falling through to the
     /// system, which rejects a schemeless path with a paramErr (-50) dialog.
-    @Test func routeTranscriptOpenURLReportsMissingLocalPath() async throws {
+    /// `scheme:rest` destinations stay with the system when nothing matches.
+    /// `{root}` stands for the session worktree's path; a nil path expects
+    /// `.unhandled`.
+    @Test(arguments: [
+        ("{root}/nope.kt:521", "{root}/nope.kt:521"),
+        ("file://{root}/nope.kt", "{root}/nope.kt"),
+        ("docs/nope.md", "docs/nope.md"),
+        ("mailto:a@b.c", nil),
+    ] as [(String, String?)])
+    func routeTranscriptOpenURLClaimsMissingLocalPaths(raw: String, missingPath: String?) async throws {
         let (state, _, worktree) = try await makeStateWithWorktree(name: "transcript-missing")
         defer { try? FileManager.default.removeItem(at: worktree.path) }
-        let missing = worktree.path.appendingPathComponent("nope.kt").path
+        let root = worktree.path.path
+        let url = try #require(URL(string: raw.replacingOccurrences(of: "{root}", with: root)))
+        let expected: AppState.TranscriptLinkRoute = missingPath.map {
+            .missing(path: $0.replacingOccurrences(of: "{root}", with: root))
+        } ?? .unhandled
 
-        for (raw, path) in [
-            ("\(missing):521", "\(missing):521"),
-            (URL(fileURLWithPath: missing).absoluteString, missing),
-            ("docs/nope.md", "docs/nope.md"),
-        ] {
-            #expect(state.transcriptLinkRoute(URL(string: raw)!, worktreeId: worktree.id) == .missing(path: path))
-        }
-        // `scheme:rest` destinations stay with the system when nothing matches.
-        #expect(state.transcriptLinkRoute(URL(string: "mailto:a@b.c")!, worktreeId: worktree.id) == .unhandled)
+        #expect(state.transcriptLinkRoute(url, worktreeId: worktree.id) == expected)
     }
 
     /// A remote session's absolute links open in the remote editor or are
