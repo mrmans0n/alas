@@ -76,7 +76,7 @@ extension ACPTranscriptCoreTextRowView {
                 if let copy = codeCopyAccessibilityElements().first(where: { $0.accessibilityFrameInParentSpace().contains(local) }) {
                     return (nil, copy, nil, nil)
                 }
-                if let link = linkAccessibilityElements().first(where: { $0.accessibilityFrameInParentSpace().contains(local) }) {
+                if let link = linkAccessibilityElement(at: local) {
                     return (nil, nil, link, nil)
                 }
                 return (nil, nil, nil, textAccessibilityElements().first { $0.accessibilityFrameInParentSpace().contains(local) })
@@ -121,10 +121,16 @@ extension ACPTranscriptCoreTextRowView {
             }
         }
         for (element, span) in zip(linkElements, spans) {
-            let frame = span.rects.dropFirst().reduce(span.rects[0]) { $0.union($1) }
-            element.setAccessibilityFrameInParentSpace(frame.offsetBy(dx: origin.x, dy: origin.y))
+            element.fragments = span.rects.map { $0.offsetBy(dx: origin.x, dy: origin.y) }
+            let frame = element.fragments.dropFirst().reduce(element.fragments[0]) { $0.union($1) }
+            element.setAccessibilityFrameInParentSpace(frame)
         }
         return linkElements
+    }
+
+    /// The link whose drawn text is under `point` (row coordinates).
+    func linkAccessibilityElement(at point: NSPoint) -> ACPTranscriptLinkAccessibilityElement? {
+        linkAccessibilityElements().first { $0.fragments.contains { $0.contains(point) } }
     }
 
     /// Code-block Copy buttons, framed where they are drawn.

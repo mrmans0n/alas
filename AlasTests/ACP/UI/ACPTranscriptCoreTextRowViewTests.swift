@@ -205,6 +205,19 @@ import Testing
         #expect(toggles == [expected])
     }
 
+    @Test func aWrappedLinkHitTestsOnlyItsOwnText() throws {
+        let view = row(.agent(markdown: "Plain words before [the full migration guide for this release](https://example.com) and after.", commentary: false))
+        _ = view.measuredHeight(forWidth: 420)
+        let link = try #require(view.linkAccessibilityElements().first)
+        #expect(link.fragments.count > 1)
+        let first = try #require(link.fragments.first)
+        // Left of where the link starts on its first line: plain text, inside the union.
+        let beside = NSPoint(x: first.minX - 4, y: first.midY)
+        #expect(link.accessibilityFrameInParentSpace().contains(beside))
+        #expect(view.linkAccessibilityElement(at: beside) == nil)
+        #expect(view.linkAccessibilityElement(at: NSPoint(x: first.midX, y: first.midY)) === link)
+    }
+
     @Test func linksAreAccessibleAndOpenWhenPressed() throws {
         var opened: [URL] = []
         var actions = ACPTranscriptNativeRows.Actions.inert

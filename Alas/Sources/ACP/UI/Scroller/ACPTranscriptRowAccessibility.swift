@@ -136,6 +136,10 @@ final class ACPTranscriptCodeCopyAccessibilityElement: NSAccessibilityElement, @
 /// Keyboard Access can reach and open it as in the text view renderer.
 final class ACPTranscriptLinkAccessibilityElement: NSAccessibilityElement, @unchecked Sendable {
     let url: URL
+    /// The link's rect on each line it covers, in the row's coordinates. A
+    /// wrapped link is hit-tested by these, not by their union, which also
+    /// covers plain text beside it.
+    var fragments: [CGRect] = []
     private let open: @MainActor @Sendable (URL) -> Void
 
     init(url: URL, text: String, open: @escaping @MainActor @Sendable (URL) -> Void) {
