@@ -56,9 +56,16 @@ public struct ProjectsAPI {
         core.projects.projects
     }
 
-    /// Registers the repository at `path` and lists its worktrees.
-    public func add(path: URL, displayName: String, icon: ProjectIcon) async throws -> ProjectConfig {
-        try await core.addProject(path: path, displayName: displayName, icon: icon)
+    /// Registers the project at `path` (on `host` for a remote one) and
+    /// lists its worktrees.
+    public func add(
+        path: URL,
+        displayName: String,
+        icon: ProjectIcon,
+        host: String? = nil,
+        kind: ProjectKind = .git
+    ) async throws -> ProjectConfig {
+        try await core.addProject(path: path, displayName: displayName, icon: icon, host: host, kind: kind)
     }
 }
 
@@ -96,12 +103,12 @@ public struct WorktreesAPI {
         await core.finishCreate(pending)
     }
 
-    /// Deletes a worktree nobody needs to confirm. Throws when another
-    /// operation holds it or it is the main checkout.
-    public func delete(_ worktree: Worktree, options: WorktreeDeleteOptions) async throws -> WorktreeDeletionOutcome {
-        let claim = try core.beginDelete(worktree)
-        core.confirmDelete(claim, for: worktree)
-        return await core.deleteWorktree(worktree, claim: claim, options: options)
+    /// Deletes a worktree nobody needs to confirm, refusing (with a
+    /// `WorktreeDeletionRefusal`) one whose checkout no longer matches it:
+    /// another lineage or branch at the path, a remote or unidentified
+    /// checkout, the main checkout, or one another operation holds.
+    public func delete(_ worktree: Worktree, force: Bool = false, deleteBranchIfMerged: Bool = false) async throws {
+        try await core.deleteWorktree(worktree, force: force, deleteBranchIfMerged: deleteBranchIfMerged)
     }
 
     /// Claims a worktree for a deletion its caller confirms first; pass the
