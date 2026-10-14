@@ -11274,7 +11274,11 @@ final class AppState {
         }
 
         // The removals' claims are held until their projects are refreshed.
-        try? await core.finishDeletions(removed)
+        do {
+            try await core.finishDeletions(removed)
+        } catch {
+            persistenceErrorHandler("Projects Save Failed", error.localizedDescription)
+        }
         // A failed removal can still have changed what Git lists.
         for projectId in touchedProjectIds.subtracting(removed.map(\.worktree.projectId)) {
             _ = try? await refreshProjectWorktrees(projectId: projectId)
@@ -12218,8 +12222,11 @@ final class AppState {
         } catch {
             outcome = .failed(error.localizedDescription)
         }
+        if case .deletedButNotSaved(let message) = outcome {
+            persistenceErrorHandler("Projects Save Failed", message)
+        }
         switch outcome {
-        case .deleted:
+        case .deleted, .deletedButNotSaved:
             removePersistedGGWorktreeMode(projectId: worktree.projectId, worktreeId: worktree.id)
             // Callers that skip the refresh (batches, which refresh once at the
             // end) reconcile the selection themselves afterwards.

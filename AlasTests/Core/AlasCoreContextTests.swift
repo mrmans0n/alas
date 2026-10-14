@@ -219,8 +219,10 @@ struct AlasCoreContextTests {
     }
 
     /// The removal cannot be undone, so a project list that cannot be saved
-    /// afterwards is reported rather than left to restore the deleted row.
-    @Test func deletionThatCannotSaveTheProjectListThrows() async throws {
+    /// afterwards is reported rather than left to restore the deleted row,
+    /// by the headless call and by the claimed deletion the app makes.
+    @Test(arguments: [false, true])
+    func deletionThatCannotSaveTheProjectListIsReported(throughClaim: Bool) async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-core-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -242,8 +244,17 @@ struct AlasCoreContextTests {
         )
         store.writeError = CocoaError(.fileWriteOutOfSpace)
 
-        await #expect(throws: CocoaError.self) {
-            try await context.deleteWorktree(worktree)
+        if throughClaim {
+            let claim = try context.beginDelete(worktree)
+            let outcome = await context.deleteWorktree(worktree, claim: claim, options: WorktreeDeleteOptions())
+            guard case .deletedButNotSaved = outcome else {
+                Issue.record("Expected the save failure to be reported, got \(outcome)")
+                return
+            }
+        } else {
+            await #expect(throws: CocoaError.self) {
+                try await context.deleteWorktree(worktree)
+            }
         }
         #expect(!context.projects.worktrees(projectId: project.id).map(\.id).contains(worktree.id))
     }

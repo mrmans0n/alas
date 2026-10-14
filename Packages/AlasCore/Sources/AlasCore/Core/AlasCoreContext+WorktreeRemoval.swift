@@ -81,6 +81,9 @@ public struct WorktreeDeleteOptions: Sendable {
 
 public enum WorktreeDeletionOutcome: Equatable, Sendable {
     case deleted
+    /// Removed, but the project list could not be saved afterwards, so the
+    /// row may come back on the next launch.
+    case deletedButNotSaved(String)
     /// Git refused without force.
     case needsForce(String)
     /// The worktree changed since the caller confirmed. Nothing was removed.
@@ -384,7 +387,7 @@ extension AlasCoreContext {
             return nil
         }
         switch await deleteWorktree(worktree, claim: claim, options: options) {
-        case .deleted:
+        case .deleted, .deletedButNotSaved:
             try await finishDeletions([(worktree, claim)])
         case .needsForce(let refusal):
             throw WorktreeDeletionRefusal.needsForce(refusal)
@@ -463,7 +466,11 @@ extension AlasCoreContext {
         switch result {
         case .removed:
             if options.refreshesProject {
-                try? await finishDeletions([(worktree, claim)])
+                do {
+                    try await finishDeletions([(worktree, claim)])
+                } catch {
+                    return .deletedButNotSaved(error.localizedDescription)
+                }
             }
             return .deleted
         case .needsForce(let refusal) where options.force:
