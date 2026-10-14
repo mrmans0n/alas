@@ -489,8 +489,11 @@ scrolls at 8 rows so a large PR doesn't make a giant popover:
 - Thread count, and required reviewers still missing on this head.
 - Shepherd line: phase, attempt count, and the rules source ("Rules:
   .alas/shepherd.md").
-- Toggles: "Auto-fix CI, conflicts and reviews" and "Auto-merge when ready
-  (squash)".
+- Switch rows (`ShepherdSwitchRow`): a 12 pt medium title over a 10.5 pt
+  `fg-muted` description, with a mini native switch trailing and vertically
+  centered. "Auto-fix": "CI failures, conflicts and reviewer threads go back to
+  this session". "Auto-merge": "Squash-merge once checks, reviewers and the
+  head are settled". Both are disabled once the record is terminal.
 - Footer actions: "Open in Changes", "Stop shepherding". Stop deletes the
   record and leaves the PR untouched. Escalated records also show "Resume",
   which returns them to `watching` and resets `fixAttempts`.
@@ -522,7 +525,8 @@ menu.
 In `ReviewLoopDrawer`:
 
 - Expanded body, above the actions: a shepherd block with the phase line, the
-  two toggles, Resume/Stop, and "Move to…".
+  same two switch rows (the auto-fix description names "the shepherding
+  session"), Resume/Stop, and "Move to…".
 - Unbound PR: a "Shepherd with…" menu listing the worktree's non-archived
   sessions sorted by `updatedAt` (the history list sorts by `lastOpenedAt`,
   so this sort is explicit), plus "New session" which launches the default

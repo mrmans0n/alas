@@ -266,7 +266,7 @@ Inside an Alas-spawned terminal:
 Use a disposable branch on a GitHub repository you can push to, with CI that runs on pull requests, and an ACP agent that supports MCP.
 
 1. In an agent session, make a small change, commit it, and ask the agent to open a PR. Confirm it offers first and calls `pr_create` only after you agree.
-2. Confirm the toolbar PR button shows an amber badge while checks run, and its popover lists the checks, the shepherd phase, and both toggles.
+2. Confirm the toolbar PR button shows an amber badge while checks run, and its popover lists the checks, the shepherd phase, and the Auto-fix and Auto-merge switches with their descriptions.
 3. Push a commit that breaks a test. Confirm that once CI fails, a prompt captioned "Alas PR shepherd" appears in the same session with the failing check and its log tail, and that the agent pushes a fix.
 4. Leave a review comment from a second account with write access. Confirm the session receives it as a fix turn while CI is still running.
 5. Leave a comment from your own account. Confirm it does not trigger a fix turn.

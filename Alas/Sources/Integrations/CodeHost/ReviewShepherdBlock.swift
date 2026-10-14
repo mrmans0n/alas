@@ -65,14 +65,16 @@ struct ReviewShepherdBlock: View {
             .lineLimit(2)
             .fixedSize(horizontal: false, vertical: true)
 
-        toggle(
-            "Auto-fix CI, conflicts and reviews",
+        ShepherdSwitchRow(
+            title: "Auto-fix",
+            detail: "CI failures, conflicts and reviewer threads go back to the shepherding session",
             isOn: record.autoFix,
             isDisabled: record.phase.isTerminal,
             set: model.setAutoFix
         )
-        toggle(
-            "Auto-merge when ready (squash)",
+        ShepherdSwitchRow(
+            title: "Auto-merge",
+            detail: "Squash-merge once checks, reviewers and the head are settled",
             isOn: record.autoMerge,
             isDisabled: record.phase.isTerminal,
             set: model.setAutoMerge
@@ -106,22 +108,40 @@ struct ReviewShepherdBlock: View {
             ReviewShepherdSessionMenu(model: model, title: "Shepherd with…", help: "Have a session fix and merge this PR")
         }
     }
+}
 
-    private func toggle(
-        _ title: String,
-        isOn: Bool,
-        isDisabled: Bool,
-        set: @escaping @MainActor (Bool) -> Void
-    ) -> some View {
-        Toggle(isOn: Binding(get: { isOn }, set: { set($0) })) {
-            Text(title)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundColor(theme.color("fg"))
+/// An auto-fix or auto-merge row, shared by the toolbar popover and the
+/// Changes drawer: title over a one-line description, switch trailing.
+struct ShepherdSwitchRow: View {
+    let title: String
+    let detail: String
+    let isOn: Bool
+    let isDisabled: Bool
+    let set: @MainActor (Bool) -> Void
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(theme.color("fg"))
+                Text(detail)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(theme.color("fg-muted"))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .opacity(isDisabled ? 0.5 : 1)
+            Spacer(minLength: 0)
+            Toggle(title, isOn: Binding(get: { isOn }, set: { set($0) }))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .disabled(isDisabled)
+                .accessibilityLabel(title)
+                .accessibilityHint(detail)
         }
-        .toggleStyle(.switch)
-        .controlSize(.mini)
-        .disabled(isDisabled)
-        .help(title)
+        .help(detail)
     }
 }
 

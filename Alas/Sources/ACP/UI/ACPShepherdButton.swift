@@ -174,10 +174,6 @@ private struct ShepherdPopover: View {
     @State private var rules: ShepherdRules = .none
     @State private var reviewerResult: ReviewerResult?
 
-    /// Narrower than the composer options popover (164 pt): the toggle
-    /// titles here are long and the popover is 340 pt wide.
-    private let controlWidth: CGFloat = 64
-
     private var isBusy: Bool { transcript.streamingState != .idle }
 
     var body: some View {
@@ -289,23 +285,21 @@ private struct ShepherdPopover: View {
             Text("Attempt \(record.fixAttempts) of \(ShepherdPolicy.maxFixAttempts) · Rules: \(rules.sourceLabel ?? "none")")
                 .font(.system(size: 10.5))
                 .foregroundStyle(theme.color("fg-muted"))
-            toggleRow(
-                "Auto-fix CI, conflicts and reviews",
-                isEnabled: record.autoFix,
-                icon: "wrench.and.screwdriver",
-                isDisabled: record.phase.isTerminal,
-                help: "Send failing checks, trusted review threads and conflicts to this session"
-            ) {
-                state.reviewShepherd.setAutoFix(!record.autoFix, for: record.id)
+            ShepherdSwitchRow(
+                title: "Auto-fix",
+                detail: "CI failures, conflicts and reviewer threads go back to this session",
+                isOn: record.autoFix,
+                isDisabled: record.phase.isTerminal
+            ) { isOn in
+                state.reviewShepherd.setAutoFix(isOn, for: record.id)
             }
-            toggleRow(
-                "Auto-merge when ready (squash)",
-                isEnabled: record.autoMerge,
-                icon: "arrow.triangle.merge",
-                isDisabled: record.phase.isTerminal,
-                help: "Squash-merge when the merge gate passes"
-            ) {
-                state.reviewShepherd.setAutoMerge(!record.autoMerge, for: record.id)
+            ShepherdSwitchRow(
+                title: "Auto-merge",
+                detail: "Squash-merge once checks, reviewers and the head are settled",
+                isOn: record.autoMerge,
+                isDisabled: record.phase.isTerminal
+            ) { isOn in
+                state.reviewShepherd.setAutoMerge(isOn, for: record.id)
             }
         }
         .padding(.horizontal, 12)
@@ -536,47 +530,5 @@ private struct ShepherdPopover: View {
         .foregroundStyle(theme.color("fg-dim"))
         .padding(.horizontal, 14)
         .padding(.vertical, 7)
-    }
-
-    /// Same construction as the ACP composer options popover's `toggleRow`
-    /// (`ACPComposerShell.swift:996-1033`), with an accent "on" state.
-    private func toggleRow(
-        _ title: String,
-        isEnabled: Bool,
-        icon: String,
-        isDisabled: Bool,
-        help: String,
-        action: @escaping () -> Void
-    ) -> some View {
-        let foreground = isEnabled ? theme.color("accent") : theme.color("fg-muted")
-        let background = isEnabled ? theme.color("accent").opacity(0.18) : theme.color("bg-3").opacity(0.7)
-        let border = isEnabled ? theme.color("accent").opacity(0.5) : theme.color("line")
-        return HStack(spacing: 8) {
-            Text(title)
-                .lineLimit(1)
-                .foregroundStyle(theme.color("fg"))
-            Spacer(minLength: 8)
-            Button(action: action) {
-                HStack(spacing: 6) {
-                    Image(systemName: icon)
-                        .font(.system(size: 11, weight: .semibold))
-                        .frame(width: 14)
-                    Text(isEnabled ? "On" : "Off")
-                    Spacer(minLength: 0)
-                }
-                .foregroundStyle(foreground)
-                .padding(.horizontal, 8)
-                .frame(width: controlWidth, height: 24)
-                .background(RoundedRectangle(cornerRadius: 6).fill(background))
-                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(border, lineWidth: 0.75))
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("\(title), \(isEnabled ? "On" : "Off")")
-            .disabled(isDisabled)
-            .opacity(isDisabled ? 0.5 : 1)
-            .help(help)
-        }
-        .frame(height: 24)
-        .font(.system(size: 11, weight: .medium))
     }
 }
