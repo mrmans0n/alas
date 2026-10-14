@@ -376,7 +376,10 @@ struct ProjectsManagerTests {
         #expect(trees.first?.branch == "main")
     }
 
-    @Test func refreshWorktreesFallsBackWhenConfiguredLinkedWorktreeDisappears() async throws {
+    /// After a relaunch the live list is empty, so the fallback comes from
+    /// the cached rows.
+    @Test(arguments: [false, true])
+    func refreshWorktreesFallsBackWhenConfiguredLinkedWorktreeDisappears(afterRelaunch: Bool) async throws {
         let repo = try await makeRepo(name: "linked-anchor")
         defer { try? FileManager.default.removeItem(at: repo) }
         let service = WorktreeService()
@@ -396,7 +399,7 @@ struct ProjectsManagerTests {
             color: "#5fb7c4",
             addedAt: Date()
         )
-        let manager = ProjectsManager(persistedProjects: [project])
+        var manager = ProjectsManager(persistedProjects: [project])
         try await manager.refreshWorktrees(projectId: projectId)
         #expect(manager.worktrees(projectId: projectId).count == 2)
 
@@ -406,6 +409,7 @@ struct ProjectsManagerTests {
             deleteBranchIfMerged: false,
             force: false
         )
+        if afterRelaunch { manager = ProjectsManager(persistedProjects: manager.projects) }
         let projectChanged = try await manager.refreshWorktrees(projectId: projectId)
 
         let remaining = manager.worktrees(projectId: projectId)
