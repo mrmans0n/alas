@@ -53,12 +53,24 @@ extension ACPTranscriptCoreTextRowView {
         return Self.tileRange(covering: visibleRect.insetBy(dx: 0, dy: -margin), height: bounds.height, tileHeight: Self.tileHeight)
     }
 
+    /// Tiles kept past each end of the wanted range, so scrolling back a little
+    /// does not redraw what was just dropped.
+    static let retainedTileSlack = 2
+
     /// AppKit calls this for its own scroll invalidations as well as ours,
-    /// so it only adds missing tiles; existing ones redraw only through
-    /// `invalidateTiles`.
+    /// so it only adds missing tiles and drops those scrolled well away;
+    /// existing ones redraw only through `invalidateTiles`.
     override func updateLayer() {
         guard let layer, bounds.height > 0 else { return }
-        for index in wantedTiles() where tiles[index] == nil {
+        let wanted = wantedTiles()
+        // A message taller than many viewports stays mounted while it scrolls
+        // by, so it must not keep a bitmap for every strip it has shown.
+        let retained = (wanted.lowerBound - Self.retainedTileSlack) ..< (wanted.upperBound + Self.retainedTileSlack)
+        for (index, tile) in tiles where !retained.contains(index) {
+            tile.removeFromSuperlayer()
+            tiles[index] = nil
+        }
+        for index in wanted where tiles[index] == nil {
             let tile = CALayer()
             tile.delegate = tileDelegate
             tile.contentsFormat = .RGBA8Uint

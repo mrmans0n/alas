@@ -212,6 +212,29 @@ import Testing
         #expect(toggles == [expected])
     }
 
+    @Test func aTallRowDropsTilesScrolledFarAway() throws {
+        let view = row(.agent(markdown: String(repeating: "A line of a long message.\n\n", count: 800), commentary: false))
+        let height = view.measuredHeight(forWidth: 800)
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 800, height: 400), styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 800, height: 400))
+        view.frame = NSRect(x: 0, y: 0, width: 800, height: height)
+        scrollView.documentView = view
+        window.contentView = scrollView
+        let tileCount = Int(ceil(height / ACPTranscriptCoreTextRowView.tileHeight))
+        try #require(tileCount > 10)
+
+        view.updateLayer()
+        #expect(view.tiles.keys.contains(0))
+        scrollView.contentView.scroll(to: NSPoint(x: 0, y: height - 400))
+        view.updateLayer()
+        #expect(view.tiles.keys.contains(tileCount - 1))
+        #expect(!view.tiles.keys.contains(0))
+    }
+
     @Test func aShortUserBubbleKeepsItsTextInsideTheBubble() throws {
         let view = row(.user(markdown: "Can you fix the bug?"))
         _ = view.measuredHeight(forWidth: 1_000)
