@@ -214,6 +214,10 @@ Each phase is one or more independent PRs. It is done when its exit criterion ho
 2. **Environment and SPI.** Introduce `AlasHostEnvironment` and `HeadlessHostEnvironment` in place of the hook closures. Mark the remaining app plumbing `@_spi(AppHost)`. *Exit:* `AlasCoreContext` has no settable closure properties, and a test target importing `AlasCore` without SPI cannot reach the plumbing.
 3. **Runs.** Introduce `RunLauncher`; terminal-backed and process-backed runs share start, settle and record. *Exit:* no run observation or settlement call remains in `AppState+RunScripts`.
 4. **Host facade and snapshots.** Add `AlasHost` with `projects`, `worktrees`, `workspaces` and `runs` as value-typed APIs and `snapshot()`. *Exit:* the CLI's `wt list`, `wt new`, `wt delete` and `workspace_list/show` go through the host.
+   - *Decided:* `AlasHost(core:)` is a thin facade over `AlasCoreContext`, which the app keeps holding next to it until callers have moved; ownership moves to the host afterwards.
+   - *Decided:* the APIs reuse the existing values (`Worktree`, `ProjectConfig`, `WorkspaceCheckout`, `RunRecord`, now all `Codable`). `WorktreeSnapshot` adds only the operation state and whether the worktree is archived; making the operation state `Codable` waits for the protocol in phase 5.
+   - *Decided:* errors are the existing typed refusals, and `snapshot()` has no cursor until events exist in phase 5.
+   - *Decided:* no verb takes a `HostCaller` yet; it arrives with the host protocol in phase 5, built by each transport adapter.
 5. **Events and the host protocol.**
    - Add `HostEvent` with cursors, coalescing and resync.
    - Add read-only session summaries to the host (`sessions.list`, `sessionChanged`, `sessionRemoved`). Session verbs and transcripts stay in phase 6.

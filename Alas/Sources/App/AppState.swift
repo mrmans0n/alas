@@ -225,6 +225,9 @@ final class AppState {
     let core: AlasCoreContext
     /// The app's side of the core's lifecycles.
     let hostEnvironment: AppHostEnvironment
+    /// The core's public API. Paths move onto it from `core` as they are
+    /// migrated.
+    let host: AlasHost
     var projectsManager: ProjectsManager {
         get { core.projects }
         set { core.projects = newValue }
@@ -1597,6 +1600,7 @@ final class AppState {
             runHostGrace: RunHostGrace(local: runScriptLocalMonitorGrace, any: runScriptMonitorGrace)
         )
         self.hostEnvironment = hostEnvironment
+        self.host = AlasHost(core: core)
         let spacesManager = spacesFile.map(SpacesManager.init(file:))
             ?? SpacesManager.migrating(projects: projectsFile.projects)
         var spacesChanged = spacesManager.pruneMissingProjects(validProjectIds: Set(projectsFile.projects.map(\.id)))
