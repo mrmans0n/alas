@@ -83,10 +83,12 @@ struct AppConfigTests {
         #expect(cfg.harness.notifyOnAwaiting == true)
         #expect(cfg.worktrees.rootPath == "~/.alas/worktrees")
         #expect(cfg.worktrees.branchPrefix == "feature/")
-        #expect(cfg.needsAttentionEnabled == false)
     }
 
-    @Test(arguments: [("schedulesEnabled", false), ("workspacesEnabled", true)])
+    @Test(arguments: [
+        ("schedulesEnabled", false), ("workspacesEnabled", true),
+        ("needsAttentionEnabled", false), ("needsAttentionEnabled", true)
+    ])
     func decodeConfigIgnoresRetiredFeatureFlag(key: String, value: Bool) throws {
         let data = try JSONEncoder().encode(AppConfig.defaults)
         var object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -110,17 +112,6 @@ struct AppConfigTests {
         let decoded = try JSONDecoder().decode(AppConfig.self, from: oldConfig)
 
         #expect(decoded == AppConfig.defaults)
-    }
-
-    @Test func decodeOldConfigDefaultsNeedsAttentionDisabled() throws {
-        let data = try JSONEncoder().encode(AppConfig.defaults)
-        var object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
-        object.removeValue(forKey: "needsAttentionEnabled")
-
-        let oldConfig = try JSONSerialization.data(withJSONObject: object)
-        let decoded = try JSONDecoder().decode(AppConfig.self, from: oldConfig)
-
-        #expect(decoded.needsAttentionEnabled == false)
     }
 
     @Test func decodeOldHarnessConfigDefaultsAwaitingPingOn() throws {
