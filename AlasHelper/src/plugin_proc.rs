@@ -123,17 +123,9 @@ pub(crate) fn handle(
 pub(crate) fn unsupported_reason() -> Option<String> {
     #[cfg(target_os = "linux")]
     {
-        if linux::pidfd_supported() {
-            None
-        } else {
-            Some("this host's Linux kernel lacks pidfd_open and pidfd_send_signal (Linux 5.3 or later is required to stop everything a command starts)".into())
-        }
+        platform::supported().err()
     }
-    #[cfg(target_os = "macos")]
-    {
-        Some("plugin commands can't run on macOS SSH hosts: macOS can't guarantee that everything a command starts is stopped".into())
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(not(target_os = "linux"))]
     {
         Some("plugin commands can't run on this host's operating system".into())
     }
@@ -343,7 +335,7 @@ fn remove_claim(dir: &Path) -> Result<(), HelperError> {
 fn process_identity(pid: i32) -> Option<String> {
     #[cfg(target_os = "linux")]
     {
-        linux::stat(pid).map(|stat| format!("{pid} {}", stat.start))
+        platform::stat(pid).map(|stat| format!("{pid} {}", stat.start))
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -362,7 +354,7 @@ fn identity_alive(record: &str) -> bool {
     match fields.next() {
         #[cfg(target_os = "linux")]
         Some(Ok(start)) => {
-            linux::stat(pid as i32).is_some_and(|stat| stat.start == start && !stat.dead)
+            platform::stat(pid as i32).is_some_and(|stat| stat.start == start && !stat.dead)
         }
         #[cfg(not(target_os = "linux"))]
         Some(Ok(_)) => false,
@@ -1118,7 +1110,7 @@ pub(crate) fn supervise_main(dir: Option<String>) -> ! {
     };
     #[cfg(target_os = "linux")]
     {
-        linux::supervise(PathBuf::from(dir));
+        supervisor::supervise(PathBuf::from(dir));
         std::process::exit(0);
     }
     #[cfg(not(target_os = "linux"))]
@@ -1134,492 +1126,31 @@ pub(crate) fn supervise_main(dir: Option<String>) -> ! {
 /// Leads the process group a plugin process runs in, so its id can't be
 /// reused while cleanup signals it. Ignores every signal it can and dies with
 /// its supervisor.
-pub(crate) fn anchor_main() -> ! {
+pub(crate) fn anchor_main(parent: Option<String>) -> ! {
     #[cfg(target_os = "linux")]
-    linux::anchor();
+    if let Some(parent) = parent.and_then(|parent| parent.parse().ok()) {
+        platform::anchor(parent);
+    }
     #[cfg(not(target_os = "linux"))]
+    let _ = parent;
     std::process::exit(1);
 }
 
 #[cfg(target_os = "linux")]
-mod linux {
-    use super::*;
-    use std::collections::HashMap;
-    use std::io::Read;
-    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-    use std::sync::Arc;
-    use std::sync::mpsc;
+#[path = "plugin_proc/linux.rs"]
+mod platform;
+#[cfg(target_os = "linux")]
+mod supervisor;
 
-    pub(super) fn pidfd_open(pid: i32) -> Option<OwnedFd> {
-        // SAFETY: a plain syscall; a non-negative result is a new fd we own.
-        let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
-        (fd >= 0).then(|| unsafe { OwnedFd::from_raw_fd(fd as i32) })
-    }
-
-    pub(super) fn pidfd_signal(fd: &OwnedFd, signal: i32) -> bool {
-        // SAFETY: a plain syscall on an fd we hold, without siginfo.
-        unsafe {
-            libc::syscall(
-                libc::SYS_pidfd_send_signal,
-                fd.as_raw_fd(),
-                signal,
-                std::ptr::null::<libc::siginfo_t>(),
-                0,
-            ) == 0
-        }
-    }
-
-    pub(super) fn pidfd_supported() -> bool {
-        pidfd_open(std::process::id() as i32).is_some_and(|fd| pidfd_signal(&fd, 0))
-    }
-
-    #[derive(Debug, Clone, Copy, PartialEq)]
-    pub(super) struct Stat {
-        pub ppid: i32,
-        pub pgrp: i32,
-        pub start: u64,
-        pub dead: bool,
-    }
-
-    /// Fields of `/proc/<pid>/stat` after the command name, which may itself
-    /// hold spaces and parentheses.
-    pub(super) fn parse_stat(text: &str) -> Option<Stat> {
-        let fields: Vec<&str> = text[text.rfind(')')? + 1..].split_whitespace().collect();
-        Some(Stat {
-            dead: matches!(*fields.first()?, "Z" | "X"),
-            ppid: fields.get(1)?.parse().ok()?,
-            pgrp: fields.get(2)?.parse().ok()?,
-            start: fields.get(19)?.parse().ok()?,
-        })
-    }
-
-    pub(super) fn stat(pid: i32) -> Option<Stat> {
-        parse_stat(&std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?)
-    }
-
-    /// Every live process below `ancestor`, with its identity.
-    pub(super) fn descendants(ancestor: i32) -> Vec<(i32, Stat)> {
-        let all: Vec<(i32, Stat)> = std::fs::read_dir("/proc")
-            .into_iter()
-            .flatten()
-            .flatten()
-            .filter_map(|entry| entry.file_name().to_str()?.parse::<i32>().ok())
-            .filter_map(|pid| Some((pid, stat(pid)?)))
-            .collect();
-        let mut below = HashSet::from([ancestor]);
-        let mut found = Vec::new();
-        // Parents may be listed after their children; repeat until stable.
-        loop {
-            let before = found.len();
-            for (pid, stat) in &all {
-                if !below.contains(pid) && below.contains(&stat.ppid) {
-                    below.insert(*pid);
-                    found.push((*pid, *stat));
-                }
-            }
-            if found.len() == before {
-                break;
-            }
-        }
-        found.retain(|(_, stat)| !stat.dead);
-        found
-    }
-
-    /// A pidfd for `pid` only while it is still the process sampled with
-    /// `start`: the fd is opened first and the identity checked while it is
-    /// held, so a pid reused in between is closed, never signalled.
-    pub(super) fn open_validated(pid: i32, start: u64) -> Option<OwnedFd> {
-        let fd = pidfd_open(pid)?;
-        stat(pid)
-            .filter(|stat| stat.start == start && !stat.dead)
-            .map(|_| fd)
-    }
-
-    fn exit_code(status: i32) -> i32 {
-        if libc::WIFEXITED(status) {
-            libc::WEXITSTATUS(status)
-        } else if libc::WIFSIGNALED(status) {
-            128 + libc::WTERMSIG(status)
-        } else {
-            -1
-        }
-    }
-
-    /// Ignores every signal it can and dies with `parent`. Async-signal-safe,
-    /// so the anchor runs it between fork and exec: ignored dispositions and
-    /// the parent-death signal survive exec, so the anchor is never without
-    /// them, however soon the command signals its group.
-    fn guard_anchor(parent: i32) -> std::io::Result<()> {
-        // SAFETY: sigaction and prctl only, both async-signal-safe.
-        unsafe {
-            for signal in 1..=64 {
-                if signal != libc::SIGKILL && signal != libc::SIGSTOP {
-                    libc::signal(signal, libc::SIG_IGN);
-                }
-            }
-            libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
-            // The supervisor may have died before the line above took effect.
-            if libc::getppid() != parent {
-                libc::_exit(0);
-            }
-        }
-        Ok(())
-    }
-
-    pub(super) fn anchor() -> ! {
-        loop {
-            // SAFETY: waiting for a signal; every catchable one is ignored.
-            unsafe { libc::pause() };
-        }
-    }
-
-    struct Supervisor {
-        dir: PathBuf,
-        me: i32,
-        anchor: i32,
-        anchor_fd: Option<OwnedFd>,
-        root: i32,
-        root_status: Option<i32>,
-        owned: HashMap<(i32, u64), OwnedFd>,
-        log: Option<std::fs::File>,
-    }
-
-    impl Supervisor {
-        fn log(&mut self, line: &str) {
-            if let Some(log) = self.log.as_mut() {
-                let _ = writeln!(log, "{line}");
-            }
-        }
-
-        /// Reaps everything that ended, the root and adopted orphans alike.
-        fn reap(&mut self) {
-            loop {
-                let mut status = 0;
-                // SAFETY: waitpid with a valid out pointer.
-                let pid = unsafe { libc::waitpid(-1, &mut status, libc::WNOHANG) };
-                if pid <= 0 {
-                    break;
-                }
-                if pid == self.root {
-                    self.root_status = Some(exit_code(status));
-                } else if pid == self.anchor && self.anchor_fd.take().is_some() {
-                    self.log("anchor-dead");
-                }
-            }
-        }
-
-        /// The processes this run still owns, each with a validated pidfd,
-        /// the anchor aside.
-        fn sample(&mut self) -> Vec<(i32, u64)> {
-            let found = descendants(self.me);
-            let live: HashSet<(i32, u64)> = found
-                .iter()
-                .filter(|(pid, _)| *pid != self.anchor)
-                .map(|(pid, stat)| (*pid, stat.start))
-                .collect();
-            self.owned.retain(|key, _| live.contains(key));
-            for &(pid, start) in &live {
-                if self.owned.contains_key(&(pid, start)) {
-                    continue;
-                }
-                match open_validated(pid, start) {
-                    Some(fd) => {
-                        self.owned.insert((pid, start), fd);
-                    }
-                    None => self.log(&format!("mismatch {pid}")),
-                }
-            }
-            self.owned.keys().copied().collect()
-        }
-
-        fn signal_owned(&mut self, key: (i32, u64), signal: i32) {
-            if let Some(fd) = self.owned.get(&key) {
-                pidfd_signal(fd, signal);
-                self.log(&format!("pid {} {signal}", key.0));
-            }
-        }
-
-        /// `SIGTERM` to the group while its anchor lives, and to every owned
-        /// process by its pidfd, newcomers included, until none is left or
-        /// the grace ends; then `SIGKILL` passes until none is left; then the
-        /// anchor, last.
-        fn stop(&mut self, grace: Duration) {
-            let term_until = Instant::now() + grace;
-            let mut termed = HashSet::new();
-            let mut group_termed = false;
-            loop {
-                self.reap();
-                let owned = self.sample();
-                if owned.is_empty() || Instant::now() >= term_until {
-                    break;
-                }
-                if !group_termed && self.anchor_fd.is_some() {
-                    group_termed = true;
-                    // SAFETY: plain kill; the live anchor keeps the group id ours.
-                    unsafe { libc::kill(-self.anchor, libc::SIGTERM) };
-                    self.log(&format!("group {}", libc::SIGTERM));
-                }
-                for key in owned {
-                    if termed.insert(key) {
-                        self.signal_owned(key, libc::SIGTERM);
-                    }
-                }
-                thread::sleep(Duration::from_millis(10));
-            }
-            // ponytail: a process stuck in uninterruptible sleep outlasting
-            // 30 s of SIGKILL passes is given up on; the anchor still goes.
-            let kill_until = Instant::now() + Duration::from_secs(30);
-            loop {
-                self.reap();
-                let owned = self.sample();
-                if owned.is_empty() || Instant::now() >= kill_until {
-                    break;
-                }
-                for key in owned {
-                    self.signal_owned(key, libc::SIGKILL);
-                }
-                thread::sleep(Duration::from_millis(5));
-            }
-            if let Some(fd) = self.anchor_fd.take() {
-                pidfd_signal(&fd, libc::SIGKILL);
-                self.log("anchor-removed");
-                let mut status = 0;
-                // SAFETY: waitpid on our own child.
-                unsafe { libc::waitpid(self.anchor, &mut status, 0) };
-            }
-            self.reap();
-        }
-    }
-
-    fn fail(dir: &Path, message: String) {
-        let _ = write_atomic(&dir.join("error"), message.as_bytes());
-    }
-
-    pub(super) fn supervise(dir: PathBuf) {
-        // SAFETY: plain prctl. Orphans of the run reparent here, so they stay
-        // findable however they detach.
-        unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1) };
-        // With its start time, so a retry can tell it from a reused pid.
-        let me = std::process::id() as i32;
-        if let Some(stat) = stat(me) {
-            let _ = write_atomic(
-                &dir.join("supervisor"),
-                format!("{me} {}", stat.start).as_bytes(),
-            );
-        }
-        let launch: Launch = match std::fs::read(dir.join("launch.json"))
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        {
-            Some(launch) => launch,
-            None => return fail(&dir, "launch file unreadable".into()),
-        };
-        let _ = std::fs::remove_file(dir.join("launch.json"));
-        let stdin = launch
-            .stdin_base64
-            .as_deref()
-            .and_then(|data| base64::engine::general_purpose::STANDARD.decode(data).ok());
-
-        let (anchor, anchor_fd) = match spawn_anchor() {
-            Ok(anchor) => anchor,
-            Err(message) => return fail(&dir, message),
-        };
-        let _ = write_atomic(&dir.join("anchor"), anchor.to_string().as_bytes());
-
-        use std::os::unix::process::CommandExt;
-        let mut command = Command::new(&launch.executable);
-        command
-            .arg0(&launch.argv[0])
-            .args(&launch.argv[1..])
-            .current_dir(&launch.cwd)
-            .env_clear()
-            .envs(launch.env.iter().map(|(key, value)| (key, value)))
-            .stdin(if stdin.is_some() {
-                Stdio::piped()
-            } else {
-                Stdio::null()
-            })
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .process_group(anchor);
-        let mut child = match command.spawn() {
-            Ok(child) => child,
-            Err(error) => {
-                pidfd_signal(&anchor_fd, libc::SIGKILL);
-                // SAFETY: waitpid on our own child.
-                unsafe { libc::waitpid(anchor, &mut 0, 0) };
-                return fail(&dir, format!("could not start {}: {error}", launch.argv[0]));
-            }
-        };
-        let root = child.id() as i32;
-        let mut supervisor = Supervisor {
-            dir: dir.clone(),
-            me: std::process::id() as i32,
-            anchor,
-            anchor_fd: Some(anchor_fd),
-            root,
-            root_status: None,
-            owned: HashMap::new(),
-            log: std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(dir.join("cleanup.log"))
-                .ok(),
-        };
-        // The root is our unreaped child, so its pid is still its own here.
-        if let (Some(fd), Some(stat)) = (pidfd_open(root), stat(root)) {
-            supervisor.owned.insert((root, stat.start), fd);
-        }
-
-        let journal = Arc::new(Mutex::new(Journal::new(
-            launch.long_running,
-            launch.output_limit,
-        )));
-        let (done_tx, done_rx) = mpsc::channel();
-        let mut readers = 0;
-        for (stream, pipe) in [
-            (
-                0_u8,
-                child
-                    .stdout
-                    .take()
-                    .map(|pipe| Box::new(pipe) as Box<dyn Read + Send>),
-            ),
-            (
-                1_u8,
-                child
-                    .stderr
-                    .take()
-                    .map(|pipe| Box::new(pipe) as Box<dyn Read + Send>),
-            ),
-        ] {
-            let Some(mut pipe) = pipe else { continue };
-            let journal = journal.clone();
-            let done = done_tx.clone();
-            readers += 1;
-            thread::spawn(move || {
-                let mut buffer = [0_u8; 16 * 1024];
-                while let Ok(read) = pipe.read(&mut buffer) {
-                    if read == 0 {
-                        break;
-                    }
-                    journal
-                        .lock()
-                        .expect("journal lock")
-                        .append(stream, &buffer[..read]);
-                }
-                let _ = done.send(());
-            });
-        }
-        if let (Some(mut input), Some(stdin)) = (child.stdin.take(), stdin) {
-            // Written, then closed, so the process sees EOF.
-            thread::spawn(move || {
-                let _ = input.write_all(&stdin);
-            });
-        }
-        // Never waited through `Child`: `reap` collects every status.
-        drop(child);
-        let _ = write_atomic(&dir.join("root"), root.to_string().as_bytes());
-        let _ = write_atomic(&dir.join("started"), b"");
-
-        let started = Instant::now();
-        let deadline = launch
-            .timeout_ms
-            .map(|ms| started + Duration::from_millis(ms));
-        let grace = Duration::from_millis(launch.kill_grace_ms);
-        let mut timed_out = false;
-        let mut flushed = 0;
-        let mut last_flush = Instant::now();
-        loop {
-            supervisor.reap();
-            if supervisor.root_status.is_some() {
-                supervisor.stop(grace.min(Duration::from_millis(LEFTOVER_GRACE_MS)));
-                break;
-            }
-            if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-                timed_out = true;
-                supervisor.stop(grace);
-                break;
-            }
-            if dir.join("stop").exists() || !dir.is_dir() || lease_lapsed(&dir) {
-                supervisor.stop(grace);
-                break;
-            }
-            if last_flush.elapsed() >= Duration::from_millis(100) {
-                flushed = flush(&dir, &journal, flushed);
-                last_flush = Instant::now();
-            }
-            thread::sleep(Duration::from_millis(20));
-        }
-        // Everything that held the pipes is gone; a straggler that escaped
-        // the passes doesn't hold the exit back for long.
-        drop(done_tx);
-        let wait_until = Instant::now() + Duration::from_secs(1);
-        for _ in 0..readers {
-            if done_rx
-                .recv_timeout(wait_until.saturating_duration_since(Instant::now()))
-                .is_err()
-            {
-                break;
-            }
-        }
-        flush(&dir, &journal, u64::MAX);
-        let record = ExitRecord {
-            exit: supervisor.root_status.unwrap_or(-1),
-            timed_out,
-        };
-        let _ = write_atomic(
-            &dir.join("exit.json"),
-            &serde_json::to_vec(&record).expect("exit serializes"),
-        );
-        // Kept for a replay until released, or until nobody renews it for a
-        // lease's time after the exit, so a stopped run can still report.
-        let _ = write_lease(&dir, None);
-        while supervisor.dir.is_dir() {
-            if lease_lapsed(&supervisor.dir) {
-                let _ = std::fs::remove_dir_all(&supervisor.dir);
-                break;
-            }
-            thread::sleep(Duration::from_millis(250));
-        }
-    }
-
-    /// Writes the journal when it changed since version `written`, and
-    /// returns the version written.
-    fn flush(dir: &Path, journal: &Mutex<Journal>, written: u64) -> u64 {
-        let (bytes, version) = {
-            let journal = journal.lock().expect("journal lock");
-            if journal.version == written {
-                return written;
-            }
-            (journal.encode(), journal.version)
-        };
-        if dir.is_dir() {
-            let _ = write_atomic(&dir.join("journal"), &bytes);
-        }
-        version
-    }
-
-    fn spawn_anchor() -> Result<(i32, OwnedFd), String> {
-        use std::os::unix::process::CommandExt;
-        let exe =
-            std::env::current_exe().map_err(|error| format!("helper path failed: {error}"))?;
-        let parent = std::process::id() as i32;
-        let mut command = Command::new(exe);
-        // SAFETY: `guard_anchor` is async-signal-safe.
-        unsafe { command.pre_exec(move || guard_anchor(parent)) };
-        let child = command
-            .arg("plugin-proc-anchor")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .process_group(0)
-            .spawn()
-            .map_err(|error| format!("anchor spawn failed: {error}"))?;
-        let pid = child.id() as i32;
-        let fd = pidfd_open(pid).ok_or("anchor pidfd failed")?;
-        Ok((pid, fd))
-    }
+/// A process as the supervisor sees it: enough to walk the tree, tell a
+/// reused pid from the process it was, and skip one that already ended.
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Stat {
+    pub ppid: i32,
+    pub pgrp: i32,
+    pub start: u64,
+    pub dead: bool,
 }
 
 #[cfg(test)]
@@ -1833,7 +1364,6 @@ mod tests {
         })))
         .expect_err("refused");
         assert_eq!(error.code, -32003);
-        assert!(error.message.contains("macOS"), "{}", error.message);
     }
 
     #[cfg(target_os = "linux")]
@@ -1841,8 +1371,8 @@ mod tests {
     fn stat_parses_names_with_spaces_and_parentheses() {
         let line = "42 (a b) c)) S 7 42 42 0 -1 4194560 1 0 0 0 0 0 0 0 20 0 1 0 98765 0 0";
         assert_eq!(
-            linux::parse_stat(line),
-            Some(linux::Stat {
+            platform::parse_stat(line),
+            Some(Stat {
                 ppid: 7,
                 pgrp: 42,
                 start: 98765,
@@ -1856,13 +1386,13 @@ mod tests {
     fn a_pid_whose_identity_changed_is_never_signalled() {
         let mut child = Command::new("sleep").arg("30").spawn().unwrap();
         let pid = child.id() as i32;
-        let start = linux::stat(pid).unwrap().start;
+        let start = platform::stat(pid).unwrap().start;
         // The sample saw another process under this pid: it is closed, not
         // signalled, and the process lives on.
-        assert!(linux::open_validated(pid, start + 1).is_none());
+        assert!(platform::open_validated(pid, start + 1).is_none());
         assert!(child.try_wait().unwrap().is_none());
-        let fd = linux::open_validated(pid, start).expect("same process");
-        assert!(linux::pidfd_signal(&fd, libc::SIGKILL));
+        let fd = platform::open_validated(pid, start).expect("same process");
+        assert!(platform::signal(&fd, libc::SIGKILL));
         let status = child.wait().unwrap();
         use std::os::unix::process::ExitStatusExt;
         assert_eq!(status.signal(), Some(libc::SIGKILL));

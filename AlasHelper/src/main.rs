@@ -298,7 +298,7 @@ fn main() {
         }
         Some("mcp-proxy") => std::process::exit(alas_helper::mcp_relay::proxy_main(args)),
         Some("plugin-proc-supervise") => plugin_proc::supervise_main(args.next()),
-        Some("plugin-proc-anchor") => plugin_proc::anchor_main(),
+        Some("plugin-proc-anchor") => plugin_proc::anchor_main(args.next()),
         Some("acp-broker-supervise") => {
             let Some(dir) = args.next() else {
                 eprintln!("usage: alas-helper acp-broker-supervise <broker-dir>");
