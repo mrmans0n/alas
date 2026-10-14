@@ -253,6 +253,35 @@ struct ACPSessionManagerDisposalTests {
         await manager.disposeAllLiveSessions()
     }
 
+    @Test("only an accepted goal control ends the late-replay window, and a rejected one keeps a prompt's",
+          arguments: ["accepted", "rejected", "rejected after a prompt", "two rejected"])
+    func goalControlReopensStreamingBoundary(outcome: String) async throws {
+        let client = ACPMockClient()
+        let started = AsyncStream<Void>.makeStream()
+        let release = AsyncStream<Void>.makeStream()
+        client.scriptAsync(method: "_session/goal") { request in
+            // An overlapping second control is rejected while the first is in flight.
+            if (request.params as? ACPGoalControlParams)?.objective == "second" { throw TestError.closeFailed }
+            started.continuation.yield()
+            for await _ in release.stream { break }
+            guard outcome == "accepted" else { throw TestError.closeFailed }
+            return Data("{}".utf8)
+        }
+        let (manager, _, session) = try await attachedManager(client: client, supportsClose: true)
+        session.goalCapability = .init(version: 1, controlMethod: "_session/goal", actions: [.set])
+        session.allowsStreamingBoundaryCrossing = false
+        let control = Task { try? await manager.controlGoal(for: session.id, action: .set, objective: "finish") }
+        for await _ in started.stream { break }
+        if outcome == "rejected after a prompt" { session.allowsStreamingBoundaryCrossing = true }
+        if outcome == "two rejected" {
+            _ = try? await manager.controlGoal(for: session.id, action: .set, objective: "second")
+        }
+        release.continuation.yield()
+        await control.value
+        #expect(session.allowsStreamingBoundaryCrossing == ["accepted", "rejected after a prompt"].contains(outcome))
+        await manager.disposeAllLiveSessions()
+    }
+
     @Test("goal control stays busy until the agent response completes")
     func goalControlBlocksProjectRebinding() async throws {
         let client = ACPMockClient()

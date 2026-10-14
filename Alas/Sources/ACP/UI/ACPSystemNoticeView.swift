@@ -26,12 +26,15 @@ struct ACPSystemNoticeView: View {
     }
 
     /// Pick an icon based on the notice text. Interruption notices get
-    /// a stop glyph; everything else stays on the generic info icon.
+    /// a stop glyph, goal confirmations the goal pill's target; everything
+    /// else stays on the generic info icon.
     private var iconName: String {
         let lower = text.lowercased()
         if lower.hasPrefix("interrupted") { return "stop.circle" }
         if lower.contains("reconnected") { return "checkmark.circle" }
         if lower.contains("disconnected") { return "bolt.slash" }
+        if lower.hasPrefix("goal set:") { return "target" }
+        if lower.hasPrefix("goal cleared:") { return "xmark.circle" }
         return "info.circle"
     }
 }

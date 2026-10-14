@@ -231,8 +231,13 @@ public final class ACPSession: ChangeTracking, Identifiable {
                 || old?.tokenBudget != new?.tokenBudget {
                 nextPromptActivity.send()
             }
+            if new == nil, let old { clearedGoalObjective = old.objective }
+            else if new != nil { clearedGoalObjective = nil }
         }
     }
+    /// The objective of the goal most recently cleared, so its `/goal clear`
+    /// confirmation is recognized after `currentGoal` is already nil.
+    private var clearedGoalObjective: String?
     @Tracked public var promptSuggestions: [ACPPromptSuggestion] = []
     @Tracked public var autoRunEnabled: Bool = false { willSet { nextPromptActivity.send() } }
     /// A hidden `/btw` side session: only read-only tools run (see
@@ -385,7 +390,12 @@ public final class ACPSession: ChangeTracking, Identifiable {
     /// duplicate bubbles while still letting fresh in-progress continuation
     /// chunks through (those target non-completed messages, so the boundary
     /// check is never reached).
-    public var allowsStreamingBoundaryCrossing: Bool = true
+    public var allowsStreamingBoundaryCrossing: Bool = true {
+        didSet { streamingBoundaryGeneration &+= 1 }
+    }
+    /// Bumped on every write to `allowsStreamingBoundaryCrossing`, so an
+    /// operation that opened it can tell whether anything set it since.
+    public private(set) var streamingBoundaryGeneration = 0
 
     /// Running text of streaming chunks that arrived with an unrecognised
     /// `messageId` while `allowsStreamingBoundaryCrossing` was false and
@@ -1020,6 +1030,18 @@ public final class ACPSession: ChangeTracking, Identifiable {
         case .agentMessageChunk(let chunk):
             clearRestoredContextRecoveryStatus()
             let txt = text(of: chunk.content)
+            // A late replay after load-replay suppression ends re-sends the
+            // confirmation; like `appendStreaming`, drop what is already shown.
+            // Prompts and goal controls reopen the window for fresh output.
+            if !allowsStreamingBoundaryCrossing, showsGoalCommandConfirmation(txt) { return [] }
+            if let notice = Self.goalCommandNotice(
+                txt, currentObjective: currentGoal?.objective, clearedObjective: clearedGoalObjective
+            ) {
+                let flushedForNotice = flushPendingReplayCandidates()
+                transcript.appendMessage(.systemNotice(id: UUID(), text: notice))
+                didAppendTranscriptMessage()
+                return flushedForNotice.union([transcript.messages.count - 1])
+            }
             let binding = steeringMessageBinding(chunk.messageId, kind: .agent)
             let messageId = binding.id
             var flushedForAgent: Set<Int> = []
@@ -1646,9 +1668,11 @@ public final class ACPSession: ChangeTracking, Identifiable {
             dirty = applyBackgroundTask(update, ownerSessionId: remoteSessionId ?? id)
         case .agentMessageChunk(let chunk):
             dirty = []
-            matchedIndex = chunk.messageId
-                .flatMap { transcript.messageIndex(messageId: $0, kind: .agent) }
-                ?? firstIdLessMatch(of: .agent, atOrAfter: suppressedReplayInsertionCursor)
+            // A `/goal` confirmation is persisted as a notice, not an agent row;
+            // older builds stored it as agent text, so take whichever is first.
+            matchedIndex = chunk.messageId.flatMap { transcript.messageIndex(messageId: $0, kind: .agent) }
+                ?? [goalCommandNoticeIndex(text(of: chunk.content), atOrAfter: suppressedReplayInsertionCursor),
+                    firstIdLessMatch(of: .agent, atOrAfter: suppressedReplayInsertionCursor)].compactMap { $0 }.min()
         case .agentThoughtChunk(let chunk):
             dirty = []
             matchedIndex = chunk.messageId
@@ -2313,6 +2337,50 @@ public final class ACPSession: ChangeTracking, Identifiable {
         appendSystemNotice(QueuedPrompt.interruptedTurnContinueNotice)
         transcript.completedOutputBoundaryMessageIds.removeAll()
         expectInterruptedTurnContinuationEcho()
+    }
+
+    /// Claude Code answers `/goal` with local-command output ("Goal set: …",
+    /// "Goal cleared: …") that the adapter streams as agent text, where it
+    /// reads as part of the agent's reply. Returns the confirmation to record
+    /// as a notice instead, or nil for anything else. The objective must match
+    /// the goal the adapter published, so agent prose that merely starts the
+    /// same way stays agent text.
+    static func goalCommandNotice(
+        _ text: String, currentObjective: String?, clearedObjective: String?
+    ) -> String? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let currentObjective, trimmed == "Goal set: \(currentObjective)" { return trimmed }
+        if let clearedObjective, trimmed == "Goal cleared: \(clearedObjective)" { return trimmed }
+        return nil
+    }
+
+    /// The first notice at or after `start` recording `text` as a `/goal`
+    /// confirmation, so suppressed replay can advance past it.
+    private func goalCommandNoticeIndex(_ text: String, atOrAfter start: Int) -> Int? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard Self.isGoalCommandConfirmation(trimmed), start < transcript.messages.count else { return nil }
+        return transcript.messages[start...].firstIndex {
+            if case .systemNotice(_, trimmed) = $0 { true } else { false }
+        }
+    }
+
+    private static func isGoalCommandConfirmation(_ trimmed: String) -> Bool {
+        trimmed.hasPrefix("Goal set: ") || trimmed.hasPrefix("Goal cleared: ")
+    }
+
+    /// Whether `text` is a `/goal` confirmation the transcript already shows:
+    /// as a notice, or as agent text recorded before notices existed. Matches
+    /// any objective, since the cleared one is not kept across a restart.
+    private func showsGoalCommandConfirmation(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard Self.isGoalCommandConfirmation(trimmed) else { return false }
+        return transcript.messages.contains { message in
+            switch message {
+            case .systemNotice(_, let notice): notice == trimmed
+            case .agent(_, _, let buf): buf.value.contains(trimmed)
+            default: false
+            }
+        }
     }
 
     public func appendSystemNotice(_ text: String) {
