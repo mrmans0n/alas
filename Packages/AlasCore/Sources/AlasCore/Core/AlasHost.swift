@@ -123,6 +123,16 @@ public struct WorktreesAPI {
         try core.beginDelete(worktree)
     }
 
+    /// Marks a claimed deletion as confirmed: the row reads as being deleted.
+    public func confirmDelete(_ claim: UUID, for worktree: Worktree) {
+        core.confirmDelete(claim, for: worktree)
+    }
+
+    /// Ends a claim, leaving `message` on the row as a failure to retry.
+    public func failClaim(_ claim: UUID, for worktree: Worktree, message: String) {
+        core.failWorktreeClaim(claim, for: worktree, message: message)
+    }
+
     public func delete(_ worktree: Worktree, claim: UUID, options: WorktreeDeleteOptions) async -> WorktreeDeletionOutcome {
         core.confirmDelete(claim, for: worktree)
         return await core.deleteWorktree(worktree, claim: claim, options: options)

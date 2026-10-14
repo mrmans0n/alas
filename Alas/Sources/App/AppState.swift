@@ -4800,7 +4800,7 @@ final class AppState {
         request.cancelledHookApprovalFails = true
         let pending: PendingWorktreeCreation
         do {
-            pending = try await core.beginCreate(request)
+            pending = try await host.worktrees.beginCreate(request)
         } catch WorktreeCreationRefusal.alreadyListed {
             return ""
         } catch {
@@ -4828,7 +4828,7 @@ final class AppState {
         }
 
         Task { @MainActor in
-            let outcome = await core.finishCreate(pending)
+            let outcome = await host.worktrees.finishCreate(pending)
             switch outcome {
             case .createdButNotSaved(_, let message), .failed(_, unsaved: let message?):
                 persistenceErrorHandler("Projects Save Failed", message)
@@ -6611,7 +6611,7 @@ final class AppState {
             .firstIndex(where: { $0.id == worktree.id }) ?? 0
         return Task { @MainActor in
             if savesBuffers, await !saveDirtyBuffers(in: worktree) {
-                core.releaseWorktreeClaim(claim, for: worktree)
+                host.worktrees.releaseClaim(claim, for: worktree)
                 return
             }
             do {
@@ -7427,10 +7427,7 @@ final class AppState {
                 self?.worktree(withId: worktreeId)
             },
             visibleWorktrees: { [weak self] in
-                guard let self else { return [] }
-                return self.projects.flatMap { project in
-                    self.projectsManager.visibleWorktrees(projectId: project.id)
-                }
+                self?.host.worktrees.list().map(\.worktree) ?? []
             },
             openRelativeFile: { [weak self] relativePath, worktreeId in
                 self?.openFile(relativePath: relativePath, worktreeId: worktreeId)
@@ -7611,9 +7608,13 @@ final class AppState {
         do {
             switch command {
             case .list:
-                return try jsonLine(await service.listCheckouts())
+                return try jsonLine(WorkspaceAutomationListResponse(
+                    checkouts: try await host.workspaces.list().map(WorkspaceAutomationService.summary)
+                ))
             case .show(let checkoutID):
-                return try jsonLine(await service.showCheckout(id: checkoutID))
+                return try jsonLine(WorkspaceAutomationShowResponse(
+                    checkout: WorkspaceAutomationService.summary(try await host.workspaces.checkout(id: checkoutID))
+                ))
             case .switch(let checkoutID):
                 try await service.selectCheckout(id: checkoutID)
                 return .ok
@@ -10949,8 +10950,8 @@ final class AppState {
         if saveBuffersFirst {
             Task { @MainActor in
                 guard await !checkpointWorktreeRemovalDisabledAfterDiscovery(worktree) else {
-                    if let claim = try? core.beginDelete(worktree) {
-                        core.failWorktreeClaim(claim, for: worktree, message: Self.checkpointRecoveryBlocksWorktreeRemovalMessage)
+                    if let claim = try? host.worktrees.beginDelete(worktree) {
+                        host.worktrees.failClaim(claim, for: worktree, message: Self.checkpointRecoveryBlocksWorktreeRemovalMessage)
                     }
                     return
                 }
@@ -11175,7 +11176,7 @@ final class AppState {
                 .firstIndex(where: { $0.id == worktree.id }) ?? 0
             let claim: UUID
             do {
-                claim = try core.beginDelete(worktree)
+                claim = try host.worktrees.beginDelete(worktree)
             } catch {
                 results.append(WorktreeBatchResult(
                     worktreeId: worktree.id,
@@ -11184,7 +11185,7 @@ final class AppState {
                 ))
                 continue
             }
-            core.confirmDelete(claim, for: worktree)
+            host.worktrees.confirmDelete(claim, for: worktree)
 
             let outcome = await performDeleteWorktree(
                 worktree: worktree,
@@ -11727,7 +11728,7 @@ final class AppState {
         // loop could otherwise admit new work into the worktree.
         let claim: UUID
         do {
-            claim = try core.beginDelete(worktree)
+            claim = try host.worktrees.beginDelete(worktree)
         } catch {
             showFileActionError(title: "Delete Failed", message: error.localizedDescription)
             return
@@ -11735,12 +11736,12 @@ final class AppState {
         guard confirmDeleteWorktree(
             Self.deleteConfirmation(branch: worktree.branch, keepBranch: keepBranch)
         ) else {
-            core.releaseWorktreeClaim(claim, for: worktree)
+            host.worktrees.releaseClaim(claim, for: worktree)
             return
         }
         let removedIndex = projectsManager.visibleWorktrees(projectId: worktree.projectId)
             .firstIndex(where: { $0.id == worktree.id }) ?? 0
-        core.confirmDelete(claim, for: worktree)
+        host.worktrees.confirmDelete(claim, for: worktree)
         Task { @MainActor in
             await performDeleteWorktree(
                 worktree: worktree,
@@ -11793,26 +11794,26 @@ final class AppState {
         // main-actor work, and an unclaimed gap would admit new sessions.
         let claim: UUID
         do {
-            claim = try core.beginDelete(worktree)
+            claim = try host.worktrees.beginDelete(worktree)
         } catch {
             return .error(error.localizedDescription)
         }
         guard await !checkpointWorktreeRemovalDisabledAfterDiscovery(worktree) else {
-            core.releaseWorktreeClaim(claim, for: worktree)
+            host.worktrees.releaseClaim(claim, for: worktree)
             return .error(Self.checkpointRecoveryBlocksWorktreeRemovalMessage)
         }
         let dirty = dirtyTabGenerations(worktreeId: worktree.id)
         if !dirty.isEmpty && !force {
-            core.releaseWorktreeClaim(claim, for: worktree)
+            host.worktrees.releaseClaim(claim, for: worktree)
             return .error("worktree has unsaved editor changes; save them or rerun with --force to delete")
         }
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
-            core.releaseWorktreeClaim(claim, for: worktree)
+            host.worktrees.releaseClaim(claim, for: worktree)
             return .error("Could not find the project for this worktree.")
         }
         let preflight = await Self.performDeletePreflight(worktreePath: worktree.path)
         if !force, preflight.requiresForce {
-            core.releaseWorktreeClaim(claim, for: worktree)
+            host.worktrees.releaseClaim(claim, for: worktree)
             if preflight.reasons.contains(.dirty) {
                 return .error("worktree has local changes; rerun with --force to delete")
             }
@@ -11821,7 +11822,7 @@ final class AppState {
 
         let removedIndex = projectsManager.visibleWorktrees(projectId: worktree.projectId)
             .firstIndex(where: { $0.id == worktree.id }) ?? 0
-        core.confirmDelete(claim, for: worktree)
+        host.worktrees.confirmDelete(claim, for: worktree)
         Task { @MainActor in
             await performDeleteWorktree(
                 worktree: worktree,
@@ -11840,7 +11841,7 @@ final class AppState {
             if let pending = pendingForceDeleteWorktree,
                pending.id == worktree.id, pending.projectId == worktree.projectId {
                 pendingForceDeleteWorktree = nil
-                core.failWorktreeClaim(pending.claim, for: worktree, message: "worktree requires force delete; rerun with --force to delete")
+                host.worktrees.failClaim(pending.claim, for: worktree, message: "worktree requires force delete; rerun with --force to delete")
             }
         }
         return .ok
@@ -12120,7 +12121,7 @@ final class AppState {
         return String(describing: error)
     }
 
-    /// Deletes a worktree claimed by `core.beginDelete` through the core,
+    /// Deletes a worktree claimed by `host.worktrees.beginDelete` through the host,
     /// then settles what only the app has: the force prompt (or, when
     /// `promptsForForce` is false, as in batches that must never pop a modal
     /// mid-run, the outcome instead), the persisted GG mode, and selection.
@@ -12161,7 +12162,7 @@ final class AppState {
         let outcome: WorktreeDeletionOutcome
         do {
             outcome = try await withAcknowledgedDirtyTabs(acknowledgedDirtyTabs, for: worktree) {
-                await core.deleteWorktree(worktree, claim: claim, options: options)
+                await host.worktrees.delete(worktree, claim: claim, options: options)
             }
         } catch {
             outcome = .failed(error.localizedDescription)
@@ -12197,7 +12198,7 @@ final class AppState {
                 // readily as `NSAlert.runModal()` does.
                 pendingForceDeleteWorktree = pending
             } else {
-                core.failWorktreeClaim(claim, for: worktree, message: refusal)
+                host.worktrees.failClaim(claim, for: worktree, message: refusal)
             }
             return .needsForce
         case .skipped(let reason):
@@ -12213,7 +12214,7 @@ final class AppState {
         pendingForceDeleteWorktree = nil
         guard let worktree = projectsManager.worktrees(projectId: pending.projectId).first(where: { $0.id == pending.id })
         else { return }
-        core.confirmDelete(pending.claim, for: worktree)
+        host.worktrees.confirmDelete(pending.claim, for: worktree)
         Task { @MainActor in
             await performDeleteWorktree(
                 worktree: worktree,
@@ -12238,7 +12239,7 @@ final class AppState {
     /// Gives back the claim a pending force prompt holds.
     private func releaseClaim(of pending: PendingForceDeleteWorktree) {
         if let worktree = projectsManager.worktrees(projectId: pending.projectId).first(where: { $0.id == pending.id }) {
-            core.releaseWorktreeClaim(pending.claim, for: worktree)
+            host.worktrees.releaseClaim(pending.claim, for: worktree)
         }
     }
 
