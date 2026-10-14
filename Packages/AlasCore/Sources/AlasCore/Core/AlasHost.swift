@@ -172,12 +172,10 @@ public struct RunsAPI {
     let core: AlasCoreContext
 
     /// The latest run of each script, in one worktree or every worktree.
+    /// Runs are kept by worktree id, which projects on different hosts can
+    /// share for the same path; each record is listed once.
     public func list(worktreeID: String? = nil) -> [RunRecord] {
-        guard let worktreeID else {
-            return core.projects.projects.flatMap { core.projects.worktrees(projectId: $0.id) }
-                .flatMap { core.runRecords.records(worktreeID: $0.id) }
-        }
-        return core.runRecords.records(worktreeID: worktreeID)
+        worktreeID.map { core.runRecords.records(worktreeID: $0) } ?? core.runRecords.allRecords
     }
 
     @discardableResult

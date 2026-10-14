@@ -132,6 +132,11 @@ public struct RunRecordStore: Equatable, Sendable {
         return record.id == runID && record.status.isActive
     }
 
+    /// Every worktree's latest run of each script.
+    public var allRecords: [RunRecord] {
+        byWorktree.values.flatMap(\.values)
+    }
+
     public var activeRecords: [RunRecord] {
         byWorktree.values.flatMap(\.values).filter(\.status.isActive)
     }
