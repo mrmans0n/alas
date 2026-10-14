@@ -1641,10 +1641,11 @@ public struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
         }
     }
 
-    /// Ids of thread-head authors whose standing must be looked up, sorted for
-    /// a stable request order. Only head comments decide `headAuthorTrust`,
-    /// so reply authors are not looked up. Empty when the viewer is unknown:
-    /// every comment is then `.unknown`, so lookups would be wasted.
+    /// Ids of every non-viewer comment author whose standing must be looked
+    /// up, deduplicated and sorted for a stable request order. Replies count:
+    /// a later trusted reply advances the thread revision. Empty when the
+    /// viewer is unknown: every comment is then `.unknown`, so lookups would
+    /// be wasted.
     private static func standingLookupAuthorIDs(
         in discussions: [GitLabDiscussion],
         currentUserUsername: String?
@@ -1652,12 +1653,14 @@ public struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
         guard let viewer = normalizedOptionalString(currentUserUsername)?.lowercased() else { return [] }
         var ids = Set<Int>()
         for discussion in discussions {
-            guard let author = actionableNotes(in: discussion).first?.author,
-                  let id = author.id,
-                  let username = normalizedOptionalString(author.username),
-                  username.lowercased() != viewer
-            else { continue }
-            ids.insert(id)
+            for note in actionableNotes(in: discussion) {
+                guard let author = note.author,
+                      let id = author.id,
+                      let username = normalizedOptionalString(author.username),
+                      username.lowercased() != viewer
+                else { continue }
+                ids.insert(id)
+            }
         }
         return ids.sorted()
     }

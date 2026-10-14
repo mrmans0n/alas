@@ -2113,7 +2113,7 @@ struct GitLabCLIProviderTests {
         #expect(thread.headAuthorTrust == testCase.expected)
     }
 
-    @Test("Author standing comes from member and user lookups and is cached across refreshes")
+    @Test("Author standing comes from member and user lookups for every participant and is cached across refreshes")
     func authorStandingLookupsAreCachedAcrossRefreshes() async throws {
         let members = "projects/platform%2Fmobile%2Falas/members/all"
         let runner = FakeRunner(results: [
@@ -2125,6 +2125,7 @@ struct GitLabCLIProviderTests {
             ProcessResult(exitCode: 0, stdout: #"{"id":8,"username":"reporter","bot":false}"#, stderr: ""),
             ProcessResult(exitCode: 1, stdout: #"{"message":"404 Not found"}"#, stderr: "glab: 404 Not Found (HTTP 404)"),
             ProcessResult(exitCode: 0, stdout: #"{"id":9,"username":"review-bot","bot":true}"#, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: #"{"id":10,"username":"developer","access_level":30}"#, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.pipelineWithJobsOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.mrViewOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.trustDiscussionsOutput, stderr: ""),
@@ -2132,18 +2133,32 @@ struct GitLabCLIProviderTests {
             ProcessResult(exitCode: 0, stdout: Self.pipelineWithJobsOutput, stderr: ""),
         ])
         let provider = GitLabCLIProvider(runner: runner, authorStandingCache: GitLabAuthorStandingCache())
-        let expected: [String: ReviewAuthorTrust] = [
+        let expectedHeads: [String: ReviewAuthorTrust] = [
             "by-maintainer": .trusted,
             "by-reporter": .untrusted,
             "by-bot": .trusted,
             "by-viewer": .untrusted,
         ]
+        // Replies are classified too: 706 is a trusted developer replying in
+        // a reporter's thread, 707 repeats an already-looked-up author.
+        let expectedComments: [String: ReviewAuthorTrust] = [
+            "701": .trusted,
+            "705": .untrusted,
+            "702": .untrusted,
+            "706": .trusted,
+            "703": .trusted,
+            "707": .trusted,
+            "704": .untrusted,
+        ]
 
         let first = try await provider.reviewRequest(remote: Self.remote, number: 42, cwd: Self.cwd)
         let second = try await provider.reviewRequest(remote: Self.remote, number: 42, cwd: Self.cwd)
 
-        #expect(Dictionary(uniqueKeysWithValues: first.threads.map { ($0.id, $0.headAuthorTrust) }) == expected)
-        #expect(Dictionary(uniqueKeysWithValues: second.threads.map { ($0.id, $0.headAuthorTrust) }) == expected)
+        for snapshot in [first, second] {
+            #expect(Dictionary(uniqueKeysWithValues: snapshot.threads.map { ($0.id, $0.headAuthorTrust) }) == expectedHeads)
+            let comments = snapshot.threads.flatMap(\.comments)
+            #expect(Dictionary(uniqueKeysWithValues: comments.map { ($0.id, $0.authorTrust) }) == expectedComments)
+        }
         let userLookup = ["api", "user", "--hostname", "gitlab.example.com", "--output", "json"]
         let standingLookups = await runner.commands.map(\.args).filter { $0.first == "api" && $0 != userLookup }
         #expect(standingLookups == [
@@ -2152,7 +2167,21 @@ struct GitLabCLIProviderTests {
             ["api", "users/8", "--hostname", "gitlab.example.com", "--output", "json"],
             ["api", "\(members)/9", "--hostname", "gitlab.example.com", "--output", "json"],
             ["api", "users/9", "--hostname", "gitlab.example.com", "--output", "json"],
+            ["api", "\(members)/10", "--hostname", "gitlab.example.com", "--output", "json"],
         ])
+
+        let emptyRunner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.mrViewOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: "[]", stderr: ""),
+            ProcessResult(exitCode: 0, stdout: #"{"username":"viewer"}"#, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.pipelineWithJobsOutput, stderr: ""),
+        ])
+        let emptyProvider = GitLabCLIProvider(runner: emptyRunner, authorStandingCache: GitLabAuthorStandingCache())
+
+        let empty = try await emptyProvider.reviewRequest(remote: Self.remote, number: 42, cwd: Self.cwd)
+
+        #expect(empty.threads.isEmpty)
+        #expect(await emptyRunner.commands.map(\.args).filter { $0.first == "api" && $0 != userLookup }.isEmpty)
     }
 
     private static func singleNoteDiscussionsOutput(author: String) -> String {
@@ -2181,21 +2210,27 @@ struct GitLabCLIProviderTests {
         "id": "by-maintainer",
         "notes": [
           { "id": 701, "body": "Rename this.", "system": false, "resolvable": true, "resolved": false,
-            "author": { "id": 7, "username": "maintainer" } }
+            "author": { "id": 7, "username": "maintainer" } },
+          { "id": 705, "body": "Done.", "system": false, "resolvable": true, "resolved": false,
+            "author": { "id": 1, "username": "viewer" } }
         ]
       },
       {
         "id": "by-reporter",
         "notes": [
           { "id": 702, "body": "Maybe split this.", "system": false, "resolvable": true, "resolved": false,
-            "author": { "id": 8, "username": "reporter" } }
+            "author": { "id": 8, "username": "reporter" } },
+          { "id": 706, "body": "Agreed, please split it.", "system": false, "resolvable": true, "resolved": false,
+            "author": { "id": 10, "username": "developer" } }
         ]
       },
       {
         "id": "by-bot",
         "notes": [
           { "id": 703, "body": "Possible nil dereference.", "system": false, "resolvable": true, "resolved": false,
-            "author": { "id": 9, "username": "review-bot" } }
+            "author": { "id": 9, "username": "review-bot" } },
+          { "id": 707, "body": "Please guard this.", "system": false, "resolvable": true, "resolved": false,
+            "author": { "id": 7, "username": "maintainer" } }
         ]
       },
       {
