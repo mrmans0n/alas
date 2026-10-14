@@ -16,11 +16,14 @@ public final class AlasHost {
     public var workspaces: WorkspacesAPI { WorkspacesAPI(core: core) }
     public var runs: RunsAPI { RunsAPI(core: core) }
 
-    /// Everything the host holds, as values. Workspace checkouts are read
-    /// from their store, so an unreadable store throws.
+    /// Everything the host holds, as values. Projects, worktrees and runs
+    /// describe one moment; Workspace checkouts are read from their own
+    /// store (an unreadable one throws) and describe the moment they were
+    /// loaded, just before. Clients kept current by the host's events
+    /// reconcile the two.
     public func snapshot() async throws -> HostSnapshot {
-        // Loaded first: the rest is read with no suspension in between, so
-        // it describes one moment.
+        // Loaded first: the in-memory state is read after it with no
+        // suspension in between, so that part describes one moment.
         let workspaceCheckouts = try await workspaces.list()
         return HostSnapshot(
             projects: projects.list(),
@@ -31,11 +34,11 @@ public final class AlasHost {
     }
 }
 
-/// The host's state at one moment.
+/// The host's state, as `AlasHost.snapshot()` describes it.
 public struct HostSnapshot: Equatable, Sendable {
     public var projects: [ProjectConfig]
     public var worktrees: [WorktreeSnapshot]
-    /// Checkouts that are not archived.
+    /// Checkouts that are not archived, as of their load from the store.
     public var workspaceCheckouts: [WorkspaceCheckout]
     public var runs: [RunRecord]
 }
