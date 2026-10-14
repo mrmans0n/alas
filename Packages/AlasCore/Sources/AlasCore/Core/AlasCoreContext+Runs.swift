@@ -519,10 +519,14 @@ extension AlasCoreContext {
                     do {
                         return try await process.value
                     } catch let neverStarted as RunService.NeverStarted {
-                        // Like a launch that failed: put the previous outcome back.
-                        self?.runRecords.rollback(runID: runID, to: displaced)
-                        self?.processRunErrors[runID] = neverStarted.underlying
-                        self?.resolveRunSettlement(runID: runID, .launchFailed(neverStarted.underlying.localizedDescription))
+                        // Like a launch that failed: put the previous outcome
+                        // back, unless a stop has already settled the run.
+                        guard let self, runRecords.isCurrentActiveRun(runID: runID, worktreeID: worktree.id, scriptKey: script.key) else {
+                            throw RunUndone()
+                        }
+                        runRecords.rollback(runID: runID, to: displaced)
+                        processRunErrors[runID] = neverStarted.underlying
+                        resolveRunSettlement(runID: runID, .launchFailed(neverStarted.underlying.localizedDescription))
                         throw RunUndone()
                     }
                 },

@@ -293,6 +293,50 @@ struct AlasCoreContextTests {
         #expect(kill(shell, 0) != 0, "the run's shell is still alive")
     }
 
+    /// A run stopped on purpose stays stopped even when its shell, cancelled,
+    /// then reports it never spawned.
+    @Test(.timeLimit(.minutes(1)))
+    func stoppedRunStaysStoppedWhenItsSpawnFailsLate() async throws {
+        struct SpawnFailed: Error {}
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-core-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try "true\n".write(to: root.appendingPathComponent("noop.sh"), atomically: true, encoding: .utf8)
+        let project = ProjectConfig(id: "p", name: "p", path: root.path, color: "blue", addedAt: Date())
+        let worktree = Worktree(
+            id: root.path, projectId: "p", name: "main", branch: "main", path: root,
+            status: .clean, lastActivity: Date()
+        )
+        let script = RunScript(
+            scope: .repo, fileName: "noop.sh", fileURL: root.appendingPathComponent("noop.sh"),
+            displayName: "Noop", onExit: .close, cwd: nil, isExecutable: false
+        )
+        let context = AlasCoreContext(
+            projects: ProjectsManager(persistedProjects: [project]),
+            runs: RunService(launch: { _, _ in
+                try? await Task.sleep(for: .seconds(300))
+                throw SpawnFailed()
+            }),
+            runHistoryStore: nil
+        )
+        let run = Task { try await context.runScript(script, in: worktree) }
+        while context.runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status != .running {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        run.cancel()
+        _ = try? await run.value
+        // The cancelled shell's late failure reaches the observation shortly;
+        // a rollback would replace the stopped record within that window.
+        let deadline = ContinuousClock.now + .seconds(1)
+        while context.runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status == .finished(.stopped),
+              ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        #expect(context.runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status == .finished(.stopped))
+    }
+
     /// A second run of a script that is still running would displace the
     /// first one's record and drop its history, so it is refused.
     @Test func refusesToStartAScriptThatIsAlreadyRunning() async throws {
