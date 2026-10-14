@@ -23,6 +23,20 @@ struct AppStateWorktreeArchiveBatchTests {
         }
     }
 
+    /// A failed delete does not hold the worktree, so the cleanup sheet can
+    /// select it and archiving it goes ahead, clearing the failure.
+    @Test func batchArchiveArchivesAFailedDelete() async throws {
+        let fixture = try await makeCleanupFixture(worktreeCount: 2)
+        defer { fixture.cleanUpAfterTest() }
+        let target = fixture.worktrees[1]
+        fixture.state.core.failWorktreeClaim(try fixture.state.core.beginDelete(target), for: target, message: "permission denied")
+
+        let results = await fixture.state.batchArchiveWorktrees([target])
+
+        #expect(results.map(\.outcome) == [.archived])
+        #expect(fixture.state.projectsManager.operationState(for: target) == nil)
+    }
+
     @Test func batchArchiveSkipsMainWorktree() async throws {
         let fixture = try await makeCleanupFixture(worktreeCount: 2)
         defer { fixture.cleanUpAfterTest() }
