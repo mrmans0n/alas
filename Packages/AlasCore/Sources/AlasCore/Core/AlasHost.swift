@@ -19,10 +19,13 @@ public final class AlasHost {
     /// Everything the host holds, as values. Workspace checkouts are read
     /// from their store, so an unreadable store throws.
     public func snapshot() async throws -> HostSnapshot {
-        HostSnapshot(
+        // Loaded first: the rest is read with no suspension in between, so
+        // it describes one moment.
+        let workspaceCheckouts = try await workspaces.list()
+        return HostSnapshot(
             projects: projects.list(),
             worktrees: worktrees.list(includingArchived: true),
-            workspaceCheckouts: try await workspaces.list(),
+            workspaceCheckouts: workspaceCheckouts,
             runs: runs.list()
         )
     }
