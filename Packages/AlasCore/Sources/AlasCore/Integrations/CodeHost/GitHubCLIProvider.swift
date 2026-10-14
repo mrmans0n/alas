@@ -98,6 +98,10 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
                   authorAssociation
                   viewerDidAuthor
                 }
+                pageInfo {
+                  hasNextPage
+                  endCursor
+                }
               }
             }
             pageInfo {
@@ -109,6 +113,40 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
       }
     }
     """
+
+    /// Fetches the comments after the first page of one review thread, for
+    /// threads whose `comments` connection in `reviewThreadsQuery` has more.
+    public static let reviewThreadCommentsQuery = """
+    query($threadID: ID!, $cursor: String) {
+      node(id: $threadID) {
+        ... on PullRequestReviewThread {
+          comments(first: 100, after: $cursor) {
+            nodes {
+              id
+              body
+              url
+              createdAt
+              diffHunk
+              author {
+                __typename
+                login
+              }
+              authorAssociation
+              viewerDidAuthor
+            }
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+          }
+        }
+      }
+    }
+    """
+
+    /// Extra comment pages fetched per review thread before the thread list is
+    /// reported incomplete.
+    public static let reviewThreadCommentsMaxExtraPages = 10
 
     /// Every connection is fetched on the first page. Later pages walk each
     /// connection backwards with its `before` cursor and skip the commit and
@@ -546,14 +584,16 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
 
     /// Loads review threads, reporting whether the fetch succeeded. A failure
     /// yields no threads but flags the result incomplete so the merge gate can
-    /// fail closed instead of treating missing threads as "no feedback".
+    /// fail closed instead of treating missing threads as "no feedback". A
+    /// thread whose later comment pages could not be read keeps the comments
+    /// that were read, and the result is flagged incomplete the same way.
     private func threadsWithCompleteness(
         remote: CodeHostRemote,
         request: ReviewRequest,
         cwd: URL
     ) async -> (threads: [ReviewThread], complete: Bool) {
         do {
-            return (try await reviewThreads(remote: remote, request: request, cwd: cwd), true)
+            return try await reviewThreads(remote: remote, request: request, cwd: cwd)
         } catch {
             return ([], false)
         }
@@ -875,13 +915,13 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
         remote: CodeHostRemote,
         request: ReviewRequest,
         cwd: URL
-    ) async throws -> [ReviewThread] {
-        var threads: [ReviewThread] = []
+    ) async throws -> (threads: [ReviewThread], complete: Bool) {
+        var nodes: [ReviewThreadNode] = []
         var cursor: String?
 
         repeat {
             let page = try await reviewThreadsPage(remote: remote, request: request, cursor: cursor, cwd: cwd)
-            threads.append(contentsOf: page.threads)
+            nodes.append(contentsOf: page.nodes)
             if page.pageInfo.hasNextPage {
                 guard let endCursor = page.pageInfo.endCursor, !endCursor.isEmpty else {
                     throw CodeHostProviderError.malformedOutput("gh review threads output is missing a pagination cursor")
@@ -892,7 +932,67 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
             }
         } while cursor != nil
 
-        return threads
+        var complete = true
+        var threads: [ReviewThread] = []
+        for node in nodes {
+            var comments = node.comments.nodes
+            if let pageInfo = node.comments.pageInfo, pageInfo.hasNextPage {
+                do {
+                    comments += try await remainingReviewThreadComments(
+                        remote: remote,
+                        threadID: node.id,
+                        after: pageInfo.endCursor,
+                        cwd: cwd
+                    )
+                } catch {
+                    complete = false
+                }
+            }
+            if let thread = try Self.reviewThread(from: node, commentNodes: comments) {
+                threads.append(thread)
+            }
+        }
+        return (threads, complete)
+    }
+
+    /// Reads the comments after `cursor` in one review thread. Throws when a
+    /// page can't be read or the thread runs past
+    /// `reviewThreadCommentsMaxExtraPages`, so the caller never treats a
+    /// truncated comment chain as complete.
+    private func remainingReviewThreadComments(
+        remote: CodeHostRemote,
+        threadID: String,
+        after cursor: String?,
+        cwd: URL
+    ) async throws -> [ReviewThreadCommentNode] {
+        var comments: [ReviewThreadCommentNode] = []
+        var cursor = cursor
+        for _ in 0..<Self.reviewThreadCommentsMaxExtraPages {
+            guard let current = cursor, !current.isEmpty else {
+                throw CodeHostProviderError.malformedOutput("gh review thread comments output is missing a pagination cursor")
+            }
+            let result = try await runner.run(
+                "gh",
+                args: [
+                    "api", "graphql",
+                    "--hostname", remote.host,
+                    "-f", "query=\(Self.reviewThreadCommentsQuery)",
+                    "-f", "threadID=\(threadID)",
+                    "-f", "cursor=\(current)",
+                ],
+                cwd: cwd
+            )
+            guard result.exitCode == 0 else {
+                throw CodeHostProviderError.commandFailed(command: "gh api graphql", stderr: result.stderr)
+            }
+            let page = try Self.parseReviewThreadCommentsPage(result.stdout)
+            comments += page.nodes
+            guard page.pageInfo.hasNextPage else { return comments }
+            cursor = page.pageInfo.endCursor
+        }
+        throw CodeHostProviderError.malformedOutput(
+            "GitHub review thread \(threadID) has more than \(Self.reviewThreadCommentsMaxExtraPages) extra comment pages"
+        )
     }
 
     private func reviewThreadsPage(
@@ -1797,8 +1897,12 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
         return url
     }
 
+    /// Parses one page of `reviewThreadsQuery` output using each thread's
+    /// first comment page only.
     public static func parseReviewThreads(_ json: String) throws -> [ReviewThread] {
-        try parseReviewThreadsPage(json).threads
+        try parseReviewThreadsPage(json).nodes.compactMap { node in
+            try reviewThread(from: node, commentNodes: node.comments.nodes)
+        }
     }
 
     public static func parsePullRequestNodeID(_ json: String) throws -> String {
@@ -1936,49 +2040,69 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
         }
 
         let connection = response.data.repository.pullRequest.reviewThreads
-        let threads: [ReviewThread] = try connection.nodes.compactMap { node in
-            let allComments: [ReviewComment] = try node.comments.nodes.enumerated().map { index, c in
-                ReviewComment(
-                    id: c.id ?? "\(node.id)-\(index)",
-                    author: c.author?.login,
-                    body: c.body,
-                    url: try parseOptionalHTTPURL(c.url, context: "gh review threads returned an invalid URL"),
-                    createdAt: try? parseOptionalDate(c.createdAt),
-                    viewerCanUpdate: c.viewerDidAuthor ?? false,
-                    viewerCanDelete: c.viewerDidAuthor ?? false,
-                    isPending: false,
-                    authorTrust: authorTrust(
-                        viewerDidAuthor: c.viewerDidAuthor,
-                        authorAssociation: c.authorAssociation,
-                        authorTypename: c.author?.typename
-                    ),
-                    viewerDidAuthor: c.viewerDidAuthor ?? false
-                )
-            }
-            let comments = allComments.filter { !$0.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-            guard !comments.isEmpty else {
-                return nil
-            }
-            return ReviewThread(
-                id: node.id,
-                path: node.path,
-                line: node.line,
-                startLine: node.startLine,
-                originalLine: node.originalLine,
-                originalStartLine: node.originalStartLine,
-                diffHunk: node.comments.nodes.first?.diffHunk,
-                diffSide: node.diffSide,
-                isResolved: node.isResolved,
-                isOutdated: node.isOutdated,
-                isFileLevel: (node.subjectType ?? "").uppercased() == "FILE",
-                comments: comments,
-                viewerCanResolve: node.viewerCanResolve ?? false,
-                viewerCanUnresolve: node.viewerCanUnresolve ?? false,
-                viewerCanReply: node.viewerCanReply ?? false,
-                url: comments.first?.url
+        return ReviewThreadsPage(nodes: connection.nodes, pageInfo: connection.pageInfo)
+    }
+
+    private static func parseReviewThreadCommentsPage(_ json: String) throws -> ReviewThreadCommentsPage {
+        let response: ReviewThreadCommentsResponse
+        do {
+            response = try JSONDecoder().decode(ReviewThreadCommentsResponse.self, from: Data(json.utf8))
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse gh review thread comments output")
+        }
+        let connection = response.data.node.comments
+        guard let pageInfo = connection.pageInfo else {
+            throw CodeHostProviderError.malformedOutput("gh review thread comments output is missing page info")
+        }
+        return ReviewThreadCommentsPage(nodes: connection.nodes, pageInfo: pageInfo)
+    }
+
+    /// Builds a thread from its node and every comment read for it. Threads
+    /// whose comments all have empty bodies are dropped.
+    private static func reviewThread(
+        from node: ReviewThreadNode,
+        commentNodes: [ReviewThreadCommentNode]
+    ) throws -> ReviewThread? {
+        let allComments: [ReviewComment] = try commentNodes.enumerated().map { index, c in
+            ReviewComment(
+                id: c.id ?? "\(node.id)-\(index)",
+                author: c.author?.login,
+                body: c.body,
+                url: try parseOptionalHTTPURL(c.url, context: "gh review threads returned an invalid URL"),
+                createdAt: try? parseOptionalDate(c.createdAt),
+                viewerCanUpdate: c.viewerDidAuthor ?? false,
+                viewerCanDelete: c.viewerDidAuthor ?? false,
+                isPending: false,
+                authorTrust: authorTrust(
+                    viewerDidAuthor: c.viewerDidAuthor,
+                    authorAssociation: c.authorAssociation,
+                    authorTypename: c.author?.typename
+                ),
+                viewerDidAuthor: c.viewerDidAuthor ?? false
             )
         }
-        return ReviewThreadsPage(threads: threads, pageInfo: connection.pageInfo)
+        let comments = allComments.filter { !$0.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        guard !comments.isEmpty else {
+            return nil
+        }
+        return ReviewThread(
+            id: node.id,
+            path: node.path,
+            line: node.line,
+            startLine: node.startLine,
+            originalLine: node.originalLine,
+            originalStartLine: node.originalStartLine,
+            diffHunk: commentNodes.first?.diffHunk,
+            diffSide: node.diffSide,
+            isResolved: node.isResolved,
+            isOutdated: node.isOutdated,
+            isFileLevel: (node.subjectType ?? "").uppercased() == "FILE",
+            comments: comments,
+            viewerCanResolve: node.viewerCanResolve ?? false,
+            viewerCanUnresolve: node.viewerCanUnresolve ?? false,
+            viewerCanReply: node.viewerCanReply ?? false,
+            url: comments.first?.url
+        )
     }
 
     /// Repository owners, organization members, collaborators and GitHub Apps
@@ -2932,12 +3056,12 @@ private struct ReviewThreadsConnection: Decodable {
     }
 }
 
-private struct ReviewThreadsPage: Equatable {
-    let threads: [ReviewThread]
+private struct ReviewThreadsPage {
+    let nodes: [ReviewThreadNode]
     let pageInfo: ReviewThreadsPageInfo
 
-    public init(threads: [ReviewThread], pageInfo: ReviewThreadsPageInfo) {
-        self.threads = threads
+    public init(nodes: [ReviewThreadNode], pageInfo: ReviewThreadsPageInfo) {
+        self.nodes = nodes
         self.pageInfo = pageInfo
     }
 }
@@ -3004,11 +3128,49 @@ private struct ReviewThreadNode: Decodable {
     }
 }
 
+/// `pageInfo` is absent from fixtures and older payloads; absent means the
+/// connection holds every comment.
 private struct ReviewThreadCommentsConnection: Decodable {
     let nodes: [ReviewThreadCommentNode]
+    let pageInfo: ReviewThreadsPageInfo?
 
-    public init(nodes: [ReviewThreadCommentNode]) {
+    public init(nodes: [ReviewThreadCommentNode], pageInfo: ReviewThreadsPageInfo? = nil) {
         self.nodes = nodes
+        self.pageInfo = pageInfo
+    }
+}
+
+private struct ReviewThreadCommentsResponse: Decodable {
+    let data: ReviewThreadCommentsData
+
+    public init(data: ReviewThreadCommentsData) {
+        self.data = data
+    }
+}
+
+private struct ReviewThreadCommentsData: Decodable {
+    let node: ReviewThreadCommentsNode
+
+    public init(node: ReviewThreadCommentsNode) {
+        self.node = node
+    }
+}
+
+private struct ReviewThreadCommentsNode: Decodable {
+    let comments: ReviewThreadCommentsConnection
+
+    public init(comments: ReviewThreadCommentsConnection) {
+        self.comments = comments
+    }
+}
+
+private struct ReviewThreadCommentsPage {
+    let nodes: [ReviewThreadCommentNode]
+    let pageInfo: ReviewThreadsPageInfo
+
+    public init(nodes: [ReviewThreadCommentNode], pageInfo: ReviewThreadsPageInfo) {
+        self.nodes = nodes
+        self.pageInfo = pageInfo
     }
 }
 

@@ -382,6 +382,77 @@ struct GitHubCLIProviderTests {
         ])
     }
 
+    struct LongThreadCase: Sendable, CustomTestStringConvertible {
+        let testDescription: String
+        let followUps: [ProcessResult]
+        let expectedCommentIDs: [String]
+        let expectedComplete: Bool
+    }
+
+    static let longThreadCases: [LongThreadCase] = [
+        LongThreadCase(
+            testDescription: "second comment page is read",
+            followUps: [
+                ProcessResult(
+                    exitCode: 0,
+                    stdout: threadCommentsPageOutput(commentID: "comment-51", hasNextPage: false, endCursor: nil),
+                    stderr: ""
+                ),
+            ],
+            expectedCommentIDs: ["comment-1", "comment-51"],
+            expectedComplete: true
+        ),
+        LongThreadCase(
+            testDescription: "failed follow-up marks threads incomplete",
+            followUps: [ProcessResult(exitCode: 1, stdout: "", stderr: "boom")],
+            expectedCommentIDs: ["comment-1"],
+            expectedComplete: false
+        ),
+        LongThreadCase(
+            testDescription: "page cap marks threads incomplete",
+            followUps: (1...GitHubCLIProvider.reviewThreadCommentsMaxExtraPages).map { page in
+                ProcessResult(
+                    exitCode: 0,
+                    stdout: threadCommentsPageOutput(commentID: "comment-p\(page)", hasNextPage: true, endCursor: "cursor-\(page + 1)"),
+                    stderr: ""
+                )
+            },
+            expectedCommentIDs: ["comment-1"],
+            expectedComplete: false
+        ),
+    ]
+
+    @Test(arguments: GitHubCLIProviderTests.longThreadCases)
+    func currentReviewRequestReadsEveryCommentPageOfLongThreads(_ testCase: LongThreadCase) async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.prListOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.mergeQueueDisabledOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.longReviewThreadOutput, stderr: ""),
+        ] + testCase.followUps)
+
+        let request = try await GitHubCLIProvider(runner: runner).currentReviewRequest(
+            remote: Self.remote,
+            branch: "feature/github-provider",
+            headOwner: nil,
+            baseBranch: "origin/main",
+            cwd: Self.cwd
+        )
+
+        let thread = try #require(request?.threads.first)
+        #expect(request?.threads.count == 1)
+        #expect(thread.comments.map(\.id) == testCase.expectedCommentIDs)
+        #expect(request?.areThreadsComplete == testCase.expectedComplete)
+        let commands = await runner.commands
+        #expect(commands.count == 3 + testCase.followUps.count)
+        #expect(commands[3].args == [
+            "api", "graphql",
+            "--hostname", "github.com",
+            "-f", "query=\(GitHubCLIProvider.reviewThreadCommentsQuery)",
+            "-f", "threadID=thread-long",
+            "-f", "cursor=cursor-1",
+        ])
+    }
+
     /// `pr_create` looks up the branch's PR whatever base it targets, so an
     /// open PR against another base is adopted instead of duplicated.
     @Test func currentReviewRequestWithEmptyBaseDropsTheBaseFilter() async throws {
@@ -2810,6 +2881,16 @@ struct GitHubCLIProviderTests {
       }
     }
     """
+
+    /// One thread whose first comment page says more comments follow.
+    private static let longReviewThreadOutput = """
+    {"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"thread-long","isResolved":false,"isOutdated":false,"comments":{"nodes":[{"id":"comment-1","body":"Please tighten this branch lookup.","url":"https://github.com/mrmans0n/alas/pull/42#discussion_r1","author":{"login":"reviewer"}}],"pageInfo":{"hasNextPage":true,"endCursor":"cursor-1"}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}
+    """
+
+    private static func threadCommentsPageOutput(commentID: String, hasNextPage: Bool, endCursor: String?) -> String {
+        let cursor = endCursor.map { "\"\($0)\"" } ?? "null"
+        return #"{"data":{"node":{"comments":{"nodes":[{"id":"\#(commentID)","body":"Reply \#(commentID)","url":"https://github.com/mrmans0n/alas/pull/42#discussion_r51","author":{"login":"reviewer"}}],"pageInfo":{"hasNextPage":\#(hasNextPage),"endCursor":\#(cursor)}}}}}"#
+    }
 
     private static let pullRequestNodeOutput = """
     {"data":{"repository":{"pullRequest":{"id":"PR_node_42"}}}}
