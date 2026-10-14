@@ -139,7 +139,11 @@ extension AppState {
             runGit: run
         )
         do {
-            let target = try await CommitPublishReviewTarget.capture(snapshot: snapshot, createAsDraft: draft, runGit: run)
+            var target = try await CommitPublishReviewTarget.capture(snapshot: snapshot, createAsDraft: draft, runGit: run)
+            // The publish path pushes to the upstream's name. Keep it only when it
+            // is this branch's own name; otherwise push to refs/heads/<branch> and
+            // retarget tracking, so an upstream such as origin/main never receives it.
+            target.upstreamBranch = Self.prCreateUpstreamToKeep(branch: target.branch, upstream: target.upstreamBranch)
             if try await !operations.remoteBranchContainsCommit(target, local.headSHA) {
                 try await operations.push(target, local.headSHA)
             }
@@ -270,14 +274,17 @@ extension AppState {
         if local.branchName == baseBranch {
             return "This worktree is on the base branch \(baseBranch). Open a pull request from a feature branch."
         }
-        if local.upstreamBranchName == baseBranch {
-            return "\(local.branchName) tracks the base branch \(baseBranch), so a push would land on \(baseBranch). "
-                + "Run `git branch --unset-upstream` in this worktree, then call pr_create again."
-        }
         if local.aheadCommitCount == 0 {
             return "\(local.branchName) has no commits ahead of \(baseBranch)."
         }
         return nil
+    }
+
+    /// The upstream `pr_create` may push to: only one named like the local
+    /// branch. Any other upstream (a worktree created from `origin/main`, say)
+    /// is dropped, so the push goes to `refs/heads/<branch>`.
+    static func prCreateUpstreamToKeep(branch: String, upstream: String?) -> String? {
+        upstream == branch ? upstream : nil
     }
 
     static func prProviderSetupProblem(_ snapshot: ReviewLoopSnapshot) -> String? {

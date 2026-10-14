@@ -486,18 +486,17 @@ struct AlasCLIRequestTests {
         #expect(ReviewCommentWireDTO.jsonLine(status) == expected)
     }
 
-    /// A branch tracking the base must not be pushed, however the agent spells
-    /// the base; the publish path would push it to the base branch.
+    /// `pr_create` pushes to the upstream's name, so only an upstream named like
+    /// the branch survives; any other one would publish to someone else's branch.
     @MainActor
-    @Test(arguments: ["main", "origin/main", "upstream/main"])
-    func prCreateRejectsABranchTrackingTheBase(base: String) {
-        let local = ReviewLoopLocalState(
-            branchName: "feature", headSHA: "a3f9c1e", baseBranch: "main",
-            hasWorkingTreeChanges: false, hasStagedChanges: false, aheadCommitCount: 1,
-            hasUpstream: true, upstreamRemoteName: "origin", upstreamBranchName: "main", needsPush: true
-        )
-        let normalized = AppState.normalizedBaseBranch(base, remoteNames: ["origin", "upstream"])
-        #expect(AppState.prCreateBranchBlocker(local, baseBranch: normalized)?.hasPrefix("feature tracks the base branch main") == true)
+    @Test(arguments: [
+        ("feature", "main", nil),
+        ("feature", "smoke/base", nil),
+        ("feature", "feature", "feature"),
+        ("feature", nil, nil),
+    ] as [(String, String?, String?)])
+    func prCreateKeepsOnlyASameNamedUpstream(branch: String, upstream: String?, kept: String?) {
+        #expect(AppState.prCreateUpstreamToKeep(branch: branch, upstream: upstream) == kept)
     }
 
     private struct ProbeParams: Decodable, Equatable {

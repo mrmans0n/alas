@@ -222,7 +222,7 @@ struct CommitPublishReviewTarget: Codable, Equatable, Sendable {
     let webURL: URL
     let branch: String
     var expectedHeadSHA: String? = nil
-    let upstreamBranch: String?
+    var upstreamBranch: String?
     let headOwner: String?
     let baseBranch: String
     let reviewRequestExisted: Bool
