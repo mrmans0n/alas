@@ -240,6 +240,21 @@ import Testing
         #expect(frame.maxX <= view.columnRect.maxX)
     }
 
+    @Test func aTableInAUserBubbleFillsTheBubble() throws {
+        typealias V = ACPTranscriptCoreTextRowView
+        let view = row(.user(markdown: "| a | b |\n|---|---|\n| 1 | 2 |"))
+        _ = view.measuredHeight(forWidth: 1_000)
+        let layout = view.layout(forWidth: 1_000)
+        let bubble = try #require(layout.items.lazy.compactMap { item -> CGRect? in
+            if case .bubble(let rect) = item { rect } else { nil }
+        }.first)
+        let (markdown, origin) = try #require(view.markdown)
+        let table = try #require(markdown.tables.first)
+        // As the SwiftUI bubble, whose table takes all the width it is offered.
+        #expect(bubble.width == 720 * V.bubbleMaxWidthFraction)
+        #expect(abs(origin.x + table.rect.maxX - (bubble.maxX - V.bubbleHorizontalPadding)) < 0.5)
+    }
+
     @Test func aWrappedLinkHitTestsOnlyItsOwnText() throws {
         let view = row(.agent(markdown: "Plain words before [the full migration guide for this release](https://example.com) and after.", commentary: false))
         _ = view.measuredHeight(forWidth: 420)

@@ -272,11 +272,12 @@ extension ACPTranscriptCoreTextRowView {
         }
     }
 
-    /// How wide the markdown actually draws: its widest line or background.
+    /// How wide the markdown actually draws: its widest line, background, or
+    /// table, which fills the width it is given as the SwiftUI table does.
     private static func usedWidth(of markdown: ACPTranscriptMarkdownLayout) -> CGFloat {
         let lines = markdown.lines.map { $0.origin.x + width(of: $0.line) }
         let backgrounds = markdown.backgrounds.map(\.rect.maxX)
-        return (lines + backgrounds).max() ?? 0
+        return (lines + backgrounds + markdown.tables.map(\.rect.maxX)).max() ?? 0
     }
 
     // MARK: - Symbols
