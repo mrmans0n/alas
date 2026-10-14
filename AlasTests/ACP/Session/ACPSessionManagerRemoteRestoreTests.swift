@@ -756,17 +756,7 @@ struct ACPSessionManagerRemoteRestoreTests {
         }
         let (manager, _, _, session) = try await fixture(
             origin: .alasCreated, instanceId: "A", remoteCoordinator: coordinator,
-            builtInMCPProvider: { context in
-                guard case .ssh(_, let fence) = context.location else { return .omitted }
-                let index = relays.contexts.count
-                relays.contexts.append(context)
-                return .prepared(PreparedBuiltInMCPAttachment(
-                    injection: BuiltInAlasMCP.remoteVisualInjection(descriptor: .init(
-                        recordId: fence.recordId, relayId: "relay-\(index)", proxyCommand: "/home/dev/.alas/bin/alas-helper",
-                        proxyArgs: ["mcp-proxy", "--record-id", fence.recordId], relayProtocolVersion: 1)),
-                    cleanup: { await relays.invalidated(index) }
-                ))
-            },
+            builtInMCPProvider: relays.provider,
             connectionFactory: { _, _, _ in ACPConnection(client: clients.removeFirst()) }
         )
         defer {
@@ -801,6 +791,44 @@ struct ACPSessionManagerRemoteRestoreTests {
 
         await manager.detach(sessionId: session.id)
         try await waitUntil { relays.invalidatedIndices == [0, 1] }
+    }
+
+    @Test("a superseded SSH attach finishing late never replaces or revokes its replacement's relay")
+    func supersededSSHAttachLeavesReplacementRelay() async throws {
+        let endpoint = ReplicaEndpoint()
+        let coordinator = ACPRemoteSessionCoordinator(owner: .init(serverId: "mac-a", instanceId: "A")) {
+            method, data in try await endpoint.request(method, data)
+        }
+        let relays = RelayLog()
+        relays.holdsFirstPreparation = true
+        var clients = [ACPMockClient(), ACPMockClient()]
+        for client in clients {
+            scriptInitialize(client, canLoad: true, canResume: true)
+            client.script(method: "session/resume") { _ in Data("{}".utf8) }
+        }
+        let (manager, _, _, session) = try await fixture(
+            origin: .alasCreated, instanceId: "A", remoteCoordinator: coordinator,
+            builtInMCPProvider: relays.provider,
+            connectionFactory: { _, _, _ in ACPConnection(client: clients.removeFirst()) }
+        )
+        defer {
+            manager.shutdownBackgroundTasks()
+            coordinator.shutdown()
+        }
+        await manager.hydrateIfNeeded(id: session.id)
+
+        let first = Task { await manager.attach(to: session.id, freshlyCreated: false) }
+        try await waitUntil { relays.heldPreparation != nil }
+        await manager.restartConnection(to: session.id)
+        try await waitUntil { session.agentState == .ready && relays.contexts.count == 2 }
+        relays.releaseHeldPreparation()
+        await first.value
+
+        try await waitUntil { relays.invalidatedIndices == [0] }
+        let replacement = try #require(relays.contexts.last)
+        #expect(replacement.isCurrent())
+        #expect(!relays.invalidatedIndices.contains(1))
+        await manager.detach(sessionId: session.id)
     }
 
     private func fixture(
@@ -923,12 +951,38 @@ struct ACPSessionManagerRemoteRestoreTests {
     }
 }
 
+/// Prepares a fake SSH relay per attach and records which ones were revoked.
 @MainActor
 private final class RelayLog {
     var contexts: [BuiltInMCPAttachmentContext] = []
     var invalidatedIndices: [Int] = []
+    /// Suspends the first preparation until released.
+    var holdsFirstPreparation = false
+    private(set) var heldPreparation: CheckedContinuation<Void, Never>?
 
     func invalidated(_ index: Int) { invalidatedIndices.append(index) }
+
+    func releaseHeldPreparation() {
+        heldPreparation?.resume()
+        heldPreparation = nil
+    }
+
+    var provider: ACPSessionManager.BuiltInMCPProvider {
+        { [self] context in
+            guard case .ssh(_, let fence) = context.location else { return .omitted }
+            let index = contexts.count
+            contexts.append(context)
+            if index == 0, holdsFirstPreparation {
+                await withCheckedContinuation { heldPreparation = $0 }
+            }
+            return .prepared(PreparedBuiltInMCPAttachment(
+                injection: BuiltInAlasMCP.remoteVisualInjection(descriptor: .init(
+                    recordId: fence.recordId, relayId: "relay-\(index)", proxyCommand: "/home/dev/.alas/bin/alas-helper",
+                    proxyArgs: ["mcp-proxy", "--record-id", fence.recordId], relayProtocolVersion: 1)),
+                cleanup: { await self.invalidated(index) }
+            ))
+        }
+    }
 }
 
 enum SSHLifecycleOperation: CaseIterable, Sendable {

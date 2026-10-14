@@ -6821,6 +6821,13 @@ extension ACPSessionManager {
             } else {
                 builtInAttachment = .omitted
             }
+            // A replacement attach may have installed its own relay while this
+            // one awaited the provider; a superseded attach must not touch it.
+            guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
+                if case .prepared(let prepared) = builtInAttachment { await prepared.invalidate() }
+                await connection.shutdown()
+                return
+            }
             let builtInMCP: BuiltInAlasMCP.Injection?
             let builtInSkippedStatus: MCPAttachmentServerStatus?
             switch builtInAttachment {
@@ -6835,11 +6842,6 @@ extension ACPSessionManager {
             case .omitted:
                 builtInMCP = nil
                 builtInSkippedStatus = nil
-            }
-            guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
-                retireBuiltInMCPAttachment(sessionId: sessionId, ownerID: attempt.id)
-                await connection.shutdown()
-                return
             }
             // `.external` adapters (e.g. Pi) ignore the ACP `mcpServers` wire
             // config entirely and reach Alas tools through the injected CLI
