@@ -90,6 +90,10 @@ public enum ShepherdPolicy {
     /// An awaitingPush record with no progress escalates after this long,
     /// even while inconclusive observations keep the poll counter still.
     public static let awaitingPushTimeout: TimeInterval = 2 * 60 * 60
+    /// A head that reports no checks at all may just not have its CI
+    /// registered yet, so the empty list counts as green only this long
+    /// after the policy first saw the head.
+    public static let noChecksGracePeriod: TimeInterval = 15 * 60
 
     public static func decide(_ record: ShepherdRecord, _ observation: ShepherdObservation) -> ShepherdDecision {
         guard !record.phase.isTerminal,
@@ -116,13 +120,16 @@ public enum ShepherdPolicy {
     }
 
     /// The existing readiness gate, plus required reviewers on the current
-    /// head and a head that has stayed put with complete checks for
-    /// `requiredStablePolls` polls. Never bypassed.
+    /// head, a head that has stayed put with complete checks for
+    /// `requiredStablePolls` polls, and, when the head reports no checks,
+    /// `noChecksGracePeriod` since it was first seen. Never bypassed.
     public static func mergeGatePasses(_ record: ShepherdRecord, _ observation: ShepherdObservation) -> Bool {
         guard ReviewReadinessModel.canMergeReviewRequest(snapshot: observation.snapshot),
-              let head = observation.snapshot.reviewRequest?.headSHA,
+              let request = observation.snapshot.reviewRequest,
+              let head = request.headSHA,
               record.lastSeenHeadSHA == head,
-              record.stableHeadPolls >= requiredStablePolls
+              record.stableHeadPolls >= requiredStablePolls,
+              !awaitingFirstChecks(record, request: request, now: observation.now)
         else { return false }
         let required = observation.rules.requiredReviewers
         guard !required.isEmpty else { return true }
@@ -176,7 +183,7 @@ public enum ShepherdPolicy {
             break
         }
 
-        updateHeadStability(&record, request: request)
+        updateHeadStability(&record, request: request, now: now)
         pruneHandled(&record, request: request)
         let problems = Self.problems(in: request, handled: record.handledThreadRevisions ?? [])
         let conclusive = isConclusive(request, for: record.lastDispatchedFingerprint)
@@ -284,7 +291,8 @@ public enum ShepherdPolicy {
         record.lastDispatchedFingerprint = nil
         record.viewerCommentIDsAtDispatch = nil
         if problems.isEmpty {
-            if isCleared(request, problems: problems, conclusive: isConclusive(request, for: nil)) {
+            if isCleared(request, problems: problems, conclusive: isConclusive(request, for: nil)),
+               !awaitingFirstChecks(record, request: request, now: observation.now) {
                 record.fixAttempts = 0
             }
             return nil
@@ -327,6 +335,15 @@ public enum ShepherdPolicy {
         request.checks.contains { $0.bucket == .pending || $0.bucket == .unknown }
     }
 
+    /// No checks reported on a head first seen less than
+    /// `noChecksGracePeriod` ago (or never): its CI may not have registered
+    /// yet, so the empty list proves nothing.
+    private static func awaitingFirstChecks(_ record: ShepherdRecord, request: ReviewRequest, now: Date) -> Bool {
+        guard request.checks.isEmpty else { return false }
+        guard let firstSeen = record.headFirstSeenAt else { return true }
+        return now.timeIntervalSince(firstSeen) < noChecksGracePeriod
+    }
+
     /// Actionable threads whose head comment is from a trusted reviewer.
     private static func trustedThreads(in request: ReviewRequest) -> [ReviewThread] {
         request.threads.filter { $0.isActionable && $0.headAuthorTrust == .trusted }
@@ -363,19 +380,24 @@ public enum ShepherdPolicy {
 
     /// Same head with complete checks counts up; an incomplete check or a new
     /// head starts over. Capped so a stable record stays equal across polls.
-    private static func updateHeadStability(_ record: inout ShepherdRecord, request: ReviewRequest) {
+    /// A new head also restarts the no-checks clock; a record saved before
+    /// the clock existed starts it on this poll.
+    private static func updateHeadStability(_ record: inout ShepherdRecord, request: ReviewRequest, now: Date) {
         let checksComplete = !hasIncompleteChecks(request)
         guard let head = request.headSHA else {
             record.lastSeenHeadSHA = nil
             record.stableHeadPolls = 0
+            record.headFirstSeenAt = nil
             return
         }
         if head == record.lastSeenHeadSHA {
             record.stableHeadPolls = checksComplete
                 ? min(record.stableHeadPolls + 1, requiredStablePolls)
                 : 0
+            if record.headFirstSeenAt == nil { record.headFirstSeenAt = now }
         } else {
             record.lastSeenHeadSHA = head
+            record.headFirstSeenAt = now
             record.stableHeadPolls = checksComplete ? 1 : 0
         }
     }

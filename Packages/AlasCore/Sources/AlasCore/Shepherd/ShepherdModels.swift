@@ -106,6 +106,11 @@ public struct ShepherdRecord: Codable, Equatable, Sendable {
     /// unknown check,
     /// capped at `ShepherdPolicy.requiredStablePolls`.
     public var stableHeadPolls: Int
+    /// When the policy first saw `lastSeenHeadSHA`. A head that reports no
+    /// checks counts as green only `ShepherdPolicy.noChecksGracePeriod` after
+    /// this, because its CI may not have registered yet. Nil while no head
+    /// is known, including records saved before this field existed.
+    public var headFirstSeenAt: Date?
     public var notifiedReadyHeadSHA: String?
     public var finishedAt: Date?
     /// The request merged while its owner session was busy, so the
@@ -139,6 +144,7 @@ public struct ShepherdRecord: Codable, Equatable, Sendable {
         self.fixAttempts = 0
         self.lastSeenHeadSHA = nil
         self.stableHeadPolls = 0
+        self.headFirstSeenAt = nil
         self.notifiedReadyHeadSHA = nil
         self.finishedAt = nil
         self.createdAt = now

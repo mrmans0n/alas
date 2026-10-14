@@ -31,6 +31,28 @@ private let stabilityCases: [ShepherdStabilityCase] = [
     .init(lastSeen: "0ld", polls: 1, bucket: .pending, expected: 0),
 ]
 
+/// A head clock started exactly `noChecksGracePeriod` before `F.now`.
+private let graceElapsed = F.now.addingTimeInterval(-ShepherdPolicy.noChecksGracePeriod)
+
+struct ShepherdHeadClockCase: Sendable, CustomTestStringConvertible {
+    let testDescription: String
+    let lastSeen: String?
+    let firstSeen: Date?
+    let head: String?
+    let expected: Date?
+}
+
+private let headClockCases: [ShepherdHeadClockCase] = [
+    .init(testDescription: "a new head restarts the clock",
+          lastSeen: "0ld", firstSeen: graceElapsed, head: F.head, expected: F.now),
+    .init(testDescription: "the same head keeps its clock",
+          lastSeen: F.head, firstSeen: graceElapsed, head: F.head, expected: graceElapsed),
+    .init(testDescription: "a record saved without a clock starts it",
+          lastSeen: F.head, firstSeen: nil, head: F.head, expected: F.now),
+    .init(testDescription: "no provider head clears the clock",
+          lastSeen: F.head, firstSeen: graceElapsed, head: nil, expected: nil),
+]
+
 private let failingOnly = ShepherdFixRequest(hasConflict: false, failingChecks: [F.failing], threads: [])
 private let threadOnly = ShepherdFixRequest(hasConflict: false, failingChecks: [], threads: [F.trustedThread])
 private let uiFailing = F.check("ui-tests", .fail)
@@ -249,6 +271,30 @@ private let policyCases: [ShepherdPolicyCase] = [
           record: F.record(autoMerge: true, lastSeenHead: "0ld", stablePolls: 2),
           observation: F.observation(F.snapshot(F.request(checks: []))),
           action: .wait, phase: .watching),
+    .init(testDescription: "a stable head with no checks waits out the grace period even with auto-merge",
+          record: F.record(autoMerge: true, lastSeenHead: F.head, stablePolls: 2, headFirstSeen: F.earlier),
+          observation: F.observation(F.snapshot(F.request(checks: []))),
+          action: .wait, phase: .watching),
+    .init(testDescription: "a stable head with no checks merges after the grace period",
+          record: F.record(autoMerge: true, lastSeenHead: F.head, stablePolls: 2, headFirstSeen: graceElapsed),
+          observation: F.observation(F.snapshot(F.request(checks: []))),
+          action: .merge, phase: .merging),
+    .init(testDescription: "a stable head with no checks and no head clock does not merge",
+          record: F.record(autoMerge: true, lastSeenHead: F.head, stablePolls: 2),
+          observation: F.observation(F.snapshot(F.request(checks: []))),
+          action: .wait, phase: .watching),
+    .init(testDescription: "a head with no checks inside the grace period is not announced ready",
+          record: F.record(lastSeenHead: F.head, stablePolls: 2, headFirstSeen: F.earlier),
+          observation: F.observation(F.snapshot(F.request(checks: []))),
+          action: .wait, phase: .watching),
+    .init(testDescription: "a head with no checks after the grace period is announced ready",
+          record: F.record(lastSeenHead: F.head, stablePolls: 2, headFirstSeen: graceElapsed),
+          observation: F.observation(F.snapshot(F.request(checks: []))),
+          action: .notifyReady, phase: .watching),
+    .init(testDescription: "a head with checks merges without a grace period",
+          record: F.record(autoMerge: true, lastSeenHead: F.head, stablePolls: 2, headFirstSeen: F.now),
+          observation: F.observation(F.snapshot(F.request())),
+          action: .merge, phase: .merging),
     .init(testDescription: "unknown mergeability neither dispatches a conflict fix nor merges",
           record: stable(autoMerge: true),
           observation: F.observation(F.snapshot(F.request(mergeState: .unknown))),
@@ -378,13 +424,15 @@ private let policyCases: [ShepherdPolicyCase] = [
     }
 
     @Test("fix attempts reset only once checks are green", arguments: [
-        (ReviewCheckBucket.pass, 0),
-        (.pending, 2),
-    ] as [(ReviewCheckBucket, Int)])
-    func attemptsReset(bucket: ReviewCheckBucket, expected: Int) {
+        ([F.check("build", .pass)], nil, 0),
+        ([F.check("build", .pending)], nil, 2),
+        ([], F.earlier, 2),
+        ([], graceElapsed, 0),
+    ] as [([ReviewCheck], Date?, Int)])
+    func attemptsReset(checks: [ReviewCheck], headFirstSeen: Date?, expected: Int) {
         let decision = ShepherdPolicy.decide(
-            F.record(fixAttempts: 2),
-            F.observation(F.snapshot(F.request(checks: [F.check("build", bucket)])))
+            F.record(fixAttempts: 2, lastSeenHead: F.head, headFirstSeen: headFirstSeen),
+            F.observation(F.snapshot(F.request(checks: checks)))
         )
         #expect(decision.record.fixAttempts == expected)
     }
@@ -397,6 +445,15 @@ private let policyCases: [ShepherdPolicyCase] = [
         )
         #expect(decision.record.stableHeadPolls == c.expected)
         #expect(decision.record.lastSeenHeadSHA == F.head)
+    }
+
+    @Test("the no-checks clock follows the provider head", arguments: headClockCases)
+    func headClock(_ c: ShepherdHeadClockCase) {
+        let decision = ShepherdPolicy.decide(
+            F.record(autoFix: false, lastSeenHead: c.lastSeen, stablePolls: 2, headFirstSeen: c.firstSeen),
+            F.observation(F.snapshot(F.request(head: c.head, checks: [])))
+        )
+        #expect(decision.record.headFirstSeenAt == c.expected)
     }
 
     @Test("ready notification fires once per head")

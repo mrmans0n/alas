@@ -126,6 +126,7 @@ public struct ShepherdRecord: Codable, Equatable, Sendable {
     public var fixAttempts: Int
     public var lastSeenHeadSHA: String?
     public var stableHeadPolls: Int        // consecutive polls with the same head and complete checks
+    public var headFirstSeenAt: Date?      // when the policy first saw lastSeenHeadSHA; nil in older records
     public var notifiedReadyHeadSHA: String?
     public var finishedAt: Date?           // set on merged/closed; drives 7-day retention
     public var createdAt: Date
@@ -188,8 +189,9 @@ Rules run in order. The first one that produces an action wins.
    Threads do not wait for checks. A trusted thread on a head with running CI
    dispatches right away, which is lassie's "feedback before CI" rule.
 
-   No problems and no pending check: reset `fixAttempts` to 0. No problems:
-   continue to rule 8. Problems
+   No problems and no pending check: reset `fixAttempts` to 0, except while a
+   head that reports no checks is inside the no-checks grace period (rule 8).
+   No problems: continue to rule 8. Problems
    whose fingerprint equals `lastDispatchedFingerprint`: `wait`. Otherwise:
    - if `fixAttempts >= 3`: `escalate(.attemptsExhausted)`;
    - else `dispatchFix` with all current problems, ordered conflict, checks,
@@ -198,7 +200,10 @@ Rules run in order. The first one that produces an action wins.
 8. Merge. Requires `autoMerge`, the existing readiness gate
    (`canMergeReviewRequest`, which includes a clean local tree and local HEAD
    equal to the provider head), every login in `rules.requiredReviewers`
-   having reviewed the current head, and `stableHeadPolls >= 2`. Gives
+   having reviewed the current head, and `stableHeadPolls >= 2`. A head that
+   reports no checks at all also needs `noChecksGracePeriod` (15 minutes)
+   since `headFirstSeenAt`, because its CI may not have registered yet; a
+   new head restarts that clock. Gives
    `merge` and phase `merging`. A merge-queue outcome moves the record to
    `queued`, and polling continues until the provider reports merged.
 9. Ready without auto-merge. Same gate as rule 8 minus `autoMerge`. Gives
@@ -591,7 +596,8 @@ Following AGENTS.md: fewer, sharper tests, extending existing suites first.
     checks wait for pending checks;
   - attempt cap, no-progress escalation, reset on green;
   - merge gate: required reviewer missing on current head, stability below 2
-    polls, dirty local tree, merge queue moves to `queued`;
+    polls, dirty local tree, merge queue moves to `queued`, a head with no
+    checks inside and after the grace period;
   - ready notification fires once per head.
 - `ShepherdPromptBuilderTests`: section order, three-log cap with the rest
   listed, full thread chains, project rules appended or omitted.

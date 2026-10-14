@@ -100,6 +100,7 @@ enum ShepherdFixtures {
         handled: [String]? = nil,
         lastSeenHead: String? = nil,
         stablePolls: Int = 0,
+        headFirstSeen: Date? = nil,
         notifiedReady: String? = nil
     ) -> ShepherdRecord {
         let host = remote(kind)
@@ -116,6 +117,7 @@ enum ShepherdFixtures {
         record.handledThreadRevisions = handled
         record.lastSeenHeadSHA = lastSeenHead
         record.stableHeadPolls = stablePolls
+        record.headFirstSeenAt = headFirstSeen
         record.notifiedReadyHeadSHA = notifiedReady
         return record
     }
