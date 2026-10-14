@@ -411,7 +411,9 @@ extension AppState {
         }
         var reference: RunScheduleFiring.RunReference?
         let settlement: RunScriptSettlement = await withCheckedContinuation { continuation in
-            switch startScriptLaunch(script, in: worktree, presentsLaunchFailure: false) {
+            switch startScriptLaunch(script, in: worktree, presentsLaunchFailure: false, onSettled: {
+                continuation.resume(returning: $0)
+            }) {
             case .started(let runID):
                 reference = RunScheduleFiring.RunReference(
                     worktreeID: worktree.id,
@@ -419,9 +421,6 @@ extension AppState {
                     runID: runID,
                     scriptName: script.displayName
                 )
-                core.awaitRunSettlement(runID: runID, worktreeID: worktree.id) {
-                    continuation.resume(returning: $0)
-                }
             case .alreadyStarting:
                 continuation.resume(returning: .launchFailed("\(script.displayName) is already starting in \(worktree.title)."))
             case .projectUnavailable:

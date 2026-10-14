@@ -128,6 +128,9 @@ struct AlasCoreContextTests {
     /// its run is recorded with an unknown outcome instead of being undone.
     @Test func runThatExecutedWithoutReportingKeepsAnUnknownRecord() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-core-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try "true\n".write(to: root.appendingPathComponent("noop.sh"), atomically: true, encoding: .utf8)
         let project = ProjectConfig(id: "p", name: "p", path: root.path, color: "blue", addedAt: Date())
         let worktree = Worktree(
             id: root.path, projectId: "p", name: "main", branch: "main", path: root,

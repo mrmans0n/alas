@@ -30,6 +30,8 @@ public protocol AlasHostEnvironment: AnyObject {
     func stopWorkspaceCheckoutSessions(_ checkout: WorkspaceCheckout) async throws
     /// Approves and prepares a Workspace member's repository hook. Nil skips it.
     func resolveWorkspaceRepoHook(_ request: WorkspaceRepoHookRequest) async throws -> String?
+    /// Starts and hosts run scripts.
+    var runLauncher: any RunLauncher { get }
 }
 
 extension AlasHostEnvironment {
@@ -58,6 +60,8 @@ extension AlasHostEnvironment {
     public func stopWorkspaceCheckoutSessions(_ checkout: WorkspaceCheckout) async throws {}
 
     public func resolveWorkspaceRepoHook(_ request: WorkspaceRepoHookRequest) async throws -> String? { nil }
+
+    public var runLauncher: any RunLauncher { HeadlessRunLauncher.shared }
 }
 
 /// A host without a UI: every requirement keeps its default.

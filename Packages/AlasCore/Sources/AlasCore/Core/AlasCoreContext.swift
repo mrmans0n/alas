@@ -53,9 +53,14 @@ public final class AlasCoreContext {
     /// Attention items and the gate observations pass through to reach them.
     public let attention: AttentionIntake
 
-    /// Headless runs in flight, covering finalization, so lifecycle
-    /// operations can stop them and wait until their records settle.
-    @ObservationIgnored var headlessRuns: [String: (worktreeID: String, task: Task<RunOutcome, Error>)] = [:]
+    /// Launches claimed and still starting, by run slot.
+    @ObservationIgnored var pendingRunLaunches: [RunSlotKey: PendingRunLaunch] = [:]
+    /// Runs in a plain process the launcher started, by run ID.
+    @ObservationIgnored var processRuns: [String: (worktreeID: String, projectID: String, scriptKey: String, task: Task<RunScriptCompletion, Error>)] = [:]
+    /// Why a run in a plain process ended without reporting, for `runScript`.
+    @ObservationIgnored var processRunErrors: [String: any Error] = [:]
+    /// How long a run outlives its host session before it is given up on.
+    @ObservationIgnored public let runHostGrace: RunHostGrace
 
     @ObservationIgnored private let store: any PersistenceStoreProtocol
     @ObservationIgnored private let projectsFile: URL
@@ -75,7 +80,8 @@ public final class AlasCoreContext {
         attentionStore: AttentionStore? = nil,
         runCompletionWaiter: @escaping RunCompletionWaiter = { try await RunScriptCompletionMonitor.wait(for: $0) },
         makeSessionManager: @escaping @MainActor (SessionOwnerID, Worktree) -> ACPSessionManager = AlasCoreContext.defaultSessionManager,
-        environment: any AlasHostEnvironment = HeadlessHostEnvironment()
+        environment: any AlasHostEnvironment = HeadlessHostEnvironment(),
+        runHostGrace: RunHostGrace = RunHostGrace()
     ) {
         self.projects = projects
         self.runs = runs
@@ -87,6 +93,7 @@ public final class AlasCoreContext {
         self.localTextOverride = localText
         self.workspaceStore = workspaceStore
         self.environment = environment
+        self.runHostGrace = runHostGrace
         self.store = store
         self.projectsFile = projectsFile
         self.makeSessionManager = makeSessionManager
@@ -149,64 +156,6 @@ public final class AlasCoreContext {
             try? saveProjects()
         }
         return project
-    }
-
-    /// Runs `script` in `worktree` without a terminal, recording it and
-    /// archiving its output like a terminal run. A run that never started
-    /// leaves the previous record in place; one whose exit status was never
-    /// observed finishes as `unknown`.
-    @discardableResult
-    public func runScript(_ script: RunScript, in worktree: Worktree) async throws -> RunOutcome {
-        guard let project = projects.projects.first(where: { $0.id == worktree.projectId }) else {
-            throw ProjectCreationError.projectNotFound
-        }
-        guard project.host == nil else { throw RunService.RunError.remoteProjectUnsupported }
-        guard projects.admitsNewWork(in: worktree) else { throw WorktreeOperationInProgress() }
-        guard runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status.isActive != true else {
-            throw RunService.RunError.alreadyRunning
-        }
-        let runID = UUID().uuidString
-        let displaced = runRecords.begin(RunRecord(
-            id: runID,
-            scriptKey: script.key,
-            scriptName: script.displayName,
-            worktreeID: worktree.id,
-            branch: worktree.branch,
-            target: RunExecutionTarget(
-                host: nil,
-                workingDirectory: script.cwd.map { worktree.path.appendingPathComponent($0).path } ?? worktree.path.path
-            ),
-            endpoint: script.endpoint,
-            status: .running,
-            startedAt: Date()
-        ))
-        // The task covers the whole run, finalization included, so lifecycle
-        // operations can wait for the record to settle.
-        let lifecycle = Task { () throws -> RunOutcome in
-            let completion: RunScriptCompletion
-            do {
-                completion = try await runs.run(script, in: worktree, project: project, runID: runID)
-            } catch is CancellationError {
-                finalizeRun(runRecords.finish(runID: runID, outcome: .stopped, at: Date()), capture: .unavailable)
-                throw CancellationError()
-            } catch where error is RunService.RunError || error is RunScriptCompletionMonitor.MonitorError {
-                // The command ran but its exit status was never observed.
-                finalizeRun(runRecords.markLostObservation(runID: runID, at: Date()), capture: .unavailable)
-                throw error
-            } catch {
-                runRecords.rollback(runID: runID, to: displaced)
-                throw error
-            }
-            let outcome: RunOutcome = completion.exitCode == 0 ? .succeeded : .failed(exitCode: completion.exitCode)
-            finalizeRun(
-                runRecords.finish(runID: runID, outcome: outcome, at: completion.completedAt),
-                capture: .completion(completion)
-            )
-            return outcome
-        }
-        headlessRuns[runID] = (worktree.id, lifecycle)
-        defer { headlessRuns.removeValue(forKey: runID) }
-        return try await withTaskCancellationHandler { try await lifecycle.value } onCancel: { lifecycle.cancel() }
     }
 
     /// The one coordinator for Workspace checkout lifecycles. It reads the
