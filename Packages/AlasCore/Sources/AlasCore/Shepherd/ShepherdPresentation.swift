@@ -3,7 +3,7 @@ import Foundation
 /// The toolbar pill's state, shared with the Changes drawer and the popover.
 /// The app maps each case to an SF Symbol and a theme color.
 public enum ShepherdBadgeState: Equatable, Sendable {
-    /// No record and no request: the pill offers Create PR/MR.
+    /// No record and no request: the pill offers Ship with agent.
     case noRequest
     /// A request exists but this session does not shepherd it.
     case unshepherded
@@ -49,7 +49,7 @@ public struct ShepherdPresentation: Equatable, Sendable {
         guard let record else {
             let line = "not shepherded"
             guard let request else {
-                return ShepherdPresentation(badge: .noRequest, number: nil, tooltip: "Not shepherded", phaseLine: line)
+                return ShepherdPresentation(badge: .noRequest, number: nil, tooltip: "Ship with agent", phaseLine: line)
             }
             let number = "\(request.provider.reviewRequestNumberPrefix)\(request.number)"
             return ShepherdPresentation(badge: .unshepherded, number: number, tooltip: "\(number) · \(line)", phaseLine: line)

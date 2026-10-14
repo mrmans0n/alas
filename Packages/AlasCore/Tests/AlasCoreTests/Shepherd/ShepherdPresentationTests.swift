@@ -21,8 +21,8 @@ private let fixingUnitTests = F.fingerprint(
 private let presentationCases: [ShepherdPresentationCase] = [
     .init(testDescription: "unbound request shows its number",
           record: nil, request: F.request(), gate: false, badge: .unshepherded, number: "#7", tooltip: "#7 · not shepherded"),
-    .init(testDescription: "no request offers Create PR",
-          record: nil, request: nil, gate: false, badge: .noRequest, number: nil, tooltip: "Not shepherded"),
+    .init(testDescription: "no request offers Ship with agent",
+          record: nil, request: nil, gate: false, badge: .noRequest, number: nil, tooltip: "Ship with agent"),
     .init(testDescription: "checks pending",
           record: F.record(), request: F.request(checks: [F.pending]), gate: false,
           badge: .waiting, number: "#7", tooltip: "#7 · checks running"),

@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// PR shepherd control in the ACP toolbar: a pill with a state symbol and
-/// the request number (or "Create PR" without one) that opens the shepherd
+/// the request number (or "Ship" without one) that opens the shepherd
 /// popover.
 ///
 /// `session` is a plain reference on purpose: the pill reads only the
@@ -35,7 +35,7 @@ struct ACPShepherdButton: View {
                     Text(number)
                         .font(.system(size: 11, weight: .semibold, design: .monospaced))
                 } else {
-                    Text(context.snapshot?.remote?.kind.createReviewRequestTitle ?? "Create PR")
+                    Text("Ship")
                         .font(.system(size: 11, weight: .medium))
                 }
             }
@@ -129,7 +129,8 @@ extension ShepherdBadgeState {
     /// Symbol shared by the toolbar pill and the popover's phase line.
     var symbolName: String {
         switch self {
-        case .noRequest, .unshepherded: "arrow.triangle.pull"
+        case .noRequest: "arrow.up.circle"
+        case .unshepherded: "arrow.triangle.pull"
         case .waiting: "clock.fill"
         case .fixing: "sparkles"
         case .ready, .merging: "arrow.triangle.merge"
@@ -488,24 +489,25 @@ private struct ShepherdPopover: View {
     }
 
     private func createRow(kind: CodeHostKind?, reason: String?) -> some View {
-        let title = kind?.createReviewRequestTitle ?? "Create PR"
+        let title = "Ship with agent"
+        let label = kind?.reviewRequestLabel ?? "PR"
         return VStack(alignment: .leading, spacing: 6) {
-            AlasButton(title: title, icon: "plus", style: .primary) {
+            AlasButton(title: title, icon: "sparkles", style: .primary) {
                 onClose()
                 state.requestShepherdCreatePR(sessionID: session.id, worktree: worktree)
             }
             .disabled(reason != nil)
             .opacity(reason == nil ? 1 : 0.5)
-            .help(reason ?? "Ask this session to open a \(kind?.reviewRequestLabel ?? "PR") and shepherd it")
+            .help(reason ?? "Ask this session to open a \(label) and shepherd it")
             .accessibilityLabel(title)
-            Text(reason ?? "The agent writes the title and description from the diff, then calls pr_create.")
+            Text(reason ?? "The agent writes, opens and shepherds the \(label)")
                 .font(.system(size: 10.5))
                 .foregroundStyle(theme.color(reason == nil ? "fg-muted" : "warn"))
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
 
-    /// Why Create PR/MR is unavailable, or nil when it can be pressed.
+    /// Why Ship with agent is unavailable, or nil when it can be pressed.
     private static func createDisabledReason(isBusy: Bool, snapshot: ReviewLoopSnapshot?, isLoading: Bool) -> String? {
         if isBusy { return "Wait for the current turn to finish." }
         guard let snapshot else {

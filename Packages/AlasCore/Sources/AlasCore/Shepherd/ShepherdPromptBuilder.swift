@@ -79,7 +79,7 @@ public enum ShepherdPromptBuilder {
         return sections.joined(separator: "\n\n")
     }
 
-    /// Sent by the toolbar's Create PR / Create MR button.
+    /// Sent by the toolbar popover's Ship with agent button.
     public static func createPrompt(kind: CodeHostKind) -> String {
         let article = kind == .gitlab ? "an" : "a"
         return "Open \(article) \(kind.reviewRequestLabel) for the work on this branch. "

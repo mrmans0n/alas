@@ -49,7 +49,7 @@ skill.
 | Lifecycle | Owned by `AlasCoreContext`, started by AppState after topology loads, stopped at app termination. Independent of pane or window visibility. |
 | Polling | Adaptive per record (30 s / 2 min / 5 min), at most 2 provider fetches in flight, immediate evaluation on wake. |
 | Project rules | `.alas/shepherd.local.md`, then `.alas/shepherd.md`, then project settings. |
-| Toolbar UI | State pill (symbol plus `#N`/`!N`, or "Create PR"), in the right-hand group directly left of the minimap toggle. |
+| Toolbar UI | State pill (symbol plus `#N`/`!N`, or "Ship"), in the right-hand group directly left of the minimap toggle. |
 
 ## Architecture
 
@@ -462,8 +462,8 @@ right-hand group directly left of the minimap `ToolbarBtn`. A 22 pt pill with
 a 5 pt corner radius, `bg-3` fill and a 0.5 pt `line` border, lit on hover or
 while the popover is open. It holds a state symbol and the request number
 (`#N` on GitHub, `!N` on GitLab) in 11 pt semibold monospaced. With neither a
-record nor a PR it shows `arrow.triangle.pull` and "Create PR" (or "Create
-MR"). `ShepherdPresentation.badge` (`ShepherdBadgeState`) picks the state:
+record nor a PR it shows `arrow.up.circle` and "Ship", with the tooltip "Ship
+with agent". `ShepherdPresentation.badge` (`ShepherdBadgeState`) picks the state:
 
 | State | Symbol, color |
 | --- | --- |
@@ -498,9 +498,11 @@ scrolls at 8 rows so a large PR doesn't make a giant popover:
   record and leaves the PR untouched. Escalated records also show "Resume",
   which returns them to `watching` and resets `fixAttempts`.
 
-With no bound PR, the popover shows the branch, its ahead count and a "Create
-PR" (or "Create MR") button. The button is disabled while the session is busy
-or the provider is unavailable, with the reason inline. It sends the session:
+With no bound PR, the popover shows the branch, its ahead count and a "Ship
+with agent" button (`sparkles`) captioned "The agent writes, opens and
+shepherds the PR" (MR on GitLab). The button is disabled while the session is
+busy or the provider is unavailable, with the reason in place of the caption.
+It sends the session:
 
 ```text
 Open a PR/MR for the work on this branch. If there are uncommitted changes that
@@ -509,7 +511,8 @@ the actual diff and this conversation, then call pr_create.
 ```
 
 If the branch already has an unowned PR, the popover offers "Shepherd #N from
-this session" in place of Create PR.
+this session" in place of Ship with agent. Every other surface keeps "Create
+PR" for the direct, non-agent action.
 
 ### Changes review drawer
 
@@ -571,7 +574,7 @@ drawer block carry the signal in that case.
 
 ## Error handling
 
-- Provider CLI missing: `pr_create` and the Create PR button say so and name
+- Provider CLI missing: `pr_create` and the Ship with agent button say so and name
   the install command. Existing records go to `paused` with `.authFailed`.
 - Push rejected (non-fast-forward, protected branch): `pr_create` returns the
   git error. The shepherd never pushes.

@@ -143,8 +143,8 @@ extension AppState {
         return queue.contains { Self.shepherdQueueItemIsDue($0, now: Date()) } ? .busy : .idle
     }
 
-    /// The popover's Create PR/MR button: asks the session, as a normal user
-    /// turn, to commit what belongs to the work and call `pr_create`.
+    /// The popover's Ship with agent button: asks the session, as a normal
+    /// user turn, to commit what belongs to the work and call `pr_create`.
     func requestShepherdCreatePR(sessionID: String, worktree: Worktree) {
         guard let manager = acpManager(for: worktree) else { return }
         Task { @MainActor [weak self] in
@@ -164,7 +164,7 @@ extension AppState {
             ) { [weak self] sent in
                 guard !sent else { return }
                 self?.inAppNotifications.post(
-                    "Could not send the Create \(kind.reviewRequestLabel) prompt to this session.",
+                    "Could not send the Ship with agent prompt to this session.",
                     severity: .error,
                     worktreeID: worktree.id
                 )
