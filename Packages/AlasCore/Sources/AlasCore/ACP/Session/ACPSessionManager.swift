@@ -569,13 +569,20 @@ public final class ACPSessionManager: ChangeTracking {
         // Like a prompt, a goal control makes the agent answer with fresh
         // output, so it ends the late-replay window a restored session keeps
         // open. Otherwise repeating an earlier objective would read as replay.
+        // A rejected control produces no output, so it restores the window.
+        let boundaryCrossingBefore = session.allowsStreamingBoundaryCrossing
         session.allowsStreamingBoundaryCrossing = true
-        try await runner.connection.controlGoal(
-            sessionId: session.remoteSessionId ?? id,
-            capability: capability,
-            action: action,
-            objective: objective
-        )
+        do {
+            try await runner.connection.controlGoal(
+                sessionId: session.remoteSessionId ?? id,
+                capability: capability,
+                action: action,
+                objective: objective
+            )
+        } catch {
+            session.allowsStreamingBoundaryCrossing = boundaryCrossingBefore
+            throw error
+        }
         if action == .set, let objective {
             if editedGoalDrafts[id] == nil || editedGoalDrafts[id] == objective {
                 editedGoalDrafts[id] = ""

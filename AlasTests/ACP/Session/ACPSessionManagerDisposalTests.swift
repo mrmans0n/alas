@@ -253,15 +253,18 @@ struct ACPSessionManagerDisposalTests {
         await manager.disposeAllLiveSessions()
     }
 
-    @Test("goal control ends the late-replay window, so its fresh confirmation is shown")
-    func goalControlReopensStreamingBoundary() async throws {
+    @Test("only an accepted goal control ends the late-replay window", arguments: [true, false])
+    func goalControlReopensStreamingBoundary(accepted: Bool) async throws {
         let client = ACPMockClient()
-        client.scriptAsync(method: "_session/goal") { _ in Data("{}".utf8) }
+        client.scriptAsync(method: "_session/goal") { _ in
+            guard accepted else { throw TestError.closeFailed }
+            return Data("{}".utf8)
+        }
         let (manager, _, session) = try await attachedManager(client: client, supportsClose: true)
         session.goalCapability = .init(version: 1, controlMethod: "_session/goal", actions: [.set])
         session.allowsStreamingBoundaryCrossing = false
-        try await manager.controlGoal(for: session.id, action: .set, objective: "finish")
-        #expect(session.allowsStreamingBoundaryCrossing)
+        _ = try? await manager.controlGoal(for: session.id, action: .set, objective: "finish")
+        #expect(session.allowsStreamingBoundaryCrossing == accepted)
         await manager.disposeAllLiveSessions()
     }
 
