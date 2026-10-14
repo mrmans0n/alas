@@ -566,6 +566,10 @@ public final class ACPSessionManager: ChangeTracking {
               runners[id] === runner
         else { throw ACPGoalControlError.unavailable }
 
+        // Like a prompt, a goal control makes the agent answer with fresh
+        // output, so it ends the late-replay window a restored session keeps
+        // open. Otherwise repeating an earlier objective would read as replay.
+        session.allowsStreamingBoundaryCrossing = true
         try await runner.connection.controlGoal(
             sessionId: session.remoteSessionId ?? id,
             capability: capability,

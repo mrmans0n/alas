@@ -253,6 +253,18 @@ struct ACPSessionManagerDisposalTests {
         await manager.disposeAllLiveSessions()
     }
 
+    @Test("goal control ends the late-replay window, so its fresh confirmation is shown")
+    func goalControlReopensStreamingBoundary() async throws {
+        let client = ACPMockClient()
+        client.scriptAsync(method: "_session/goal") { _ in Data("{}".utf8) }
+        let (manager, _, session) = try await attachedManager(client: client, supportsClose: true)
+        session.goalCapability = .init(version: 1, controlMethod: "_session/goal", actions: [.set])
+        session.allowsStreamingBoundaryCrossing = false
+        try await manager.controlGoal(for: session.id, action: .set, objective: "finish")
+        #expect(session.allowsStreamingBoundaryCrossing)
+        await manager.disposeAllLiveSessions()
+    }
+
     @Test("goal control stays busy until the agent response completes")
     func goalControlBlocksProjectRebinding() async throws {
         let client = ACPMockClient()

@@ -1030,6 +1030,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
             ) {
                 // A late replay after load-replay suppression ends re-sends the
                 // confirmation; like `appendStreaming`, drop what is already shown.
+                // Prompts and goal controls reopen the window for fresh output.
                 if !allowsStreamingBoundaryCrossing, transcript.messages.contains(where: {
                     if case .systemNotice(_, notice) = $0 { true } else { false }
                 }) { return [] }
