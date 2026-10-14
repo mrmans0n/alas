@@ -122,19 +122,26 @@ extension AppState {
             )
         }
 
-        if let existing = snapshot.reviewRequest, existing.state == .open {
-            return await bound(existing, created: false)
-        }
         // A failed lookup aborts: treating it as "no request" could open a second
-        // one against another base. A differently named upstream is searched too:
-        // its open request is adopted as is, since the push below never targets
-        // that name.
-        for branch in Self.prCreateLookupBranches(local) {
-            if let existing = try await openRequest(
-                remote: remote, branch: branch, headOwner: local.headRemoteOwner,
-                bases: [""], worktreePath: context.path
+        // one against another base. A differently named upstream is searched too,
+        // but the push below never targets that name.
+        var adopted = snapshot.reviewRequest.flatMap { $0.state == .open ? $0 : nil }
+        if adopted == nil {
+            for branch in Self.prCreateLookupBranches(local) {
+                adopted = try await openRequest(
+                    remote: remote, branch: branch, headOwner: local.headRemoteOwner,
+                    bases: [""], worktreePath: context.path
+                )
+                if adopted != nil { break }
+            }
+        }
+        if let adopted {
+            switch Self.prCreateAdoption(
+                headRefName: adopted.headRefName, number: adopted.number, kind: adopted.provider, local: local
             ) {
-                return await bound(existing, created: false)
+            case .bind: return await bound(adopted, created: false)
+            case .blocked(let message): throw PRShepherdCLIError(message: message)
+            case .publishThenBind: break
             }
         }
 
@@ -172,6 +179,11 @@ extension AppState {
             }
             if let existing = try await pushedBranchRequest() {
                 return await bound(existing, created: false)
+            }
+            // The adopted request is on this branch: the pending HEAD is now
+            // published, so bind it rather than open another.
+            if let adopted {
+                return await bound(adopted, created: false)
             }
             let url: URL
             do {
@@ -341,13 +353,37 @@ extension AppState {
         upstream == branch ? upstream : nil
     }
 
-    /// Branch names whose open request `pr_create` adopts before pushing: the
+    /// Branch names searched for an open request before creating one: the
     /// local branch, and a differently named upstream unless it is the base.
     static func prCreateLookupBranches(_ local: ReviewLoopLocalState) -> [String] {
         guard let upstream = local.upstreamBranchName, !upstream.isEmpty,
               upstream != local.branchName, upstream != local.baseBranch
         else { return [local.branchName] }
         return [local.branchName, upstream]
+    }
+
+    enum PRCreateAdoption: Equatable {
+        /// Run the exact-SHA push first, then bind the open request.
+        case publishThenBind
+        case bind
+        case blocked(String)
+    }
+
+    /// What `pr_create` does with an open request whose head is `headRefName`.
+    /// One on this branch gets the pending HEAD pushed first; one on a
+    /// differently named upstream is never pushed to, so unpushed commits there
+    /// block rather than report a request that lacks them.
+    static func prCreateAdoption(
+        headRefName: String, number: Int, kind: CodeHostKind, local: ReviewLoopLocalState
+    ) -> PRCreateAdoption {
+        if headRefName == local.branchName { return .publishThenBind }
+        guard local.needsPush else { return .bind }
+        let request = "\(kind.reviewRequestLabel) \(kind.reviewRequestNumberPrefix)\(number)"
+        return .blocked(
+            "\(local.branchName) tracks \(headRefName), which has open \(request). "
+                + "Push your commits to \(headRefName) or stop tracking it (`git branch --unset-upstream`), "
+                + "then call pr_create again."
+        )
     }
 
     static func prProviderSetupProblem(_ snapshot: ReviewLoopSnapshot) -> String? {

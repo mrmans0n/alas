@@ -518,6 +518,35 @@ struct AlasCLIRequestTests {
         #expect(AppState.prCreateLookupBranches(local) == expected)
     }
 
+    /// An open request on this branch gets the pending HEAD pushed first; one
+    /// on a differently named upstream is never pushed to, so unpushed
+    /// commits block instead of being silently left out.
+    @MainActor
+    @Test(arguments: [
+        ("feature", CodeHostKind.github, true, AppState.PRCreateAdoption.publishThenBind),
+        ("feature", .github, false, .publishThenBind),
+        ("review-feature", .github, false, .bind),
+        ("review-feature", .github, true, .blocked(
+            "feature tracks review-feature, which has open PR #42. Push your commits to review-feature "
+                + "or stop tracking it (`git branch --unset-upstream`), then call pr_create again."
+        )),
+        ("review-feature", .gitlab, true, .blocked(
+            "feature tracks review-feature, which has open MR !42. Push your commits to review-feature "
+                + "or stop tracking it (`git branch --unset-upstream`), then call pr_create again."
+        )),
+    ] as [(String, CodeHostKind, Bool, AppState.PRCreateAdoption)])
+    func prCreatePublishesBeforeAdoptingAnOpenRequest(
+        headRefName: String, kind: CodeHostKind, needsPush: Bool, expected: AppState.PRCreateAdoption
+    ) {
+        let local = ReviewLoopLocalState(
+            branchName: "feature", headSHA: "a3f9c1e", baseBranch: "main",
+            hasWorkingTreeChanges: false, hasStagedChanges: false, aheadCommitCount: 1,
+            hasUpstream: true, upstreamRemoteName: "origin",
+            upstreamBranchName: "review-feature", needsPush: needsPush
+        )
+        #expect(AppState.prCreateAdoption(headRefName: headRefName, number: 42, kind: kind, local: local) == expected)
+    }
+
     private struct ProbeParams: Decodable, Equatable {
         var name: String
         var count: Int?
