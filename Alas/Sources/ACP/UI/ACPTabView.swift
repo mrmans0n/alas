@@ -563,6 +563,12 @@ private struct ACPSessionView: View {
                     // URL is the sole form the system can act on.
                     _ = NSWorkspace.shared.open(fileURL)
                     return true
+                case .missing(let path):
+                    state.showFileActionError(
+                        title: "File Not Found",
+                        message: "Nothing exists at \(path). The agent may have linked a file that was moved, deleted, or never created."
+                    )
+                    return true
                 case .unhandled:
                     return false
                 }

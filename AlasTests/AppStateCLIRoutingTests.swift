@@ -720,16 +720,22 @@ struct AppStateCLIRoutingTests {
         })
     }
 
-    @Test func routeTranscriptOpenURLIsUnhandledForMissingAbsolutePath() async throws {
+    /// A missing local path is claimed instead of falling through to the
+    /// system, which rejects a schemeless path with a paramErr (-50) dialog.
+    @Test func routeTranscriptOpenURLReportsMissingLocalPath() async throws {
         let (state, _, worktree) = try await makeStateWithWorktree(name: "transcript-missing")
         defer { try? FileManager.default.removeItem(at: worktree.path) }
+        let missing = worktree.path.appendingPathComponent("nope.kt").path
 
-        let route = state.transcriptLinkRoute(
-            URL(string: worktree.path.appendingPathComponent("nope.md").path)!,
-            worktreeId: worktree.id
-        )
-
-        #expect(route == .unhandled)
+        for (raw, path) in [
+            ("\(missing):521", "\(missing):521"),
+            (URL(fileURLWithPath: missing).absoluteString, missing),
+            ("docs/nope.md", "docs/nope.md"),
+        ] {
+            #expect(state.transcriptLinkRoute(URL(string: raw)!, worktreeId: worktree.id) == .missing(path: path))
+        }
+        // `scheme:rest` destinations stay with the system when nothing matches.
+        #expect(state.transcriptLinkRoute(URL(string: "mailto:a@b.c")!, worktreeId: worktree.id) == .unhandled)
     }
 
     /// A remote session's absolute links open in the remote editor or are

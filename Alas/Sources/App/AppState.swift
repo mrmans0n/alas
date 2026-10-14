@@ -10396,6 +10396,10 @@ final class AppState {
         /// relative URL), and `NSWorkspace` rejects that form with paramErr
         /// (-50) instead of opening the file.
         case systemOpen(URL)
+        /// A local path (absolute, relative, or `file:`) that names nothing on
+        /// disk. Claimed so the caller can say so: the system's default action
+        /// rejects the schemeless form with a bare paramErr (-50) dialog.
+        case missing(path: String)
         /// Not a local path we can resolve; let the default URL action run.
         case unhandled
         /// A remote worktree's absolute link outside it: claimed, nothing opens.
@@ -10468,12 +10472,19 @@ final class AppState {
         guard let worktree = worktree(withId: worktreeId) else { return .unhandled }
 
         let rawPath: String
+        // Only file URLs and schemeless paths are unambiguously local. A
+        // `scheme:rest` destination may be `Package.swift:2` or `mailto:`, so
+        // the system keeps it when nothing on disk matches.
+        let isLocalPathForm: Bool
         if url.isFileURL {
             rawPath = url.path
+            isLocalPathForm = true
         } else if url.scheme == nil {
             rawPath = url.path.removingPercentEncoding ?? url.path
+            isLocalPathForm = true
         } else if !url.absoluteString.contains("://") {
             rawPath = url.absoluteString.removingPercentEncoding ?? url.absoluteString
+            isLocalPathForm = false
         } else {
             return .unhandled
         }
@@ -10494,12 +10505,12 @@ final class AppState {
                 return .opened
             case .systemOpen(let fileURL):
                 return .systemOpen(fileURL)
-            case .unhandled, .ignored:
+            case .unhandled, .ignored, .missing:
                 continue
             }
         }
 
-        return .unhandled
+        return isLocalPathForm ? .missing(path: rawPath) : .unhandled
     }
 
     private func transcriptRoute(forLocalPath candidatePath: String, worktree: Worktree) -> TranscriptLinkRoute {
