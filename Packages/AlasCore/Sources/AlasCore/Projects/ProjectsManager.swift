@@ -485,11 +485,20 @@ public final class ProjectsManager {
         setOperationState(for: worktree, state: restored)
     }
 
-    /// Clears the claim `token` opened, for an operation that completed.
-    public func finishOperation(_ token: UUID, for worktree: Worktree) {
+    /// Ends the claim `token` opened, for an operation that ran: cleared, or
+    /// left as `state` (such as a failure to retry), which no claim holds.
+    public func finishOperation(_ token: UUID, for worktree: Worktree, leaving state: WorktreeOperationState? = nil) {
         let key = WorktreeOperationKey(projectId: worktree.projectId, worktreeId: worktree.id)
         guard claimTokens[key]?.token == token else { return }
-        setOperationState(for: worktree, state: nil)
+        setOperationState(for: worktree, state: state)
+    }
+
+    /// Moves the claim `token` holds to another stage of its operation,
+    /// keeping the token and the state it replaced.
+    public func updateClaim(_ token: UUID, to state: WorktreeOperationState, for worktree: Worktree) {
+        let key = WorktreeOperationKey(projectId: worktree.projectId, worktreeId: worktree.id)
+        guard let claim = claimTokens[key], claim.token == token, worktreeOperationStates[key] != nil else { return }
+        worktreeOperationStates[key] = state
     }
 
     /// Whether new terminals, agent sessions and runs may start in `worktree`.

@@ -1420,7 +1420,7 @@ final class AppState {
     static let forceDeleteAlertTitleSuffix = "requires force delete."
     static let forceDeleteAlertMessage = "Git refused to remove this worktree — it may have uncommitted changes or be locked. Force delete will remove it and discard any uncommitted work."
 
-    private static let checkpointRecoveryBlocksWorktreeRemovalMessage = "An interrupted checkpoint restore needs recovery before this worktree can be deleted."
+    private static let checkpointRecoveryBlocksWorktreeRemovalMessage = WorktreeRemovalResult.checkpointRecoveryMessage
     static let checkpointRecoveryBlocksACPMessage = "An interrupted checkpoint restore needs recovery before an agent session can start."
 
     /// Set when a worktree deletion stops because the tree is dirty and Git
@@ -1434,6 +1434,9 @@ final class AppState {
         let worktreePath: URL    // actual worktree path
         let deleteBranchIfMerged: Bool
         let removedIndex: Int
+        /// The deletion's claim, held as `.preparingDelete` while the prompt is up.
+        let claim: UUID
+        var acknowledgedDirtyTabs: [TabID: Int] = [:]
     }
     var pendingForceDeleteWorktree: PendingForceDeleteWorktree?
 
@@ -1729,6 +1732,11 @@ final class AppState {
         }
         core.quiesceWorktree = { [weak self] worktree in
             try await self?.quiesceWorktreeForRemoval(worktree)
+        }
+        // The app's refresh also reconciles what it shows, and saves itself.
+        core.refreshProjectWorktrees = { [weak self] projectID in
+            _ = try await self?.refreshProjectWorktrees(projectId: projectID)
+            return false
         }
         core.repoHookPrompter = .queue(repoHookApprovalQueue)
         core.globalTerminalConfig = { [weak self] in self?.config.terminal ?? AppConfig.defaults.terminal }
@@ -6792,15 +6800,15 @@ final class AppState {
 
     /// Runs `operation` with `acknowledged` as the only unsaved edits the
     /// quiesce step may discard in `worktree`; anything dirtied since refuses.
-    private func withAcknowledgedDirtyTabs(
+    private func withAcknowledgedDirtyTabs<Value>(
         _ acknowledged: [TabID: Int],
         for worktree: Worktree,
-        _ operation: () async throws -> Void
-    ) async throws {
+        _ operation: () async throws -> Value
+    ) async rethrows -> Value {
         let key = WorktreeOperationKey(projectId: worktree.projectId, worktreeId: worktree.id)
         acknowledgedDirtyTabs[key] = acknowledged
         defer { acknowledgedDirtyTabs[key] = nil }
-        try await operation()
+        return try await operation()
     }
 
     struct UnacknowledgedEditsError: LocalizedError {
@@ -10972,56 +10980,43 @@ final class AppState {
         return "This worktree is owned by Workspace checkout \u{201C}\(owner.name)\u{201D}. Delete it from the checkout instead."
     }
 
-    /// Both the CLI and interactive delete paths confirm well before the
-    /// actual removal — a modal alert's nested run loop and a CLI's checkpoint
-    /// discovery and git preflight each yield the main actor at least once
-    /// in between, wide enough for a checkout to get unarchived in the gap.
-    /// Called as the first statement of the scheduled deletion, right before
-    /// the real removal, mirroring the batch-delete path's own
-    /// re-validation-right-before-execution pattern.
-    private func recheckWorkspaceOwnershipBeforeRemoval(_ worktree: Worktree) -> Bool {
-        guard let refusal = workspaceOwnershipDeletionRefusal(for: worktree) else { return true }
-        projectsManager.setOperationState(for: worktree, state: .deleteFailed(message: refusal))
-        return false
-    }
-
     func deleteWorktree(_ worktree: Worktree, keepBranch: Bool = false) {
         if let refusal = workspaceOwnershipDeletionRefusal(for: worktree) {
             showFileActionError(title: "Delete Failed", message: refusal)
             return
         }
-        let dirty = dirtyEditorTabIds(worktreeId: worktree.id)
-        let saveBuffersFirst: Bool
-        if dirty.isEmpty {
-            saveBuffersFirst = false
-        } else {
+        // Snapshotted before the prompt: only what the user was shown counts
+        // as acknowledged.
+        let dirtyAtPrompt = dirtyTabGenerations(worktreeId: worktree.id)
+        var saveBuffersFirst = false
+        var acknowledged: [TabID: Int] = [:]
+        if !dirtyAtPrompt.isEmpty {
             switch promptForDirtyBuffers(
                 action: "Delete",
                 branch: worktree.branch,
-                dirtyCount: dirty.count,
+                dirtyCount: dirtyAtPrompt.count,
                 onDiskDestructive: true,
                 keepBranch: keepBranch
             ) {
             case .save: saveBuffersFirst = true
-            case .discard: saveBuffersFirst = false
+            case .discard: acknowledged = dirtyAtPrompt
             case .cancel: return
             }
         }
         if saveBuffersFirst {
             Task { @MainActor in
                 guard await !checkpointWorktreeRemovalDisabledAfterDiscovery(worktree) else {
-                    projectsManager.setOperationState(
-                        for: worktree,
-                        state: .deleteFailed(message: Self.checkpointRecoveryBlocksWorktreeRemovalMessage)
-                    )
+                    if let claim = try? core.beginDelete(worktree) {
+                        core.failWorktreeClaim(claim, for: worktree, message: Self.checkpointRecoveryBlocksWorktreeRemovalMessage)
+                    }
                     return
                 }
                 guard await saveDirtyBuffers(in: worktree) else { return }
-                beginDeleteWorktree(worktree, keepBranch: keepBranch)
+                beginDeleteWorktree(worktree, keepBranch: keepBranch, acknowledgedDirtyTabs: [:])
             }
             return
         }
-        beginDeleteWorktree(worktree, keepBranch: keepBranch)
+        beginDeleteWorktree(worktree, keepBranch: keepBranch, acknowledgedDirtyTabs: acknowledged)
     }
 
     /// Delete several worktrees in one pass, reusing the single-item deletion
@@ -11087,7 +11082,7 @@ final class AppState {
 
         var results: [WorktreeBatchResult] = []
         var touchedProjectIds: Set<String> = []
-        var removedWorktreeIDsByProject: [String: [String]] = [:]
+        var removed: [(worktree: Worktree, claim: UUID)] = []
 
         for worktree in worktrees {
             guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
@@ -11233,12 +11228,24 @@ final class AppState {
                 force = false
             }
 
-            let siblingsBefore = projectsManager.visibleWorktrees(projectId: worktree.projectId)
-            let removedIndex = siblingsBefore.firstIndex(where: { $0.id == worktree.id }) ?? 0
-            projectsManager.setOperationState(for: worktree, state: .deleting(projectId: worktree.projectId))
+            let removedIndex = projectsManager.visibleWorktrees(projectId: worktree.projectId)
+                .firstIndex(where: { $0.id == worktree.id }) ?? 0
+            let claim: UUID
+            do {
+                claim = try core.beginDelete(worktree)
+            } catch {
+                results.append(WorktreeBatchResult(
+                    worktreeId: worktree.id,
+                    branch: worktree.branch,
+                    outcome: .skipped(reason: WorktreeRemovalResult.changedSinceConfirmationMessage)
+                ))
+                continue
+            }
+            core.confirmDelete(claim, for: worktree)
 
             let outcome = await performDeleteWorktree(
                 worktree: worktree,
+                claim: claim,
                 repoPath: URL(fileURLWithPath: project.path),
                 deleteBranchIfMerged: Self.resolveDeleteBranchIfMerged(
                     globalDeleteOnRemove: config.worktrees.deleteBranchOnRemove,
@@ -11249,9 +11256,9 @@ final class AppState {
                 // One refresh at the end, not one per item.
                 refreshAfter: false,
                 promptsForForce: false,
+                isBatch: true,
                 authorizedDeleteContentFingerprint: authorization?.contentFingerprintsByWorktree[worktree.id],
-                authorizedDirtyTabsAtConfirmation: authorization?.dirtyTabsByWorktree[worktree.id] ?? [:],
-                authorizedSessionIDs: authorization?.sessionIDsByWorktree[worktree.id] ?? [],
+                acknowledgedDirtyTabs: dirtyTabsAtConfirmation[worktree.id] ?? [:],
                 verifiedMergedBranchSHA: forgeConfirmedMergedBranchSHAs[worktree.id]
             )
 
@@ -11261,42 +11268,20 @@ final class AppState {
                 outcome: outcome
             ))
             if outcome == .deleted {
-                removedWorktreeIDsByProject[worktree.projectId, default: []].append(worktree.id)
+                removed.append((worktree, claim))
             }
             touchedProjectIds.insert(worktree.projectId)
         }
 
-        for projectId in touchedProjectIds {
-            do {
-                _ = try await refreshProjectWorktrees(projectId: projectId)
-            } catch {
-                // The refresh is what reconciles removed rows (and their
-                // `.deleting` claims) out of the list. If it could not run,
-                // drop the rows this batch did remove — together with the
-                // project metadata naming them — instead of leaving them to
-                // resolve as ordinary worktrees: the removal already
-                // succeeded, and `allWorktreeIds()` below must not keep
-                // counting a deleted worktree either. Scoped to this
-                // project's own removals — worktree ids are path-derived, so
-                // the same id can exist under another host's project.
-                for worktreeID in removedWorktreeIDsByProject[projectId] ?? [] {
-                    projectsManager.dropRemovedWorktree(id: worktreeID, projectId: projectId)
-                }
-                saveProjects()
-                continue
-            }
-            // The refresh clears a held claim only when git no longer lists
-            // the id. A checkout recreated at the same path keeps that id, so
-            // release the claims for the items this batch removed regardless:
-            // the removals succeeded, and whatever now holds that id is not
-            // the worktree that was being deleted.
-            for worktreeID in removedWorktreeIDsByProject[projectId] ?? [] {
-                projectsManager.setOperationState(
-                    forWorktreeId: worktreeID,
-                    projectId: projectId,
-                    state: nil
-                )
-            }
+        // The removals' claims are held until their projects are refreshed.
+        do {
+            try await core.finishDeletions(removed)
+        } catch {
+            persistenceErrorHandler("Projects Save Failed", error.localizedDescription)
+        }
+        // A failed removal can still have changed what Git lists.
+        for projectId in touchedProjectIds.subtracting(removed.map(\.worktree.projectId)) {
+            _ = try? await refreshProjectWorktrees(projectId: projectId)
         }
         // Per-item deletion skipped selection reconciliation because the list
         // was still stale at that point. Now that every touched project has
@@ -11789,39 +11774,41 @@ final class AppState {
     /// admitted into this worktree while the user is still deciding, then
     /// keep writing straight through the confirmed delete's staging/audit
     /// window.
-    private func beginDeleteWorktree(_ worktree: Worktree, keepBranch: Bool) {
+    private func beginDeleteWorktree(_ worktree: Worktree, keepBranch: Bool, acknowledgedDirtyTabs: [TabID: Int]) {
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
             showFileActionError(title: "Delete Failed", message: "Could not find the project for this worktree.")
             return
         }
-        let repoPath = URL(fileURLWithPath: project.path)
-        let deleteBranch = Self.resolveDeleteBranchIfMerged(
-            globalDeleteOnRemove: config.worktrees.deleteBranchOnRemove,
-            keepBranch: keepBranch
-        )
-
-        projectsManager.setOperationState(for: worktree, state: .preparingDelete)
+        // Claimed as `.preparingDelete` while the confirmation is up: its run
+        // loop could otherwise admit new work into the worktree.
+        let claim: UUID
+        do {
+            claim = try core.beginDelete(worktree)
+        } catch {
+            showFileActionError(title: "Delete Failed", message: error.localizedDescription)
+            return
+        }
         guard confirmDeleteWorktree(
             Self.deleteConfirmation(branch: worktree.branch, keepBranch: keepBranch)
         ) else {
-            if projectsManager.operationState(for: worktree) == .preparingDelete {
-                projectsManager.setOperationState(for: worktree, state: nil)
-            }
+            core.releaseWorktreeClaim(claim, for: worktree)
             return
         }
-
-        let siblingsBefore = projectsManager.visibleWorktrees(projectId: worktree.projectId)
-        let removedIndex = siblingsBefore.firstIndex(where: { $0.id == worktree.id }) ?? 0
-        projectsManager.setOperationState(for: worktree, state: .deleting(projectId: worktree.projectId))
-
+        let removedIndex = projectsManager.visibleWorktrees(projectId: worktree.projectId)
+            .firstIndex(where: { $0.id == worktree.id }) ?? 0
+        core.confirmDelete(claim, for: worktree)
         Task { @MainActor in
-            guard recheckWorkspaceOwnershipBeforeRemoval(worktree) else { return }
             await performDeleteWorktree(
                 worktree: worktree,
-                repoPath: repoPath,
-                deleteBranchIfMerged: deleteBranch,
+                claim: claim,
+                repoPath: URL(fileURLWithPath: project.path),
+                deleteBranchIfMerged: Self.resolveDeleteBranchIfMerged(
+                    globalDeleteOnRemove: config.worktrees.deleteBranchOnRemove,
+                    keepBranch: keepBranch
+                ),
                 force: false,
-                removedIndex: removedIndex
+                removedIndex: removedIndex,
+                acknowledgedDirtyTabs: acknowledgedDirtyTabs
             )
         }
     }
@@ -11830,22 +11817,14 @@ final class AppState {
     func cliDeleteWorktree(_ worktree: Worktree, force: Bool, keepBranch: Bool) async -> AlasCLIResponse {
         // Matched on project as well as id: a worktree id is its path, so a
         // prompt opened for a same-path checkout under another project is a
-        // different worktree's prompt and must not be discarded here.
-        if pendingForceDeleteWorktree?.id == worktree.id,
-           pendingForceDeleteWorktree?.projectId == worktree.projectId {
+        // different worktree's prompt and must not be discarded here. The
+        // prompt's claim is given back with it; a `.preparingDelete` with no
+        // matching prompt belongs to the live first confirmation dialog,
+        // which the switch below refuses to race.
+        if let pending = pendingForceDeleteWorktree,
+           pending.id == worktree.id, pending.projectId == worktree.projectId {
             pendingForceDeleteWorktree = nil
-            // That pending force prompt claimed the worktree via
-            // `.preparingDelete`; discarding the prompt without releasing
-            // the claim would leave the row permanently blocked from new
-            // session admission — nothing else clears a bare
-            // `.preparingDelete`. This is scoped to exactly the claim that
-            // prompt owned: a `.preparingDelete` with no matching
-            // `pendingForceDeleteWorktree` belongs to the live first
-            // confirmation dialog (`beginDeleteWorktree`'s `NSAlert`), which
-            // this call must never touch — see the guard below.
-            if projectsManager.operationState(for: worktree) == .preparingDelete {
-                projectsManager.setOperationState(for: worktree, state: nil)
-            }
+            releaseClaim(of: pending)
         }
         switch projectsManager.operationState(for: worktree) {
         case .deleting:
@@ -11866,59 +11845,58 @@ final class AppState {
         if let refusal = workspaceOwnershipDeletionRefusal(for: worktree) {
             return .error(refusal)
         }
-        // Claim immediately, before any `await`: every check below yields
-        // to other main-actor work (checkpoint discovery, the git
-        // preflight), and an unclaimed gap here is exactly the
-        // session-admission race `.preparingDelete` exists to close.
-        // Released on every path that doesn't end in an actual deletion.
-        projectsManager.setOperationState(for: worktree, state: .preparingDelete)
-
+        // Claimed before any `await`: the checks below yield to other
+        // main-actor work, and an unclaimed gap would admit new sessions.
+        let claim: UUID
+        do {
+            claim = try core.beginDelete(worktree)
+        } catch {
+            return .error(error.localizedDescription)
+        }
         guard await !checkpointWorktreeRemovalDisabledAfterDiscovery(worktree) else {
-            projectsManager.setOperationState(for: worktree, state: nil)
+            core.releaseWorktreeClaim(claim, for: worktree)
             return .error(Self.checkpointRecoveryBlocksWorktreeRemovalMessage)
         }
-        let dirty = dirtyEditorTabIds(worktreeId: worktree.id)
+        let dirty = dirtyTabGenerations(worktreeId: worktree.id)
         if !dirty.isEmpty && !force {
-            projectsManager.setOperationState(for: worktree, state: nil)
+            core.releaseWorktreeClaim(claim, for: worktree)
             return .error("worktree has unsaved editor changes; save them or rerun with --force to delete")
         }
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
-            projectsManager.setOperationState(for: worktree, state: nil)
+            core.releaseWorktreeClaim(claim, for: worktree)
             return .error("Could not find the project for this worktree.")
         }
         let preflight = await Self.performDeletePreflight(worktreePath: worktree.path)
         if !force, preflight.requiresForce {
-            projectsManager.setOperationState(for: worktree, state: nil)
+            core.releaseWorktreeClaim(claim, for: worktree)
             if preflight.reasons.contains(.dirty) {
                 return .error("worktree has local changes; rerun with --force to delete")
             }
             return .error("worktree requires force delete; rerun with --force to delete")
         }
 
-        let repoPath = URL(fileURLWithPath: project.path)
-        let deleteBranch = Self.resolveDeleteBranchIfMerged(
-            globalDeleteOnRemove: config.worktrees.deleteBranchOnRemove,
-            keepBranch: keepBranch
-        )
-        let siblingsBefore = projectsManager.visibleWorktrees(projectId: worktree.projectId)
-        let removedIndex = siblingsBefore.firstIndex(where: { $0.id == worktree.id }) ?? 0
-        projectsManager.setOperationState(for: worktree, state: .deleting(projectId: worktree.projectId))
+        let removedIndex = projectsManager.visibleWorktrees(projectId: worktree.projectId)
+            .firstIndex(where: { $0.id == worktree.id }) ?? 0
+        core.confirmDelete(claim, for: worktree)
         Task { @MainActor in
-            guard recheckWorkspaceOwnershipBeforeRemoval(worktree) else { return }
             await performDeleteWorktree(
                 worktree: worktree,
-                repoPath: repoPath,
-                deleteBranchIfMerged: deleteBranch,
+                claim: claim,
+                repoPath: URL(fileURLWithPath: project.path),
+                deleteBranchIfMerged: Self.resolveDeleteBranchIfMerged(
+                    globalDeleteOnRemove: config.worktrees.deleteBranchOnRemove,
+                    keepBranch: keepBranch
+                ),
                 force: force,
-                removedIndex: removedIndex
+                removedIndex: removedIndex,
+                // `--force` discards the editors' unsaved changes as they are now.
+                acknowledgedDirtyTabs: dirty
             )
-            if pendingForceDeleteWorktree?.id == worktree.id,
-               pendingForceDeleteWorktree?.projectId == worktree.projectId {
+            // The CLI cannot answer the force prompt; leave the refusal on the row.
+            if let pending = pendingForceDeleteWorktree,
+               pending.id == worktree.id, pending.projectId == worktree.projectId {
                 pendingForceDeleteWorktree = nil
-                projectsManager.setOperationState(
-                    for: worktree,
-                    state: .deleteFailed(message: "worktree requires force delete; rerun with --force to delete")
-                )
+                core.failWorktreeClaim(pending.claim, for: worktree, message: "worktree requires force delete; rerun with --force to delete")
             }
         }
         return .ok
@@ -12198,201 +12176,126 @@ final class AppState {
         return String(describing: error)
     }
 
-    /// Runs the git removal off the main actor, then resumes on MainActor
-    /// for state cleanup. On dirty-worktree failure publishes
-    /// `pendingForceDeleteWorktree` instead of showing a blocking modal —
-    /// unless `promptsForForce` is false, in which case that modal is
-    /// suppressed and the outcome is reported back instead (see
-    /// `batchDeleteWorktrees`, which must never pop a modal mid-run).
+    /// Deletes a worktree claimed by `core.beginDelete` through the core,
+    /// then settles what only the app has: the force prompt (or, when
+    /// `promptsForForce` is false, as in batches that must never pop a modal
+    /// mid-run, the outcome instead), the persisted GG mode, and selection.
+    /// `acknowledgedDirtyTabs` are the unsaved edits the user agreed to
+    /// discard; anything else dirty refuses at quiesce.
     @discardableResult
     private func performDeleteWorktree(
         worktree: Worktree,
+        claim: UUID,
         repoPath: URL,
         deleteBranchIfMerged: Bool,
         force: Bool,
         removedIndex: Int,
         refreshAfter: Bool = true,
         promptsForForce: Bool = true,
+        isBatch: Bool = false,
         authorizedDeleteContentFingerprint: String? = nil,
-        authorizedDirtyTabsAtConfirmation: [TabID: Int]? = nil,
-        authorizedSessionIDs: Set<String>? = nil,
+        acknowledgedDirtyTabs: [TabID: Int] = [:],
         verifiedMergedBranchSHA: String? = nil
     ) async -> WorktreeBatchOutcome {
-        if authorizedDirtyTabsAtConfirmation == nil,
-           !recheckWorkspaceOwnershipBeforeRemoval(worktree) {
-            return .skipped(reason: "Worktree changed since confirmation")
-        }
-        let isAuthorizedBatchDeletion = authorizedDirtyTabsAtConfirmation != nil && authorizedSessionIDs != nil
-        if let authorizedDirtyTabsAtConfirmation,
-           let authorizedSessionIDs {
-            let volatileStateIsStillAuthorized = Self.hasOnlyAcknowledgedDirtiness(
-                current: dirtyTabGenerations(worktreeId: worktree.id),
-                acknowledgedAtConfirmation: authorizedDirtyTabsAtConfirmation
-            )
-                && worktreeCleanupSessionIDs(worktreeId: worktree.id).isSubset(of: authorizedSessionIDs)
-                && WorktreeService.localBranchName(forWorktreeAt: worktree.path) == worktree.branch
-                && workspacesManager.canMutate
-                && worktreeCleanupWorkspaceOwners(for: worktree).isEmpty
-            guard volatileStateIsStillAuthorized else {
-                projectsManager.setOperationState(for: worktree, state: nil)
-                return .skipped(reason: "Worktree changed since confirmation")
+        var options = WorktreeDeleteOptions()
+        options.force = force
+        options.deleteBranchIfMerged = deleteBranchIfMerged
+        options.verifiedMergedBranchSHA = verifiedMergedBranchSHA
+        options.authorizedContentFingerprint = authorizedDeleteContentFingerprint
+        options.keepsClaimForForcePrompt = promptsForForce
+        // Batches report skips in their results and leave the row as it was.
+        options.recordsSkips = !isBatch
+        options.refreshesProject = refreshAfter
+        if isBatch {
+            // The scan's branch can be stale: a detached checkout's commits
+            // are reachable only through its own HEAD.
+            options.revalidate = {
+                WorktreeService.localBranchName(forWorktreeAt: worktree.path) == worktree.branch
+                    ? nil : WorktreeRemovalResult.changedSinceConfirmationMessage
             }
         }
-
-        let result = await core.removeWorktree(WorktreeRemovalRequest(
-            worktree: worktree,
-            repoPath: repoPath,
-            force: force,
-            deleteBranchIfMerged: deleteBranchIfMerged,
-            verifiedMergedBranchSHA: verifiedMergedBranchSHA,
-            authorizedContentFingerprint: authorizedDeleteContentFingerprint,
-            revalidate: { [weak self] in
-                guard let self else { return "Worktree changed since confirmation" }
-                if isAuthorizedBatchDeletion {
-                    guard self.workspacesManager.canMutate, self.worktreeCleanupWorkspaceOwners(for: worktree).isEmpty else {
-                        self.projectsManager.setOperationState(for: worktree, state: nil)
-                        return "Worktree changed since confirmation"
-                    }
-                    return nil
-                }
-                return self.recheckWorkspaceOwnershipBeforeRemoval(worktree) ? nil : "Worktree changed since confirmation"
+        let outcome: WorktreeDeletionOutcome
+        do {
+            outcome = try await withAcknowledgedDirtyTabs(acknowledgedDirtyTabs, for: worktree) {
+                await core.deleteWorktree(worktree, claim: claim, options: options)
             }
-        ))
-        switch result {
-        case .removed:
-            break
-        case .checkpointRecoveryPending:
-            projectsManager.setOperationState(
-                for: worktree,
-                state: .deleteFailed(message: Self.checkpointRecoveryBlocksWorktreeRemovalMessage)
-            )
-            return .failed(message: Self.checkpointRecoveryBlocksWorktreeRemovalMessage)
-        case .skipped(let reason):
-            if reason == Self.changedDeleteRisksMessage {
-                projectsManager.setOperationState(for: worktree, state: nil)
-            }
-            return .skipped(reason: reason)
-        case .needsForce(let refusal) where force:
-            // Already forced: nothing left to offer.
-            projectsManager.setOperationState(for: worktree, state: .deleteFailed(message: refusal))
-            return .failed(message: refusal)
-        case .needsForce(let refusal):
-            if promptsForForce,
-               let pending = Self.pendingForceDelete(
-                    for: worktree,
-                    repoPath: repoPath,
-                    deleteBranchIfMerged: deleteBranchIfMerged,
-                    removedIndex: removedIndex,
-                    stderr: refusal
-               ) {
-                // `.preparingDelete`, not `nil`: the row still shows a
-                // "Preparing deletion…" state (rather than the alarming
-                // "Deleting…" one) while the force-delete alert is up, but
-                // stays claimed against new session admission for the same
-                // reason the first confirmation does — this SwiftUI `.alert`
-                // is no less capable of yielding to other main-actor work
-                // while it's open than `NSAlert.runModal()` is.
-                projectsManager.setOperationState(for: worktree, state: .preparingDelete)
-                pendingForceDeleteWorktree = pending
-            } else {
-                // Batches never force implicitly and must not hijack the app
-                // with a modal mid-run: record the state and report it back so
-                // the sheet can tell the user to handle this one individually.
-                projectsManager.setOperationState(for: worktree, state: .deleteFailed(message: refusal))
-            }
-            return .needsForce
-        case .failed(let message):
-            projectsManager.setOperationState(for: worktree, state: .deleteFailed(message: message))
-            return .failed(message: message)
+        } catch {
+            outcome = .failed(error.localizedDescription)
         }
-
-        // The `.deleting` claim must outlive the stale-row window: the removed
-        // row stays in the visible list until the refresh below reconciles it
-        // away, and everything keyed off the claim (session admission, the
-        // right pane collapsing for this worktree only) must keep seeing it
-        // until the row it describes is gone. The refresh clears it on its own
-        // for a row git no longer lists; batches skip this per-item refresh
-        // and release their claims at their own trailing refresh.
-        removePersistedGGWorktreeMode(
-            projectId: worktree.projectId,
-            worktreeId: worktree.id
-        )
-        // Selection reconciliation only makes sense once the project list no
-        // longer contains the deleted worktree. Callers that skip the refresh
-        // (batches, which refresh once at the end) reconcile the selection
-        // themselves afterwards.
-        if refreshAfter {
-            do {
-                _ = try await refreshProjectWorktrees(projectId: worktree.projectId)
-                // The refresh clears the claim only for a row git no longer
-                // lists. A checkout recreated at the same path before this
-                // refresh ran keeps the same path-derived id, so it would
-                // inherit the claim and stay hidden from the right pane and
-                // blocked from session admission forever. The removal this
-                // claim described has already succeeded, so release it either
-                // way: whatever the refreshed list holds under this id now is
-                // not the worktree that was being deleted.
-                projectsManager.setOperationState(for: worktree, state: nil)
-            } catch {
-                // The refresh reconciles the removed row away together with
-                // its `.deleting` claim and the project metadata that names
-                // it. When the refresh itself could not run, drop them here
-                // instead of only releasing the claim: the removal already
-                // succeeded, and a row left behind resolves as an ordinary
-                // worktree — remounting the pane this deletion collapsed,
-                // reopening session admission for a checkout that is gone,
-                // and letting `selectionAfterRemoval` select it straight
-                // back. Persisted metadata must go with it, or a hosted
-                // project would restore the deleted row at startup recovery.
-                projectsManager.dropRemovedWorktree(
-                    id: worktree.id,
-                    projectId: worktree.projectId
-                )
-                saveProjects()
-            }
-            if selectedWorktreeId == worktree.id {
+        if case .deletedButNotSaved(let message) = outcome {
+            persistenceErrorHandler("Projects Save Failed", message)
+        }
+        switch outcome {
+        case .deleted, .deletedButNotSaved:
+            removePersistedGGWorktreeMode(projectId: worktree.projectId, worktreeId: worktree.id)
+            // Callers that skip the refresh (batches, which refresh once at the
+            // end) reconcile the selection themselves afterwards.
+            if refreshAfter, selectedWorktreeId == worktree.id {
                 selectWorktree(id: selectionAfterRemoval(
                     removedFromProjectId: worktree.projectId,
                     removedAtIndex: removedIndex
                 ))
             }
+            return .deleted
+        case .needsForce(let refusal):
+            guard promptsForForce else { return .needsForce }
+            if let pending = Self.pendingForceDelete(
+                for: worktree,
+                claim: claim,
+                repoPath: repoPath,
+                deleteBranchIfMerged: deleteBranchIfMerged,
+                removedIndex: removedIndex,
+                stderr: refusal,
+                acknowledgedDirtyTabs: acknowledgedDirtyTabs
+            ) {
+                // The core kept the claim as `.preparingDelete` for this
+                // SwiftUI alert, which yields to other main-actor work as
+                // readily as `NSAlert.runModal()` does.
+                pendingForceDeleteWorktree = pending
+            } else {
+                core.failWorktreeClaim(claim, for: worktree, message: refusal)
+            }
+            return .needsForce
+        case .skipped(let reason):
+            return .skipped(reason: reason)
+        case .failed(let message):
+            return .failed(message: message)
         }
-        return .deleted
     }
 
     /// Called from the SwiftUI alert when the user confirms force delete.
     func confirmForceDeletePendingWorktree() {
         guard let pending = pendingForceDeleteWorktree else { return }
         pendingForceDeleteWorktree = nil
-
         guard let worktree = projectsManager.worktrees(projectId: pending.projectId).first(where: { $0.id == pending.id })
         else { return }
-
-        projectsManager.setOperationState(forWorktreeId: pending.id, projectId: pending.projectId, state: .deleting(projectId: pending.projectId))
-
+        core.confirmDelete(pending.claim, for: worktree)
         Task { @MainActor in
-            // This SwiftUI alert stays open for arbitrary user think-time —
-            // the same async gap the CLI and interactive paths already
-            // recheck ownership across, so this force-confirmation path
-            // needs the identical recheck immediately before removal.
-            guard recheckWorkspaceOwnershipBeforeRemoval(worktree) else { return }
             await performDeleteWorktree(
                 worktree: worktree,
+                claim: pending.claim,
                 repoPath: pending.repoPath,
                 deleteBranchIfMerged: pending.deleteBranchIfMerged,
                 force: true,
-                removedIndex: pending.removedIndex
+                removedIndex: pending.removedIndex,
+                acknowledgedDirtyTabs: pending.acknowledgedDirtyTabs
             )
         }
     }
 
     /// Called from the SwiftUI alert when the user cancels force delete.
     func cancelForceDeletePendingWorktree() {
-        if let pending = pendingForceDeleteWorktree,
-           projectsManager.operationState(forWorktreeId: pending.id, projectId: pending.projectId) == .preparingDelete {
-            projectsManager.setOperationState(forWorktreeId: pending.id, projectId: pending.projectId, state: nil)
+        if let pending = pendingForceDeleteWorktree {
+            releaseClaim(of: pending)
         }
         pendingForceDeleteWorktree = nil
+    }
+
+    /// Gives back the claim a pending force prompt holds.
+    private func releaseClaim(of pending: PendingForceDeleteWorktree) {
+        if let worktree = projectsManager.worktrees(projectId: pending.projectId).first(where: { $0.id == pending.id }) {
+            core.releaseWorktreeClaim(pending.claim, for: worktree)
+        }
     }
 
     nonisolated private static func performDeletePreflight(worktreePath: URL) async -> WorktreeDeletePreflight {
@@ -12427,18 +12330,18 @@ final class AppState {
         )
     }
 
-    private static let changedDeleteRisksMessage = WorktreeRemovalResult.changedDeleteRisksMessage
-
     nonisolated static func worktreeDeleteContentFingerprint(worktreePath: URL) async throws -> String {
         try await WorktreeService.worktreeDeleteContentFingerprint(worktreePath: worktreePath)
     }
 
     nonisolated static func pendingForceDelete(
         for worktree: Worktree,
+        claim: UUID,
         repoPath: URL,
         deleteBranchIfMerged: Bool,
         removedIndex: Int,
-        stderr: String
+        stderr: String,
+        acknowledgedDirtyTabs: [TabID: Int] = [:]
     ) -> PendingForceDeleteWorktree? {
         guard requiresForceRetry(forRemovalRefusal: stderr) else { return nil }
         return PendingForceDeleteWorktree(
@@ -12448,7 +12351,9 @@ final class AppState {
             repoPath: repoPath,
             worktreePath: worktree.path,
             deleteBranchIfMerged: deleteBranchIfMerged,
-            removedIndex: removedIndex
+            removedIndex: removedIndex,
+            claim: claim,
+            acknowledgedDirtyTabs: acknowledgedDirtyTabs
         )
     }
 

@@ -1402,7 +1402,8 @@ struct AppStateCLIRoutingTests {
             repoPath: main.path,
             worktreePath: target.path,
             deleteBranchIfMerged: false,
-            removedIndex: 1
+            removedIndex: 1,
+            claim: try state.core.beginDelete(target)
         )
 
         let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in main.id })
@@ -1430,7 +1431,6 @@ struct AppStateCLIRoutingTests {
         try await state.projectsManager.refreshWorktrees(projectId: project.id)
         let target = try #require(state.projectsManager.worktrees(projectId: project.id).first { $0.branch == "delete-stale-claim-target" })
 
-        state.projectsManager.setOperationState(forWorktreeId: target.id, projectId: project.id, state: .preparingDelete)
         state.pendingForceDeleteWorktree = AppState.PendingForceDeleteWorktree(
             id: target.id,
             branch: target.branch,
@@ -1438,7 +1438,8 @@ struct AppStateCLIRoutingTests {
             repoPath: main.path,
             worktreePath: target.path,
             deleteBranchIfMerged: false,
-            removedIndex: 1
+            removedIndex: 1,
+            claim: try state.core.beginDelete(target)
         )
 
         let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in main.id })
@@ -1517,11 +1518,6 @@ struct AppStateCLIRoutingTests {
             lastActivity: .distantPast
         )
         state.projectsManager.insertOptimisticWorktree(otherRow)
-        state.projectsManager.setOperationState(
-            forWorktreeId: otherRow.id,
-            projectId: otherProject.id,
-            state: .preparingDelete
-        )
         state.pendingForceDeleteWorktree = AppState.PendingForceDeleteWorktree(
             id: sharedID,
             branch: otherRow.branch,
@@ -1529,7 +1525,8 @@ struct AppStateCLIRoutingTests {
             repoPath: URL(fileURLWithPath: otherProject.path),
             worktreePath: otherRow.path,
             deleteBranchIfMerged: false,
-            removedIndex: 0
+            removedIndex: 0,
+            claim: try state.core.beginDelete(otherRow)
         )
 
         // A worktree in *this* project that happens to share the same
