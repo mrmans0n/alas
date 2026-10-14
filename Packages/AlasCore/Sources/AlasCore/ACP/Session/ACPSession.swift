@@ -1025,15 +1025,13 @@ public final class ACPSession: ChangeTracking, Identifiable {
         case .agentMessageChunk(let chunk):
             clearRestoredContextRecoveryStatus()
             let txt = text(of: chunk.content)
+            // A late replay after load-replay suppression ends re-sends the
+            // confirmation; like `appendStreaming`, drop what is already shown.
+            // Prompts and goal controls reopen the window for fresh output.
+            if !allowsStreamingBoundaryCrossing, showsGoalCommandConfirmation(txt) { return [] }
             if let notice = Self.goalCommandNotice(
                 txt, currentObjective: currentGoal?.objective, clearedObjective: clearedGoalObjective
             ) {
-                // A late replay after load-replay suppression ends re-sends the
-                // confirmation; like `appendStreaming`, drop what is already shown.
-                // Prompts and goal controls reopen the window for fresh output.
-                if !allowsStreamingBoundaryCrossing, transcript.messages.contains(where: {
-                    if case .systemNotice(_, notice) = $0 { true } else { false }
-                }) { return [] }
                 let flushedForNotice = flushPendingReplayCandidates()
                 transcript.appendMessage(.systemNotice(id: UUID(), text: notice))
                 didAppendTranscriptMessage()
@@ -2347,6 +2345,21 @@ public final class ACPSession: ChangeTracking, Identifiable {
         if let currentObjective, trimmed == "Goal set: \(currentObjective)" { return trimmed }
         if let clearedObjective, trimmed == "Goal cleared: \(clearedObjective)" { return trimmed }
         return nil
+    }
+
+    /// Whether `text` is a `/goal` confirmation the transcript already shows:
+    /// as a notice, or as agent text recorded before notices existed. Matches
+    /// any objective, since the cleared one is not kept across a restart.
+    private func showsGoalCommandConfirmation(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("Goal set: ") || trimmed.hasPrefix("Goal cleared: ") else { return false }
+        return transcript.messages.contains { message in
+            switch message {
+            case .systemNotice(_, let notice): notice == trimmed
+            case .agent(_, _, let buf): buf.value.contains(trimmed)
+            default: false
+            }
+        }
     }
 
     public func appendSystemNotice(_ text: String) {

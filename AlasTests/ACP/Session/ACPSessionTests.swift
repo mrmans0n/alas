@@ -1690,17 +1690,25 @@ struct ACPSessionTests {
         session.apply(.agentMessageChunk(.init(messageId: "m-2", content: .text("Goal set: Ship phase 3"))))
         #expect(lastRowIsNotice("Goal set: Ship phase 3"))
 
-        session.allowsStreamingBoundaryCrossing = false
-        session.apply(.agentMessageChunk(.init(messageId: "m-2", content: .text("Goal set: Ship phase 3"))))
-        #expect(session.transcript.messages.count == 2)
-        session.allowsStreamingBoundaryCrossing = true
-
         session.apply(.agentMessageChunk(.init(messageId: "m-3", content: .text("Goal set: something else"))))
         #expect(!lastRowIsNotice("Goal set: something else"))
 
         publishGoal(nil)
         session.apply(.agentMessageChunk(.init(messageId: "m-4", content: .text("Goal cleared: Ship phase 3"))))
         #expect(lastRowIsNotice("Goal cleared: Ship phase 3"))
+    }
+
+    @Test("a late-replayed /goal confirmation already shown is dropped", arguments: [false, true])
+    func lateReplayedGoalConfirmationIsDropped(storedAsAgentText: Bool) {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        // A cleared goal is not restored, and older builds kept the confirmation as agent text.
+        let confirmation = storedAsAgentText ? "Goal set: Ship phase 3" : "Goal cleared: Ship phase 3"
+        session.transcript.appendMessage(storedAsAgentText
+            ? .agent(id: UUID(), messageId: "m-1", StreamingText("Done.\n\n\(confirmation)"))
+            : .systemNotice(id: UUID(), text: confirmation))
+        session.allowsStreamingBoundaryCrossing = false
+        session.apply(.agentMessageChunk(.init(messageId: "m-2", content: .text(confirmation))))
+        #expect(session.transcript.messages.count == 1)
     }
 
     @Test("oversized goal integers are ignored", arguments: ["tokensUsed", "iterations"])
