@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import UserNotifications
+@_spi(Testing) import AlasCore
 @testable import Alas
 
 /// Scheduled runs go through the manual run-script path: same records, same

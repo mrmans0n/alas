@@ -2,6 +2,7 @@ import Foundation
 import Synchronization
 import Testing
 import UserNotifications
+@_spi(Testing) import AlasCore
 @testable import Alas
 
 struct RunScriptLaunchTests {

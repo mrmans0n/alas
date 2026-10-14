@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+@_spi(Testing) import AlasCore
 @testable import Alas
 
 @MainActor
