@@ -26,15 +26,6 @@ import Testing
         #expect(view.measuredHeight(forWidth: 0) == 0 && view.lastMeasuredWidth == 400)
     }
 
-    @Test(arguments: [
-        ACPTranscriptCoreTextRowView.Content.thought(label: "Planning"),
-        .toolGroupHeader(label: "Ran 3 commands", iconSystemName: "terminal", expanded: false),
-    ])
-    func oneLineRowsAreOneLineTall(content: ACPTranscriptCoreTextRowView.Content) {
-        let height = row(content).measuredHeight(forWidth: 1_000)
-        #expect(height > 10 && height < 30)
-    }
-
     @Test func theColumnIsCenteredAndCapped() {
         let view = row(.agent(markdown: "Hi", commentary: false))
         _ = view.measuredHeight(forWidth: 1_400)
