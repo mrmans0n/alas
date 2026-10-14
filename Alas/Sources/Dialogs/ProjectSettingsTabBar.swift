@@ -18,12 +18,12 @@ enum ProjectSettingsTab: String, CaseIterable, Identifiable {
     }
 }
 
-struct ProjectSettingsTabBar: View {
+struct ProjectSettingsSidebar: View {
     @Binding var selection: ProjectSettingsTab
     @Environment(\.theme) private var theme
 
     var body: some View {
-        HStack(spacing: 22) {
+        VStack(alignment: .leading, spacing: 4) {
             ForEach(ProjectSettingsTab.allCases) { tab in
                 Button {
                     selection = tab
@@ -46,13 +46,15 @@ struct ProjectSettingsTabBar: View {
                             .font(.system(size: 12.5, weight: .medium))
                     }
                     .foregroundStyle(theme.color(selection == tab ? "fg" : "fg-dim"))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 10)
                     .padding(.vertical, 10)
                     .contentShape(Rectangle())
-                    .overlay(alignment: .bottom) {
-                        Rectangle()
-                            .fill(theme.color("accent"))
-                            .frame(height: 2)
-                            .opacity(selection == tab ? 1 : 0)
+                    .background {
+                        if selection == tab {
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(theme.color("bg-3"))
+                        }
                     }
                 }
                 .buttonStyle(.plain)
@@ -60,8 +62,11 @@ struct ProjectSettingsTabBar: View {
             }
             Spacer(minLength: 0)
         }
-        .background(alignment: .bottom) { Divider() }
+        .padding(12)
+        .frame(width: 172)
+        .frame(maxHeight: .infinity, alignment: .topLeading)
+        .background(theme.color("bg-2"))
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Project settings tabs")
+        .accessibilityLabel("Project settings sections")
     }
 }

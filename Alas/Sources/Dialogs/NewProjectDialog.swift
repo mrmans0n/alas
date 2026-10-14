@@ -188,14 +188,28 @@ private struct ProjectDialog: View {
     }
 
     var body: some View {
-        DialogContainer(
-            title: title,
-            subtitle: subtitle,
-            width: DialogContainerLayout.projectWidth,
-            content: {
-                ProjectSettingsTabBar(selection: $selectedTab)
-                ScrollView {
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(theme.color("fg"))
+                Text(subtitle)
+                    .font(.system(size: 12))
+                    .foregroundStyle(theme.color("fg-dim"))
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 22)
+            .padding(.vertical, 18)
+
+            Divider()
+            HStack(spacing: 0) {
+                ProjectSettingsSidebar(selection: $selectedTab)
+                Divider()
+                ScrollView(.vertical) {
                     VStack(alignment: .leading, spacing: 16) {
+                        Text(selectedTab.rawValue)
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(theme.color("fg"))
                         switch selectedTab {
                         case .general:
                             generalSettings
@@ -212,25 +226,38 @@ private struct ProjectDialog: View {
                         case .integrations:
                             integrationsSection
                         }
+                        if let sshConnectionIssue {
+                            sshConnectionIssueField(sshConnectionIssue)
+                        } else if let errorMessage {
+                            errorField(errorMessage)
+                        }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, 4)
+                    .padding(22)
                 }
-                .frame(height: 330)
+                .scrollBounceBehavior(.basedOnSize)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .disabled(isValidating)
-                if let sshConnectionIssue {
-                    sshConnectionIssueField(sshConnectionIssue)
-                } else if let errorMessage {
-                    errorField(errorMessage)
-                }
-            },
-            cancelTitle: "Cancel",
-            confirmTitle: confirmTitle,
-            confirmStyle: .primary,
-            onCancel: cancel,
-            onConfirm: confirm,
-            confirmEnabled: confirmEnabled
-        )
+            }
+            .frame(maxHeight: .infinity)
+
+            HStack(spacing: 8) {
+                Spacer()
+                AlasButton(title: "Cancel", style: .subtle, action: cancel)
+                AlasButton(title: confirmTitle, style: .primary, action: confirm)
+                    .disabled(!confirmEnabled)
+                    .opacity(confirmEnabled ? 1 : 0.5)
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 12)
+            .background(theme.color("bg-2"))
+            .overlay(Divider(), alignment: .top)
+        }
+        .frame(width: 800)
+        .frame(minHeight: 480, idealHeight: 660, maxHeight: .infinity)
+        .background(theme.color("bg-1"))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .background(ProjectSettingsSheetSizing())
         .onAppear {
             populateInitialValues()
             Task { await loadAvatarPresetIfAvailable() }
@@ -1651,6 +1678,33 @@ private struct SSHConnectionAssistant: View {
         case .failed: onRetry()
         case .incompatible: onCancel()
         case .connecting, .verifying: break
+        }
+    }
+}
+
+/// Fixes the sheet's width while allowing its detail pane to grow vertically.
+private struct ProjectSettingsSheetSizing: NSViewRepresentable {
+    func makeNSView(context: Context) -> SizingView { SizingView() }
+
+    func updateNSView(_ nsView: SizingView, context: Context) {}
+
+    final class SizingView: NSView {
+        private weak var configuredWindow: NSWindow?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            // Wait until the hosting view has installed its sizing constraints.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, let window = self.window,
+                      self.configuredWindow !== window else { return }
+                self.configuredWindow = window
+                let screenHeight = window.screen?.visibleFrame.height ?? 900
+                let maximumHeight = max(480, screenHeight - 80)
+                window.styleMask.insert(.resizable)
+                window.contentMinSize = NSSize(width: 800, height: 480)
+                window.contentMaxSize = NSSize(width: 800, height: maximumHeight)
+                window.setContentSize(NSSize(width: 800, height: min(660, maximumHeight)))
+            }
         }
     }
 }
