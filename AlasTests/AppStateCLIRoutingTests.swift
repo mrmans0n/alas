@@ -797,18 +797,33 @@ struct AppStateCLIRoutingTests {
     }
 
     /// Relative transcript paths, including `Package.swift:2` that Foundation
-    /// parses with a scheme, join a remote session's root; other `scheme:`
-    /// links and local sessions keep the local routing.
+    /// parses with a scheme, join a remote session's root; `scheme:` links an
+    /// app handles (`tel:123`) or that aren't `path:line`, and every link in a
+    /// local session, keep the local routing.
     @Test(arguments: [
-        ("Sources/a.swift:3", true, AppState.AbsoluteLinkRoute.remoteEditor(relativePath: "Sources/a.swift", line: 3, column: nil)),
-        ("Package.swift:2", false, .remoteEditor(relativePath: "Package.swift", line: 2, column: nil)),
-        ("../escape.swift", true, .ignored),
-        ("/srv/repo/a.swift", true, .remoteEditor(relativePath: "a.swift", line: nil, column: nil)),
-        ("mailto:a@b.c", false, .local),
+        ("Sources/a.swift:3", true, false, AppState.AbsoluteLinkRoute.remoteEditor(relativePath: "Sources/a.swift", line: 3, column: nil)),
+        ("Package.swift:2", false, false, .remoteEditor(relativePath: "Package.swift", line: 2, column: nil)),
+        ("tel:123", false, true, .local),
+        ("mailto:a@b.c", false, true, .local),
+        ("../escape.swift", true, false, .ignored),
+        ("/srv/repo/a.swift", true, false, .remoteEditor(relativePath: "a.swift", line: nil, column: nil)),
     ])
-    func transcriptRemoteLinkRouteJoinsRelativePaths(raw: String, isLocalPathForm: Bool, expected: AppState.AbsoluteLinkRoute) {
-        #expect(AppState.transcriptRemoteLinkRoute(raw, isLocalPathForm: isLocalPathForm, worktreeRoot: "/.alas-remote/mini/srv/repo") == expected)
-        #expect(AppState.transcriptRemoteLinkRoute(raw, isLocalPathForm: isLocalPathForm, worktreeRoot: "/srv/repo") == .local)
+    func transcriptRemoteLinkRouteJoinsRelativePaths(
+        raw: String,
+        isLocalPathForm: Bool,
+        schemeHasSystemHandler: Bool,
+        expected: AppState.AbsoluteLinkRoute
+    ) {
+        func route(root: String) -> AppState.AbsoluteLinkRoute {
+            AppState.transcriptRemoteLinkRoute(
+                raw,
+                isLocalPathForm: isLocalPathForm,
+                schemeHasSystemHandler: schemeHasSystemHandler,
+                worktreeRoot: root
+            )
+        }
+        #expect(route(root: "/.alas-remote/mini/srv/repo") == expected)
+        #expect(route(root: "/srv/repo") == .local)
     }
 
     /// A remote Workspace checkout root has no editor of its own: its path

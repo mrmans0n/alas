@@ -10446,15 +10446,17 @@ final class AppState {
     /// How a transcript link from a session rooted at `worktreeRoot` routes
     /// on a remote host. A relative path names a file on that host, so it
     /// joins the virtual root and routes lexically, unprobed. That includes
-    /// `Package.swift:2`, which Foundation parses as having a scheme; a
-    /// `mailto:` link is no path and stays `.local`.
+    /// `Package.swift:2`, which Foundation parses as having a scheme, unless
+    /// the system has an app for that scheme (`tel:123`). A `mailto:` link
+    /// is no path and stays `.local`.
     nonisolated static func transcriptRemoteLinkRoute(
         _ rawPath: String,
         isLocalPathForm: Bool,
+        schemeHasSystemHandler: Bool,
         worktreeRoot: String
     ) -> AbsoluteLinkRoute {
-        let isRelativePath = !rawPath.hasPrefix("/")
-            && (isLocalPathForm || parseLocalPathPosition(rawPath) != nil)
+        let isRelativePath = !rawPath.hasPrefix("/") && (isLocalPathForm
+            || (!schemeHasSystemHandler && parseLocalPathPosition(rawPath) != nil))
         return absoluteLinkRoute(isRelativePath ? worktreeRoot + "/" + rawPath : rawPath, worktreeRoot: worktreeRoot)
     }
 
@@ -10515,6 +10517,7 @@ final class AppState {
         let remoteRoute = Self.transcriptRemoteLinkRoute(
             rawPath,
             isLocalPathForm: isLocalPathForm,
+            schemeHasSystemHandler: !isLocalPathForm && NSWorkspace.shared.urlForApplication(toOpen: url) != nil,
             worktreeRoot: session.path.path
         )
         if let registered {
