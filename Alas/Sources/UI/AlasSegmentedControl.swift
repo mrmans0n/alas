@@ -101,6 +101,7 @@ struct AlasSegmentedControl<ID: Hashable>: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
         .focusable(option.isEnabled)
         .focusEffectDisabled()
         .disabled(!option.isEnabled)

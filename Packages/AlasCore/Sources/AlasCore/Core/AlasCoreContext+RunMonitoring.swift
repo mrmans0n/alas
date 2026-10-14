@@ -17,12 +17,12 @@ public enum RunScriptSettlement: Equatable, Sendable {
 /// A run whose completion file is being waited for.
 public struct RunObservation {
     public let worktreeID: String
-    /// The terminal session hosting the run.
-    public let sessionID: String
+    /// The terminal session hosting the run; nil for a run in a plain process.
+    public let sessionID: String?
     public let location: RunScriptCaptureLocation
     public let task: Task<Void, Never>
 
-    public init(worktreeID: String, sessionID: String, location: RunScriptCaptureLocation, task: Task<Void, Never>) {
+    public init(worktreeID: String, sessionID: String?, location: RunScriptCaptureLocation, task: Task<Void, Never>) {
         self.worktreeID = worktreeID
         self.sessionID = sessionID
         self.location = location
@@ -73,15 +73,18 @@ extension AlasCoreContext {
 
     // MARK: - Observation
 
-    /// Waits for the run's completion file and finishes its record from it.
-    /// `onFinished` is called with the finished record once it is archived;
-    /// a failed run's record carries the run ID as its failure ID.
+    /// Waits for the run's completion (`awaitCompletion`, or else its
+    /// completion file) and
+    /// finishes its record from it. `onFinished` is called with the finished
+    /// record once it is archived; a failed run's record carries the run ID
+    /// as its failure ID.
     @_spi(AppHost) public func observeRun(
         runID: String,
-        sessionID: String,
+        sessionID: String?,
         location: RunScriptCaptureLocation,
         scriptKey: String,
         worktreeID: String,
+        awaitCompletion: (@MainActor () async throws -> RunScriptCompletion)? = nil,
         onFinished: @escaping @MainActor (RunRecord, RunScriptCompletion) -> Void
     ) {
         runObservations[runID] = RunObservation(
@@ -92,7 +95,12 @@ extension AlasCoreContext {
                 guard let self else { return }
                 defer { runObservations.removeValue(forKey: runID) }
                 do {
-                    let completion = try await runCompletionWaiter(location)
+                    let completion: RunScriptCompletion
+                    if let awaitCompletion {
+                        completion = try await awaitCompletion()
+                    } else {
+                        completion = try await runCompletionWaiter(location)
+                    }
                     guard runRecords.isCurrentActiveRun(runID: runID, worktreeID: worktreeID, scriptKey: scriptKey) else {
                         // Something replaced this run's slot while it was in
                         // flight, so its exit status no longer describes what
@@ -104,17 +112,27 @@ extension AlasCoreContext {
                     let finalized = runRecords.finish(
                         runID: runID,
                         outcome: failed ? .failed(exitCode: completion.exitCode) : .succeeded,
-                        at: Date(),
+                        // A process's completion is timed on this machine; a
+                        // terminal run's file may come from another host's clock.
+                        at: awaitCompletion == nil ? Date() : completion.completedAt,
                         failureID: failed ? runID : nil
                     )
                     finalizeRun(finalized, capture: .completion(completion))
                     if let finalized { onFinished(finalized, completion) }
-                } catch is CancellationError {
+                } catch is RunUndone {
+                    // The run never started and was already put back.
+                } catch is CancellationError where Task.isCancelled {
                     // `stopObservingRun` already recorded the lost
-                    // observation; it owns that transition.
+                    // observation; it owns that transition. A cancellation
+                    // thrown by the completion source alone is a lost run
+                    // like any other failure below.
                 } catch {
                     // The waiter failed (dropped SSH, unreadable completion
                     // file). We never saw an exit status, so we can't claim one.
+                    if sessionID == nil {
+                        // A run in a plain process has a caller waiting for why.
+                        processRunErrors[runID] = error
+                    }
                     loseObservation(runID: runID, capture: .failed(error, location: location), release: .failed(error, location: location))
                     runMonitoringLogger.error(
                         "Run script completion monitor failed for run \(runID, privacy: .public) at \(String(describing: location), privacy: .public): \(String(describing: error), privacy: .public)"

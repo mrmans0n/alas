@@ -297,9 +297,7 @@ struct RunScriptLaunchTests {
     /// the state a fixed "let it settle" sleep used to approximate.
     @MainActor
     private func finishPendingLaunches(_ state: AppState) async {
-        for task in Array(state.pendingScriptLaunchTasks.values) {
-            await task.value
-        }
+        await state.core.waitForStartingRunsForTesting()
     }
 
     /// Polls `condition` until it holds or `timeout` elapses; the caller
@@ -411,7 +409,7 @@ struct RunScriptLaunchTests {
             return false
         }
         #expect(scriptTabs.count == 1)
-        #expect(state.pendingScriptLaunches.isEmpty)
+        #expect(state.core.startingRunIsHidden(scriptKey: runScript.key, worktreeID: worktree.id) == nil)
     }
 
     /// A worktree being deleted admits nothing new: a run is refused before
@@ -855,7 +853,7 @@ struct RunScriptLaunchTests {
             task: Task {}
         )
 
-        state.cancelRunScriptCompletionTasks(sessionID: "session", after: .milliseconds(1), includeRemote: false)
+        state.core.stopObservingRuns(hostedBy: "session", after: .milliseconds(1), includeRemote: false)
 
         try await Task.sleep(for: .milliseconds(20))
         #expect(state.runScriptCompletionTaskCountForTesting == 1)
@@ -873,7 +871,7 @@ struct RunScriptLaunchTests {
             task: Task {}
         )
 
-        state.cancelRunScriptCompletionTasks(sessionID: "session", after: .milliseconds(30))
+        state.core.stopObservingRuns(hostedBy: "session", after: .milliseconds(30))
 
         try await waitUntil { state.runScriptCompletionTaskCountForTesting == 0 }
         #expect(state.runScriptCompletionTaskCountForTesting == 0)

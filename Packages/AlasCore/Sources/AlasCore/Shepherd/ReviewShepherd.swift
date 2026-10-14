@@ -744,7 +744,9 @@ public final class ReviewShepherd {
                 )
                 return
             case .finished(let result):
-                outcome = result
+                outcome = result == .merged
+                    ? await confirmedMergeOutcome(id, worktreePath: context.path)
+                    : result
             }
             if outcome == nil {
                 // No merge happened: the gate that said merge no longer holds
@@ -873,6 +875,18 @@ public final class ReviewShepherd {
         return .finished(await loop.merge(snapshot: latest) { [weak self] in
             self?.mayStillMerge(id, generation) ?? false
         })
+    }
+
+    /// A merge command that succeeded does not prove the request merged: a
+    /// GitLab merge train accepts it and merges later. Only the provider
+    /// reporting it merged finishes the record; still open or an unreadable
+    /// request keeps it queued, polling until the provider says merged.
+    private func confirmedMergeOutcome(_ id: ShepherdRecordID, worktreePath: URL) async -> ReviewMergeOutcome {
+        guard let record = records[id], let provider = providerRegistry.provider(for: id.providerKind) else {
+            return .queued
+        }
+        let request = try? await provider.reviewRequest(remote: record.remote, number: id.requestNumber, cwd: worktreePath)
+        return request?.state == .merged ? .merged : .queued
     }
 
     /// The decision to merge still stands: same generation, still merging,

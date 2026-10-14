@@ -60,18 +60,6 @@ enum WorkspaceDefinitionSaveError: LocalizedError {
     }
 }
 
-struct PendingRunScriptLaunch: Equatable {
-    let id: UUID
-    let worktreeID: String
-    let scriptKey: String
-    var isHidden = false
-}
-
-struct PendingRunScriptLaunchKey: Hashable {
-    let worktreeID: String
-    let scriptKey: String
-}
-
 struct RemoteWorktreeStatusProjectScanToken: Equatable {
     let projectID: String
     let generation: Int
@@ -307,13 +295,6 @@ final class AppState {
     /// The `pr_create` running per worktree. A concurrent call waits for it
     /// instead of pushing or opening a second request.
     @ObservationIgnored var prCreateTasks: [String: Task<AlasCLIResponse, Never>] = [:]
-    /// How long a local run-script completion monitor outlives its exited or
-    /// closed terminal before it is cancelled. Injectable so tests don't wait
-    /// out the production grace.
-    @ObservationIgnored let runScriptLocalMonitorGrace: Duration
-    /// The same grace for every monitor, remote ones included; remote
-    /// captures can land well after the terminal is gone.
-    @ObservationIgnored let runScriptMonitorGrace: Duration
     /// Decides when scheduled runs start. Execution is delegated back here so
     /// a scheduled run is a manual run with a different trigger.
     var runScheduler: RunScheduler { core.runScheduler }
@@ -581,17 +562,6 @@ final class AppState {
     @ObservationIgnored
     private var remoteAccelerationTasks: [String: Task<Void, Never>] = [:]
     private let remoteAccelerationProbeRetryDelay: TimeInterval = 30
-    /// Keys of in-flight run-script launches.
-    /// `RunScript.launchScript` inserts synchronously before starting its
-    /// async `Task` and removes on completion, closing the window where two
-    /// rapid invocations (double-click, repeated Enter) would both see no
-    /// registered tab yet and both launch — see `AppState+RunScripts.swift`.
-    /// Worktree ids and script keys can contain `:`, so the dictionary key
-    /// must remain structured rather than serialized.
-    @ObservationIgnored
-    var pendingScriptLaunches: [PendingRunScriptLaunchKey: PendingRunScriptLaunch] = [:]
-    @ObservationIgnored
-    var pendingScriptLaunchTasks: [UUID: Task<Void, Never>] = [:]
     var runScriptCatalogGeneration = 0
     @ObservationIgnored
     private let automaticCheckpointService = WorktreeCheckpointService()
@@ -1599,8 +1569,6 @@ final class AppState {
         self.worktreeStatusScan = worktreeStatusScan
         self.projectGitWatcherFactory = projectGitWatcherFactory
         self.ggStackCache = ggStackCache
-        self.runScriptLocalMonitorGrace = runScriptLocalMonitorGrace
-        self.runScriptMonitorGrace = runScriptMonitorGrace
         self.usageHistory = usageHistory
         self.acpModelCatalog = acpModelCatalog ?? ACPAgentModelCatalog(store: store)
         let workspaceBridge = workspaceSpacePersistenceBridge ?? WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore)
@@ -1625,7 +1593,8 @@ final class AppState {
             localText: localTextInference,
             attentionStore: attentionStore,
             runCompletionWaiter: runScriptCompletionWaiter,
-            environment: hostEnvironment
+            environment: hostEnvironment,
+            runHostGrace: RunHostGrace(local: runScriptLocalMonitorGrace, any: runScriptMonitorGrace)
         )
         self.hostEnvironment = hostEnvironment
         let spacesManager = spacesFile.map(SpacesManager.init(file:))
@@ -8220,7 +8189,7 @@ final class AppState {
             return state.root.find(leafId: leafId) != nil
         }?.id
         guard let tabId = owningTabId else { return }
-        cancelRunScriptCompletionTasks(sessionID: leafId, after: runScriptMonitorGrace)
+        core.runHostExited(sessionID: leafId)
         guard let outcome = tabs.removeLeaf(
             worktreeId: worktreeId, tabId: tabId, leafId: leafId
         ) else { return }
@@ -8291,7 +8260,7 @@ final class AppState {
     /// Tears down a pane already removed from its split tab.
     private func closeRemovedTerminalLeaf(_ leafId: String, worktreeId: String) {
         let authExitHandler = takeACPAuthTerminalExitHandler(terminalId: leafId, owner: .worktree(worktreeId))
-        scheduleRunScriptCompletionCancellation(sessionID: leafId)
+        core.runHostClosed(sessionID: leafId)
         closeTerminalSession(id: leafId, worktreeId: worktreeId, projectPath: projectPath(forWorktreeId: worktreeId))
         authExitHandler?()
     }
@@ -9427,7 +9396,7 @@ final class AppState {
                         owner: .worktree(worktreeId)
                     )
                     if cancelRunScriptMonitors {
-                        scheduleRunScriptCompletionCancellation(sessionID: leaf.id)
+                        core.runHostClosed(sessionID: leaf.id)
                     }
                     closeTerminalSession(id: leaf.id, worktreeId: worktreeId, projectPath: projectPath)
                     authExitHandler?()
@@ -9509,7 +9478,7 @@ final class AppState {
                         terminalId: leaf.id,
                         owner: .worktree(worktreeId)
                     )
-                    scheduleRunScriptCompletionCancellation(sessionID: leaf.id)
+                    core.runHostClosed(sessionID: leaf.id)
                     closeTerminalSession(id: leaf.id, worktreeId: worktreeId, projectPath: projectPath)
                     authExitHandler?()
                 }
@@ -16760,7 +16729,11 @@ extension AppState: RemoteSessionsProvider {
 /// step.
 @MainActor
 class AppHostEnvironment: AlasHostEnvironment {
-    weak var app: AppState?
+    weak var app: AppState? {
+        didSet { appRunLauncher.app = app }
+    }
+    let appRunLauncher = AppRunLauncher()
+    var runLauncher: any RunLauncher { appRunLauncher }
     var repoHookLoader = RepoHookLoader()
     var repoHookPrompter: RepoHookPrompter = .skipping
     var worktreeCleanupLauncher: AppState.WorktreeCleanupLauncher = { try WorktreeTrashCleaner.launch($0) }

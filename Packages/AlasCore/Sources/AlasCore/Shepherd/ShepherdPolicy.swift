@@ -183,6 +183,7 @@ public enum ShepherdPolicy {
             break
         }
 
+        let headUnchanged = request.headSHA != nil && request.headSHA == record.lastSeenHeadSHA
         updateHeadStability(&record, request: request, now: now)
         pruneHandled(&record, request: request)
         let problems = Self.problems(in: request, handled: record.handledThreadRevisions ?? [])
@@ -190,12 +191,16 @@ public enum ShepherdPolicy {
         let cleared = isCleared(request, problems: problems, conclusive: conclusive)
 
         // A merge attempt interrupted by a quit, or a merge queue the
-        // provider no longer reports, falls back to watching.
+        // provider no longer reports, falls back to watching. A provider
+        // without merge-queue reporting (a GitLab merge train) can accept a
+        // merge that lands later: that holds while the head stands and no
+        // check failed, so the record is not merged a second time.
         switch record.phase {
         case .merging:
             record.phase = .watching
         case .queued:
             if request.isInMergeQueue { return .wait }
+            if !request.isMergeQueueEnabled, headUnchanged, request.worstCheckBucket != .fail { return .wait }
             record.phase = .watching
         default:
             break

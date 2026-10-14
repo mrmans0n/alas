@@ -116,7 +116,7 @@ extension AlasCoreContext {
         }
 
         // Nothing may keep using the checkout while its files go.
-        await stopHeadlessRuns(worktreeID: worktree.id)
+        await stopProcessRuns(worktreeID: worktree.id)
         do {
             try await environment.quiesceWorktree(worktree, in: self)
         } catch {
@@ -169,18 +169,6 @@ extension AlasCoreContext {
         return .removed
     }
 
-    /// Cancels the worktree's headless runs and waits until their records
-    /// have settled.
-    func stopHeadlessRuns(worktreeID: String) async {
-        let running = headlessRuns.values.filter { $0.worktreeID == worktreeID }.map(\.task)
-        for run in running {
-            run.cancel()
-        }
-        for run in running {
-            _ = try? await run.value
-        }
-    }
-
     // MARK: - Archive
 
     /// Archives a worktree whose `.archiving` claim the caller holds: stops
@@ -192,7 +180,7 @@ extension AlasCoreContext {
         _ worktree: Worktree,
         revalidate: @MainActor () async -> (any Error)? = { nil }
     ) async throws {
-        await stopHeadlessRuns(worktreeID: worktree.id)
+        await stopProcessRuns(worktreeID: worktree.id)
         try await environment.quiesceWorktree(worktree, in: self)
         // Ownership can change while everything stops (a Workspace checkout
         // registering this worktree), so it is checked again right before hiding.

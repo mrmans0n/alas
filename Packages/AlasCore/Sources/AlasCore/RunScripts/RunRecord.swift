@@ -156,7 +156,9 @@ public struct RunRecordStore: Equatable, Sendable {
         }
     }
 
-    public mutating func markRunning(runID: String, sessionID: String) {
+    /// `sessionID` is the terminal session hosting the run; nil for a run in a
+    /// plain process.
+    public mutating func markRunning(runID: String, sessionID: String?) {
         _ = mutateActive(runID: runID) {
             $0.status = .running
             $0.sessionID = sessionID
