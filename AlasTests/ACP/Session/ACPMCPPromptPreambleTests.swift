@@ -74,13 +74,13 @@ struct ACPMCPPromptPreambleTests {
     @Test("nothing attached produces no preamble")
     func nothingAttached() {
         #expect(ACPMCPPromptPreamble.text(
-            builtInInjected: false, isDelegated: false, userServerNames: []) == nil)
+            builtInTools: nil, isDelegated: false, userServerNames: []) == nil)
     }
 
     @Test("root built-in preamble names every tool and the search hint")
     func rootBuiltIn() throws {
         let text = try #require(ACPMCPPromptPreamble.text(
-            builtInInjected: true, isDelegated: false, userServerNames: []))
+            builtInTools: .full, isDelegated: false, userServerNames: []))
         #expect(text.hasPrefix("<alas-workspace-context>"))
         #expect(text.hasSuffix("</alas-workspace-context>"))
         for tool in ACPMCPPromptPreamble.builtInToolNames {
@@ -93,10 +93,22 @@ struct ACPMCPPromptPreambleTests {
         #expect(text.contains("pr_create and pr_status are MCP-only"))
     }
 
+    @Test("a visual-only built-in names visual_show and offers no other Alas tool, CLI fallback, or delegation route")
+    func visualOnlyBuiltIn() throws {
+        let text = try #require(ACPMCPPromptPreamble.text(
+            builtInTools: .visualOnly, isDelegated: false, userServerNames: [], nativeSubagentsDisabled: true))
+        #expect(text.contains("visual_show"))
+        for tool in ACPMCPPromptPreamble.builtInToolNames where tool.contains("_") {
+            #expect(!text.contains(tool), "unexpected tool \(tool)")
+        }
+        #expect(!text.contains("`alas` CLI"))
+        #expect(text.contains("Alas delegation tools are not available"))
+    }
+
     @Test("mcp mode notes the alas CLI fallback for blocked servers")
     func mcpMentionsCLIFallback() {
         let text = ACPMCPPromptPreamble.text(
-            builtInInjected: true,
+            builtInTools: .full,
             isDelegated: false,
             userServerNames: [],
             mode: .mcp
@@ -108,7 +120,7 @@ struct ACPMCPPromptPreambleTests {
     @Test("delegated preamble omits child-only session tools and explains delegation")
     func delegated() throws {
         let text = try #require(ACPMCPPromptPreamble.text(
-            builtInInjected: true, isDelegated: true, userServerNames: []))
+            builtInTools: .full, isDelegated: true, userServerNames: []))
         #expect(!text.contains("session_new"))
         #expect(!text.contains("session_wait"))
         #expect(!text.contains("session_interrupt"))
@@ -120,7 +132,7 @@ struct ACPMCPPromptPreambleTests {
     @Test("user servers are listed by name")
     func userServers() throws {
         let text = try #require(ACPMCPPromptPreamble.text(
-            builtInInjected: false, isDelegated: false,
+            builtInTools: nil, isDelegated: false,
             userServerNames: ["linear", "sentry"]))
         #expect(text.contains("Additional MCP servers attached: linear, sentry."))
         #expect(!text.contains("\"alas\""))
@@ -129,7 +141,7 @@ struct ACPMCPPromptPreambleTests {
     @Test("built-in plus user servers renders both sections")
     func builtInPlusUserServers() throws {
         let text = try #require(ACPMCPPromptPreamble.text(
-            builtInInjected: true, isDelegated: false,
+            builtInTools: .full, isDelegated: false,
             userServerNames: ["linear"]))
         #expect(text.contains("\"alas\""))
         #expect(text.contains("Additional MCP servers attached: linear."))
@@ -157,7 +169,7 @@ struct ACPMCPPromptPreambleTests {
     @Test("cli mode swaps MCP wording for alas CLI commands")
     func cliMode() throws {
         let text = try #require(ACPMCPPromptPreamble.text(
-            builtInInjected: true, isDelegated: false, userServerNames: [],
+            builtInTools: .full, isDelegated: false, userServerNames: [],
             mode: .cli(serverAvailability: .notInstalled)))
         #expect(text.contains("alas open"))
         #expect(text.contains("alas wt list"))
@@ -173,7 +185,7 @@ struct ACPMCPPromptPreambleTests {
     @Test("cli mode delegated variant restricts session commands")
     func cliModeDelegated() throws {
         let text = try #require(ACPMCPPromptPreamble.text(
-            builtInInjected: true, isDelegated: true, userServerNames: [],
+            builtInTools: .full, isDelegated: true, userServerNames: [],
             mode: .cli(serverAvailability: .notInstalled)))
         #expect(text.contains("only with `alas session send <parent-session-id> <prompt>`"))
         #expect(text.contains("$ALAS_PARENT_SESSION_ID"))
@@ -185,33 +197,33 @@ struct ACPMCPPromptPreambleTests {
     @Test("cli mode user servers depend on adapter server availability")
     func cliModeUserServers() throws {
         let available = try #require(ACPMCPPromptPreamble.text(
-            builtInInjected: false, isDelegated: false, userServerNames: ["linear"],
+            builtInTools: nil, isDelegated: false, userServerNames: ["linear"],
             mode: .cli(serverAvailability: .available)))
         #expect(available.contains("mcp()"))
         #expect(available.contains("pi-mcp-adapter"))
         #expect(available.contains("linear"))
 
         let notInstalled = try #require(ACPMCPPromptPreamble.text(
-            builtInInjected: false, isDelegated: false, userServerNames: ["linear"],
+            builtInTools: nil, isDelegated: false, userServerNames: ["linear"],
             mode: .cli(serverAvailability: .notInstalled)))
         #expect(notInstalled.contains("cannot be reached"))
         #expect(notInstalled.contains("pi-mcp-adapter"))
 
         let syncFailed = try #require(ACPMCPPromptPreamble.text(
-            builtInInjected: false, isDelegated: false, userServerNames: ["linear"],
+            builtInTools: nil, isDelegated: false, userServerNames: ["linear"],
             mode: .cli(serverAvailability: .syncFailed)))
         #expect(syncFailed.contains("linear"))
         #expect(syncFailed.contains("could not write .pi/mcp.json"))
 
         let userManaged = try #require(ACPMCPPromptPreamble.text(
-            builtInInjected: false, isDelegated: false, userServerNames: ["linear"],
+            builtInTools: nil, isDelegated: false, userServerNames: ["linear"],
             mode: .cli(serverAvailability: .userManaged)))
         #expect(userManaged.contains("linear"))
         #expect(userManaged.contains("existing .pi/mcp.json"))
         #expect(userManaged.contains("Alas did not add them"))
 
         let noServers = try #require(ACPMCPPromptPreamble.text(
-            builtInInjected: true, isDelegated: false, userServerNames: [],
+            builtInTools: .full, isDelegated: false, userServerNames: [],
             mode: .cli(serverAvailability: .noServers)))
         #expect(!noServers.contains("Additional MCP servers"))
         #expect(!noServers.contains("This project configures"))
@@ -220,13 +232,13 @@ struct ACPMCPPromptPreambleTests {
     @Test("default mode is unchanged mcp wording")
     func defaultModeUnchanged() throws {
         let text = try #require(ACPMCPPromptPreamble.text(
-            builtInInjected: true, isDelegated: false, userServerNames: []))
+            builtInTools: .full, isDelegated: false, userServerNames: []))
         #expect(text.contains("MCP server \"alas\""))
     }
 
     @Test func ggStackContextRendersNamedForm() throws {
         let text = try #require(ACPMCPPromptPreamble.text(
-            builtInInjected: true, isDelegated: false, userServerNames: [], mode: .mcp,
+            builtInTools: .full, isDelegated: false, userServerNames: [], mode: .mcp,
             ggStack: .init(stackName: "auth-flow", entryCount: 3, ggMCPAttached: true)
         ))
         #expect(text.contains("gg stacked-diffs stack \"auth-flow\" (3 entries)"))
@@ -238,7 +250,7 @@ struct ACPMCPPromptPreambleTests {
 
     @Test func ggStackContextGenericFormAndNoMCPMention() throws {
         let text = try #require(ACPMCPPromptPreamble.text(
-            builtInInjected: true, isDelegated: false, userServerNames: [], mode: .cli(serverAvailability: .available),
+            builtInTools: .full, isDelegated: false, userServerNames: [], mode: .cli(serverAvailability: .available),
             ggStack: .init(stackName: nil, entryCount: nil, ggMCPAttached: false)
         ))
         #expect(text.contains("gg stacked-diffs"))
@@ -250,7 +262,7 @@ struct ACPMCPPromptPreambleTests {
         // No built-in, no user servers — but a stack context alone still
         // produces a preamble. It must not claim MCP tools are attached.
         let text = try #require(ACPMCPPromptPreamble.text(
-            builtInInjected: false, isDelegated: false, userServerNames: [], mode: .mcp,
+            builtInTools: nil, isDelegated: false, userServerNames: [], mode: .mcp,
             ggStack: .init(stackName: "s", entryCount: 1, ggMCPAttached: false)
         ))
         #expect(!text.contains("MCP servers are attached"))
@@ -259,7 +271,7 @@ struct ACPMCPPromptPreambleTests {
 
     @Test func nilGGStackKeepsExistingBehavior() {
         #expect(ACPMCPPromptPreamble.text(
-            builtInInjected: false, isDelegated: false, userServerNames: [], mode: .mcp
+            builtInTools: nil, isDelegated: false, userServerNames: [], mode: .mcp
         ) == nil)
     }
 
@@ -272,10 +284,10 @@ struct ACPMCPPromptPreambleTests {
         )
 
         let mcp = try #require(ACPMCPPromptPreamble.text(
-            builtInInjected: false, isDelegated: false, userServerNames: [], issue: issue
+            builtInTools: nil, isDelegated: false, userServerNames: [], issue: issue
         ))
         let cli = try #require(ACPMCPPromptPreamble.text(
-            builtInInjected: false, isDelegated: false, userServerNames: [],
+            builtInTools: nil, isDelegated: false, userServerNames: [],
             mode: .cli(serverAvailability: .noServers), issue: issue
         ))
 
@@ -287,10 +299,10 @@ struct ACPMCPPromptPreambleTests {
     @Test("root preamble tells parents they will be notified about delegated children")
     func rootMentionsOutcomeNotifications() throws {
         let mcp = try #require(ACPMCPPromptPreamble.text(
-            builtInInjected: true, isDelegated: false, userServerNames: [], mode: .mcp))
+            builtInTools: .full, isDelegated: false, userServerNames: [], mode: .mcp))
         #expect(mcp.contains("you do not need to poll session_list"))
         let cli = try #require(ACPMCPPromptPreamble.text(
-            builtInInjected: true, isDelegated: false, userServerNames: [],
+            builtInTools: .full, isDelegated: false, userServerNames: [],
             mode: .cli(serverAvailability: .notInstalled)))
         #expect(cli.contains("you do not need to poll `alas session list`"))
     }
@@ -298,14 +310,14 @@ struct ACPMCPPromptPreambleTests {
     @Test("delegated preamble does not mention outcome notifications")
     func delegatedOmitsOutcomeNotifications() throws {
         let text = try #require(ACPMCPPromptPreamble.text(
-            builtInInjected: true, isDelegated: true, userServerNames: []))
+            builtInTools: .full, isDelegated: true, userServerNames: []))
         #expect(!text.contains("you do not need to poll"))
     }
 
     @Test("root preamble explains blocked children and the approval boundary")
     func rootMentionsBlockedChildren() throws {
         let text = try #require(ACPMCPPromptPreamble.text(
-            builtInInjected: true, isDelegated: false, userServerNames: [], mode: .mcp))
+            builtInTools: .full, isDelegated: false, userServerNames: [], mode: .mcp))
         #expect(text.contains("blocked"))
         #expect(text.contains("cannot answer"))
     }
@@ -313,7 +325,7 @@ struct ACPMCPPromptPreambleTests {
     @Test("delegated preamble does not mention blocked children")
     func delegatedOmitsBlockedChildren() throws {
         let text = try #require(ACPMCPPromptPreamble.text(
-            builtInInjected: true, isDelegated: true, userServerNames: []))
+            builtInTools: .full, isDelegated: true, userServerNames: []))
         #expect(!text.contains("cannot answer"))
     }
 
@@ -336,13 +348,13 @@ struct ACPMCPPromptPreambleTests {
         off: String
     ) throws {
         let root = try #require(ACPMCPPromptPreamble.text(
-            builtInInjected: true, isDelegated: false, userServerNames: [],
+            builtInTools: .full, isDelegated: false, userServerNames: [],
             mode: mode, nativeSubagentsDisabled: true, nativeDelegationMechanism: mechanism))
         #expect(root.contains(off))
         #expect(root.contains(route))
 
         let child = try #require(ACPMCPPromptPreamble.text(
-            builtInInjected: true, isDelegated: true, userServerNames: [],
+            builtInTools: .full, isDelegated: true, userServerNames: [],
             mode: mode, nativeSubagentsDisabled: true, nativeDelegationMechanism: mechanism))
         #expect(child.contains(off))
         #expect(!child.contains("session_new"))
@@ -352,7 +364,7 @@ struct ACPMCPPromptPreambleTests {
     @Test("disabled native subagents without Alas tools say delegation is unavailable")
     func nativeSubagentsDisabledWithoutAlasTools() throws {
         let text = try #require(ACPMCPPromptPreamble.text(
-            builtInInjected: false, isDelegated: false, userServerNames: [],
+            builtInTools: nil, isDelegated: false, userServerNames: [],
             nativeSubagentsDisabled: true))
         #expect(text.contains("Alas delegation tools are not available"))
         #expect(!text.contains("session_new"))

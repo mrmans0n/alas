@@ -10,6 +10,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Shepherd pull and merge requests from the agent session that opened them: the new `pr_create` and `pr_status` MCP tools, background watching of CI, trusted review threads and merge conflicts on GitHub and GitLab, fix turns queued into the owning session, optional auto-merge through the existing merge gate, project shepherd rules from `.alas/shepherd.md`, and a PR status pill in the agent toolbar whose "Ship with agent" action has the session write, open and shepherd the PR. PRs created from the Changes tab's Draft PR and Commit & PR flows can go to a session through a "Shepherd with" picker.
 
+### Added
+
+- Show visual aids in ACP sessions of SSH projects. The remote helper relays the built-in `visual_show` tool, and only that tool, back to the Mac that owns the session, with no port forwarding or listening port; this needs remote helper 0.8.0, which Alas installs on connect (#1996).
+
 ### Changed
 
 - Start sidebar peers collapsed instead of automatically expanding them.

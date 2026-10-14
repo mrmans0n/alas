@@ -22,8 +22,54 @@ pub struct McpEnv {
     pub session_id: String,
     pub parent_session_id: Option<String>,
     pub workspace_only: bool,
+    /// Set by `alas mcp --visual-only`: only `visual_show` is listed or
+    /// callable, whatever the other restrictions say.
+    pub visual_only: bool,
     /// "stdio" or "http"; tags every request this server dispatches.
     pub transport: &'static str,
+}
+
+impl McpEnv {
+    fn tool_scope(&self) -> ToolScope {
+        if self.visual_only {
+            ToolScope::Visual
+        } else if self.workspace_only {
+            ToolScope::Workspace
+        } else {
+            ToolScope::All
+        }
+    }
+}
+
+/// Which tools a server lists and accepts.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum ToolScope {
+    All,
+    /// Workspace Checkout sessions: read-only workspace, preview, and visual tools.
+    Workspace,
+    /// The remote-session bridge: `visual_show` only.
+    Visual,
+}
+
+impl ToolScope {
+    fn allows(self, name: &str) -> bool {
+        match self {
+            ToolScope::All => true,
+            ToolScope::Workspace => is_workspace_tool(name),
+            ToolScope::Visual => name == "visual_show",
+        }
+    }
+
+    /// The error for a call outside the scope, before anything is dispatched.
+    fn rejection(self, name: &str) -> (i64, String) {
+        match self {
+            ToolScope::Workspace => (
+                -32602,
+                format!("tool unavailable in Workspace Checkout context: {name}"),
+            ),
+            ToolScope::All | ToolScope::Visual => (-32602, format!("unknown tool: {name}")),
+        }
+    }
 }
 
 impl Clone for McpEnv {
@@ -34,6 +80,7 @@ impl Clone for McpEnv {
             session_id: self.session_id.clone(),
             parent_session_id: self.parent_session_id.clone(),
             workspace_only: self.workspace_only,
+            visual_only: self.visual_only,
             transport: self.transport,
         }
     }
@@ -82,6 +129,7 @@ pub fn env_from(get: impl Fn(&str) -> Option<String>) -> Result<McpEnv, String> 
         workspace_only: get("ALAS_MCP_WORKSPACE_ONLY")
             .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
             .unwrap_or(false),
+        visual_only: false,
         transport: "stdio",
     })
 }
@@ -94,14 +142,14 @@ pub fn handle_line(
     worktree_dir: &str,
     dispatch: impl FnMut(&Command) -> Result<Response, TransportError>,
 ) -> Option<Value> {
-    handle_line_with_parent(line, worktree_dir, None, false, dispatch)
+    handle_line_with_parent(line, worktree_dir, None, ToolScope::All, dispatch)
 }
 
 fn handle_line_with_parent(
     line: &str,
     worktree_dir: &str,
     parent_session_id: Option<&str>,
-    workspace_only: bool,
+    scope: ToolScope,
     mut dispatch: impl FnMut(&Command) -> Result<Response, TransportError>,
 ) -> Option<Value> {
     let msg: Value = match serde_json::from_str(line) {
@@ -118,14 +166,14 @@ fn handle_line_with_parent(
         .and_then(Value::as_str)
         .unwrap_or_default();
     let reply = match method {
-        "initialize" => Ok(initialize_result(parent_session_id)),
+        "initialize" => Ok(initialize_result(parent_session_id, scope)),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({
-            "tools": tool_definitions_for_session(workspace_only, parent_session_id.is_some())
+            "tools": tool_definitions_for_session(scope, parent_session_id.is_some())
         })),
         "tools/call" => {
             let params = msg.get("params").cloned().unwrap_or(Value::Null);
-            call_tool(&params, worktree_dir, workspace_only, &mut dispatch)
+            call_tool(&params, worktree_dir, scope, &mut dispatch)
         }
         other => Err((-32601, format!("method not found: {other}"))),
     };
@@ -135,8 +183,11 @@ fn handle_line_with_parent(
     })
 }
 
-fn initialize_result(parent_session_id: Option<&str>) -> Value {
+fn initialize_result(parent_session_id: Option<&str>, scope: ToolScope) -> Value {
     let instructions = match parent_session_id {
+        _ if scope == ToolScope::Visual => {
+            "Shows visuals to the user in Alas with visual_show. A visual may ask one optional question; the user's answer arrives as their next prompt, so end your turn after showing it."
+        }
         Some(_) => {
             "Tools that drive the user's Alas workspace UI. This session was delegated by a parent session: it cannot create descendants. Report results and questions to the parent only with this server's session_send tool; do not use SendMessage, ListAgents, or any other messaging or agent tool for that."
         }
@@ -162,21 +213,18 @@ fn error_reply(id: Value, code: i64, message: &str) -> Value {
 /// what makes the agent-side permission prompt legible. `resolve` is internal
 /// and not exposed.
 pub fn tool_definitions() -> Vec<Value> {
-    tool_definitions_for_mode(false)
+    tool_definitions_for_mode(ToolScope::All)
 }
 
-fn tool_definitions_for_mode(workspace_only: bool) -> Vec<Value> {
-    if workspace_only {
-        return all_tool_definitions()
-            .into_iter()
-            .filter(|tool| {
-                tool.get("name")
-                    .and_then(Value::as_str)
-                    .is_some_and(is_workspace_tool)
-            })
-            .collect();
-    }
+fn tool_definitions_for_mode(scope: ToolScope) -> Vec<Value> {
     all_tool_definitions()
+        .into_iter()
+        .filter(|tool| {
+            tool.get("name")
+                .and_then(Value::as_str)
+                .is_some_and(|name| scope.allows(name))
+        })
+        .collect()
 }
 
 /// Tools that only act on a session's own children.
@@ -185,8 +233,8 @@ const CHILD_ONLY_TOOLS: [&str; 3] = ["session_new", "session_wait", "session_int
 /// Delegated children are leaves: tools that act on children are left out
 /// of their discovery. Direct or forged calls still reach Alas, whose
 /// orchestration policy rejects them.
-fn tool_definitions_for_session(workspace_only: bool, is_delegated: bool) -> Vec<Value> {
-    let tools = tool_definitions_for_mode(workspace_only);
+fn tool_definitions_for_session(scope: ToolScope, is_delegated: bool) -> Vec<Value> {
+    let tools = tool_definitions_for_mode(scope);
     if !is_delegated {
         return tools;
     }
@@ -1443,7 +1491,7 @@ pub fn dispatch(env: &McpEnv, command: &Command) -> Result<Response, TransportEr
 fn call_tool(
     params: &Value,
     worktree_dir: &str,
-    workspace_only: bool,
+    scope: ToolScope,
     mut dispatch: impl FnMut(&Command) -> Result<Response, TransportError>,
 ) -> Result<Value, (i64, String)> {
     let name = params
@@ -1454,11 +1502,8 @@ fn call_tool(
         .get("arguments")
         .cloned()
         .unwrap_or_else(|| json!({}));
-    if workspace_only && !is_workspace_tool(name) {
-        return Err((
-            -32602,
-            format!("tool unavailable in Workspace Checkout context: {name}"),
-        ));
+    if !scope.allows(name) {
+        return Err(scope.rejection(name));
     }
     let command = command_for_tool(name, &args, worktree_dir).map_err(|msg| (-32602, msg))?;
     Ok(match dispatch(&command) {
@@ -1582,7 +1627,7 @@ fn capture_tool_result(lines: Option<&Vec<String>>) -> Option<Value> {
 fn tools_call_command(
     msg: &Value,
     worktree_dir: &str,
-    workspace_only: bool,
+    scope: ToolScope,
 ) -> Result<Option<(Value, Command)>, Value> {
     if msg.get("method").and_then(Value::as_str) != Some("tools/call") {
         return Ok(None);
@@ -1595,12 +1640,9 @@ fn tools_call_command(
             return Err(error_reply(id, -32602, "tools/call requires a tool name"));
         }
     };
-    if workspace_only && !is_workspace_tool(name) {
-        return Err(error_reply(
-            id,
-            -32602,
-            &format!("tool unavailable in Workspace Checkout context: {name}"),
-        ));
+    if !scope.allows(name) {
+        let (code, message) = scope.rejection(name);
+        return Err(error_reply(id, code, &message));
     }
     let args = params
         .get("arguments")
@@ -1783,7 +1825,11 @@ pub fn serve(env: &McpEnv) -> std::io::Result<()> {
 
     // Announce startup so the app can tell an injected-but-spawned server from
     // one the harness silently dropped. Best-effort; never blocks serving.
-    alas_client::send_hello(&env.socket, &env.session_id, "stdio");
+    // The visual-only bridge backend starts before any agent talks to it, so
+    // its startup proves nothing and it stays quiet.
+    if !env.visual_only {
+        alas_client::send_hello(&env.socket, &env.session_id, "stdio");
+    }
 
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
@@ -1832,7 +1878,7 @@ pub fn serve(env: &McpEnv) -> std::io::Result<()> {
             }
             continue;
         }
-        match tools_call_command(&msg, &env.worktree_dir, env.workspace_only) {
+        match tools_call_command(&msg, &env.worktree_dir, env.tool_scope()) {
             Ok(Some((id, command))) => {
                 if !runs_on_worker(&command) {
                     let result = match dispatch(env, &command) {
@@ -1907,7 +1953,7 @@ pub fn serve(env: &McpEnv) -> std::io::Result<()> {
                     &line,
                     &env.worktree_dir,
                     env.parent_session_id.as_deref(),
-                    env.workspace_only,
+                    env.tool_scope(),
                     |cmd| dispatch(env, cmd),
                 ) {
                     let _ = reply_tx.send(reply);
@@ -2186,7 +2232,7 @@ fn build_http_response(
     // process across ACP reattaches while the app clears its registration
     // registry per attach, so the hello must fire each time the harness
     // reconnects and re-sends `initialize`. `recordHello` is idempotent.
-    if is_initialize_message(&req.body) {
+    if !env.visual_only && is_initialize_message(&req.body) {
         alas_client::send_hello(&env.socket, &env.session_id, "http");
     }
 
@@ -2212,7 +2258,7 @@ fn build_http_response(
             let _ = dispatch(env, &cancel);
             return http_response(202, "application/json", "");
         }
-        match tools_call_command(&msg, &env.worktree_dir, env.workspace_only) {
+        match tools_call_command(&msg, &env.worktree_dir, env.tool_scope()) {
             Ok(Some((id, command))) if runs_on_worker(&command) => {
                 let limit = if is_preview_cancel_command(&command) {
                     MAX_MCP_WORKERS
@@ -2263,7 +2309,7 @@ fn build_http_response(
         &req.body,
         &env.worktree_dir,
         env.parent_session_id.as_deref(),
-        env.workspace_only,
+        env.tool_scope(),
         |cmd| dispatch(env, cmd),
     ) {
         Some(reply) => http_response(200, "application/json", &reply.to_string()),
@@ -2279,7 +2325,7 @@ mod tests {
         cancellation_command_for_message, command_for_tool, dispatch, env_from, handle_line,
         handle_line_with_parent, http_response, initialize_result, is_initialize_message,
         parse_http_request, register_pending_preview, runs_on_worker, session_wait_timed_out,
-        tool_result, tools_call_command,
+        tool_definitions, tool_result, tools_call_command, ToolScope,
     };
     use alas_client::{Command, Response, VisualOption, VisualQuestion};
     use serde_json::{Value, json};
@@ -2413,13 +2459,13 @@ mod tests {
 
     #[test]
     fn delegated_initialize_instructions_route_reports_through_session_send_only() {
-        let instructions = initialize_result(Some("parent"))["instructions"]
+        let instructions = initialize_result(Some("parent"), ToolScope::All)["instructions"]
             .as_str()
             .unwrap()
             .to_string();
         assert!(instructions.contains("only with this server's session_send tool"));
         assert!(instructions.contains("do not use SendMessage, ListAgents"));
-        let root = initialize_result(None)["instructions"]
+        let root = initialize_result(None, ToolScope::All)["instructions"]
             .as_str()
             .unwrap()
             .to_string();
@@ -2680,7 +2726,7 @@ mod tests {
             r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#,
             "/checkout",
             None,
-            true,
+            ToolScope::Workspace,
             |_| unreachable!(),
         )
         .unwrap();
@@ -2720,7 +2766,7 @@ mod tests {
             r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"open","arguments":{"path":"README.md"}}}"#,
             "/checkout",
             None,
-            true,
+            ToolScope::Workspace,
             |_| unreachable!(),
         )
         .unwrap();
@@ -2730,7 +2776,7 @@ mod tests {
             r#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"session_read","arguments":{"session_id":"fork"}}}"#,
             "/checkout",
             None,
-            true,
+            ToolScope::Workspace,
             |command| {
                 assert!(matches!(command, Command::SessionRead { session_id, .. } if session_id == "fork"));
                 Ok(Response { ok: true, lines: Some(vec!["{}".into()]), error: None, exit_code: None })
@@ -2742,7 +2788,7 @@ mod tests {
             r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"session_send","arguments":{"session_id":"fork","prompt":"Run this"}}}"#,
             "/checkout",
             None,
-            true,
+            ToolScope::Workspace,
             |_| unreachable!(),
         )
         .unwrap();
@@ -2752,7 +2798,7 @@ mod tests {
             r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"workspace_list","arguments":{}}}"#,
             "/checkout",
             None,
-            true,
+            ToolScope::Workspace,
             |command| {
                 assert_eq!(*command, Command::WorkspaceList);
                 Ok(Response { ok: true, lines: Some(vec!["[]".into()]), error: None, exit_code: None })
@@ -2765,7 +2811,7 @@ mod tests {
             r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"preview_list","arguments":{}}}"#,
             "/checkout",
             None,
-            true,
+            ToolScope::Workspace,
             |command| {
                 assert_eq!(*command, Command::Preview(alas_client::PreviewCommand::List));
                 Ok(Response {
@@ -2783,7 +2829,7 @@ mod tests {
             r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"preview_open","arguments":{"url":"http://127.0.0.1:5173"}}}"#,
             "/checkout",
             None,
-            true,
+            ToolScope::Workspace,
             |command| {
                 assert_eq!(
                     *command,
@@ -2807,7 +2853,7 @@ mod tests {
             r#"{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"visual_show","arguments":{"title":"Pick","html":"<p>hi</p>"}}}"#,
             "/checkout",
             None,
-            true,
+            ToolScope::Workspace,
             |command| {
                 assert!(matches!(command, Command::VisualShow { title, .. } if title == "Pick"));
                 Ok(Response {
@@ -2823,12 +2869,66 @@ mod tests {
     }
 
     #[test]
+    fn visual_only_mode_lists_and_accepts_only_visual_show() {
+        // Workspace and delegated restrictions must not widen visual-only mode.
+        let env = McpEnv {
+            socket: "/tmp/alas-no-such-socket-for-visual-only-test".into(),
+            worktree_dir: "/wt".into(),
+            session_id: "s1".into(),
+            parent_session_id: Some("parent".into()),
+            workspace_only: true,
+            visual_only: true,
+            transport: "stdio",
+        };
+        let scope = env.tool_scope();
+        let instructions = initialize_result(Some("parent"), scope)["instructions"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(instructions.contains("visual_show"));
+        assert!(!instructions.contains("session_send"));
+
+        let list = handle_line_with_parent(
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#,
+            "/wt",
+            Some("parent"),
+            scope,
+            |_| unreachable!(),
+        )
+        .unwrap();
+        let visual = tool_definitions()
+            .into_iter()
+            .find(|tool| tool["name"] == json!("visual_show"))
+            .unwrap();
+        assert_eq!(list["result"]["tools"], json!([visual]));
+
+        // Every other name, listed or hidden, is refused before dispatch on
+        // both the shared path and the stdio/HTTP pre-parse path.
+        let mut names: Vec<String> = tool_definitions()
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap().to_string())
+            .filter(|name| name != "visual_show")
+            .collect();
+        names.extend(["resolve".to_string(), "workspace_create".to_string()]);
+        for name in names {
+            let line = call(&name, json!({}));
+            let reply =
+                handle_line_with_parent(&line, "/wt", Some("parent"), scope, |_| unreachable!())
+                    .unwrap();
+            assert_eq!(reply["error"]["code"], json!(-32602), "{name}");
+            assert_eq!(reply["error"]["message"], json!(format!("unknown tool: {name}")));
+            let msg: Value = serde_json::from_str(&line).unwrap();
+            assert!(tools_call_command(&msg, "/wt", scope).is_err(), "{name}");
+        }
+    }
+
+    #[test]
     fn workspace_only_preparsed_tool_call_accepts_preview_tools() {
         let msg: Value = serde_json::from_str(
             r#"{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"preview_open","arguments":{"url":"http://127.0.0.1:5173"}}}"#,
         )
         .unwrap();
-        let (id, command) = tools_call_command(&msg, "/checkout", true)
+        let (id, command) = tools_call_command(&msg, "/checkout", ToolScope::Workspace)
             .unwrap()
             .expect("preview tool call");
         assert_eq!(id, json!(9));
@@ -2860,7 +2960,7 @@ mod tests {
                 r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#,
                 "/wt",
                 parent,
-                false,
+                ToolScope::All,
                 |_| unreachable!(),
             )
             .unwrap();
@@ -2891,7 +2991,7 @@ mod tests {
             r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"session_new","arguments":{"prompt":"x"}}}"#,
             "/wt",
             Some("parent-session"),
-            false,
+            ToolScope::All,
             |command| {
                 assert!(matches!(command, Command::SessionNew { .. }));
                 forwarded = true;
@@ -2909,35 +3009,13 @@ mod tests {
     }
 
     #[test]
-    fn workspace_only_mode_exposes_preview_tools_too() {
-        let list = handle_line_with_parent(
-            r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#,
-            "/checkout",
-            None,
-            true,
-            |_| unreachable!(),
-        )
-        .unwrap();
-        let names: Vec<_> = list["result"]["tools"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|tool| tool["name"].as_str().unwrap())
-            .collect();
-        assert!(names.contains(&"workspace_list"));
-        assert!(names.contains(&"preview_capture"));
-        assert!(names.contains(&"visual_show"));
-        assert!(!names.contains(&"open"));
-    }
-
-    #[test]
     fn pr_tools_stay_with_delegated_children_and_leave_workspace_checkouts() {
-        let tool_names = |parent: Option<&str>, workspace_only: bool| -> Vec<String> {
+        let tool_names = |parent: Option<&str>, scope: ToolScope| -> Vec<String> {
             let list = handle_line_with_parent(
                 r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#,
                 "/wt",
                 parent,
-                workspace_only,
+                scope,
                 |_| unreachable!(),
             )
             .unwrap();
@@ -2948,8 +3026,8 @@ mod tests {
                 .map(|tool| tool["name"].as_str().unwrap().to_string())
                 .collect()
         };
-        let child = tool_names(Some("parent-session"), false);
-        let checkout = tool_names(None, true);
+        let child = tool_names(Some("parent-session"), ToolScope::All);
+        let checkout = tool_names(None, ToolScope::Workspace);
         for tool in ["pr_create", "pr_status"] {
             assert!(child.iter().any(|name| name == tool), "child lacks {tool}");
             assert!(!checkout.iter().any(|name| name == tool), "checkout exposes {tool}");
@@ -2959,7 +3037,7 @@ mod tests {
             r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"pr_status","arguments":{}}}"#,
             "/checkout",
             None,
-            true,
+            ToolScope::Workspace,
             |_| unreachable!(),
         )
         .unwrap();
@@ -3151,6 +3229,7 @@ mod tests {
             session_id: "s1".into(),
             parent_session_id: None,
             workspace_only: false,
+            visual_only: false,
             transport: "stdio",
         };
         let req = HttpRequest {
@@ -3929,6 +4008,7 @@ mod tests {
             session_id: "acp-1".into(),
             parent_session_id: None,
             workspace_only: false,
+            visual_only: false,
             transport: "stdio",
         };
         let resp = dispatch(&env, &alas_client::Command::WtList).unwrap();

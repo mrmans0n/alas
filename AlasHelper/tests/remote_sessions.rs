@@ -1,14 +1,35 @@
 use serde_json::{Value, json};
-use std::io::{BufRead, BufReader, Write};
+use std::collections::VecDeque;
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{Receiver, channel};
 use std::sync::{Arc, Barrier};
+use std::time::Duration;
+
+/// Generous: only reached when the behavior under test is broken.
+const LINE_DEADLINE: Duration = Duration::from_secs(30);
+
+/// Reads a child's stdout lines on a thread so waits can have a deadline.
+fn line_reader(output: impl Read + Send + 'static) -> Receiver<String> {
+    let (sender, receiver) = channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(output).lines() {
+            let Ok(line) = line else { return };
+            if sender.send(line).is_err() {
+                return;
+            }
+        }
+    });
+    receiver
+}
 
 struct Helper {
     child: Child,
     input: ChildStdin,
-    output: BufReader<ChildStdout>,
+    output: Receiver<String>,
+    notifications: VecDeque<Value>,
     next_id: u64,
 }
 impl Helper {
@@ -23,11 +44,21 @@ impl Helper {
             .unwrap();
         Self {
             input: child.stdin.take().unwrap(),
-            output: BufReader::new(child.stdout.take().unwrap()),
+            output: line_reader(child.stdout.take().unwrap()),
             child,
+            notifications: VecDeque::new(),
             next_id: 0,
         }
     }
+    fn next_line(&mut self) -> Value {
+        let line = self
+            .output
+            .recv_timeout(LINE_DEADLINE)
+            .expect("helper exited or stopped answering");
+        serde_json::from_str(&line).unwrap()
+    }
+    /// Sends a request and returns its response, keeping any notifications
+    /// that arrive first for `notification`.
     fn raw(&mut self, method: &str, params: Value) -> Value {
         self.next_id += 1;
         writeln!(
@@ -38,16 +69,22 @@ impl Helper {
         .unwrap();
         self.input.flush().unwrap();
         loop {
-            let mut line = String::new();
-            assert_ne!(
-                self.output.read_line(&mut line).unwrap(),
-                0,
-                "helper exited"
-            );
-            let value: Value = serde_json::from_str(&line).unwrap();
+            let value = self.next_line();
             if value["id"] == self.next_id {
                 return value;
             }
+            if value.get("id").is_none() {
+                self.notifications.push_back(value);
+            }
+        }
+    }
+    fn notification(&mut self, method: &str) -> Value {
+        loop {
+            if let Some(index) = self.notifications.iter().position(|n| n["method"] == method) {
+                return self.notifications.remove(index).unwrap()["params"].clone();
+            }
+            let value = self.next_line();
+            self.notifications.push_back(value);
         }
     }
     fn request(&mut self, method: &str, params: Value) -> Value {
@@ -114,6 +151,16 @@ impl Fixture {
 }
 impl Drop for Fixture {
     fn drop(&mut self) {
+        // A killed helper cannot remove its relay socket directory.
+        if let Ok(db) = rusqlite::Connection::open(self.0.join("remote_leases.sqlite")) {
+            let sockets: Vec<String> = db
+                .prepare("SELECT socket_path FROM remote_mcp_routes")
+                .and_then(|mut rows| rows.query_map([], |r| r.get(0))?.collect())
+                .unwrap_or_default();
+            for socket in sockets.iter().filter_map(|s| Path::new(s).parent()) {
+                let _ = std::fs::remove_dir_all(socket);
+            }
+        }
         let _ = std::fs::remove_dir_all(&self.0);
     }
 }
@@ -476,4 +523,108 @@ fn taking_over_a_parent_does_not_take_over_its_child_or_another_agent() {
     let observed = helper.request("lease/observe", json!({"key":child_key}));
     assert_eq!(observed["lease"]["owner"]["serverId"], "a");
     assert_eq!(observed["lease"]["procId"], "child-proc");
+}
+
+#[test]
+fn retained_mcp_proxy_follows_takeover_and_never_completes_through_the_old_owner() {
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD;
+    let fixture = Fixture::new();
+    let mut a = Helper::start(&fixture.0);
+    let mut b = Helper::start(&fixture.0);
+    let first = a.request("lease/claim", fixture.claim("a"));
+    let record = first["lease"]["recordId"].clone();
+    let registered = a.request(
+        "mcp/register",
+        json!({"fence":first["fence"],"relayId":"relay-a"}),
+    );
+    assert_eq!(
+        registered["proxyArgs"],
+        json!(["mcp-proxy", "--state-dir", fixture.0, "--record-id", record])
+    );
+    assert_eq!(registered["relayProtocolVersion"], 1);
+    // The retained descriptor is what the remote agent runs, unchanged.
+    let mut proxy = Command::new(registered["proxyCommand"].as_str().unwrap())
+        .args(
+            registered["proxyArgs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|arg| arg.as_str().unwrap()),
+        )
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut proxy_in = proxy.stdin.take().unwrap();
+    let proxy_out = line_reader(proxy.stdout.take().unwrap());
+    let mut send = move |frame: &str| {
+        writeln!(proxy_in, "{frame}").unwrap();
+        proxy_in.flush().unwrap();
+    };
+    let reply = || -> Value {
+        serde_json::from_str(&proxy_out.recv_timeout(LINE_DEADLINE).unwrap()).unwrap()
+    };
+
+    let held = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{}}"#;
+    send(held);
+    let request = a.notification("mcp/request");
+    assert_eq!(request["recordId"], record);
+    assert_eq!(request["relayId"], "relay-a");
+    assert_eq!(b64.decode(request["frameBase64"].as_str().unwrap()).unwrap(), held.as_bytes());
+    // The held exchange waits on a worker, not on the request loop.
+    assert_eq!(a.request("ping", json!({}))["ok"], true);
+
+    let seized = b.request("lease/seize", fixture.claim("b"));
+    b.request(
+        "mcp/register",
+        json!({"fence":seized["fence"],"relayId":"relay-b"}),
+    );
+    let stale_success = b64.encode(br#"{"jsonrpc":"2.0","id":1,"result":{}}"#);
+    assert_eq!(
+        a.raw("mcp/complete", json!({"fence":first["fence"],"relayId":"relay-a","requestId":request["requestId"],"responseBase64":stale_success}))["error"]["code"],
+        -32081
+    );
+    assert_eq!(
+        a.raw("mcp/unregister", json!({"fence":first["fence"],"relayId":"relay-a"}))["error"]["code"],
+        -32081
+    );
+    assert_eq!(
+        reply(),
+        json!({"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"Alas visual relay unavailable"}})
+    );
+
+    // A notification is acknowledged without output, so the next line the
+    // proxy prints must be B's answer to the request that follows it.
+    send(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#);
+    let notification = b.notification("mcp/request");
+    b.request(
+        "mcp/complete",
+        json!({"fence":seized["fence"],"relayId":"relay-b","requestId":notification["requestId"],"responseBase64":null}),
+    );
+    let html = "<p>caf\u{e9} \u{1F600}\u{7}\t\n /.alas-remote/example/srv/repo</p>";
+    let frame = json!({"jsonrpc":"2.0","id":"two","method":"tools/call","params":{"html":html}}).to_string();
+    send(&frame);
+    let forwarded = b.notification("mcp/request");
+    assert_eq!(forwarded["relayId"], "relay-b");
+    assert_eq!(b64.decode(forwarded["frameBase64"].as_str().unwrap()).unwrap(), frame.as_bytes());
+    let answer = json!({"jsonrpc":"2.0","id":"two","result":{"echo":html}});
+    b.request(
+        "mcp/complete",
+        json!({"fence":seized["fence"],"relayId":"relay-b","requestId":forwarded["requestId"],"responseBase64":b64.encode(answer.to_string())}),
+    );
+    assert_eq!(reply(), answer);
+    a.request("ping", json!({}));
+    assert!(
+        !a.notifications.iter().any(|n| n["method"] == "mcp/request"),
+        "a frame reached the previous owner"
+    );
+
+    // With the owner gone the same proxy answers promptly and keeps running.
+    drop(b);
+    send(r#"{"jsonrpc":"2.0","id":3,"method":"tools/call"}"#);
+    assert_eq!(reply()["error"]["code"], -32000);
+    drop(send);
+    assert!(proxy.wait().unwrap().success());
 }

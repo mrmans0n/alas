@@ -7208,6 +7208,51 @@ final class AppState {
     /// holding the session's lease attaches it, so two instances on one
     /// profile never fight over a link. Falls back to the bind path when the
     /// link cannot be created.
+    /// The visual-only built-in server for an SSH session. The host's helper
+    /// relays `visual_show` frames back here, where a local
+    /// `alas mcp --visual-only` serves them against the app socket under this
+    /// session's id; nothing local is written into the remote agent's config.
+    func remoteVisualMCPAttachment(
+        context: BuiltInMCPAttachmentContext,
+        configuredServers: [ProjectMCPServer]
+    ) async -> BuiltInMCPAttachment {
+        guard case .ssh(let host, let fence) = context.location,
+              BuiltInAlasMCP.injectsRemoteVisual(
+                  enabled: config.harness.exposeAlasMCP,
+                  configuredServers: configuredServers,
+                  injectionSupport: context.injectionSupport
+              )
+        else { return .omitted }
+        guard let binaryPath = (try? TerminalCLIInjection.installExecutables())?
+                  .appendingPathComponent(TerminalCLIInjection.executableName).path,
+              let socketPath = acpSessionSocketPath(sessionId: context.sessionId)
+        else { return .skipped(BuiltInAlasMCP.unavailableStatus("Alas CLI unavailable")) }
+        let environment = [
+            "ALAS_SOCKET_PATH": socketPath,
+            "ALAS_SESSION_ID": context.sessionId,
+            "ALAS_WORKTREE_DIR": context.worktreePath,
+        ]
+        do {
+            let prepared = try await RemoteVisualMCPBridge.prepare(
+                client: RemoteHelperClientPool.shared.client(for: host),
+                fence: fence,
+                makeBackend: {
+                    JSONRPCStdioTransport(
+                        executable: URL(fileURLWithPath: binaryPath),
+                        arguments: ["mcp", "--visual-only"],
+                        environment: environment,
+                        framing: .newline
+                    )
+                },
+                authorize: { await context.isCurrent() },
+                onRegistration: { await context.noteRegistered() }
+            )
+            return .prepared(prepared)
+        } catch {
+            return .skipped(BuiltInAlasMCP.unavailableStatus(error.localizedDescription))
+        }
+    }
+
     func acpSessionSocketPath(sessionId: String) -> String? {
         harness.socketServer.linkSession(leafId: AgentHookSocketServer.acpSessionLinkKey(sessionId))
             ?? harness.socketServer.socketPath
@@ -13182,8 +13227,18 @@ final class AppState {
                     repoTrust: project.repoMCPTrust
                 )
             },
-            builtInMCPProvider: { [weak self] worktreePath, sessionId, adapterSupportsHTTP in
-                guard let self else { return nil }
+            builtInMCPProvider: { [weak self] context in
+                guard let self else { return .omitted }
+                let worktreePath = context.worktreePath
+                let sessionId = context.sessionId
+                guard case .local(let adapterSupportsHTTP) = context.location else {
+                    // Remote projects keep app-level servers only (repo config
+                    // is a local-only layer in v1).
+                    return await self.remoteVisualMCPAttachment(
+                        context: context,
+                        configuredServers: self.projects.first { $0.id == worktree.projectId }?.mcpServers ?? []
+                    )
+                }
                 // installExecutables is idempotent (byte-compares before
                 // writing); a nil binaryPath (no bundle, e.g. tests) means
                 // no injection rather than a dead command for the agent.
@@ -13231,7 +13286,7 @@ final class AppState {
                         sessionId: sessionId,
                         parentSessionId: parentSessionId
                     ) {
-                        return BuiltInAlasMCP.injection(
+                        return .local(BuiltInAlasMCP.injection(
                             enabled: self.config.harness.exposeAlasMCP,
                             configuredServers: configuredServers,
                             binaryPath: binaryPath,
@@ -13240,7 +13295,7 @@ final class AppState {
                             sessionId: sessionId,
                             parentSessionId: parentSessionId,
                             httpEndpoint: endpoint
-                        )
+                        ))
                     }
                     // Supervisor couldn't get a port — fall through to stdio
                     // (better than no tools).
@@ -13251,7 +13306,7 @@ final class AppState {
                 // process a previous attach of this session spawned so it does
                 // not linger bound on localhost. No-op when none is running.
                 self.mcpHTTPSupervisor.end(sessionId: sessionId)
-                return BuiltInAlasMCP.injection(
+                return .local(BuiltInAlasMCP.injection(
                     enabled: self.config.harness.exposeAlasMCP,
                     configuredServers: configuredServers,
                     binaryPath: binaryPath,
@@ -13259,7 +13314,7 @@ final class AppState {
                     worktreePath: worktreePath,
                     sessionId: sessionId,
                     parentSessionId: parentSessionId
-                )
+                ))
             },
             builtInMCPHello: { [weak self] sessionId in
                 self?.mcpRegistrationRegistry.record(sessionId: sessionId)
@@ -13609,14 +13664,19 @@ final class AppState {
                 let resourceURL = Bundle.main.resourceURL ?? Bundle.main.bundleURL
                 return try LocalACPBrokerService(resourceURL: resourceURL)
             },
-            builtInMCPProvider: { [weak self] worktreePath, sessionId, adapterSupportsHTTP in
-                guard let self,
-                      let binaryPath = (try? TerminalCLIInjection.installExecutables())?
-                          .appendingPathComponent(TerminalCLIInjection.executableName).path
-                else { return nil }
+            builtInMCPProvider: { [weak self] context in
+                guard let self else { return .omitted }
+                let worktreePath = context.worktreePath
+                let sessionId = context.sessionId
                 let current = self.currentWorkspaceCheckoutSnapshot(checkout)
                 let configuredServers = self.workspaceFrozenMCPServers(for: current)
-                let context = BuiltInAlasMCP.WorkspaceContext(
+                guard case .local(let adapterSupportsHTTP) = context.location else {
+                    return await self.remoteVisualMCPAttachment(context: context, configuredServers: configuredServers)
+                }
+                guard let binaryPath = (try? TerminalCLIInjection.installExecutables())?
+                    .appendingPathComponent(TerminalCLIInjection.executableName).path
+                else { return .omitted }
+                let workspaceContext = BuiltInAlasMCP.WorkspaceContext(
                     checkoutID: current.id,
                     rootPath: current.rootPath,
                     members: current.members.map { .init(id: $0.id, availability: $0.availability) }
@@ -13638,7 +13698,7 @@ final class AppState {
                        parentSessionId: nil,
                        workspaceOnly: true
                    ) {
-                    return BuiltInAlasMCP.injection(
+                    return .local(BuiltInAlasMCP.injection(
                         enabled: self.config.harness.exposeAlasMCP,
                         configuredServers: configuredServers,
                         binaryPath: binaryPath,
@@ -13646,19 +13706,19 @@ final class AppState {
                         worktreePath: worktreePath,
                         sessionId: sessionId,
                         httpEndpoint: endpoint,
-                        workspaceContext: context
-                    )
+                        workspaceContext: workspaceContext
+                    ))
                 }
                 self.mcpHTTPSupervisor.end(sessionId: sessionId)
-                return BuiltInAlasMCP.injection(
+                return .local(BuiltInAlasMCP.injection(
                     enabled: self.config.harness.exposeAlasMCP,
                     configuredServers: configuredServers,
                     binaryPath: binaryPath,
                     socketPath: self.acpSessionSocketPath(sessionId: sessionId),
                     worktreePath: worktreePath,
                     sessionId: sessionId,
-                    workspaceContext: context
-                )
+                    workspaceContext: workspaceContext
+                ))
             },
             frozenMCPAttachmentProvider: { [weak self] in
                 guard let self else { return nil }

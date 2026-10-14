@@ -108,6 +108,12 @@ struct CommitsSectionView: View {
     let onCopySHA: (CommitInfo) -> Void
     let onEdit: (CommitInfo) -> Void
     let onReview: (CommitInfo) -> Void
+    let onReviewRange: (CommitInfo) -> Void
+    /// SHAs the review palette lists (the comparison-relative commits ahead).
+    /// A GG stack can display commits outside that set, which the palette
+    /// could not anchor, so only these rows offer "Review Range From Here…".
+    let reviewRangeAnchorSHAs: Set<String>
+    let onChooseReviewScope: () -> Void
     let onLoadOlder: () -> Void
     let onSelectBaseBranch: (String) -> Void
     let onOpenBaseBranchSelector: () -> Void
@@ -170,6 +176,7 @@ struct CommitsSectionView: View {
                         onSelect: onSelectBaseBranch,
                         onOpen: onOpenBaseBranchSelector
                     )
+                    ReviewScopeHeaderButton(action: onChooseReviewScope)
                     BranchOpsMenu(rps: rps)
             }
         }
@@ -283,6 +290,7 @@ struct CommitsSectionView: View {
             onOpenRemote: openRemoteAction(for: commit, remote: remote),
             onEdit: allowsGenericGitActions ? { onEdit(commit) } : nil,
             onReview: { onReview(commit) },
+            onReviewRange: reviewRangeAnchorSHAs.contains(commit.sha) ? { onReviewRange(commit) } : nil,
             onCherryPick: allowsGenericGitActions ? { rps.requestCherryPick(sha: commit.sha) } : nil,
             onRevert: allowsGenericGitActions ? { rps.runRevert(sha: commit.sha) } : nil,
             ggMenu: ggMenu(for: commit),
@@ -371,6 +379,22 @@ struct CommitsSectionView: View {
             hasOlderCommits: !olderCommits.isEmpty,
             onLoadOlder: onLoadOlder
         )
+    }
+}
+
+private struct ReviewScopeHeaderButton: View {
+    let action: () -> Void
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "scope")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(theme.color("fg-muted"))
+        }
+        .buttonStyle(.plain)
+        .help("Choose review scope")
+        .accessibilityLabel("Choose review scope")
     }
 }
 

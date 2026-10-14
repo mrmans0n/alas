@@ -206,6 +206,7 @@ public struct RemoteSessionUnavailable: LocalizedError, Sendable {
     public var errorDescription: String? { message }
     public static let helperRequired = Self(message: "Update and enable the Alas helper on this SSH host to coordinate this session.")
     public static let ownershipLost = Self(message: "This SSH session is owned by another Alas instance.")
+    public static let visualRelayRequired = Self(message: "Update the Alas helper on this SSH host to use visual aids.")
 
     public init(message: String) {
         self.message = message

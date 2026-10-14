@@ -1,5 +1,83 @@
 import Foundation
 
+/// Which built-in tools an attachment exposes. SSH sessions only get
+/// `visual_show`, relayed back to this Mac by the remote helper.
+public enum BuiltInMCPToolScope: Equatable, Sendable {
+    case full
+    case visualOnly
+}
+
+/// What the session manager knows when it asks for the built-in server.
+public struct BuiltInMCPAttachmentContext: Sendable {
+    public enum Location: Equatable, Sendable {
+        case local(adapterSupportsHTTP: Bool)
+        /// The fence is the session's confirmed remote authority at attach.
+        case ssh(host: String, fence: RemoteSessionFence)
+    }
+
+    public let worktreePath: String
+    public let sessionId: String
+    public let injectionSupport: ACPMCPInjectionSupport
+    public let location: Location
+    /// Whether the attach that requested the server still owns the session
+    /// and, over SSH, the fence it was prepared under.
+    public let isCurrent: @MainActor @Sendable () -> Bool
+    /// Records genuine agent traffic as proof the agent registered the
+    /// server on this attach. Ignored once the attach is no longer current.
+    public let noteRegistered: @MainActor @Sendable () -> Void
+
+    public init(
+        worktreePath: String,
+        sessionId: String,
+        injectionSupport: ACPMCPInjectionSupport,
+        location: Location,
+        isCurrent: @escaping @MainActor @Sendable () -> Bool = { true },
+        noteRegistered: @escaping @MainActor @Sendable () -> Void = {}
+    ) {
+        self.worktreePath = worktreePath
+        self.sessionId = sessionId
+        self.injectionSupport = injectionSupport
+        self.location = location
+        self.isCurrent = isCurrent
+        self.noteRegistered = noteRegistered
+    }
+}
+
+public enum BuiltInMCPAttachment {
+    /// Not requested: disabled, overridden by a configured "alas" server, or
+    /// unreachable through this adapter's MCP configuration.
+    case omitted
+    /// Requested but unavailable; the status row says why.
+    case skipped(MCPAttachmentServerStatus)
+    case prepared(PreparedBuiltInMCPAttachment)
+
+    /// A local injection needs no resources beyond the agent's own process.
+    @MainActor
+    public static func local(_ injection: BuiltInAlasMCP.Injection?) -> BuiltInMCPAttachment {
+        injection.map { .prepared(PreparedBuiltInMCPAttachment(injection: $0)) } ?? .omitted
+    }
+}
+
+/// A built-in server entry plus the resources serving it. The session
+/// manager invalidates it when the attachment that requested it ends.
+@MainActor
+public final class PreparedBuiltInMCPAttachment {
+    public let injection: BuiltInAlasMCP.Injection
+    private var cleanup: (@Sendable () async -> Void)?
+
+    public init(injection: BuiltInAlasMCP.Injection, cleanup: (@Sendable () async -> Void)? = nil) {
+        self.injection = injection
+        self.cleanup = cleanup
+    }
+
+    /// Idempotent. Stops accepting relayed calls before it returns.
+    public func invalidate() async {
+        guard let cleanup else { return }
+        self.cleanup = nil
+        await cleanup()
+    }
+}
+
 /// The app-provided MCP server exposing Alas CLI actions (open files,
 /// worktrees, review) to ACP agents. Composed alongside — never inside —
 /// `MCPAttachmentPlanner`, so the planner stays a pure function of user
@@ -16,13 +94,36 @@ public enum BuiltInAlasMCP: Sendable {
         /// The HTTP server is the process an earlier attach in this app run
         /// already got, not a fresh spawn. See `MCPRegistrationDecision`.
         public let reusesRunningServer: Bool
+        public let toolScope: BuiltInMCPToolScope
 
-        public init(server: ACPMCPServer, status: MCPAttachmentServerStatus, isDelegated: Bool, reusesRunningServer: Bool) {
+        public init(server: ACPMCPServer, status: MCPAttachmentServerStatus, isDelegated: Bool, reusesRunningServer: Bool, toolScope: BuiltInMCPToolScope = .full) {
             self.server = server
             self.status = status
             self.isDelegated = isDelegated
             self.reusesRunningServer = reusesRunningServer
+            self.toolScope = toolScope
         }
+    }
+
+    /// The status row for a built-in server that was requested but cannot be
+    /// served, e.g. an SSH host whose helper cannot relay it.
+    public static func unavailableStatus(_ reason: String) -> MCPAttachmentServerStatus {
+        .init(id: statusId, name: serverName, transport: .stdio,
+              disposition: .skipped(.remoteRelayUnavailable(reason)))
+    }
+
+    /// The entry for an SSH session: the remote helper's stdio proxy, which
+    /// relays `visual_show` back to this Mac. It carries no local command,
+    /// socket, credential, or session id; the descriptor names only the
+    /// helper binary, its state directory, and the stable remote record.
+    public static func remoteVisualInjection(descriptor: RemoteMCPRouteDescriptor) -> Injection {
+        Injection(
+            server: .stdio(name: serverName, command: descriptor.proxyCommand, args: descriptor.proxyArgs, env: []),
+            status: .init(id: statusId, name: serverName, transport: .stdio, disposition: .requested),
+            isDelegated: false,
+            reusesRunningServer: false,
+            toolScope: .visualOnly
+        )
     }
 
     /// An HTTP endpoint for the built-in server. When provided, `injection`
@@ -73,7 +174,21 @@ public enum BuiltInAlasMCP: Sendable {
     public static func shouldInject(enabled: Bool, configuredServers: [ProjectMCPServer],
                              binaryPath: String?, socketPath: String?) -> Bool {
         guard enabled, binaryPath != nil, socketPath != nil else { return false }
-        return !configuredServers.contains {
+        return !isOverridden(by: configuredServers)
+    }
+
+    /// Whether an SSH session should request the relayed visual tool. An
+    /// `.external` adapter (Pi) ignores ACP MCP config, so the relay would
+    /// never be reached; its own status reports that limitation.
+    public static func injectsRemoteVisual(enabled: Bool, configuredServers: [ProjectMCPServer],
+                                           injectionSupport: ACPMCPInjectionSupport) -> Bool {
+        guard enabled, injectionSupport == .sessionNew else { return false }
+        return !isOverridden(by: configuredServers)
+    }
+
+    /// A configured server named "alas" is an intentional user override.
+    private static func isOverridden(by configuredServers: [ProjectMCPServer]) -> Bool {
+        configuredServers.contains {
             $0.name.trimmingCharacters(in: .whitespacesAndNewlines) == serverName
         }
     }

@@ -1635,6 +1635,111 @@ struct RemoteHelperClientTests {
         #expect((try await read.value).content == "ok")
     }
 
+    @Test func visualRelayRouteSurvivesHelperReplacementWithoutReplayingOrLeakingCompletions() async throws {
+        let first = FakeJSONRPCTransport(), second = FakeJSONRPCTransport()
+        let queue = RemoteHelperTransportQueue([first, second])
+        let client = RemoteHelperClient(host: "devbox", idleShutdownNanoseconds: 0, transportFactory: { queue.next() })
+        let fence = RemoteSessionFence(recordId: "record", token: "token")
+        func request(_ transport: FakeJSONRPCTransport, _ index: Int) throws -> [String: Any] {
+            try #require(JSONSerialization.jsonObject(with: transport.sentFrames[index]) as? [String: Any])
+        }
+        func registerReply(_ transport: FakeJSONRPCTransport, _ index: Int) throws -> String {
+            let register = try request(transport, index)
+            #expect(register["method"] as? String == "mcp/register")
+            let params = try #require(register["params"] as? [String: Any])
+            #expect((params["fence"] as? [String: String]) == ["recordId": "record", "token": "token"])
+            let relayId = try #require(params["relayId"] as? String)
+            transport.send(frame: Data(#"{"jsonrpc":"2.0","id":\#(register["id"]!),"result":{"recordId":"record","relayId":"\#(relayId)","proxyCommand":"/home/dev/.alas/bin/alas-helper","proxyArgs":["mcp-proxy","--state-dir","/home/dev/.alas","--record-id","record"],"relayProtocolVersion":1}}"#.utf8))
+            return relayId
+        }
+        // The frame is opaque: a path-looking string must not be rewritten.
+        let frame = Data(#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"visual_show","arguments":{"html":"<p>/.alas-remote/devbox/srv/repo</p>\n"}}}"#.utf8)
+        func relay(_ transport: FakeJSONRPCTransport, relayId: String, requestId: String) {
+            transport.send(frame: Data(#"{"jsonrpc":"2.0","method":"mcp/request","params":{"requestId":"\#(requestId)","recordId":"record","relayId":"\#(relayId)","frameBase64":"\#(frame.base64EncodedString())"}}"#.utf8))
+        }
+
+        let opening = Task { try await client.openMCPRoute(fence: fence) }
+        try await waitUntil { first.sentFrames.count == 1 }
+        first.send(frame: Data(#"{"jsonrpc":"2.0","id":1,"result":{"name":"alas-helper","protocolVersion":1,"binaryVersion":"0.8.0","capabilities":{"watchKinds":[],"fs":{"read":true,"write":true,"stat":true},"ping":true,"visualMCPRelay":1}}}"#.utf8))
+        try await waitUntil { first.sentFrames.count == 2 }
+        let firstRelayId = try registerReply(first, 1)
+        let opened = try await opening.value
+        #expect(opened.descriptor.proxyArgs.last == "record")
+        var events = opened.events.makeAsyncIterator()
+        #expect(await events.next() == .available)
+
+        relay(first, relayId: firstRelayId, requestId: "q1")
+        guard case .request(let staleOrigin, let staleFrame)? = await events.next() else {
+            Issue.record("Expected the relayed request")
+            return
+        }
+        #expect(staleFrame == frame)
+        // The held request does not block ordinary traffic.
+        let ping = Task { try await client.ping() }
+        try await waitUntil { first.sentFrames.count == 3 }
+        first.send(frame: Data(#"{"jsonrpc":"2.0","id":\#(try request(first, 2)["id"]!),"result":{"ok":true}}"#.utf8))
+        #expect(try await ping.value.ok)
+
+        first.send(exitStatus: 1)
+        #expect(await events.next() == .unavailable)
+        await #expect(throws: RemoteHelperClientError.notRunning) {
+            try await client.completeMCPRoute(origin: staleOrigin, completion: .frame(Data("{}".utf8)))
+        }
+        #expect(first.sentFrames.count == 3)
+        #expect(second.sentFrames.isEmpty)
+
+        // The next request restarts the helper; only the registration is replayed.
+        let reconnect = Task { try await client.ping() }
+        try await waitUntil { second.sentFrames.count == 1 }
+        let secondRelayId = try registerReply(second, 0)
+        #expect(secondRelayId != firstRelayId)
+        try await waitUntil { second.sentFrames.count == 2 }
+        #expect(try request(second, 1)["method"] as? String == "ping")
+        second.send(frame: Data(#"{"jsonrpc":"2.0","id":\#(try request(second, 1)["id"]!),"result":{"ok":true}}"#.utf8))
+        _ = try await reconnect.value
+        #expect(await events.next() == .available)
+        await #expect(throws: RemoteHelperClientError.notRunning) {
+            try await client.completeMCPRoute(origin: staleOrigin, completion: .notification)
+        }
+        #expect(second.sentFrames.count == 2)
+
+        relay(second, relayId: secondRelayId, requestId: "q2")
+        guard case .request(let origin, _)? = await events.next() else {
+            Issue.record("Expected the relayed request")
+            return
+        }
+        let completing = Task { try await client.completeMCPRoute(origin: origin, completion: .frame(frame)) }
+        try await waitUntil { second.sentFrames.count == 3 }
+        let complete = try request(second, 2)
+        #expect(complete["method"] as? String == "mcp/complete")
+        let completeParams = try #require(complete["params"] as? [String: Any])
+        #expect(completeParams["relayId"] as? String == secondRelayId)
+        #expect(completeParams["requestId"] as? String == "q2")
+        #expect((completeParams["responseBase64"] as? String).flatMap { Data(base64Encoded: $0) } == frame)
+        second.send(frame: Data(#"{"jsonrpc":"2.0","id":\#(complete["id"]!),"result":{"ok":true}}"#.utf8))
+        try await completing.value
+
+        let closing = Task { await client.closeMCPRoute(opened.handle) }
+        try await waitUntil { second.sentFrames.count == 4 }
+        #expect(try request(second, 3)["method"] as? String == "mcp/unregister")
+        second.send(frame: Data(#"{"jsonrpc":"2.0","id":\#(try request(second, 3)["id"]!),"result":{"ok":true}}"#.utf8))
+        await closing.value
+        #expect(await events.next() == nil)
+        await client.shutdown()
+    }
+
+    @Test func visualRelayRequiresAdvertisedHelperCapability() async throws {
+        let transport = FakeJSONRPCTransport()
+        let client = RemoteHelperClient(host: "devbox", idleShutdownNanoseconds: 0, transportFactory: { transport })
+        let opening = Task { try await client.openMCPRoute(fence: .init(recordId: "record", token: "token")) }
+        try await waitUntil { transport.sentFrames.count == 1 }
+        transport.send(frame: Data(#"{"jsonrpc":"2.0","id":1,"result":{"name":"alas-helper","protocolVersion":1,"binaryVersion":"0.7.0","capabilities":{"watchKinds":[],"fs":{"read":true,"write":true,"stat":true},"ping":true,"sessionCoordination":1}}}"#.utf8))
+        await #expect(throws: RemoteSessionUnavailable.self) { try await opening.value }
+        // An old helper never sees an RPC it does not know.
+        #expect(transport.sentFrames.count == 1)
+        await client.shutdown()
+    }
+
     @Test func connectionExitMarksHostOfflineOnlyForSSHFailure() async throws {
         defer {
             RemoteHostStatusStore.shared.reportSuccess(host: "crashbox")

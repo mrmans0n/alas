@@ -879,7 +879,8 @@ struct ChangesTabView: View {
             let isLast = commit.id == commits.last?.id && older.isEmpty
             rows.append(appKitRow(
                 id: "commit-primary-\(commit.sha)",
-                token: String(reflecting: commit) + rowStateToken + Self.commitRowTerminalToken(isLast: isLast),
+                token: String(reflecting: commit) + rowStateToken + Self.commitRowTerminalToken(isLast: isLast)
+                    + String(section.reviewRangeAnchorSHAs.contains(commit.sha)),
                 estimatedHeight: 64
             ) { section.primaryCommitRow(commit) })
         }
@@ -1155,6 +1156,13 @@ struct ChangesTabView: View {
                 }
             },
             onReview: { appKitActionRelay.onReviewCommit($0) },
+            onReviewRange: { [appState, rps] commit in
+                appState.openReviewPaletteOverlay(prefill: rps.worktree, rangeAnchorSHA: commit.sha)
+            },
+            reviewRangeAnchorSHAs: Set(rps.commits.map(\.sha)),
+            onChooseReviewScope: { [appState, rps] in
+                appState.openReviewPaletteOverlay(prefill: rps.worktree)
+            },
             onLoadOlder: { Task { @MainActor in await rps.loadOlder() } },
             onSelectBaseBranch: { rps.selectBaseBranch($0) },
             onOpenBaseBranchSelector: { Task { @MainActor in await rps.fetchBranches() } },

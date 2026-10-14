@@ -1841,6 +1841,22 @@ struct ACPSessionManagerTests {
         #expect(await manager.showVisualAid(visual, in: "unknown") == false)
     }
 
+    @Test("a takeover while showVisualAid confirms the lease appends and persists nothing")
+    func showVisualAidRefusesAfterTakeoverDuringConfirmation() async throws {
+        let (manager, session, store, _) = try await attachedVisualAidManager()
+        defer { manager.shutdownBackgroundTasks() }
+        let visual = questionVisual()
+        manager.beforeLeaseReadForTesting = {
+            try? store.seizeLease(sessionId: session.id, instanceId: "other", pid: Int64(getpid()),
+                                  now: Int64(Date().timeIntervalSince1970))
+        }
+
+        #expect(await manager.showVisualAid(visual, in: session.id) == false)
+
+        #expect(session.transcript.visualAid(id: visual.id) == nil)
+        #expect(try storedVisualAids(store, sessionId: session.id).isEmpty)
+    }
+
     @Test("answerVisualAid stores the answer once and refuses a second answer")
     func answerVisualAidStoresOnce() async throws {
         let (manager, session, store, client) = try await attachedVisualAidManager()

@@ -73,8 +73,11 @@ public enum ACPMCPPromptPreamble: Sendable {
     ]
 
     /// The preamble text, or nil when no MCP server was attached.
+    /// - Parameter builtInTools: which built-in tools reach the agent (the
+    ///   attached server in `.mcp` mode, the injected CLI in `.cli` mode),
+    ///   or nil when none do.
     public static func text(
-        builtInInjected: Bool,
+        builtInTools: BuiltInMCPToolScope?,
         isDelegated: Bool,
         userServerNames: [String],
         mode: ACPMCPPreambleMode = .mcp,
@@ -83,18 +86,18 @@ public enum ACPMCPPromptPreamble: Sendable {
         nativeSubagentsDisabled: Bool = false,
         nativeDelegationMechanism: ACPNativeDelegationMechanism? = nil
     ) -> String? {
-        guard builtInInjected || !userServerNames.isEmpty || ggStack != nil || issue != nil
+        guard builtInTools != nil || !userServerNames.isEmpty || ggStack != nil || issue != nil
                 || nativeSubagentsDisabled
         else { return nil }
         let delegation = nativeSubagentsDisabled
             ? nativeDelegationLine(
-                builtInInjected: builtInInjected, isDelegated: isDelegated, mode: mode,
+                builtInInjected: builtInTools == .full, isDelegated: isDelegated, mode: mode,
                 mechanism: nativeDelegationMechanism)
             : nil
         switch mode {
         case .mcp:
             return mcpText(
-                builtInInjected: builtInInjected,
+                builtInTools: builtInTools,
                 isDelegated: isDelegated,
                 userServerNames: userServerNames,
                 ggStack: ggStack,
@@ -102,7 +105,7 @@ public enum ACPMCPPromptPreamble: Sendable {
                 delegation: delegation)
         case .cli(let serverAvailability):
             return cliText(
-                builtInInjected: builtInInjected,
+                builtInInjected: builtInTools == .full,
                 isDelegated: isDelegated,
                 userServerNames: userServerNames,
                 serverAvailability: serverAvailability,
@@ -145,7 +148,7 @@ public enum ACPMCPPromptPreamble: Sendable {
     }
 
     private static func mcpText(
-        builtInInjected: Bool,
+        builtInTools: BuiltInMCPToolScope?,
         isDelegated: Bool,
         userServerNames: [String],
         ggStack: GGPreambleStackContext?,
@@ -154,7 +157,7 @@ public enum ACPMCPPromptPreamble: Sendable {
     ) -> String {
         var lines: [String] = []
         lines.append("<alas-workspace-context>")
-        if builtInInjected || !userServerNames.isEmpty {
+        if builtInTools != nil || !userServerNames.isEmpty {
             lines.append(
                 "This session runs inside Alas, the user's macOS workspace app. "
                 + "MCP servers are attached to this session. Some agent harnesses "
@@ -164,7 +167,13 @@ public enum ACPMCPPromptPreamble: Sendable {
         } else {
             lines.append("This session runs inside Alas, the user's macOS workspace app.")
         }
-        if builtInInjected {
+        if builtInTools == .visualOnly {
+            lines.append("The MCP server \"alas\" (built-in) provides only visual_show: it shows "
+                + "an HTML visual (a fragment or a full document, such as a diagram, comparison, "
+                + "or chart) in this session's transcript, optionally with a question. The "
+                + "user's answer arrives as their next prompt. No other Alas tools are "
+                + "available in this session.")
+        } else if builtInTools == .full {
             let sessionTools = isDelegated
                 ? "session_list/session_send/session_read/session_search"
                 : "agent_list/session_list/session_new/session_send (delegate direct child agent sessions; "

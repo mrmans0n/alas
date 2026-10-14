@@ -245,6 +245,8 @@ struct ACPMCPStatusState: Equatable {
             return "Skipped: declined (repo)"
         case .repoDisabled:
             return "Skipped: disabled (repo)"
+        case let .remoteRelayUnavailable(reason):
+            return "Unavailable on the SSH host: \(reason)"
         }
     }
 }

@@ -233,6 +233,31 @@ struct ReviewTargetPaletteModelTests {
         #expect(opened?.payload == .commitRange(base: "aaa1^", head: "ccc3"))
     }
 
+    @Test func openingAnchoredSelectsAnchorAndNextPickCompletesRange() async {
+        let model = ReviewTargetPaletteModel()
+        let newest = commit("ccc3", "third")
+        let middle = commit("bbb2", "second")
+        let oldest = commit("aaa1", "first")
+        model.open(prefill: worktree("feature"), rangeAnchorSHA: "bbb2")
+        var opened: ReviewSessionTarget?
+        let env = environment(commits: [newest, middle, oldest], onOpen: { t, _ in opened = t })
+        await model.loadTargets(environment: env)
+        #expect(model.rangeAnchor == middle)
+        #expect(model.targetRows()[model.selectedIndex] == .commit(middle))
+        model.moveSelection(step: 1, selectable: model.targetRows().map(\.isSelectable))
+        await model.activateSelection(environment: env)
+        #expect(opened?.payload == .commitRange(base: "aaa1^", head: "bbb2"))
+    }
+
+    @Test func anchorMissingFromCommitsAheadIsDropped() async {
+        let model = ReviewTargetPaletteModel()
+        let only = commit("aaa1", "first")
+        model.open(prefill: worktree("feature"), rangeAnchorSHA: "gone")
+        await model.loadTargets(environment: environment(commits: [only]))
+        #expect(model.rangeAnchor == nil)
+        #expect(model.targetRows()[model.selectedIndex] == .commit(only))
+    }
+
     @Test func shiftDownAnchorsCurrentCommitAndLaunchesOrderedRange() async {
         let model = ReviewTargetPaletteModel()
         let w = worktree("feature")

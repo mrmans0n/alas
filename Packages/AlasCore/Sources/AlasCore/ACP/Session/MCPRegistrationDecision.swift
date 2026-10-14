@@ -81,6 +81,15 @@ public enum MCPRegistrationDecision: Sendable {
         return serverTransport == attachedTransport ? .serverRequest : .none
     }
 
+    /// Whether a missing proof can become a warning once the grace elapses.
+    /// The visual-only SSH relay has no transport switch to recommend, and
+    /// an agent adopted across reconnects keeps its remote proxy without a
+    /// fresh `initialize`, so it stays `.unknown` until genuine relayed
+    /// traffic proves it.
+    public static func graceCanWarn(toolScope: BuiltInMCPToolScope) -> Bool {
+        toolScope == .full
+    }
+
     /// Whether the recorded hello counts for this attach: any hello does,
     /// except the one a superseded server sent before the attach started.
     public static func isCurrentHello(_ sequence: Int?, staleSequence: Int?) -> Bool {
