@@ -2323,7 +2323,9 @@ public struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
     /// Lowercased usernames that approved or commented on the head commit.
     /// A dated approval (`approved_at`, newer GitLab) and a note count only
     /// when created after `cutoff` (see `reviewersOnHeadCutoff`); with no
-    /// cutoff, neither counts. An approval without `approved_at` counts.
+    /// cutoff, neither counts. An approval without a valid `approved_at`
+    /// never counts: a project that keeps approvals across pushes would
+    /// otherwise let an older head's approval stand for this one.
     public static func parseReviewersOnHead(
         approvalsJSON: String,
         notePages: [GitLabReviewersOnHeadNotesPage],
@@ -2339,9 +2341,9 @@ public struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
         var reviewers = Set<String>()
         for approval in approvals.approvedBy ?? [] {
             guard let username = normalizedOptionalString(approval.user?.username) else { continue }
-            if let approvedAt = try? parseOptionalGitLabDate(approval.approvedAt) {
-                guard let cutoff, approvedAt >= cutoff else { continue }
-            }
+            guard let approvedAt = try? parseOptionalGitLabDate(approval.approvedAt),
+                  let cutoff, approvedAt >= cutoff
+            else { continue }
             reviewers.insert(username.lowercased())
         }
         guard let cutoff else { return reviewers }

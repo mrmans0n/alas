@@ -2221,10 +2221,10 @@ struct GitLabCLIProviderTests {
         "Reviewers on head keep current approvals and human notes posted after the head commit and Alas first seeing it",
         arguments: [
             GitLabReviewersOnHeadCase(
-                testDescription: "approval without approved_at counts, lowercased",
+                testDescription: "approval without approved_at does not count",
                 approvals: #"{"user": {"id": 7, "username": "Maintainer"}}"#,
                 notes: "",
-                expected: ["maintainer"]
+                expected: []
             ),
             GitLabReviewersOnHeadCase(
                 testDescription: "approval after the head commit counts",
