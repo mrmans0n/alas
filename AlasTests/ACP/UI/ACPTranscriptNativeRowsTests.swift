@@ -29,6 +29,8 @@ import Testing
         ("open ~/notes.txt", true, false),
         ("inspect (/tmp)", true, false),
         ("inspect (/.project)", true, false),
+        ("see &num;12", true, false),
+        ("merge &excl;34", true, false),
         ("either and/or works", true, true),
         ("details at https://gitlab.example.com/g/p/-/merge_requests/7", true, false),
         ("no images or chips here", true, true),

@@ -22,6 +22,18 @@ enum ACPTranscriptNativeRows {
         return cache
     }()
 
+    /// Whether `text` could render a chip: a slash command, an absolute
+    /// path, a `#12`/`!34` reference, a `~/` path or a URL. The real detectors
+    /// need the code host and the file system, so this rejects conservatively.
+    private static func mayHoldChips(_ text: String) -> Bool {
+        text.hasPrefix("/")
+            // Absolute paths after whitespace or any opener, as
+            // `ACPAbsolutePathDetector` accepts them; "and/or" stays native.
+            || text.range(of: #"(^|[^A-Za-z0-9])/[^\s/]"#, options: .regularExpression) != nil
+            || text.range(of: #"[#!]\d"#, options: .regularExpression) != nil
+            || text.contains("~/") || text.contains("://")
+    }
+
     /// Parsing is the expensive part and specs rebuild on every publish, so
     /// each source string is parsed once.
     static func supportsMarkdown(_ source: String) -> Bool {
@@ -52,17 +64,10 @@ enum ACPTranscriptNativeRows {
         guard !isLive else { return nil }
         switch message {
         case .user(_, _, let text, let attachments, let delegatedSource, let pastedSpans):
+            // Chips are found in the rendered text (entities decoded, `&#35;12`
+            // becomes `#12`), so the source and the rendering are both checked.
             guard attachments.isEmpty, pastedSpans.isEmpty, delegatedSource == nil,
-                  !text.hasPrefix("/"),
-                  // Absolute paths after whitespace or any opener, as
-                  // `ACPAbsolutePathDetector` accepts them; "and/or" stays native.
-                  text.range(of: #"(^|[^A-Za-z0-9])/[^\s/]"#, options: .regularExpression) == nil,
-                  text.range(of: #"#\d"#, options: .regularExpression) == nil,
-                  // Chip forms that depend on the workspace (GitLab `!34`, an
-                  // existing `~/file`, a PR/MR URL); the real detectors need
-                  // the code host and file system, so reject conservatively.
-                  text.range(of: #"!\d"#, options: .regularExpression) == nil,
-                  !text.contains("~/"), !text.contains("://"),
+                  !mayHoldChips(text), !mayHoldChips(ACPMarkdownInlineRenderer.plainText(text)),
                   supportsMarkdown(text)
             else { return nil }
             return .user(markdown: text)
