@@ -101,7 +101,13 @@ impl Supervisor {
             .filter(|(pid, _)| *pid != self.anchor)
             .map(|(pid, stat)| (*pid, stat.start))
             .collect();
-        self.owned.retain(|key, _| live.contains(key));
+        // Once found, a process stays owned while it is still that process:
+        // on macOS one can leave the group and drop its output on SIGTERM,
+        // and the next sample would no longer see it.
+        self.owned.retain(|&(pid, start), _| {
+            live.contains(&(pid, start))
+                || platform::stat(pid).is_some_and(|stat| stat.start == start && !stat.dead)
+        });
         for &(pid, start) in &live {
             if self.owned.contains_key(&(pid, start)) {
                 continue;

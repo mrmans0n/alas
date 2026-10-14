@@ -376,6 +376,24 @@ fn a_child_forked_during_the_term_grace_is_stopped_too() {
 }
 
 #[test]
+fn a_process_that_detaches_when_terminated_is_still_killed() {
+    let mut helper = Helper::start();
+    // An orphan cleanup finds by its group and output, which on SIGTERM
+    // leaves both and keeps running: what cleanup already found stays found.
+    helper.spawn_script(
+        "detacher",
+        "(perl -MPOSIX -e '$SIG{TERM} = sub { POSIX::setsid(); open(STDOUT, \">\", \"/dev/null\"); open(STDERR, \">\", \"/dev/null\"); open(my $f, \">\", \"detached.pid\"); print $f \"$$\\n\"; close $f }; open(my $f, \">\", \"started.pid\"); print $f \"$$\\n\"; close $f; sleep 1 while 1' &)\nwhile [ ! -s started.pid ]; do sleep 0.01; done\nexec sleep 300\n",
+        json!({ "killGraceMs": 1000 }),
+    );
+    let detacher = helper.pid_file("started.pid");
+    helper.kill("detacher");
+    assert_eq!(helper.pid_file("detached.pid"), detacher);
+    let result = helper.wait_exit("detacher");
+    assert_eq!(result["exit"], 143);
+    assert!(!alive(detacher));
+}
+
+#[test]
 fn the_anchor_ignores_the_groups_signals_and_is_removed_last() {
     let mut helper = Helper::start();
     // The command signals its own group, the anchor's, then ignores SIGTERM.
