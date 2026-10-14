@@ -112,7 +112,9 @@ extension AlasCoreContext {
                     let finalized = runRecords.finish(
                         runID: runID,
                         outcome: failed ? .failed(exitCode: completion.exitCode) : .succeeded,
-                        at: Date(),
+                        // A process's completion is timed on this machine; a
+                        // terminal run's file may come from another host's clock.
+                        at: awaitCompletion == nil ? Date() : completion.completedAt,
                         failureID: failed ? runID : nil
                     )
                     finalizeRun(finalized, capture: .completion(completion))

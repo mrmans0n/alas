@@ -153,6 +153,12 @@ extension AlasCoreContext {
         if let refusal = launcher.refusal(for: script, in: worktree, project: project) {
             return .refused(title: "Run Script Failed", message: refusal)
         }
+        // A run still hosted would keep going next to the new one; restarting
+        // stops it first. One whose host is gone is only waiting to be given up.
+        if let current = runRecords.record(worktreeID: worktree.id, scriptKey: script.key), current.status.isActive,
+           processRuns[current.id] != nil || launcher.hostsRun(scriptKey: script.key, worktreeID: worktree.id) {
+            return .refused(title: "Run Script Failed", message: "\(script.displayName) is already running.")
+        }
         // Refused before a record exists, so the row never flips to Starting.
         guard projects.admitsNewWork(in: worktree) else {
             return .refused(

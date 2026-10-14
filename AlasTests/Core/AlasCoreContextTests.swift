@@ -242,7 +242,7 @@ struct AlasCoreContextTests {
 
         // Same turn: the restart takes the slot before the cancellation's stop runs.
         first.cancel()
-        let replacement = context.startRun(script, in: worktree, isHidden: true)
+        let replacement = context.restartRun(script, in: worktree, isHidden: true)
         defer { context.stopRun(scriptKey: script.key, in: worktree) }
 
         await #expect(throws: CancellationError.self) { _ = try await first.value }
@@ -362,6 +362,41 @@ struct AlasCoreContextTests {
 
         await #expect(throws: CancellationError.self) { _ = try await run.value }
         #expect(context.runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status == .finished(.stopped))
+    }
+
+    /// A script still running is not started a second time next to it.
+    @Test(.timeLimit(.minutes(1)))
+    func startRunRefusesAScriptStillRunning() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-core-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try "sleep 300\n".write(to: root.appendingPathComponent("long.sh"), atomically: true, encoding: .utf8)
+        let project = ProjectConfig(id: "p", name: "p", path: root.path, color: "blue", addedAt: Date())
+        let worktree = Worktree(
+            id: root.path, projectId: "p", name: "main", branch: "main", path: root,
+            status: .clean, lastActivity: Date()
+        )
+        let script = RunScript(
+            scope: .repo, fileName: "long.sh", fileURL: root.appendingPathComponent("long.sh"),
+            displayName: "Long", onExit: .close, cwd: nil, isExecutable: false
+        )
+        let context = AlasCoreContext(projects: ProjectsManager(persistedProjects: [project]), runHistoryStore: nil)
+        guard case .started(let firstID) = context.startRun(script, in: worktree, isHidden: true) else {
+            Issue.record("Expected the first run to start")
+            return
+        }
+        defer { context.stopRun(scriptKey: script.key, in: worktree) }
+        while context.runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status != .running {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        let second = context.startRun(script, in: worktree, isHidden: true)
+
+        guard case .refused = second else {
+            Issue.record("Expected the second run to be refused, got \(second)")
+            return
+        }
+        #expect(context.runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.id == firstID)
     }
 
     /// A second run of a script that is still running would displace the
