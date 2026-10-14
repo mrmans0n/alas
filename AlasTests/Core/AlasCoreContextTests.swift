@@ -218,6 +218,78 @@ struct AlasCoreContextTests {
         #expect(context.runRecords.record(worktreeID: worktree.id, scriptKey: script.key) == nil)
     }
 
+    /// Once Git has added the worktree it exists, so a refresh failing after
+    /// that is left to the next refresh instead of failing the creation,
+    /// which a retry could only repeat against the existing path.
+    @Test func creationSurvivesARefreshThatFails() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-core-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let repo = root.appendingPathComponent("repo")
+        try FileManager.default.copyItem(at: try await Self.repoTemplate.value, to: repo)
+        let context = AlasCoreContext(
+            projects: ProjectsManager(persistedProjects: []),
+            store: TestPersistenceStore(),
+            projectsFile: root.appendingPathComponent("projects.json"),
+            runHistoryStore: nil
+        )
+        let project = try await context.addProject(path: repo, displayName: "repo", icon: .default(color: "blue"))
+        context.refreshProjectWorktrees = { _ in throw CocoaError(.fileReadUnknown) }
+
+        let worktree = try await context.createWorktree(
+            projectID: project.id, branch: "feature", base: "main", destination: root.appendingPathComponent("feature")
+        )
+
+        #expect(FileManager.default.fileExists(atPath: worktree.path.path))
+        #expect(context.projects.operationState(for: worktree) == nil)
+    }
+
+    enum UnsavedCreation: CaseIterable {
+        /// Its GG mode is only persisted by the creation's last save.
+        case created
+        /// Its pending branch name was not saved, then the app's hook
+        /// approval was cancelled.
+        case failedAfterward
+    }
+
+    /// A save that fails during a creation is reported, whether the creation
+    /// then stands or fails: what it recorded is otherwise lost on restart.
+    @Test(arguments: UnsavedCreation.allCases)
+    func creationReportsAProjectListItCannotSave(_ scenario: UnsavedCreation) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-core-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let repo = root.appendingPathComponent("repo")
+        try FileManager.default.copyItem(at: try await Self.repoTemplate.value, to: repo)
+        let store = TestPersistenceStore()
+        let context = AlasCoreContext(
+            projects: ProjectsManager(persistedProjects: []),
+            store: store,
+            projectsFile: root.appendingPathComponent("projects.json"),
+            runHistoryStore: nil
+        )
+        let project = try await context.addProject(path: repo, displayName: "repo", icon: .default(color: "blue"))
+        var request = WorktreeCreateRequest(projectID: project.id, base: "main", branch: "feature", destination: root.appendingPathComponent("feature"))
+        switch scenario {
+        case .created:
+            request.ggWorktreeMode = .on
+        case .failedAfterward:
+            request.namesBranchFromFirstPrompt = true
+            request.cancelledHookApprovalFails = true
+            context.repoHookLoader = RepoHookLoader { _, _, _ in .data(Data("true\n".utf8)) }
+            context.repoHookPrompter = RepoHookPrompter(decide: { _, _, _ in .cancel }, decideFailure: { _, _ in .cancel })
+        }
+        let pending = try await context.beginCreate(request)
+        store.writeError = CocoaError(.fileWriteOutOfSpace)
+
+        switch (scenario, await context.finishCreate(pending)) {
+        case (.created, .createdButNotSaved), (.failedAfterward, .failed(_, unsaved: .some)):
+            break
+        case (_, let outcome):
+            Issue.record("Expected the save failure to be reported, got \(outcome)")
+        }
+    }
+
     /// The removal cannot be undone, so a project list that cannot be saved
     /// afterwards is reported rather than left to restore the deleted row,
     /// by the headless call and by the claimed deletion the app makes.

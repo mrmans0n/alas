@@ -506,7 +506,6 @@ extension AppState {
             }
             markWorktreeLaunchFailed(
                 worktree: worktree,
-                projectId: project.id,
                 error: error,
                 launchSurface: launchSurface
             )
