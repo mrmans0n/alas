@@ -45,7 +45,7 @@ const STOP_GRACE_MS: u64 = 5000;
 const MAX_TIMEOUT_MS: u64 = 10 * 60 * 1000;
 /// What a process leaves running when it exits on its own gets this long
 /// after `SIGTERM`, as API 6 says.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg_attr(not(any(target_os = "linux", target_os = "macos")), allow(dead_code))]
 const LEFTOVER_GRACE_MS: u64 = 1000;
 /// A login environment past this is not one: the capture fails and the
 /// helper's own is used.
@@ -121,11 +121,11 @@ pub(crate) fn handle(
 
 /// Why this host can't run plugin processes, if it can't.
 pub(crate) fn unsupported_reason() -> Option<String> {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         platform::supported().err()
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         Some("plugin commands can't run on this host's operating system".into())
     }
@@ -333,11 +333,11 @@ fn remove_claim(dir: &Path) -> Result<(), HelperError> {
 
 /// `pid` with its start time, so a reused pid never matches it.
 fn process_identity(pid: i32) -> Option<String> {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         platform::stat(pid).map(|stat| format!("{pid} {}", stat.start))
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let _ = pid;
         None
@@ -352,11 +352,11 @@ fn identity_alive(record: &str) -> bool {
         return false;
     };
     match fields.next() {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         Some(Ok(start)) => {
             platform::stat(pid as i32).is_some_and(|stat| stat.start == start && !stat.dead)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         Some(Ok(_)) => false,
         Some(Err(_)) => false,
         // SAFETY: signal 0 only checks that the pid exists.
@@ -683,7 +683,7 @@ fn write_lease(dir: &Path, lease_ms: Option<u64>) -> Result<(), HelperError> {
 }
 
 /// A lease file that can't be read counts as lapsed: nobody can renew it.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg_attr(not(any(target_os = "linux", target_os = "macos")), allow(dead_code))]
 fn lease_lapsed(dir: &Path) -> bool {
     std::fs::read_to_string(dir.join("lease-until"))
         .ok()
@@ -964,7 +964,7 @@ struct Chunk {
 
 const JOURNAL_MAGIC: &[u8; 4] = b"APJ1";
 
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg_attr(not(any(target_os = "linux", target_os = "macos")), allow(dead_code))]
 impl Journal {
     fn new(keep_tail: bool, limit: usize) -> Self {
         Self {
@@ -1108,12 +1108,12 @@ pub(crate) fn supervise_main(dir: Option<String>) -> ! {
         eprintln!("usage: alas-helper plugin-proc-supervise <dir>");
         std::process::exit(2);
     };
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         supervisor::supervise(PathBuf::from(dir));
         std::process::exit(0);
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let _ = std::fs::write(
             Path::new(&dir).join("error"),
@@ -1127,11 +1127,11 @@ pub(crate) fn supervise_main(dir: Option<String>) -> ! {
 /// reused while cleanup signals it. Ignores every signal it can and dies with
 /// its supervisor.
 pub(crate) fn anchor_main(parent: Option<String>) -> ! {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     if let Some(parent) = parent.and_then(|parent| parent.parse().ok()) {
         platform::anchor(parent);
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     let _ = parent;
     std::process::exit(1);
 }
@@ -1139,12 +1139,15 @@ pub(crate) fn anchor_main(parent: Option<String>) -> ! {
 #[cfg(target_os = "linux")]
 #[path = "plugin_proc/linux.rs"]
 mod platform;
-#[cfg(target_os = "linux")]
+#[cfg(target_os = "macos")]
+#[path = "plugin_proc/macos.rs"]
+mod platform;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod supervisor;
 
 /// A process as the supervisor sees it: enough to walk the tree, tell a
 /// reused pid from the process it was, and skip one that already ended.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Stat {
     pub ppid: i32,
@@ -1356,16 +1359,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn macos_hosts_refuse_plugin_processes_with_the_reason() {
-        let error = spawn(Some(json!({
-            "procId": "p1", "lease": "l", "argv": ["true"], "cwd": "/", "outputLimit": 10
-        })))
-        .expect_err("refused");
-        assert_eq!(error.code, -32003);
-    }
-
     #[cfg(target_os = "linux")]
     #[test]
     fn stat_parses_names_with_spaces_and_parentheses() {
@@ -1381,7 +1374,7 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn a_pid_whose_identity_changed_is_never_signalled() {
         let mut child = Command::new("sleep").arg("30").spawn().unwrap();

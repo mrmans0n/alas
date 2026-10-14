@@ -1,6 +1,8 @@
 //! Lifecycle of plugin processes (`pproc/*`), driven through a real helper.
 //! Linux only: other hosts refuse plugin processes.
-#![cfg(target_os = "linux")]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
+// Until the suite runs on macOS too.
+#![cfg_attr(target_os = "macos", allow(dead_code))]
 
 use base64::Engine;
 use serde_json::{Value, json};
@@ -181,6 +183,7 @@ fn wait_until(mut condition: impl FnMut() -> bool) {
 }
 
 /// Running, not a zombie.
+#[cfg(target_os = "linux")]
 fn alive(pid: i32) -> bool {
     std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
         !matches!(
@@ -188,6 +191,47 @@ fn alive(pid: i32) -> bool {
             Some('Z' | 'X')
         )
     })
+}
+
+#[cfg(target_os = "macos")]
+fn bsdinfo(pid: i32) -> Option<libc::proc_bsdinfo> {
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as i32;
+    let filled = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            (&mut info as *mut libc::proc_bsdinfo).cast(),
+            size,
+        )
+    };
+    (filled == size).then_some(info)
+}
+
+/// Running, not a zombie.
+#[cfg(target_os = "macos")]
+fn alive(pid: i32) -> bool {
+    bsdinfo(pid).is_some_and(|info| info.pbi_status != libc::SZOMB)
+}
+
+/// The start time the helper records with a pid.
+fn start_time(pid: u32) -> u64 {
+    #[cfg(target_os = "linux")]
+    {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+        stat[stat.rfind(')').unwrap() + 2..]
+            .split(' ')
+            .nth(19)
+            .unwrap()
+            .parse()
+            .unwrap()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let info = bsdinfo(pid as i32).unwrap();
+        info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec
+    }
 }
 
 fn output(result: &Value) -> String {
@@ -208,6 +252,7 @@ fn b64(text: &str) -> String {
     base64::engine::general_purpose::STANDARD.encode(text)
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn argv_arrives_unchanged_and_stdin_ends_after_the_payload() {
     let mut helper = Helper::start();
@@ -229,6 +274,7 @@ fn argv_arrives_unchanged_and_stdin_ends_after_the_payload() {
     assert_eq!(result["exit"], 0);
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn a_long_running_start_sees_eof_on_stdin() {
     let mut helper = Helper::start();
@@ -240,6 +286,7 @@ fn a_long_running_start_sees_eof_on_stdin() {
     );
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn a_signal_exit_reports_128_plus_the_signal() {
     let mut helper = Helper::start();
@@ -254,6 +301,7 @@ fn a_signal_exit_reports_128_plus_the_signal() {
     }
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn what_the_root_leaves_running_is_stopped_when_it_exits() {
     let mut helper = Helper::start();
@@ -274,6 +322,7 @@ fn what_the_root_leaves_running_is_stopped_when_it_exits() {
     assert!(!alive(background) && !alive(daemon));
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn a_root_that_calls_setsid_and_its_setsid_child_are_stopped() {
     let mut helper = Helper::start();
@@ -310,6 +359,7 @@ fn a_root_that_calls_setsid_and_its_setsid_child_are_stopped() {
     assert!(!alive(root) && !alive(child));
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn a_child_forked_during_the_term_grace_is_stopped_too() {
     let mut helper = Helper::start();
@@ -328,6 +378,7 @@ fn a_child_forked_during_the_term_grace_is_stopped_too() {
     assert!(!alive(root) && !alive(late));
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn the_anchor_ignores_the_groups_signals_and_is_removed_last() {
     let mut helper = Helper::start();
@@ -355,6 +406,7 @@ fn the_anchor_ignores_the_groups_signals_and_is_removed_last() {
     assert!(!alive(anchor) && !alive(root));
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn once_the_anchor_dies_cleanup_goes_on_through_pidfds_alone() {
     let mut helper = Helper::start();
@@ -381,6 +433,7 @@ fn once_the_anchor_dies_cleanup_goes_on_through_pidfds_alone() {
     assert!(!alive(root) && !alive(background));
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn a_lapsed_lease_and_the_deadline_stop_the_run() {
     let mut helper = Helper::start();
@@ -402,6 +455,7 @@ fn a_lapsed_lease_and_the_deadline_stop_the_run() {
     );
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn another_lease_can_neither_attach_nor_stop_a_process() {
     let mut helper = Helper::start();
@@ -423,6 +477,7 @@ fn another_lease_can_neither_attach_nor_stop_a_process() {
     assert!(!helper.dir("mine").exists());
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn output_streams_as_notifications_until_the_exit() {
     let mut helper = Helper::start();
@@ -458,6 +513,7 @@ fn output_streams_as_notifications_until_the_exit() {
     assert_eq!((text.as_str(), exit), ("onetwo", json!(0)));
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn a_spawn_an_earlier_helper_left_unstarted_runs_again() {
     let mut helper = Helper::start();
@@ -477,6 +533,7 @@ fn a_spawn_an_earlier_helper_left_unstarted_runs_again() {
     assert_eq!(retried["spawned"], false);
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn a_retry_never_reports_a_run_whose_supervisor_is_gone() {
     let mut helper = Helper::start();
@@ -484,13 +541,7 @@ fn a_retry_never_reports_a_run_whose_supervisor_is_gone() {
     // another live process: the recorded start time no longer matches.
     let mut stranger = Command::new("sleep").arg("30").spawn().unwrap();
     let pid = stranger.id();
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
-    let start: u64 = stat[stat.rfind(')').unwrap() + 2..]
-        .split(' ')
-        .nth(19)
-        .unwrap()
-        .parse()
-        .unwrap();
+    let start = start_time(pid);
     let dir = helper.dir("orphan");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("owner"), LEASE).unwrap();
@@ -514,13 +565,7 @@ fn a_retry_never_reports_a_run_whose_supervisor_is_gone() {
 fn live_identity() -> (Child, String) {
     let child = Command::new("sleep").arg("30").spawn().unwrap();
     let pid = child.id();
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
-    let start: u64 = stat[stat.rfind(')').unwrap() + 2..]
-        .split(' ')
-        .nth(19)
-        .unwrap()
-        .parse()
-        .unwrap();
+    let start = start_time(pid);
     (child, format!("{pid} {start}"))
 }
 
@@ -534,6 +579,7 @@ fn publish_claim(helper: &Helper, proc_id: &str, launcher: &str) -> PathBuf {
     dir
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn a_retry_while_the_original_launcher_lives_joins_its_claim() {
     let mut helper = Helper::start();
@@ -551,6 +597,7 @@ fn a_retry_while_the_original_launcher_lives_joins_its_claim() {
     let _ = launcher.wait();
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn a_retry_after_the_launcher_died_unstarted_runs_again() {
     let mut helper = Helper::start();
@@ -570,6 +617,7 @@ fn a_retry_after_the_launcher_died_unstarted_runs_again() {
     let _ = stranger.wait();
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn a_retry_joins_a_started_run_whose_worktree_is_gone() {
     let mut helper = Helper::start();
@@ -585,6 +633,7 @@ fn a_retry_joins_a_started_run_whose_worktree_is_gone() {
     let _ = std::fs::rename(format!("{}.moved", worktree.display()), &worktree);
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn a_slow_spawn_does_not_hold_up_other_requests() {
     let mut helper = Helper::start();
@@ -617,4 +666,31 @@ fn a_slow_spawn_does_not_hold_up_other_requests() {
             break;
         }
     }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn the_anchor_exits_once_its_parent_is_gone() {
+    // The shell plays the supervisor: `$$` stays its pid through `exec`, so
+    // the anchor's parent is it until the kill.
+    let mut parent = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(format!(
+            "{} plugin-proc-anchor $$ & echo $!; exec sleep 30",
+            env!("CARGO_BIN_EXE_alas-helper")
+        ))
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut line = String::new();
+    BufReader::new(parent.stdout.take().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    let anchor: i32 = line.trim().parse().unwrap();
+    // Not a wait for an event: the anchor must still be there a while later.
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(alive(anchor), "the anchor left while its parent lived");
+    parent.kill().unwrap();
+    parent.wait().unwrap();
+    wait_until(|| !alive(anchor));
 }
