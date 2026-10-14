@@ -6,10 +6,12 @@ import Foundation
 /// On by default; set `ALAS_TRANSCRIPT_CORETEXT=0` to opt out and draw every
 /// row with SwiftUI. Native rows cover finished agent messages (including
 /// commentary), collapsed thoughts and tool calls, tool-group headers without
-/// hidden members, and plain user messages. Everything else stays SwiftUI per
-/// row: live/streaming rows, expanded cards, user messages with chips or
-/// attachments, tables, images, task lists, Mermaid, file edits, plans,
-/// notices, visual aids, subagents, and compaction/background tasks.
+/// hidden members, and plain user messages; their markdown may hold tables of
+/// up to `ACPTranscriptMarkdownLayout.maxNativeTableColumns` (5) columns.
+/// Everything else stays SwiftUI per row: live/streaming rows, expanded cards,
+/// user messages with chips or attachments, tables wider than 5 columns,
+/// images, task lists, Mermaid, file edits, plans, notices, visual aids,
+/// subagents, and compaction/background tasks.
 @MainActor
 enum ACPTranscriptNativeRows {
     static let isEnabled: Bool = ProcessInfo.processInfo.environment["ALAS_TRANSCRIPT_CORETEXT"] != "0"

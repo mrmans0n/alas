@@ -146,10 +146,10 @@ struct ACPTranscriptMarkdownLayout {
 
     /// Whether every block can be drawn here. Images, Mermaid diagrams and
     /// task lists need views of their own, and so do tables of more than
-    /// `maxNativeTableColumns` columns. So does prose
-    /// with an inline image: the SwiftUI renderer turns it into a text
-    /// attachment that `CTLineDraw` cannot show. `![` is a conservative
-    /// stand-in for the inline renderer's image matching, which needs a theme.
+    /// `maxNativeTableColumns` columns. So does prose with an inline image:
+    /// the SwiftUI renderer turns it into a text attachment that `CTLineDraw`
+    /// cannot show. `![` is a conservative stand-in for the inline renderer's
+    /// image matching, which needs a theme.
     static func supports(_ blocks: [ACPMarkdownParser.Block]) -> Bool {
         blocks.allSatisfy { block in
             switch block {
