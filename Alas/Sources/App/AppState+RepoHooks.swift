@@ -1,3 +1,4 @@
+@_spi(AppHost) import AlasCore
 import Foundation
 
 extension AppState {

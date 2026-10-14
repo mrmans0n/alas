@@ -46,7 +46,7 @@ extension AlasCoreContext {
     /// The repository's hook for `event`, when the project inherits it and it
     /// is approved: approved earlier, or now through `repoHookPrompter`. Nil
     /// when there is none or it is skipped; throws when it is cancelled.
-    public func preparedRepoHook(
+    @_spi(AppHost) public func preparedRepoHook(
         event: RepoHookEvent,
         project: ProjectConfig,
         worktree: Worktree,
@@ -97,7 +97,7 @@ extension AlasCoreContext {
     }
 
     /// Records the approval and persists it; nothing is kept if saving fails.
-    public func persistRepoHookApproval(projectId: String, hash: String) throws {
+    @_spi(AppHost) public func persistRepoHookApproval(projectId: String, hash: String) throws {
         guard projects.approveRepoHook(projectId: projectId, hash: hash) else {
             if projects.isRepoHookApproved(projectId: projectId, hash: hash) {
                 return
@@ -116,7 +116,7 @@ extension AlasCoreContext {
     /// approved hook and the project's own, combined as configured. It runs
     /// in the worktree, over SSH for remote ones, and its failure does not
     /// fail the creation. Throws only when the hook's approval is cancelled.
-    public func runWorktreeCreateScripts(
+    func runWorktreeCreateScripts(
         project: ProjectConfig,
         worktree: Worktree,
         includeUserStartupScript: Bool = true

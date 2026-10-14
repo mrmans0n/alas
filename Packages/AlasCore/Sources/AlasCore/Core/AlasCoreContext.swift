@@ -25,11 +25,11 @@ public final class AlasCoreContext {
     /// Waits for a run's completion file. Injectable so tests can settle runs.
     @ObservationIgnored public let runCompletionWaiter: RunCompletionWaiter
     /// Runs whose completion is being waited for, keyed by run ID.
-    @ObservationIgnored public var runObservations: [String: RunObservation] = [:]
+    @ObservationIgnored @_spi(AppHost) @_spi(Testing) public var runObservations: [String: RunObservation] = [:]
     /// Told exactly once when a run settles, keyed by run ID. The worktree is
     /// carried so a worktree teardown can settle every run it owns, including
     /// ones that never produced an archivable record.
-    @ObservationIgnored public var runSettlementHandlers: [String: (worktreeID: String, notify: (RunScriptSettlement) -> Void)] = [:]
+    @ObservationIgnored @_spi(Testing) public internal(set) var runSettlementHandlers: [String: (worktreeID: String, notify: (RunScriptSettlement) -> Void)] = [:]
 
     /// The on-device text model's files and state.
     @ObservationIgnored public let localTextModelStore: LocalTextModelStore
