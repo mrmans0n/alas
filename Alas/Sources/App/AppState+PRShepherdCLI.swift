@@ -9,9 +9,10 @@ private struct PRShepherdCLIError: Error {
 /// calling ACP session and its worktree, and rejected Workspace checkout owners.
 extension AppState {
     /// Pushes the exact HEAD, opens the PR/MR (or adopts the open one for this
-    /// branch), and binds the shepherd to the calling session. A call made
-    /// while another runs for the worktree waits for it, then adopts the
-    /// request it opened, else returns its response.
+    /// branch), and binds the shepherd to the calling session. Calls for one
+    /// worktree run one at a time: a call made while another runs waits for
+    /// it, then runs the whole publish path itself, so its own HEAD is pushed
+    /// before the request the first call opened is adopted.
     func cliPRCreate(
         sessionID: String,
         worktreeID: String,
@@ -20,12 +21,12 @@ extension AppState {
         draft: Bool,
         base: String?
     ) async -> AlasCLIResponse {
-        if let running = prCreateTasks[worktreeID] {
-            let response = await running.value
-            if let adopted = await adoptOpenPR(sessionID: sessionID, worktreeID: worktreeID, base: base) {
-                return .text([ReviewCommentWireDTO.jsonLine(adopted)])
-            }
-            return response
+        // The caller that started a task clears it only after it resumes, so a
+        // finished task can still be listed: wait for each one once.
+        var finished: Task<AlasCLIResponse, Never>?
+        while let running = prCreateTasks[worktreeID], running != finished {
+            _ = await running.value
+            finished = running
         }
         let task = Task { @MainActor [weak self] () -> AlasCLIResponse in
             guard let self else { return .error("Alas is not available.") }
@@ -45,23 +46,6 @@ extension AppState {
             prCreateTasks[worktreeID] = nil
         }
         return response
-    }
-
-    /// The open request for the worktree's branch, bound to `sessionID`. Nil
-    /// when there is none or it can't be read.
-    private func adoptOpenPR(sessionID: String, worktreeID: String, base: String?) async -> PRCreateResultWire? {
-        guard let target = try? prShepherdTarget(worktreeID) else { return nil }
-        let baseBranch = await prCreateBaseBranch(base, context: target.context)
-        guard let probe = await reviewShepherd.fetchSnapshot(worktreePath: target.context.path, baseBranch: baseBranch),
-              let request = await openRequestAnyBase(probe: probe, worktreePath: target.context.path)
-        else { return nil }
-        let snapshot = probe
-        let record = await bindPRShepherd(sessionID: sessionID, worktreeID: worktreeID, request: request)
-        return PRCreateResultWire(
-            request: request, headSHA: request.headSHA ?? snapshot.local.headSHA, created: false,
-            uncommittedChanges: snapshot.local.hasWorkingTreeChanges || snapshot.local.hasStagedChanges,
-            record: record
-        )
     }
 
     /// The requested base, else the worktree's, without a `<remote>/` prefix.
