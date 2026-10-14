@@ -110,7 +110,7 @@ import Testing
         let container = NSView()
         container.addSubview(view)
         withExtendedLifetime(container) {
-            text.replace(with: "Short\n\n| a | b |\n|---|---|\n| 1 | 2 |")
+            text.replace(with: "Short\n\n| a | b | c | d | e | f |\n|---|---|---|---|---|---|\n| 1 | 2 | 3 | 4 | 5 | 6 |")
             #expect(respecs == 1)
             #expect(view.content == .agent(markdown: "Short", commentary: true))
         }

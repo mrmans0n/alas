@@ -18,7 +18,20 @@ import Testing
 struct ACPTranscriptFrameRateBenchmark {
     @Test(arguments: [false, true])
     func flingThroughHistory(collapsesFinishedToolCalls: Bool) async throws {
-        let corpus = ACPTranscriptBenchmarkCorpus(seed: 7, messageCount: 650)
+        try await fling(ACPTranscriptBenchmarkCorpus(seed: 7, messageCount: 650), label: "fling", collapsesFinishedToolCalls: collapsesFinishedToolCalls)
+    }
+
+    /// History heavy in table, file-edit, and plan rows: answers with
+    /// real-sized tables, file-edit cards, and plans.
+    @Test(arguments: [false, true])
+    func flingThroughTableHeavyHistory(collapsesFinishedToolCalls: Bool) async throws {
+        try await fling(
+            ACPTranscriptBenchmarkCorpus(seed: 7, messageCount: 650, mix: .tableHeavy), label: "fling-tables",
+            collapsesFinishedToolCalls: collapsesFinishedToolCalls
+        )
+    }
+
+    private func fling(_ corpus: ACPTranscriptBenchmarkCorpus, label: String, collapsesFinishedToolCalls: Bool) async throws {
         let bench = try BenchWindow(messages: corpus.messages, collapsesFinishedToolCalls: collapsesFinishedToolCalls)
         defer { bench.close() }
         try await bench.settle()
@@ -46,7 +59,7 @@ struct ACPTranscriptFrameRateBenchmark {
             return !(direction > 0 && target >= maxY && bench.session.transcript.visibleTailBound == bench.session.transcript.messages.count)
         }
         bench.endLiveScroll()
-        stats.report("fling collapse=\(collapsesFinishedToolCalls)", label: "TRANSCRIPT-BENCH", envPrefix: "ALAS_TRANSCRIPT_BENCH")
+        stats.report("\(label) collapse=\(collapsesFinishedToolCalls)", label: "TRANSCRIPT-BENCH", envPrefix: "ALAS_TRANSCRIPT_BENCH")
         #expect(stats.p95 <= FrameRateBenchmark.budgetMs, "p95 frame \(stats.p95)ms")
     }
 
@@ -203,12 +216,20 @@ struct ACPTranscriptBenchmarkCorpus {
         let update: ACPSessionUpdate
     }
 
+    /// `typical` follows the fitted composition; `tableHeavy` adds the rows
+    /// that are costlier to draw, in larger numbers.
+    enum Mix {
+        case typical, tableHeavy
+    }
+
     private(set) var messages: [ACPMessage] = []
     private var rng: SplitMix64
+    private let mix: Mix
     private var toolSerial = 0
 
-    init(seed: UInt64, messageCount: Int) {
+    init(seed: UInt64, messageCount: Int, mix: Mix = .typical) {
         rng = SplitMix64(seed: seed)
+        self.mix = mix
         while messages.count < messageCount {
             appendTurn()
         }
@@ -262,10 +283,12 @@ struct ACPTranscriptBenchmarkCorpus {
                 messages.append(.thought(id: UUID(), messageId: nil, StreamingText(prose(chars: rng.lognormal(p50: 220, p90: 400, cap: 1200)))))
             }
             if rng.chance(0.7) {
-                messages.append(.agent(
-                    id: UUID(), messageId: nil,
-                    StreamingText(agentText(chars: rng.lognormal(p50: 150, p90: 700, cap: 3000)), phase: .commentary)
-                ))
+                var text = agentText(chars: rng.lognormal(p50: 150, p90: 700, cap: 3000))
+                if mix == .tableHeavy, rng.chance(0.15) { text += "\n\n" + table() }
+                messages.append(.agent(id: UUID(), messageId: nil, StreamingText(text, phase: .commentary)))
+            }
+            if mix == .tableHeavy, rng.chance(0.35 / 6) {
+                messages.append(.fileEdit(id: UUID(), fileEdit()))
             }
             for _ in 0..<toolRunLength() {
                 toolSerial += 1
@@ -278,10 +301,42 @@ struct ACPTranscriptBenchmarkCorpus {
                 )))
             }
         }
-        messages.append(.agent(
-            id: UUID(), messageId: nil,
-            StreamingText(markdownAnswer(chars: rng.lognormal(p50: 600, p90: 1800, cap: 5000)), phase: .finalAnswer)
-        ))
+        if mix == .tableHeavy, rng.chance(0.25) {
+            messages.append(.plan(id: UUID(), (0..<Int(rng.uniform(3, 8))).map { index in
+                .init(content: prose(chars: 60), status: index < 2 ? "completed" : index == 2 ? "in_progress" : "pending")
+            }))
+        }
+        var answer = markdownAnswer(chars: rng.lognormal(p50: 600, p90: 1800, cap: 5000))
+        if mix == .tableHeavy, rng.chance(0.6) { answer += "\n\n" + table() }
+        messages.append(.agent(id: UUID(), messageId: nil, StreamingText(answer, phase: .finalAnswer)))
+    }
+
+    /// A summary table as agents write them: 4-10 rows, 3-5 columns, with
+    /// inline code and bold in some cells.
+    private mutating func table() -> String {
+        let columns = Int(rng.uniform(3, 6))
+        let header = "| " + (0..<columns).map { _ in prose(chars: 8).dropLast() }.joined(separator: " | ") + " |"
+        let rule = "|" + String(repeating: "---|", count: columns)
+        let rows = (0..<Int(rng.uniform(4, 11))).map { _ in
+            "| " + (0..<columns).map { column -> String in
+                switch rng.uniform(0, 1) {
+                case ..<0.2: "`\(Self.words.randomElement(using: &rng)!.trimmingCharacters(in: CharacterSet(charactersIn: "`*")))`"
+                case ..<0.3: "**\(Int(rng.uniform(1, 99))) ms**"
+                default: String(prose(chars: column == 0 ? 14 : 34).dropLast())
+                }
+            }.joined(separator: " | ") + " |"
+        }
+        return ([header, rule] + rows).joined(separator: "\n")
+    }
+
+    private mutating func fileEdit() -> ACPMessage.FileEdit {
+        let lines = (0..<Int(rng.uniform(10, 60))).map { index in "    let value\(index) = transcript.rowLayout(at: index).minY + spacing" }
+        var newLines = lines
+        for index in stride(from: 2, to: newLines.count, by: 5) { newLines[index] += " // adjusted" }
+        return .init(
+            path: "Alas/Sources/ACP/UI/Scroller/ACPTranscriptScroller.swift", added: lines.count / 5, removed: lines.count / 5,
+            oldText: lines.joined(separator: "\n"), newText: newLines.joined(separator: "\n")
+        )
     }
 
     private mutating func toolRunLength() -> Int {

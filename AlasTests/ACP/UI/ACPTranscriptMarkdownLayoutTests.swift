@@ -102,8 +102,7 @@ import Testing
     func tablesAreSupportedUpToTheColumnCap(columns: Int, expected: Bool) {
         let row = "|" + String(repeating: " x |", count: columns)
         let source = row + "\n|" + String(repeating: "---|", count: columns) + "\n" + row
-        #expect(ACPTranscriptMarkdownLayout.supports(ACPMarkdownParser.parse(source), tables: true) == expected)
-        #expect(!ACPTranscriptMarkdownLayout.supports(ACPMarkdownParser.parse(source)))
+        #expect(ACPTranscriptMarkdownLayout.supports(ACPMarkdownParser.parse(source)) == expected)
     }
 
     @Test func aLongCodeLanguageLabelStaysClearOfTheCopyButton() throws {

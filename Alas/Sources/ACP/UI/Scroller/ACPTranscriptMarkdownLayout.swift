@@ -140,17 +140,17 @@ struct ACPTranscriptMarkdownLayout {
     let maxLineHeight: CGFloat
 
     /// Whether every block can be drawn here. Images, Mermaid diagrams and
-    /// task lists need views of their own, and so do tables unless `tables`
-    /// allows ones of at most `maxNativeTableColumns` columns. So does prose
+    /// task lists need views of their own, and so do tables of more than
+    /// `maxNativeTableColumns` columns. So does prose
     /// with an inline image: the SwiftUI renderer turns it into a text
     /// attachment that `CTLineDraw` cannot show. `![` is a conservative
     /// stand-in for the inline renderer's image matching, which needs a theme.
-    static func supports(_ blocks: [ACPMarkdownParser.Block], tables: Bool = false) -> Bool {
+    static func supports(_ blocks: [ACPMarkdownParser.Block]) -> Bool {
         blocks.allSatisfy { block in
             switch block {
             case .image, .mermaid, .taskList: false
             case .table(let header, let rows):
-                tables && max(header.count, rows.map(\.count).max() ?? 0) <= maxNativeTableColumns
+                max(header.count, rows.map(\.count).max() ?? 0) <= maxNativeTableColumns
                     && !(header + rows.flatMap { $0 }).contains { $0.contains("![") }
             case .heading(_, let text), .paragraph(let text), .quote(let text): !text.contains("![")
             case .code, .streamingCode: true
@@ -160,7 +160,7 @@ struct ACPTranscriptMarkdownLayout {
 
     static func make(source: String, width: CGFloat, theme: Theme, typography: ACPChatTypography) -> ACPTranscriptMarkdownLayout? {
         let blocks = ACPMarkdownParser.parse(source)
-        guard supports(blocks, tables: true) else { return nil }
+        guard supports(blocks) else { return nil }
         var builder = Builder(width: max(1, width), theme: theme, typography: typography)
         for (index, block) in blocks.enumerated() {
             if index > 0 { builder.y += blockSpacing }
