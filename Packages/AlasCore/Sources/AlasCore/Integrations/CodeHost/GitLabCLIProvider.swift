@@ -254,13 +254,10 @@ public struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
         let base = normalizeBaseBranch
             ? Self.normalizedBaseBranch(baseBranch, remoteName: remote.remoteName)
             : baseBranch
-        var args = [
-            "mr", "list",
-            "--source-branch", branch,
-            "--target-branch", base,
-            "--output", "json",
-            "--per-page", "20",
-        ]
+        // An empty base finds the branch's request whatever it targets.
+        var args = ["mr", "list", "--source-branch", branch]
+        if !base.isEmpty { args += ["--target-branch", base] }
+        args += ["--output", "json", "--per-page", "20"]
         if includeAllStates {
             args.append("--all")
         }

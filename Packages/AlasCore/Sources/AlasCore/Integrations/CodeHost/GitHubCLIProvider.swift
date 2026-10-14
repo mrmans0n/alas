@@ -486,19 +486,16 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
         let base = normalizeBaseBranch
             ? Self.normalizedBaseBranch(baseBranch, remoteName: remote.remoteName)
             : baseBranch
-        let result = try await runner.run(
-            "gh",
-            args: [
-                "pr", "list",
-                "--head", branch,
-                "--base", base,
-                "--state", state,
-                "--limit", "20",
-                "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,headRepository,baseRefName,baseRefOid,reviewDecision,mergeStateStatus",
-                "-R", Self.highLevelRepositorySelector(remote: remote),
-            ],
-            cwd: cwd
-        )
+        // An empty base finds the branch's request whatever it targets.
+        var args = ["pr", "list", "--head", branch]
+        if !base.isEmpty { args += ["--base", base] }
+        args += [
+            "--state", state,
+            "--limit", "20",
+            "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,headRepository,baseRefName,baseRefOid,reviewDecision,mergeStateStatus",
+            "-R", Self.highLevelRepositorySelector(remote: remote),
+        ]
+        let result = try await runner.run("gh", args: args, cwd: cwd)
         guard result.exitCode == 0 else {
             throw CodeHostProviderError.commandFailed(command: "gh pr list", stderr: result.stderr)
         }

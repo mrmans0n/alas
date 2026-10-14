@@ -52,10 +52,10 @@ extension AppState {
     private func adoptOpenPR(sessionID: String, worktreeID: String, base: String?) async -> PRCreateResultWire? {
         guard let target = try? prShepherdTarget(worktreeID) else { return nil }
         let baseBranch = await prCreateBaseBranch(base, context: target.context)
-        guard let snapshot = await reviewShepherd.fetchSnapshot(worktreePath: target.context.path, baseBranch: baseBranch),
-              let request = snapshot.reviewRequest,
-              request.state == .open
+        guard let probe = await reviewShepherd.fetchSnapshot(worktreePath: target.context.path, baseBranch: baseBranch),
+              let request = await openRequestAnyBase(probe: probe, worktreePath: target.context.path)
         else { return nil }
+        let snapshot = probe
         let record = await bindPRShepherd(sessionID: sessionID, worktreeID: worktreeID, request: request)
         return PRCreateResultWire(
             request: request, headSHA: request.headSHA ?? snapshot.local.headSHA, created: false,
@@ -122,7 +122,7 @@ extension AppState {
             )
         }
 
-        if let existing = snapshot.reviewRequest, existing.state == .open {
+        if let existing = await openRequestAnyBase(probe: snapshot, worktreePath: context.path) {
             return await bound(existing, created: false)
         }
 
@@ -174,10 +174,25 @@ extension AppState {
         }
     }
 
-    /// The open request the branch lookup finds for this worktree right now.
+    /// The open request for this worktree's branch right now, whatever base it
+    /// targets.
     private func openReviewRequest(worktreePath: URL, baseBranch: String) async -> ReviewRequest? {
-        guard let request = await reviewShepherd.fetchSnapshot(worktreePath: worktreePath, baseBranch: baseBranch)?.reviewRequest,
-              request.state == .open
+        guard let probe = await reviewShepherd.fetchSnapshot(worktreePath: worktreePath, baseBranch: baseBranch) else {
+            return nil
+        }
+        return await openRequestAnyBase(probe: probe, worktreePath: worktreePath)
+    }
+
+    /// `probe`'s open request, else the branch's open request targeting any
+    /// other base: both providers filter the branch lookup by base, so a PR
+    /// opened against another base would otherwise be missed and duplicated.
+    private func openRequestAnyBase(probe: ReviewLoopSnapshot, worktreePath: URL) async -> ReviewRequest? {
+        if let request = probe.reviewRequest, request.state == .open { return request }
+        guard let remote = probe.remote, !probe.local.branchName.isEmpty else { return nil }
+        let lookup = ReviewLoopState(worktreePath: worktreePath, baseBranch: probe.local.baseBranch)
+        guard let request = try? await lookup.currentReviewRequest(
+            remote: remote, branch: probe.local.branchName, headOwner: probe.local.headRemoteOwner, baseBranch: ""
+        ), request.state == .open
         else { return nil }
         return request
     }
@@ -195,10 +210,17 @@ extension AppState {
             }
             snapshot = fresh
         } else {
-            guard let fresh = await reviewShepherd.fetchSnapshot(
+            guard var fresh = await reviewShepherd.fetchSnapshot(
                 worktreePath: context.path, baseBranch: context.baseBranch
             ) else {
                 throw PRShepherdCLIError(message: "Alas could not read this worktree's Git state.")
+            }
+            // The branch's PR may target another base than the worktree's.
+            if fresh.reviewRequest == nil,
+               let other = await openRequestAnyBase(probe: fresh, worktreePath: context.path),
+               let rebased = await reviewShepherd.fetchSnapshot(worktreePath: context.path, baseBranch: other.baseRefName),
+               rebased.reviewRequest != nil {
+                fresh = rebased
             }
             snapshot = fresh
         }

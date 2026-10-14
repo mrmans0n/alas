@@ -382,6 +382,30 @@ struct GitHubCLIProviderTests {
         ])
     }
 
+    /// `pr_create` looks up the branch's PR whatever base it targets, so an
+    /// open PR against another base is adopted instead of duplicated.
+    @Test func currentReviewRequestWithEmptyBaseDropsTheBaseFilter() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.prListOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.mergeQueueDisabledOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.reviewThreadsOutput, stderr: ""),
+        ])
+
+        let request = try await GitHubCLIProvider(runner: runner).currentReviewRequest(
+            remote: Self.remote, branch: "feature/github-provider", headOwner: nil, baseBranch: "", cwd: Self.cwd
+        )
+
+        #expect(request?.number == 42)
+        #expect(await runner.commands.first?.args == [
+            "pr", "list",
+            "--head", "feature/github-provider",
+            "--state", "open",
+            "--limit", "20",
+            "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,headRepository,baseRefName,baseRefOid,reviewDecision,mergeStateStatus",
+            "-R", "mrmans0n/alas",
+        ])
+    }
+
     @Test func reviewDiffUsesPRDiffCommand() async throws {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: "diff --git a/A.swift b/A.swift\n", stderr: ""),
