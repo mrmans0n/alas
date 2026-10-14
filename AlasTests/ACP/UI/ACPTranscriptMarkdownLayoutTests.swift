@@ -57,6 +57,8 @@ import Testing
     @Test(arguments: [
         "| a | b |\n|---|---|\n| 1 | 2 |",
         "| Scenario | p95 | Note |\n|---|---|---|\n| fling | **12 ms** | a longer note that wraps onto a second line in its column |\n| stream | `9 ms` | short |",
+        "| | |\n|---|---|\n| a | b |",
+        "Intro.\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\nOutro.",
     ], [400, 640])
     func tableHeightMatchesTheSwiftUITable(source: String, width: Int) throws {
         let layout = try #require(ACPTranscriptMarkdownLayout.make(

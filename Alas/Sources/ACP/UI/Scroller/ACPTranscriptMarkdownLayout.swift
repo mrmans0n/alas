@@ -123,6 +123,8 @@ struct ACPTranscriptMarkdownLayout {
     static let tableCellVerticalPadding: CGFloat = 6
     static let tableDividerWidth: CGFloat = 0.5
     static let tableCornerRadius: CGFloat = 6
+    /// How tall SwiftUI sizes an empty `Text`, whatever its font.
+    static let emptyTextHeight: CGFloat = 14
 
     let width: CGFloat
     let height: CGFloat
@@ -559,11 +561,17 @@ struct ACPTranscriptMarkdownLayout {
                 for column in 0..<columns {
                     y = rowTop + L.tableCellVerticalPadding
                     let x = CGFloat(column) * (columnWidth + L.tableDividerWidth) + L.tableCellHorizontalPadding
-                    addBlockText(
-                        inline(column < cells.count ? cells[column] : "", role: .tableCell(isHeader: rowIndex == 0)),
-                        x: x, width: max(1, columnWidth - 2 * L.tableCellHorizontalPadding),
-                        separator: column == columns - 1 ? "\n" : "\t"
-                    )
+                    let cellWidth = max(1, columnWidth - 2 * L.tableCellHorizontalPadding)
+                    let role = ACPMarkdownInlineRole.tableCell(isHeader: rowIndex == 0)
+                    let text = inline(column < cells.count ? cells[column] : "", role: role)
+                    addBlockText(text, x: x, width: cellWidth, separator: column == columns - 1 ? "\n" : "\t")
+                    if text.length == 0 {
+                        // An empty cell's `Text` still takes up a line in the SwiftUI table.
+                        addEmptyLine(
+                            attributes: inline("x", role: role).attributes(at: 0, effectiveRange: nil), at: 0, x: x, width: cellWidth,
+                            lineHeight: L.emptyTextHeight, block: texts.count - 1
+                        )
+                    }
                     rowBottom = max(rowBottom, y + L.tableCellVerticalPadding)
                 }
                 rowBottoms.append(rowBottom)
@@ -610,19 +618,10 @@ struct ACPTranscriptMarkdownLayout {
             var start = 0
             while start < text.length || (start == text.length && endsInNewline) {
                 guard start < text.length else {
-                    let line = CTLineCreateWithAttributedString(
-                        NSAttributedString(string: "", attributes: text.attributes(at: text.length - 1, effectiveRange: nil))
+                    addEmptyLine(
+                        attributes: text.attributes(at: text.length - 1, effectiveRange: nil), at: start, x: x, width: width,
+                        lineSpacing: lineSpacing, lineHeight: lineHeight, block: block
                     )
-                    var ascent: CGFloat = 0, descent: CGFloat = 0
-                    CTLineGetTypographicBounds(line, &ascent, &descent, nil)
-                    let measured = max(
-                        lineHeight ?? Self.lineHeight(of: text, range: NSRange(location: text.length - 1, length: 1)), ascent + descent
-                    )
-                    lines.append(Line(
-                        line: line, origin: CGPoint(x: x, y: y), height: (measured > 0 ? measured : typography.paragraphSize) + lineSpacing,
-                        block: block, range: NSRange(location: start, length: 0), visibleLength: 0, maxX: x + width
-                    ))
-                    y += lines[lines.count - 1].height
                     break
                 }
                 let count = max(1, CTTypesetterSuggestLineBreak(typesetter, start, Double(width)))
@@ -646,6 +645,24 @@ struct ACPTranscriptMarkdownLayout {
                 y += height
                 start += count
             }
+        }
+
+        /// Stacks an empty line, as tall as a line in `attributes`' font, at
+        /// offset `location` of `block`.
+        private mutating func addEmptyLine(
+            attributes: [NSAttributedString.Key: Any], at location: Int, x: CGFloat, width: CGFloat,
+            lineSpacing: CGFloat = 0, lineHeight: CGFloat? = nil, block: Int?
+        ) {
+            let line = CTLineCreateWithAttributedString(NSAttributedString(string: "", attributes: attributes))
+            var ascent: CGFloat = 0, descent: CGFloat = 0
+            CTLineGetTypographicBounds(line, &ascent, &descent, nil)
+            let fontHeight = (attributes[.font] as? NSFont).map(TextKitLineHeight.of) ?? 0
+            let measured = max(lineHeight ?? fontHeight, ascent + descent)
+            lines.append(Line(
+                line: line, origin: CGPoint(x: x, y: y), height: (measured > 0 ? measured : typography.paragraphSize) + lineSpacing,
+                block: block, range: NSRange(location: location, length: 0), visibleLength: 0, maxX: x + width
+            ))
+            y += lines[lines.count - 1].height
         }
 
         /// A line of `font` as SwiftUI sizes it: ascent, descent and leading each rounded up.
