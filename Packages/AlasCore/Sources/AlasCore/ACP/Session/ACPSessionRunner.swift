@@ -2731,6 +2731,17 @@ public final class ACPSessionRunner {
 }
 
 extension ACPSessionRunner {
+    /// Opens the streaming boundary for a goal control, whose agent answers
+    /// with fresh output. Updates already queued are applied first, as the
+    /// prompt path does, so a late replay frame is still judged under the
+    /// closed boundary. Returns the value before opening it.
+    func openStreamingBoundaryForGoalControl() -> Bool {
+        flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
+        let before = session.allowsStreamingBoundaryCrossing
+        session.allowsStreamingBoundaryCrossing = true
+        return before
+    }
+
     /// Cancels one native subagent. `session/cancel` addressed to the CHILD
     /// session id, so the parent turn keeps running — that is the whole
     /// point of the row's Cancel action.

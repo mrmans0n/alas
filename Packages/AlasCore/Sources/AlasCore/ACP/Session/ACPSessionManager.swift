@@ -571,8 +571,7 @@ public final class ACPSessionManager: ChangeTracking {
         // open. Otherwise repeating an earlier objective would read as replay.
         // A rejected control produces no output, so it restores the window
         // unless a prompt has set it in the meantime.
-        let boundaryCrossingBefore = session.allowsStreamingBoundaryCrossing
-        session.allowsStreamingBoundaryCrossing = true
+        let boundaryCrossingBefore = runner.openStreamingBoundaryForGoalControl()
         let boundaryGeneration = session.streamingBoundaryGeneration
         do {
             try await runner.connection.controlGoal(
