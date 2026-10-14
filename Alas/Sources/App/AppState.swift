@@ -4832,203 +4832,69 @@ final class AppState {
             // Should not happen if the dialog validated the project; fail silently.
             return ""
         }
-        let repoPath = URL(fileURLWithPath: project.path)
-        // Canonicalize once and use this URL everywhere downstream — both
-        // the optimistic row and the eventual `WorktreeService.add` return
-        // value derive their `id` from the path we hand in, so any
-        // divergence here would make `selectedWorktreeId` and terminal
-        // routing target a non-existent row after reconcile.
-        //
-        // resolvingSymlinksInPath only resolves links along path components
-        // that exist on disk; the leaf doesn't exist yet, so resolve the
-        // parent (which does) and reattach the leaf.
-        let canonicalDestination: URL
-        if destinationAlreadyPrepared {
-            canonicalDestination = destination
-        } else {
-            do {
-                canonicalDestination = try await WorktreeLifecycle.preparedCreateWorktreeDestination(
-                    repoPath: repoPath,
-                    destination: destination
-                )
-            } catch {
-                showFileActionError(title: "Create Worktree Failed", message: error.localizedDescription)
-                return ""
-            }
+        var request = WorktreeCreateRequest(projectID: projectId, base: base, branch: branch, destination: destination)
+        request.destinationAlreadyPrepared = destinationAlreadyPrepared
+        request.runsStartupScripts = runStartup
+        request.fetchesBaseFirst = config.worktrees.fetchRemoteBeforeCreate
+        request.namesBranchFromFirstPrompt = namesBranchFromFirstPrompt
+        request.ggWorktreeMode = ggWorktreeMode
+        request.issueAttachment = issueAttachment
+        request.launchSurface = launchSurface
+        request.cancelledHookApprovalFails = true
+        let pending: PendingWorktreeCreation
+        do {
+            pending = try await core.beginCreate(request)
+        } catch WorktreeCreationRefusal.alreadyListed {
+            return ""
+        } catch {
+            showFileActionError(title: "Create Worktree Failed", message: error.localizedDescription)
+            return ""
         }
-        let optimisticId = Worktree.makeId(path: canonicalDestination)
-        if projectsManager.worktrees(projectId: projectId).contains(where: { $0.id == optimisticId }) {
-            let isRetryingFailedCreate: Bool
-            if case .createFailed = projectsManager.operationState(
-                forWorktreeId: optimisticId,
-                projectId: projectId
-            ) {
-                isRetryingFailedCreate = true
-            } else {
-                isRetryingFailedCreate = false
-            }
-            if !isRetryingFailedCreate {
-                return ""
-            }
-        }
+        let optimistic = pending.worktree
         reconciledCreateFailureCompletionClaims.remove(
-            WorktreeOperationKey(projectId: projectId, worktreeId: optimisticId)
+            WorktreeOperationKey(projectId: projectId, worktreeId: optimistic.id)
         )
-        rightPaneStore.invalidateSnapshot(worktreeId: optimisticId)
-        let optimistic = Worktree(
-            id: optimisticId,
-            projectId: projectId,
-            name: branch,
-            branch: branch,
-            path: canonicalDestination,
-            status: .clean,
-            lastActivity: Date()
-        )
+        rightPaneStore.invalidateSnapshot(worktreeId: optimistic.id)
         if launchSurface != .delegated,
            let containing = spacesManager.containingSpaceId(forProjectId: projectId),
            containing != spacesManager.activeSpaceId {
             _ = switchToSpace(id: containing)
         }
-        projectsManager.insertOptimisticWorktree(optimistic)
         setUnpersistedGGWorktreeMode(
             projectId: projectId,
             worktreeId: optimistic.id,
             mode: ggWorktreeMode
         )
-        projectsManager.setOperationState(forWorktreeId: optimistic.id, projectId: projectId, state: .creating)
         rightPaneStore.reevaluateGGGate(worktreeId: optimistic.id)
         if launchSurface != .delegated {
             selectWorktree(id: optimistic.id)
         }
 
         Task { @MainActor in
-            do {
-                if self.config.worktrees.fetchRemoteBeforeCreate {
-                    if let fetchInfo = try? await GitService().remoteForFetch(worktreePath: repoPath, ref: base) {
-                        do {
-                            _ = try await GitService().fetchRef(
-                                worktreePath: repoPath,
-                                remote: fetchInfo.remote,
-                                branch: fetchInfo.branch
-                            )
-                        } catch {
-                            Self.logger.error("Fetch failed before creating worktree: \(String(describing: error), privacy: .public)")
-                        }
-                    }
+            switch await core.finishCreate(pending) {
+            case .created(let newWorktree):
+                removeUnpersistedGGWorktreeMode(projectId: project.id, worktreeId: newWorktree.id)
+                rightPaneStore.reevaluateGGGate(worktreeId: newWorktree.id)
+                if launchSurface != .delegated {
+                    selectWorktree(id: newWorktree.id)
                 }
-                let newWorktree = try await WorktreeLifecycle.performCreateWorktree(
-                    repoPath: repoPath,
-                    base: base, branch: branch, destination: canonicalDestination, projectId: projectId,
-                    // A temporary name must never check out an existing branch:
-                    // the first prompt would rename that branch.
-                    requiresNewBranch: namesBranchFromFirstPrompt
-                )
-                guard projects.contains(where: { $0.id == projectId }) else { return }
-                // Recorded as soon as the branch exists: a later step failing
-                // must not strand the worktree on its temporary name.
-                if namesBranchFromFirstPrompt {
-                    projectsManager.setPendingAutoBranchName(
-                        projectId: project.id,
-                        worktreeId: newWorktree.id,
-                        placeholder: newWorktree.branch
-                    )
-                    saveProjects()
-                }
-                try await core.runWorktreeCreateScripts(
-                    project: project,
-                    worktree: newWorktree,
-                    includeUserStartupScript: runStartup
-                )
-                guard projects.contains(where: { $0.id == projectId }) else { return }
-
                 do {
-                    let wasHidden = projectsManager.isWorktreeHidden(
-                        projectId: project.id,
-                        path: newWorktree.path
-                    )
-                    projectsManager.setWorktreeHidden(
-                        projectId: project.id,
-                        path: newWorktree.path,
-                        hidden: false
-                    )
-                    _ = try await refreshProjectWorktrees(projectId: project.id)
-                    guard projects.contains(where: { $0.id == projectId }) else { return }
-                    removeUnpersistedGGWorktreeMode(projectId: project.id, worktreeId: newWorktree.id)
-                    projectsManager.setGGWorktreeMode(
-                        projectId: project.id,
-                        worktreeId: newWorktree.id,
-                        mode: ggWorktreeMode
-                    )
-                    if ggWorktreeMode != .inherit {
-                        saveProjects()
-                    }
-                    rightPaneStore.reevaluateGGGate(worktreeId: newWorktree.id)
-                    projectsManager.setOperationState(forWorktreeId: optimistic.id, projectId: projectId, state: nil)
-                    if wasHidden {
-                        saveProjects()
-                    }
-                    if let issueAttachment {
-                        projectsManager.setIssueAttachment(
-                            projectId: project.id,
-                            worktreeId: newWorktree.id,
-                            attachment: issueAttachment
-                        )
-                        saveProjects()
-                    }
-                    if launchSurface != .delegated {
-                        selectWorktree(id: newWorktree.id)
-                    }
-
-                    do {
-                        try await self.launchWorktreeSurface(launchSurface, worktree: newWorktree, project: project)
-                    } catch {
-                        self.markWorktreeLaunchFailed(
-                            worktree: newWorktree,
-                            projectId: projectId,
-                            error: error,
-                            launchSurface: launchSurface
-                        )
-                    }
+                    try await self.launchWorktreeSurface(launchSurface, worktree: newWorktree, project: project)
                 } catch {
-                    discardUnpersistedGGWorktreeMode(
-                        projectId: projectId,
-                        worktreeId: optimistic.id,
-                        mode: ggWorktreeMode
-                    )
-                    projectsManager.setOperationState(
-                        forWorktreeId: optimistic.id,
-                        projectId: projectId,
-                                                state: .createFailed(
-                            projectId: projectId,
-                            message: error.localizedDescription,
-                            base: base,
-                            ggWorktreeMode: ggWorktreeMode,
-                            launchSurface: launchSurface,
-                            issueAttachment: issueAttachment,
-                            namesBranchFromFirstPrompt: namesBranchFromFirstPrompt
-                        )
+                    self.markWorktreeLaunchFailed(
+                        worktree: newWorktree,
+                        error: error,
+                        launchSurface: launchSurface
                     )
                 }
-            } catch {
-                let msg = error.localizedDescription
+            case .failed:
                 discardUnpersistedGGWorktreeMode(
                     projectId: projectId,
                     worktreeId: optimistic.id,
                     mode: ggWorktreeMode
                 )
-                projectsManager.setOperationState(
-                    forWorktreeId: optimistic.id,
-                    projectId: projectId,
-                                        state: .createFailed(
-                        projectId: projectId,
-                        message: msg,
-                        base: base,
-                        ggWorktreeMode: ggWorktreeMode,
-                        launchSurface: launchSurface,
-                        issueAttachment: issueAttachment,
-                        namesBranchFromFirstPrompt: namesBranchFromFirstPrompt
-                    )
-                )
+            case .projectRemoved:
+                break
             }
         }
         return optimistic.id
@@ -5408,19 +5274,10 @@ final class AppState {
 
     func markWorktreeLaunchFailed(
         worktree: Worktree,
-        projectId: String,
         error: Error,
         launchSurface: WorktreeLaunchSurface
     ) {
-        projectsManager.setOperationState(
-            forWorktreeId: worktree.id,
-            projectId: projectId,
-                        state: .launchFailed(
-                projectId: projectId,
-                message: error.localizedDescription,
-                launchSurface: launchSurface
-            )
-        )
+        core.recordLaunchFailure(worktree, message: error.localizedDescription, launchSurface: launchSurface)
     }
 
     func retryWorktreeLaunch(_ worktree: Worktree, project: ProjectConfig) async {
@@ -5437,11 +5294,10 @@ final class AppState {
                 project: project,
                 refreshAvailability: true
             )
-            projectsManager.setOperationState(for: worktree, state: nil)
+            core.clearLaunchFailure(worktree)
         } catch {
             markWorktreeLaunchFailed(
                 worktree: worktree,
-                projectId: project.id,
                 error: error,
                 launchSurface: launchSurface
             )
@@ -6584,7 +6440,6 @@ final class AppState {
             } catch {
                 markWorktreeLaunchFailed(
                     worktree: worktree,
-                    projectId: projectId,
                     error: error,
                     launchSurface: launchSurface
                 )

@@ -185,46 +185,6 @@ public final class AlasCoreContext {
         return project
     }
 
-    /// Creates a worktree for `branch` from `base` at `destination`, runs its
-    /// create script unless `runStartupScripts` is false or its repository hook
-    /// approval is cancelled, then refreshes and persists the project's
-    /// worktree list on a best-effort basis.
-    public func createWorktree(
-        projectID: String,
-        branch: String,
-        base: String,
-        destination: URL,
-        runStartupScripts: Bool = true
-    ) async throws -> Worktree {
-        guard let project = projects.projects.first(where: { $0.id == projectID }) else {
-            throw ProjectCreationError.projectNotFound
-        }
-        let repoPath = URL(fileURLWithPath: project.path)
-        let prepared = try await WorktreeLifecycle.preparedCreateWorktreeDestination(
-            repoPath: repoPath,
-            destination: destination
-        )
-        let worktree = try await WorktreeLifecycle.performCreateWorktree(
-            repoPath: repoPath,
-            base: base,
-            branch: branch,
-            destination: prepared,
-            projectId: projectID
-        )
-        // The worktree exists from here on: a cancelled hook approval only
-        // means its scripts do not run, not that the creation failed.
-        do {
-            try await runWorktreeCreateScripts(project: project, worktree: worktree, includeUserStartupScript: runStartupScripts)
-        } catch RepoHookPreflightError.cancelled {}
-        // The worktree now exists on disk, and git is the source of truth for
-        // it: a refresh or save that fails here is left to the next refresh
-        // rather than reported as a failed creation.
-        if (try? await projects.refreshWorktrees(projectId: projectID)) == true {
-            try? saveProjects()
-        }
-        return worktree
-    }
-
     /// Runs `script` in `worktree` without a terminal, recording it and
     /// archiving its output like a terminal run. A run that never started
     /// leaves the previous record in place; one whose exit status was never
