@@ -109,6 +109,9 @@ struct ACPToolbar: View {
                     }
                 }
             }
+            if showsShepherdButton {
+                ACPShepherdButton(session: session, worktree: worktree, state: state)
+            }
             ToolbarBtn(
                 icon: "rectangle.trailingthird.inset.filled",
                 tooltip: state.config.harness.acpShowMinimap ? "Hide minimap" : "Show minimap",
@@ -135,6 +138,12 @@ struct ACPToolbar: View {
     private var isWorkspaceCheckoutOwner: Bool {
         if case .workspaceCheckout = owner { return true }
         return false
+    }
+
+    /// Same eligibility the shepherd service enforces (local git worktrees,
+    /// no folders or Workspace checkout members), plus checkout-owned sessions.
+    private var showsShepherdButton: Bool {
+        !isWorkspaceCheckoutOwner && state.isShepherdEligible(worktree)
     }
 
     private func reconnectSession() {

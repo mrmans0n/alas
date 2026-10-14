@@ -426,6 +426,148 @@ struct AlasCLIRequestTests {
         }
     }
 
+    @Test(arguments: [
+        (#"{"title":"fix: retry","body":"Why.","draft":true,"base":"release"}"#,
+         PRCreateParams?.some(PRCreateParams(title: "fix: retry", body: "Why.", draft: true, base: "release"))),
+        (#"{"title":" fix: retry ","body":"Why."}"#,
+         PRCreateParams(title: "fix: retry", body: "Why.", draft: false, base: nil)),
+        (#"{"title":"fix: retry","body":"Why.","base":"  "}"#,
+         PRCreateParams(title: "fix: retry", body: "Why.", draft: false, base: nil)),
+        (#"{"body":"Why."}"#, nil),
+        (#"{"title":"   ","body":"Why."}"#, nil),
+        (#"{"title":"fix: retry"}"#, nil),
+        (#"{"title":"fix: retry","body":"Why.","draft":"yes"}"#, nil),
+    ])
+    func decodesPRCreate(params: String, expected: PRCreateParams?) throws {
+        let json = #"{"v":1,"kind":"cli","command":"pr_create","session_id":"acp-1","cwd":"/wt","params":\#(params)}"#
+        if let expected {
+            #expect(try AlasCLIRequest.decode(from: Data(json.utf8)).command == .prCreate(expected))
+        } else {
+            #expect(throws: AlasCLIRequestError.malformed) {
+                try AlasCLIRequest.decode(from: Data(json.utf8))
+            }
+        }
+    }
+
+    @Test func decodesPRStatus() throws {
+        let json = #"{"v":1,"kind":"cli","command":"pr_status","session_id":"acp-1","cwd":"/wt","params":{}}"#
+        #expect(try AlasCLIRequest.decode(from: Data(json.utf8)).command == .prStatus)
+    }
+
+    /// Pins the agent-facing `pr_status` keys from the spec, including the
+    /// explicit nulls agents rely on.
+    @Test(arguments: [
+        (PRStatusWire(pullRequest: nil, shepherd: nil), #"{"pull_request":null,"shepherd":null}"#),
+        (
+            PRStatusWire(
+                pullRequest: .init(
+                    number: 2041,
+                    url: "https://example.com/pr/2041",
+                    state: "open",
+                    draft: false,
+                    headSha: "a3f9c1e",
+                    mergeState: "blocked",
+                    checks: .init(
+                        passed: 10, failed: 1, pending: 1, skipped: 0,
+                        failing: [.init(name: "unit-tests", workflow: "CI", url: nil)]
+                    ),
+                    threads: [.init(
+                        id: "PRRT_1", path: "Auth/TokenRefresher.swift", line: 88, author: "maintainer",
+                        trust: "trusted", body: "Back off.", url: nil
+                    )],
+                    missingRequiredReviewers: ["chatgpt-codex-connector"]
+                ),
+                shepherd: .init(phase: "fixing", autoFix: true, autoMerge: false, fixAttempts: 1, rulesSource: "repo_file")
+            ),
+            #"{"pull_request":{"checks":{"failed":1,"failing":[{"name":"unit-tests","url":null,"workflow":"CI"}],"passed":10,"pending":1,"skipped":0},"draft":false,"head_sha":"a3f9c1e","merge_state":"blocked","missing_required_reviewers":["chatgpt-codex-connector"],"number":2041,"state":"open","threads":[{"author":"maintainer","body":"Back off.","id":"PRRT_1","line":88,"path":"Auth\/TokenRefresher.swift","trust":"trusted","url":null}],"url":"https:\/\/example.com\/pr\/2041"},"shepherd":{"auto_fix":true,"auto_merge":false,"fix_attempts":1,"phase":"fixing","rules_source":"repo_file"}}"#
+        ),
+    ])
+    func prStatusWireMatchesTheSpecKeys(status: PRStatusWire, expected: String) {
+        #expect(ReviewCommentWireDTO.jsonLine(status) == expected)
+    }
+
+    /// `pr_create` pushes to the upstream's name, so only an upstream named like
+    /// the branch survives; any other one would publish to someone else's branch.
+    @MainActor
+    @Test(arguments: [
+        ("feature", "main", nil),
+        ("feature", "smoke/base", nil),
+        ("feature", "feature", "feature"),
+        ("feature", nil, nil),
+    ] as [(String, String?, String?)])
+    func prCreateKeepsOnlyASameNamedUpstream(branch: String, upstream: String?, kept: String?) {
+        #expect(AppState.prCreateUpstreamToKeep(branch: branch, upstream: upstream) == kept)
+    }
+
+    /// An open request on a differently named upstream is adopted, not
+    /// duplicated; an upstream that is the base is never searched.
+    @MainActor
+    @Test(arguments: [
+        ("review-feature", ["feature", "review-feature"]),
+        ("feature", ["feature"]),
+        ("main", ["feature"]),
+        (nil, ["feature"]),
+    ] as [(String?, [String])])
+    func prCreateLooksUpADifferentlyNamedUpstream(upstream: String?, expected: [String]) {
+        let local = ReviewLoopLocalState(
+            branchName: "feature", headSHA: "a3f9c1e", baseBranch: "main",
+            hasWorkingTreeChanges: false, hasStagedChanges: false, aheadCommitCount: 1,
+            hasUpstream: upstream != nil, upstreamRemoteName: upstream.map { _ in "origin" },
+            upstreamBranchName: upstream, needsPush: true
+        )
+        #expect(AppState.prCreateLookupBranches(local) == expected)
+    }
+
+    /// A remote branch with commits the worktree lacks blocks `pr_create`,
+    /// unless that upstream is the base, which is never pushed or adopted.
+    @MainActor
+    @Test(arguments: [
+        ("feature", 2, false, true),
+        ("feature", 2, true, true),
+        ("feature", 0, true, false),
+        ("review-feature", 1, false, true),
+        ("main", 3, false, false),
+    ] as [(String, Int, Bool, Bool)])
+    func prCreateRejectsAStaleUpstream(upstream: String, upstreamAhead: Int, needsPush: Bool, blocked: Bool) {
+        let local = ReviewLoopLocalState(
+            branchName: "feature", headSHA: "a3f9c1e", baseBranch: "main",
+            hasWorkingTreeChanges: false, hasStagedChanges: false, aheadCommitCount: 1,
+            hasUpstream: true, upstreamRemoteName: "origin", upstreamBranchName: upstream,
+            upstreamAheadCommitCount: upstreamAhead, needsPush: needsPush
+        )
+        let blocker = AppState.prCreateBranchBlocker(local, baseBranch: "main")
+        #expect((blocker?.contains("has commits this worktree doesn't") ?? false) == blocked)
+    }
+
+    /// An open request on this branch gets the pending HEAD pushed first; one
+    /// on a differently named upstream is never pushed to, so unpushed
+    /// commits block instead of being silently left out.
+    @MainActor
+    @Test(arguments: [
+        ("feature", CodeHostKind.github, true, AppState.PRCreateAdoption.publishThenBind),
+        ("feature", .github, false, .publishThenBind),
+        ("review-feature", .github, false, .bind),
+        ("review-feature", .github, true, .blocked(
+            "feature tracks review-feature, which has open PR #42. Push your commits to review-feature "
+                + "or stop tracking it (`git branch --unset-upstream`), then call pr_create again."
+        )),
+        ("review-feature", .gitlab, true, .blocked(
+            "feature tracks review-feature, which has open MR !42. Push your commits to review-feature "
+                + "or stop tracking it (`git branch --unset-upstream`), then call pr_create again."
+        )),
+    ] as [(String, CodeHostKind, Bool, AppState.PRCreateAdoption)])
+    func prCreatePublishesBeforeAdoptingAnOpenRequest(
+        headRefName: String, kind: CodeHostKind, needsPush: Bool, expected: AppState.PRCreateAdoption
+    ) {
+        let local = ReviewLoopLocalState(
+            branchName: "feature", headSHA: "a3f9c1e", baseBranch: "main",
+            hasWorkingTreeChanges: false, hasStagedChanges: false, aheadCommitCount: 1,
+            hasUpstream: true, upstreamRemoteName: "origin",
+            upstreamBranchName: "review-feature", needsPush: needsPush
+        )
+        #expect(AppState.prCreateAdoption(headRefName: headRefName, number: 42, kind: kind, local: local) == expected)
+    }
+
     private struct ProbeParams: Decodable, Equatable {
         var name: String
         var count: Int?

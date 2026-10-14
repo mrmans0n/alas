@@ -161,6 +161,9 @@ struct ACPDelegatedOutcomeTextTests {
         // A notice kind from a newer build is still Alas's, never a report.
         (#"{"sessionId":"parent","messageId":"m1","senderRelationship":"child","childNoticeKind":"later"}"#,
          "Alas · child parent"),
+        // A PR shepherd prompt, as stored in a transcript, is Alas's own.
+        (#"{"sessionId":"parent","messageId":"m1","senderRelationship":"alas-shepherd"}"#,
+         "Alas PR shepherd"),
     ])
     func persistedSourceDecodes(json: String, label: String) throws {
         let source = try JSONDecoder().decode(ACPDelegatedPromptSource.self, from: Data(json.utf8))

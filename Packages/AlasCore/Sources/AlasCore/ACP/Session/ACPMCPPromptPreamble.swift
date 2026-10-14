@@ -66,6 +66,7 @@ public enum ACPMCPPromptPreamble: Sendable {
         "worktree_list", "worktree_switch", "worktree_new", "worktree_delete",
         "review", "review_comments", "review_reply", "review_resolve",
         "review_comment_add", "review_finish",
+        "pr_create", "pr_status",
         "preview_list", "preview_open", "preview_navigate", "preview_reload", "preview_back", "preview_forward",
         "preview_inspect", "preview_capture", "preview_console", "preview_click", "preview_type", "preview_scroll",
         "preview_wait", "preview_cancel",
@@ -183,7 +184,10 @@ public enum ACPMCPPromptPreamble: Sendable {
                 + "open (reveal files to the user), notify (macOS notification), "
                 + "worktree_list/worktree_switch/worktree_new/worktree_delete, "
                 + "review, review_comments/review_reply/review_resolve/"
-                + "review_comment_add/review_finish, \(sessionTools)."
+                + "review_comment_add/review_finish, "
+                + "pr_create/pr_status (open a PR/MR for this worktree's branch and have Alas watch it "
+                + "until it merges; offer pr_create when you've finished a change the user will want "
+                + "reviewed, and call it only after the user agrees or asks), \(sessionTools)."
             if isDelegated {
                 line += " This session was delegated by a parent session: it "
                     + "cannot create descendants. Report results and questions to "
@@ -199,7 +203,8 @@ public enum ACPMCPPromptPreamble: Sendable {
                     + "reach them."
             }
             line += " Prefer these tools when the user asks to open/show files, "
-                + "manage worktrees, run or respond to reviews, or be notified."
+                + "manage worktrees, run or respond to reviews, open or check a pull request, "
+                + "or be notified."
             lines.append(line)
             lines.append("Preview tools control your owner's actual browser tab: "
                 + builtInToolNames.filter { $0.hasPrefix("preview_") }.joined(separator: ", ")
@@ -210,7 +215,8 @@ public enum ACPMCPPromptPreamble: Sendable {
                 + "restrict MCP servers by policy), the same actions are available via "
                 + "the `alas` CLI in your shell: `alas open`, `alas notify`, "
                 + "`alas wt …`, `alas review …` (comments/reply/resolve/finish), "
-                + "`alas session …`, and `alas preview …`.")
+                + "`alas session …`, and `alas preview …`. "
+                + "pr_create and pr_status are MCP-only.")
         }
         if !userServerNames.isEmpty {
             lines.append("Additional MCP servers attached: "

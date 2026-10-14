@@ -13,8 +13,16 @@ public struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
     // `Sendable` struct hold it (see `GitLabPendingComments`).
     private let pendingComments = GitLabPendingComments()
 
-    public init(runner: any CodeHostCommandRunning = ProcessCodeHostCommandRunner()) {
+    // Process-wide by default (see `GitLabAuthorStandingCache`); tests pass
+    // their own so cases stay independent.
+    private let authorStandingCache: GitLabAuthorStandingCache
+
+    public init(
+        runner: any CodeHostCommandRunning = ProcessCodeHostCommandRunner(),
+        authorStandingCache: GitLabAuthorStandingCache = .shared
+    ) {
         self.runner = runner
+        self.authorStandingCache = authorStandingCache
     }
 
     public func mergedReviewRequests(
@@ -246,13 +254,10 @@ public struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
         let base = normalizeBaseBranch
             ? Self.normalizedBaseBranch(baseBranch, remoteName: remote.remoteName)
             : baseBranch
-        var args = [
-            "mr", "list",
-            "--source-branch", branch,
-            "--target-branch", base,
-            "--output", "json",
-            "--per-page", "20",
-        ]
+        // An empty base finds the branch's request whatever it targets.
+        var args = ["mr", "list", "--source-branch", branch]
+        if !base.isEmpty { args += ["--target-branch", base] }
+        args += ["--output", "json", "--per-page", "20"]
         if includeAllStates {
             args.append("--all")
         }
@@ -1069,6 +1074,70 @@ public struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
         }
     }
 
+    /// Standing of each author id in this project, from the cache or the
+    /// members/users APIs. Ids whose lookup fails are left out, so their
+    /// comments stay `.unknown` and nothing is cached for them.
+    private func authorStandings(
+        for authorIDs: [Int],
+        remote: CodeHostRemote,
+        cwd: URL
+    ) async -> [Int: GitLabAuthorStanding] {
+        var standings: [Int: GitLabAuthorStanding] = [:]
+        for userID in authorIDs {
+            if let cached = authorStandingCache.standing(
+                host: remote.host,
+                projectPath: remote.repositorySlug,
+                userID: userID
+            ) {
+                standings[userID] = cached
+                continue
+            }
+            guard let standing = await fetchAuthorStanding(userID: userID, remote: remote, cwd: cwd) else { continue }
+            authorStandingCache.store(standing, host: remote.host, projectPath: remote.repositorySlug, userID: userID)
+            standings[userID] = standing
+        }
+        return standings
+    }
+
+    /// `members/all` includes access inherited from groups; a 404 means "not a
+    /// member". Note payloads carry no `bot` flag, so the users API is asked
+    /// only when membership alone doesn't already make the author trusted.
+    private func fetchAuthorStanding(userID: Int, remote: CodeHostRemote, cwd: URL) async -> GitLabAuthorStanding? {
+        guard let member = try? await runner.run(
+            "glab",
+            args: [
+                "api", "projects/\(Self.encodedProjectPath(remote.repositorySlug))/members/all/\(userID)",
+                "--hostname", remote.host, "--output", "json",
+            ],
+            cwd: cwd
+        ) else { return nil }
+
+        let accessLevel: Int?
+        if member.exitCode == 0 {
+            guard let level = try? Self.parseMemberAccessLevel(member.stdout) else { return nil }
+            accessLevel = level
+        } else if case .notFound? = CodeHostIssueProviderError.classification(
+            // `number` only feeds the error message, which is discarded here.
+            provider: kind, remote: remote, number: userID, result: member
+        ) {
+            accessLevel = nil
+        } else {
+            return nil
+        }
+        if let accessLevel, accessLevel >= GitLabAuthorStanding.minimumTrustedAccessLevel {
+            return .privileged
+        }
+
+        guard let user = try? await runner.run(
+            "glab",
+            args: ["api", "users/\(userID)", "--hostname", remote.host, "--output", "json"],
+            cwd: cwd
+        ), user.exitCode == 0,
+            let isBot = try? Self.parseUserIsBot(user.stdout)
+        else { return nil }
+        return GitLabAuthorStanding(accessLevel: accessLevel, isBot: isBot)
+    }
+
     private func reviewRequestDetails(
         remote: CodeHostRemote,
         request: ReviewRequest,
@@ -1347,7 +1416,85 @@ public struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
         }
 
         let currentUserUsername = await currentUserUsername(remote: remote, cwd: cwd)
-        return try Self.parseDiscussions(result.stdout, requestURL: request.url, currentUserUsername: currentUserUsername)
+        let discussions = try Self.decodeDiscussions(result.stdout)
+        let standings = await authorStandings(
+            for: Self.standingLookupAuthorIDs(in: discussions, currentUserUsername: currentUserUsername),
+            remote: remote,
+            cwd: cwd
+        )
+        return try Self.threads(
+            from: discussions,
+            requestURL: request.url,
+            currentUserUsername: currentUserUsername,
+            authorStandings: standings
+        )
+    }
+
+    /// Notes per page `reviewersOnHead` asks for; GitLab caps `per_page` at 100.
+    public static let reviewersOnHeadNotesPageSize = 100
+
+    /// Note pages fetched before `reviewersOnHead` stops and judges what it
+    /// has; a note it never reads only means "not reviewed".
+    public static let reviewersOnHeadMaxNotePages = 10
+
+    public func reviewersOnHead(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        notBefore: Date?,
+        cwd: URL
+    ) async throws -> Set<String> {
+        guard let headSHA = Self.normalizedOptionalString(request.headSHA) else {
+            throw CodeHostProviderError.malformedOutput("GitLab reviewers on head require the merge request head SHA.")
+        }
+        let approvals = try await apiJSON(
+            Self.mergeRequestAPIPath(remote: remote, request: request, suffix: "approvals"),
+            remote: remote,
+            cwd: cwd
+        )
+        let headCommit = try await apiJSON(
+            "projects/\(Self.encodedProjectPath(remote.repositorySlug))/repository/commits/\(headSHA)",
+            remote: remote,
+            cwd: cwd
+        )
+        let cutoff = try Self.reviewersOnHeadCutoff(headCommitJSON: headCommit, notBefore: notBefore)
+        var notePages: [GitLabReviewersOnHeadNotesPage] = []
+        if let cutoff {
+            // Newest first, so paging stops once a page reaches the cutoff.
+            for page in 1...Self.reviewersOnHeadMaxNotePages {
+                let notes = try await apiJSON(
+                    Self.mergeRequestAPIPath(remote: remote, request: request, suffix: "notes"),
+                    query: [
+                        "sort=desc",
+                        "order_by=created_at",
+                        "per_page=\(Self.reviewersOnHeadNotesPageSize)",
+                        "page=\(page)",
+                    ],
+                    remote: remote,
+                    cwd: cwd
+                )
+                let notesPage = try Self.parseReviewersOnHeadNotesPage(notes)
+                notePages.append(notesPage)
+                if Self.isLastReviewersOnHeadNotesPage(notesPage, cutoff: cutoff) { break }
+            }
+        }
+        return try Self.parseReviewersOnHead(approvalsJSON: approvals, notePages: notePages, cutoff: cutoff)
+    }
+
+    /// `glab api <path>` as JSON. Query fields switch the call to an explicit
+    /// GET, as `openIssues` does, so `-f` becomes query parameters.
+    private func apiJSON(_ path: String, query: [String] = [], remote: CodeHostRemote, cwd: URL) async throws -> String {
+        var args = ["api", path, "--hostname", remote.host, "--output", "json"]
+        if !query.isEmpty {
+            args += ["--method", "GET"]
+            for field in query {
+                args += ["-f", field]
+            }
+        }
+        let result = try await runner.run("glab", args: args, cwd: cwd)
+        guard result.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(command: "glab api \(path)", stderr: result.stderr)
+        }
+        return result.stdout
     }
 
     public static func normalizedBaseBranch(_ baseBranch: String, remoteName: String) -> String {
@@ -1468,22 +1615,87 @@ public struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
     public static func parseDiscussions(
         _ json: String,
         requestURL: URL,
-        currentUserUsername: String? = nil
+        currentUserUsername: String? = nil,
+        authorStandings: [Int: GitLabAuthorStanding] = [:]
     ) throws -> [ReviewThread] {
-        let data = Data(json.utf8)
-        let discussions: [GitLabDiscussion]
+        try threads(
+            from: decodeDiscussions(json),
+            requestURL: requestURL,
+            currentUserUsername: currentUserUsername,
+            authorStandings: authorStandings
+        )
+    }
+
+    private static func decodeDiscussions(_ json: String) throws -> [GitLabDiscussion] {
         do {
-            discussions = try JSONDecoder().decode([GitLabDiscussion].self, from: data)
+            return try JSONDecoder().decode([GitLabDiscussion].self, from: Data(json.utf8))
         } catch {
             throw CodeHostProviderError.malformedOutput("Unable to parse glab mr note list output")
         }
+    }
 
-        return try discussions.compactMap { discussion in
-            // Collect all non-system notes with a non-empty body.
-            let actionableNotes = discussion.notes.filter { note in
-                !note.isSystem && !note.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    /// Non-system notes with a non-empty body: the notes that become comments.
+    private static func actionableNotes(in discussion: GitLabDiscussion) -> [GitLabDiscussionNote] {
+        discussion.notes.filter { note in
+            !note.isSystem && !note.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+    }
+
+    /// Ids of every non-viewer comment author whose standing must be looked
+    /// up, deduplicated and sorted for a stable request order. Replies count:
+    /// a later trusted reply advances the thread revision. Empty when the
+    /// viewer is unknown: every comment is then `.unknown`, so lookups would
+    /// be wasted.
+    private static func standingLookupAuthorIDs(
+        in discussions: [GitLabDiscussion],
+        currentUserUsername: String?
+    ) -> [Int] {
+        guard let viewer = normalizedOptionalString(currentUserUsername)?.lowercased() else { return [] }
+        var ids = Set<Int>()
+        for discussion in discussions {
+            for note in actionableNotes(in: discussion) {
+                guard let author = note.author,
+                      let id = author.id,
+                      let username = normalizedOptionalString(author.username),
+                      username.lowercased() != viewer
+                else { continue }
+                ids.insert(id)
             }
-            guard let firstNote = actionableNotes.first else {
+        }
+        return ids.sorted()
+    }
+
+    /// Trusted when the author is not the viewer and is a bot or has
+    /// Developer access or higher.
+    private static func authorTrust(
+        of author: GitLabDiscussionAuthor?,
+        currentUserUsername: String?,
+        authorStandings: [Int: GitLabAuthorStanding]
+    ) -> ReviewAuthorTrust {
+        guard let username = normalizedOptionalString(author?.username),
+              let viewer = normalizedOptionalString(currentUserUsername)
+        else { return .unknown }
+        if username.lowercased() == viewer.lowercased() { return .untrusted }
+        guard let id = author?.id, let standing = authorStandings[id] else { return .unknown }
+        return standing == .privileged ? .trusted : .untrusted
+    }
+
+    private static func isViewerAuthor(_ author: GitLabDiscussionAuthor?, currentUserUsername: String?) -> Bool {
+        guard let username = normalizedOptionalString(author?.username),
+              let viewer = normalizedOptionalString(currentUserUsername)
+        else { return false }
+        return username.lowercased() == viewer.lowercased()
+    }
+
+    private static func threads(
+        from discussions: [GitLabDiscussion],
+        requestURL: URL,
+        currentUserUsername: String?,
+        authorStandings: [Int: GitLabAuthorStanding]
+    ) throws -> [ReviewThread] {
+        try discussions.compactMap { discussion in
+            let notes = Self.actionableNotes(in: discussion)
+            guard let firstNote = notes.first else {
                 return nil
             }
 
@@ -1491,7 +1703,7 @@ public struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
             // Assumed GitLab note position keys: new_path, new_line, old_line, old_path
             // (from glab mr note list --output json).
             let position = firstNote.position
-            let comments: [ReviewComment] = try actionableNotes.enumerated().map { index, note in
+            let comments: [ReviewComment] = try notes.enumerated().map { index, note in
                 let commentURL = try discussionURL(note: note, requestURL: requestURL)
                 let isViewer = note.author?.username.map { currentUserUsername == $0 } ?? false
                 return ReviewComment(
@@ -1502,7 +1714,13 @@ public struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
                     createdAt: try? parseOptionalGitLabDate(note.createdAt),
                     viewerCanUpdate: isViewer,
                     viewerCanDelete: isViewer,
-                    isPending: false
+                    isPending: false,
+                    authorTrust: authorTrust(
+                        of: note.author,
+                        currentUserUsername: currentUserUsername,
+                        authorStandings: authorStandings
+                    ),
+                    viewerDidAuthor: isViewerAuthor(note.author, currentUserUsername: currentUserUsername)
                 )
             }
 
@@ -2010,7 +2228,8 @@ public struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
             createdAt: try? parseOptionalGitLabDate(note.createdAt),
             viewerCanUpdate: true,
             viewerCanDelete: true,
-            isPending: false
+            isPending: false,
+            viewerDidAuthor: true
         )
     }
 
@@ -2026,6 +2245,117 @@ public struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
             throw CodeHostProviderError.malformedOutput("glab api user output is missing username")
         }
         return username
+    }
+
+    static func parseMemberAccessLevel(_ json: String) throws -> Int {
+        let member: GitLabMemberResponse
+        do {
+            member = try JSONDecoder().decode(GitLabMemberResponse.self, from: Data(json.utf8))
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse glab api member output")
+        }
+        guard let accessLevel = member.accessLevel else {
+            throw CodeHostProviderError.malformedOutput("glab api member output is missing access_level")
+        }
+        return accessLevel
+    }
+
+    /// `bot` is missing on GitLab versions that predate it; that reads as a human.
+    static func parseUserIsBot(_ json: String) throws -> Bool {
+        let user: GitLabUserResponse
+        do {
+            user = try JSONDecoder().decode(GitLabUserResponse.self, from: Data(json.utf8))
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse glab api users output")
+        }
+        return user.bot ?? false
+    }
+
+    /// When Alas starts counting dated approvals and notes on the head: the
+    /// later of the head commit's `created_at` and `notBefore`, when Alas
+    /// first saw this head. The commit's `created_at` is authored locally, so
+    /// a commit made before a comment but pushed after it would otherwise
+    /// count the stale comment. The cost is that a note posted between the
+    /// push and Alas's first poll of the head doesn't count. A nil
+    /// `notBefore` gives no cutoff: dated approvals and notes count for nobody.
+    public static func reviewersOnHeadCutoff(headCommitJSON: String, notBefore: Date?) throws -> Date? {
+        let headCommit: GitLabCommitResponse
+        do {
+            headCommit = try JSONDecoder().decode(GitLabCommitResponse.self, from: Data(headCommitJSON.utf8))
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse glab reviewers output")
+        }
+        guard let headCreatedAt = try? parseOptionalGitLabDate(headCommit.createdAt) else {
+            throw CodeHostProviderError.malformedOutput("glab commit output is missing created_at")
+        }
+        return notBefore.map { max($0, headCreatedAt) }
+    }
+
+    /// One page of merge request notes. System notes ("added 1 commit",
+    /// "approved this merge request") never count, but still date the page.
+    public static func parseReviewersOnHeadNotesPage(_ json: String) throws -> GitLabReviewersOnHeadNotesPage {
+        let notes: [GitLabDiscussionNote]
+        do {
+            notes = try JSONDecoder().decode([GitLabDiscussionNote].self, from: Data(json.utf8))
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse glab reviewers output")
+        }
+        var humanNotes: [GitLabReviewersOnHeadNotesPage.Note] = []
+        var oldestCreatedAt: Date?
+        for note in notes {
+            guard let createdAt = try? parseOptionalGitLabDate(note.createdAt) else { continue }
+            oldestCreatedAt = min(oldestCreatedAt ?? createdAt, createdAt)
+            guard !note.isSystem, let username = normalizedOptionalString(note.author?.username) else { continue }
+            humanNotes.append(.init(username: username.lowercased(), createdAt: createdAt))
+        }
+        return GitLabReviewersOnHeadNotesPage(
+            humanNotes: humanNotes,
+            noteCount: notes.count,
+            oldestCreatedAt: oldestCreatedAt
+        )
+    }
+
+    /// Whether older pages hold nothing after `cutoff`: this short page is
+    /// GitLab's last, or newest-first order already reached `cutoff`.
+    private static func isLastReviewersOnHeadNotesPage(_ page: GitLabReviewersOnHeadNotesPage, cutoff: Date) -> Bool {
+        if page.noteCount < reviewersOnHeadNotesPageSize { return true }
+        guard let oldestCreatedAt = page.oldestCreatedAt else { return false }
+        return oldestCreatedAt <= cutoff
+    }
+
+    /// Lowercased usernames that approved or commented on the head commit.
+    /// A dated approval (`approved_at`, newer GitLab) and a note count only
+    /// when created after `cutoff` (see `reviewersOnHeadCutoff`); with no
+    /// cutoff, neither counts. An approval without a valid `approved_at`
+    /// never counts: a project that keeps approvals across pushes would
+    /// otherwise let an older head's approval stand for this one.
+    public static func parseReviewersOnHead(
+        approvalsJSON: String,
+        notePages: [GitLabReviewersOnHeadNotesPage],
+        cutoff: Date?
+    ) throws -> Set<String> {
+        let approvals: GitLabApprovalsResponse
+        do {
+            approvals = try JSONDecoder().decode(GitLabApprovalsResponse.self, from: Data(approvalsJSON.utf8))
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse glab reviewers output")
+        }
+
+        var reviewers = Set<String>()
+        for approval in approvals.approvedBy ?? [] {
+            guard let username = normalizedOptionalString(approval.user?.username) else { continue }
+            guard let approvedAt = try? parseOptionalGitLabDate(approval.approvedAt),
+                  let cutoff, approvedAt >= cutoff
+            else { continue }
+            reviewers.insert(username.lowercased())
+        }
+        guard let cutoff else { return reviewers }
+        for page in notePages {
+            for note in page.humanNotes where note.createdAt > cutoff {
+                reviewers.insert(note.username)
+            }
+        }
+        return reviewers
     }
 
     private static func checkID(for pipeline: GitLabPipeline) -> String {
@@ -2137,6 +2467,62 @@ private final class GitLabPendingComments: @unchecked Sendable {
     }
 
     public init() {}
+}
+
+/// A GitLab comment author's standing in the project, which decides trust
+/// for anyone other than the viewer.
+public enum GitLabAuthorStanding: Equatable, Sendable {
+    /// A bot, or a member with Developer (30) access or higher.
+    case privileged
+    /// Not a member, or a member below Developer, and not a bot.
+    case unprivileged
+
+    public static let minimumTrustedAccessLevel = 30
+
+    public init(accessLevel: Int?, isBot: Bool) {
+        self = isBot || (accessLevel ?? 0) >= Self.minimumTrustedAccessLevel ? .privileged : .unprivileged
+    }
+}
+
+/// Author standings keyed by host, project and user id.
+///
+/// `@unchecked Sendable` for the same reason as `GitLabPendingComments`: the
+/// only mutable state is `entries`, and every access goes through `lock`.
+/// `shared` is the provider default because registries create provider
+/// instances per call site. Entries expire after an hour so a role change
+/// is picked up without restarting Alas.
+public final class GitLabAuthorStandingCache: @unchecked Sendable {
+    public static let shared = GitLabAuthorStandingCache()
+    static let timeToLive: TimeInterval = 60 * 60
+
+    private struct Entry {
+        let standing: GitLabAuthorStanding
+        let storedAt: Date
+    }
+
+    private let lock = NSLock()
+    private var entries: [String: Entry] = [:]
+
+    public init() {}
+
+    func standing(host: String, projectPath: String, userID: Int, now: Date = Date()) -> GitLabAuthorStanding? {
+        let key = Self.key(host: host, projectPath: projectPath, userID: userID)
+        lock.lock()
+        defer { lock.unlock() }
+        guard let entry = entries[key], now.timeIntervalSince(entry.storedAt) < Self.timeToLive else { return nil }
+        return entry.standing
+    }
+
+    func store(_ standing: GitLabAuthorStanding, host: String, projectPath: String, userID: Int, now: Date = Date()) {
+        let key = Self.key(host: host, projectPath: projectPath, userID: userID)
+        lock.lock()
+        defer { lock.unlock() }
+        entries[key] = Entry(standing: standing, storedAt: now)
+    }
+
+    private static func key(host: String, projectPath: String, userID: Int) -> String {
+        "\(host.lowercased())|\(projectPath.lowercased())|\(userID)"
+    }
 }
 
 private struct MRListItem: Decodable {
@@ -2592,6 +2978,21 @@ private struct GitLabDiscussion: Decodable {
     }
 }
 
+/// One page of `GitLabCLIProvider.reviewersOnHead`'s merge request notes,
+/// newest first.
+public struct GitLabReviewersOnHeadNotesPage: Sendable {
+    fileprivate struct Note: Sendable {
+        /// Lowercased.
+        let username: String
+        let createdAt: Date
+    }
+
+    fileprivate let humanNotes: [Note]
+    /// Every note on the page, system notes and undated ones included.
+    fileprivate let noteCount: Int
+    fileprivate let oldestCreatedAt: Date?
+}
+
 private struct GitLabDiscussionNote: Decodable {
     let id: Int?
     let body: String
@@ -2647,12 +3048,64 @@ private struct GitLabCurrentUser: Decodable {
     }
 }
 
+private struct GitLabApprovalsResponse: Decodable {
+    struct Approval: Decodable {
+        let user: GitLabDiscussionAuthor?
+        let approvedAt: String?
+
+        private enum CodingKeys: String, CodingKey {
+            case user
+            case approvedAt = "approved_at"
+        }
+    }
+
+    let approvedBy: [Approval]?
+
+    private enum CodingKeys: String, CodingKey {
+        case approvedBy = "approved_by"
+    }
+}
+
+private struct GitLabCommitResponse: Decodable {
+    let createdAt: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case createdAt = "created_at"
+    }
+}
+
 private struct GitLabDiscussionAuthor: Decodable {
+    let id: Int?
     let username: String?
 
-    public init(username: String?) {
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        // Lenient: an unexpected id shape must not drop the whole note.
+        self.id = try? container.decodeIfPresent(Int.self, forKey: .id)
+        self.username = try container.decodeIfPresent(String.self, forKey: .username)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case username
+    }
+
+    public init(id: Int? = nil, username: String?) {
+        self.id = id
         self.username = username
     }
+}
+
+private struct GitLabMemberResponse: Decodable {
+    let accessLevel: Int?
+
+    private enum CodingKeys: String, CodingKey {
+        case accessLevel = "access_level"
+    }
+}
+
+private struct GitLabUserResponse: Decodable {
+    let bot: Bool?
 }
 
 private struct GitLabCreatedNote: Decodable {

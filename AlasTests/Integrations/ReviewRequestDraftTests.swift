@@ -609,6 +609,20 @@ struct ReviewRequestDraftTests {
         #expect(ReviewRequestDraft.validationMessage(for: input) == "Switch to a feature branch before creating a PR.")
     }
 
+    /// Unpicked means the newest session, a picked one that is no longer
+    /// offered falls back to the newest, and None binds nothing.
+    @Test(arguments: [
+        (ChangesShepherdChoice?.none, ["new", "old"], String?("new")),
+        (.some(.session("old")), ["new", "old"], "old"),
+        (.some(.session("archived")), ["new", "old"], "new"),
+        (.some(.noSession), ["new", "old"], nil),
+        (nil, [], nil),
+        (.some(.session("old")), [], nil),
+    ])
+    func shepherdChoiceResolvesTheSessionToBind(choice: ChangesShepherdChoice?, candidateIDs: [String], expected: String?) {
+        #expect(ChangesShepherdChoice.sessionID(for: choice, candidateIDs: candidateIDs) == expected)
+    }
+
     private static func snapshot(
         needsPush: Bool,
         aheadCommitCount: Int,

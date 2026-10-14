@@ -543,6 +543,25 @@ fn all_tool_definitions() -> Vec<Value> {
                 }
             }
         }),
+        json!({
+            "name": "pr_create",
+            "description": "Open a pull/merge request for this worktree's branch and have Alas watch it. Offer this when you've finished a change the user will want reviewed, and call it only after the user agrees or asks. Alas pushes the exact HEAD (never force), creates the PR/MR (or adopts the open one for this branch), and later sends this session a new turn when CI fails, a trusted reviewer leaves a thread, or the branch conflicts with base. Returns JSON with number, url, provider, head_sha, created, uncommitted_changes, and the shepherd's auto_fix/auto_merge settings.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "title": { "type": "string", "description": "PR/MR title, written from the actual diff." },
+                    "body": { "type": "string", "description": "PR/MR description, Markdown." },
+                    "draft": { "type": "boolean", "description": "Create as a draft. Default: false." },
+                    "base": { "type": "string", "description": "Target branch. Default: the worktree's base branch." }
+                },
+                "required": ["title", "body"]
+            }
+        }),
+        json!({
+            "name": "pr_status",
+            "description": "Show the pull/merge request Alas watches for this session, else the one for this worktree's branch, as JSON from a fresh provider fetch: state, head_sha, merge_state, check counts with failing checks, actionable threads from trusted reviewers, required reviewers still missing on the current head, and the shepherd's phase and settings. pull_request is null when there is none; shepherd is null when Alas is not watching it.",
+            "inputSchema": { "type": "object", "properties": {} }
+        }),
     ];
     tools.extend(preview_tool_definitions());
     tools.extend(workspace_tool_definitions());
@@ -1035,6 +1054,16 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                 summary: optional_string(args, "summary"),
             })
         }
+        "pr_create" => Ok(Command::PrCreate {
+            title: required_string(args, "title")?,
+            body: required_string(args, "body")?,
+            draft: optional_bool(args, "draft")?.unwrap_or(false),
+            base: match args.get("base") {
+                None | Some(Value::Null) | Some(Value::String(_)) => optional_string(args, "base"),
+                Some(_) => return Err("base must be a string".into()),
+            },
+        }),
+        "pr_status" => Ok(Command::PrStatus),
         "workspace_list" => Ok(Command::WorkspaceList),
         "workspace_show" => Ok(Command::WorkspaceShow {
             checkout_id: required_uuid(args, "checkout_id")?,
@@ -1541,6 +1570,7 @@ fn success_message(command: &Command) -> String {
         Command::ReviewResolve { reopen: true, .. } => "Comment reopened.".into(),
         Command::ReviewCommentAdd { path, .. } => format!("Filed review comment on {path}."),
         Command::ReviewFinish { .. } => "Review finished.".into(),
+        Command::PrCreate { .. } | Command::PrStatus => "OK".into(),
         Command::AgentList { .. } => "No delegation agents found.".into(),
         Command::SessionList => "No delegated sessions found.".into(),
         Command::SessionNew { .. } => "Delegated session creation accepted.".into(),
@@ -2609,6 +2639,8 @@ mod tests {
                 "review_resolve",
                 "review_comment_add",
                 "review_finish",
+                "pr_create",
+                "pr_status",
                 "preview_list",
                 "preview_open",
                 "preview_navigate",
@@ -2974,6 +3006,42 @@ mod tests {
         .unwrap();
         assert!(forwarded);
         assert_eq!(reply["result"]["isError"], json!(true));
+    }
+
+    #[test]
+    fn pr_tools_stay_with_delegated_children_and_leave_workspace_checkouts() {
+        let tool_names = |parent: Option<&str>, scope: ToolScope| -> Vec<String> {
+            let list = handle_line_with_parent(
+                r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#,
+                "/wt",
+                parent,
+                scope,
+                |_| unreachable!(),
+            )
+            .unwrap();
+            list["result"]["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|tool| tool["name"].as_str().unwrap().to_string())
+                .collect()
+        };
+        let child = tool_names(Some("parent-session"), ToolScope::All);
+        let checkout = tool_names(None, ToolScope::Workspace);
+        for tool in ["pr_create", "pr_status"] {
+            assert!(child.iter().any(|name| name == tool), "child lacks {tool}");
+            assert!(!checkout.iter().any(|name| name == tool), "checkout exposes {tool}");
+        }
+
+        let reply = handle_line_with_parent(
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"pr_status","arguments":{}}}"#,
+            "/checkout",
+            None,
+            ToolScope::Workspace,
+            |_| unreachable!(),
+        )
+        .unwrap();
+        assert_eq!(reply["error"]["code"], json!(-32602));
     }
 
     #[test]
@@ -3730,6 +3798,54 @@ mod tests {
             }
         );
         assert!(command_for_tool("review_finish", &json!({"verdict": "reject"}), "/wt").is_err());
+    }
+
+    #[test]
+    fn pr_tools_map_to_commands_and_validate_arguments() {
+        assert_eq!(
+            command_for_tool(
+                "pr_create",
+                &json!({"title": "fix: retry", "body": "Why.", "draft": true, "base": "release"}),
+                "/wt"
+            )
+            .unwrap(),
+            Command::PrCreate {
+                title: "fix: retry".into(),
+                body: "Why.".into(),
+                draft: true,
+                base: Some("release".into())
+            }
+        );
+        assert_eq!(
+            command_for_tool(
+                "pr_create",
+                &json!({"title": " fix: retry ", "body": "Why.", "base": "  "}),
+                "/wt"
+            )
+            .unwrap(),
+            Command::PrCreate {
+                title: "fix: retry".into(),
+                body: "Why.".into(),
+                draft: false,
+                base: None
+            }
+        );
+        for bad in [
+            json!({"body": "Why."}),
+            json!({"title": "   ", "body": "Why."}),
+            json!({"title": "fix: retry"}),
+            json!({"title": "fix: retry", "body": "Why.", "draft": "yes"}),
+            json!({"title": "fix: retry", "body": "Why.", "base": 123}),
+        ] {
+            assert!(
+                command_for_tool("pr_create", &bad, "/wt").is_err(),
+                "accepted {bad}"
+            );
+        }
+        assert_eq!(
+            command_for_tool("pr_status", &json!({}), "/wt").unwrap(),
+            Command::PrStatus
+        );
     }
 
     #[test]

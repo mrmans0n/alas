@@ -2,6 +2,10 @@ import SwiftUI
 
 struct CIStatusStrip: View {
     let checks: [ReviewCheck]
+    /// Past this many checks the expanded list scrolls at that height, so a
+    /// large PR doesn't grow a hugging container (the shepherd popover)
+    /// without bound. Nil lets the list take its full height.
+    var maxVisibleRows: Int? = nil
     var onExpand: (ReviewCheck) -> Void = { _ in }
     @State private var isExpanded = false
     @State private var expandedCheckIDs: Set<String> = []
@@ -30,6 +34,29 @@ struct CIStatusStrip: View {
         if cancelled > 0 { parts.append("\(cancelled) cancelled") }
         if skipped > 0 { parts.append("\(skipped) skipped") }
         return parts.joined(separator: " · ")
+    }
+
+    /// One `CICheckRow`: an 11 pt line plus 5 pt vertical padding each side.
+    private static let rowHeight: CGFloat = 24
+
+    private var checkRows: some View {
+        VStack(spacing: 0) {
+            ForEach(checks) { check in
+                CICheckRow(
+                    check: check,
+                    isExpanded: expandedCheckIDs.contains(check.id),
+                    onToggle: {
+                        if expandedCheckIDs.contains(check.id) {
+                            expandedCheckIDs.remove(check.id)
+                        } else {
+                            expandedCheckIDs.insert(check.id)
+                            onExpand(check)
+                        }
+                    }
+                )
+            }
+        }
+        .padding(.vertical, 4)
     }
 
     var body: some View {
@@ -64,23 +91,14 @@ struct CIStatusStrip: View {
 
                 if isExpanded {
                     Divider().overlay(theme.color("line"))
-                    VStack(spacing: 0) {
-                        ForEach(checks) { check in
-                            CICheckRow(
-                                check: check,
-                                isExpanded: expandedCheckIDs.contains(check.id),
-                                onToggle: {
-                                    if expandedCheckIDs.contains(check.id) {
-                                        expandedCheckIDs.remove(check.id)
-                                    } else {
-                                        expandedCheckIDs.insert(check.id)
-                                        onExpand(check)
-                                    }
-                                }
-                            )
+                    if let maxVisibleRows, checks.count > maxVisibleRows {
+                        ScrollView {
+                            checkRows
                         }
+                        .frame(height: CGFloat(maxVisibleRows) * Self.rowHeight + 8)
+                    } else {
+                        checkRows
                     }
-                    .padding(.vertical, 4)
                 }
             }
             .background(theme.color("bg-2"))

@@ -92,9 +92,15 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
                   createdAt
                   diffHunk
                   author {
+                    __typename
                     login
                   }
+                  authorAssociation
                   viewerDidAuthor
+                }
+                pageInfo {
+                  hasNextPage
+                  endCursor
                 }
               }
             }
@@ -107,6 +113,110 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
       }
     }
     """
+
+    /// Fetches the comments after the first page of one review thread, for
+    /// threads whose `comments` connection in `reviewThreadsQuery` has more.
+    public static let reviewThreadCommentsQuery = """
+    query($threadID: ID!, $cursor: String) {
+      node(id: $threadID) {
+        ... on PullRequestReviewThread {
+          comments(first: 100, after: $cursor) {
+            nodes {
+              id
+              body
+              url
+              createdAt
+              diffHunk
+              author {
+                __typename
+                login
+              }
+              authorAssociation
+              viewerDidAuthor
+            }
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+          }
+        }
+      }
+    }
+    """
+
+    /// Extra comment pages fetched per review thread before the thread list is
+    /// reported incomplete.
+    public static let reviewThreadCommentsMaxExtraPages = 10
+
+    /// Every connection is fetched on the first page. Later pages walk each
+    /// connection backwards with its `before` cursor and skip the commit and
+    /// any connection that has run out.
+    public static let reviewersOnHeadQuery = """
+    query(
+      $owner: String!, $repo: String!, $number: Int!,
+      $reviewsBefore: String, $commentsBefore: String, $reactionsBefore: String,
+      $withCommits: Boolean = true, $withReviews: Boolean = true,
+      $withComments: Boolean = true, $withReactions: Boolean = true
+    ) {
+      repository(owner: $owner, name: $repo) {
+        pullRequest(number: $number) {
+          commits(last: 1) @include(if: $withCommits) {
+            nodes {
+              commit {
+                oid
+                committedDate
+              }
+            }
+          }
+          reviews(
+            last: 100, before: $reviewsBefore, states: [APPROVED, CHANGES_REQUESTED, COMMENTED]
+          ) @include(if: $withReviews) {
+            nodes {
+              author {
+                login
+              }
+              commit {
+                oid
+              }
+            }
+            pageInfo {
+              hasPreviousPage
+              startCursor
+            }
+          }
+          comments(last: 100, before: $commentsBefore) @include(if: $withComments) {
+            nodes {
+              author {
+                login
+              }
+              createdAt
+            }
+            pageInfo {
+              hasPreviousPage
+              startCursor
+            }
+          }
+          reactions(last: 100, before: $reactionsBefore) @include(if: $withReactions) {
+            nodes {
+              content
+              createdAt
+              user {
+                login
+              }
+            }
+            pageInfo {
+              hasPreviousPage
+              startCursor
+            }
+          }
+        }
+      }
+    }
+    """
+
+    /// Pages fetched per connection before `reviewersOnHead` stops and
+    /// judges what it has; evidence it never reads only means "not reviewed".
+    public static let reviewersOnHeadMaxPages = 10
 
     public static let mergeQueueMetadataQuery = """
     query($owner: String!, $name: String!, $number: Int!) {
@@ -440,19 +550,16 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
         let base = normalizeBaseBranch
             ? Self.normalizedBaseBranch(baseBranch, remoteName: remote.remoteName)
             : baseBranch
-        let result = try await runner.run(
-            "gh",
-            args: [
-                "pr", "list",
-                "--head", branch,
-                "--base", base,
-                "--state", state,
-                "--limit", "20",
-                "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,headRepository,baseRefName,baseRefOid,reviewDecision,mergeStateStatus",
-                "-R", Self.highLevelRepositorySelector(remote: remote),
-            ],
-            cwd: cwd
-        )
+        // An empty base finds the branch's request whatever it targets.
+        var args = ["pr", "list", "--head", branch]
+        if !base.isEmpty { args += ["--base", base] }
+        args += [
+            "--state", state,
+            "--limit", "20",
+            "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,headRepository,baseRefName,baseRefOid,reviewDecision,mergeStateStatus",
+            "-R", Self.highLevelRepositorySelector(remote: remote),
+        ]
+        let result = try await runner.run("gh", args: args, cwd: cwd)
         guard result.exitCode == 0 else {
             throw CodeHostProviderError.commandFailed(command: "gh pr list", stderr: result.stderr)
         }
@@ -477,14 +584,16 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
 
     /// Loads review threads, reporting whether the fetch succeeded. A failure
     /// yields no threads but flags the result incomplete so the merge gate can
-    /// fail closed instead of treating missing threads as "no feedback".
+    /// fail closed instead of treating missing threads as "no feedback". A
+    /// thread whose later comment pages could not be read keeps the comments
+    /// that were read, and the result is flagged incomplete the same way.
     private func threadsWithCompleteness(
         remote: CodeHostRemote,
         request: ReviewRequest,
         cwd: URL
     ) async -> (threads: [ReviewThread], complete: Bool) {
         do {
-            return (try await reviewThreads(remote: remote, request: request, cwd: cwd), true)
+            return try await reviewThreads(remote: remote, request: request, cwd: cwd)
         } catch {
             return ([], false)
         }
@@ -578,14 +687,117 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
             ],
             cwd: cwd
         )
+        let checks: [ReviewCheck]
         if result.exitCode == 1, Self.isNoChecksReported(result) {
-            return []
-        }
-        guard result.exitCode == 0 || result.exitCode == 1 || result.exitCode == 8 else {
-            throw CodeHostProviderError.commandFailed(command: "gh pr checks", stderr: result.stderr)
+            checks = []
+        } else {
+            guard result.exitCode == 0 || result.exitCode == 1 || result.exitCode == 8 else {
+                throw CodeHostProviderError.commandFailed(command: "gh pr checks", stderr: result.stderr)
+            }
+            checks = try Self.parseChecks(result.stdout)
         }
 
-        return try Self.parseChecks(result.stdout)
+        guard let headSHA = Self.normalizedOptionalString(request.headSHA) else { return checks }
+        return try await addingPendingWorkflowRuns(to: checks, remote: remote, headSHA: headSHA, cwd: cwd)
+    }
+
+    /// A workflow run that is queued, or has not created its jobs yet, has no
+    /// check runs, so `gh pr checks` does not report it. Each such run becomes
+    /// a pending check. Runs are read page by page, up to
+    /// `workflowRunsPageLimit` pages. When a page cannot be read, or runs
+    /// remain past the last page read, one pending check stands in for the
+    /// unread runs, so a caller never reads the gap as "no checks".
+    private func addingPendingWorkflowRuns(
+        to checks: [ReviewCheck],
+        remote: CodeHostRemote,
+        headSHA: String,
+        cwd: URL
+    ) async throws -> [ReviewCheck] {
+        var merged = checks
+        var runsRead = 0
+        for page in 1...Self.workflowRunsPageLimit {
+            let result: ProcessResult
+            do {
+                result = try await runner.run(
+                    "gh",
+                    args: [
+                        "api",
+                        "--hostname", remote.host,
+                        "repos/\(remote.repositorySlug)/actions/runs?head_sha=\(headSHA)"
+                            + "&per_page=\(Self.workflowRunsPageSize)&page=\(page)",
+                    ],
+                    cwd: cwd
+                )
+            } catch let error as CancellationError {
+                throw error
+            } catch {
+                return merged + [Self.workflowRunsUnavailableCheck]
+            }
+            guard result.exitCode == 0,
+                  let response = try? Self.decodeWorkflowRuns(result.stdout)
+            else { return merged + [Self.workflowRunsUnavailableCheck] }
+
+            merged = Self.mergingPendingWorkflowRuns(response.workflowRuns, into: merged)
+            runsRead += response.workflowRuns.count
+            if Self.isLastWorkflowRunsPage(response, runsRead: runsRead) { return merged }
+        }
+        return merged + [Self.workflowRunsUnavailableCheck]
+    }
+
+    private static let workflowRunsPageSize = 100
+    private static let workflowRunsPageLimit = 5
+
+    static let workflowRunsUnavailableCheck = ReviewCheck(
+        id: "workflow-runs-unavailable",
+        name: "Workflow runs unavailable",
+        workflow: nil,
+        bucket: .pending,
+        detailURL: nil,
+        completedAt: nil
+    )
+
+    /// Appends a pending check for each unfinished run in a
+    /// `GET /repos/{owner}/{repo}/actions/runs` response whose workflow has no
+    /// pending check yet.
+    public static func mergingPendingWorkflowRuns(_ json: String, into checks: [ReviewCheck]) throws -> [ReviewCheck] {
+        mergingPendingWorkflowRuns(try decodeWorkflowRuns(json).workflowRuns, into: checks)
+    }
+
+    private static func decodeWorkflowRuns(_ json: String) throws -> WorkflowRunsResponse {
+        do {
+            return try JSONDecoder().decode(WorkflowRunsResponse.self, from: Data(json.utf8))
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse gh api actions/runs output")
+        }
+    }
+
+    /// A page shorter than the page size is the last one; so is any page that
+    /// brings the runs read up to the reported `total_count`.
+    private static func isLastWorkflowRunsPage(_ response: WorkflowRunsResponse, runsRead: Int) -> Bool {
+        if response.workflowRuns.count < workflowRunsPageSize { return true }
+        guard let totalCount = response.totalCount else { return false }
+        return runsRead >= totalCount
+    }
+
+    private static func mergingPendingWorkflowRuns(
+        _ runs: [WorkflowRunsResponse.WorkflowRun],
+        into checks: [ReviewCheck]
+    ) -> [ReviewCheck] {
+        var merged = checks
+        for run in runs where run.status != "completed" {
+            let workflow = run.name ?? "Workflow run \(run.id)"
+            guard !merged.contains(where: { $0.bucket == .pending && $0.workflow == workflow }) else { continue }
+            let detailURL = run.htmlURL.flatMap(URL.init(string:)).flatMap { $0.isHTTPOrHTTPS ? $0 : nil }
+            merged.append(ReviewCheck(
+                id: "run-\(run.id)",
+                name: "\(workflow) (\(run.status == "in_progress" ? "running" : "queued"))",
+                workflow: workflow,
+                bucket: .pending,
+                detailURL: detailURL,
+                completedAt: nil
+            ))
+        }
+        return merged
     }
 
     public func reviewDiff(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> String {
@@ -733,13 +945,13 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
         remote: CodeHostRemote,
         request: ReviewRequest,
         cwd: URL
-    ) async throws -> [ReviewThread] {
-        var threads: [ReviewThread] = []
+    ) async throws -> (threads: [ReviewThread], complete: Bool) {
+        var nodes: [ReviewThreadNode] = []
         var cursor: String?
 
         repeat {
             let page = try await reviewThreadsPage(remote: remote, request: request, cursor: cursor, cwd: cwd)
-            threads.append(contentsOf: page.threads)
+            nodes.append(contentsOf: page.nodes)
             if page.pageInfo.hasNextPage {
                 guard let endCursor = page.pageInfo.endCursor, !endCursor.isEmpty else {
                     throw CodeHostProviderError.malformedOutput("gh review threads output is missing a pagination cursor")
@@ -750,7 +962,67 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
             }
         } while cursor != nil
 
-        return threads
+        var complete = true
+        var threads: [ReviewThread] = []
+        for node in nodes {
+            var comments = node.comments.nodes
+            if let pageInfo = node.comments.pageInfo, pageInfo.hasNextPage {
+                do {
+                    comments += try await remainingReviewThreadComments(
+                        remote: remote,
+                        threadID: node.id,
+                        after: pageInfo.endCursor,
+                        cwd: cwd
+                    )
+                } catch {
+                    complete = false
+                }
+            }
+            if let thread = try Self.reviewThread(from: node, commentNodes: comments) {
+                threads.append(thread)
+            }
+        }
+        return (threads, complete)
+    }
+
+    /// Reads the comments after `cursor` in one review thread. Throws when a
+    /// page can't be read or the thread runs past
+    /// `reviewThreadCommentsMaxExtraPages`, so the caller never treats a
+    /// truncated comment chain as complete.
+    private func remainingReviewThreadComments(
+        remote: CodeHostRemote,
+        threadID: String,
+        after cursor: String?,
+        cwd: URL
+    ) async throws -> [ReviewThreadCommentNode] {
+        var comments: [ReviewThreadCommentNode] = []
+        var cursor = cursor
+        for _ in 0..<Self.reviewThreadCommentsMaxExtraPages {
+            guard let current = cursor, !current.isEmpty else {
+                throw CodeHostProviderError.malformedOutput("gh review thread comments output is missing a pagination cursor")
+            }
+            let result = try await runner.run(
+                "gh",
+                args: [
+                    "api", "graphql",
+                    "--hostname", remote.host,
+                    "-f", "query=\(Self.reviewThreadCommentsQuery)",
+                    "-f", "threadID=\(threadID)",
+                    "-f", "cursor=\(current)",
+                ],
+                cwd: cwd
+            )
+            guard result.exitCode == 0 else {
+                throw CodeHostProviderError.commandFailed(command: "gh api graphql", stderr: result.stderr)
+            }
+            let page = try Self.parseReviewThreadCommentsPage(result.stdout)
+            comments += page.nodes
+            guard page.pageInfo.hasNextPage else { return comments }
+            cursor = page.pageInfo.endCursor
+        }
+        throw CodeHostProviderError.malformedOutput(
+            "GitHub review thread \(threadID) has more than \(Self.reviewThreadCommentsMaxExtraPages) extra comment pages"
+        )
     }
 
     private func reviewThreadsPage(
@@ -781,6 +1053,41 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
         }
 
         return try Self.parseReviewThreadsPage(result.stdout)
+    }
+
+    public func reviewersOnHead(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        notBefore: Date?,
+        cwd: URL
+    ) async throws -> Set<String> {
+        guard let headSHA = request.headSHA, !headSHA.isEmpty else {
+            throw CodeHostProviderError.malformedOutput("GitHub reviewers on head require the pull request head SHA.")
+        }
+        var pages: [ReviewersOnHeadPage] = []
+        var cursors = ReviewersOnHeadCursors()
+        for _ in 0..<Self.reviewersOnHeadMaxPages {
+            let result = try await runner.run(
+                "gh",
+                args: [
+                    "api", "graphql",
+                    "--hostname", remote.host,
+                    "-f", "query=\(Self.reviewersOnHeadQuery)",
+                    "-F", "owner=\(remote.owner)",
+                    "-F", "repo=\(remote.repository)",
+                    "-F", "number=\(request.number)",
+                ] + cursors.arguments,
+                cwd: cwd
+            )
+            guard result.exitCode == 0 else {
+                throw CodeHostProviderError.commandFailed(command: "gh api graphql", stderr: result.stderr)
+            }
+            let page = try Self.parseReviewersOnHeadPage(result.stdout)
+            pages.append(page)
+            cursors = try page.cursorsForPreviousPage()
+            if cursors.isExhausted { break }
+        }
+        return Self.reviewersOnHead(in: pages, headSHA: headSHA, notBefore: notBefore)
     }
 
     private func fetchPRNodeID(
@@ -1620,8 +1927,12 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
         return url
     }
 
+    /// Parses one page of `reviewThreadsQuery` output using each thread's
+    /// first comment page only.
     public static func parseReviewThreads(_ json: String) throws -> [ReviewThread] {
-        try parseReviewThreadsPage(json).threads
+        try parseReviewThreadsPage(json).nodes.compactMap { node in
+            try reviewThread(from: node, commentNodes: node.comments.nodes)
+        }
     }
 
     public static func parsePullRequestNodeID(_ json: String) throws -> String {
@@ -1759,43 +2070,171 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
         }
 
         let connection = response.data.repository.pullRequest.reviewThreads
-        let threads: [ReviewThread] = try connection.nodes.compactMap { node in
-            let allComments: [ReviewComment] = try node.comments.nodes.enumerated().map { index, c in
-                ReviewComment(
-                    id: c.id ?? "\(node.id)-\(index)",
-                    author: c.author?.login,
-                    body: c.body,
-                    url: try parseOptionalHTTPURL(c.url, context: "gh review threads returned an invalid URL"),
-                    createdAt: try? parseOptionalDate(c.createdAt),
-                    viewerCanUpdate: c.viewerDidAuthor ?? false,
-                    viewerCanDelete: c.viewerDidAuthor ?? false,
-                    isPending: false
-                )
-            }
-            let comments = allComments.filter { !$0.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-            guard !comments.isEmpty else {
-                return nil
-            }
-            return ReviewThread(
-                id: node.id,
-                path: node.path,
-                line: node.line,
-                startLine: node.startLine,
-                originalLine: node.originalLine,
-                originalStartLine: node.originalStartLine,
-                diffHunk: node.comments.nodes.first?.diffHunk,
-                diffSide: node.diffSide,
-                isResolved: node.isResolved,
-                isOutdated: node.isOutdated,
-                isFileLevel: (node.subjectType ?? "").uppercased() == "FILE",
-                comments: comments,
-                viewerCanResolve: node.viewerCanResolve ?? false,
-                viewerCanUnresolve: node.viewerCanUnresolve ?? false,
-                viewerCanReply: node.viewerCanReply ?? false,
-                url: comments.first?.url
+        return ReviewThreadsPage(nodes: connection.nodes, pageInfo: connection.pageInfo)
+    }
+
+    private static func parseReviewThreadCommentsPage(_ json: String) throws -> ReviewThreadCommentsPage {
+        let response: ReviewThreadCommentsResponse
+        do {
+            response = try JSONDecoder().decode(ReviewThreadCommentsResponse.self, from: Data(json.utf8))
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse gh review thread comments output")
+        }
+        let connection = response.data.node.comments
+        guard let pageInfo = connection.pageInfo else {
+            throw CodeHostProviderError.malformedOutput("gh review thread comments output is missing page info")
+        }
+        return ReviewThreadCommentsPage(nodes: connection.nodes, pageInfo: pageInfo)
+    }
+
+    /// Builds a thread from its node and every comment read for it. Threads
+    /// whose comments all have empty bodies are dropped.
+    private static func reviewThread(
+        from node: ReviewThreadNode,
+        commentNodes: [ReviewThreadCommentNode]
+    ) throws -> ReviewThread? {
+        let allComments: [ReviewComment] = try commentNodes.enumerated().map { index, c in
+            ReviewComment(
+                id: c.id ?? "\(node.id)-\(index)",
+                author: c.author?.login,
+                body: c.body,
+                url: try parseOptionalHTTPURL(c.url, context: "gh review threads returned an invalid URL"),
+                createdAt: try? parseOptionalDate(c.createdAt),
+                viewerCanUpdate: c.viewerDidAuthor ?? false,
+                viewerCanDelete: c.viewerDidAuthor ?? false,
+                isPending: false,
+                authorTrust: authorTrust(
+                    viewerDidAuthor: c.viewerDidAuthor,
+                    authorAssociation: c.authorAssociation,
+                    authorTypename: c.author?.typename
+                ),
+                viewerDidAuthor: c.viewerDidAuthor ?? false
             )
         }
-        return ReviewThreadsPage(threads: threads, pageInfo: connection.pageInfo)
+        let comments = allComments.filter { !$0.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        guard !comments.isEmpty else {
+            return nil
+        }
+        return ReviewThread(
+            id: node.id,
+            path: node.path,
+            line: node.line,
+            startLine: node.startLine,
+            originalLine: node.originalLine,
+            originalStartLine: node.originalStartLine,
+            diffHunk: commentNodes.first?.diffHunk,
+            diffSide: node.diffSide,
+            isResolved: node.isResolved,
+            isOutdated: node.isOutdated,
+            isFileLevel: (node.subjectType ?? "").uppercased() == "FILE",
+            comments: comments,
+            viewerCanResolve: node.viewerCanResolve ?? false,
+            viewerCanUnresolve: node.viewerCanUnresolve ?? false,
+            viewerCanReply: node.viewerCanReply ?? false,
+            url: comments.first?.url
+        )
+    }
+
+    /// Repository owners, organization members, collaborators and GitHub Apps
+    /// (`Bot`) are trusted. The viewer's own comments never are: the shepherd
+    /// must not act on its own replies. Without the viewer flag or the
+    /// association (for a non-bot) the author can't be classified.
+    private static func authorTrust(
+        viewerDidAuthor: Bool?,
+        authorAssociation: String?,
+        authorTypename: String?
+    ) -> ReviewAuthorTrust {
+        if viewerDidAuthor == true { return .untrusted }
+        if authorTypename == "Bot" { return .trusted }
+        guard viewerDidAuthor == false,
+              let association = authorAssociation?.uppercased(),
+              !association.isEmpty
+        else { return .unknown }
+        switch association {
+        case "OWNER", "MEMBER", "COLLABORATOR":
+            return .trusted
+        default:
+            return .untrusted
+        }
+    }
+
+    /// Across all `pages`: logins with a submitted review on `headSHA`, plus
+    /// authors of top-level comments and thumbs-up reactions created after
+    /// both the head commit and `notBefore`. Codex reacts with a thumbs-up
+    /// instead of reviewing when it finds nothing; its in-progress eyes
+    /// reaction doesn't count.
+    /// `committedDate` is authored locally, so `notBefore` (when Alas first
+    /// saw this head) keeps a comment that predates the push from counting;
+    /// the cost is that a thumbs-up posted between the push and Alas's first
+    /// poll of the head doesn't count either. A nil `notBefore`, or a head
+    /// that moved since the request was fetched, leaves comments and
+    /// reactions counting for nobody. Logins are normalized by
+    /// `normalizedReviewerLogin`.
+    public static func reviewersOnHead(
+        in pages: [ReviewersOnHeadPage],
+        headSHA: String,
+        notBefore: Date?
+    ) -> Set<String> {
+        let evidence = mergeReviewersOnHeadPages(pages)
+        let head = headSHA.lowercased()
+
+        var reviewers = Set<String>()
+        for review in evidence.reviews {
+            guard review.commit?.oid.lowercased() == head, let login = review.author?.login else { continue }
+            reviewers.insert(normalizedReviewerLogin(login))
+        }
+        guard let notBefore,
+              let lastCommit = evidence.lastCommit,
+              lastCommit.oid.lowercased() == head,
+              let headCommittedAt = try? parseOptionalDate(lastCommit.committedDate)
+        else { return reviewers }
+        let cutoff = max(headCommittedAt, notBefore)
+        for comment in evidence.comments {
+            guard let login = comment.author?.login,
+                  let createdAt = try? parseOptionalDate(comment.createdAt),
+                  createdAt > cutoff
+            else { continue }
+            reviewers.insert(normalizedReviewerLogin(login))
+        }
+        for reaction in evidence.reactions where reaction.content == "THUMBS_UP" {
+            guard let login = reaction.user?.login,
+                  let createdAt = try? parseOptionalDate(reaction.createdAt),
+                  createdAt > cutoff
+            else { continue }
+            reviewers.insert(normalizedReviewerLogin(login))
+        }
+        return reviewers
+    }
+
+    public static func parseReviewersOnHeadPage(_ json: String) throws -> ReviewersOnHeadPage {
+        do {
+            let response = try JSONDecoder().decode(ReviewersOnHeadResponse.self, from: Data(json.utf8))
+            return ReviewersOnHeadPage(pullRequest: response.data.repository.pullRequest)
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse gh reviewers output")
+        }
+    }
+
+    /// The head commit comes from the first page, the only one that asks for it.
+    private static func mergeReviewersOnHeadPages(_ pages: [ReviewersOnHeadPage]) -> ReviewersOnHeadEvidence {
+        var evidence = ReviewersOnHeadEvidence(
+            lastCommit: pages.first?.pullRequest.commits?.nodes.last?.commit
+        )
+        for page in pages {
+            evidence.reviews += page.pullRequest.reviews?.nodes ?? []
+            evidence.comments += page.pullRequest.comments?.nodes ?? []
+            evidence.reactions += page.pullRequest.reactions?.nodes ?? []
+        }
+        return evidence
+    }
+
+    /// Lowercased, without the `[bot]` suffix GitHub adds to app logins, so a
+    /// rule naming `chatgpt-codex-connector` matches `chatgpt-codex-connector[bot]`.
+    private static func normalizedReviewerLogin(_ login: String) -> String {
+        let lowered = login.lowercased()
+        let botSuffix = "[bot]"
+        guard lowered.hasSuffix(botSuffix) else { return lowered }
+        return String(lowered.dropLast(botSuffix.count))
     }
 
     private static func parseAddThreadReplyResponse(_ json: String) throws -> ReviewComment {
@@ -1875,7 +2314,8 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
             createdAt: (try? parseOptionalDate(comment.createdAt)) ?? nil,
             viewerCanUpdate: comment.viewerDidAuthor ?? false,
             viewerCanDelete: comment.viewerDidAuthor ?? false,
-            isPending: false
+            isPending: false,
+            viewerDidAuthor: comment.viewerDidAuthor ?? false
         )
     }
 
@@ -2278,6 +2718,28 @@ private struct GitHubQueueMetadataResponse: Decodable {
     }
 }
 
+private struct WorkflowRunsResponse: Decodable {
+    let totalCount: Int?
+    let workflowRuns: [WorkflowRun]
+
+    struct WorkflowRun: Decodable {
+        let id: Int
+        let name: String?
+        let status: String?
+        let htmlURL: String?
+
+        enum CodingKeys: String, CodingKey {
+            case id, name, status
+            case htmlURL = "html_url"
+        }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case totalCount = "total_count"
+        case workflowRuns = "workflow_runs"
+    }
+}
+
 private struct CheckItem: Decodable {
     let bucket: String
     let completedAt: String?
@@ -2626,12 +3088,12 @@ private struct ReviewThreadsConnection: Decodable {
     }
 }
 
-private struct ReviewThreadsPage: Equatable {
-    let threads: [ReviewThread]
+private struct ReviewThreadsPage {
+    let nodes: [ReviewThreadNode]
     let pageInfo: ReviewThreadsPageInfo
 
-    public init(threads: [ReviewThread], pageInfo: ReviewThreadsPageInfo) {
-        self.threads = threads
+    public init(nodes: [ReviewThreadNode], pageInfo: ReviewThreadsPageInfo) {
+        self.nodes = nodes
         self.pageInfo = pageInfo
     }
 }
@@ -2698,11 +3160,49 @@ private struct ReviewThreadNode: Decodable {
     }
 }
 
+/// `pageInfo` is absent from fixtures and older payloads; absent means the
+/// connection holds every comment.
 private struct ReviewThreadCommentsConnection: Decodable {
     let nodes: [ReviewThreadCommentNode]
+    let pageInfo: ReviewThreadsPageInfo?
 
-    public init(nodes: [ReviewThreadCommentNode]) {
+    public init(nodes: [ReviewThreadCommentNode], pageInfo: ReviewThreadsPageInfo? = nil) {
         self.nodes = nodes
+        self.pageInfo = pageInfo
+    }
+}
+
+private struct ReviewThreadCommentsResponse: Decodable {
+    let data: ReviewThreadCommentsData
+
+    public init(data: ReviewThreadCommentsData) {
+        self.data = data
+    }
+}
+
+private struct ReviewThreadCommentsData: Decodable {
+    let node: ReviewThreadCommentsNode
+
+    public init(node: ReviewThreadCommentsNode) {
+        self.node = node
+    }
+}
+
+private struct ReviewThreadCommentsNode: Decodable {
+    let comments: ReviewThreadCommentsConnection
+
+    public init(comments: ReviewThreadCommentsConnection) {
+        self.comments = comments
+    }
+}
+
+private struct ReviewThreadCommentsPage {
+    let nodes: [ReviewThreadCommentNode]
+    let pageInfo: ReviewThreadsPageInfo
+
+    public init(nodes: [ReviewThreadCommentNode], pageInfo: ReviewThreadsPageInfo) {
+        self.nodes = nodes
+        self.pageInfo = pageInfo
     }
 }
 
@@ -2713,15 +3213,26 @@ private struct ReviewThreadCommentNode: Decodable {
     let createdAt: String?
     let diffHunk: String?
     let author: ReviewThreadAuthor?
+    let authorAssociation: String?
     let viewerDidAuthor: Bool?
 
-    public init(id: String?, body: String, url: String?, createdAt: String?, diffHunk: String?, author: ReviewThreadAuthor?, viewerDidAuthor: Bool?) {
+    public init(
+        id: String?,
+        body: String,
+        url: String?,
+        createdAt: String?,
+        diffHunk: String?,
+        author: ReviewThreadAuthor?,
+        authorAssociation: String? = nil,
+        viewerDidAuthor: Bool?
+    ) {
         self.id = id
         self.body = body
         self.url = url
         self.createdAt = createdAt
         self.diffHunk = diffHunk
         self.author = author
+        self.authorAssociation = authorAssociation
         self.viewerDidAuthor = viewerDidAuthor
     }
 }
@@ -2756,10 +3267,153 @@ private struct GitHubPullRequestMarker: Decodable {
 
 private struct ReviewThreadAuthor: Decodable {
     let login: String
+    /// GraphQL `Actor` concrete type: `User`, `Bot`, `Mannequin`, ...
+    let typename: String?
 
-    public init(login: String) {
-        self.login = login
+    private enum CodingKeys: String, CodingKey {
+        case login
+        case typename = "__typename"
     }
+
+    public init(login: String, typename: String? = nil) {
+        self.login = login
+        self.typename = typename
+    }
+}
+
+/// One page of `GitHubCLIProvider.reviewersOnHeadQuery`.
+public struct ReviewersOnHeadPage {
+    fileprivate let pullRequest: ReviewersOnHeadResponse.PullRequest
+
+    /// Where the next page reads each connection from; a connection that
+    /// this page skipped or that has no older entries is exhausted.
+    fileprivate func cursorsForPreviousPage() throws -> ReviewersOnHeadCursors {
+        func position<Node>(_ connection: ReviewersOnHeadResponse.Nodes<Node>?) throws -> ReviewersOnHeadCursors.Position {
+            guard let pageInfo = connection?.pageInfo, pageInfo.hasPreviousPage else { return .exhausted }
+            guard let startCursor = pageInfo.startCursor, !startCursor.isEmpty else {
+                throw CodeHostProviderError.malformedOutput("gh reviewers output is missing a pagination cursor")
+            }
+            return .before(startCursor)
+        }
+        return try ReviewersOnHeadCursors(
+            includesCommits: false,
+            reviews: position(pullRequest.reviews),
+            comments: position(pullRequest.comments),
+            reactions: position(pullRequest.reactions)
+        )
+    }
+}
+
+private struct ReviewersOnHeadCursors {
+    enum Position: Equatable {
+        case latest
+        case before(String)
+        case exhausted
+    }
+
+    var includesCommits = true
+    var reviews = Position.latest
+    var comments = Position.latest
+    var reactions = Position.latest
+
+    var isExhausted: Bool {
+        [reviews, comments, reactions].allSatisfy { $0 == .exhausted }
+    }
+
+    /// `gh api graphql` fields for `reviewersOnHeadQuery`; omitted ones keep
+    /// the query's defaults, which read the latest page of everything.
+    var arguments: [String] {
+        var arguments: [String] = []
+        if !includesCommits {
+            arguments += ["-F", "withCommits=false"]
+        }
+        let connections = [
+            (cursor: "reviewsBefore", include: "withReviews", position: reviews),
+            (cursor: "commentsBefore", include: "withComments", position: comments),
+            (cursor: "reactionsBefore", include: "withReactions", position: reactions),
+        ]
+        for connection in connections {
+            switch connection.position {
+            case .latest:
+                break
+            case let .before(cursor):
+                arguments += ["-F", "\(connection.cursor)=\(cursor)"]
+            case .exhausted:
+                arguments += ["-F", "\(connection.include)=false"]
+            }
+        }
+        return arguments
+    }
+}
+
+private struct ReviewersOnHeadEvidence {
+    let lastCommit: ReviewersOnHeadResponse.HeadCommit?
+    var reviews: [ReviewersOnHeadResponse.Review] = []
+    var comments: [ReviewersOnHeadResponse.Comment] = []
+    var reactions: [ReviewersOnHeadResponse.Reaction] = []
+}
+
+private struct ReviewersOnHeadResponse: Decodable {
+    struct Nodes<Node: Decodable>: Decodable {
+        let nodes: [Node]
+        let pageInfo: PageInfo?
+    }
+
+    struct PageInfo: Decodable {
+        let hasPreviousPage: Bool
+        let startCursor: String?
+    }
+
+    struct Login: Decodable {
+        let login: String
+    }
+
+    struct CommitOID: Decodable {
+        let oid: String
+    }
+
+    struct HeadCommit: Decodable {
+        let oid: String
+        let committedDate: String?
+    }
+
+    struct CommitNode: Decodable {
+        let commit: HeadCommit
+    }
+
+    struct Review: Decodable {
+        let author: Login?
+        let commit: CommitOID?
+    }
+
+    struct Comment: Decodable {
+        let author: Login?
+        let createdAt: String?
+    }
+
+    struct Reaction: Decodable {
+        let content: String
+        let createdAt: String?
+        let user: Login?
+    }
+
+    /// A connection is absent when the page skipped it with `@include`.
+    struct PullRequest: Decodable {
+        let commits: Nodes<CommitNode>?
+        let reviews: Nodes<Review>?
+        let comments: Nodes<Comment>?
+        let reactions: Nodes<Reaction>?
+    }
+
+    struct Repository: Decodable {
+        let pullRequest: PullRequest
+    }
+
+    struct ResponseData: Decodable {
+        let repository: Repository
+    }
+
+    let data: ResponseData
 }
 
 private struct AddPullRequestReviewThreadReplyResponse: Decodable {

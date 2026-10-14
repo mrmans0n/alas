@@ -382,6 +382,101 @@ struct GitHubCLIProviderTests {
         ])
     }
 
+    struct LongThreadCase: Sendable, CustomTestStringConvertible {
+        let testDescription: String
+        let followUps: [ProcessResult]
+        let expectedCommentIDs: [String]
+        let expectedComplete: Bool
+    }
+
+    static let longThreadCases: [LongThreadCase] = [
+        LongThreadCase(
+            testDescription: "second comment page is read",
+            followUps: [
+                ProcessResult(
+                    exitCode: 0,
+                    stdout: threadCommentsPageOutput(commentID: "comment-51", hasNextPage: false, endCursor: nil),
+                    stderr: ""
+                ),
+            ],
+            expectedCommentIDs: ["comment-1", "comment-51"],
+            expectedComplete: true
+        ),
+        LongThreadCase(
+            testDescription: "failed follow-up marks threads incomplete",
+            followUps: [ProcessResult(exitCode: 1, stdout: "", stderr: "boom")],
+            expectedCommentIDs: ["comment-1"],
+            expectedComplete: false
+        ),
+        LongThreadCase(
+            testDescription: "page cap marks threads incomplete",
+            followUps: (1...GitHubCLIProvider.reviewThreadCommentsMaxExtraPages).map { page in
+                ProcessResult(
+                    exitCode: 0,
+                    stdout: threadCommentsPageOutput(commentID: "comment-p\(page)", hasNextPage: true, endCursor: "cursor-\(page + 1)"),
+                    stderr: ""
+                )
+            },
+            expectedCommentIDs: ["comment-1"],
+            expectedComplete: false
+        ),
+    ]
+
+    @Test(arguments: GitHubCLIProviderTests.longThreadCases)
+    func currentReviewRequestReadsEveryCommentPageOfLongThreads(_ testCase: LongThreadCase) async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.prListOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.mergeQueueDisabledOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.longReviewThreadOutput, stderr: ""),
+        ] + testCase.followUps)
+
+        let request = try await GitHubCLIProvider(runner: runner).currentReviewRequest(
+            remote: Self.remote,
+            branch: "feature/github-provider",
+            headOwner: nil,
+            baseBranch: "origin/main",
+            cwd: Self.cwd
+        )
+
+        let thread = try #require(request?.threads.first)
+        #expect(request?.threads.count == 1)
+        #expect(thread.comments.map(\.id) == testCase.expectedCommentIDs)
+        #expect(request?.areThreadsComplete == testCase.expectedComplete)
+        let commands = await runner.commands
+        #expect(commands.count == 3 + testCase.followUps.count)
+        #expect(commands[3].args == [
+            "api", "graphql",
+            "--hostname", "github.com",
+            "-f", "query=\(GitHubCLIProvider.reviewThreadCommentsQuery)",
+            "-f", "threadID=thread-long",
+            "-f", "cursor=cursor-1",
+        ])
+    }
+
+    /// `pr_create` looks up the branch's PR whatever base it targets, so an
+    /// open PR against another base is adopted instead of duplicated.
+    @Test func currentReviewRequestWithEmptyBaseDropsTheBaseFilter() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.prListOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.mergeQueueDisabledOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.reviewThreadsOutput, stderr: ""),
+        ])
+
+        let request = try await GitHubCLIProvider(runner: runner).currentReviewRequest(
+            remote: Self.remote, branch: "feature/github-provider", headOwner: nil, baseBranch: "", cwd: Self.cwd
+        )
+
+        #expect(request?.number == 42)
+        #expect(await runner.commands.first?.args == [
+            "pr", "list",
+            "--head", "feature/github-provider",
+            "--state", "open",
+            "--limit", "20",
+            "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,headRepository,baseRefName,baseRefOid,reviewDecision,mergeStateStatus",
+            "-R", "mrmans0n/alas",
+        ])
+    }
+
     @Test func reviewDiffUsesPRDiffCommand() async throws {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: "diff --git a/A.swift b/A.swift\n", stderr: ""),
@@ -517,6 +612,384 @@ struct GitHubCLIProviderTests {
         #expect(threads[0].comments.first?.id == "comment-1")
         #expect(threads[1].isResolved == false)
         #expect(threads[1].isActionable == false)
+    }
+
+    struct GitHubAuthorTrustCase: Sendable, CustomTestStringConvertible {
+        let testDescription: String
+        let headCommentFields: String
+        let expected: ReviewAuthorTrust
+    }
+
+    @Test(
+        "Review thread comments map author association, bot type and viewer to author trust",
+        arguments: [
+            GitHubAuthorTrustCase(
+                testDescription: "owner",
+                headCommentFields: #""author": {"__typename": "User", "login": "owner"}, "authorAssociation": "OWNER", "viewerDidAuthor": false"#,
+                expected: .trusted
+            ),
+            GitHubAuthorTrustCase(
+                testDescription: "organization member",
+                headCommentFields: #""author": {"__typename": "User", "login": "maintainer"}, "authorAssociation": "MEMBER", "viewerDidAuthor": false"#,
+                expected: .trusted
+            ),
+            GitHubAuthorTrustCase(
+                testDescription: "collaborator",
+                headCommentFields: #""author": {"__typename": "User", "login": "collab"}, "authorAssociation": "COLLABORATOR", "viewerDidAuthor": false"#,
+                expected: .trusted
+            ),
+            GitHubAuthorTrustCase(
+                testDescription: "contributor",
+                headCommentFields: #""author": {"__typename": "User", "login": "drive-by"}, "authorAssociation": "CONTRIBUTOR", "viewerDidAuthor": false"#,
+                expected: .untrusted
+            ),
+            GitHubAuthorTrustCase(
+                testDescription: "first timer",
+                headCommentFields: #""author": {"__typename": "User", "login": "newcomer"}, "authorAssociation": "FIRST_TIMER", "viewerDidAuthor": false"#,
+                expected: .untrusted
+            ),
+            GitHubAuthorTrustCase(
+                testDescription: "no association",
+                headCommentFields: #""author": {"__typename": "User", "login": "stranger"}, "authorAssociation": "NONE", "viewerDidAuthor": false"#,
+                expected: .untrusted
+            ),
+            GitHubAuthorTrustCase(
+                testDescription: "GitHub App bot without association",
+                headCommentFields: #""author": {"__typename": "Bot", "login": "chatgpt-codex-connector"}, "authorAssociation": "NONE", "viewerDidAuthor": false"#,
+                expected: .trusted
+            ),
+            GitHubAuthorTrustCase(
+                testDescription: "viewer who is a member",
+                headCommentFields: #""author": {"__typename": "User", "login": "viewer"}, "authorAssociation": "MEMBER", "viewerDidAuthor": true"#,
+                expected: .untrusted
+            ),
+            GitHubAuthorTrustCase(
+                testDescription: "missing association",
+                headCommentFields: #""author": {"__typename": "User", "login": "maintainer"}, "viewerDidAuthor": false"#,
+                expected: .unknown
+            ),
+            GitHubAuthorTrustCase(
+                testDescription: "missing viewerDidAuthor",
+                headCommentFields: #""author": {"__typename": "User", "login": "maintainer"}, "authorAssociation": "MEMBER""#,
+                expected: .unknown
+            ),
+        ]
+    )
+    func reviewThreadCommentAuthorTrust(_ testCase: GitHubAuthorTrustCase) throws {
+        let threads = try GitHubCLIProvider.parseReviewThreads(
+            Self.authorTrustReviewThreadOutput(headCommentFields: testCase.headCommentFields)
+        )
+
+        let thread = try #require(threads.first)
+        #expect(thread.comments.first?.authorTrust == testCase.expected)
+        #expect(thread.comments.last?.authorTrust == .untrusted)
+        #expect(thread.comments.last?.viewerDidAuthor == true)
+        #expect(thread.headAuthorTrust == testCase.expected)
+    }
+
+    private static func authorTrustReviewThreadOutput(headCommentFields: String) -> String {
+        """
+        {
+          "data": {
+            "repository": {
+              "pullRequest": {
+                "reviewThreads": {
+                  "nodes": [
+                    {
+                      "id": "PRRT_trust",
+                      "isResolved": false,
+                      "isOutdated": false,
+                      "comments": {
+                        "nodes": [
+                          {
+                            "id": "PRRC_head",
+                            "body": "Please rename this.",
+                            \(headCommentFields)
+                          },
+                          {
+                            "id": "PRRC_reply",
+                            "body": "Done.",
+                            "author": { "__typename": "User", "login": "viewer" },
+                            "authorAssociation": "OWNER",
+                            "viewerDidAuthor": true
+                          }
+                        ]
+                      }
+                    }
+                  ],
+                  "pageInfo": { "hasNextPage": false, "endCursor": null }
+                }
+              }
+            }
+          }
+        }
+        """
+    }
+
+    struct ReviewersOnHeadCase: Sendable, CustomTestStringConvertible {
+        let testDescription: String
+        let lastCommitOID: String
+        let reviews: String
+        let comments: String
+        var reactions = ""
+        /// When Alas first saw the head, ISO 8601; the head commit is dated 10:00.
+        var notBefore: String? = "2026-10-13T10:01:00Z"
+        let expected: Set<String>
+    }
+
+    @Test(
+        "Reviewers on head keep head-commit reviews, and comments and thumbs-up reactions after the head commit and Alas first seeing it",
+        arguments: [
+            ReviewersOnHeadCase(
+                testDescription: "review on head counts, lowercased",
+                lastCommitOID: "head-sha-42",
+                reviews: #"{"author": {"login": "Codex-Connector"}, "commit": {"oid": "head-sha-42"}}"#,
+                comments: "",
+                expected: ["codex-connector"]
+            ),
+            ReviewersOnHeadCase(
+                testDescription: "review on an older commit does not count",
+                lastCommitOID: "head-sha-42",
+                reviews: #"{"author": {"login": "maintainer"}, "commit": {"oid": "old-sha"}}"#,
+                comments: "",
+                expected: []
+            ),
+            ReviewersOnHeadCase(
+                testDescription: "comment after the head commit counts",
+                lastCommitOID: "head-sha-42",
+                reviews: "",
+                comments: #"{"author": {"login": "Maintainer"}, "createdAt": "2026-10-13T10:05:00Z"}"#,
+                expected: ["maintainer"]
+            ),
+            ReviewersOnHeadCase(
+                testDescription: "comment before the head commit does not count",
+                lastCommitOID: "head-sha-42",
+                reviews: "",
+                comments: #"{"author": {"login": "maintainer"}, "createdAt": "2026-10-13T09:55:00Z"}"#,
+                expected: []
+            ),
+            ReviewersOnHeadCase(
+                testDescription: "moved head ignores comments",
+                lastCommitOID: "newer-sha",
+                reviews: "",
+                comments: #"{"author": {"login": "maintainer"}, "createdAt": "2026-10-13T10:05:00Z"}"#,
+                expected: []
+            ),
+            ReviewersOnHeadCase(
+                testDescription: "deleted author is skipped",
+                lastCommitOID: "head-sha-42",
+                reviews: #"{"author": null, "commit": {"oid": "head-sha-42"}}"#,
+                comments: "",
+                expected: []
+            ),
+            ReviewersOnHeadCase(
+                testDescription: "bot review drops the [bot] suffix",
+                lastCommitOID: "head-sha-42",
+                reviews: #"{"author": {"login": "chatgpt-codex-connector[bot]"}, "commit": {"oid": "head-sha-42"}}"#,
+                comments: "",
+                expected: ["chatgpt-codex-connector"]
+            ),
+            ReviewersOnHeadCase(
+                testDescription: "thumbs-up after the head commit counts",
+                lastCommitOID: "head-sha-42",
+                reviews: "",
+                comments: "",
+                reactions: #"{"content": "THUMBS_UP", "createdAt": "2026-10-13T10:05:00Z", "user": {"login": "chatgpt-codex-connector[bot]"}}"#,
+                expected: ["chatgpt-codex-connector"]
+            ),
+            ReviewersOnHeadCase(
+                testDescription: "eyes reaction after the head commit does not count",
+                lastCommitOID: "head-sha-42",
+                reviews: "",
+                comments: "",
+                reactions: #"{"content": "EYES", "createdAt": "2026-10-13T10:05:00Z", "user": {"login": "chatgpt-codex-connector[bot]"}}"#,
+                expected: []
+            ),
+            ReviewersOnHeadCase(
+                testDescription: "thumbs-up before the head commit does not count",
+                lastCommitOID: "head-sha-42",
+                reviews: "",
+                comments: "",
+                reactions: #"{"content": "THUMBS_UP", "createdAt": "2026-10-13T09:55:00Z", "user": {"login": "chatgpt-codex-connector[bot]"}}"#,
+                expected: []
+            ),
+            ReviewersOnHeadCase(
+                testDescription: "comment after the head commit but before Alas saw the head does not count",
+                lastCommitOID: "head-sha-42",
+                reviews: "",
+                comments: #"{"author": {"login": "maintainer"}, "createdAt": "2026-10-13T10:05:00Z"}"#,
+                notBefore: "2026-10-13T10:10:00Z",
+                expected: []
+            ),
+            ReviewersOnHeadCase(
+                testDescription: "thumbs-up after the head commit but before Alas saw the head does not count",
+                lastCommitOID: "head-sha-42",
+                reviews: "",
+                comments: "",
+                reactions: #"{"content": "THUMBS_UP", "createdAt": "2026-10-13T10:05:00Z", "user": {"login": "chatgpt-codex-connector[bot]"}}"#,
+                notBefore: "2026-10-13T10:10:00Z",
+                expected: []
+            ),
+            ReviewersOnHeadCase(
+                testDescription: "thumbs-up after the head commit and after Alas saw the head counts",
+                lastCommitOID: "head-sha-42",
+                reviews: "",
+                comments: "",
+                reactions: #"{"content": "THUMBS_UP", "createdAt": "2026-10-13T10:15:00Z", "user": {"login": "chatgpt-codex-connector[bot]"}}"#,
+                notBefore: "2026-10-13T10:10:00Z",
+                expected: ["chatgpt-codex-connector"]
+            ),
+            ReviewersOnHeadCase(
+                testDescription: "unknown first-seen time counts only reviews on the head commit",
+                lastCommitOID: "head-sha-42",
+                reviews: #"{"author": {"login": "maintainer"}, "commit": {"oid": "head-sha-42"}}"#,
+                comments: #"{"author": {"login": "commenter"}, "createdAt": "2026-10-13T10:05:00Z"}"#,
+                reactions: #"{"content": "THUMBS_UP", "createdAt": "2026-10-13T10:05:00Z", "user": {"login": "chatgpt-codex-connector[bot]"}}"#,
+                notBefore: nil,
+                expected: ["maintainer"]
+            ),
+        ]
+    )
+    func reviewersOnHeadSelection(_ testCase: ReviewersOnHeadCase) throws {
+        let output = Self.reviewersOnHeadOutput(
+            lastCommitOID: testCase.lastCommitOID,
+            reviews: testCase.reviews,
+            comments: testCase.comments,
+            reactions: testCase.reactions
+        )
+
+        let notBefore = try testCase.notBefore.map { try #require(ISO8601DateFormatter().date(from: $0)) }
+        let page = try GitHubCLIProvider.parseReviewersOnHeadPage(output)
+        #expect(
+            GitHubCLIProvider.reviewersOnHead(in: [page], headSHA: "head-sha-42", notBefore: notBefore)
+                == testCase.expected
+        )
+    }
+
+    struct ReviewersOnHeadPagingCase: Sendable, CustomTestStringConvertible {
+        let testDescription: String
+        /// Review author logins, newest page first; each page reports an older page while one follows it.
+        let reviewPages: [[String]]
+        /// Whether the oldest scripted page still reports an older page.
+        var oldestHasPreviousPage = false
+        let expectedPageCount: Int
+        let expected: Set<String>
+    }
+
+    @Test(
+        "Reviewers on head page backwards through older reviews, up to the page cap",
+        arguments: [
+            ReviewersOnHeadPagingCase(
+                testDescription: "head review only on the older page counts",
+                reviewPages: [["stale"], ["codex"]],
+                expectedPageCount: 2,
+                expected: ["codex"]
+            ),
+            ReviewersOnHeadPagingCase(
+                testDescription: "page cap keeps reviews from the pages it read",
+                reviewPages: (0...GitHubCLIProvider.reviewersOnHeadMaxPages).map { ["reviewer-\($0)"] },
+                oldestHasPreviousPage: true,
+                expectedPageCount: GitHubCLIProvider.reviewersOnHeadMaxPages,
+                expected: Set((0..<GitHubCLIProvider.reviewersOnHeadMaxPages).map { "reviewer-\($0)" })
+            ),
+        ]
+    )
+    func reviewersOnHeadPaging(_ testCase: ReviewersOnHeadPagingCase) async throws {
+        let runner = FakeRunner(results: testCase.reviewPages.indices.map { index in
+            let isOldest = index == testCase.reviewPages.count - 1
+            return ProcessResult(
+                exitCode: 0,
+                stdout: Self.reviewersOnHeadPagedOutput(
+                    page: index,
+                    reviewers: testCase.reviewPages[index],
+                    hasPreviousPage: !isOldest || testCase.oldestHasPreviousPage
+                ),
+                stderr: ""
+            )
+        })
+
+        let reviewers = try await GitHubCLIProvider(runner: runner).reviewersOnHead(
+            remote: Self.remote,
+            request: Self.makeRequest(),
+            notBefore: nil,
+            cwd: Self.cwd
+        )
+
+        #expect(reviewers == testCase.expected)
+        let commands = await runner.commands
+        #expect(commands.count == testCase.expectedPageCount)
+        let baseArgs = [
+            "api", "graphql",
+            "--hostname", "github.com",
+            "-f", "query=\(GitHubCLIProvider.reviewersOnHeadQuery)",
+            "-F", "owner=mrmans0n",
+            "-F", "repo=alas",
+            "-F", "number=42",
+        ]
+        #expect(commands.first?.args == baseArgs)
+        for (index, command) in commands.enumerated().dropFirst() {
+            #expect(command.args == baseArgs + [
+                "-F", "withCommits=false",
+                "-F", "reviewsBefore=reviews-cursor-\(index - 1)",
+                "-F", "withComments=false",
+                "-F", "withReactions=false",
+            ])
+        }
+    }
+
+    /// Only the first page carries the head commit and the comment and
+    /// reaction connections, as the provider skips them afterwards.
+    private static func reviewersOnHeadPagedOutput(page: Int, reviewers: [String], hasPreviousPage: Bool) -> String {
+        let reviews = reviewers.map { login in
+            let oid = login == "stale" ? "old-sha" : "head-sha-42"
+            return #"{"author": {"login": "\#(login)"}, "commit": {"oid": "\#(oid)"}}"#
+        }
+        let pageInfo = #"{"hasPreviousPage": \#(hasPreviousPage), "startCursor": "reviews-cursor-\#(page)"}"#
+        let firstPageConnections = page == 0
+            ? """
+            "commits": { "nodes": [{ "commit": { "oid": "head-sha-42", "committedDate": "2026-10-13T10:00:00Z" } }] },
+            "comments": { "nodes": [], "pageInfo": { "hasPreviousPage": false, "startCursor": null } },
+            "reactions": { "nodes": [], "pageInfo": { "hasPreviousPage": false, "startCursor": null } },
+            """
+            : ""
+        return """
+        {
+          "data": {
+            "repository": {
+              "pullRequest": {
+                \(firstPageConnections)
+                "reviews": { "nodes": [\(reviews.joined(separator: ","))], "pageInfo": \(pageInfo) }
+              }
+            }
+          }
+        }
+        """
+    }
+
+    private static func reviewersOnHeadOutput(
+        lastCommitOID: String,
+        reviews: String,
+        comments: String,
+        reactions: String
+    ) -> String {
+        """
+        {
+          "data": {
+            "repository": {
+              "pullRequest": {
+                "commits": {
+                  "nodes": [
+                    { "commit": { "oid": "\(lastCommitOID)", "committedDate": "2026-10-13T10:00:00Z" } }
+                  ]
+                },
+                "reviews": { "nodes": [\(reviews)] },
+                "comments": { "nodes": [\(comments)] },
+                "reactions": { "nodes": [\(reactions)] }
+              }
+            }
+          }
+        }
+        """
     }
 
     @Test func githubPublishReviewUsesGraphQLPayloadAndRefreshesPR() async throws {
@@ -1247,6 +1720,7 @@ struct GitHubCLIProviderTests {
         let request = try #require(try GitHubCLIProvider.parsePRList(Self.prListOutput, remote: Self.remote))
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: testCase.exitCode, stdout: testCase.stdout, stderr: testCase.stderr),
+            ProcessResult(exitCode: 0, stdout: Self.workflowRunsOutput(), stderr: ""),
         ])
 
         let checks = try await GitHubCLIProvider(runner: runner).checks(
@@ -1363,7 +1837,87 @@ struct GitHubCLIProviderTests {
         #expect(await runner.commands.isEmpty)
     }
 
-    @Test func checksTreatNoChecksReportedAsEmptyChecks() async throws {
+    struct NoChecksReportedCase: Sendable, CustomTestStringConvertible {
+        let testDescription: String
+        let runsResults: [ProcessResult]
+        let expectedNames: [String]
+        var expectedPages = 1
+    }
+
+    @Test(arguments: [
+        NoChecksReportedCase(
+            testDescription: "no workflow runs for the head",
+            runsResults: [ProcessResult(exitCode: 0, stdout: GitHubCLIProviderTests.workflowRunsOutput(), stderr: "")],
+            expectedNames: []
+        ),
+        NoChecksReportedCase(
+            testDescription: "a queued workflow run with no check runs yet",
+            runsResults: [ProcessResult(
+                exitCode: 0,
+                stdout: GitHubCLIProviderTests.workflowRunsOutput(
+                    #"{"id": 101, "name": "Build", "status": "queued", "html_url": "https://github.com/mrmans0n/alas/actions/runs/101"}"#
+                ),
+                stderr: ""
+            )],
+            expectedNames: ["Build (queued)"]
+        ),
+        NoChecksReportedCase(
+            testDescription: "workflow runs request fails",
+            runsResults: [ProcessResult(exitCode: 1, stdout: "", stderr: "HTTP 502")],
+            expectedNames: ["Workflow runs unavailable"]
+        ),
+        NoChecksReportedCase(
+            testDescription: "workflow runs output is malformed",
+            runsResults: [ProcessResult(exitCode: 0, stdout: "not json", stderr: "")],
+            expectedNames: ["Workflow runs unavailable"]
+        ),
+        NoChecksReportedCase(
+            testDescription: "unfinished run only on the second page",
+            runsResults: [
+                ProcessResult(
+                    exitCode: 0,
+                    stdout: GitHubCLIProviderTests.completedWorkflowRunsPage(page: 1, totalCount: 101),
+                    stderr: ""
+                ),
+                ProcessResult(
+                    exitCode: 0,
+                    stdout: GitHubCLIProviderTests.workflowRunsOutput(
+                        [#"{"id": 101, "name": "Build", "status": "in_progress", "html_url": null}"#],
+                        totalCount: 101
+                    ),
+                    stderr: ""
+                ),
+            ],
+            expectedNames: ["Build (running)"],
+            expectedPages: 2
+        ),
+        NoChecksReportedCase(
+            testDescription: "runs remain past the page limit",
+            runsResults: (1...5).map { page in
+                ProcessResult(
+                    exitCode: 0,
+                    stdout: GitHubCLIProviderTests.completedWorkflowRunsPage(page: page, totalCount: 600),
+                    stderr: ""
+                )
+            },
+            expectedNames: ["Workflow runs unavailable"],
+            expectedPages: 5
+        ),
+        NoChecksReportedCase(
+            testDescription: "second page fails",
+            runsResults: [
+                ProcessResult(
+                    exitCode: 0,
+                    stdout: GitHubCLIProviderTests.completedWorkflowRunsPage(page: 1, totalCount: 150),
+                    stderr: ""
+                ),
+                ProcessResult(exitCode: 1, stdout: "", stderr: "HTTP 502"),
+            ],
+            expectedNames: ["Workflow runs unavailable"],
+            expectedPages: 2
+        ),
+    ])
+    func checksAddUnfinishedWorkflowRunsWhenNoChecksAreReported(_ testCase: NoChecksReportedCase) async throws {
         let request = try #require(try GitHubCLIProvider.parsePRList(Self.prListOutput, remote: Self.remote))
         let runner = FakeRunner(results: [
             ProcessResult(
@@ -1371,6 +1925,28 @@ struct GitHubCLIProviderTests {
                 stdout: "",
                 stderr: "no checks reported on the 'feature/github-provider' branch"
             ),
+        ] + testCase.runsResults)
+
+        let checks = try await GitHubCLIProvider(runner: runner).checks(
+            remote: Self.remote,
+            request: request,
+            cwd: Self.cwd
+        )
+
+        #expect(checks.map(\.name) == testCase.expectedNames)
+        #expect(checks.allSatisfy { $0.bucket == .pending })
+        #expect(await runner.commands.dropFirst().map(\.args) == (1...testCase.expectedPages).map { page in
+            [
+                "api", "--hostname", "github.com",
+                "repos/mrmans0n/alas/actions/runs?head_sha=head-sha-42&per_page=100&page=\(page)",
+            ]
+        })
+    }
+
+    @Test func checksSkipWorkflowRunsWithoutAHeadSHA() async throws {
+        let request = Self.makeRequest(checks: [], headSHA: nil)
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.checksOutput, stderr: ""),
         ])
 
         let checks = try await GitHubCLIProvider(runner: runner).checks(
@@ -1379,7 +1955,71 @@ struct GitHubCLIProviderTests {
             cwd: Self.cwd
         )
 
-        #expect(checks.isEmpty)
+        #expect(checks.count == 1)
+        #expect(await runner.commands.count == 1)
+    }
+
+    struct WorkflowRunsCase: Sendable, CustomTestStringConvertible {
+        let testDescription: String
+        let existing: [ReviewCheck]
+        let runs: [String]
+        let expected: [ReviewCheck]
+    }
+
+    @Test(arguments: [
+        WorkflowRunsCase(
+            testDescription: "queued run becomes a pending check",
+            existing: [],
+            runs: [#"{"id": 101, "name": "Build", "status": "queued", "html_url": "https://github.com/mrmans0n/alas/actions/runs/101"}"#],
+            expected: [ReviewCheck(
+                id: "run-101", name: "Build (queued)", workflow: "Build", bucket: .pending,
+                detailURL: URL(string: "https://github.com/mrmans0n/alas/actions/runs/101"), completedAt: nil
+            )]
+        ),
+        WorkflowRunsCase(
+            testDescription: "in-progress run reads as running",
+            existing: [],
+            runs: [#"{"id": 102, "name": "Lint", "status": "in_progress", "html_url": null}"#],
+            expected: [ReviewCheck(
+                id: "run-102", name: "Lint (running)", workflow: "Lint", bucket: .pending,
+                detailURL: nil, completedAt: nil
+            )]
+        ),
+        WorkflowRunsCase(
+            testDescription: "workflow that already has a pending check is not duplicated",
+            existing: [ReviewCheck(id: "job-1", name: "build", workflow: "Build", bucket: .pending, detailURL: nil, completedAt: nil)],
+            runs: [#"{"id": 101, "name": "Build", "status": "in_progress", "html_url": null}"#],
+            expected: [ReviewCheck(id: "job-1", name: "build", workflow: "Build", bucket: .pending, detailURL: nil, completedAt: nil)]
+        ),
+        WorkflowRunsCase(
+            testDescription: "workflow with only a finished check still gets its rerun",
+            existing: [ReviewCheck(id: "job-1", name: "build", workflow: "Build", bucket: .pass, detailURL: nil, completedAt: nil)],
+            runs: [#"{"id": 103, "name": "Build", "status": "queued", "html_url": null}"#],
+            expected: [
+                ReviewCheck(id: "job-1", name: "build", workflow: "Build", bucket: .pass, detailURL: nil, completedAt: nil),
+                ReviewCheck(id: "run-103", name: "Build (queued)", workflow: "Build", bucket: .pending, detailURL: nil, completedAt: nil),
+            ]
+        ),
+        WorkflowRunsCase(
+            testDescription: "completed run is ignored",
+            existing: [],
+            runs: [#"{"id": 104, "name": "Build", "status": "completed", "html_url": null}"#],
+            expected: []
+        ),
+        WorkflowRunsCase(
+            testDescription: "empty run list leaves the checks alone",
+            existing: [ReviewCheck(id: "job-1", name: "build", workflow: "Build", bucket: .pass, detailURL: nil, completedAt: nil)],
+            runs: [],
+            expected: [ReviewCheck(id: "job-1", name: "build", workflow: "Build", bucket: .pass, detailURL: nil, completedAt: nil)]
+        ),
+    ])
+    func workflowRunsAddPendingChecks(_ testCase: WorkflowRunsCase) throws {
+        let checks = try GitHubCLIProvider.mergingPendingWorkflowRuns(
+            Self.workflowRunsOutput(testCase.runs),
+            into: testCase.existing
+        )
+
+        #expect(checks == testCase.expected)
     }
 
     @Test func createReviewRequestQualifiesForkHeadOwner() async throws {
@@ -2125,6 +2765,25 @@ struct GitHubCLIProviderTests {
     {"data":{"repository":{"pullRequest":{"isMergeQueueEnabled":false,"isInMergeQueue":false}}}}
     """
 
+    static func workflowRunsOutput(_ runs: String...) -> String {
+        workflowRunsOutput(runs)
+    }
+
+    static func workflowRunsOutput(_ runs: [String], totalCount: Int? = nil) -> String {
+        #"{"total_count": \#(totalCount ?? runs.count), "workflow_runs": [\#(runs.joined(separator: ", "))]}"#
+    }
+
+    /// A full page of 100 completed runs, numbered so no two pages share an ID.
+    static func completedWorkflowRunsPage(page: Int, totalCount: Int) -> String {
+        let firstID = (page - 1) * 100
+        return workflowRunsOutput(
+            (firstID..<firstID + 100).map { id in
+                #"{"id": \#(id), "name": "Build", "status": "completed", "html_url": null}"#
+            },
+            totalCount: totalCount
+        )
+    }
+
     static let checksOutput = """
     [
       {
@@ -2280,6 +2939,16 @@ struct GitHubCLIProviderTests {
       }
     }
     """
+
+    /// One thread whose first comment page says more comments follow.
+    private static let longReviewThreadOutput = """
+    {"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"thread-long","isResolved":false,"isOutdated":false,"comments":{"nodes":[{"id":"comment-1","body":"Please tighten this branch lookup.","url":"https://github.com/mrmans0n/alas/pull/42#discussion_r1","author":{"login":"reviewer"}}],"pageInfo":{"hasNextPage":true,"endCursor":"cursor-1"}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}
+    """
+
+    private static func threadCommentsPageOutput(commentID: String, hasNextPage: Bool, endCursor: String?) -> String {
+        let cursor = endCursor.map { "\"\($0)\"" } ?? "null"
+        return #"{"data":{"node":{"comments":{"nodes":[{"id":"\#(commentID)","body":"Reply \#(commentID)","url":"https://github.com/mrmans0n/alas/pull/42#discussion_r51","author":{"login":"reviewer"}}],"pageInfo":{"hasNextPage":\#(hasNextPage),"endCursor":\#(cursor)}}}}}"#
+    }
 
     private static let pullRequestNodeOutput = """
     {"data":{"repository":{"pullRequest":{"id":"PR_node_42"}}}}

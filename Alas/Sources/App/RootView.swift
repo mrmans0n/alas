@@ -165,9 +165,11 @@ struct RootView: View {
                 state.completeStartupRecoveryIfCenterPaneWillNotAppear()
                 state.startAllProjectGitWatchers(includeRemoteProjects: !isRecovering)
                 state.rescanAgents()
-                // Schedules need reconciled worktrees to resolve their
-                // targets, so the clock starts only once topology is loaded.
+                // Schedules and shepherded requests need reconciled worktrees
+                // to resolve their targets, so both clocks start only once
+                // topology is loaded.
                 state.startRunScheduler()
+                state.startReviewShepherd()
                 state.startArchivedWorktreePruning()
             }
             .onChange(of: state.selectedWorktreeId) { _, _ in

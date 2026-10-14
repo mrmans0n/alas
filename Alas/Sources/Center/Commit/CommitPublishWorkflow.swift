@@ -126,6 +126,9 @@ struct CommitPublishOperations {
         throw GGMutationError.staleConfirmation
     }
     var refreshAfterCompletion: () async -> Void
+    /// Binds the request a publish created to the target's shepherd session.
+    /// Runs after `refreshAfterCompletion`, so the review state is fresh.
+    var shepherdCreatedRequest: (_ url: URL, _ sessionID: String) async -> Void = { _, _ in }
 
     static func live(
         worktreePath: URL,
@@ -451,6 +454,10 @@ final class CommitPublishWorkflow {
                     }
                 }
                 try await complete(runID)
+                if !target.reviewRequestExisted, let sessionID = target.shepherdSessionID,
+                   let url = checkpoint.createdReviewURL {
+                    await operations.shepherdCreatedRequest(url, sessionID)
+                }
                 return
 
             case .sync:

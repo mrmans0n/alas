@@ -250,7 +250,7 @@ Inside an Alas-spawned terminal:
 4. On an unpublished branch, click "Start" and confirm the next action becomes push.
 5. On a branch with an open PR, confirm the drawer shows `GitHub #<number>` and compact check/review/merge status.
 6. For a failing check, confirm "Open in agent" creates an ACP tab with a focused handoff prompt.
-7. Confirm merge, comment posting, review-thread resolution, force-push, and editing-agent runs are not executed without explicit user action.
+7. Confirm merge, comment posting, review-thread resolution, force-push, and editing-agent runs are not executed without explicit user action, unless PR shepherd auto-fix or auto-merge is turned on for that PR.
 
 ### Draft PR generation
 
@@ -260,6 +260,25 @@ Inside an Alas-spawned terminal:
 4. Click the sparkle button with an enabled AI tool.
 5. Confirm title/body are filled with Summary and Testing sections.
 6. Toggle Draft, then create the PR from a disposable branch or cancel before submission during local-only testing.
+
+## PR shepherd
+
+Use a disposable branch on a GitHub repository you can push to, with CI that runs on pull requests, and an ACP agent that supports MCP.
+
+1. In an agent session, make a small change, commit it, and ask the agent to open a PR. Confirm it offers first and calls `pr_create` only after you agree.
+2. In a session on a branch with no PR, confirm the toolbar pill reads "Ship". Open it and confirm the popover offers "Ship with agent" captioned "The agent writes, opens and shepherds the PR". Press it and confirm the session receives the prompt to open a PR and calls `pr_create`, after which the pill shows the PR number.
+3. Confirm the toolbar PR button shows an amber badge while checks run, and its popover lists the checks, the shepherd phase, and the Auto-fix and Auto-merge switches with their descriptions.
+4. Push a commit that breaks a test. Confirm that once CI fails, a prompt captioned "Alas PR shepherd" appears in the same session with the failing check and its log tail, and that the agent pushes a fix.
+5. Leave a review comment from a second account with write access. Confirm the session receives it as a fix turn while CI is still running.
+6. Leave a comment from your own account. Confirm it does not trigger a fix turn.
+7. Turn auto-fix off in the popover, break CI again, and confirm no fix turn arrives and the badge turns red.
+8. Create `.alas/shepherd.md` with `required_reviewers: [chatgpt-codex-connector]` frontmatter, turn auto-merge on, and confirm the PR does not merge until Codex has reviewed the current head (a formal review on that commit, or a thumbs-up reaction after Alas first saw it), and the popover lists Codex as missing until then.
+9. Once every gate passes, confirm the PR is squash-merged after two stable polls, the badge turns purple, and a macOS notification arrives.
+10. With an agent session open in the worktree, open the Draft PR tab from the review drawer. Confirm a "Shepherd with" line sits under the header with the newest session picked, and its menu lists the worktree's other non-archived sessions and "None". Create the PR and confirm the picked session receives a context prompt captioned "Alas PR shepherd" and its toolbar pill shows the PR number with a shepherd badge.
+11. Stage a change on a branch without a PR, open the Draft commit tab, pick a session in "Shepherd with" and press Commit & PR. Confirm the PR is created and bound to that session. Repeat with a publish that stops after the push and before the PR is created (for example, take the network down once the push finishes), then retry it and confirm the resumed publish binds the session you picked.
+12. Create a PR from the Draft PR tab with "Shepherd with" set to None. Confirm the drawer then offers "Shepherd with…", binding a session sends it a context prompt, and that session's toolbar shows the badge.
+13. Archive the owning session of a shepherded PR with failing CI. Confirm a notification says the shepherd needs you and the drawer shows the escalation.
+14. Quit Alas mid-fix and relaunch. Confirm the record resumes and the phase moves on once the agent's push lands.
 
 ## Peer pairing by approval
 

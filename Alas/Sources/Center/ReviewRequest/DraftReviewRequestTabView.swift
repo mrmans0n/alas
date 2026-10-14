@@ -84,6 +84,31 @@ struct DraftReviewRequestTabView: View {
         validationMessage == nil && !busy && tabState.createdURL == nil
     }
 
+    /// Sessions for "Shepherd with"; empty when the worktree can't be shepherded.
+    private var shepherdCandidates: [ReviewShepherdDrawerModel.Candidate] {
+        appState.shepherdCandidateItems(worktreeID: worktreeId)
+    }
+
+    private var shepherdSessionID: String? {
+        ChangesShepherdChoice.sessionID(for: tabState.shepherdChoice, candidateIDs: shepherdCandidates.map(\.id))
+    }
+
+    private var shepherdLine: AnyView? {
+        let candidates = shepherdCandidates
+        guard !candidates.isEmpty else { return nil }
+        return AnyView(ChangesShepherdLine(
+            candidates: candidates,
+            selectedID: shepherdSessionID,
+            reviewRequestLabel: tabState.provider.reviewRequestLabel,
+            isDisabled: busy || tabState.createdURL != nil,
+            select: { choice in
+                appState.tabs.updateDraftReviewRequest(worktreeId: worktreeId, tabId: tabState.id) {
+                    $0.shepherdChoice = choice
+                }
+            }
+        ))
+    }
+
     private var contextKey: String {
         let head = matchingSnapshot?.local.headSHA ?? tabState.headSHA
         let base = matchingSnapshot?.local.baseBranch ?? tabState.baseBranch
@@ -103,7 +128,10 @@ struct DraftReviewRequestTabView: View {
             reviewRequestEditor
             contextBrowser
         }
-        .onAppear { hydrateFromTabState() }
+        .onAppear {
+            hydrateFromTabState()
+            appState.refreshShepherdCandidates(worktreeID: worktreeId)
+        }
         .onChange(of: title) { _, new in persist(title: new) }
         .onChange(of: bodyText) { _, new in persist(body: new) }
         .onChange(of: createAsDraft) { _, new in persist(createAsDraft: new) }
@@ -227,7 +255,8 @@ struct DraftReviewRequestTabView: View {
                     }
                     .toggleStyle(.checkbox)
                     .disabled(busy || tabState.createdURL != nil)
-                )
+                ),
+                optionsRow: shepherdLine
             )
             if hasEditorMessages {
                 editorMessages
@@ -768,6 +797,7 @@ struct DraftReviewRequestTabView: View {
         let titleSnapshot = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let bodySnapshot = bodyText.trimmingCharacters(in: .whitespacesAndNewlines)
         let draftSnapshot = createAsDraft
+        let shepherdSnapshot = shepherdSessionID
         Task { @MainActor in
             defer { busy = false }
             do {
@@ -796,8 +826,17 @@ struct DraftReviewRequestTabView: View {
                     worktreeId: worktreeId,
                     forceReviewLoopRemote: true
                 )
-                if let snapshot = appState.rightPaneStore.activeState(worktreeId: worktreeId)?.reviewLoop.snapshot {
-                    _ = appState.tabs.transitionPendingCreatedReview(worktreeId: worktreeId, snapshot: snapshot)
+                let refreshed = appState.rightPaneStore.activeState(worktreeId: worktreeId)?.reviewLoop.snapshot
+                if let refreshed {
+                    _ = appState.tabs.transitionPendingCreatedReview(worktreeId: worktreeId, snapshot: refreshed)
+                }
+                // Binding brings the session's agent up; the create is done.
+                if let shepherdSnapshot {
+                    Task {
+                        await appState.shepherdCreatedRequest(
+                            url: url, sessionID: shepherdSnapshot, worktreeID: worktreeId, snapshot: refreshed
+                        )
+                    }
                 }
             } catch {
                 self.error = (error as NSError).localizedDescription
@@ -952,6 +991,7 @@ struct ReviewRequestMessageEditor: View {
     let editorDisabled: Bool
     let onDismissError: () -> Void
     let accessory: AnyView?
+    var optionsRow: AnyView? = nil
 
     var body: some View {
         CommitMessageEditorView(
@@ -969,7 +1009,8 @@ struct ReviewRequestMessageEditor: View {
             iconName: "branch",
             editorDisabled: editorDisabled,
             onDismissError: onDismissError,
-            accessory: accessory
+            accessory: accessory,
+            optionsRow: optionsRow
         )
     }
 }

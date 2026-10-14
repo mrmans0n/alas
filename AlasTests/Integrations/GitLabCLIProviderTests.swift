@@ -2045,6 +2045,389 @@ struct GitLabCLIProviderTests {
         #expect(threads[0].comments[0].viewerCanDelete == false)
     }
 
+    struct DiscussionTrustCase: Sendable, CustomTestStringConvertible {
+        let testDescription: String
+        let author: String
+        let currentUserUsername: String?
+        let standings: [Int: GitLabAuthorStanding]
+        let expected: ReviewAuthorTrust
+    }
+
+    @Test(
+        "Discussion comments map viewer and project standing to author trust",
+        arguments: [
+            DiscussionTrustCase(
+                testDescription: "privileged author",
+                author: #"{ "id": 7, "username": "maintainer" }"#,
+                currentUserUsername: "viewer",
+                standings: [7: .privileged],
+                expected: .trusted
+            ),
+            DiscussionTrustCase(
+                testDescription: "unprivileged author",
+                author: #"{ "id": 7, "username": "maintainer" }"#,
+                currentUserUsername: "viewer",
+                standings: [7: .unprivileged],
+                expected: .untrusted
+            ),
+            DiscussionTrustCase(
+                testDescription: "viewer, matched case-insensitively, even when privileged",
+                author: #"{ "id": 1, "username": "Viewer" }"#,
+                currentUserUsername: "viewer",
+                standings: [1: .privileged],
+                expected: .untrusted
+            ),
+            DiscussionTrustCase(
+                testDescription: "standing not resolved",
+                author: #"{ "id": 7, "username": "maintainer" }"#,
+                currentUserUsername: "viewer",
+                standings: [:],
+                expected: .unknown
+            ),
+            DiscussionTrustCase(
+                testDescription: "author without id",
+                author: #"{ "username": "maintainer" }"#,
+                currentUserUsername: "viewer",
+                standings: [7: .privileged],
+                expected: .unknown
+            ),
+            DiscussionTrustCase(
+                testDescription: "viewer unknown",
+                author: #"{ "id": 7, "username": "maintainer" }"#,
+                currentUserUsername: nil,
+                standings: [7: .privileged],
+                expected: .unknown
+            ),
+        ]
+    )
+    func discussionCommentAuthorTrust(_ testCase: DiscussionTrustCase) throws {
+        let threads = try GitLabCLIProvider.parseDiscussions(
+            Self.singleNoteDiscussionsOutput(author: testCase.author),
+            requestURL: URL(string: "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42")!,
+            currentUserUsername: testCase.currentUserUsername,
+            authorStandings: testCase.standings
+        )
+
+        let thread = try #require(threads.first)
+        #expect(thread.comments.first?.authorTrust == testCase.expected)
+        #expect(thread.headAuthorTrust == testCase.expected)
+    }
+
+    @Test("Author standing comes from member and user lookups for every participant and is cached across refreshes")
+    func authorStandingLookupsAreCachedAcrossRefreshes() async throws {
+        let members = "projects/platform%2Fmobile%2Falas/members/all"
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.mrViewOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.trustDiscussionsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: #"{"username":"viewer"}"#, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: #"{"id":7,"username":"maintainer","access_level":30}"#, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: #"{"id":8,"username":"reporter","access_level":20}"#, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: #"{"id":8,"username":"reporter","bot":false}"#, stderr: ""),
+            ProcessResult(exitCode: 1, stdout: #"{"message":"404 Not found"}"#, stderr: "glab: 404 Not Found (HTTP 404)"),
+            ProcessResult(exitCode: 0, stdout: #"{"id":9,"username":"review-bot","bot":true}"#, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: #"{"id":10,"username":"developer","access_level":30}"#, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.pipelineWithJobsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.mrViewOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.trustDiscussionsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: #"{"username":"viewer"}"#, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.pipelineWithJobsOutput, stderr: ""),
+        ])
+        let provider = GitLabCLIProvider(runner: runner, authorStandingCache: GitLabAuthorStandingCache())
+        let expectedHeads: [String: ReviewAuthorTrust] = [
+            "by-maintainer": .trusted,
+            "by-reporter": .untrusted,
+            "by-bot": .trusted,
+            "by-viewer": .untrusted,
+        ]
+        // Replies are classified too: 706 is a trusted developer replying in
+        // a reporter's thread, 707 repeats an already-looked-up author.
+        let expectedComments: [String: ReviewAuthorTrust] = [
+            "701": .trusted,
+            "705": .untrusted,
+            "702": .untrusted,
+            "706": .trusted,
+            "703": .trusted,
+            "707": .trusted,
+            "704": .untrusted,
+        ]
+
+        let first = try await provider.reviewRequest(remote: Self.remote, number: 42, cwd: Self.cwd)
+        let second = try await provider.reviewRequest(remote: Self.remote, number: 42, cwd: Self.cwd)
+
+        for snapshot in [first, second] {
+            #expect(Dictionary(uniqueKeysWithValues: snapshot.threads.map { ($0.id, $0.headAuthorTrust) }) == expectedHeads)
+            let comments = snapshot.threads.flatMap(\.comments)
+            #expect(Dictionary(uniqueKeysWithValues: comments.map { ($0.id, $0.authorTrust) }) == expectedComments)
+        }
+        let userLookup = ["api", "user", "--hostname", "gitlab.example.com", "--output", "json"]
+        let standingLookups = await runner.commands.map(\.args).filter { $0.first == "api" && $0 != userLookup }
+        #expect(standingLookups == [
+            ["api", "\(members)/7", "--hostname", "gitlab.example.com", "--output", "json"],
+            ["api", "\(members)/8", "--hostname", "gitlab.example.com", "--output", "json"],
+            ["api", "users/8", "--hostname", "gitlab.example.com", "--output", "json"],
+            ["api", "\(members)/9", "--hostname", "gitlab.example.com", "--output", "json"],
+            ["api", "users/9", "--hostname", "gitlab.example.com", "--output", "json"],
+            ["api", "\(members)/10", "--hostname", "gitlab.example.com", "--output", "json"],
+        ])
+
+        let emptyRunner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.mrViewOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: "[]", stderr: ""),
+            ProcessResult(exitCode: 0, stdout: #"{"username":"viewer"}"#, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.pipelineWithJobsOutput, stderr: ""),
+        ])
+        let emptyProvider = GitLabCLIProvider(runner: emptyRunner, authorStandingCache: GitLabAuthorStandingCache())
+
+        let empty = try await emptyProvider.reviewRequest(remote: Self.remote, number: 42, cwd: Self.cwd)
+
+        #expect(empty.threads.isEmpty)
+        #expect(await emptyRunner.commands.map(\.args).filter { $0.first == "api" && $0 != userLookup }.isEmpty)
+    }
+
+    private static func singleNoteDiscussionsOutput(author: String) -> String {
+        """
+        [
+          {
+            "id": "discussion-trust",
+            "notes": [
+              {
+                "id": 801,
+                "body": "Please rename this.",
+                "system": false,
+                "resolvable": true,
+                "resolved": false,
+                "author": \(author)
+              }
+            ]
+          }
+        ]
+        """
+    }
+
+    private static let trustDiscussionsOutput = """
+    [
+      {
+        "id": "by-maintainer",
+        "notes": [
+          { "id": 701, "body": "Rename this.", "system": false, "resolvable": true, "resolved": false,
+            "author": { "id": 7, "username": "maintainer" } },
+          { "id": 705, "body": "Done.", "system": false, "resolvable": true, "resolved": false,
+            "author": { "id": 1, "username": "viewer" } }
+        ]
+      },
+      {
+        "id": "by-reporter",
+        "notes": [
+          { "id": 702, "body": "Maybe split this.", "system": false, "resolvable": true, "resolved": false,
+            "author": { "id": 8, "username": "reporter" } },
+          { "id": 706, "body": "Agreed, please split it.", "system": false, "resolvable": true, "resolved": false,
+            "author": { "id": 10, "username": "developer" } }
+        ]
+      },
+      {
+        "id": "by-bot",
+        "notes": [
+          { "id": 703, "body": "Possible nil dereference.", "system": false, "resolvable": true, "resolved": false,
+            "author": { "id": 9, "username": "review-bot" } },
+          { "id": 707, "body": "Please guard this.", "system": false, "resolvable": true, "resolved": false,
+            "author": { "id": 7, "username": "maintainer" } }
+        ]
+      },
+      {
+        "id": "by-viewer",
+        "notes": [
+          { "id": 704, "body": "Note to self.", "system": false, "resolvable": true, "resolved": false,
+            "author": { "id": 1, "username": "viewer" } }
+        ]
+      }
+    ]
+    """
+
+    struct GitLabReviewersOnHeadCase: Sendable, CustomTestStringConvertible {
+        let testDescription: String
+        let approvals: String
+        let notes: String
+        /// When Alas first saw the head, ISO 8601; the head commit is dated 10:00.
+        var notBefore: String? = "2026-10-13T10:01:00Z"
+        let expected: Set<String>
+    }
+
+    @Test(
+        "Reviewers on head keep current approvals and human notes posted after the head commit and Alas first seeing it",
+        arguments: [
+            GitLabReviewersOnHeadCase(
+                testDescription: "approval without approved_at does not count",
+                approvals: #"{"user": {"id": 7, "username": "Maintainer"}}"#,
+                notes: "",
+                expected: []
+            ),
+            GitLabReviewersOnHeadCase(
+                testDescription: "approval after the head commit counts",
+                approvals: #"{"user": {"username": "maintainer"}, "approved_at": "2026-10-13T10:05:00.000Z"}"#,
+                notes: "",
+                expected: ["maintainer"]
+            ),
+            GitLabReviewersOnHeadCase(
+                testDescription: "approval before the head commit does not count",
+                approvals: #"{"user": {"username": "maintainer"}, "approved_at": "2026-10-13T09:55:00.000Z"}"#,
+                notes: "",
+                expected: []
+            ),
+            GitLabReviewersOnHeadCase(
+                testDescription: "note after the head commit counts",
+                approvals: "",
+                notes: #"{"id": 1, "body": "Looks good.", "system": false, "author": {"username": "Codex"}, "created_at": "2026-10-13T10:05:00.000Z"}"#,
+                expected: ["codex"]
+            ),
+            GitLabReviewersOnHeadCase(
+                testDescription: "note before the head commit does not count",
+                approvals: "",
+                notes: #"{"id": 1, "body": "Looks good.", "system": false, "author": {"username": "codex"}, "created_at": "2026-10-13T09:55:00.000Z"}"#,
+                expected: []
+            ),
+            GitLabReviewersOnHeadCase(
+                testDescription: "system note after the head commit does not count",
+                approvals: "",
+                notes: #"{"id": 1, "body": "approved this merge request", "system": true, "author": {"username": "maintainer"}, "created_at": "2026-10-13T10:05:00.000Z"}"#,
+                expected: []
+            ),
+            GitLabReviewersOnHeadCase(
+                testDescription: "note after the head commit but before Alas saw the head does not count",
+                approvals: "",
+                notes: #"{"id": 1, "body": "Looks good.", "system": false, "author": {"username": "codex"}, "created_at": "2026-10-13T10:05:00.000Z"}"#,
+                notBefore: "2026-10-13T10:10:00Z",
+                expected: []
+            ),
+            GitLabReviewersOnHeadCase(
+                testDescription: "approval after the head commit but before Alas saw the head does not count",
+                approvals: #"{"user": {"username": "maintainer"}, "approved_at": "2026-10-13T10:05:00.000Z"}"#,
+                notes: "",
+                notBefore: "2026-10-13T10:10:00Z",
+                expected: []
+            ),
+            GitLabReviewersOnHeadCase(
+                testDescription: "note after the head commit and after Alas saw the head counts",
+                approvals: "",
+                notes: #"{"id": 1, "body": "Looks good.", "system": false, "author": {"username": "codex"}, "created_at": "2026-10-13T10:15:00.000Z"}"#,
+                notBefore: "2026-10-13T10:10:00Z",
+                expected: ["codex"]
+            ),
+            GitLabReviewersOnHeadCase(
+                testDescription: "unknown first-seen time ignores dated approvals and notes",
+                approvals: #"{"user": {"username": "maintainer"}, "approved_at": "2026-10-13T10:05:00.000Z"}"#,
+                notes: #"{"id": 1, "body": "Looks good.", "system": false, "author": {"username": "codex"}, "created_at": "2026-10-13T10:05:00.000Z"}"#,
+                notBefore: nil,
+                expected: []
+            ),
+        ]
+    )
+    func reviewersOnHeadSelection(_ testCase: GitLabReviewersOnHeadCase) throws {
+        let notBefore = try testCase.notBefore.map { try #require(ISO8601DateFormatter().date(from: $0)) }
+        let cutoff = try GitLabCLIProvider.reviewersOnHeadCutoff(
+            headCommitJSON: #"{"id": "head123", "created_at": "2026-10-13T10:00:00.000Z"}"#,
+            notBefore: notBefore
+        )
+        let reviewers = try GitLabCLIProvider.parseReviewersOnHead(
+            approvalsJSON: "{\"approved_by\": [\(testCase.approvals)]}",
+            notePages: [GitLabCLIProvider.parseReviewersOnHeadNotesPage("[\(testCase.notes)]")],
+            cutoff: cutoff
+        )
+
+        #expect(reviewers == testCase.expected)
+    }
+
+    /// `count` notes by `author` at `createdAt`.
+    struct GitLabScriptedNotes: Sendable {
+        let author: String
+        let createdAt: String
+        var count = 1
+    }
+
+    struct GitLabReviewersOnHeadPagingCase: Sendable, CustomTestStringConvertible {
+        let testDescription: String
+        /// Notes pages, newest first; the head commit is dated 10:00 and Alas first saw it at 10:01.
+        let notePages: [[GitLabScriptedNotes]]
+        let expectedPageCount: Int
+        let expected: Set<String>
+    }
+
+    @Test(
+        "Reviewers on head page newest-first through notes until the cutoff, up to the page cap",
+        arguments: [
+            GitLabReviewersOnHeadPagingCase(
+                testDescription: "required reviewer's note only on the second page counts",
+                notePages: [
+                    [GitLabScriptedNotes(author: "teammate", createdAt: "2026-10-13T10:30:00.000Z", count: 100)],
+                    [GitLabScriptedNotes(author: "Codex", createdAt: "2026-10-13T10:20:00.000Z")],
+                ],
+                expectedPageCount: 2,
+                expected: ["teammate", "codex"]
+            ),
+            GitLabReviewersOnHeadPagingCase(
+                testDescription: "a full page reaching the cutoff stops paging",
+                notePages: [
+                    [
+                        GitLabScriptedNotes(author: "codex", createdAt: "2026-10-13T10:30:00.000Z"),
+                        GitLabScriptedNotes(author: "stale", createdAt: "2026-10-13T09:50:00.000Z", count: 99),
+                    ],
+                    [GitLabScriptedNotes(author: "older", createdAt: "2026-10-13T09:40:00.000Z")],
+                ],
+                expectedPageCount: 1,
+                expected: ["codex"]
+            ),
+            GitLabReviewersOnHeadPagingCase(
+                testDescription: "page cap keeps notes from the pages it read",
+                notePages: (0...GitLabCLIProvider.reviewersOnHeadMaxNotePages).map {
+                    [GitLabScriptedNotes(author: "reviewer-\($0)", createdAt: "2026-10-13T10:30:00.000Z", count: 100)]
+                },
+                expectedPageCount: GitLabCLIProvider.reviewersOnHeadMaxNotePages,
+                expected: Set((0..<GitLabCLIProvider.reviewersOnHeadMaxNotePages).map { "reviewer-\($0)" })
+            ),
+        ]
+    )
+    func reviewersOnHeadPaging(_ testCase: GitLabReviewersOnHeadPagingCase) async throws {
+        let notesOutputs = testCase.notePages.map { page in
+            let notes = page.flatMap { scripted in
+                let note = #"{"body": "Looks good.", "system": false, "author": {"username": "\#(scripted.author)"}, "#
+                    + #""created_at": "\#(scripted.createdAt)"}"#
+                return Array(repeating: note, count: scripted.count)
+            }
+            return ProcessResult(exitCode: 0, stdout: "[\(notes.joined(separator: ","))]", stderr: "")
+        }
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: #"{"approved_by": []}"#, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: #"{"id": "head123", "created_at": "2026-10-13T10:00:00.000Z"}"#, stderr: ""),
+        ] + notesOutputs)
+
+        let reviewers = try await GitLabCLIProvider(runner: runner).reviewersOnHead(
+            remote: Self.remote,
+            request: Self.makeRequest(),
+            notBefore: try #require(ISO8601DateFormatter().date(from: "2026-10-13T10:01:00Z")),
+            cwd: Self.cwd
+        )
+
+        #expect(reviewers == testCase.expected)
+        let commands = await runner.commands
+        #expect(commands.map { Array($0.args.prefix(2)) }.prefix(2) == [
+            ["api", "projects/platform%2Fmobile%2Falas/merge_requests/42/approvals"],
+            ["api", "projects/platform%2Fmobile%2Falas/repository/commits/head123"],
+        ])
+        let notesCommands = commands.dropFirst(2)
+        #expect(notesCommands.count == testCase.expectedPageCount)
+        for (index, command) in notesCommands.enumerated() {
+            #expect(command.args == [
+                "api", "projects/platform%2Fmobile%2Falas/merge_requests/42/notes",
+                "--hostname", "gitlab.example.com",
+                "--output", "json",
+                "--method", "GET",
+                "-f", "sort=desc",
+                "-f", "order_by=created_at",
+                "-f", "per_page=100",
+                "-f", "page=\(index + 1)",
+            ])
+        }
+    }
+
     @Test func noteIDRequiresNumericCommentID() throws {
         let comment = ReviewComment(
             id: "123",

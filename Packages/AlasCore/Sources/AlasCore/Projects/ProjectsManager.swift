@@ -9,19 +9,23 @@ public struct ProjectUpdate: Equatable, Sendable {
     public var mcpServers: [ProjectMCPServer]?
     /// Nil leaves naming unchanged; a blank string resets to the global default.
     public var worktreeBranchTemplate: String?
+    /// Nil leaves the PR shepherd rules unchanged; empty settings clear them.
+    public var shepherd: ProjectShepherdSettings?
 
     public init(
         name: String,
         icon: ProjectIcon,
         startupScripts: ProjectStartupScripts = .defaults,
         mcpServers: [ProjectMCPServer]? = nil,
-        worktreeBranchTemplate: String? = nil
+        worktreeBranchTemplate: String? = nil,
+        shepherd: ProjectShepherdSettings? = nil
     ) {
         self.name = name
         self.icon = icon
         self.startupScripts = startupScripts
         self.mcpServers = mcpServers
         self.worktreeBranchTemplate = worktreeBranchTemplate
+        self.shepherd = shepherd
     }
 
     public init(
@@ -29,14 +33,16 @@ public struct ProjectUpdate: Equatable, Sendable {
         color: String,
         startupScripts: ProjectStartupScripts = .defaults,
         mcpServers: [ProjectMCPServer]? = nil,
-        worktreeBranchTemplate: String? = nil
+        worktreeBranchTemplate: String? = nil,
+        shepherd: ProjectShepherdSettings? = nil
     ) {
         self.init(
             name: name,
             icon: ProjectIcon.default(color: color),
             startupScripts: startupScripts,
             mcpServers: mcpServers,
-            worktreeBranchTemplate: worktreeBranchTemplate
+            worktreeBranchTemplate: worktreeBranchTemplate,
+            shepherd: shepherd
         )
     }
 }
@@ -272,6 +278,9 @@ public final class ProjectsManager {
         }
         if let template = update.worktreeBranchTemplate {
             projects[idx].worktreeBranchTemplate = WorktreeBranchName.normalizedTemplate(template)
+        }
+        if let shepherd = update.shepherd {
+            projects[idx].shepherd = shepherd.isEmpty ? nil : shepherd
         }
     }
 

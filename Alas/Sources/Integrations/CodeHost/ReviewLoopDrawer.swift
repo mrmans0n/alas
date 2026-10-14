@@ -5,6 +5,7 @@ struct ReviewLoopDrawer: View {
     let canOpenAgentHandoff: Bool
     let onAction: (ReviewReadinessActionKind) -> Void
     var onRevealReviewRequest: (Int) -> Void = { _ in }
+    var shepherd: ReviewShepherdDrawerModel? = nil
 
     @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -146,6 +147,10 @@ struct ReviewLoopDrawer: View {
                     .foregroundColor(theme.color("fg-dim"))
                     .lineLimit(3)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if let shepherd {
+                ReviewShepherdBlock(model: shepherd)
             }
 
             if !model.actions.isEmpty {

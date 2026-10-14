@@ -1,0 +1,93 @@
+import Foundation
+import Testing
+@testable import AlasCore
+
+struct ShepherdRulesResolveCase: Sendable, CustomTestStringConvertible {
+    let testDescription: String
+    let localFile: String?
+    let repoFile: String?
+    let settings: ProjectShepherdSettings?
+    let source: ShepherdRules.Source
+    let instructions: String
+    let reviewers: [String]
+}
+
+struct ShepherdRulesParseCase: Sendable, CustomTestStringConvertible {
+    let testDescription: String
+    let contents: String
+    let instructions: String
+    let reviewers: [String]
+}
+
+private let sampleSettings = ProjectShepherdSettings(
+    instructions: "  Settings rules\n",
+    requiredReviewers: ["@Codex-Bot", "codex-bot", " "]
+)
+private let repoFileContents = "---\nrequired_reviewers: [maintainer]\n---\nRepo rules"
+
+private let resolveCases: [ShepherdRulesResolveCase] = [
+    .init(testDescription: "local file beats repo file and settings",
+          localFile: "Local rules", repoFile: repoFileContents, settings: sampleSettings,
+          source: .localFile, instructions: "Local rules", reviewers: []),
+    .init(testDescription: "repo file beats settings",
+          localFile: nil, repoFile: repoFileContents, settings: sampleSettings,
+          source: .repoFile, instructions: "Repo rules", reviewers: ["maintainer"]),
+    .init(testDescription: "settings apply when no file exists",
+          localFile: nil, repoFile: nil, settings: sampleSettings,
+          source: .projectSettings, instructions: "Settings rules", reviewers: ["codex-bot"]),
+    .init(testDescription: "empty settings resolve to none",
+          localFile: nil, repoFile: nil, settings: ProjectShepherdSettings(),
+          source: .none, instructions: "", reviewers: []),
+    .init(testDescription: "no source resolves to none",
+          localFile: nil, repoFile: nil, settings: nil,
+          source: .none, instructions: "", reviewers: []),
+    .init(testDescription: "an empty local file still wins",
+          localFile: "", repoFile: repoFileContents, settings: sampleSettings,
+          source: .localFile, instructions: "", reviewers: []),
+]
+
+private let parseCases: [ShepherdRulesParseCase] = [
+    .init(testDescription: "flow list",
+          contents: "---\nrequired_reviewers: [chatgpt-codex-connector, \"Maintainer\"]\n---\nBatch fixes.\n",
+          instructions: "Batch fixes.", reviewers: ["chatgpt-codex-connector", "maintainer"]),
+    .init(testDescription: "block list",
+          contents: "---\nrequired_reviewers:\n  - chatgpt-codex-connector\n  - '@maintainer'\n---\n\nBatch fixes.",
+          instructions: "Batch fixes.", reviewers: ["chatgpt-codex-connector", "maintainer"]),
+    .init(testDescription: "no frontmatter",
+          contents: "Batch fixes.\n",
+          instructions: "Batch fixes.", reviewers: []),
+    .init(testDescription: "unterminated frontmatter is plain text",
+          contents: "---\nrequired_reviewers: [a]\nBatch fixes.",
+          instructions: "---\nrequired_reviewers: [a]\nBatch fixes.", reviewers: []),
+    .init(testDescription: "unclosed flow list is ignored",
+          contents: "---\nrequired_reviewers: [a, b\n---\nBatch fixes.",
+          instructions: "Batch fixes.", reviewers: []),
+    .init(testDescription: "unknown keys only",
+          contents: "---\nowner: me\n---\n",
+          instructions: "", reviewers: []),
+    .init(testDescription: "empty file",
+          contents: "",
+          instructions: "", reviewers: []),
+    .init(testDescription: "CRLF line endings",
+          contents: "---\r\nrequired_reviewers: [a]\r\n---\r\nBatch fixes.\r\n",
+          instructions: "Batch fixes.", reviewers: ["a"]),
+]
+
+@Suite struct ShepherdRulesResolverTests {
+    @Test("first available source wins completely", arguments: resolveCases)
+    func resolve(_ c: ShepherdRulesResolveCase) {
+        let rules = ShepherdRulesResolver.resolve(
+            localFile: c.localFile, repoFile: c.repoFile, projectSettings: c.settings
+        )
+        #expect(rules.source == c.source)
+        #expect(rules.instructions == c.instructions)
+        #expect(rules.requiredReviewers == c.reviewers)
+    }
+
+    @Test("frontmatter yields instructions and normalized reviewers", arguments: parseCases)
+    func parse(_ c: ShepherdRulesParseCase) {
+        let parsed = ShepherdRulesResolver.parse(fileContents: c.contents)
+        #expect(parsed.instructions == c.instructions)
+        #expect(parsed.requiredReviewers == c.reviewers)
+    }
+}

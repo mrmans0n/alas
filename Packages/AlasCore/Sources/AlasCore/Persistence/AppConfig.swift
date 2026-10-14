@@ -518,11 +518,13 @@ public struct AppConfig: Codable, Equatable, Sendable {
         /// Master switch for the gg stacked-diffs integration. On by
         /// default — without gg installed the later gates hide all UI.
         public var stackedDiffsEnabled: Bool = true
+        /// Defaults for newly bound PR shepherd records (Settings > Changes).
+        public var shepherd: ShepherdDefaults = .init()
 
         public enum CodingKeys: String, CodingKey, Sendable {
             case aiToolId, prompt, reviewRequestPrompt, mergeBulkResolvePrompt,
                  mergeSingleResolvePrompt, comparisonMode,
-                 diffLayoutMode, diffShowWhitespace, stackedDiffsEnabled
+                 diffLayoutMode, diffShowWhitespace, stackedDiffsEnabled, shepherd
         }
 
         public init(aiToolId: String, prompt: String, reviewRequestPrompt: String, mergeBulkResolvePrompt: String, mergeSingleResolvePrompt: String, comparisonMode: ChangesComparisonMode, diffLayoutMode: DiffLayoutMode, diffShowWhitespace: Bool, stackedDiffsEnabled: Bool = true) {
@@ -1021,6 +1023,8 @@ extension AppConfig {
             )
             changes.stackedDiffsEnabled =
                 (try? changesContainer.decode(Bool.self, forKey: .stackedDiffsEnabled)) ?? true
+            changes.shepherd =
+                (try? changesContainer.decode(ShepherdDefaults.self, forKey: .shepherd)) ?? .init()
         } else {
             changes = Changes(
                 aiToolId: Changes.automaticAIToolID,

@@ -134,6 +134,39 @@ struct DraftCommitTabView: View {
             preferredAction: tabState.preferredAction, availability: publishAvailability)
     }
 
+    /// Sessions for "Shepherd with", offered only when publishing creates a
+    /// PR in a worktree the shepherd can watch.
+    private var shepherdCandidates: [ReviewShepherdDrawerModel.Candidate] {
+        guard presentation.draftToggleLabel != nil else { return [] }
+        return appState.shepherdCandidateItems(worktreeID: worktreeId)
+    }
+
+    /// The session the created PR goes to: the paused publish's own pick
+    /// while one is waiting to resume.
+    private var shepherdSessionID: String? {
+        if let publishCheckpoint {
+            guard case .review(let target) = publishCheckpoint.destination else { return nil }
+            return target.shepherdSessionID
+        }
+        return ChangesShepherdChoice.sessionID(for: tabState.shepherdChoice, candidateIDs: shepherdCandidates.map(\.id))
+    }
+
+    private var shepherdLine: AnyView? {
+        let candidates = shepherdCandidates
+        guard !candidates.isEmpty else { return nil }
+        return AnyView(ChangesShepherdLine(
+            candidates: candidates,
+            selectedID: shepherdSessionID,
+            reviewRequestLabel: publishAvailability?.reviewRequestLabel ?? "PR",
+            isDisabled: !presentation.draftToggleEnabled,
+            select: { choice in
+                appState.tabs.updateDraftCommit(worktreeId: worktreeId, tabId: tabState.id) {
+                    $0.shepherdChoice = choice
+                }
+            }
+        ))
+    }
+
     /// A key that changes whenever the staged set changes in the sidebar.
     /// SwiftUI tracks reads of `@Observable` properties, so this recomputes
     /// automatically when `rps.changes` mutates.
@@ -270,6 +303,7 @@ struct DraftCommitTabView: View {
                         }
                     }
                 ),
+                optionsRow: shepherdLine,
                 suggesting: messageSuggestion.isSuggesting,
                 suggestionNote: messageSuggestion.isShowingSuggestion(subject: subject, body: bodyText)
                     ? "Suggested on this Mac from the staged diff. Review it before committing." : nil
@@ -294,7 +328,10 @@ struct DraftCommitTabView: View {
             }
             stagedDiffBody
         }
-        .onAppear { hydrateFromTabState() }
+        .onAppear {
+            hydrateFromTabState()
+            appState.refreshShepherdCandidates(worktreeID: worktreeId)
+        }
         // Re-probe HEAD existence whenever the right-pane state observes a
         // HEAD-changing event (external commit, rebase, reset, etc.). On
         // mount the key is "" → "<sha>" so the task fires once.
@@ -768,6 +805,7 @@ struct DraftCommitTabView: View {
         let bodySnapshot = bodyText
         let amendSnapshot = amend
         let draftSnapshot = createReviewRequestAsDraft
+        let shepherdSnapshot = shepherdSessionID
         let reviewSnapshot = rps.reviewLoop.snapshot
         let ggMode = rps.ggContext.isActive
         let ggTarget: GGStackTargetIdentity?
@@ -796,6 +834,11 @@ struct DraftCommitTabView: View {
         operations.syncGGForTarget = { try await rps.syncGGForCommitPublish(target: $0, markExecutionStarted: $1.markStarted) }
         operations.currentGGRecoveryOperationID = { try await rps.currentGGRecoveryOperationIDForCommitPublish() }
         operations.validateGGRecoveryHead = { try rps.validateGGRecoveryHeadForCommitPublish(operationID: $0, headSHA: $1) }
+        operations.shepherdCreatedRequest = { url, sessionID in
+            await appState.shepherdCreatedRequest(
+                url: url, sessionID: sessionID, worktreeID: worktreeId, snapshot: rps.reviewLoop.snapshot
+            )
+        }
         appState.tabs.runCommitPublish(worktreeId: worktreeId, tabId: tabState.id,
             subject: subjectSnapshot, body: bodySnapshot, amend: amendSnapshot,
             operations: operations, prepareDestination: { [worktreePath] in
@@ -803,10 +846,12 @@ struct DraftCommitTabView: View {
                     return .gg(ggTarget)
                 }
                 guard let reviewSnapshot else { throw CommitPublishWorkflowError.invalidDestination(phase: .push) }
-                return .review(try await CommitPublishReviewTarget.capture(
+                var target = try await CommitPublishReviewTarget.capture(
                     snapshot: reviewSnapshot, createAsDraft: draftSnapshot,
                     runGit: { try await Process.git($0, cwd: worktreePath) }
-                ))
+                )
+                target.shepherdSessionID = shepherdSnapshot
+                return .review(target)
             })
     }
 

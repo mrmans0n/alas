@@ -292,6 +292,9 @@ final class AppState {
     @ObservationIgnored var attentionAliasRetryTask: Task<Void, Never>?
     @ObservationIgnored var attentionAliasRetryAttempts = 0
     @ObservationIgnored var attentionAliasRetryNotBefore: Date?
+    /// The `pr_create` running per worktree. A concurrent call waits for it
+    /// instead of pushing or opening a second request.
+    @ObservationIgnored var prCreateTasks: [String: Task<AlasCLIResponse, Never>] = [:]
     /// Decides when scheduled runs start. Execution is delegated back here so
     /// a scheduled run is a manual run with a different trigger.
     var runScheduler: RunScheduler { core.runScheduler }
@@ -1716,10 +1719,12 @@ final class AppState {
             self?.showFileActionError(title: "Run History Failed", message: message)
         }
         installRunScheduleRunner()
+        installReviewShepherdEffects()
         startLocalTextObservers()
         AlasTerminationCoordinator.shared.flush = { [weak self] in
             await self?.shutdownLocalTextFeatures()
             self?.runScheduler.stop()
+            self?.reviewShepherd.stop()
             await GGLandingStore.shared.cancelAllAndWait()
             self?.cancelPendingRunScriptLaunches()
             self?.cancelAllRunScriptCompletionTasks()
@@ -6491,7 +6496,8 @@ final class AppState {
         icon: ProjectIcon,
         startupScripts: ProjectStartupScripts,
         mcpServers: [ProjectMCPServer],
-        worktreeBranchTemplate: String? = nil
+        worktreeBranchTemplate: String? = nil,
+        shepherd: ProjectShepherdSettings? = nil
     ) {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else { return }
@@ -6503,7 +6509,8 @@ final class AppState {
                 icon: icon,
                 startupScripts: startupScripts,
                 mcpServers: mcpServers,
-                worktreeBranchTemplate: worktreeBranchTemplate
+                worktreeBranchTemplate: worktreeBranchTemplate,
+                shepherd: shepherd
             )
         )
         saveProjects()
@@ -7563,6 +7570,21 @@ final class AppState {
                       await manager.showVisualAid(visual, in: sessionID)
                 else { return .error("This session can't show visuals right now.") }
                 return .text([#"{"visual_id":"\#(visual.id.uuidString)"}"#])
+            },
+            prCreate: { [weak self] sessionID, worktreeID, params in
+                guard let self else { return .error("Alas is not available.") }
+                return await self.cliPRCreate(
+                    sessionID: sessionID,
+                    worktreeID: worktreeID,
+                    title: params.title,
+                    body: params.body,
+                    draft: params.draft,
+                    base: params.base
+                )
+            },
+            prStatus: { [weak self] sessionID, worktreeID in
+                guard let self else { return .error("Alas is not available.") }
+                return await self.cliPRStatus(sessionID: sessionID, worktreeID: worktreeID)
             }
         )
     }
@@ -13092,6 +13114,7 @@ final class AppState {
             onTurnCompleted: { [weak self] completion in
                 Task { @MainActor [weak self] in
                     self?.scheduledAgentTurns.deliver(completion)
+                    self?.reviewShepherd.turnCompleted(sessionID: completion.sessionId)
                     await self?.acpOrchestration.childTurnCompleted(completion)
                 }
             },

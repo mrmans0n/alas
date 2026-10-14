@@ -199,6 +199,16 @@ pub enum Command {
         verdict: Option<String>,
         summary: Option<String>,
     },
+    /// MCP-only: push this worktree's branch, open its pull/merge request (or
+    /// adopt the open one) and have Alas shepherd it for the calling session.
+    PrCreate {
+        title: String,
+        body: String,
+        draft: bool,
+        base: Option<String>,
+    },
+    /// MCP-only: fresh status of the calling session's pull/merge request.
+    PrStatus,
     /// Read-only discovery of the ACP agents (and remembered model catalogs)
     /// the calling session could delegate to.
     AgentList {
@@ -543,6 +553,28 @@ pub fn build_request(
                 params.insert("summary".into(), serde_json::Value::String(summary.clone()));
             }
             r.params = Some(serde_json::Value::Object(params));
+            r
+        }
+        Command::PrCreate {
+            title,
+            body,
+            draft,
+            base,
+        } => {
+            let mut r = Request::new("pr_create");
+            let mut params = serde_json::Map::new();
+            params.insert("title".into(), serde_json::Value::String(title.clone()));
+            params.insert("body".into(), serde_json::Value::String(body.clone()));
+            params.insert("draft".into(), serde_json::Value::Bool(*draft));
+            if let Some(base) = base {
+                params.insert("base".into(), serde_json::Value::String(base.clone()));
+            }
+            r.params = Some(serde_json::Value::Object(params));
+            r
+        }
+        Command::PrStatus => {
+            let mut r = Request::new("pr_status");
+            r.params = Some(serde_json::json!({}));
             r
         }
         Command::AgentList { worktree } => {
@@ -1663,6 +1695,50 @@ mod tests {
                 "summary": "Fix the race."
             }))
         );
+    }
+
+    #[test]
+    fn builds_pr_create_and_status_params() {
+        let create = build_request(
+            &Command::PrCreate {
+                title: "fix: retry".into(),
+                body: "Why.".into(),
+                draft: false,
+                base: None,
+            },
+            Some("acp-1".into()),
+            Some("/wt".into()),
+        );
+        assert_eq!(create.command, "pr_create");
+        assert_eq!(create.session_id.as_deref(), Some("acp-1"));
+        assert_eq!(
+            create.params,
+            Some(serde_json::json!({ "title": "fix: retry", "body": "Why.", "draft": false }))
+        );
+
+        let with_base = build_request(
+            &Command::PrCreate {
+                title: "fix: retry".into(),
+                body: "Why.".into(),
+                draft: true,
+                base: Some("release".into()),
+            },
+            None,
+            Some("/wt".into()),
+        );
+        assert_eq!(
+            with_base.params,
+            Some(serde_json::json!({
+                "title": "fix: retry",
+                "body": "Why.",
+                "draft": true,
+                "base": "release"
+            }))
+        );
+
+        let status = build_request(&Command::PrStatus, Some("acp-1".into()), Some("/wt".into()));
+        assert_eq!(status.command, "pr_status");
+        assert_eq!(status.params, Some(serde_json::json!({})));
     }
 
     #[test]

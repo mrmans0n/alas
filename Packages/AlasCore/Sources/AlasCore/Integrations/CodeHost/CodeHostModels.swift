@@ -299,6 +299,15 @@ public struct CheckAnnotation: Identifiable, Equatable, Sendable {
     }
 }
 
+/// Whether a review comment's author may steer the PR shepherd. Only
+/// `trusted` comments trigger automatic fixes; `unknown` means the provider
+/// could not classify the author and is treated like `untrusted`.
+public enum ReviewAuthorTrust: String, Codable, Equatable, Sendable {
+    case trusted
+    case untrusted
+    case unknown
+}
+
 public struct ReviewComment: Identifiable, Equatable, Sendable {
     public let id: String
     public let author: String?
@@ -308,8 +317,23 @@ public struct ReviewComment: Identifiable, Equatable, Sendable {
     public let viewerCanUpdate: Bool
     public let viewerCanDelete: Bool
     public let isPending: Bool
+    public let authorTrust: ReviewAuthorTrust
+    /// True when the authenticated user wrote the comment, e.g. the agent
+    /// replying through the user's CLI login.
+    public let viewerDidAuthor: Bool
 
-    public init(id: String, author: String?, body: String, url: URL?, createdAt: Date?, viewerCanUpdate: Bool, viewerCanDelete: Bool, isPending: Bool) {
+    public init(
+        id: String,
+        author: String?,
+        body: String,
+        url: URL?,
+        createdAt: Date?,
+        viewerCanUpdate: Bool,
+        viewerCanDelete: Bool,
+        isPending: Bool,
+        authorTrust: ReviewAuthorTrust = .unknown,
+        viewerDidAuthor: Bool = false
+    ) {
         self.id = id
         self.author = author
         self.body = body
@@ -318,6 +342,8 @@ public struct ReviewComment: Identifiable, Equatable, Sendable {
         self.viewerCanUpdate = viewerCanUpdate
         self.viewerCanDelete = viewerCanDelete
         self.isPending = isPending
+        self.authorTrust = authorTrust
+        self.viewerDidAuthor = viewerDidAuthor
     }
 }
 
@@ -437,6 +463,7 @@ public struct ReviewThread: Identifiable, Equatable, Sendable {
 
     public var author: String? { headComment?.author }
     public var body: String { headComment?.body ?? "" }
+    public var headAuthorTrust: ReviewAuthorTrust { headComment?.authorTrust ?? .unknown }
 
     public var isActionable: Bool { !isResolved && !isOutdated }
 
