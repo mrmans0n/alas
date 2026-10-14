@@ -13,6 +13,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixes
 
 - Align inline diff highlights with their text in the CoreText renderer, including wrapped lines.
+- Keep the repository's Build run script console hidden by using the correct `alas-console` header.
 
 ## [0.21.3] - 2026-10-14
 
