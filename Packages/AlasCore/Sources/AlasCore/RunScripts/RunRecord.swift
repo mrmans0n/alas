@@ -2,7 +2,7 @@ import Foundation
 
 /// How a run ended. `unknown` exists so losing sight of a process is never
 /// laundered into success: an interrupted run reports only what we observed.
-public enum RunOutcome: Equatable, Sendable {
+public enum RunOutcome: Codable, Equatable, Sendable {
     case succeeded
     case failed(exitCode: Int32)
     /// The user stopped the run (or its terminal) while it was still going.
@@ -15,7 +15,7 @@ public enum RunOutcome: Equatable, Sendable {
 /// hosting it — an `alas-on-exit: keep` script leaves its shell at a prompt
 /// long after the command itself finished, and closing that shell later says
 /// nothing about the command's outcome.
-public enum RunStatus: Equatable, Sendable {
+public enum RunStatus: Codable, Equatable, Sendable {
     case notRun
     case starting
     case running
@@ -31,7 +31,7 @@ public enum RunStatus: Equatable, Sendable {
 
 /// Where a run executes. Rows surface this so a local run and an SSH run of
 /// the same script are never mistaken for each other.
-public struct RunExecutionTarget: Equatable, Sendable {
+public struct RunExecutionTarget: Codable, Equatable, Sendable {
     /// SSH destination, or nil when the command runs on this Mac.
     public let host: String?
     /// Absolute working directory on `host`.
@@ -48,7 +48,7 @@ public struct RunExecutionTarget: Equatable, Sendable {
 
 /// Another owner of a run's endpoint port, detected when the run starts.
 /// Alas reports the collision and never terminates the process holding it.
-public enum RunPortConflict: Equatable, Sendable {
+public enum RunPortConflict: Codable, Equatable, Sendable {
     /// Another run Alas owns already serves the port.
     case ownedByRun(worktreeID: String, branch: String, scriptName: String)
     /// Something outside Alas is listening on it.
@@ -56,7 +56,7 @@ public enum RunPortConflict: Equatable, Sendable {
 }
 
 /// The observed history of one launch of one script in one worktree.
-public struct RunRecord: Identifiable, Equatable, Sendable {
+public struct RunRecord: Codable, Identifiable, Equatable, Sendable {
     /// Fresh per launch. Completion monitors carry it so a late callback from
     /// a superseded run is dropped instead of clobbering the run that
     /// replaced it.

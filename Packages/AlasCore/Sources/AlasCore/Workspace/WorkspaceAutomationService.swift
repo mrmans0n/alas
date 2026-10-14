@@ -232,7 +232,13 @@ public struct WorkspaceAutomationService: Sendable {
         return copy
     }
 
-    private func checkout(id: UUID) async throws -> WorkspaceCheckout {
+    /// The checkouts that are not archived, reconciled with what is on disk.
+    public func checkouts() async throws -> [WorkspaceCheckout] {
+        try await loadedState().checkouts.filter { $0.archivedAt == nil }
+    }
+
+    /// One checkout that is not archived.
+    public func checkout(id: UUID) async throws -> WorkspaceCheckout {
         let state = try await loadedState()
         guard let checkout = state.checkouts.first(where: { $0.id == id && $0.archivedAt == nil }) else {
             throw WorkspaceAutomationError.checkoutNotFound
@@ -240,7 +246,7 @@ public struct WorkspaceAutomationService: Sendable {
         return checkout
     }
 
-    private static func summary(_ checkout: WorkspaceCheckout) -> WorkspaceAutomationCheckoutSummary {
+    public static func summary(_ checkout: WorkspaceCheckout) -> WorkspaceAutomationCheckoutSummary {
         WorkspaceAutomationCheckoutSummary(
             id: checkout.id,
             workspaceID: checkout.workspaceID,
