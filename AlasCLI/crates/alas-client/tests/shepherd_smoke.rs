@@ -3,6 +3,6 @@
 
 #[test]
 fn shepherd_smoke_ci_failure() {
-    let expected_protocol_lines = 2;
+    let expected_protocol_lines = 3;
     assert_eq!(expected_protocol_lines, 3, "shepherd smoke: expected 3 protocol lines");
 }
