@@ -54,6 +54,28 @@ import Testing
         #expect(abs(background.rect.height - host.fittingSize.height) < 1)
     }
 
+    @Test func aLongCodeLanguageLabelStaysClearOfTheCopyButton() throws {
+        let layout = try #require(ACPTranscriptMarkdownLayout.make(
+            source: "```a-very-long-info-string-for-this-code-block\nlet x = 1\n```", width: 200, theme: theme, typography: .default
+        ))
+        let label = try #require(layout.codeBlocks.first?.label)
+        #expect(label.rect.maxX <= layout.copyButtonRect(0, copied: true).minX)
+    }
+
+    @Test func aRightToLeftLinkIsOneSpanOverItsGlyphs() throws {
+        let label = "שלום עולם"
+        let layout = try #require(ACPTranscriptMarkdownLayout.make(
+            source: "See [\(label)](https://example.com) now.", width: 600, theme: theme, typography: .default
+        ))
+        let spans = layout.linkSpans()
+        #expect(spans.map(\.text) == [label])
+        let span = try #require(spans.first)
+        let union = span.rects.dropFirst().reduce(span.rects[0]) { $0.union($1) }
+        let range = (layout.texts[0] as NSString).range(of: label)
+        let labelLine = CTLineCreateWithAttributedString(layout.attributedTexts[0].attributedSubstring(from: range))
+        #expect(abs(union.width - CGFloat(CTLineGetTypographicBounds(labelLine, nil, nil, nil))) < 1)
+    }
+
     @Test func separateLinksToOneURLStaySeparate() throws {
         let url = "https://example.com"
         let source = "First [docs](\(url)) here, then plain words in between, and [docs again](\(url)).\n\nNew block [docs](\(url))."

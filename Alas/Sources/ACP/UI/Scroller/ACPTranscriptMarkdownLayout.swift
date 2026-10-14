@@ -73,6 +73,8 @@ struct ACPTranscriptMarkdownLayout {
     static let codeBodyHorizontalPadding: CGFloat = 10
     static let codeBodyVerticalPadding: CGFloat = 8
     static let codeHeaderHorizontalPadding: CGFloat = 10
+    /// Between the language label and the Copy button.
+    static let codeHeaderSpacing: CGFloat = 8
     static let codeHeaderVerticalPadding: CGFloat = 6
     /// Height of the empty header `CodeBlockView` keeps when there is no language.
     static let codeEmptyHeaderContentHeight: CGFloat = 1
@@ -160,7 +162,9 @@ struct ACPTranscriptMarkdownLayout {
         for line in lines {
             guard let block = line.block, texts.indices.contains(block) else { continue }
             let blockText = texts[block] as NSString
-            for run in CTLineGetGlyphRuns(line.line) as! [CTRun] {
+            // Source order, so a right-to-left link's runs, drawn in reverse, still join.
+            let runs = (CTLineGetGlyphRuns(line.line) as! [CTRun]).sorted { CTRunGetStringRange($0).location < CTRunGetStringRange($1).location }
+            for run in runs {
                 let value = (CTRunGetAttributes(run) as NSDictionary)[NSAttributedString.Key.link]
                 guard let url = (value as? URL) ?? (value as? String).flatMap(URL.init(string:)) else { continue }
                 let range = CTRunGetStringRange(run)
@@ -392,7 +396,14 @@ struct ACPTranscriptMarkdownLayout {
                     .kern: L.codeLabelTracking,
                 ])
                 let first = lines.count
-                addText(label, x: L.codeHeaderHorizontalPadding, width: max(1, width - 2 * L.codeHeaderHorizontalPadding), lineSpacing: 0)
+                // As the SwiftUI header's `HStack`, the label gets what the Copy button and spacing
+                // leave; the wider "Copied" label is reserved so the label never runs under it.
+                let buttonWidth = ceil(max(
+                    CGFloat(CTLineGetTypographicBounds(copyButtonStyle.copy, nil, nil, nil)),
+                    CGFloat(CTLineGetTypographicBounds(copyButtonStyle.copied, nil, nil, nil))
+                )) + 2 * L.copyButtonHorizontalPadding
+                let labelWidth = width - 2 * L.codeHeaderHorizontalPadding - buttonWidth - L.codeHeaderSpacing
+                addText(label, x: L.codeHeaderHorizontalPadding, width: max(1, labelWidth), lineSpacing: 0)
                 let labelHeight = y - headerTop
                 headerHeight = max(labelHeight, headerContentHeight)
                 for index in first..<lines.count {
