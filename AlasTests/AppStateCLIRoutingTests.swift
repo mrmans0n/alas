@@ -728,6 +728,7 @@ struct AppStateCLIRoutingTests {
     @Test(arguments: [
         ("{root}/nope.kt:521", "{root}/nope.kt:521"),
         ("file://{root}/nope.kt", "{root}/nope.kt"),
+        ("file://LOCALHOST{root}/nope.kt", "{root}/nope.kt"),
         ("docs/nope.md", "docs/nope.md"),
         ("mailto:a@b.c", nil),
         ("//example.com/nope.md", nil),

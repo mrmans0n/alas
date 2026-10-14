@@ -10478,7 +10478,7 @@ final class AppState {
         let isLocalPathForm: Bool
         if url.isFileURL {
             // `file://server/share` names a network volume, not a local path.
-            guard url.host.map({ $0.isEmpty || $0 == "localhost" }) ?? true else { return .unhandled }
+            guard url.host.map({ $0.isEmpty || $0.lowercased() == "localhost" }) ?? true else { return .unhandled }
             rawPath = url.path
             isLocalPathForm = true
         } else if url.scheme == nil {
