@@ -208,7 +208,9 @@ extension AlasCoreContext {
                 needsSave = true
             }
             projects.finishOperation(pending.claim, for: pending.worktree)
-            if needsSave {
+            // An earlier failed save is retried here, so the final write
+            // decides what is reported whatever the refresh saved meanwhile.
+            if needsSave || saveFailure != nil {
                 save()
             }
             return saveFailure.map { .createdButNotSaved(created, $0) } ?? .created(created)
