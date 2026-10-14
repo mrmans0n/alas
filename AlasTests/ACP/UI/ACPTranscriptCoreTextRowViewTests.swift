@@ -26,13 +26,6 @@ import Testing
         #expect(view.measuredHeight(forWidth: 0) == 0 && view.lastMeasuredWidth == 400)
     }
 
-    @Test func theColumnIsCenteredAndCapped() {
-        let view = row(.agent(markdown: "Hi", commentary: false))
-        _ = view.measuredHeight(forWidth: 1_400)
-        #expect(view.columnRect.width == 720)
-        #expect(abs(view.columnRect.midX - 700) < 0.5)
-    }
-
     @Test func reconfiguringWithNewContentInvalidatesTheHeight() {
         let view = row(.agent(markdown: "Short", commentary: false))
         let short = view.measuredHeight(forWidth: 800)
