@@ -55,6 +55,7 @@ struct UpdateControllerTests {
         #expect(controller.availableUpdate == detected)
         #expect(defaults.object(forKey: lastCheckedKey) as? Date == checkedAt)
 
+        now = now.addingTimeInterval(UpdateThrottle.interval)
         await source.setResponse(version: "1.0.0")
         await controller.checkAutomatically()
         #expect(await source.checkCount == 3)
@@ -91,6 +92,41 @@ struct UpdateControllerTests {
         await controller.checkManually()
         #expect(await source.checkCount == 2)
         #expect(controller.presentedUpdate == controller.availableUpdate)
+    }
+
+    @Test func failedAutomaticAttemptsStayThrottledAcrossRelaunchesWhileManualChecksBypass() async throws {
+        let source = ReleaseSource()
+        await source.setResponse(version: nil)
+        let domain = "UpdateControllerTests.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let start = Date(timeIntervalSince1970: 1_000)
+        var now = start
+        let checker = ReleaseChecker(fetch: { try await source.fetch($0) })
+        let original = UpdateController(
+            identity: identity, checker: checker, installSource: .direct,
+            defaults: defaults, now: { now }, isEnabled: { true }
+        )
+        await original.checkAutomatically()
+        let relaunched = UpdateController(
+            identity: identity, checker: checker, installSource: .direct,
+            defaults: try #require(UserDefaults(suiteName: domain)), now: { now }, isEnabled: { true }
+        )
+        var wake = 0
+        await relaunched.monitorAutomatically {
+            wake += 1
+            switch wake {
+            case 1: now = start.addingTimeInterval(UpdateThrottle.interval - 1)
+            case 2: now = start.addingTimeInterval(UpdateThrottle.interval)
+            default: throw CancellationError()
+            }
+        }
+        #expect(await source.checkCount == 2)
+
+        await source.setResponse(version: "2.0.0")
+        await relaunched.checkManually()
+        #expect(await source.checkCount == 3)
+        #expect(relaunched.presentedUpdate?.id == "stable-2.0.0")
     }
 
     @Test(arguments: [

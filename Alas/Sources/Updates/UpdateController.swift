@@ -24,6 +24,7 @@ final class UpdateController {
 
     private let lastCheckedKey = "io.nlopez.alas.updates.lastCheckedAt"
     private static let availableUpdateKey = "io.nlopez.alas.updates.availableUpdate"
+    private static let lastAutomaticAttemptKey = "io.nlopez.alas.updates.lastAutomaticAttemptAt"
 
     init(
         identity: BuildIdentity = BuildIdentity.current(),
@@ -66,9 +67,18 @@ final class UpdateController {
     }
 
     func checkAutomatically() async {
-        let last = defaults.object(forKey: lastCheckedKey) as? Date
-        guard !Task.isCancelled,
-              UpdateThrottle.shouldCheck(enabled: isEnabled(), lastCheckedAt: last, now: now()) else { return }
+        let lastChecked = defaults.object(forKey: lastCheckedKey) as? Date
+        let lastAttempt = defaults.object(forKey: Self.lastAutomaticAttemptKey) as? Date
+        let last: Date?
+        if let lastChecked, let lastAttempt {
+            last = max(lastChecked, lastAttempt)
+        } else {
+            last = lastChecked ?? lastAttempt
+        }
+        let date = now()
+        guard !Task.isCancelled, checkTask == nil,
+              UpdateThrottle.shouldCheck(enabled: isEnabled(), lastCheckedAt: last, now: date) else { return }
+        defaults.set(date, forKey: Self.lastAutomaticAttemptKey)
         await runCheck(manually: false)
     }
 
@@ -100,7 +110,6 @@ final class UpdateController {
         let result = await checker.check(identity: identity)
         switch result {
         case .updateAvailable(let info):
-            // Only a successful fetch consumes the daily throttle.
             persistUpdate(info)
             availableUpdate = info
             defaults.set(now(), forKey: lastCheckedKey)
