@@ -1,10 +1,10 @@
 import SwiftUI
 
-/// PR shepherd control in the ACP toolbar. Built like `ACPSessionsButton`:
-/// an icon-only popover button whose dot badge shows the state of the
-/// pull/merge request this session shepherds.
+/// PR shepherd control in the ACP toolbar: a pill with a state symbol and
+/// the request number (or "Create PR" without one) that opens the shepherd
+/// popover.
 ///
-/// `session` is a plain reference on purpose: the badge reads only the
+/// `session` is a plain reference on purpose: the pill reads only the
 /// shepherd records and the cached review snapshot, so streaming updates
 /// must not re-render the toolbar. The popover observes the transcript.
 struct ACPShepherdButton: View {
@@ -20,27 +20,33 @@ struct ACPShepherdButton: View {
     private var isLit: Bool { hovering || open }
 
     var body: some View {
-        let presentation = ShepherdSessionContext(sessionID: session.id, worktree: worktree, state: state).presentation
+        let context = ShepherdSessionContext(sessionID: session.id, worktree: worktree, state: state)
+        let presentation = context.presentation
+        let badge = presentation.badge
         let tooltip = presentation.tooltip
         Button {
             open.toggle()
         } label: {
-            ZStack(alignment: .topTrailing) {
-                Image(systemName: "arrow.triangle.pull")
-                    .font(.system(size: 12))
-                    .foregroundStyle(theme.color(isLit ? "fg" : "fg-muted"))
-                    .padding(.horizontal, 6).padding(.vertical, 3)
-                    .background(theme.color("bg-3").opacity(isLit ? 1 : 0.5))
-                    .clipShape(RoundedRectangle(cornerRadius: 5))
-                    .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(theme.color("line"), lineWidth: 0.5))
-                if let badge = presentation.tone.color(theme: theme) {
-                    Circle()
-                        .fill(badge)
-                        .frame(width: 6, height: 6)
-                        .overlay(Circle().strokeBorder(theme.color("bg-2"), lineWidth: 1))
-                        .offset(x: 3, y: -3)
+            HStack(spacing: 5) {
+                Image(systemName: badge.symbolName)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(badge.color(theme: theme))
+                if let number = presentation.number {
+                    Text(number)
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                } else {
+                    Text(context.snapshot?.remote?.kind.createReviewRequestTitle ?? "Create PR")
+                        .font(.system(size: 11, weight: .medium))
                 }
             }
+            .foregroundStyle(theme.color(isLit ? "fg" : "fg-dim"))
+            .lineLimit(1)
+            .padding(.horizontal, 7)
+            .frame(height: 22)
+            .background(theme.color("bg-3").opacity(isLit ? 1 : 0.5))
+            .clipShape(RoundedRectangle(cornerRadius: 5))
+            .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(theme.color("line"), lineWidth: 0.5))
+            .aiBeam(isActive: badge.isActive, cornerRadius: 5)
         }
         .buttonStyle(.toolbarControl)
         .onHover { hovering = $0 }
@@ -119,14 +125,27 @@ struct ShepherdSessionContext {
     }
 }
 
-extension ShepherdBadgeTone {
-    /// Badge and chip tint shared by the toolbar button and the Changes
-    /// drawer. `nil` means no badge.
-    func color(theme: Theme) -> Color? {
+extension ShepherdBadgeState {
+    /// Symbol shared by the toolbar pill and the popover's phase line.
+    var symbolName: String {
         switch self {
-        case .none: nil
-        case .working: theme.color("warn")
-        case .ready: theme.color("add")
+        case .noRequest, .unshepherded: "arrow.triangle.pull"
+        case .waiting: "clock.fill"
+        case .fixing: "sparkles"
+        case .ready, .merging: "arrow.triangle.merge"
+        case .queued: "list.bullet.rectangle"
+        case .attention: "exclamationmark.triangle.fill"
+        case .merged: "checkmark.circle.fill"
+        case .closed: "xmark.circle"
+        }
+    }
+
+    func color(theme: Theme) -> Color {
+        switch self {
+        case .noRequest, .unshepherded, .closed: theme.color("fg-muted")
+        case .waiting: theme.color("warn")
+        case .fixing: theme.color("accent")
+        case .ready, .merging, .queued: theme.color("add")
         case .attention: theme.color("del")
         case .merged: Color(nsColor: .systemPurple)
         }
@@ -156,7 +175,7 @@ private struct ShepherdPopover: View {
     @State private var reviewerResult: ReviewerResult?
 
     /// Narrower than the composer options popover (164 pt): the toggle
-    /// titles here are long and the popover is 300 pt wide.
+    /// titles here are long and the popover is 340 pt wide.
     private let controlWidth: CGFloat = 64
 
     private var isBusy: Bool { transcript.streamingState != .idle }
@@ -165,17 +184,15 @@ private struct ShepherdPopover: View {
         let context = ShepherdSessionContext(
             sessionID: session.id, worktree: worktree, state: state, fetched: fetchedSnapshot
         )
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                if let record = context.record {
-                    boundContent(record: record, context: context)
-                } else {
-                    unboundContent(context: context)
-                }
+        VStack(alignment: .leading, spacing: 0) {
+            if let record = context.record {
+                boundContent(record: record, context: context)
+            } else {
+                unboundContent(context: context)
             }
         }
-        .frame(width: 300)
-        .frame(maxHeight: 520)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(width: 340)
         .background(theme.color("bg-1"))
         .task(id: session.id) { await load() }
         .task(id: isLoading ? nil : reviewerKey(context)) { await loadReviewers() }
@@ -250,7 +267,7 @@ private struct ShepherdPopover: View {
             if request.checks.isEmpty {
                 infoLine("No CI checks", systemImage: "checkmark.seal")
             } else {
-                CIStatusStrip(checks: request.checks)
+                CIStatusStrip(checks: request.checks, maxVisibleRows: 8)
             }
             reviewLines(request: request, reviewers: reviewers(for: context))
         } else {
@@ -259,9 +276,9 @@ private struct ShepherdPopover: View {
         Divider().background(theme.color("line"))
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Image(systemName: "pawprint")
+                Image(systemName: presentation.badge.symbolName)
                     .font(.system(size: 10.5, weight: .semibold))
-                    .foregroundStyle(presentation.tone.color(theme: theme) ?? theme.color("fg-muted"))
+                    .foregroundStyle(presentation.badge.color(theme: theme))
                 Text(presentation.phaseLine)
                     .font(.system(size: 11.5, weight: .medium))
                     .foregroundStyle(theme.color("fg"))

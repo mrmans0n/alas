@@ -61,7 +61,7 @@ struct ReviewShepherdBlock: View {
         HStack(spacing: 6) {
             Image(systemName: "pawprint")
                 .font(.system(size: 10.5, weight: .semibold))
-                .foregroundStyle(model.presentation.tone.color(theme: theme) ?? theme.color("fg-faint"))
+                .foregroundStyle(model.presentation.badge.color(theme: theme))
             Text(model.ownerTitle ?? "Session archived or missing")
                 .font(.system(size: 11.5, weight: .semibold))
                 .foregroundColor(theme.color(model.ownerTitle == nil ? "fg-dim" : "fg"))

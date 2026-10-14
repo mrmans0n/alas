@@ -1,21 +1,44 @@
 import Foundation
 
-/// Badge state shared by the ACP toolbar button and the Changes drawer. The
-/// app maps tones to colors (working: warn, ready: add, attention: del,
-/// merged: purple, none: no badge).
-public enum ShepherdBadgeTone: Equatable, Sendable {
-    case none, working, ready, attention, merged
+/// The toolbar pill's state, shared with the Changes drawer and the popover.
+/// The app maps each case to an SF Symbol and a theme color.
+public enum ShepherdBadgeState: Equatable, Sendable {
+    /// No record and no request: the pill offers Create PR/MR.
+    case noRequest
+    /// A request exists but this session does not shepherd it.
+    case unshepherded
+    /// Checks running, watching, waiting for a push or on reviewers.
+    case waiting
+    case fixing
+    case ready
+    case merging
+    case queued
+    /// Escalated, paused, or failing with auto-fix off.
+    case attention
+    case merged
+    case closed
+
+    /// The pill runs the AI beam while the shepherd is acting on the request.
+    public var isActive: Bool {
+        switch self {
+        case .fixing, .merging: true
+        default: false
+        }
+    }
 }
 
 public struct ShepherdPresentation: Equatable, Sendable {
-    public let tone: ShepherdBadgeTone
+    public let badge: ShepherdBadgeState
+    /// "#2041" or "!2041"; nil with neither a record nor a request.
+    public let number: String?
     /// "#2041 · fixing unit-tests"
     public let tooltip: String
     /// The phase part of the tooltip, without the number.
     public let phaseLine: String
 
-    public init(tone: ShepherdBadgeTone, tooltip: String, phaseLine: String) {
-        self.tone = tone
+    public init(badge: ShepherdBadgeState, number: String?, tooltip: String, phaseLine: String) {
+        self.badge = badge
+        self.number = number
         self.tooltip = tooltip
         self.phaseLine = phaseLine
     }
@@ -25,42 +48,44 @@ public struct ShepherdPresentation: Equatable, Sendable {
     public static func make(record: ShepherdRecord?, request: ReviewRequest?, mergeGatePasses: Bool) -> ShepherdPresentation {
         guard let record else {
             let line = "not shepherded"
-            let tooltip = request.map { "\($0.provider.reviewRequestNumberPrefix)\($0.number) · \(line)" }
-                ?? "Not shepherded"
-            return ShepherdPresentation(tone: .none, tooltip: tooltip, phaseLine: line)
+            guard let request else {
+                return ShepherdPresentation(badge: .noRequest, number: nil, tooltip: "Not shepherded", phaseLine: line)
+            }
+            let number = "\(request.provider.reviewRequestNumberPrefix)\(request.number)"
+            return ShepherdPresentation(badge: .unshepherded, number: number, tooltip: "\(number) · \(line)", phaseLine: line)
         }
-        let (tone, line) = state(record: record, request: request, mergeGatePasses: mergeGatePasses)
+        let (badge, line) = state(record: record, request: request, mergeGatePasses: mergeGatePasses)
         let number = "\(record.id.providerKind.reviewRequestNumberPrefix)\(record.id.requestNumber)"
-        return ShepherdPresentation(tone: tone, tooltip: "\(number) · \(line)", phaseLine: line)
+        return ShepherdPresentation(badge: badge, number: number, tooltip: "\(number) · \(line)", phaseLine: line)
     }
 
     private static func state(
         record: ShepherdRecord,
         request: ReviewRequest?,
         mergeGatePasses: Bool
-    ) -> (ShepherdBadgeTone, String) {
+    ) -> (ShepherdBadgeState, String) {
         switch record.phase {
         case .merged: return (.merged, "merged")
-        case .closed: return (.none, "closed")
+        case .closed: return (.closed, "closed")
         case .escalated(let reason): return (.attention, "needs attention: \(text(for: reason))")
         case .paused: return (.attention, "paused: provider sign-in failed")
-        case .fixing: return (.working, fixingLine(record: record, request: request))
-        case .awaitingPush: return (.working, "waiting for a push")
-        case .merging: return (.working, "merging")
-        case .queued: return (.working, "in merge queue")
+        case .fixing: return (.fixing, fixingLine(record: record, request: request))
+        case .awaitingPush: return (.waiting, "waiting for a push")
+        case .merging: return (.merging, "merging")
+        case .queued: return (.queued, "in merge queue")
         case .watching: break
         }
         if mergeGatePasses { return (.ready, "ready to merge") }
-        guard let request else { return (.working, "watching") }
-        if request.checks.contains(where: { $0.bucket == .pending }) { return (.working, "checks running") }
+        guard let request else { return (.waiting, "watching") }
+        if request.checks.contains(where: { $0.bucket == .pending }) { return (.waiting, "checks running") }
         let problems = ShepherdPolicy.problems(in: request, handled: record.handledThreadRevisions ?? [])
-        guard !problems.isEmpty else { return (.working, "watching") }
+        guard !problems.isEmpty else { return (.waiting, "watching") }
         let what = summary(
             hasConflict: problems.hasConflict,
             checkNames: problems.failingChecks.map(\.name),
             threadCount: problems.threads.count
         )
-        return record.autoFix ? (.working, "needs a fix: \(what)") : (.attention, "auto-fix off: \(what)")
+        return record.autoFix ? (.waiting, "needs a fix: \(what)") : (.attention, "auto-fix off: \(what)")
     }
 
     private static func fixingLine(record: ShepherdRecord, request: ReviewRequest?) -> String {

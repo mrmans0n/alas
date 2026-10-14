@@ -49,7 +49,7 @@ skill.
 | Lifecycle | Owned by `AlasCoreContext`, started by AppState after topology loads, stopped at app termination. Independent of pane or window visibility. |
 | Polling | Adaptive per record (30 s / 2 min / 5 min), at most 2 provider fetches in flight, immediate evaluation on wake. |
 | Project rules | `.alas/shepherd.local.md`, then `.alas/shepherd.md`, then project settings. |
-| Toolbar UI | Icon button with a dot badge, same style as `ACPSessionsButton`, in the right-hand group directly left of the minimap toggle. |
+| Toolbar UI | State pill (symbol plus `#N`/`!N`, or "Create PR"), in the right-hand group directly left of the minimap toggle. |
 
 ## Architecture
 
@@ -453,24 +453,30 @@ subcommand would not come for free, and agents reach these tools through MCP.
 ### ACP toolbar button
 
 `ACPShepherdButton` in `Alas/Sources/ACP/UI/`, placed in `ACPToolbar`'s
-right-hand group directly left of the minimap `ToolbarBtn`. Same construction
-as `ACPSessionsButton`: SF Symbol `arrow.triangle.pull` at 12 pt, `bg-3`
-rounded rectangle with a 0.5 pt `line` border, lit on hover or while the
-popover is open, and a 6 pt dot badge at the top-right corner.
+right-hand group directly left of the minimap `ToolbarBtn`. A 22 pt pill with
+a 5 pt corner radius, `bg-3` fill and a 0.5 pt `line` border, lit on hover or
+while the popover is open. It holds a state symbol and the request number
+(`#N` on GitHub, `!N` on GitLab) in 11 pt semibold monospaced. With neither a
+record nor a PR it shows `arrow.triangle.pull` and "Create PR" (or "Create
+MR"). `ShepherdPresentation.badge` (`ShepherdBadgeState`) picks the state:
 
-| State | Badge |
+| State | Symbol, color |
 | --- | --- |
-| No bound PR | none |
-| Checks pending, `fixing`, `awaitingPush`, `merging`, `queued` | `warn` |
-| Ready (gate passes) | `add` (green) |
-| Failing with auto-fix off, `escalated`, `paused` | `del` (red) |
-| `merged` | `.systemPurple`, as in `ACPUpstreamReferenceHover` |
-| `closed` | none, tooltip says closed |
+| PR exists, not shepherded by this session | `arrow.triangle.pull`, `fg-muted` |
+| Checks pending, `watching`, `awaitingPush`, waiting on reviewers | `clock.fill`, `warn` |
+| `fixing` | `sparkles`, `accent`, with the AI beam |
+| Ready (gate passes) | `arrow.triangle.merge`, `add` |
+| `merging` | `arrow.triangle.merge`, `add`, with the AI beam |
+| `queued` | `list.bullet.rectangle`, `add` |
+| Failing with auto-fix off, `escalated`, `paused` | `exclamationmark.triangle.fill`, `del` |
+| `merged` | `checkmark.circle.fill`, `.systemPurple` |
+| `closed` | `xmark.circle`, `fg-muted` |
 
 The tooltip states the PR number and phase, for example "#2041 · fixing
 unit-tests".
 
-Popover, 300 pt wide like the MCP popover:
+Popover, 340 pt wide and sized to its content. Past 8 checks the check list
+scrolls at 8 rows so a large PR doesn't make a giant popover:
 
 - Header: PR number and title with an open-in-browser link, then
   `branch → base · short SHA · provider`.

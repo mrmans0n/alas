@@ -232,7 +232,7 @@ struct ReviewLoopDrawer: View {
     /// Shown only while a record exists. Same shape as `chipView`, tinted by
     /// the toolbar badge tone.
     private func shepherdChip(_ shepherd: ReviewShepherdDrawerModel) -> some View {
-        let color = shepherd.presentation.tone.color(theme: theme) ?? theme.color("fg-faint")
+        let color = shepherd.presentation.badge.color(theme: theme)
         return Image(systemName: "pawprint")
             .font(.system(size: 10, weight: .semibold))
             .foregroundStyle(color)
