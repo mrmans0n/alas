@@ -103,18 +103,17 @@ struct ChatPane: View {
                 SettingsGroup(title: GroupTitles.composer) {
                     SettingsRow(name: RowLabels.sendOnEnter,
                                 desc: "While busy, ⏎ and the send button use this action. Hold ⌥ for the other action. Steer joins the running turn when supported; otherwise it interrupts and sends a new prompt.") {
-                        Picker("", selection: Binding(
-                            get: { state.config.harness.acpSendOnEnter },
-                            set: {
+                        AlasSegmentedControl(
+                            selection: state.config.harness.acpSendOnEnter,
+                            options: [
+                                AlasSegmentedOption(id: true, label: "Queue"),
+                                AlasSegmentedOption(id: false, label: "Steer"),
+                            ],
+                            onSelect: {
                                 state.config.harness.acpSendOnEnter = $0
                                 state.saveConfig()
                             }
-                        )) {
-                            Text("Queue").tag(true)
-                            Text("Steer").tag(false)
-                        }
-                        .labelsHidden()
-                        .frame(width: 220)
+                        )
                     }
                     if !dictationLocales.isEmpty {
                         SettingsRow(
@@ -178,17 +177,16 @@ struct ChatPane: View {
     }
 
     private var defaultLauncherModePicker: some View {
-        Picker("", selection: Binding(
-            get: { state.config.agents.defaultLauncherMode },
-            set: { newValue in
-                state.config.agents.defaultLauncherMode = newValue
+        AlasSegmentedControl(
+            selection: state.config.agents.defaultLauncherMode,
+            options: [
+                AlasSegmentedOption(id: AppConfig.LauncherMode.terminal, label: "Terminal", icon: "terminal"),
+                AlasSegmentedOption(id: AppConfig.LauncherMode.acp, label: "Chat", icon: "sparkle"),
+            ],
+            onSelect: {
+                state.config.agents.defaultLauncherMode = $0
                 state.saveConfig()
             }
-        )) {
-            Label("Terminal", systemImage: "terminal").tag(AppConfig.LauncherMode.terminal)
-            Label("Chat", systemImage: "sparkle").tag(AppConfig.LauncherMode.acp)
-        }
-        .pickerStyle(.menu)
-        .settingsDropdownFrame()
+        )
     }
 }
