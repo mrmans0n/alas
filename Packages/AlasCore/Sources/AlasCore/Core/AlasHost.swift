@@ -125,6 +125,13 @@ public struct WorktreesAPI {
         return await core.deleteWorktree(worktree, claim: claim, options: options)
     }
 
+    /// Refreshes the projects of deletions made with `refreshesProject`
+    /// false, once, and ends their claims. Throws if the project list
+    /// cannot be saved.
+    public func finishDeletions(_ deletions: [(worktree: Worktree, claim: UUID)]) async throws {
+        try await core.finishDeletions(deletions)
+    }
+
     public func releaseClaim(_ claim: UUID, for worktree: Worktree) {
         core.releaseWorktreeClaim(claim, for: worktree)
     }
