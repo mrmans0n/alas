@@ -731,6 +731,7 @@ struct AppStateCLIRoutingTests {
         ("docs/nope.md", "docs/nope.md"),
         ("mailto:a@b.c", nil),
         ("//example.com/nope.md", nil),
+        ("file://server/share/nope.md", nil),
     ] as [(String, String?)])
     func routeTranscriptOpenURLClaimsMissingLocalPaths(raw: String, missingPath: String?) async throws {
         let (state, _, worktree) = try await makeStateWithWorktree(name: "transcript-missing")
@@ -757,6 +758,9 @@ struct AppStateCLIRoutingTests {
         ("/.alas-remote/mini/srv/repo", "/srv/other/b.swift", .ignored),
         ("/.alas-remote/mini/srv/repo", "file:///etc/hosts", .ignored),
         ("/.alas-remote/mini/srv/repo", "/.alas-remote/other/srv/repo/a.swift", .ignored),
+        // A relative link joined to the virtual root routes the same way.
+        ("/.alas-remote/mini/srv/repo", "/.alas-remote/mini/srv/repo/Sources/a.swift:3", .remoteEditor(relativePath: "Sources/a.swift", line: 3, column: nil)),
+        ("/.alas-remote/mini/srv/repo", "/.alas-remote/mini/srv/repo/../escape.swift", .ignored),
         ("/.alas-remote/mini/srv/repo", "Sources/a.swift", .local),
         ("/.alas-remote/mini/srv/repo", "https://example.com/a", .local),
         ("/srv/repo", "/srv/repo/a.swift", .local),

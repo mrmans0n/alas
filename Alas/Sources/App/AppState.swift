@@ -10477,6 +10477,8 @@ final class AppState {
         // the system keeps it when nothing on disk matches.
         let isLocalPathForm: Bool
         if url.isFileURL {
+            // `file://server/share` names a network volume, not a local path.
+            guard url.host.map({ $0.isEmpty || $0 == "localhost" }) ?? true else { return .unhandled }
             rawPath = url.path
             isLocalPathForm = true
         } else if url.scheme == nil {
@@ -10491,7 +10493,12 @@ final class AppState {
             return .unhandled
         }
         guard !rawPath.isEmpty else { return .unhandled }
-        if let remote = routeRemoteAbsoluteLink(rawPath, worktree: worktree) { return remote }
+        // A remote session's relative path names a file on its host, so it
+        // joins the virtual worktree root and routes lexically, unprobed.
+        let remoteCandidate = isLocalPathForm && !rawPath.hasPrefix("/")
+            ? worktree.path.path + "/" + rawPath
+            : rawPath
+        if let remote = routeRemoteAbsoluteLink(remoteCandidate, worktree: worktree) { return remote }
 
         var candidates = [rawPath]
         // Trailing-period fallback: transcript prose can include sentence
