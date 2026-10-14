@@ -447,6 +447,9 @@ extension ACPTranscriptCoreTextRowView {
                 outline.stroke()
             }
         }
+        for table in markdown.tables where table.rect.intersects(local) {
+            drawTable(table, origin: origin)
+        }
         let lines = markdown.linesIntersecting(local)
         drawTextSelection(markdown, origin: origin, lines: lines, context: context)
         for index in lines.indices {
@@ -463,6 +466,38 @@ extension ACPTranscriptCoreTextRowView {
             }
         }
         drawCopyButtons(markdown, origin: origin, dirtyRect: dirtyRect, context: context)
+    }
+
+    /// A table's fill, header band, rules, column dividers and outline, clipped to its rounded rect.
+    private func drawTable(_ table: ACPTranscriptMarkdownLayout.Table, origin: CGPoint) {
+        typealias L = ACPTranscriptMarkdownLayout
+        let rect = table.rect.offsetBy(dx: origin.x, dy: origin.y)
+        let radius = L.tableCornerRadius
+        let hairline = L.tableDividerWidth
+        let shape = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
+        table.fill.setFill()
+        shape.fill()
+        NSGraphicsContext.saveGraphicsState()
+        shape.addClip()
+        if let headerBottom = table.rowBottoms.first {
+            table.headerFill.setFill()
+            CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: headerBottom - table.rect.minY).fill()
+            table.headerRule.setFill()
+            CGRect(x: rect.minX, y: origin.y + headerBottom, width: rect.width, height: hairline).fill()
+        }
+        table.divider.setFill()
+        for bottom in table.rowBottoms.dropFirst().dropLast() {
+            CGRect(x: rect.minX, y: origin.y + bottom, width: rect.width, height: hairline).fill()
+        }
+        for x in table.columnXs {
+            CGRect(x: rect.minX + x, y: rect.minY, width: hairline, height: rect.height).fill()
+        }
+        NSGraphicsContext.restoreGraphicsState()
+        table.stroke.setStroke()
+        let inset = rect.insetBy(dx: hairline / 2, dy: hairline / 2)
+        let outline = NSBezierPath(roundedRect: inset, xRadius: radius - hairline / 2, yRadius: radius - hairline / 2)
+        outline.lineWidth = hairline
+        outline.stroke()
     }
 
     /// The selected text's background, in the system selection color, dimmed

@@ -30,6 +30,11 @@ struct ACPTranscriptMarkdownLayout {
         let rect: CGRect
         let columnXs: [CGFloat]
         let rowBottoms: [CGFloat]
+        let fill: NSColor
+        let headerFill: NSColor
+        let headerRule: NSColor
+        let divider: NSColor
+        let stroke: NSColor
     }
 
     /// A code block's "Copy" button in its header.
@@ -548,7 +553,12 @@ struct ACPTranscriptMarkdownLayout {
                 // Columns fill the width exactly, as the SwiftUI table's background does.
                 rect: CGRect(x: 0, y: top, width: width, height: y - top),
                 columnXs: (1..<columns).map { CGFloat($0) * (columnWidth + L.tableDividerWidth) - L.tableDividerWidth },
-                rowBottoms: rowBottoms
+                rowBottoms: rowBottoms,
+                fill: theme.nsColor("bg-1").withAlphaComponent(0.4),
+                headerFill: theme.nsColor("bg-2").withAlphaComponent(0.5),
+                headerRule: theme.nsColor("line"),
+                divider: theme.nsColor("line-soft"),
+                stroke: theme.nsColor("line")
             ))
         }
 
