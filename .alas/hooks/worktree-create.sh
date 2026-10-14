@@ -19,12 +19,13 @@ source="$(git worktree list --porcelain | awk '/^worktree /{print $2; exit}')"
 # the rest, since every artifact below is fingerprint-checked by its own
 # build script and falls back to a real build on any mismatch or absence.
 for module in fff ghostty zmx; do
-  path="ThirdParty/$module"
-  local_src="$source/$path"
-  git submodule init -- "$path" >/dev/null 2>&1
-  git config "submodule.${path}.url" "$local_src"
-  if git -c protocol.file.allow=always submodule update --reference-if-able "$local_src" -- "$path"; then
-    git submodule sync -- "$path" >/dev/null 2>&1
+  # zsh's `path` parameter is tied to PATH; keep the module path separate.
+  module_path="ThirdParty/$module"
+  local_src="$source/$module_path"
+  git submodule init -- "$module_path" >/dev/null 2>&1
+  git config "submodule.${module_path}.url" "$local_src"
+  if git -c protocol.file.allow=always submodule update --reference "$local_src" -- "$module_path"; then
+    git submodule sync -- "$module_path" >/dev/null 2>&1
   else
     echo "worktree-init: warning: submodule update failed for $module, continuing" >&2
   fi

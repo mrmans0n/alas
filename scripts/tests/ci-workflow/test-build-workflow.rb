@@ -34,6 +34,7 @@ end
   "scripts/ci_swift_tests.py",
   "scripts/tests/alas-build/run.sh",
   ".alas/scripts/build.sh",
+  ".alas/hooks/worktree-create.sh",
   ".swiftformat",
   ".gitmodules"
 ].each do |file|
@@ -175,6 +176,7 @@ shell_steps = builder_steps.map { |step| step["run"] }
   "bash scripts/tests/embed-ghostty-resources/run.sh",
   "bash scripts/tests/xcode-state/run.sh",
   "bash scripts/tests/alas-build/run.sh",
+  "bash scripts/tests/worktree-create/run.sh",
   "bash scripts/tests/prepare-release-project/run.sh",
   "bash scripts/tests/verify-release-architecture/run.sh"
 ].each do |command|
