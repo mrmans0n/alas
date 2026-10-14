@@ -4872,8 +4872,11 @@ final class AppState {
 
         Task { @MainActor in
             let outcome = await core.finishCreate(pending)
-            if case .createdButNotSaved(_, let message) = outcome {
+            switch outcome {
+            case .createdButNotSaved(_, let message), .failed(_, unsaved: let message?):
                 persistenceErrorHandler("Projects Save Failed", message)
+            default:
+                break
             }
             switch outcome {
             case .created(let newWorktree), .createdButNotSaved(let newWorktree, _):

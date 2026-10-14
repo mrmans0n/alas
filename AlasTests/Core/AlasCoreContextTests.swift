@@ -244,10 +244,18 @@ struct AlasCoreContextTests {
         #expect(context.projects.operationState(for: worktree) == nil)
     }
 
-    /// What a creation records in the project list (here its GG mode) is
-    /// only persisted by its last save, so a failure there is reported while
-    /// the creation itself stands.
-    @Test func creationReportsAProjectListItCannotSave() async throws {
+    enum UnsavedCreation: CaseIterable {
+        /// Its GG mode is only persisted by the creation's last save.
+        case created
+        /// Its pending branch name was not saved, then the app's hook
+        /// approval was cancelled.
+        case failedAfterward
+    }
+
+    /// A save that fails during a creation is reported, whether the creation
+    /// then stands or fails: what it recorded is otherwise lost on restart.
+    @Test(arguments: UnsavedCreation.allCases)
+    func creationReportsAProjectListItCannotSave(_ scenario: UnsavedCreation) async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-core-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -262,17 +270,24 @@ struct AlasCoreContextTests {
         )
         let project = try await context.addProject(path: repo, displayName: "repo", icon: .default(color: "blue"))
         var request = WorktreeCreateRequest(projectID: project.id, base: "main", branch: "feature", destination: root.appendingPathComponent("feature"))
-        request.ggWorktreeMode = .on
+        switch scenario {
+        case .created:
+            request.ggWorktreeMode = .on
+        case .failedAfterward:
+            request.namesBranchFromFirstPrompt = true
+            request.cancelledHookApprovalFails = true
+            context.repoHookLoader = RepoHookLoader { _, _, _ in .data(Data("true\n".utf8)) }
+            context.repoHookPrompter = RepoHookPrompter(decide: { _, _, _ in .cancel }, decideFailure: { _, _ in .cancel })
+        }
         let pending = try await context.beginCreate(request)
         store.writeError = CocoaError(.fileWriteOutOfSpace)
 
-        let outcome = await context.finishCreate(pending)
-
-        guard case .createdButNotSaved(let worktree, _) = outcome else {
+        switch (scenario, await context.finishCreate(pending)) {
+        case (.created, .createdButNotSaved), (.failedAfterward, .failed(_, unsaved: .some)):
+            break
+        case (_, let outcome):
             Issue.record("Expected the save failure to be reported, got \(outcome)")
-            return
         }
-        #expect(FileManager.default.fileExists(atPath: worktree.path.path))
     }
 
     /// The removal cannot be undone, so a project list that cannot be saved

@@ -46,8 +46,9 @@ public enum WorktreeCreationOutcome: Equatable, Sendable {
     /// Created, but what it records in the project list (a pending branch
     /// name, the GG mode, the issue attachment) could not be saved.
     case createdButNotSaved(Worktree, String)
-    /// Left on the row as `.createFailed`, for retry.
-    case failed(String)
+    /// Left on the row as `.createFailed`, for retry. `unsaved` is a save
+    /// that failed before it did, such as a pending branch name.
+    case failed(String, unsaved: String? = nil)
     /// The project was removed meanwhile, along with the row.
     case projectRemoved
 }
@@ -75,7 +76,7 @@ extension AlasCoreContext {
         let pending = try await beginCreate(request)
         switch await finishCreate(pending) {
         case .created(let worktree), .createdButNotSaved(let worktree, _): return worktree
-        case .failed(let message): throw WorktreeCreationFailure(message: message)
+        case .failed(let message, _): throw WorktreeCreationFailure(message: message)
         case .projectRemoved: throw ProjectCreationError.projectNotFound
         }
     }
@@ -109,6 +110,10 @@ extension AlasCoreContext {
                 repoPath: URL(fileURLWithPath: project.path),
                 destination: request.destination
             )
+        // Preparing a remote destination awaits SSH; the project can be gone.
+        guard projects.projects.contains(where: { $0.id == request.projectID }) else {
+            throw ProjectCreationError.projectNotFound
+        }
         let id = Worktree.makeId(path: destination)
         if projects.worktrees(projectId: request.projectID).contains(where: { $0.id == id }) {
             guard case .createFailed = projects.operationState(forWorktreeId: id, projectId: request.projectID) else {
@@ -211,7 +216,7 @@ extension AlasCoreContext {
                 issueAttachment: request.issueAttachment,
                 namesBranchFromFirstPrompt: request.namesBranchFromFirstPrompt
             ))
-            return .failed(message)
+            return .failed(message, unsaved: saveFailure)
         }
     }
 
