@@ -196,7 +196,7 @@ extension AlasCoreContext {
             // only repeat against the existing path.
             var needsSave = wasHidden
             do {
-                needsSave = try await refreshProjectWorktrees(request.projectID) || needsSave
+                needsSave = try await environment.refreshProjectWorktrees(request.projectID, in: self) || needsSave
             } catch {
                 creationLogger.error("Refresh after creating a worktree failed: \(error.localizedDescription, privacy: .public)")
             }

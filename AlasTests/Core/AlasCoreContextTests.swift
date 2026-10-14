@@ -228,14 +228,16 @@ struct AlasCoreContextTests {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let repo = root.appendingPathComponent("repo")
         try FileManager.default.copyItem(at: try await Self.repoTemplate.value, to: repo)
+        let environment = TestHostEnvironment()
+        environment.refresh = { _ in throw CocoaError(.fileReadUnknown) }
         let context = AlasCoreContext(
             projects: ProjectsManager(persistedProjects: []),
             store: TestPersistenceStore(),
             projectsFile: root.appendingPathComponent("projects.json"),
-            runHistoryStore: nil
+            runHistoryStore: nil,
+            environment: environment
         )
         let project = try await context.addProject(path: repo, displayName: "repo", icon: .default(color: "blue"))
-        context.refreshProjectWorktrees = { _ in throw CocoaError(.fileReadUnknown) }
 
         let worktree = try await context.createWorktree(
             projectID: project.id, branch: "feature", base: "main", destination: root.appendingPathComponent("feature")
@@ -263,11 +265,13 @@ struct AlasCoreContextTests {
         let repo = root.appendingPathComponent("repo")
         try FileManager.default.copyItem(at: try await Self.repoTemplate.value, to: repo)
         let store = TestPersistenceStore()
+        let environment = TestHostEnvironment()
         let context = AlasCoreContext(
             projects: ProjectsManager(persistedProjects: []),
             store: store,
             projectsFile: root.appendingPathComponent("projects.json"),
-            runHistoryStore: nil
+            runHistoryStore: nil,
+            environment: environment
         )
         let project = try await context.addProject(path: repo, displayName: "repo", icon: .default(color: "blue"))
         var request = WorktreeCreateRequest(projectID: project.id, base: "main", branch: "feature", destination: root.appendingPathComponent("feature"))
@@ -277,8 +281,8 @@ struct AlasCoreContextTests {
         case .failedAfterward:
             request.namesBranchFromFirstPrompt = true
             request.cancelledHookApprovalFails = true
-            context.repoHookLoader = RepoHookLoader { _, _, _ in .data(Data("true\n".utf8)) }
-            context.repoHookPrompter = RepoHookPrompter(decide: { _, _, _ in .cancel }, decideFailure: { _, _ in .cancel })
+            environment.repoHookLoader = RepoHookLoader { _, _, _ in .data(Data("true\n".utf8)) }
+            environment.repoHookPrompter = RepoHookPrompter(decide: { _, _, _ in .cancel }, decideFailure: { _, _ in .cancel })
         }
         let pending = try await context.beginCreate(request)
         store.writeError = CocoaError(.fileWriteOutOfSpace)
@@ -438,19 +442,21 @@ struct AlasCoreContextTests {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let repo = root.appendingPathComponent("repo")
         try FileManager.default.copyItem(at: try await Self.repoTemplate.value, to: repo)
+        let environment = TestHostEnvironment()
+        environment.repoHookLoader = RepoHookLoader { _, _, _ in .data(Data("touch hook-ran\n".utf8)) }
         let context = AlasCoreContext(
             projects: ProjectsManager(persistedProjects: []),
             store: TestPersistenceStore(),
             projectsFile: root.appendingPathComponent("projects.json"),
-            runHistoryStore: nil
+            runHistoryStore: nil,
+            environment: environment
         )
-        context.repoHookLoader = RepoHookLoader { _, _, _ in .data(Data("touch hook-ran\n".utf8)) }
         let project = try await context.addProject(path: repo, displayName: "repo", icon: .default(color: "blue"))
         if approval == .cancelled {
-            context.repoHookPrompter = RepoHookPrompter(decide: { _, _, _ in .cancel }, decideFailure: { _, _ in .cancel })
+            environment.repoHookPrompter = RepoHookPrompter(decide: { _, _, _ in .cancel }, decideFailure: { _, _ in .cancel })
         }
         if approval == .approvedEarlier {
-            guard case let .loaded(hook) = await context.repoHookLoader.load(event: .worktreeCreate, worktreeRoot: repo, host: nil) else {
+            guard case let .loaded(hook) = await environment.repoHookLoader.load(event: .worktreeCreate, worktreeRoot: repo, host: nil) else {
                 Issue.record("the fake hook loads")
                 return
             }
@@ -485,5 +491,18 @@ struct AlasCoreContextTests {
             try context.unarchiveWorktree(path: root, projectID: "p")
         }
         #expect(!context.projects.admitsNewWork(in: worktree))
+    }
+}
+
+/// A headless environment whose repository hooks and refresh a test sets.
+@MainActor
+private final class TestHostEnvironment: AlasHostEnvironment {
+    var repoHookLoader = RepoHookLoader()
+    var repoHookPrompter: RepoHookPrompter = .skipping
+    var refresh: ((String) async throws -> Bool)?
+
+    func refreshProjectWorktrees(_ projectID: String, in core: AlasCoreContext) async throws -> Bool {
+        if let refresh { return try await refresh(projectID) }
+        return try await core.projects.refreshWorktrees(projectId: projectID)
     }
 }

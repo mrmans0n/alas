@@ -40,13 +40,9 @@ public final class AlasCoreContext {
     @ObservationIgnored private let localTextOverride: (any LocalTextGenerating)?
     /// Durable Workspace definitions and checkouts.
     @ObservationIgnored public let workspaceStore: WorkspaceStore
-    /// Stops everything running in a checkout before a lifecycle operation
-    /// touches it. The app installs one that closes its terminals and agent
-    /// sessions; without one, nothing is stopped.
-    @ObservationIgnored public var stopWorkspaceCheckoutSessions: @MainActor (WorkspaceCheckout) async throws -> Void
-    /// Approves and prepares a member's repository hook. Without one, hooks
-    /// are skipped.
-    @ObservationIgnored public var resolveWorkspaceRepoHook: WorkspaceRepoHookResolving = { _ in nil }
+    /// What the host adds to lifecycles: the app's terminals, prompts and
+    /// refresh, or nothing when headless.
+    @ObservationIgnored public let environment: any AlasHostEnvironment
     @ObservationIgnored private var workspaceCheckoutCoordinator: WorkspaceCheckoutCoordinator?
     /// Checkouts `unarchiveWorkspaceCheckout` is reactivating. Archive treats
     /// their members as owned already: the coordinator checks them before
@@ -57,40 +53,9 @@ public final class AlasCoreContext {
     /// Attention items and the gate observations pass through to reach them.
     public let attention: AttentionIntake
 
-    /// Starts background cleanup of a removed worktree's staged files.
-    @ObservationIgnored public var launchWorktreeCleanup: @MainActor (WorktreeTrashCleanupTicket) throws -> Void = {
-        try WorktreeTrashCleaner.launch($0)
-    }
-    /// Whether an interrupted checkpoint restore must be recovered before the
-    /// worktree can be removed. The app installs one that also counts a
-    /// checkpoint operation it has in flight.
-    @ObservationIgnored public var checkpointRecoveryBlocksRemoval: @MainActor (Worktree) async -> Bool = {
-        await AlasCoreContext.hasPendingCheckpointRecovery($0)
-    }
-    /// Stops everything using a worktree that is about to go: its agent
-    /// sessions by default. The app installs one that also kills its
-    /// terminals, waiting for them, and closes its tabs. Throwing refuses the
-    /// removal.
-    @ObservationIgnored public lazy var quiesceWorktree: @MainActor (Worktree) async throws -> Void = { [weak self] worktree in
-        await self?.disposeSessionManager(owner: .worktree(worktree.id))
-    }
-    /// Re-reads a project's worktrees after a removal. Returns whether the
-    /// project list changed and still needs saving. The app installs its own
-    /// refresh, which also reconciles what it shows and saves by itself.
-    @ObservationIgnored public lazy var refreshProjectWorktrees: @MainActor (String) async throws -> Bool = { [weak self] projectID in
-        try await self?.projects.refreshWorktrees(projectId: projectID) ?? false
-    }
     /// Headless runs in flight, covering finalization, so lifecycle
     /// operations can stop them and wait until their records settle.
     @ObservationIgnored var headlessRuns: [String: (worktreeID: String, task: Task<RunOutcome, Error>)] = [:]
-
-    /// Reads repository hooks from a worktree.
-    @ObservationIgnored public var repoHookLoader = RepoHookLoader()
-    /// Asks about unapproved repository hooks. Headless, they are skipped; the
-    /// app installs its approval queue.
-    @ObservationIgnored public var repoHookPrompter: RepoHookPrompter = .skipping
-    /// The global startup scripts. The app installs its terminal settings.
-    @ObservationIgnored public var globalTerminalConfig: @MainActor () -> AppConfig.Terminal = { AppConfig.defaults.terminal }
 
     @ObservationIgnored private let store: any PersistenceStoreProtocol
     @ObservationIgnored private let projectsFile: URL
@@ -109,7 +74,8 @@ public final class AlasCoreContext {
         localText: (any LocalTextGenerating)? = nil,
         attentionStore: AttentionStore? = nil,
         runCompletionWaiter: @escaping RunCompletionWaiter = { try await RunScriptCompletionMonitor.wait(for: $0) },
-        makeSessionManager: @escaping @MainActor (SessionOwnerID, Worktree) -> ACPSessionManager = AlasCoreContext.defaultSessionManager
+        makeSessionManager: @escaping @MainActor (SessionOwnerID, Worktree) -> ACPSessionManager = AlasCoreContext.defaultSessionManager,
+        environment: any AlasHostEnvironment = HeadlessHostEnvironment()
     ) {
         self.projects = projects
         self.runs = runs
@@ -120,7 +86,7 @@ public final class AlasCoreContext {
         self.localTextModelStore = localTextModelStore
         self.localTextOverride = localText
         self.workspaceStore = workspaceStore
-        self.stopWorkspaceCheckoutSessions = { _ in }
+        self.environment = environment
         self.store = store
         self.projectsFile = projectsFile
         self.makeSessionManager = makeSessionManager
@@ -252,11 +218,10 @@ public final class AlasCoreContext {
             store: workspaceStore,
             sessions: WorkspaceCheckoutSessionStopper(
                 store: workspaceStore,
-                stop: { [weak self] checkout in try await self?.stopWorkspaceCheckoutSessions(checkout) }
+                stop: { [weak self] checkout in try await self?.environment.stopWorkspaceCheckoutSessions(checkout) }
             ),
             resolveRepoHook: { [weak self] request in
-                guard let resolve = await self?.resolveWorkspaceRepoHook else { return nil }
-                return try await resolve(request)
+                try await self?.resolveWorkspaceRepoHook(request)
             },
             memberAdmitsWork: { [weak self] projectID, path in
                 let worktreeID = Worktree.makeId(path: URL(fileURLWithPath: path))
@@ -265,6 +230,10 @@ public final class AlasCoreContext {
         )
         workspaceCheckoutCoordinator = coordinator
         return coordinator
+    }
+
+    private func resolveWorkspaceRepoHook(_ request: WorkspaceRepoHookRequest) async throws -> String? {
+        try await environment.resolveWorkspaceRepoHook(request)
     }
 
     /// Shuts down the owner's agent sessions, persisting what they hold and

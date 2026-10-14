@@ -235,6 +235,8 @@ final class AppState {
     var themeStore: ThemeStore
     /// The headless core: projects, worktrees and session managers.
     let core: AlasCoreContext
+    /// The app's side of the core's lifecycles.
+    let hostEnvironment: AppHostEnvironment
     var projectsManager: ProjectsManager {
         get { core.projects }
         set { core.projects = newValue }
@@ -244,8 +246,8 @@ final class AppState {
     let repoConfigStore = RepoConfigStore()
     let repoHookApprovalQueue = RepoHookApprovalQueue()
     var repoHookLoader: RepoHookLoader {
-        get { core.repoHookLoader }
-        set { core.repoHookLoader = newValue }
+        get { hostEnvironment.repoHookLoader }
+        set { hostEnvironment.repoHookLoader = newValue }
     }
     /// Project icons already resolved from repo files, keyed by the identity of
     /// the file that supplied them.
@@ -1530,7 +1532,8 @@ final class AppState {
         localTextReadModelState: (@Sendable () async -> LocalTextModelState)? = nil,
         localTextInference: (any LocalTextGenerating)? = nil,
         nextPromptInference: (any NextPromptRuntime)? = nil,
-        localTextSupported: Bool = NextPromptInference.isSupported()
+        localTextSupported: Bool = NextPromptInference.isSupported(),
+        hostEnvironment: AppHostEnvironment = AppHostEnvironment()
     ) {
         // Legacy remote worktrees were renamed to virtual ids on decode. Move
         // their id-keyed state first: the attention store and run scheduler
@@ -1602,8 +1605,10 @@ final class AppState {
             localTextModelStore: suggestionStore,
             localText: localTextInference,
             attentionStore: attentionStore,
-            runCompletionWaiter: runScriptCompletionWaiter
+            runCompletionWaiter: runScriptCompletionWaiter,
+            environment: hostEnvironment
         )
+        self.hostEnvironment = hostEnvironment
         let spacesManager = spacesFile.map(SpacesManager.init(file:))
             ?? SpacesManager.migrating(projects: projectsFile.projects)
         var spacesChanged = spacesManager.pruneMissingProjects(validProjectIds: Set(projectsFile.projects.map(\.id)))
@@ -1716,30 +1721,12 @@ final class AppState {
         self.runScheduler.persistenceErrorHandler = { [weak self] message in
             self?.persistenceErrorHandler("Schedules Save Failed", message)
         }
-        core.stopWorkspaceCheckoutSessions = { [weak self] checkout in
-            try await self?.stopWorkspaceCheckoutSessions(checkout)
-        }
-        core.resolveWorkspaceRepoHook = { [weak self] request in
-            guard let self else { return nil }
-            return try await self.preparedWorkspaceRepoHook(request)
-        }
+        hostEnvironment.app = self
+        hostEnvironment.repoHookPrompter = .queue(repoHookApprovalQueue)
+        hostEnvironment.worktreeCleanupLauncher = worktreeCleanupLauncher
         core.attention.onAdmit = { [weak self] signal in
             self?.registerAttentionAlias(for: signal)
         }
-        core.launchWorktreeCleanup = worktreeCleanupLauncher
-        core.checkpointRecoveryBlocksRemoval = { [weak self] worktree in
-            await self?.checkpointWorktreeRemovalDisabledAfterDiscovery(worktree) ?? true
-        }
-        core.quiesceWorktree = { [weak self] worktree in
-            try await self?.quiesceWorktreeForRemoval(worktree)
-        }
-        // The app's refresh also reconciles what it shows, and saves itself.
-        core.refreshProjectWorktrees = { [weak self] projectID in
-            _ = try await self?.refreshProjectWorktrees(projectId: projectID)
-            return false
-        }
-        core.repoHookPrompter = .queue(repoHookApprovalQueue)
-        core.globalTerminalConfig = { [weak self] in self?.config.terminal ?? AppConfig.defaults.terminal }
         core.runHistory.onFailure = { [weak self] message in
             self?.showFileActionError(title: "Run History Failed", message: message)
         }
@@ -6319,7 +6306,7 @@ final class AppState {
     }
 
     @discardableResult
-    private func refreshProjectWorktrees(projectId: String) async throws -> Bool {
+    fileprivate func refreshProjectWorktrees(projectId: String) async throws -> Bool {
         let previousPaths = Dictionary(uniqueKeysWithValues: projectsManager.projects
             .filter { $0.id == projectId }
             .map { ($0.id, $0.path) })
@@ -9919,7 +9906,7 @@ final class AppState {
     /// Stops everything using a worktree whose files are about to go: its
     /// agents (awaited), terminals, tabs, buffers and pending runs. Run
     /// history stays until the removal has succeeded.
-    private func quiesceWorktreeForRemoval(_ worktree: Worktree) async throws {
+    fileprivate func quiesceWorktreeForRemoval(_ worktree: Worktree) async throws {
         let owner = SessionOwnerID.worktree(worktree.id)
         await disposeACPManagerAndWait(owner: owner)
         // Closing a tab only queues the daemon-side kill; wait for it so no
@@ -16553,5 +16540,49 @@ extension AppState: RemoteSessionsProvider {
         case .text(let text):
             return .success(text: text, truncated: false)
         }
+    }
+}
+
+/// The app's side of the core's worktree and Workspace lifecycles: it kills
+/// terminals and closes tabs before a worktree goes, asks about repository
+/// hooks, and refreshes what the app shows. Not final, so tests can wrap a
+/// step.
+@MainActor
+class AppHostEnvironment: AlasHostEnvironment {
+    weak var app: AppState?
+    var repoHookLoader = RepoHookLoader()
+    var repoHookPrompter: RepoHookPrompter = .skipping
+    var worktreeCleanupLauncher: AppState.WorktreeCleanupLauncher = { try WorktreeTrashCleaner.launch($0) }
+
+    init() {}
+
+    func quiesceWorktree(_ worktree: Worktree, in core: AlasCoreContext) async throws {
+        try await app?.quiesceWorktreeForRemoval(worktree)
+    }
+
+    func checkpointRecoveryBlocksRemoval(_ worktree: Worktree) async -> Bool {
+        await app?.checkpointWorktreeRemovalDisabledAfterDiscovery(worktree) ?? true
+    }
+
+    func launchWorktreeCleanup(_ ticket: WorktreeTrashCleanupTicket) throws {
+        try worktreeCleanupLauncher(ticket)
+    }
+
+    /// The app's refresh also reconciles what it shows, and saves by itself.
+    func refreshProjectWorktrees(_ projectID: String, in core: AlasCoreContext) async throws -> Bool {
+        _ = try await app?.refreshProjectWorktrees(projectId: projectID)
+        return false
+    }
+
+    func globalTerminalConfig() -> AppConfig.Terminal {
+        app?.config.terminal ?? AppConfig.defaults.terminal
+    }
+
+    func stopWorkspaceCheckoutSessions(_ checkout: WorkspaceCheckout) async throws {
+        try await app?.stopWorkspaceCheckoutSessions(checkout)
+    }
+
+    func resolveWorkspaceRepoHook(_ request: WorkspaceRepoHookRequest) async throws -> String? {
+        try await app?.preparedWorkspaceRepoHook(request)
     }
 }

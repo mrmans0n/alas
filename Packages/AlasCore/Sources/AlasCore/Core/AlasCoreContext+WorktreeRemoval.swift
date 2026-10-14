@@ -100,7 +100,7 @@ extension AlasCoreContext {
     /// worktree in place with its sessions already stopped.
     public func removeWorktree(_ request: WorktreeRemovalRequest) async -> WorktreeRemovalResult {
         let worktree = request.worktree
-        if await checkpointRecoveryBlocksRemoval(worktree) {
+        if await environment.checkpointRecoveryBlocksRemoval(worktree) {
             return .checkpointRecoveryPending
         }
         if !request.force, request.authorizedContentFingerprint == nil {
@@ -118,7 +118,7 @@ extension AlasCoreContext {
         // Nothing may keep using the checkout while its files go.
         await stopHeadlessRuns(worktreeID: worktree.id)
         do {
-            try await quiesceWorktree(worktree)
+            try await environment.quiesceWorktree(worktree, in: self)
         } catch {
             return .failed("Could not stop everything using the worktree: \(error.localizedDescription)")
         }
@@ -154,7 +154,7 @@ extension AlasCoreContext {
         await discardRuns(worktreeID: worktree.id, deletingHistory: true)?.value
         if case .staged(let ticket) = outcome {
             do {
-                try launchWorktreeCleanup(ticket)
+                try environment.launchWorktreeCleanup(ticket)
             } catch {
                 removalLogger.error(
                     "Could not launch worktree cleanup for \(ticket.stagedPath.path, privacy: .public): \(error.localizedDescription, privacy: .public)"
@@ -193,7 +193,7 @@ extension AlasCoreContext {
         revalidate: @MainActor () async -> (any Error)? = { nil }
     ) async throws {
         await stopHeadlessRuns(worktreeID: worktree.id)
-        try await quiesceWorktree(worktree)
+        try await environment.quiesceWorktree(worktree, in: self)
         // Ownership can change while everything stops (a Workspace checkout
         // registering this worktree), so it is checked again right before hiding.
         if let refusal = await revalidate() {
@@ -533,7 +533,7 @@ extension AlasCoreContext {
             let removed = deletions.filter { $0.worktree.projectId == projectID }
             var needsSave: Bool
             do {
-                needsSave = try await refreshProjectWorktrees(projectID)
+                needsSave = try await environment.refreshProjectWorktrees(projectID, in: self)
             } catch {
                 for deletion in removed {
                     projects.dropRemovedWorktree(id: deletion.worktree.id, projectId: projectID)
