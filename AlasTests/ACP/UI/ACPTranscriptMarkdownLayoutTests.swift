@@ -194,6 +194,16 @@ import Testing
         #expect((spans.first?.rects.count ?? 0) > 1)
     }
 
+    @Test func aLinkWrappedInACellIsOneSpanBesideALinkInTheNextCell() throws {
+        let layout = try #require(ACPTranscriptMarkdownLayout.make(
+            source: "| a | b |\n|---|---|\n| [the full migration guide for this release](https://example.com/guide) | [docs](https://example.com/docs) |",
+            width: 240, theme: theme, typography: .default
+        ))
+        let spans = layout.linkSpans()
+        #expect(spans.map(\.text) == ["the full migration guide for this release", "docs"])
+        #expect((spans.first?.rects.count ?? 0) > 1)
+    }
+
     @Test func linksAreStyledAndHitTestable() throws {
         let layout = try #require(ACPTranscriptMarkdownLayout.make(source: "See [docs](https://example.com) now.", width: 400, theme: theme, typography: .default))
         let line = try #require(layout.lines.first)

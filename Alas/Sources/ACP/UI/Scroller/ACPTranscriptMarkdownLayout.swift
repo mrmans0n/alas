@@ -244,10 +244,13 @@ struct ACPTranscriptMarkdownLayout {
                 // Runs of one link continue across style changes and line wraps:
                 // same URL, same block, and nothing but wrapped-away whitespace
                 // between them in the source. Two links to one URL stay apart.
-                if let last = spans.last, last.url == url, last.block == block, last.end <= range.location,
+                // Lines run in y order, so a table cell's link can wrap past a
+                // link in the next cell; continue the block's latest span.
+                if let lastIndex = spans.lastIndex(where: { $0.block == block }), case let last = spans[lastIndex],
+                   last.url == url, last.end <= range.location,
                    Self.isSameLink(in: attributedTexts[block], endingAt: last.end, startingAt: range.location) {
                     let gap = blockText.substring(with: NSRange(location: last.end, length: range.location - last.end))
-                    spans[spans.count - 1] = LinkSpan(
+                    spans[lastIndex] = LinkSpan(
                         url: url, text: last.text + gap + text, rects: last.rects + [rect], block: block, end: end
                     )
                 } else {
