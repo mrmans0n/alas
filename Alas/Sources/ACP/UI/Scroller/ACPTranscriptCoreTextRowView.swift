@@ -267,6 +267,9 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
             actions.requestRespec()
             return
         }
+        // The invalidation below is dropped while the reconciler applies specs;
+        // the flag makes its next layout pass measure the row anyway.
+        markNeedsRemeasure()
         configure(
             content: .agent(markdown: markdown, commentary: commentary), contentMaxWidth: contentMaxWidth,
             inToolCallGroup: inToolCallGroup, theme: theme, typography: typography, actions: actions,

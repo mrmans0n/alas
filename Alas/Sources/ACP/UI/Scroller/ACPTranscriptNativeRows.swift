@@ -17,6 +17,8 @@ enum ACPTranscriptNativeRows {
     private static let supportCache: NSCache<NSString, NSNumber> = {
         let cache = NSCache<NSString, NSNumber>()
         cache.countLimit = 4096
+        // Steered streaming checks every growing prefix; bound the keys' bytes.
+        cache.totalCostLimit = 8 << 20
         return cache
     }()
 
@@ -26,7 +28,7 @@ enum ACPTranscriptNativeRows {
         let key = source as NSString
         if let cached = supportCache.object(forKey: key) { return cached.boolValue }
         let supported = ACPTranscriptMarkdownLayout.supports(ACPMarkdownParser.parse(source))
-        supportCache.setObject(NSNumber(value: supported), forKey: key)
+        supportCache.setObject(NSNumber(value: supported), forKey: key, cost: source.utf8.count)
         return supported
     }
 
