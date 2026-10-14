@@ -171,7 +171,16 @@ extension AlasCoreContext {
             // A path archived before is a new worktree now.
             let wasHidden = projects.isWorktreeHidden(projectId: request.projectID, path: created.path)
             projects.setWorktreeHidden(projectId: request.projectID, path: created.path, hidden: false)
-            var needsSave = try await refreshProjectWorktrees(request.projectID) || wasHidden
+            // The worktree exists from here on, and git is the source of
+            // truth for it: a refresh that fails is left to the next one
+            // rather than reported as a failed creation, which a retry could
+            // only repeat against the existing path.
+            var needsSave = wasHidden
+            do {
+                needsSave = try await refreshProjectWorktrees(request.projectID) || needsSave
+            } catch {
+                creationLogger.error("Refresh after creating a worktree failed: \(error.localizedDescription, privacy: .public)")
+            }
             guard projects.projects.contains(where: { $0.id == request.projectID }) else { return .projectRemoved }
             projects.setGGWorktreeMode(projectId: request.projectID, worktreeId: created.id, mode: request.ggWorktreeMode)
             needsSave = needsSave || request.ggWorktreeMode != .inherit

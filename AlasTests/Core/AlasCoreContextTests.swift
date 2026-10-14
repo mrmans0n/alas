@@ -218,6 +218,32 @@ struct AlasCoreContextTests {
         #expect(context.runRecords.record(worktreeID: worktree.id, scriptKey: script.key) == nil)
     }
 
+    /// Once Git has added the worktree it exists, so a refresh failing after
+    /// that is left to the next refresh instead of failing the creation,
+    /// which a retry could only repeat against the existing path.
+    @Test func creationSurvivesARefreshThatFails() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-core-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let repo = root.appendingPathComponent("repo")
+        try FileManager.default.copyItem(at: try await Self.repoTemplate.value, to: repo)
+        let context = AlasCoreContext(
+            projects: ProjectsManager(persistedProjects: []),
+            store: TestPersistenceStore(),
+            projectsFile: root.appendingPathComponent("projects.json"),
+            runHistoryStore: nil
+        )
+        let project = try await context.addProject(path: repo, displayName: "repo", icon: .default(color: "blue"))
+        context.refreshProjectWorktrees = { _ in throw CocoaError(.fileReadUnknown) }
+
+        let worktree = try await context.createWorktree(
+            projectID: project.id, branch: "feature", base: "main", destination: root.appendingPathComponent("feature")
+        )
+
+        #expect(FileManager.default.fileExists(atPath: worktree.path.path))
+        #expect(context.projects.operationState(for: worktree) == nil)
+    }
+
     /// The removal cannot be undone, so a project list that cannot be saved
     /// afterwards is reported rather than left to restore the deleted row,
     /// by the headless call and by the claimed deletion the app makes.
