@@ -55,11 +55,14 @@ extension ACPTranscriptCoreTextRowView {
         // The system's list may omit subviews, so add the actions button
         // explicitly unless it is already there.
         var children = super.accessibilityChildren() ?? []
-        let (button, elements, links, copies) = MainActor.assumeIsolated {
-            (actionsButton as NSButton?, textAccessibilityElements(), linkAccessibilityElements(), codeCopyAccessibilityElements())
+        let (button, elements, links, labels, copies) = MainActor.assumeIsolated {
+            (
+                actionsButton as NSButton?, textAccessibilityElements(), linkAccessibilityElements(),
+                codeLabelAccessibilityElements(), codeCopyAccessibilityElements()
+            )
         }
         if let button, !children.contains(where: { $0 as AnyObject === button }) { children.append(button) }
-        return children + elements + links + copies
+        return children + elements + links + labels + copies
     }
 
     override func accessibilityHitTest(_ point: NSPoint) -> Any? {
@@ -131,6 +134,24 @@ extension ACPTranscriptCoreTextRowView {
     /// The link whose drawn text is under `point` (row coordinates).
     func linkAccessibilityElement(at point: NSPoint) -> ACPTranscriptLinkAccessibilityElement? {
         linkAccessibilityElements().first { $0.fragments.contains { $0.contains(point) } }
+    }
+
+    /// Code-block language labels as static text, as the SwiftUI block's header
+    /// reads them, kept apart from the selectable code.
+    func codeLabelAccessibilityElements() -> [ACPTranscriptCodeLabelAccessibilityElement] {
+        guard hasTextArea, let (markdown, origin) = markdown else { return [] }
+        let labels = markdown.codeBlocks.compactMap(\.label)
+        if codeLabelElements.map({ $0.accessibilityLabel() ?? "" }) != labels.map(\.text) {
+            codeLabelElements = labels.map { label in
+                let element = ACPTranscriptCodeLabelAccessibilityElement(label: label.text)
+                element.setAccessibilityParent(self)
+                return element
+            }
+        }
+        for (element, label) in zip(codeLabelElements, labels) {
+            element.setAccessibilityFrameInParentSpace(label.rect.offsetBy(dx: origin.x, dy: origin.y))
+        }
+        return codeLabelElements
     }
 
     /// Code-block Copy buttons, framed where they are drawn.

@@ -132,6 +132,15 @@ final class ACPTranscriptCodeCopyAccessibilityElement: NSAccessibilityElement, @
     }
 }
 
+/// A code block's drawn language label, read as static text as in the SwiftUI block's header.
+final class ACPTranscriptCodeLabelAccessibilityElement: NSAccessibilityElement, @unchecked Sendable {
+    init(label: String) {
+        super.init()
+        setAccessibilityRole(.staticText)
+        setAccessibilityLabel(label)
+    }
+}
+
 /// A drawn Markdown link as an accessible link, so VoiceOver and Full
 /// Keyboard Access can reach and open it as in the text view renderer.
 final class ACPTranscriptLinkAccessibilityElement: NSAccessibilityElement, @unchecked Sendable {

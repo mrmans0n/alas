@@ -345,6 +345,14 @@ import Testing
         #expect(pasteboard.string(forType: .string) == "let x = 1")
     }
 
+    @Test func codeBlockLanguageIsAccessibleStaticText() throws {
+        let view = row(.agent(markdown: "```swift\nlet x = 1\n```\n\n```\nplain\n```", commentary: false))
+        _ = view.measuredHeight(forWidth: 800)
+        let labels = (view.accessibilityChildren() ?? []).compactMap { $0 as? ACPTranscriptCodeLabelAccessibilityElement }
+        #expect(labels.map { $0.accessibilityLabel() } == ["SWIFT"])
+        #expect(!(labels.first?.accessibilityFrameInParentSpace().isEmpty ?? true))
+    }
+
     @Test func codeBlockCopyCopiesOnlyTheCodeAndShowsCopiedUntilTheDelayEnds() async throws {
         let view = row(.agent(markdown: "```swift\nlet x = 1\n```", commentary: false))
         _ = view.measuredHeight(forWidth: 800)
