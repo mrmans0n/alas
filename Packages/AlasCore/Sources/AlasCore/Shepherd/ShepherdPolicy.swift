@@ -202,7 +202,9 @@ public enum ShepherdPolicy {
         case .merging:
             record.phase = .watching
         case .queued:
-            if request.isInMergeQueue { return .wait }
+            // New feedback for the session beats waiting: a fix push takes the
+            // request out of the queue anyway.
+            if request.isInMergeQueue, problems.isEmpty { return .wait }
             let trainStopped = request.worstCheckBucket == .fail || request.worstCheckBucket == .cancel
             if !request.isMergeQueueEnabled, headUnchanged, !trainStopped, problems.isEmpty { return .wait }
             record.phase = .watching

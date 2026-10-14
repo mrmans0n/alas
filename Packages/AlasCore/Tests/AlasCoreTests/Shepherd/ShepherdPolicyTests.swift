@@ -266,6 +266,13 @@ private let policyCases: [ShepherdPolicyCase] = [
           record: F.record(phase: .queued, autoMerge: true),
           observation: F.observation(F.snapshot(F.request(isMergeQueueEnabled: true, isInMergeQueue: true))),
           action: .wait, phase: .queued),
+    .init(testDescription: "queued record dispatches a trusted thread that arrives while in the queue",
+          record: F.record(phase: .queued, autoMerge: true, lastSeenHead: F.head, stablePolls: 2),
+          observation: F.observation(F.snapshot(F.request(
+              threads: [F.trustedThread], isMergeQueueEnabled: true, isInMergeQueue: true
+          ))),
+          action: .dispatchFix(ShepherdFixRequest(hasConflict: false, failingChecks: [], threads: [F.trustedThread])),
+          phase: .fixing(dispatchedAt: F.now)),
     .init(testDescription: "queued record holds on an unchanged head without queue reporting",
           record: F.record(kind: .gitlab, phase: .queued, autoMerge: true, lastSeenHead: F.head, stablePolls: 2),
           observation: F.observation(F.snapshot(F.request(kind: .gitlab))),
