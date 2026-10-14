@@ -231,8 +231,13 @@ public final class ACPSession: ChangeTracking, Identifiable {
                 || old?.tokenBudget != new?.tokenBudget {
                 nextPromptActivity.send()
             }
+            if new == nil, let old { clearedGoalObjective = old.objective }
+            else if new != nil { clearedGoalObjective = nil }
         }
     }
+    /// The objective of the goal most recently cleared, so its `/goal clear`
+    /// confirmation is recognized after `currentGoal` is already nil.
+    private var clearedGoalObjective: String?
     @Tracked public var promptSuggestions: [ACPPromptSuggestion] = []
     @Tracked public var autoRunEnabled: Bool = false { willSet { nextPromptActivity.send() } }
     /// A hidden `/btw` side session: only read-only tools run (see
@@ -1020,6 +1025,14 @@ public final class ACPSession: ChangeTracking, Identifiable {
         case .agentMessageChunk(let chunk):
             clearRestoredContextRecoveryStatus()
             let txt = text(of: chunk.content)
+            if let notice = Self.goalCommandNotice(
+                txt, currentObjective: currentGoal?.objective, clearedObjective: clearedGoalObjective
+            ) {
+                let flushedForNotice = flushPendingReplayCandidates()
+                transcript.appendMessage(.systemNotice(id: UUID(), text: notice))
+                didAppendTranscriptMessage()
+                return flushedForNotice.union([transcript.messages.count - 1])
+            }
             let binding = steeringMessageBinding(chunk.messageId, kind: .agent)
             let messageId = binding.id
             var flushedForAgent: Set<Int> = []
@@ -2313,6 +2326,21 @@ public final class ACPSession: ChangeTracking, Identifiable {
         appendSystemNotice(QueuedPrompt.interruptedTurnContinueNotice)
         transcript.completedOutputBoundaryMessageIds.removeAll()
         expectInterruptedTurnContinuationEcho()
+    }
+
+    /// Claude Code answers `/goal` with local-command output ("Goal set: …",
+    /// "Goal cleared: …") that the adapter streams as agent text, where it
+    /// reads as part of the agent's reply. Returns the confirmation to record
+    /// as a notice instead, or nil for anything else. The objective must match
+    /// the goal the adapter published, so agent prose that merely starts the
+    /// same way stays agent text.
+    static func goalCommandNotice(
+        _ text: String, currentObjective: String?, clearedObjective: String?
+    ) -> String? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let currentObjective, trimmed == "Goal set: \(currentObjective)" { return trimmed }
+        if let clearedObjective, trimmed == "Goal cleared: \(clearedObjective)" { return trimmed }
+        return nil
     }
 
     public func appendSystemNotice(_ text: String) {
