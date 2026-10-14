@@ -136,7 +136,7 @@ end
 
 expected_runners = {
   "ci-workflow-contract" => "ubuntu-26.04",
-  "rust-tests" => "ubuntu-26.04",
+  "rust-tests" => "${{ matrix.os || 'ubuntu-26.04' }}",
   "remote-web-tests" => "ubuntu-26.04"
 }
 
@@ -147,11 +147,13 @@ end
 
 rust_job = jobs.fetch("rust-tests")
 matrix = rust_job.dig("strategy", "matrix")
-projects = matrix.fetch("include").map { |entry| [entry.fetch("project"), entry.fetch("toolchain")] }
-raise "rust-tests must cover every first-party Rust project with its declared toolchain" unless projects == [
-  ["AlasCLI", "1.98.1"],
-  ["AlasHelper", "1.98.1"],
-  ["ThirdParty/treesitter-pack", "1.97.1"]
+projects = matrix.fetch("include").map { |entry| [entry.fetch("project"), entry.fetch("toolchain"), entry.fetch("os", "ubuntu-26.04")] }
+# The helper also runs on macOS SSH hosts, where it supervises plugin processes differently.
+raise "rust-tests must cover every first-party Rust project with its declared toolchain, the helper on macOS too" unless projects == [
+  ["AlasCLI", "1.98.1", "ubuntu-26.04"],
+  ["AlasHelper", "1.98.1", "ubuntu-26.04"],
+  ["AlasHelper", "1.98.1", "macos-26"],
+  ["ThirdParty/treesitter-pack", "1.97.1", "ubuntu-26.04"]
 ]
 
 rust_command = rust_job.fetch("steps").find { |step| step["name"] == "Run locked Rust tests" }
