@@ -244,6 +244,37 @@ struct AlasCoreContextTests {
         #expect(context.projects.operationState(for: worktree) == nil)
     }
 
+    /// What a creation records in the project list (here its GG mode) is
+    /// only persisted by its last save, so a failure there is reported while
+    /// the creation itself stands.
+    @Test func creationReportsAProjectListItCannotSave() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-core-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let repo = root.appendingPathComponent("repo")
+        try FileManager.default.copyItem(at: try await Self.repoTemplate.value, to: repo)
+        let store = TestPersistenceStore()
+        let context = AlasCoreContext(
+            projects: ProjectsManager(persistedProjects: []),
+            store: store,
+            projectsFile: root.appendingPathComponent("projects.json"),
+            runHistoryStore: nil
+        )
+        let project = try await context.addProject(path: repo, displayName: "repo", icon: .default(color: "blue"))
+        var request = WorktreeCreateRequest(projectID: project.id, base: "main", branch: "feature", destination: root.appendingPathComponent("feature"))
+        request.ggWorktreeMode = .on
+        let pending = try await context.beginCreate(request)
+        store.writeError = CocoaError(.fileWriteOutOfSpace)
+
+        let outcome = await context.finishCreate(pending)
+
+        guard case .createdButNotSaved(let worktree, _) = outcome else {
+            Issue.record("Expected the save failure to be reported, got \(outcome)")
+            return
+        }
+        #expect(FileManager.default.fileExists(atPath: worktree.path.path))
+    }
+
     /// The removal cannot be undone, so a project list that cannot be saved
     /// afterwards is reported rather than left to restore the deleted row,
     /// by the headless call and by the claimed deletion the app makes.

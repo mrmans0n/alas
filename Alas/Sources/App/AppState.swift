@@ -4871,8 +4871,12 @@ final class AppState {
         }
 
         Task { @MainActor in
-            switch await core.finishCreate(pending) {
-            case .created(let newWorktree):
+            let outcome = await core.finishCreate(pending)
+            if case .createdButNotSaved(_, let message) = outcome {
+                persistenceErrorHandler("Projects Save Failed", message)
+            }
+            switch outcome {
+            case .created(let newWorktree), .createdButNotSaved(let newWorktree, _):
                 removeUnpersistedGGWorktreeMode(projectId: project.id, worktreeId: newWorktree.id)
                 rightPaneStore.reevaluateGGGate(worktreeId: newWorktree.id)
                 if launchSurface != .delegated {

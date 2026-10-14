@@ -43,6 +43,9 @@ public struct PendingWorktreeCreation: Sendable {
 
 public enum WorktreeCreationOutcome: Equatable, Sendable {
     case created(Worktree)
+    /// Created, but what it records in the project list (a pending branch
+    /// name, the GG mode, the issue attachment) could not be saved.
+    case createdButNotSaved(Worktree, String)
     /// Left on the row as `.createFailed`, for retry.
     case failed(String)
     /// The project was removed meanwhile, along with the row.
@@ -71,7 +74,7 @@ extension AlasCoreContext {
     public func createWorktree(_ request: WorktreeCreateRequest) async throws -> Worktree {
         let pending = try await beginCreate(request)
         switch await finishCreate(pending) {
-        case .created(let worktree): return worktree
+        case .created(let worktree), .createdButNotSaved(let worktree, _): return worktree
         case .failed(let message): throw WorktreeCreationFailure(message: message)
         case .projectRemoved: throw ProjectCreationError.projectNotFound
         }
@@ -134,6 +137,10 @@ extension AlasCoreContext {
             return .projectRemoved
         }
         let repoPath = URL(fileURLWithPath: project.path)
+        var saveFailure: String?
+        func save() {
+            do { try saveProjects() } catch { saveFailure = saveFailure ?? error.localizedDescription }
+        }
         do {
             if request.fetchesBaseFirst {
                 await fetchBase(request.base, in: repoPath)
@@ -157,7 +164,7 @@ extension AlasCoreContext {
                     worktreeId: created.id,
                     placeholder: created.branch
                 )
-                try? saveProjects()
+                save()
             }
             do {
                 try await runWorktreeCreateScripts(
@@ -190,9 +197,9 @@ extension AlasCoreContext {
             }
             projects.finishOperation(pending.claim, for: pending.worktree)
             if needsSave {
-                try? saveProjects()
+                save()
             }
-            return .created(created)
+            return saveFailure.map { .createdButNotSaved(created, $0) } ?? .created(created)
         } catch {
             let message = error.localizedDescription
             projects.finishOperation(pending.claim, for: pending.worktree, leaving: .createFailed(
