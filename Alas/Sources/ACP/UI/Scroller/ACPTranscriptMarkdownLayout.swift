@@ -38,11 +38,22 @@ struct ACPTranscriptMarkdownLayout {
     struct CopyButtonStyle {
         let copy: CTLine
         let copied: CTLine
+        let copyIcon: NSImage
+        let copiedIcon: NSImage
         let ascent: CGFloat
         let fill: NSColor
         let copiedFill: NSColor
         let stroke: NSColor
         let copiedStroke: NSColor
+
+        /// The button's width: icon, spacing, and label inside its padding.
+        @MainActor func width(copied: Bool) -> CGFloat {
+            let label = copied ? self.copied : copy
+            let icon = copied ? copiedIcon : copyIcon
+            return ceil(icon.size.width + ACPTranscriptMarkdownLayout.copyButtonIconSpacing
+                + CGFloat(CTLineGetTypographicBounds(label, nil, nil, nil)))
+                + 2 * ACPTranscriptMarkdownLayout.copyButtonHorizontalPadding
+        }
     }
 
     /// A rule under one run, relative to its line's origin and baseline.
@@ -59,6 +70,10 @@ struct ACPTranscriptMarkdownLayout {
         let rect: CGRect
         let color: NSColor
         let cornerRadius: CGFloat
+        /// A code block's header band: its height from the top, fill, and bottom divider.
+        var header: (height: CGFloat, fill: NSColor, divider: NSColor)?
+        /// An outline drawn inside the edge, as SwiftUI's `strokeBorder`.
+        var stroke: NSColor?
     }
 
     // Copied from `ACPMarkdownText` and its `CodeBlockView`.
@@ -81,6 +96,7 @@ struct ACPTranscriptMarkdownLayout {
     static let codeLineSpacing: CGFloat = 2
     static let codeLabelTracking: CGFloat = 0.4
     static let copyButtonHorizontalPadding: CGFloat = 6
+    static let copyButtonIconSpacing: CGFloat = 4
     static let copyButtonVerticalPadding: CGFloat = 2
     static let copyButtonCornerRadius: CGFloat = 4
     static let copyButtonStrokeWidth: CGFloat = 0.5
@@ -130,8 +146,7 @@ struct ACPTranscriptMarkdownLayout {
     /// Code block `index`'s "Copy" button, sized for the label it shows.
     func copyButtonRect(_ index: Int, copied: Bool) -> CGRect {
         let block = codeBlocks[index]
-        let label = copied ? copyButtonStyle.copied : copyButtonStyle.copy
-        let width = ceil(CGFloat(CTLineGetTypographicBounds(label, nil, nil, nil))) + 2 * Self.copyButtonHorizontalPadding
+        let width = copyButtonStyle.width(copied: copied)
         return CGRect(x: block.maxX - width, y: block.minY, width: width, height: block.height)
     }
 
@@ -252,15 +267,23 @@ struct ACPTranscriptMarkdownLayout {
             self.width = width
             self.theme = theme
             self.typography = typography
-            // As `CodeBlockView.copyButton`, without its icon.
+            // As `CodeBlockView.copyButton`.
             let font = NSFont.systemFont(ofSize: typography.labelSize, weight: .medium)
             func label(_ string: String, _ color: NSColor) -> CTLine {
                 CTLineCreateWithAttributedString(NSAttributedString(string: string, attributes: [.font: font, .foregroundColor: color]))
             }
+            func icon(_ name: String, weight: NSFont.Weight, _ color: NSColor) -> NSImage {
+                let configuration = NSImage.SymbolConfiguration(pointSize: typography.labelSize, weight: weight)
+                    .applying(NSImage.SymbolConfiguration(paletteColors: [color]))
+                return NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(configuration) ?? NSImage()
+            }
             let add = theme.nsColor("add")
+            let muted = theme.nsColor("fg-muted")
             copyButtonStyle = CopyButtonStyle(
-                copy: label("Copy", theme.nsColor("fg-muted")),
+                copy: label("Copy", muted),
                 copied: label("Copied", add),
+                copyIcon: icon("doc.on.doc", weight: .regular, muted),
+                copiedIcon: icon("checkmark", weight: .bold, add),
                 ascent: font.ascender,
                 fill: theme.nsColor("bg-3").withAlphaComponent(0.6),
                 copiedFill: theme.nsColor("bg-3").withAlphaComponent(0.4),
@@ -398,10 +421,7 @@ struct ACPTranscriptMarkdownLayout {
                 let first = lines.count
                 // As the SwiftUI header's `HStack`, the label gets what the Copy button and spacing
                 // leave; the wider "Copied" label is reserved so the label never runs under it.
-                let buttonWidth = ceil(max(
-                    CGFloat(CTLineGetTypographicBounds(copyButtonStyle.copy, nil, nil, nil)),
-                    CGFloat(CTLineGetTypographicBounds(copyButtonStyle.copied, nil, nil, nil))
-                )) + 2 * L.copyButtonHorizontalPadding
+                let buttonWidth = max(copyButtonStyle.width(copied: false), copyButtonStyle.width(copied: true))
                 let labelWidth = width - 2 * L.codeHeaderHorizontalPadding - buttonWidth - L.codeHeaderSpacing
                 addText(label, x: L.codeHeaderHorizontalPadding, width: max(1, labelWidth), lineSpacing: 0)
                 let labelHeight = y - headerTop
@@ -419,6 +439,7 @@ struct ACPTranscriptMarkdownLayout {
                 minY: headerTop + (headerHeight - buttonHeight) / 2, height: buttonHeight
             ))
             y = headerTop + headerHeight + L.codeHeaderVerticalPadding
+            let headerBandHeight = y - top
 
             y += L.codeBodyVerticalPadding
             let code: NSAttributedString
@@ -449,7 +470,10 @@ struct ACPTranscriptMarkdownLayout {
             backgrounds[backgroundIndex] = Background(
                 rect: CGRect(x: 0, y: top, width: width, height: y - top),
                 color: theme.nsColor("bg-0").withAlphaComponent(L.codeBackgroundAlpha),
-                cornerRadius: L.codeCornerRadius
+                cornerRadius: L.codeCornerRadius,
+                // As `CodeBlockView`'s header background and divider, and its outline.
+                header: (headerBandHeight, theme.nsColor("bg-2").withAlphaComponent(0.6), theme.nsColor("line-soft")),
+                stroke: theme.nsColor("line")
             )
         }
 
