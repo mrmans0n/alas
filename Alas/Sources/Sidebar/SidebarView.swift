@@ -369,11 +369,6 @@ struct SidebarView: View {
             }
             .sidebarChromeTheme(textContrast: override.textContrast)
             .background {
-                if let nativePeerSessions = state.nativePeerSessions {
-                    NativePeerSidebarExpansion(client: nativePeerSessions, model: peerSidebarModel)
-                }
-            }
-            .background {
                 if state.spacesManager.shouldShowSpaceAffordance {
                     SpacePagerScrollCaptureView { offset in
                         pageSpace(offset: offset)
