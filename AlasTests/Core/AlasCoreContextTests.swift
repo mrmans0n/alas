@@ -460,7 +460,7 @@ struct AlasCoreContextTests {
                 Issue.record("the fake hook loads")
                 return
             }
-            try context.persistRepoHookApproval(projectId: project.id, hash: hook.hash)
+            #expect(context.projects.approveRepoHook(projectId: project.id, hash: hook.hash))
         }
 
         let worktree = try await context.createWorktree(
