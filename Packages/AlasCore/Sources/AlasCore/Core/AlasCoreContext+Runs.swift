@@ -217,7 +217,11 @@ extension AlasCoreContext {
                     // what this launch opened is ended: a restart may already
                     // host the script's next run.
                     switch launch {
-                    case .process(let process): process.cancel()
+                    case .process(let process):
+                        // Waited out, so whoever waits for this launch (a
+                        // removal) knows the process has ended.
+                        process.cancel()
+                        _ = try? await process.value
                     case .hosted(let sessionID): launcher.endRunHost(sessionID: sessionID, worktreeID: worktree.id)
                     case .unobservable: break
                     }
@@ -305,6 +309,7 @@ extension AlasCoreContext {
     /// of its tabs does: launches stop, and running ones settle as unknown.
     public func abandonRuns(worktreeID: String) {
         cancelStartingRuns(worktreeID: worktreeID)
+        cancelProcessRuns { $0 == worktreeID }
         for (runID, entry) in runObservations where entry.worktreeID == worktreeID {
             stopObservingRun(runID: runID)
         }
@@ -320,6 +325,7 @@ extension AlasCoreContext {
     @discardableResult
     public func forgetRuns(worktreeID: String, deletingHistory: Bool) -> Task<Void, Never>? {
         cancelStartingRuns(worktreeID: worktreeID)
+        cancelProcessRuns { $0 == worktreeID }
         return discardRuns(worktreeID: worktreeID, deletingHistory: deletingHistory)
     }
 
@@ -327,6 +333,7 @@ extension AlasCoreContext {
     /// anyone waiting on one settle as unknown.
     public func abandonAllRuns() {
         cancelStartingRuns()
+        cancelProcessRuns { _ in true }
         stopObservingAllRuns()
     }
 
@@ -460,6 +467,15 @@ extension AlasCoreContext {
     }
 
     // MARK: - Private
+
+    /// Ends the processes of runs being given up on: no longer observing a
+    /// process does not stop it.
+    private func cancelProcessRuns(where matches: (_ worktreeID: String) -> Bool) {
+        for (runID, run) in processRuns where matches(run.worktreeID) {
+            processRuns.removeValue(forKey: runID)
+            run.task.cancel()
+        }
+    }
 
     /// Stops one run. When a restart has already taken the script's slot, only
     /// the run's own process is ended; the replacement is left alone.

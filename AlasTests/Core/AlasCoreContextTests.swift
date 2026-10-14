@@ -255,6 +255,44 @@ struct AlasCoreContextTests {
         #expect(current?.status.isActive == true)
     }
 
+    /// Giving up on every run, as quitting does, ends their processes too,
+    /// not only the waiting for them.
+    @Test(.timeLimit(.minutes(1)))
+    func abandoningAllRunsEndsTheirProcesses() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-core-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let pidFile = root.appendingPathComponent("pid")
+        try "echo $$ > '\(pidFile.path)'\nsleep 300\n".write(to: root.appendingPathComponent("long.sh"), atomically: true, encoding: .utf8)
+        let project = ProjectConfig(id: "p", name: "p", path: root.path, color: "blue", addedAt: Date())
+        let worktree = Worktree(
+            id: root.path, projectId: "p", name: "main", branch: "main", path: root,
+            status: .clean, lastActivity: Date()
+        )
+        let script = RunScript(
+            scope: .repo, fileName: "long.sh", fileURL: root.appendingPathComponent("long.sh"),
+            displayName: "Long", onExit: .close, cwd: nil, isExecutable: false
+        )
+        let context = AlasCoreContext(projects: ProjectsManager(persistedProjects: [project]), runHistoryStore: nil)
+        let run = Task { try await context.runScript(script, in: worktree) }
+        var pid: pid_t?
+        while pid == nil {
+            pid = (try? String(contentsOf: pidFile, encoding: .utf8)).flatMap { pid_t($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let shell = try #require(pid)
+
+        context.abandonAllRuns()
+        _ = try? await run.value
+
+        // SIGTERM first, SIGKILL after a two second grace.
+        let deadline = ContinuousClock.now + .seconds(10)
+        while kill(shell, 0) == 0, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        #expect(kill(shell, 0) != 0, "the run's shell is still alive")
+    }
+
     /// A second run of a script that is still running would displace the
     /// first one's record and drop its history, so it is refused.
     @Test func refusesToStartAScriptThatIsAlreadyRunning() async throws {
