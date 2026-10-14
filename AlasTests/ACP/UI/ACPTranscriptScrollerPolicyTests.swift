@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import SwiftUI
 import Testing
 @testable import Alas
 
@@ -13,6 +14,7 @@ private func makeHost(
     typography: ACPChatTypography = .default,
     onRememberScrollAnchor: @escaping (String?, Int?, Bool) -> Void = { _, _, _ in },
     onQueueRemove: @escaping (UUID) -> Void = { _ in },
+    onLoadFullToolCallContent: @escaping (String) async -> String? = { _ in nil },
     collapsesFinishedToolCalls: Bool = false
 ) -> ACPTranscriptScroller {
     ACPTranscriptScroller(
@@ -22,7 +24,7 @@ private func makeHost(
         typography: typography,
         trustedImageRoot: nil,
         onOpenDiff: { _ in },
-        onLoadFullToolCallContent: { _ in nil },
+        onLoadFullToolCallContent: onLoadFullToolCallContent,
         forkTargets: [],
         onFork: { _, _ in },
         rememberedScrollAnchor: { nil },
@@ -73,6 +75,53 @@ struct ACPTranscriptScrollerRowSpecsTests {
         if isActive {
             #expect(specs.first { $0.id == "__streaming_caret__" }?.parksWhenReleased == false)
         }
+    }
+
+    @Test("a message row's token changes when assistive tech turns on so mounted rows reconfigure")
+    func messageRowTokenCoversPermanentActions() throws {
+        let host = makeHost()
+        let agent = ACPMessage.agent(id: UUID(), StreamingText("answer"))
+        host.transcript.messages = [agent]
+        func token(_ permanent: Bool) throws -> ACPRowEqualityToken {
+            let specs = ACPTranscriptScroller.Coordinator.rowSpecs(host: host, showsActionsPermanently: permanent)
+            return try #require(specs.first { $0.id == agent.stableId }).equalityToken
+        }
+        #expect(try !token(true).isEqual(to: token(false)))
+    }
+
+    @Test("only rows that park are considered for native drawing, so a streaming answer is never parsed")
+    func nativeRowsSkipActiveTurn() {
+        let host = makeHost()
+        let streaming = "streaming answer \(UUID())"
+        let messages: [ACPMessage] = [
+            .user(id: UUID(), text: "previous", attachments: []),
+            .agent(id: UUID(), StreamingText("history \(UUID())")),
+            .user(id: UUID(), text: "current", attachments: []),
+            .agent(id: UUID(), StreamingText(streaming))
+        ]
+        host.transcript.messages = messages
+        host.transcript.streamingState = .streaming
+        let specs = ACPTranscriptScroller.Coordinator.rowSpecs(host: host, nativeRowsEnabled: true)
+        #expect(specs.first { $0.id == messages[1].stableId }?.native != nil)
+        #expect(specs.first { $0.id == messages[3].stableId }?.native == nil)
+        #expect(!ACPTranscriptNativeRows.hasParsed(streaming))
+    }
+
+    @Test("a row whose turn ends changes token as it becomes native, so the mounted view is replaced")
+    func endingATurnChangesTheTokenOfRowsThatBecomeNative() throws {
+        let host = makeHost()
+        let prompt = ACPMessage.user(id: UUID(), text: "please fix the tests", attachments: [])
+        host.transcript.messages = [prompt, .agent(id: UUID(), StreamingText("working"))]
+        func spec() throws -> ACPTranscriptRowSpec {
+            try #require(ACPTranscriptScroller.Coordinator.rowSpecs(host: host, nativeRowsEnabled: true).first { $0.id == prompt.stableId })
+        }
+        host.transcript.streamingState = .streaming
+        let active = try spec()
+        host.transcript.streamingState = .idle
+        let idle = try spec()
+        #expect(active.native == nil)
+        #expect(idle.native != nil)
+        #expect(!active.equalityToken.isEqual(to: idle.equalityToken))
     }
 
     @Test("idle tool rows park only after both tool and terminal finish", arguments: ["pending", "in_progress", "completed", "failed"])
@@ -351,6 +400,92 @@ struct ACPTranscriptScrollerRowSpecsTests {
         #expect(!collapsed.isEqual(to: expanded))
     }
 
+    @Test("expanding a native tool row swaps it for the expanded SwiftUI card")
+    func expandingANativeToolRowSwapsItForTheExpandedSwiftUICard() throws {
+        let host = makeHost()
+        host.transcript.messages = [.user(id: UUID(), text: "go", attachments: []), tool("a")]
+        let coordinator = ACPTranscriptScroller.Coordinator()
+        let store = coordinator.rowExpansionStore
+        func spec() throws -> ACPTranscriptRowSpec {
+            try #require(ACPTranscriptScroller.Coordinator.rowSpecs(
+                host: host, rowExpansionStore: store, nativeRowsEnabled: true
+            ).first { $0.id == "tc-a" })
+        }
+
+        let collapsed = try spec()
+        #expect(collapsed.native != nil)
+
+        store.setExpanded(true, stableID: "tc-a")
+        let expanded = try spec()
+        #expect(expanded.native == nil)
+        #expect(!collapsed.equalityToken.isEqual(to: expanded.equalityToken))
+
+        store.setExpanded(false, stableID: "tc-a")
+        #expect(try spec().native != nil)
+    }
+
+    @Test("pressing a mounted native tool row swaps it for the card only after the press returns")
+    func pressingAMountedNativeToolRowSwapsItAfterThePressReturns() async throws {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.replaceTranscriptMessages([.user(id: UUID(), text: "go", attachments: []), tool("a")])
+        session.transcript.visibleHead = 0
+        session.transcript.visibleTail = nil
+        let scroller = ACPTranscriptScrollerView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
+        let coordinator = ACPTranscriptScroller.Coordinator()
+        coordinator.nativeRowsEnabled = true
+        coordinator.attach(scroller: scroller, host: makeHost(session: session))
+        scroller.layoutSubtreeIfNeeded()
+        let native = try #require(coordinator.mountedRowViewForTesting(id: "tc-a") as? ACPTranscriptCoreTextRowView)
+
+        #expect(native.accessibilityPerformPress())
+        // The press is still on the stack when the store changes, so the
+        // row it came from must stay mounted until the call returns.
+        #expect(coordinator.mountedRowViewForTesting(id: "tc-a") === native)
+        #expect(native.superview != nil)
+        try await eventually("the expanded card to replace the native row") {
+            coordinator.mountedRowViewForTesting(id: "tc-a") is ACPTranscriptRowHostingView
+        }
+    }
+
+    @Test("an expanded truncated tool card still loads its full content")
+    func expandedTruncatedToolCardsStillLoadTheirFullContent() async throws {
+        let loads = LoadRecorder()
+        let host = makeHost(onLoadFullToolCallContent: { id in
+            await loads.record(id)
+            return "full output"
+        })
+        var call = ACPMessage.ToolCall(toolCallId: "a", title: "Run a", kind: "execute", status: "completed", content: "partial")
+        call.isContentTruncated = true
+        host.transcript.messages = [.user(id: UUID(), text: "go", attachments: []), .toolCall(call)]
+        let store = ACPTranscriptRowExpansionStore()
+        store.setExpanded(true, stableID: "tc-a")
+
+        let spec = try #require(ACPTranscriptScroller.Coordinator.rowSpecs(
+            host: host, rowExpansionStore: store, nativeRowsEnabled: true
+        ).first { $0.id == "tc-a" })
+        #expect(spec.native == nil)
+
+        // Built already expanded, the card pages its content in on appear.
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 300),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.contentViewController = NSHostingController(rootView: spec.build())
+        defer { window.close() }
+        try await eventually("the card to load its full content") {
+            window.layoutIfNeeded()
+            return !loads.ids.isEmpty
+        }
+        #expect(loads.ids == ["a"])
+    }
+
+    @MainActor
+    private final class LoadRecorder {
+        private(set) var ids: [String] = []
+        func record(_ id: String) { ids.append(id) }
+    }
+
     @Test("an expanded bundle emits a header spec followed by one spec per member")
     func expandedBundleEmitsHeaderAndMemberSpecs() {
         let host = makeHost(collapsesFinishedToolCalls: true)
@@ -453,6 +588,8 @@ struct ACPTranscriptScrollerRowSpecsTests {
                 ACPTranscriptVisibleRow(index: 1, stableId: "tc-b"),
                 ACPTranscriptVisibleRow(index: 2, stableId: "tc-c"),
             ])),
+            // A memoized fold can be stale: a row past the transcript has no spec.
+            .message(ACPTranscriptVisibleRow(index: 3, stableId: "tc-gone")),
         ]
         let ids = ACPTranscriptScroller.Coordinator.rowSpecs(host: host, renderRows: supplied).map(\.id)
         #expect(ids == ["tc-a", "tcg-tc-b", "__composer_spacer__"])

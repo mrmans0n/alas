@@ -8,8 +8,20 @@ struct ACPThoughtView: View {
     /// `ACPNarrationLiveness` at the transcript level, since the buffer
     /// alone cannot tell "finished" from "paused between chunks".
     var isLive: Bool = false
-    @State private var expanded = false
+    /// Reports each toggle, so the transcript can remember it across rebuilds.
+    var onExpandedChange: ((Bool) -> Void)?
+    @State private var expanded: Bool
     @Environment(\.theme) private var theme
+
+    init(
+        buffer: StreamingText, isLive: Bool = false,
+        initiallyExpanded: Bool = false, onExpandedChange: ((Bool) -> Void)? = nil
+    ) {
+        self.buffer = buffer
+        self.isLive = isLive
+        self.onExpandedChange = onExpandedChange
+        _expanded = State(initialValue: initiallyExpanded)
+    }
 
     static func inlineLabel(for value: String) -> String? {
         // Live buffers can grow into long walls of text. Stop before making
@@ -40,7 +52,10 @@ struct ACPThoughtView: View {
                 .acpNarrationShimmer(isActive: isLive, axis: .vertical)
                 .padding(.vertical, 2)
             VStack(alignment: .leading, spacing: 6) {
-                Button { expanded.toggle() } label: {
+                Button {
+                    expanded.toggle()
+                    onExpandedChange?(expanded)
+                } label: {
                     HStack(spacing: 7) {
                         Image(systemName: "brain")
                             .font(.system(size: 11))

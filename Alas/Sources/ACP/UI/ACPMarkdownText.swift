@@ -338,7 +338,7 @@ private struct ACPMarkdownTaskCheckbox: NSViewRepresentable {
 /// Fenced code block with optional language label and a copy button on
 /// the right side of the header. Click flashes a checkmark + "Copied"
 /// for ~1.5s, mirroring the SHA-copy affordance in the commit editor.
-private struct CodeBlockView: View {
+struct CodeBlockView: View {
     let language: String?
     let code: String
     let typography: ACPChatTypography
