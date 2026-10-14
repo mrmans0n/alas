@@ -1178,7 +1178,7 @@ mod tests {
             Some("/wt".into()),
         );
         assert_eq!(request.command, "visual_show");
-        assert_eq!(request.session_id.as_deref(), Some("acp-1"));
+        assert_eq!(request.session_id.as_deref(), Some("acp-2"));
         assert_eq!(
             request.params,
             Some(serde_json::json!({
