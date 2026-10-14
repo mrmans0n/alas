@@ -88,6 +88,8 @@ struct ACPTranscriptMarkdownLayout {
     /// The selectable text of each block, in order: rendered inline markdown
     /// (no backticks or asterisks) and code bodies.
     let texts: [String]
+    /// Each block's rendered text with its attributes, for link boundaries.
+    let attributedTexts: [NSAttributedString]
     let codeBlocks: [CodeBlock]
     let copyButtonStyle: CopyButtonStyle
 
@@ -116,7 +118,8 @@ struct ACPTranscriptMarkdownLayout {
         }
         return ACPTranscriptMarkdownLayout(
             width: max(1, width), height: builder.y, lines: builder.lines, backgrounds: builder.backgrounds,
-            texts: builder.texts, codeBlocks: builder.codeBlocks, copyButtonStyle: builder.copyButtonStyle
+            texts: builder.texts, attributedTexts: builder.attributedTexts, codeBlocks: builder.codeBlocks,
+            copyButtonStyle: builder.copyButtonStyle
         )
     }
 
@@ -170,8 +173,7 @@ struct ACPTranscriptMarkdownLayout {
                 // same URL, same block, and nothing but wrapped-away whitespace
                 // between them in the source. Two links to one URL stay apart.
                 if let last = spans.last, last.url == url, last.block == block, last.end <= range.location,
-                   blockText.substring(with: NSRange(location: last.end, length: range.location - last.end))
-                       .allSatisfy(\.isWhitespace) {
+                   Self.isSameLink(url, in: attributedTexts[block], from: last.end, to: range.location) {
                     let gap = blockText.substring(with: NSRange(location: last.end, length: range.location - last.end))
                     spans[spans.count - 1] = LinkSpan(
                         url: url, text: last.text + gap + text, rects: last.rects + [rect], block: block, end: end
@@ -182,6 +184,22 @@ struct ACPTranscriptMarkdownLayout {
             }
         }
         return spans
+    }
+
+    /// Whether the source between two runs belongs to one link: only
+    /// whitespace a wrap left out, still carrying that link. Two adjacent
+    /// links to one URL are separated by text without the attribute.
+    private static func isSameLink(_ url: URL, in text: NSAttributedString, from start: Int, to end: Int) -> Bool {
+        guard start <= end, end <= text.length else { return false }
+        let string = text.string as NSString
+        for index in start..<end {
+            guard let scalar = Unicode.Scalar(string.character(at: index)), CharacterSet.whitespacesAndNewlines.contains(scalar) else {
+                return false
+            }
+            let value = text.attribute(.link, at: index, effectiveRange: nil)
+            guard ((value as? URL) ?? (value as? String).flatMap(URL.init(string:))) == url else { return false }
+        }
+        return true
     }
 
     /// The link under `point`, in layout coordinates; nil outside link glyphs.
@@ -224,6 +242,7 @@ struct ACPTranscriptMarkdownLayout {
         var lines: [Line] = []
         var backgrounds: [Background] = []
         var texts: [String] = []
+        var attributedTexts: [NSAttributedString] = []
         var codeBlocks: [CodeBlock] = []
         let copyButtonStyle: CopyButtonStyle
 
@@ -381,6 +400,7 @@ struct ACPTranscriptMarkdownLayout {
             _ text: NSAttributedString, x: CGFloat, width: CGFloat, lineSpacing: CGFloat = 0, lineHeight: CGFloat? = nil
         ) {
             texts.append(text.string)
+            attributedTexts.append(text)
             addText(text, x: x, width: width, lineSpacing: lineSpacing, lineHeight: lineHeight, block: texts.count - 1)
         }
 

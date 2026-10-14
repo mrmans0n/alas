@@ -61,6 +61,13 @@ import Testing
         #expect(layout.linkSpans().map(\.text) == ["docs", "docs again", "docs"])
     }
 
+    @Test func adjacentLinksToOneURLStayDistinct() throws {
+        let layout = try #require(ACPTranscriptMarkdownLayout.make(
+            source: "[first](https://example.com) [second](https://example.com)", width: 600, theme: theme, typography: .default
+        ))
+        #expect(layout.linkSpans().map(\.text) == ["first", "second"])
+    }
+
     @Test func aWrappedLinkIsOneSpan() throws {
         let layout = try #require(ACPTranscriptMarkdownLayout.make(
             source: "Read [the full migration guide for this release](https://example.com) first.", width: 120,
