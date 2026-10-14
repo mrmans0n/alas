@@ -306,8 +306,10 @@ struct ACPTranscriptMarkdownLayout {
         private static func markLinkBoundaries(in rendered: NSMutableAttributedString, source: String) {
             let pattern = #"\[((?:[^\[\]]|\[[^\]]*\])*)\]\(\s*<?([^)\s>]+)>?(?:\s+"[^"]*")?\s*\)"#
             guard let regex = try? NSRegularExpression(pattern: pattern) else { return }
-            let nsSource = source as NSString
-            var sourceLinks = regex.matches(in: source, range: NSRange(location: 0, length: nsSource.length)).map {
+            // Link syntax inside a code span renders as code, not as a link.
+            let withoutCode = source.replacingOccurrences(of: #"(`+)[\s\S]*?\1"#, with: " ", options: .regularExpression)
+            let nsSource = withoutCode as NSString
+            var sourceLinks = regex.matches(in: withoutCode, range: NSRange(location: 0, length: nsSource.length)).map {
                 (label: nsSource.substring(with: $0.range(at: 1)), url: nsSource.substring(with: $0.range(at: 2)))
             }
             var ordinal = 0
