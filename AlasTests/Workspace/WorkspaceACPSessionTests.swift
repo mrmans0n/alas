@@ -2,53 +2,20 @@ import Foundation
 import Testing
 @testable import Alas
 
+private struct AvailableMemberObserver: WorkspaceCheckoutObserving {
+    func observe(_ member: WorkspaceCheckoutMember, in checkout: WorkspaceCheckout) async -> WorkspaceCheckoutMemberObservation {
+        .exactLineage("test-lineage")
+    }
+}
+
 @Suite("Workspace ACP session ownership", .serialized)
 struct WorkspaceACPSessionTests {
     @MainActor
     @Test func reviewFeedbackFindsAndActivatesCheckoutAgent() async throws {
-        struct AvailableMemberObserver: WorkspaceCheckoutObserving {
-            func observe(_ member: WorkspaceCheckoutMember, in checkout: WorkspaceCheckout) async -> WorkspaceCheckoutMemberObservation {
-                .exactLineage("test-lineage")
-            }
-        }
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let project = ProjectConfig(id: UUID().uuidString, name: "Repo", path: root.path, color: "blue", addedAt: Date())
-        let worktree = Worktree(id: UUID().uuidString, projectId: project.id, name: "topic", branch: "topic", path: root.appendingPathComponent("repo"), status: .clean, lastActivity: Date())
-        let checkout = WorkspaceCheckout(
-            workspaceID: nil, fallbackWorkspaceName: "Workspace", executionLocation: .local,
-            branch: "topic", rootPath: root.path,
-            members: [.init(workspaceMemberID: UUID(), projectID: project.id, fallbackProjectName: project.name,
-                            fallbackRepositoryRoot: project.path, worktreePath: worktree.path.path, availability: .available)]
-        )
-        try writeManifest(for: checkout)
-        let workspaceStore = WorkspaceStore(url: root.appendingPathComponent("workspaces.json"))
-        try await workspaceStore.checkpoint(.init(checkouts: [checkout]))
-        let workspacesManager = WorkspacesManager(
-            bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore), observer: AvailableMemberObserver()
-        )
-        let state = AppState(store: TestPersistenceStore(), workspacesManager: workspacesManager, workspaceStore: workspaceStore)
-        state.projectsManager = ProjectsManager(persistedProjects: [project])
-        state.projectsManager.insertOptimisticWorktree(worktree)
-        state.agentRegistry = AgentRegistry(
-            builtinState: [:],
-            customs: [.init(
-                id: "test",
-                displayName: "Test",
-                binary: "test",
-                binaryOverride: nil,
-                promptModeArgs: [],
-                bypassPermissionsFlag: nil,
-                extraTerminalArgs: nil,
-                isBuiltin: false,
-                isEnabled: true,
-                builtinLogoAssetName: nil
-            )],
-            installedIds: ["test"]
-        )
-        state.config.changes.aiToolId = "none"
-        _ = await workspacesManager.load(spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
+        let (state, checkout, worktree) = try await makeCheckoutState(root: root)
         state.selectWorkspaceCheckout(id: checkout.id)
         #expect(state.checkoutFocusedWorktreeScope?.worktreeID == worktree.id)
         guard case let .ready(manager) = await state.workspaceACPManager(for: checkout) else {
@@ -71,7 +38,7 @@ struct WorkspaceACPSessionTests {
         #expect(state.selectedWorkspaceCheckout?.id == checkout.id)
 
         let result = await withCheckedContinuation { continuation in
-            sender.send("New review feedback", .newChat(agentID: "test", title: "New chat")) {
+            sender.send("New review feedback", .newChat(agentID: "claude", title: "New chat")) {
                 continuation.resume(returning: $0)
             }
         }
@@ -80,6 +47,72 @@ struct WorkspaceACPSessionTests {
         #expect(state.tabs.tabs(forWorktree: worktree.id).isEmpty)
         let newSession = try #require(manager.sessions.values.first { $0.id != session.id })
         #expect(newSession.composerDraft == ACPComposerDraft(segments: [.text("New review feedback")]))
+    }
+
+    @MainActor
+    @Test func preparingARestoredCheckoutChatCreatesItsManager() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (state, checkout, _) = try await makeCheckoutState(root: root)
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, .local)
+        let dbPath = Paths.acpSessionsDB(for: owner)
+        defer { try? FileManager.default.removeItem(at: dbPath) }
+        let seed = ACPSessionManager(
+            worktreeId: owner.storageKey,
+            worktreePath: checkout.rootPath,
+            owner: owner,
+            store: try ACPSessionStore(path: dbPath.path)
+        )
+        let session = seed.createSession(agentId: "test")
+        await seed.flushPersistence()
+        // Restored before the checkout's manager exists, as during an SSH location check.
+        _ = state.tabs.append(acpSession: .init(sessionId: session.id, title: "Workspace agent"), to: owner)
+        try #require(state.acpManager(for: owner) == nil)
+
+        await state.prepareACPSessionForPrompt(sessionId: session.id, owner: owner)
+
+        #expect(state.session(for: session.id) != nil)
+    }
+
+    @MainActor
+    private func makeCheckoutState(root: URL) async throws -> (AppState, WorkspaceCheckout, Worktree) {
+        let project = ProjectConfig(id: UUID().uuidString, name: "Repo", path: root.path, color: "blue", addedAt: Date())
+        let worktree = Worktree(id: UUID().uuidString, projectId: project.id, name: "topic", branch: "topic", path: root.appendingPathComponent("repo"), status: .clean, lastActivity: Date())
+        let checkout = WorkspaceCheckout(
+            workspaceID: nil, fallbackWorkspaceName: "Workspace", executionLocation: .local,
+            branch: "topic", rootPath: root.path,
+            members: [.init(workspaceMemberID: UUID(), projectID: project.id, fallbackProjectName: project.name,
+                            fallbackRepositoryRoot: project.path, worktreePath: worktree.path.path, availability: .available)]
+        )
+        try writeManifest(for: checkout)
+        let workspaceStore = WorkspaceStore(url: root.appendingPathComponent("workspaces.json"))
+        try await workspaceStore.checkpoint(.init(checkouts: [checkout]))
+        let workspacesManager = WorkspacesManager(
+            bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore), observer: AvailableMemberObserver()
+        )
+        let state = AppState(store: TestPersistenceStore(), workspacesManager: workspacesManager, workspaceStore: workspaceStore)
+        state.projectsManager = ProjectsManager(persistedProjects: [project])
+        state.projectsManager.insertOptimisticWorktree(worktree)
+        state.agentRegistry = AgentRegistry(
+            builtinState: ["claude": BuiltinAgentState(isEnabled: true, binaryOverride: nil, extraTerminalArgs: nil)],
+            customs: [.init(
+                id: "test",
+                displayName: "Test",
+                binary: "test",
+                binaryOverride: nil,
+                promptModeArgs: [],
+                bypassPermissionsFlag: nil,
+                extraTerminalArgs: nil,
+                isBuiltin: false,
+                isEnabled: true,
+                builtinLogoAssetName: nil
+            )],
+            installedIds: ["test", "claude"]
+        )
+        state.config.changes.aiToolId = AppConfig.Changes.disabledAIToolID
+        _ = await workspacesManager.load(spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
+        return (state, checkout, worktree)
     }
 
     @Test func checkoutOwnerUsesAnIsolatedDatabaseWhileWorktreesKeepLegacyPath() {

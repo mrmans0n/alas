@@ -532,6 +532,7 @@ struct ReviewDraftSummaryRail: View {
         systemName: String,
         label: String,
         enabled: Bool,
+        help: String? = nil,
         action: @escaping () -> Void
     ) -> some View {
         Button {
@@ -547,7 +548,7 @@ struct ReviewDraftSummaryRail: View {
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
-        .help(label)
+        .help(help ?? label)
         .accessibilityIdentifier(id)
         .accessibilityLabel(label)
         .background(
@@ -593,7 +594,8 @@ struct ReviewDraftSummaryRail: View {
                 id: "review-draft-summary-send-agent",
                 systemName: "paperplane",
                 label: "Send to agent",
-                enabled: canSendToAgent
+                enabled: canSendToAgent,
+                help: ReviewSendToAgentHelp.text("Send to agent", targets: agentTargets)
             ) {
                 guard let target = agentTargets.first else { return }
                 draftCommentActions.sendToAgent(bundle, target)
@@ -641,7 +643,7 @@ struct ReviewDraftSummaryRail: View {
             }
             .buttonStyle(.plain)
             .disabled(!canSendToAgent)
-            .help("Send to agent")
+            .help(ReviewSendToAgentHelp.text("Send to agent", targets: agentTargets))
             .accessibilityIdentifier("review-draft-summary-send-agent")
             .accessibilityLabel("Send to agent")
             .background(

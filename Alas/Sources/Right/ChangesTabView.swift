@@ -1140,9 +1140,9 @@ struct ChangesTabView: View {
     }
 
     /// Agent to use for the Conflicts section's bulk resolve. Mirrors the
-    /// `MergeConflictTabView.resolvedAgent` precedence: respect explicit
-    /// "none", prefer the user's pinned tool from Settings, fall back to
-    /// any enabled agent.
+    /// `MergeConflictTabView.resolvedAgent` precedence: nil when AI is
+    /// disabled, else the user's pinned tool from Settings, else (Automatic)
+    /// the first eligible enabled agent.
     ///
     /// Filters out agents without a `bypassPermissionsFlag` because the
     /// bulk action runs the agent non-interactively (no TTY to answer
@@ -1151,21 +1151,14 @@ struct ChangesTabView: View {
     /// 10-minute timeout fires. The bulk button is disabled in that
     /// case with a tooltip explaining why.
     private var resolvedBulkAgent: AgentDefinition? {
-        let id = appState.config.changes.aiToolId
-        if id == "none" { return nil }
-        let agents = appState.agentAvailability(for: rps.worktree).agents
-        if !id.isEmpty, let agent = agents.first(where: { $0.id == id }) {
-            return agent.bypassPermissionsFlag != nil ? agent : nil
-        }
-        // Fallback: pick the first ENABLED agent that also supports
-        // bypass. Filtering before .first matters when the registry's
-        // enabled list begins with an agent that has no bypass flag
-        // (e.g. Pi) but a later one does (e.g. Claude / Codex /
-        // Cursor) — without this we'd reject the first match and
-        // leave bulk resolve disabled despite a usable tool being
-        // available.
-        return agents
-            .first(where: { $0.bypassPermissionsFlag != nil })
+        // Automatic picks the first enabled agent that supports bypass, not
+        // just the first one: the registry may list an agent without a bypass
+        // flag (e.g. Pi) ahead of one that has it (Claude / Codex / Cursor).
+        RepositoryAgentSelectionPolicy.selection(
+            selectedID: appState.config.changes.aiToolId,
+            availability: appState.agentAvailability(for: rps.worktree),
+            where: { $0.supportsTerminal && $0.bypassPermissionsFlag != nil }
+        ).agent
     }
 }
 

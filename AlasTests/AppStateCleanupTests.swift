@@ -685,6 +685,7 @@ struct AppStateCleanupTests {
         let state = AppState()
         // Name from the request's words, without a model in the loop.
         state.config.issueWorktreeNameSuggestionsEnabled = false
+        state.config.changes.aiToolId = AppConfig.Changes.disabledAIToolID
         let project = try await state.projectsManager.addProject(
             path: repo,
             displayName: "auto-name-delete",

@@ -866,7 +866,7 @@ struct ReviewDraftCommentCard: View {
             .accessibilityIdentifier("diff-review-draft-comment-action-send-\(comment.id)")
             .accessibilityLabel("Send")
         } else {
-            sendActionButton(enabled: isEnabled) {
+            sendActionButton(enabled: isEnabled, help: ReviewSendToAgentHelp.text("Send", targets: targets)) {
                 guard let target = targets.first else { return }
                 actions.sendToAgent(feedbackBundle, target)
             }
@@ -885,13 +885,13 @@ struct ReviewDraftCommentCard: View {
         }
     }
 
-    private func sendActionButton(enabled: Bool, action: @escaping () -> Void) -> some View {
+    private func sendActionButton(enabled: Bool, help: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             sendActionLabel(enabled: enabled, showsMenuIndicator: false)
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
-        .help("Send")
+        .help(help)
         .accessibilityIdentifier(accessibilityIdentifier(forActionID: "send"))
         .accessibilityLabel("Send")
         .background(

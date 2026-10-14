@@ -1138,17 +1138,30 @@ final class AppState {
         return agentRegistry.agents.first(where: { $0.id == id })
     }
 
+    /// The agent a handoff opens for `id` (an agent id or Automatic) on this
+    /// worktree's host; nil when AI is disabled or the agent is unavailable.
+    /// Handoffs open ACP chats, so only agents with an ACP launch spec qualify.
     func availableAgentForHandoff(id: String?, worktree: Worktree) -> AgentDefinition? {
-        guard let id, id != "none" else { return nil }
-        return agentAvailability(for: worktree).agents.first { $0.id == id }
+        RepositoryAgentSelectionPolicy.selection(
+            selectedID: id,
+            availability: agentAvailability(for: worktree),
+            where: Self.canOpenACPChat
+        ).agent
     }
 
     func availableAgentForHandoff(id: String?, checkout: WorkspaceCheckout) -> AgentDefinition? {
-        guard let id, id != "none" else { return nil }
-        return agentAvailability(
-            worktreePath: URL(fileURLWithPath: checkout.rootPath),
-            executionTarget: checkout.executionLocation.agentExecutionTarget
-        ).agents.first { $0.id == id }
+        RepositoryAgentSelectionPolicy.selection(
+            selectedID: id,
+            availability: agentAvailability(
+                worktreePath: URL(fileURLWithPath: checkout.rootPath),
+                executionTarget: checkout.executionLocation.agentExecutionTarget
+            ),
+            where: Self.canOpenACPChat
+        ).agent
+    }
+
+    private nonisolated static func canOpenACPChat(_ agent: AgentDefinition) -> Bool {
+        ACPLaunchCatalog.spec(for: agent.id) != nil
     }
 
     private func loadAgentAvailabilityForDelegation(_ worktree: Worktree) async -> AgentAvailabilityState {
@@ -1352,7 +1365,7 @@ final class AppState {
 
     /// When an enabled agent becomes disabled / uninstalled / deleted, snap
     /// any selector pointing at it to a safe default:
-    ///   - `changes.aiToolId` → "none"
+    ///   - `changes.aiToolId` → Automatic
     ///   - `agents.worktreeAutoLaunch.agentId` → nil
     ///   - per-project `worktreeAgentMode` → `.useGlobal` if it referenced
     ///     a vanished agent
@@ -1363,8 +1376,10 @@ final class AppState {
         ).map(\.id))
         var changed = false
         let currentTool = config.changes.aiToolId
-        if currentTool != "none", !enabledIds.contains(currentTool) {
-            config.changes.aiToolId = "none"
+        if currentTool != AppConfig.Changes.automaticAIToolID,
+           currentTool != AppConfig.Changes.disabledAIToolID,
+           !enabledIds.contains(currentTool) {
+            config.changes.aiToolId = AppConfig.Changes.automaticAIToolID
             changed = true
         }
         if let autoLaunchId = config.agents.worktreeAutoLaunch.agentId,
@@ -12694,6 +12709,48 @@ final class AppState {
         await manager.attach(to: sessionId, freshlyCreated: freshlyCreated)
     }
 
+    /// Brings an open chat tab's session up so a prompt can be handed to it.
+    /// A restored tab that was never selected has no live session or writer
+    /// lease until its view mounts, and a restored checkout tab may not have
+    /// its manager yet. Attaching here coalesces with the attach the mounting
+    /// tab starts, and never takes a lease another live instance holds, so
+    /// the send that follows fails instead of taking over.
+    func prepareACPSessionForPrompt(sessionId: ACPSession.ID, owner: SessionOwnerID) async {
+        let manager: ACPSessionManager?
+        switch owner {
+        case .worktree(let worktreeId):
+            manager = worktree(withId: worktreeId).flatMap { acpManager(for: $0) }
+        case .workspaceCheckout:
+            manager = await checkoutACPManagerForPrompt(owner: owner)
+        }
+        guard let manager, !manager.isWriter(for: sessionId) else { return }
+        // A cold restored tab's row is not cached yet, and the synchronous
+        // `placeholderSession` only starts loading it. Load it first.
+        if manager.liveSession(for: sessionId) == nil {
+            guard await manager.persistedSessionRow(id: sessionId) != nil else { return }
+        }
+        // Not retained: a release here would evict a session that failed to
+        // attach before the send could report it. The activated tab retains it.
+        guard manager.placeholderSession(id: sessionId) != nil else { return }
+        await hydrateAndAttachACP(manager: manager, sessionId: sessionId)
+    }
+
+    /// The checkout's ACP manager, created when restoration has not made it
+    /// yet (e.g. an SSH location still being validated). Mirrors
+    /// `openWorkspaceCheckoutACPSession`: a checkout that stops being
+    /// authoritative meanwhile gets its new manager disposed.
+    private func checkoutACPManagerForPrompt(owner: SessionOwnerID) async -> ACPSessionManager? {
+        if let existing = acpManager(for: owner) { return existing }
+        guard let checkout = workspaceCheckout(for: owner),
+              case .ready(let manager) = await workspaceACPManager(for: checkout)
+        else { return nil }
+        guard await authoritativeCheckoutForWorkspaceACPSessionCreation(checkout) != nil else {
+            await disposeACPManagerAndWait(owner: owner)
+            return nil
+        }
+        return manager
+    }
+
     // MARK: Session references
 
     /// Sessions of `projectId` the composer can attach, most recent first.
@@ -14230,10 +14287,9 @@ final class AppState {
     func openReviewLoopHandoff(from reviewLoop: ReviewLoopState, actionKind: ReviewReadinessActionKind) {
         guard let snapshot = reviewLoop.snapshot else { return }
         guard actionKind == .openAgentHandoff else { return }
-        let agentID = config.changes.aiToolId
         guard let worktreeId = selectedWorktreeId,
               let worktree = worktree(withId: worktreeId),
-              availableAgentForHandoff(id: agentID, worktree: worktree) != nil
+              let agent = availableAgentForHandoff(id: config.changes.aiToolId, worktree: worktree)
         else { return }
         let prompt = ReviewLoopHandoffBuilder.build(
             snapshot: snapshot,
@@ -14243,20 +14299,19 @@ final class AppState {
                 detail: "Prepare a focused agent handoff."
             )
         )
-        openACPHandoff(agentID: agentID, initialPrompt: prompt)
+        openACPHandoff(agentID: agent.id, initialPrompt: prompt)
     }
 
     func openReviewEvidenceHandoff(snapshot: ReviewLoopSnapshot, detail: ReviewEvidenceDetail) {
-        let agentID = config.changes.aiToolId
         guard let worktreeId = selectedWorktreeId,
               let worktree = worktree(withId: worktreeId),
-              availableAgentForHandoff(id: agentID, worktree: worktree) != nil
+              let agent = availableAgentForHandoff(id: config.changes.aiToolId, worktree: worktree)
         else { return }
         let prompt = ReviewLoopHandoffBuilder.buildSelectedEvidencePrompt(
             snapshot: snapshot,
             detail: detail
         )
-        openACPHandoff(agentID: agentID, initialPrompt: prompt)
+        openACPHandoff(agentID: agent.id, initialPrompt: prompt)
     }
 
     @discardableResult

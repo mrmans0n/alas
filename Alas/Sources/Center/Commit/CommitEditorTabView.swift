@@ -470,7 +470,8 @@ struct CommitEditorTabView: View {
         guard !busy else { return }
         guard let agent = RepositoryAgentSelectionPolicy.selection(
             selectedID: appState.config.changes.aiToolId,
-            availability: agentAvailability
+            availability: agentAvailability,
+            where: \.supportsTerminal
         ).agent else {
             error = "Select an AI tool available on this host."
             return

@@ -31,7 +31,7 @@ struct ChangesPane: View {
 
                 SettingsGroup(title: "Commit message") {
                     SettingsRow(name: "Agent",
-                                desc: "Used by the sparkle button in the draft commit tab.") {
+                                desc: "Used for commit messages, review handoffs, and conflict resolution. Automatic uses the first available agent.") {
                         toolPicker
                     }
                     SettingsRow(name: "Prompt",
@@ -171,6 +171,7 @@ struct ChangesPane: View {
 
     private var toolPicker: some View {
         Picker("", selection: state.bind(\.changes.aiToolId)) {
+            Text("Automatic").tag(AppConfig.Changes.automaticAIToolID)
             // `agent.isEnabled` is clamped against install detection in
             // AgentRegistry, so every entry here is both enabled and installed.
             // ACP-only registry agents cannot run prompt mode.
@@ -182,7 +183,7 @@ struct ChangesPane: View {
                 }
                 .tag(agent.id)
             }
-            Text("None").tag("none")
+            Text("None").tag(AppConfig.Changes.disabledAIToolID)
         }
         .pickerStyle(.menu)
         .settingsDropdownFrame()
