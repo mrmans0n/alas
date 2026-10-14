@@ -86,6 +86,8 @@ import Testing
     @Test(arguments: [
         ("`[decoy](https://example.com)` ", [String]()),
         ("https://example.com ", ["https://example.com"]),
+        (#"\[decoy](https://other.example) "#, ["https://other.example"]),
+        (#"\[decoy](https://example.com) "#, ["https://example.com"]),
     ])
     func linkLikeTextBeforeLinksDoesNotShiftTheirBoundaries(prefix: String, leadingSpans: [String]) throws {
         let layout = try #require(ACPTranscriptMarkdownLayout.make(

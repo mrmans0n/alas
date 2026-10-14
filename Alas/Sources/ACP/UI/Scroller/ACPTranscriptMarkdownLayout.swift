@@ -307,8 +307,10 @@ struct ACPTranscriptMarkdownLayout {
             // `[label](destination)` or an angle-bracket autolink, whose label is its URL.
             let pattern = #"\[((?:[^\[\]]|\[[^\]]*\])*)\]\(\s*<?([^)\s>]+)>?(?:\s+"[^"]*")?\s*\)|<([A-Za-z][A-Za-z0-9+.-]*:[^<>\s]+)>"#
             guard let regex = try? NSRegularExpression(pattern: pattern) else { return }
-            // Link syntax inside a code span renders as code, not as a link.
-            let withoutCode = source.replacingOccurrences(of: #"(`+)[\s\S]*?\1"#, with: " ", options: .regularExpression)
+            // Link syntax inside a code span renders as code, and an escaped bracket renders as text.
+            let withoutCode = source
+                .replacingOccurrences(of: #"(`+)[\s\S]*?\1"#, with: " ", options: .regularExpression)
+                .replacingOccurrences(of: #"\\[!-/:-@\[-`{-~]"#, with: " ", options: .regularExpression)
             let nsSource = withoutCode as NSString
             var sourceLinks = regex.matches(in: withoutCode, range: NSRange(location: 0, length: nsSource.length)).map { match in
                 if match.range(at: 3).location != NSNotFound {
@@ -321,15 +323,18 @@ struct ACPTranscriptMarkdownLayout {
             rendered.enumerateAttribute(.link, in: NSRange(location: 0, length: rendered.length)) { value, range, _ in
                 guard let url = (value as? URL) ?? (value as? String).flatMap(URL.init(string:)) else { return }
                 // The source links this range was rendered from, in order.
+                // Source links before the first one to this URL didn't render as links and are skipped.
                 // Candidates are consumed only when their lengths add up to the range, so a range
                 // with no source link of its own (a bare URL the renderer autolinked) leaves the
                 // explicit links that follow it for their own range.
+                let matches = { (candidate: (label: String, url: String, isAutolink: Bool)) in
+                    URL(string: candidate.url)?.absoluteString == url.absoluteString || candidate.url == url.absoluteString
+                }
+                let start = sourceLinks.firstIndex(where: matches) ?? sourceLinks.endIndex
                 var lengths: [Int] = []
                 var total = 0
-                for next in sourceLinks {
-                    guard total < range.length,
-                          URL(string: next.url)?.absoluteString == url.absoluteString || next.url == url.absoluteString
-                    else { break }
+                for next in sourceLinks[start...] {
+                    guard total < range.length, matches(next) else { break }
                     let length = next.isAutolink
                         ? (next.label as NSString).length
                         : (ACPMarkdownInlineRenderer.plainText(next.label) as NSString).length
@@ -337,7 +342,7 @@ struct ACPTranscriptMarkdownLayout {
                     total += length
                 }
                 if total == range.length, !lengths.isEmpty {
-                    sourceLinks.removeFirst(lengths.count)
+                    sourceLinks.removeFirst(start + lengths.count)
                 } else {
                     lengths = [range.length]
                 }
