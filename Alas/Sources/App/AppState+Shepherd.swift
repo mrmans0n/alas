@@ -81,6 +81,40 @@ extension AppState {
             .sorted { $0.updatedAt > $1.updatedAt }
     }
 
+    /// `shepherdSessionCandidates` as menu items naming each session's agent,
+    /// for the Changes drawer and the Changes tab's "Shepherd with" line.
+    /// Empty when the worktree can't be shepherded.
+    func shepherdCandidateItems(worktreeID: String) -> [ReviewShepherdDrawerModel.Candidate] {
+        guard let worktree = worktree(withId: worktreeID), isShepherdEligible(worktree) else { return [] }
+        return shepherdSessionCandidates(worktree: worktree).map {
+            ReviewShepherdDrawerModel.Candidate(id: $0.id, title: $0.title, agentName: agent(id: $0.agentId)?.displayName)
+        }
+    }
+
+    /// Reloads the worktree's recent sessions, which `shepherdCandidateItems` reads.
+    func refreshShepherdCandidates(worktreeID: String) {
+        guard let worktree = worktree(withId: worktreeID) else { return }
+        acpManager(for: worktree)?.refreshRecent()
+    }
+
+    /// Binds a request the Changes tab just created to the session picked in
+    /// its "Shepherd with" line. `snapshot` is the review state the tab read
+    /// after creating, and must describe the request at `url`. The request
+    /// stays created whatever happens here: a failure only posts a message.
+    func shepherdCreatedRequest(url: URL, sessionID: String, worktreeID: String, snapshot: ReviewLoopSnapshot?) async {
+        guard let worktree = worktree(withId: worktreeID) else { return }
+        guard let request = snapshot?.reviewRequest, request.url == url else {
+            let label = snapshot?.remote?.kind.reviewRequestLabel ?? "PR"
+            inAppNotifications.post(
+                "Couldn't start shepherding the new \(label). Use Shepherd with… in the review drawer.",
+                severity: .error,
+                worktreeID: worktreeID
+            )
+            return
+        }
+        await shepherdWithSession(sessionID, worktree: worktree, request: request)
+    }
+
     /// Queues `text` on the session as a shepherd prompt, captioned "Alas PR
     /// shepherd". Hydrates a session with no open tab, like the orchestration
     /// coordinator's delivery, then brings its agent up the way the composer

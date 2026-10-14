@@ -274,9 +274,11 @@ Use a disposable branch on a GitHub repository you can push to, with CI that run
 7. Turn auto-fix off in the popover, break CI again, and confirm no fix turn arrives and the badge turns red.
 8. Create `.alas/shepherd.md` with `required_reviewers: [chatgpt-codex-connector]` frontmatter, turn auto-merge on, and confirm the PR does not merge until Codex has reviewed the current head (a formal review on that commit, or a thumbs-up reaction after it), and the popover lists Codex as missing until then.
 9. Once every gate passes, confirm the PR is squash-merged after two stable polls, the badge turns purple, and a macOS notification arrives.
-10. Open the Changes tab for a worktree whose PR was created from the Changes drawer. Confirm the drawer offers "Shepherd with…", binding a session sends it a context prompt, and that session's toolbar shows the badge.
-11. Archive the owning session of a shepherded PR with failing CI. Confirm a notification says the shepherd needs you and the drawer shows the escalation.
-12. Quit Alas mid-fix and relaunch. Confirm the record resumes and the phase moves on once the agent's push lands.
+10. With an agent session open in the worktree, open the Draft PR tab from the review drawer. Confirm a "Shepherd with" line sits under the header with the newest session picked, and its menu lists the worktree's other non-archived sessions and "None". Create the PR and confirm the picked session receives a context prompt captioned "Alas PR shepherd" and its toolbar pill shows the PR number with a shepherd badge.
+11. Stage a change on a branch without a PR, open the Draft commit tab, pick a session in "Shepherd with" and press Commit & PR. Confirm the PR is created and bound to that session. Repeat with a publish that stops after the push and before the PR is created (for example, take the network down once the push finishes), then retry it and confirm the resumed publish binds the session you picked.
+12. Create a PR from the Draft PR tab with "Shepherd with" set to None. Confirm the drawer then offers "Shepherd with…", binding a session sends it a context prompt, and that session's toolbar shows the badge.
+13. Archive the owning session of a shepherded PR with failing CI. Confirm a notification says the shepherd needs you and the drawer shows the escalation.
+14. Quit Alas mid-fix and relaunch. Confirm the record resumes and the phase moves on once the agent's push lands.
 
 ## Peer pairing by approval
 

@@ -654,6 +654,8 @@ struct DraftCommitTabState: Codable, Equatable, Identifiable {
     var publishCheckpoint: CommitPublishCheckpoint?
     /// The on-device suggestion the fields still hold untouched, if any.
     var messageSuggestion: CommitMessageSuggestionRecord?
+    /// The "Shepherd with" pick for Commit & PR; nil until the user picks.
+    var shepherdChoice: ChangesShepherdChoice?
     private var presentationRevision: Int?
 
     private enum CodingKeys: String, CodingKey {
@@ -667,6 +669,7 @@ struct DraftCommitTabState: Codable, Equatable, Identifiable {
         case createReviewRequestAsDraft
         case publishCheckpoint
         case messageSuggestion
+        case shepherdChoice
         case presentationRevision
     }
 
@@ -708,6 +711,7 @@ struct DraftCommitTabState: Codable, Equatable, Identifiable {
         createReviewRequestAsDraft = try container.decodeIfPresent(Bool.self, forKey: .createReviewRequestAsDraft) ?? false
         publishCheckpoint = try container.decodeIfPresent(CommitPublishCheckpoint.self, forKey: .publishCheckpoint)
         messageSuggestion = try? container.decodeIfPresent(CommitMessageSuggestionRecord.self, forKey: .messageSuggestion)
+        shepherdChoice = try? container.decodeIfPresent(ChangesShepherdChoice.self, forKey: .shepherdChoice)
         presentationRevision = try container.decodeIfPresent(Int.self, forKey: .presentationRevision)
     }
 
@@ -723,6 +727,7 @@ struct DraftCommitTabState: Codable, Equatable, Identifiable {
         try container.encode(createReviewRequestAsDraft, forKey: .createReviewRequestAsDraft)
         try container.encodeIfPresent(publishCheckpoint, forKey: .publishCheckpoint)
         try container.encodeIfPresent(messageSuggestion, forKey: .messageSuggestion)
+        try container.encodeIfPresent(shepherdChoice, forKey: .shepherdChoice)
         try container.encodeIfPresent(presentationRevision, forKey: .presentationRevision)
     }
 
@@ -749,6 +754,8 @@ struct DraftReviewRequestTabState: Codable, Equatable, Identifiable {
     var selectedPath: String?
     var createdURL: URL?
     var didOpenCreatedReview: Bool?
+    /// The "Shepherd with" pick; nil until the user picks.
+    var shepherdChoice: ChangesShepherdChoice?
 
     var reviewBranchName: String { upstreamBranchName ?? branchName }
 

@@ -58,6 +58,9 @@ struct CommitMessageEditorView: View {
     var editorDisabled: Bool = false
     var onDismissError: () -> Void = {}
     var accessory: AnyView? = nil
+    /// A full-width line under the header row for options of its actions
+    /// that don't fit beside them.
+    var optionsRow: AnyView? = nil
     /// An on-device model is drafting a message for the empty fields.
     var suggesting: Bool = false
     /// Shown while the fields hold an untouched on-device suggestion.
@@ -88,6 +91,9 @@ struct CommitMessageEditorView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             headerRow
+            if let optionsRow {
+                optionsRow
+            }
             if let message = agentPresentation.message {
                 agentAvailabilityMessage(message)
             }

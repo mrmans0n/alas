@@ -145,6 +145,79 @@ struct ShepherdSwitchRow: View {
     }
 }
 
+/// The pick in the Changes tab's "Shepherd with" line. Tab state stores nil
+/// until the user picks, which means the newest candidate.
+enum ChangesShepherdChoice: Codable, Equatable {
+    case noSession
+    case session(String)
+
+    /// The session to bind a created request to, given the candidates newest
+    /// first. A picked session that is no longer offered falls back to the
+    /// newest; with no candidates there is nothing to bind.
+    static func sessionID(for choice: ChangesShepherdChoice?, candidateIDs: [String]) -> String? {
+        switch choice {
+        case .noSession:
+            return nil
+        case .session(let id) where candidateIDs.contains(id):
+            return id
+        case .session, nil:
+            return candidateIDs.first
+        }
+    }
+}
+
+/// "Shepherd with [session ▾]" in the Draft PR and Draft commit tabs: the
+/// request the tab creates is bound to the picked session, which then fixes
+/// and merges it like a PR it opened itself. The tabs reload the sessions.
+struct ChangesShepherdLine: View {
+    /// Newest `updatedAt` first; the line is not shown without any.
+    let candidates: [ReviewShepherdDrawerModel.Candidate]
+    let selectedID: String?
+    let reviewRequestLabel: String
+    let isDisabled: Bool
+    let select: (ChangesShepherdChoice) -> Void
+    @Environment(\.theme) private var theme
+
+    private var selected: ReviewShepherdDrawerModel.Candidate? {
+        candidates.first { $0.id == selectedID }
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Toggle(isOn: Binding(
+                get: { selectedID != nil },
+                set: { on in select(on ? candidates.first.map { .session($0.id) } ?? .noSession : .noSession) }
+            )) {
+                Text("Shepherd with")
+                    .font(.system(size: 11))
+                    .foregroundColor(theme.color("fg-dim"))
+            }
+            .toggleStyle(.checkbox)
+            .accessibilityLabel("Shepherd the \(reviewRequestLabel) after creating it")
+            Menu {
+                ForEach(candidates) { candidate in
+                    Button(candidate.menuTitle) { select(.session(candidate.id)) }
+                }
+                Divider()
+                Button("None") { select(.noSession) }
+            } label: {
+                Text(selected?.menuTitle ?? "None")
+                    .font(.system(size: 11, weight: .medium))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.visible)
+            .fixedSize()
+            .accessibilityLabel("Shepherding session")
+            .accessibilityValue(selected?.menuTitle ?? "None")
+            Spacer(minLength: 0)
+        }
+        .disabled(isDisabled)
+        .help("Once the \(reviewRequestLabel) is created, this session fixes CI failures, conflicts and reviewer threads, and can merge it")
+    }
+}
+
 /// Sessions sorted by `updatedAt` (the history list sorts by
 /// `lastOpenedAt`, so the order here is explicit), then "New session".
 struct ReviewShepherdSessionMenu: View {

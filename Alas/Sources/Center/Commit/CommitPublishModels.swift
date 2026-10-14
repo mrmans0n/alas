@@ -230,6 +230,9 @@ struct CommitPublishReviewTarget: Codable, Equatable, Sendable {
     var pushURL: String? = nil
     var pushURLs: [String]? = nil
     var pushRemoteName: String? = nil
+    /// The session picked in "Shepherd with" for the request this publish
+    /// creates. Kept in the checkpoint so a resumed publish still binds it.
+    var shepherdSessionID: String? = nil
 
     var capturedPushURLs: [String] { pushURLs ?? pushURL.map { [$0] } ?? [] }
 

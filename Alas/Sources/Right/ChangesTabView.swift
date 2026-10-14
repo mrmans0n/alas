@@ -246,15 +246,8 @@ struct ChangesTabView: View {
             guard let lookup = shepherdOwnerLookup, lookup.sessionID == bound.sessionID else { return nil }
             return lookup.row
         }.flatMap { $0.archived ? nil : $0 }
-        let candidates = appState.shepherdSessionCandidates(worktree: worktree)
+        let candidates = appState.shepherdCandidateItems(worktreeID: worktree.id)
             .filter { $0.id != record?.sessionID }
-            .map {
-                ReviewShepherdDrawerModel.Candidate(
-                    id: $0.id,
-                    title: $0.title,
-                    agentName: appState.agent(id: $0.agentId)?.displayName
-                )
-            }
         // A bound record uses the shepherd's full gate from its last decision;
         // without one, the readiness half.
         let gatePasses = record.map { shepherd.gatePasses[$0.id] ?? false }

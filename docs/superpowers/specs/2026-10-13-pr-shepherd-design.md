@@ -535,7 +535,30 @@ In `ReviewLoopDrawer`:
   so this sort is explicit), plus "New session" which launches the default
   agent through `PreparedWorktreeACPPrompt` with the rebinding context prompt.
 
-Both surfaces read and write the same `ReviewShepherd` record.
+All surfaces read and write the same `ReviewShepherd` record.
+
+### Changes tab create flows
+
+The Draft PR tab and the Draft commit tab's Commit & PR action can hand the
+request they create to a session. `ChangesShepherdLine` sits under the
+editor's header row, which holds the create and commit buttons: a "Shepherd
+with" checkbox and a menu of the worktree's non-archived sessions, newest
+`updatedAt` first, plus "None". It defaults to the newest session. It is
+hidden when the worktree isn't shepherd-eligible or has no sessions, and in
+the Draft commit tab whenever publishing would not create a PR (one already
+exists, or gg mode).
+
+The pick is stored as `shepherdChoice` (`ChangesShepherdChoice`, nil until
+picked) in `DraftReviewRequestTabState` and `DraftCommitTabState`. Commit & PR
+also copies the resolved session into its `CommitPublishReviewTarget`, so the
+checkpoint carries it and a resumed publish binds the same session.
+
+After the create succeeds and the Changes pane has refreshed, the tab looks
+the request up in the refreshed snapshot by its URL, the same match it uses
+to open the created request, and calls `shepherdWithSession`, which sends the
+session the context prompt. A failed bind never fails the create: a missing
+request posts an in-app error pointing at the drawer's "Shepherd with…", and
+a delivery failure escalates the record as usual.
 
 ### Settings
 
