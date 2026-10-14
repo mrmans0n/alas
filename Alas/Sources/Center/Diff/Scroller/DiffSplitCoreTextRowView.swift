@@ -1536,16 +1536,20 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         drawTextSelection(which, wrapped: wrapped, tops: tops, rows: rows)
         // Under the labels, as `DiffPaneCodeTextView` draws them with the row backgrounds.
         drawExpansionPills(which, rows: rows, palette: palette)
+        // Flip the context, not just the text matrix: CoreText backgrounds
+        // follow the context transform and must stay aligned with the glyphs.
+        context.scaleBy(x: 1, y: -1)
+        context.textMatrix = .identity
         for index in rows {
             let x = pane.minX + gutter + Self.textInset + (side.indents[index] ?? 0)
             let baseline = codeTop + tops[index] + baseline(side, index)
             if let wrapped {
                 for (part, line) in wrapped[index].enumerated() {
-                    context.textPosition = CGPoint(x: x, y: baseline + CGFloat(part) * lineHeight)
+                    context.textPosition = CGPoint(x: x, y: -(baseline + CGFloat(part) * lineHeight))
                     CTLineDraw(line, context)
                 }
             } else {
-                context.textPosition = CGPoint(x: x - offset, y: baseline)
+                context.textPosition = CGPoint(x: x - offset, y: -baseline)
                 CTLineDraw(side.code[index], context)
             }
         }
