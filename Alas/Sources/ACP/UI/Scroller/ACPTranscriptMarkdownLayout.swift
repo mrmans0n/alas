@@ -640,7 +640,11 @@ private enum MarkdownLinkScanner {
         for match in matches {
             let destination = match.range(at: 2).location != NSNotFound ? match.range(at: 2) : match.range(at: 3)
             let key = referenceKey(nsSource.substring(with: match.range(at: 1)))
-            if references[key] == nil { references[key] = decodingEntities(nsSource.substring(with: destination)) }
+            if references[key] == nil {
+                let unescaped = nsSource.substring(with: destination)
+                    .replacingOccurrences(of: #"\\([!-/:-@\[-`{-~])"#, with: "$1", options: .regularExpression)
+                references[key] = decodingEntities(unescaped)
+            }
         }
         let body = regex.stringByReplacingMatches(in: source, range: NSRange(location: 0, length: nsSource.length), withTemplate: "")
         return (references, body)
