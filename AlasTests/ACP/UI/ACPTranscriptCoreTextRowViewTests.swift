@@ -222,6 +222,14 @@ import Testing
         #expect(!view.tiles.keys.contains(0))
     }
 
+    @Test func tableLinesReachAccessibilityInReadingOrder() throws {
+        let view = row(.agent(markdown: "| a cell long enough to wrap across lines in its column | b |\n|---|---|\n| 1 | 2 |", commentary: false))
+        _ = view.measuredHeight(forWidth: 320)
+        let element = try #require(view.accessibilityChildren()?.compactMap { $0 as? ACPTranscriptTextAccessibilityElement }.first)
+        let starts = element.lineStartsForTesting
+        #expect(starts == starts.sorted())
+    }
+
     @Test func aShortUserBubbleKeepsItsTextInsideTheBubble() throws {
         let view = row(.user(markdown: "Can you fix the bug?"))
         _ = view.measuredHeight(forWidth: 1_000)

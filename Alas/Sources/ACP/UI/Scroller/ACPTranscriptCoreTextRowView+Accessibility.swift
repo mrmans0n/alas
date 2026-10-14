@@ -102,9 +102,11 @@ extension ACPTranscriptCoreTextRowView {
     }
 
     private static func lineStarts(of markdown: ACPTranscriptMarkdownLayout) -> [TextSelection.Position] {
+        // Lines sit in y order, so side-by-side table cells interleave; the
+        // text element wants reading order.
         markdown.lines.compactMap { line in
             line.block.map { TextSelection.Position(block: $0, index: line.range.location) }
-        }
+        }.sorted()
     }
 
     /// Keeps a held element's lines current when the text re-wraps, since
