@@ -226,11 +226,6 @@ private struct ProjectDialog: View {
                         case .integrations:
                             integrationsSection
                         }
-                        if let sshConnectionIssue {
-                            sshConnectionIssueField(sshConnectionIssue)
-                        } else if let errorMessage {
-                            errorField(errorMessage)
-                        }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(22)
@@ -240,6 +235,18 @@ private struct ProjectDialog: View {
                 .disabled(isValidating)
             }
             .frame(maxHeight: .infinity)
+
+            if sshConnectionIssue != nil || errorMessage != nil {
+                VStack(alignment: .leading, spacing: 0) {
+                    if let sshConnectionIssue {
+                        sshConnectionIssueField(sshConnectionIssue)
+                    } else if let errorMessage {
+                        errorField(errorMessage)
+                    }
+                }
+                .padding(.horizontal, 22)
+                .padding(.vertical, 12)
+            }
 
             HStack(spacing: 8) {
                 Spacer()
