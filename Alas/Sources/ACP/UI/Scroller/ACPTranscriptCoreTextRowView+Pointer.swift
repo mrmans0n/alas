@@ -168,15 +168,20 @@ extension ACPTranscriptCoreTextRowView {
             return lower..<max(lower, upper)
         }
 
-        /// The selected text, blocks joined by newlines.
-        func text(in texts: [String]) -> String {
+        /// The selected text, each block followed by its separator in
+        /// `separators` (a tab between table cells), or a newline.
+        func text(in texts: [String], separators: [String]) -> String {
             guard !isEmpty else { return "" }
-            return (start.block...end.block).compactMap { block -> String? in
-                guard texts.indices.contains(block) else { return nil }
+            var result = ""
+            var previous: Int?
+            for block in start.block...end.block where texts.indices.contains(block) {
                 let text = texts[block] as NSString
-                guard let span = span(inBlock: block, length: text.length) else { return nil }
-                return text.substring(with: NSRange(location: span.lowerBound, length: span.count))
-            }.joined(separator: "\n")
+                guard let span = span(inBlock: block, length: text.length) else { continue }
+                if let previous { result += separators.indices.contains(previous) ? separators[previous] : "\n" }
+                result += text.substring(with: NSRange(location: span.lowerBound, length: span.count))
+                previous = block
+            }
+            return result
         }
     }
 
@@ -221,9 +226,11 @@ extension ACPTranscriptCoreTextRowView {
         if let rect = textSelection.flatMap(rect(covering:)) { invalidateTiles(rect) }
     }
 
-    /// The selectable line whose box is under or after `y`, in markdown coordinates.
-    private static func selectableLine(atOrAfter y: CGFloat, in markdown: ACPTranscriptMarkdownLayout) -> ACPTranscriptMarkdownLayout.Line? {
-        markdown.lines.first { $0.block != nil && y < $0.origin.y + $0.height }
+    /// The selectable line under `point`, picked by x among a table row's
+    /// cells, or else the first one below it, in markdown coordinates.
+    private static func selectableLine(atOrAfter point: CGPoint, in markdown: ACPTranscriptMarkdownLayout) -> ACPTranscriptMarkdownLayout.Line? {
+        markdown.line(at: point) { $0.block != nil }
+            ?? markdown.lines.first { $0.block != nil && point.y < $0.origin.y + $0.height }
     }
 
     /// The block and offset nearest `point`. Points above or below the text
@@ -233,7 +240,7 @@ extension ACPTranscriptCoreTextRowView {
         guard let (markdown, origin) = markdown else { return nil }
         let local = CGPoint(x: point.x - origin.x, y: point.y - origin.y)
         if inside, !CGRect(x: 0, y: 0, width: markdown.width, height: markdown.height).contains(local) { return nil }
-        guard let line = Self.selectableLine(atOrAfter: local.y, in: markdown), let block = line.block else {
+        guard let line = Self.selectableLine(atOrAfter: local, in: markdown), let block = line.block else {
             guard let last = markdown.texts.indices.last else { return nil }
             return .init(block: last, index: (markdown.texts[last] as NSString).length)
         }
@@ -249,7 +256,7 @@ extension ACPTranscriptCoreTextRowView {
     private func characterIndex(at point: NSPoint, near position: TextSelection.Position) -> Int {
         guard let (markdown, origin) = markdown else { return position.index }
         let local = CGPoint(x: point.x - origin.x, y: point.y - origin.y)
-        guard let line = Self.selectableLine(atOrAfter: local.y, in: markdown), line.block == position.block,
+        guard let line = Self.selectableLine(atOrAfter: local, in: markdown), line.block == position.block,
               line.visibleLength > 0, position.index > line.range.location,
               local.x - line.origin.x < CTLineGetOffsetForStringIndex(line.line, position.index, nil)
         else { return position.index }
@@ -287,8 +294,8 @@ extension ACPTranscriptCoreTextRowView {
     }
 
     func selectedText() -> String {
-        guard let textSelection, let texts = markdown?.layout.texts else { return "" }
-        return textSelection.text(in: texts)
+        guard let textSelection, let layout = markdown?.layout else { return "" }
+        return textSelection.text(in: layout.texts, separators: layout.blockSeparators)
     }
 
     /// Copies the selection to `pasteboard`; false when nothing is selected.

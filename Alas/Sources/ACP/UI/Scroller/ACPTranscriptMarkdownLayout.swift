@@ -260,10 +260,24 @@ struct ACPTranscriptMarkdownLayout {
         return before != nil && before == after
     }
 
+    /// The line under `point`, in layout coordinates: of the lines whose box
+    /// holds `point.y` (a table row's cells share one band), the one whose
+    /// `origin.x..<maxX` holds `point.x`, else the nearest in x. Only lines
+    /// `isIncluded` accepts are considered.
+    func line(at point: CGPoint, where isIncluded: (Line) -> Bool = { _ in true }) -> Line? {
+        var nearest: (line: Line, distance: CGFloat)?
+        for line in linesIntersecting(CGRect(x: point.x, y: point.y, width: 0, height: 0))
+            where line.origin.y <= point.y && point.y < line.origin.y + line.height && isIncluded(line) {
+            let distance = max(line.origin.x - point.x, point.x - line.maxX, 0)
+            if distance == 0, point.x < line.maxX { return line }
+            if nearest.map({ distance < $0.distance }) ?? true { nearest = (line, distance) }
+        }
+        return nearest?.line
+    }
+
     /// The link under `point`, in layout coordinates; nil outside link glyphs.
     func link(at point: CGPoint) -> URL? {
-        let lines = linesIntersecting(CGRect(x: point.x, y: point.y, width: 0, height: 0))
-        guard let line = lines.first(where: { $0.origin.y <= point.y && point.y < $0.origin.y + $0.height }) else { return nil }
+        guard let line = line(at: point) else { return nil }
         let x = point.x - line.origin.x
         guard x >= 0, x < CGFloat(CTLineGetTypographicBounds(line.line, nil, nil, nil)) else { return nil }
         // The run's drawn extent, not a caret index: past a glyph's midpoint

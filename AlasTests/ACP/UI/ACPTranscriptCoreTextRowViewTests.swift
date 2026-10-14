@@ -341,6 +341,22 @@ import Testing
         #expect(view.selectedText() == "First paragraph.\nSecond code here.\nlet x = 1")
     }
 
+    @Test func aClickResolvesToTheCellUnderThePoint() throws {
+        let view = row(.agent(markdown: "| first | second |\n|---|---|\n| left | right |", commentary: false))
+        _ = view.measuredHeight(forWidth: 800)
+        let (layout, origin) = try #require(view.markdown)
+        let right = try #require(layout.lines.first { $0.block.map { layout.texts[$0] } == "right" })
+        let point = NSPoint(x: origin.x + right.origin.x + 2, y: origin.y + right.origin.y + right.height / 2)
+        #expect(view.textPosition(at: point)?.block == right.block)
+    }
+
+    @Test func copyingATableKeepsItsShape() throws {
+        let view = row(.agent(markdown: "| a | b |\n|---|---|\n| 1 |", commentary: false))
+        _ = view.measuredHeight(forWidth: 800)
+        view.selectAllForTesting()
+        #expect(view.selectedText() == "a\tb\n1\t")
+    }
+
     @Test func codeBlockCopyIsAnAccessibleButton() throws {
         let view = row(.agent(markdown: "Intro.\n\n```swift\nlet x = 1\n```", commentary: false))
         _ = view.measuredHeight(forWidth: 800)

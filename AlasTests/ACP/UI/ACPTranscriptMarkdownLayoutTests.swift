@@ -208,6 +208,14 @@ import Testing
         #expect(layout.link(at: CGPoint(x: x, y: line.origin.y + line.height + 50)) == nil)
     }
 
+    @Test func linksInLaterColumnsAreHitTested() throws {
+        let layout = try #require(ACPTranscriptMarkdownLayout.make(
+            source: "| a | b |\n|---|---|\n| plain | [docs](https://example.com) |", width: 400, theme: theme, typography: .default
+        ))
+        let span = try #require(layout.linkSpans().first)
+        #expect(layout.link(at: CGPoint(x: span.rects[0].midX, y: span.rects[0].midY))?.absoluteString == "https://example.com")
+    }
+
     /// A caret index past the glyph's midpoint is the run's end, so hit
     /// testing has to use the run's drawn bounds instead.
     @Test func theTrailingHalfOfALinkGlyphStillHitsTheLink() throws {
