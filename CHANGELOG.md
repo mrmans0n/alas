@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Start sidebar peers collapsed instead of automatically expanding them.
+
 ### Fixes
 
 - Align inline diff highlights with their text in the CoreText renderer, including wrapped lines.

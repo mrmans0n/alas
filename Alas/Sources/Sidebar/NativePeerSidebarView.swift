@@ -18,43 +18,14 @@ struct NativePeerSessionRowPresentation {
     }
 }
 
-/// Expansion and hover state of the peers section. It lives outside the
-/// section because the section's rows are lazy-stack elements that mount
-/// only on screen; default expansion must not wait for one to appear.
+/// User-controlled expansion and hover state, retained outside the lazy rows.
 @MainActor
 @Observable
 final class NativePeerSidebarModel {
     var expandedPeerIDs: Set<String> = []
-    /// Peer ids already given an expansion state. Lets a peer that pairs
-    /// later still default open, without re-expanding one the user
-    /// explicitly collapsed earlier.
-    private(set) var knownPeerIDs: Set<String> = []
     var collapsedRepoIDs: Set<String> = []
     var headerHovering = false
     var plusHovering = false
-
-    /// Default-expands any peer id seen for the first time, leaving known
-    /// peers' expansion state, including an explicit collapse, untouched.
-    func expandNewPeers(_ ids: [String]) {
-        let newIDs = Set(ids).subtracting(knownPeerIDs)
-        guard !newIDs.isEmpty else { return }
-        expandedPeerIDs.formUnion(newIDs)
-        knownPeerIDs.formUnion(newIDs)
-    }
-}
-
-/// Feeds peer ids into `NativePeerSidebarModel` from outside the lazy stack.
-/// A leaf, so reading the snapshot re-renders nothing but itself.
-struct NativePeerSidebarExpansion: View {
-    let client: NativePeerSessions
-    let model: NativePeerSidebarModel
-
-    var body: some View {
-        Color.clear
-            .onChange(of: client.snapshot.groups.map(\.id), initial: true) { _, ids in
-                model.expandNewPeers(ids)
-            }
-    }
 }
 
 /// App-scoped peer groups live beside the workspace tree, never inside a
