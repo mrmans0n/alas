@@ -1157,7 +1157,7 @@ struct ChangesTabView: View {
         RepositoryAgentSelectionPolicy.selection(
             selectedID: appState.config.changes.aiToolId,
             availability: appState.agentAvailability(for: rps.worktree),
-            where: { $0.bypassPermissionsFlag != nil }
+            where: { $0.supportsTerminal && $0.bypassPermissionsFlag != nil }
         ).agent
     }
 }

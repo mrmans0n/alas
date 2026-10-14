@@ -243,12 +243,14 @@ struct MergeConflictTabView: View {
     }
 
     /// Resolves the agent to use for merge-conflict assistance from
-    /// Settings → Changes → AI tool: the pinned agent, or the first available
-    /// one on Automatic. Nil when AI is disabled or nothing is available.
+    /// Settings → Changes → AI tool: the pinned agent, or on Automatic the
+    /// first available one that runs prompt mode (`MergeAgent` needs it).
+    /// Nil when AI is disabled or nothing is available.
     private var resolvedAgent: AgentDefinition? {
         RepositoryAgentSelectionPolicy.selection(
             selectedID: state.config.changes.aiToolId,
-            availability: state.agentAvailability(for: worktree)
+            availability: state.agentAvailability(for: worktree),
+            where: \.supportsTerminal
         ).agent
     }
 
