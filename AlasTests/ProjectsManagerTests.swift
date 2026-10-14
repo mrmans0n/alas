@@ -630,6 +630,35 @@ extension ProjectsManagerTests {
         #expect(!mgr.isWorktreeHidden(projectId: project.id, path: bogus))
     }
 
+    @Test func pruningForgetsArchivedWorktreesWhoseDirectoryIsGone() async throws {
+        let repo = try await makeRepo(name: "archive-prune")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let svc = WorktreeService()
+        let gone = try await svc.add(
+            repoPath: repo, base: "main", branch: "gone",
+            destination: repo.appendingPathComponent("wt-gone"), projectId: "p"
+        )
+        let kept = try await svc.add(
+            repoPath: repo, base: "main", branch: "kept",
+            destination: repo.appendingPathComponent("wt-kept"), projectId: "p"
+        )
+        let manager = ProjectsManager(persistedProjects: [ProjectConfig(
+            id: "p", name: "archive-prune", path: repo.path, color: "#5fb7c4", addedAt: Date(),
+            hiddenWorktreePaths: [gone.path.path, kept.path.path]
+        )])
+        try FileManager.default.removeItem(at: gone.path)
+
+        #expect(manager.staleArchivedWorktreePaths(projectId: "p") == [gone.path.path])
+        #expect(await manager.pruneStaleArchivedWorktrees() == ["p"])
+        try await manager.refreshWorktrees(projectId: "p")
+
+        #expect(manager.projects[0].hiddenWorktreePaths == [kept.path.path])
+        let listed = try await Process.git(["worktree", "list", "--porcelain"], cwd: repo).stdout
+        #expect(!listed.contains(gone.path.path))
+        let branches = try await Process.git(["branch", "--list", "gone"], cwd: repo).stdout
+        #expect(branches.contains("gone"))
+    }
+
     @Test func refreshPrunesOnlyMissingGGWorktreeOverrides() async throws {
         let repo = try await makeRepo(name: "gg-override-prune")
         defer { try? FileManager.default.removeItem(at: repo) }

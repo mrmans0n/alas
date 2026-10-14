@@ -764,6 +764,43 @@ public final class ProjectsManager {
         return worktrees(projectId: projectId).filter { hidden.contains(canonical($0.path)) }
     }
 
+    /// Archived paths of local git projects whose directory is gone or no
+    /// longer holds a checkout. Archived rows are hidden, so nothing else
+    /// notices when they disappear; this reads the persisted paths, so it
+    /// works before the first refresh too.
+    public func staleArchivedWorktreePaths(projectId: String) -> [String] {
+        guard let project = projects.first(where: { $0.id == projectId }),
+              project.host == nil, !project.isFolder
+        else { return [] }
+        return project.hiddenWorktreePaths.filter { path in
+            operationState(forWorktreeId: path, projectId: projectId) == nil
+                && (!Self.isDirectory(path)
+                    || !FileManager.default.fileExists(atPath: URL(fileURLWithPath: path).appendingPathComponent(".git").path))
+        }
+    }
+
+    /// Drops git's registration of every stale archived worktree whose
+    /// directory is gone, and returns the projects that had stale archived
+    /// paths. A refresh of those projects then forgets the archived rows,
+    /// since git no longer lists them as live. `git worktree remove` without
+    /// `--force` only touches the administrative files of a missing
+    /// directory, keeps the branch, and leaves locked worktrees alone.
+    @discardableResult
+    public func pruneStaleArchivedWorktrees() async -> Set<String> {
+        var pruned: Set<String> = []
+        for project in projects {
+            let stale = staleArchivedWorktreePaths(projectId: project.id)
+            guard !stale.isEmpty else { continue }
+            pruned.insert(project.id)
+            let repo = URL(fileURLWithPath: project.path)
+            guard Self.isDirectory(repo.path) else { continue }
+            for path in stale where !FileManager.default.fileExists(atPath: path) {
+                _ = try? await Process.git(["worktree", "remove", path], cwd: repo)
+            }
+        }
+        return pruned
+    }
+
     public func visibleMainWorktree(projectId: String) -> Worktree? {
         guard let project = projects.first(where: { $0.id == projectId }) else { return nil }
         return visibleWorktrees(projectId: projectId).first { isMainWorktree($0, project: project) }
