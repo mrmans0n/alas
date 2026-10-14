@@ -377,13 +377,18 @@ struct ProjectsManagerTests {
     }
 
     /// After a relaunch the live list is empty, so the fallback comes from
-    /// the cached rows.
-    @Test(arguments: [false, true])
-    func refreshWorktreesFallsBackWhenConfiguredLinkedWorktreeDisappears(afterRelaunch: Bool) async throws {
+    /// the cached rows. A directory left behind without its `.git` is no
+    /// checkout either; it sits outside the repository so git cannot find
+    /// the repository from it.
+    @Test(arguments: [(false, false), (true, false), (true, true)])
+    func refreshWorktreesFallsBackWhenConfiguredLinkedWorktreeDisappears(afterRelaunch: Bool, keepsDirectory: Bool) async throws {
         let repo = try await makeRepo(name: "linked-anchor")
-        defer { try? FileManager.default.removeItem(at: repo) }
+        let linkedPath = URL(fileURLWithPath: repo.path + "-linked")
+        defer {
+            try? FileManager.default.removeItem(at: repo)
+            try? FileManager.default.removeItem(at: linkedPath)
+        }
         let service = WorktreeService()
-        let linkedPath = repo.appendingPathComponent("linked-anchor")
         let projectId = "linked-anchor-project"
         let linkedWorktree = try await service.add(
             repoPath: repo,
@@ -403,12 +408,16 @@ struct ProjectsManagerTests {
         try await manager.refreshWorktrees(projectId: projectId)
         #expect(manager.worktrees(projectId: projectId).count == 2)
 
-        try await service.remove(
-            repoPath: repo,
-            worktree: linkedWorktree,
-            deleteBranchIfMerged: false,
-            force: false
-        )
+        if keepsDirectory {
+            try FileManager.default.removeItem(at: linkedPath.appendingPathComponent(".git"))
+        } else {
+            try await service.remove(
+                repoPath: repo,
+                worktree: linkedWorktree,
+                deleteBranchIfMerged: false,
+                force: false
+            )
+        }
         if afterRelaunch { manager = ProjectsManager(persistedProjects: manager.projects) }
         let projectChanged = try await manager.refreshWorktrees(projectId: projectId)
 

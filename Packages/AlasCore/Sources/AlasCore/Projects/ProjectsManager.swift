@@ -794,7 +794,7 @@ public final class ProjectsManager {
             let stale = staleArchivedWorktreePaths(projectId: project.id)
             guard !stale.isEmpty else { continue }
             pruned.insert(project.id)
-            guard let repo = localGitAnchor(project) else { continue }
+            let repo = localGitAnchor(project)
             for path in stale where !FileManager.default.fileExists(atPath: path) {
                 _ = try? await Process.git(["worktree", "remove", path], cwd: repo)
             }
@@ -916,18 +916,25 @@ public final class ProjectsManager {
     /// archived worktree, can remove the linked worktree stored as the
     /// project path; another checkout that still exists answers instead, so
     /// the deleted row can be reconciled. Cached rows count too, since the
-    /// live list is empty until the first refresh after launch.
-    private func localGitAnchor(_ project: ProjectConfig) -> URL? {
+    /// live list is empty until the first refresh after launch. A directory
+    /// that lost its `.git` is no checkout, and git would run from whatever
+    /// repository encloses it.
+    private func localGitAnchor(_ project: ProjectConfig) -> URL {
         let configured = URL(fileURLWithPath: project.path)
-        guard project.host == nil, !FileManager.default.fileExists(atPath: configured.path) else { return configured }
+        // `HEAD` admits a bare repository.
+        func isRepository(_ url: URL) -> Bool {
+            [".git", "HEAD"].contains { FileManager.default.fileExists(atPath: url.appendingPathComponent($0).path) }
+        }
+        guard project.host == nil, !isRepository(configured) else { return configured }
         return (worktreesByProject[project.id, default: []] + project.cachedWorktrees)
-            .first { FileManager.default.fileExists(atPath: $0.path.path) }?.path
+            .map(\.path)
+            .first(where: isRepository) ?? configured
     }
 
     private func refreshWorktreesImpl(projectId: String) async throws -> Bool {
         guard let project = projects.first(where: { $0.id == projectId }) else { return false }
         let configuredURL = URL(fileURLWithPath: project.path)
-        let url = project.isFolder ? configuredURL : (localGitAnchor(project) ?? configuredURL)
+        let url = project.isFolder ? configuredURL : localGitAnchor(project)
         // A deleted local folder fails like a deleted repository, so stale
         // project cleanup can find it.
         if project.isFolder, project.host == nil, !Self.isDirectory(configuredURL.path) {
