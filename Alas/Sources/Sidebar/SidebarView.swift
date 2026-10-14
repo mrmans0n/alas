@@ -2,12 +2,10 @@ import SwiftUI
 import AppKit
 
 struct SidebarAttentionPresentation {
-    let showsInbox: Bool
     let count: Int
 
-    init(enabled: Bool, aggregation: AttentionAggregation, peerRows: [RemoteSessionSummary] = [], pluginUpdateCount: Int = 0) {
-        showsInbox = enabled
-        count = enabled ? aggregation.unresolvedCount + peerRows.count + pluginUpdateCount : 0
+    init(aggregation: AttentionAggregation, peerRows: [RemoteSessionSummary] = [], pluginUpdateCount: Int = 0) {
+        count = aggregation.unresolvedCount + peerRows.count + pluginUpdateCount
     }
 }
 
@@ -504,11 +502,10 @@ private struct SidebarAttentionHeader: View {
 
     var body: some View {
         let aggregation = state.attentionAggregation
-        let peerRows = state.config.needsAttentionEnabled
-            ? state.nativePeerSessions?.snapshot.attentionRows ?? [] : []
-        let pluginUpdates = state.config.needsAttentionEnabled ? state.pluginManager?.catalogUpdates ?? [] : []
+        let peerRows = state.nativePeerSessions?.snapshot.attentionRows ?? []
+        let pluginUpdates = state.pluginManager?.catalogUpdates ?? []
         let presentation = SidebarAttentionPresentation(
-            enabled: state.config.needsAttentionEnabled, aggregation: aggregation,
+            aggregation: aggregation,
             peerRows: peerRows, pluginUpdateCount: pluginUpdates.count
         )
         SidebarHeaderView(
@@ -519,7 +516,6 @@ private struct SidebarAttentionHeader: View {
             onHideSidebar: onHideSidebar,
             onNewWorkspace: { showingNewWorkspace = true },
             attentionCount: presentation.count,
-            showsAttentionInbox: presentation.showsInbox,
             attentionInboxOpen: $state.isAttentionInboxOpen,
             attentionAggregation: aggregation,
             peerAttentionRows: peerRows,

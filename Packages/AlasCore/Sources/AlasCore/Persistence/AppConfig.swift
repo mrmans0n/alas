@@ -51,9 +51,6 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public var runFailureBriefsEnabled: Bool = true
     public var localTextModelEnabled: Bool = false
     public var issueWorktreeNameSuggestionsEnabled: Bool = true
-    /// Preview gate for the Needs Attention inbox and project affordances.
-    /// Events continue collecting while its presentation is disabled.
-    public var needsAttentionEnabled: Bool = false
     /// Gate for plugins. Off: nothing is scanned, loaded or run. On, a plugin still runs only once approved.
     public var pluginsEnabled: Bool = true
     public var recentProjectIds: [String] = []
@@ -703,7 +700,6 @@ public struct AppConfig: Codable, Equatable, Sendable {
         sessionSummariesEnabled: false,
         localTextModelEnabled: false,
         issueWorktreeNameSuggestionsEnabled: true,
-        needsAttentionEnabled: false,
         pluginsEnabled: true,
         recentProjectIds: [],
         recentWorktreeIdsByProject: [:],
@@ -713,7 +709,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         shortcutOverrides: [:]
     )
 
-    public init(themeId: String, accent: String, matchSystemTheme: Bool, sidebarMaterial: SidebarMaterialChoice, sidebarWidth: Double, rightPaneWidth: Double, rightPaneVisible: Bool, sidebarVisible: Bool, commitDetailSplitRatio: Double, general: General, worktrees: Worktrees, terminal: Terminal, harness: Harness, code: Code, markdown: Markdown, changes: Changes, agents: Agents, files: Files, remote: Remote = .init(), nextPromptSuggestionsEnabled: Bool = false, sessionSummariesEnabled: Bool = false, runFailureBriefsEnabled: Bool = true, localTextModelEnabled: Bool = false, issueWorktreeNameSuggestionsEnabled: Bool = true, needsAttentionEnabled: Bool = false, pluginsEnabled: Bool = true, recentProjectIds: [String] = [], recentWorktreeIdsByProject: [String: [String]] = [:], recentWorktreeRefs: [RepoSelectorRecents.RecentWorktreeRef] = [], collapsedProjectIds: [String] = [], sidebarChromeOverrides: [String: SidebarChromeOverride] = [:], shortcutOverrides: [String: ShortcutBinding?] = [:], repositoryCloneRootPath: String = "") {
+    public init(themeId: String, accent: String, matchSystemTheme: Bool, sidebarMaterial: SidebarMaterialChoice, sidebarWidth: Double, rightPaneWidth: Double, rightPaneVisible: Bool, sidebarVisible: Bool, commitDetailSplitRatio: Double, general: General, worktrees: Worktrees, terminal: Terminal, harness: Harness, code: Code, markdown: Markdown, changes: Changes, agents: Agents, files: Files, remote: Remote = .init(), nextPromptSuggestionsEnabled: Bool = false, sessionSummariesEnabled: Bool = false, runFailureBriefsEnabled: Bool = true, localTextModelEnabled: Bool = false, issueWorktreeNameSuggestionsEnabled: Bool = true, pluginsEnabled: Bool = true, recentProjectIds: [String] = [], recentWorktreeIdsByProject: [String: [String]] = [:], recentWorktreeRefs: [RepoSelectorRecents.RecentWorktreeRef] = [], collapsedProjectIds: [String] = [], sidebarChromeOverrides: [String: SidebarChromeOverride] = [:], shortcutOverrides: [String: ShortcutBinding?] = [:], repositoryCloneRootPath: String = "") {
         self.themeId = themeId
         self.accent = accent
         self.matchSystemTheme = matchSystemTheme
@@ -738,7 +734,6 @@ public struct AppConfig: Codable, Equatable, Sendable {
         self.runFailureBriefsEnabled = runFailureBriefsEnabled
         self.localTextModelEnabled = localTextModelEnabled
         self.issueWorktreeNameSuggestionsEnabled = issueWorktreeNameSuggestionsEnabled
-        self.needsAttentionEnabled = needsAttentionEnabled
         self.pluginsEnabled = pluginsEnabled
         self.recentProjectIds = recentProjectIds
         self.recentWorktreeIdsByProject = recentWorktreeIdsByProject
@@ -837,7 +832,6 @@ extension AppConfig {
              runFailureBriefsEnabled,
              localTextModelEnabled,
              issueWorktreeNameSuggestionsEnabled,
-             needsAttentionEnabled,
              pluginsEnabled,
              recentProjectIds, recentWorktreeIdsByProject, recentWorktreeRefs,
              collapsedProjectIds,
@@ -1093,8 +1087,6 @@ extension AppConfig {
         issueWorktreeNameSuggestionsEnabled =
             (try? c.decode(Bool.self, forKey: .issueWorktreeNameSuggestionsEnabled))
             ?? (harness.acpLocalTitlesEnabled || priorModelConsent)
-        // Needs Attention remains opt-in while its entry points are in preview.
-        needsAttentionEnabled = (try? c.decode(Bool.self, forKey: .needsAttentionEnabled)) ?? false
         pluginsEnabled = (try? c.decode(Bool.self, forKey: .pluginsEnabled)) ?? true
         recentProjectIds = (try? c.decode([String].self, forKey: .recentProjectIds)) ?? []
         recentWorktreeIdsByProject =

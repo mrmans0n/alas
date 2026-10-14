@@ -6,18 +6,6 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct AttentionInboxViewTests {
-    @Test func sidebarPresentationHidesAttentionWhenFeatureIsDisabled() {
-        let aggregation = aggregation(items: [makeItem()])
-
-        let disabled = SidebarAttentionPresentation(enabled: false, aggregation: aggregation)
-        #expect(disabled.showsInbox == false)
-        #expect(disabled.count == 0)
-
-        let enabled = SidebarAttentionPresentation(enabled: true, aggregation: aggregation)
-        #expect(enabled.showsInbox == true)
-        #expect(enabled.count == 1)
-    }
-
     @Test func livePeerAttentionAddsOnceToBadgeAndInboxWithoutChangingLocalRows() {
         let local = aggregation(items: [makeItem(), makeItem()])
         let peer = RemoteSessionSummary(id: "B:s", title: "Peer request", agentId: "claude",
@@ -27,8 +15,8 @@ struct AttentionInboxViewTests {
             peers: [.init(serverId: "B", name: "Mac B", state: "online")],
             rows: [peer, peer]
         )
-        let badge = SidebarAttentionPresentation(enabled: true, aggregation: local,
-                                                 peerRows: snapshot.attentionRows)
+        let badge = SidebarAttentionPresentation(aggregation: local,
+                                                peerRows: snapshot.attentionRows)
         let inbox = AttentionInboxPresentation(aggregation: local, loadError: nil,
                                                peerRows: snapshot.attentionRows)
 
@@ -40,19 +28,23 @@ struct AttentionInboxViewTests {
         #expect(inbox.acknowledgeLabel == "Acknowledge local")
 
         let peerOnly = AttentionInboxPresentation(aggregation: aggregation(), loadError: nil,
-                                                  peerRows: snapshot.attentionRows)
+                                                 peerRows: snapshot.attentionRows)
         #expect(peerOnly.emptyTitle == nil)
         #expect(peerOnly.totalCount == 1)
         #expect(peerOnly.acknowledgeLabel == nil)
 
         let update = PluginCatalogTests.version("1.0.0")
         let withPluginUpdate = AttentionInboxPresentation(aggregation: local, loadError: nil,
+                                                          peerRows: snapshot.attentionRows,
                                                           pluginUpdates: [(PluginCatalogTests.entry([update]), update)])
-        #expect(withPluginUpdate.totalCount == 3)
+        let combinedBadge = SidebarAttentionPresentation(aggregation: local,
+                                                         peerRows: snapshot.attentionRows, pluginUpdateCount: 1)
+        #expect(withPluginUpdate.totalCount == 4)
+        #expect(combinedBadge.count == withPluginUpdate.totalCount)
         #expect(withPluginUpdate.acknowledgeLabel == "Acknowledge local")
     }
 
-    @Test func clearingOrDisablingPeerAttentionRemovesOnlyLiveContribution() {
+    @Test func clearingPeerAttentionRemovesOnlyLiveContribution() {
         let local = aggregation(items: [makeItem()])
         let peer = RemoteSessionSummary(id: "B:s", title: "Peer request", agentId: "claude",
                                         status: "awaitingInput", canDrive: false,
@@ -64,12 +56,10 @@ struct AttentionInboxViewTests {
         let active = NativePeerSidebarSnapshot.build(peers: peers, rows: [peer])
         let resolved = NativePeerSidebarSnapshot.build(peers: peers, rows: [cleared])
 
-        #expect(SidebarAttentionPresentation(enabled: true, aggregation: local,
-                                            peerRows: active.attentionRows).count == 2)
-        #expect(SidebarAttentionPresentation(enabled: true, aggregation: local,
-                                            peerRows: resolved.attentionRows).count == 1)
-        #expect(SidebarAttentionPresentation(enabled: false, aggregation: local,
-                                            peerRows: active.attentionRows).count == 0)
+        #expect(SidebarAttentionPresentation(aggregation: local,
+                                           peerRows: active.attentionRows).count == 2)
+        #expect(SidebarAttentionPresentation(aggregation: local,
+                                           peerRows: resolved.attentionRows).count == 1)
         #expect(local.unresolvedCount == 1)
     }
 

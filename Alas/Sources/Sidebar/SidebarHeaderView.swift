@@ -8,7 +8,6 @@ struct SidebarHeaderView: View {
     let onHideSidebar: () -> Void
     var onNewWorkspace: (() -> Void)? = nil
     var attentionCount: Int = 0
-    var showsAttentionInbox = true
     @Binding var attentionInboxOpen: Bool
     var attentionAggregation: AttentionAggregation = AttentionAggregation(items: [], history: [], unresolvedCount: 0, unresolvedCountByProject: [:])
     var peerAttentionRows: [RemoteSessionSummary] = []
@@ -28,7 +27,6 @@ struct SidebarHeaderView: View {
          onHideSidebar: @escaping () -> Void,
          onNewWorkspace: (() -> Void)? = nil,
          attentionCount: Int = 0,
-         showsAttentionInbox: Bool = true,
          attentionInboxOpen: Binding<Bool> = .constant(false),
          attentionAggregation: AttentionAggregation = AttentionAggregation(items: [], history: [], unresolvedCount: 0, unresolvedCountByProject: [:]),
          peerAttentionRows: [RemoteSessionSummary] = [],
@@ -48,7 +46,6 @@ struct SidebarHeaderView: View {
         self.onHideSidebar = onHideSidebar
         self.onNewWorkspace = onNewWorkspace
         self.attentionCount = attentionCount
-        self.showsAttentionInbox = showsAttentionInbox
         self._attentionInboxOpen = attentionInboxOpen
         self.attentionAggregation = attentionAggregation
         self.peerAttentionRows = peerAttentionRows
@@ -122,9 +119,7 @@ struct SidebarHeaderView: View {
             HStack(alignment: .center, spacing: 1) {
                 ToolbarBtn(icon: "search", tooltip: "Search",
                            metrics: .sidebarHeader, action: onSearch)
-                if showsAttentionInbox {
-                    attentionToolbarButton(metrics: .sidebarHeader)
-                }
+                attentionToolbarButton(metrics: .sidebarHeader)
                 if onAddFolder != nil || onNewWorkspace != nil {
                     Menu {
                         addMenuItems
@@ -168,9 +163,7 @@ struct SidebarHeaderView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             HStack(spacing: 2) {
                 ToolbarBtn(icon: "search", tooltip: "Search", action: onSearch)
-                if showsAttentionInbox {
-                    attentionToolbarButton()
-                }
+                attentionToolbarButton()
                 Menu {
                     addMenuItems
                     Divider()

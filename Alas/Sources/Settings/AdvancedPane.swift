@@ -15,23 +15,6 @@ struct AdvancedPane: View {
                     .font(.system(size: 12.5)).foregroundColor(theme.color("fg-dim"))
                     .padding(.bottom, 12)
 
-                SettingsGroup(title: "Experimental") {
-                    SettingsRow(
-                        name: "Needs attention",
-                        desc: "Shows the attention inbox and repository attention counts."
-                    ) {
-                        AlasToggle(on: Binding(
-                            get: { state.config.needsAttentionEnabled },
-                            set: { enabled in
-                                state.config.needsAttentionEnabled = enabled
-                                if !enabled {
-                                    state.isAttentionInboxOpen = false
-                                }
-                                state.saveConfig()
-                            }
-                        ))
-                    }
-                }
                 if let recovery = state.workspaceRecoveryError {
                     SettingsGroup(title: "Workspaces") {
                         VStack(alignment: .leading, spacing: 8) {
