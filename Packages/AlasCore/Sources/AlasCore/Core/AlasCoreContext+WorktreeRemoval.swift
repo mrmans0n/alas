@@ -4,21 +4,21 @@ import os
 private let removalLogger = Logger(subsystem: "io.nlopez.alas", category: "WorktreeRemoval")
 
 /// One request to remove a worktree from disk.
-struct WorktreeRemovalRequest: Sendable {
-    var worktree: Worktree
+@_spi(AppHost) public struct WorktreeRemovalRequest: Sendable {
+    public var worktree: Worktree
     /// The repository the worktree belongs to.
-    var repoPath: URL
-    var force: Bool
-    var deleteBranchIfMerged: Bool
-    var verifiedMergedBranchSHA: String?
+    public var repoPath: URL
+    public var force: Bool
+    public var deleteBranchIfMerged: Bool
+    public var verifiedMergedBranchSHA: String?
     /// The content fingerprint the caller confirmed. The removal is refused
     /// if the worktree changed since, and Git's preflight is not repeated.
-    var authorizedContentFingerprint: String?
+    public var authorizedContentFingerprint: String?
     /// Checked under the project mutation gate right before removal. A reason
     /// skips the removal.
-    var revalidate: @MainActor @Sendable () async -> String?
+    public var revalidate: @MainActor @Sendable () async -> String?
 
-    init(
+    public init(
         worktree: Worktree,
         repoPath: URL,
         force: Bool,
@@ -98,7 +98,7 @@ extension AlasCoreContext {
     /// gate; then drop what belonged to it. A refusal after the quiesce (Git
     /// failing after its preflight, or `revalidate` objecting) leaves the
     /// worktree in place with its sessions already stopped.
-    func removeWorktree(_ request: WorktreeRemovalRequest) async -> WorktreeRemovalResult {
+    @_spi(AppHost) public func removeWorktree(_ request: WorktreeRemovalRequest) async -> WorktreeRemovalResult {
         let worktree = request.worktree
         if await environment.checkpointRecoveryBlocksRemoval(worktree) {
             return .checkpointRecoveryPending

@@ -427,10 +427,24 @@ extension ACPTranscriptCoreTextRowView {
         for background in markdown.backgrounds where background.rect.intersects(local) {
             background.color.setFill()
             let rect = background.rect.offsetBy(dx: origin.x, dy: origin.y)
-            if background.cornerRadius > 0 {
-                NSBezierPath(roundedRect: rect, xRadius: background.cornerRadius, yRadius: background.cornerRadius).fill()
-            } else {
-                rect.fill()
+            let radius = background.cornerRadius
+            let shape = radius > 0 ? NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius) : NSBezierPath(rect: rect)
+            shape.fill()
+            if let header = background.header {
+                NSGraphicsContext.saveGraphicsState()
+                shape.addClip()
+                header.fill.setFill()
+                CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: header.height).fill()
+                header.divider.setFill()
+                CGRect(x: rect.minX, y: rect.minY + header.height - 0.5, width: rect.width, height: 0.5).fill()
+                NSGraphicsContext.restoreGraphicsState()
+            }
+            if let stroke = background.stroke {
+                stroke.setStroke()
+                let inset = rect.insetBy(dx: 0.25, dy: 0.25)
+                let outline = NSBezierPath(roundedRect: inset, xRadius: max(0, radius - 0.25), yRadius: max(0, radius - 0.25))
+                outline.lineWidth = 0.5
+                outline.stroke()
             }
         }
         let lines = markdown.linesIntersecting(local)
@@ -518,8 +532,14 @@ extension ACPTranscriptCoreTextRowView {
             border.lineWidth = L.copyButtonStrokeWidth
             (copied ? style.copiedStroke : style.stroke).setStroke()
             border.stroke()
+            let icon = copied ? style.copiedIcon : style.copyIcon
+            let iconRect = CGRect(
+                x: rect.minX + L.copyButtonHorizontalPadding, y: rect.midY - icon.size.height / 2,
+                width: icon.size.width, height: icon.size.height
+            )
+            icon.draw(in: iconRect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
             context.textPosition = CGPoint(
-                x: rect.minX + L.copyButtonHorizontalPadding, y: rect.minY + L.copyButtonVerticalPadding + style.ascent
+                x: iconRect.maxX + L.copyButtonIconSpacing, y: rect.minY + L.copyButtonVerticalPadding + style.ascent
             )
             CTLineDraw(copied ? style.copied : style.copy, context)
         }
