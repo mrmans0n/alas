@@ -390,7 +390,12 @@ public final class ACPSession: ChangeTracking, Identifiable {
     /// duplicate bubbles while still letting fresh in-progress continuation
     /// chunks through (those target non-completed messages, so the boundary
     /// check is never reached).
-    public var allowsStreamingBoundaryCrossing: Bool = true
+    public var allowsStreamingBoundaryCrossing: Bool = true {
+        didSet { streamingBoundaryGeneration &+= 1 }
+    }
+    /// Bumped on every write to `allowsStreamingBoundaryCrossing`, so an
+    /// operation that opened it can tell whether anything set it since.
+    public private(set) var streamingBoundaryGeneration = 0
 
     /// Running text of streaming chunks that arrived with an unrecognised
     /// `messageId` while `allowsStreamingBoundaryCrossing` was false and

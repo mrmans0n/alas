@@ -253,18 +253,27 @@ struct ACPSessionManagerDisposalTests {
         await manager.disposeAllLiveSessions()
     }
 
-    @Test("only an accepted goal control ends the late-replay window", arguments: [true, false])
-    func goalControlReopensStreamingBoundary(accepted: Bool) async throws {
+    @Test("only an accepted goal control ends the late-replay window, and a rejected one keeps a prompt's",
+          arguments: ["accepted", "rejected", "rejected after a prompt"])
+    func goalControlReopensStreamingBoundary(outcome: String) async throws {
         let client = ACPMockClient()
+        let started = AsyncStream<Void>.makeStream()
+        let release = AsyncStream<Void>.makeStream()
         client.scriptAsync(method: "_session/goal") { _ in
-            guard accepted else { throw TestError.closeFailed }
+            started.continuation.yield()
+            for await _ in release.stream { break }
+            guard outcome == "accepted" else { throw TestError.closeFailed }
             return Data("{}".utf8)
         }
         let (manager, _, session) = try await attachedManager(client: client, supportsClose: true)
         session.goalCapability = .init(version: 1, controlMethod: "_session/goal", actions: [.set])
         session.allowsStreamingBoundaryCrossing = false
-        _ = try? await manager.controlGoal(for: session.id, action: .set, objective: "finish")
-        #expect(session.allowsStreamingBoundaryCrossing == accepted)
+        let control = Task { try? await manager.controlGoal(for: session.id, action: .set, objective: "finish") }
+        for await _ in started.stream { break }
+        if outcome == "rejected after a prompt" { session.allowsStreamingBoundaryCrossing = true }
+        release.continuation.yield()
+        await control.value
+        #expect(session.allowsStreamingBoundaryCrossing == (outcome != "rejected"))
         await manager.disposeAllLiveSessions()
     }
 
