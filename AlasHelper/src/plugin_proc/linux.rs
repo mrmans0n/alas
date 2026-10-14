@@ -110,3 +110,14 @@ pub(super) fn anchor(_parent: i32) -> ! {
         unsafe { libc::pause() };
     }
 }
+
+/// Nothing to pin: the subreaper keeps every orphan below the supervisor.
+pub(super) struct Pins;
+
+pub(super) fn pin(_pipes: Vec<OwnedFd>) -> Pins {
+    Pins
+}
+
+pub(super) fn strays(_pins: &Pins, _anchor: Option<i32>, _since: u64) -> Vec<(i32, Stat)> {
+    Vec::new()
+}

@@ -1,5 +1,7 @@
 //! macOS: no pidfds and no subreaper. A process is its pid and start time,
-//! checked again immediately before every signal.
+//! checked again immediately before every signal. Orphans, which launchd
+//! adopts at once, are found by the run's process group and output pipes
+//! (`strays`).
 //! ponytail: a pid reused between the check and `kill` is still hit; that
 //! needs the pid space to wrap within microseconds.
 
@@ -33,13 +35,16 @@ fn bsdinfo(pid: i32) -> Option<libc::proc_bsdinfo> {
 }
 
 pub(super) fn stat(pid: i32) -> Option<Stat> {
-    let info = bsdinfo(pid)?;
-    Some(Stat {
+    bsdinfo(pid).map(|info| stat_of(&info))
+}
+
+fn stat_of(info: &libc::proc_bsdinfo) -> Stat {
+    Stat {
         ppid: info.pbi_ppid as i32,
         pgrp: info.pbi_pgid as i32,
         start: info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec,
         dead: info.pbi_status == libc::SZOMB,
-    })
+    }
 }
 
 pub(super) fn pids() -> Vec<i32> {
@@ -103,4 +108,126 @@ pub(super) fn anchor(parent: i32) -> ! {
         thread::sleep(Duration::from_millis(250));
     }
     std::process::exit(0);
+}
+
+/// `struct proc_fileinfo` from `<sys/proc_info.h>`.
+#[repr(C)]
+struct ProcFileInfo {
+    fi_openflags: u32,
+    fi_status: u32,
+    fi_offset: libc::off_t,
+    fi_type: i32,
+    fi_guardflags: u32,
+}
+
+/// `struct pipe_fdinfo` from `<sys/proc_info.h>`.
+#[repr(C)]
+struct PipeFdInfo {
+    pfi: ProcFileInfo,
+    pipe_stat: libc::vinfo_stat,
+    pipe_handle: u64,
+    pipe_peerhandle: u64,
+    pipe_status: i32,
+    rfu_1: i32,
+}
+
+const PROC_PIDFDPIPEINFO: i32 = 6;
+
+/// Both ends of the pipe `fd` of `pid` is, by their kernel handles.
+fn pipe_ends(pid: i32, fd: i32) -> Option<[u64; 2]> {
+    // SAFETY: plain data, filled below.
+    let mut info: PipeFdInfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<PipeFdInfo>() as i32;
+    // SAFETY: proc_pidfdinfo fills at most `size` bytes of a local.
+    let filled = unsafe {
+        libc::proc_pidfdinfo(
+            pid,
+            fd,
+            PROC_PIDFDPIPEINFO,
+            (&mut info as *mut PipeFdInfo).cast(),
+            size,
+        )
+    };
+    (filled == size).then_some([info.pipe_handle, info.pipe_peerhandle])
+}
+
+/// The pipes `pid` holds, each as the handle of the end it holds.
+fn pipes_held(pid: i32) -> Vec<u64> {
+    // SAFETY: a null buffer asks for the size.
+    let bytes =
+        unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDLISTFDS, 0, std::ptr::null_mut(), 0) };
+    if bytes <= 0 {
+        return Vec::new();
+    }
+    let mut fds: Vec<libc::proc_fdinfo> =
+        Vec::with_capacity(bytes as usize / std::mem::size_of::<libc::proc_fdinfo>() + 8);
+    let capacity = (fds.capacity() * std::mem::size_of::<libc::proc_fdinfo>()) as i32;
+    // SAFETY: the buffer holds `capacity` bytes; only what was filled is kept.
+    let filled = unsafe {
+        let filled = libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDLISTFDS,
+            0,
+            fds.as_mut_ptr().cast(),
+            capacity,
+        );
+        fds.set_len(filled.max(0) as usize / std::mem::size_of::<libc::proc_fdinfo>());
+        filled
+    };
+    if filled <= 0 {
+        return Vec::new();
+    }
+    fds.iter()
+        .filter(|fd| fd.proc_fdtype == libc::PROX_FDTYPE_PIPE as u32)
+        .filter_map(|fd| pipe_ends(pid, fd.proc_fd).map(|[held, _]| held))
+        .collect()
+}
+
+/// The run's output pipes, held open by the supervisor so their handles can't
+/// be reused for another pipe while cleanup looks for them.
+pub(super) struct Pins {
+    _fds: Vec<std::os::fd::OwnedFd>,
+    /// Both ends of every pinned pipe.
+    handles: Vec<u64>,
+}
+
+pub(super) fn pin(pipes: Vec<std::os::fd::OwnedFd>) -> Pins {
+    use std::os::fd::AsRawFd;
+    let me = std::process::id() as i32;
+    let handles = pipes
+        .iter()
+        .filter_map(|fd| pipe_ends(me, fd.as_raw_fd()))
+        .flatten()
+        .collect();
+    Pins {
+        _fds: pipes,
+        handles,
+    }
+}
+
+/// The user's processes started since `since` that launchd may have adopted
+/// but still belong to the run: in the anchor's group while it lives, or
+/// holding either end of the run's output pipes.
+/// ponytail: one that left the group and redirected its output before a
+/// sample saw it below the supervisor escapes.
+pub(super) fn strays(pins: &Pins, anchor: Option<i32>, since: u64) -> Vec<(i32, Stat)> {
+    let me = std::process::id() as i32;
+    // SAFETY: getuid only.
+    let uid = unsafe { libc::getuid() };
+    pids()
+        .into_iter()
+        .filter(|pid| *pid != me && Some(*pid) != anchor)
+        .filter_map(|pid| {
+            let info = bsdinfo(pid)?;
+            let stat = stat_of(&info);
+            (info.pbi_uid == uid && stat.start >= since && !stat.dead).then_some((pid, stat))
+        })
+        .filter(|(pid, stat)| {
+            Some(stat.pgrp) == anchor
+                || (!pins.handles.is_empty()
+                    && pipes_held(*pid)
+                        .iter()
+                        .any(|held| pins.handles.contains(held)))
+        })
+        .collect()
 }

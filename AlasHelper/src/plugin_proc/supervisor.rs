@@ -52,6 +52,11 @@ struct Supervisor {
     root: i32,
     root_status: Option<i32>,
     owned: HashMap<(i32, u64), Handle>,
+    /// What `platform::strays` recognizes the run's leftovers by: its output
+    /// pipes, pinned so their identity can't be reused, and the supervisor's
+    /// start, before which none of them began.
+    pins: platform::Pins,
+    since: u64,
     log: Option<std::fs::File>,
 }
 
@@ -82,7 +87,15 @@ impl Supervisor {
     /// The processes this run still owns, each with a validated handle,
     /// the anchor aside.
     fn sample(&mut self) -> Vec<(i32, u64)> {
-        let found = descendants(self.me);
+        let mut found = descendants(self.me);
+        // Orphans the platform can't keep below us (macOS): in the anchor's
+        // group while it holds the id, or holding the run's output.
+        let group = self.anchor_fd.is_some().then_some(self.anchor);
+        for (pid, stat) in platform::strays(&self.pins, group, self.since) {
+            if !found.iter().any(|(known, _)| *known == pid) {
+                found.push((pid, stat));
+            }
+        }
         let live: HashSet<(i32, u64)> = found
             .iter()
             .filter(|(pid, _)| *pid != self.anchor)
@@ -170,6 +183,7 @@ pub(super) fn supervise(dir: PathBuf) {
     platform::become_reaper();
     // With its start time, so a retry can tell it from a reused pid.
     let me = std::process::id() as i32;
+    let since = platform::stat(me).map_or(0, |stat| stat.start);
     if let Some(stat) = platform::stat(me) {
         let _ = write_atomic(
             &dir.join("supervisor"),
@@ -221,6 +235,22 @@ pub(super) fn supervise(dir: PathBuf) {
         }
     };
     let root = child.id() as i32;
+    // Read ends of our own, apart from the readers', which drop theirs at EOF.
+    use std::os::fd::AsFd;
+    let pins = [
+        child
+            .stdout
+            .as_ref()
+            .map(|pipe| pipe.as_fd().try_clone_to_owned()),
+        child
+            .stderr
+            .as_ref()
+            .map(|pipe| pipe.as_fd().try_clone_to_owned()),
+    ]
+    .into_iter()
+    .flatten()
+    .flatten()
+    .collect();
     let mut supervisor = Supervisor {
         dir: dir.clone(),
         me: std::process::id() as i32,
@@ -229,6 +259,8 @@ pub(super) fn supervise(dir: PathBuf) {
         root,
         root_status: None,
         owned: HashMap::new(),
+        pins: platform::pin(pins),
+        since,
         log: std::fs::OpenOptions::new()
             .create(true)
             .append(true)

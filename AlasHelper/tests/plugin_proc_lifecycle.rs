@@ -43,6 +43,21 @@ impl Helper {
         let worktree = root.join("worktree");
         std::fs::create_dir_all(&home).unwrap();
         std::fs::create_dir_all(&worktree).unwrap();
+        #[cfg(target_os = "macos")]
+        {
+            // macOS has no setsid(1); the scripts get a stand-in on the login PATH.
+            let bin = home.join("bin");
+            std::fs::create_dir_all(&bin).unwrap();
+            std::fs::write(
+                bin.join("setsid"),
+                "#!/usr/bin/perl\nuse POSIX;\nif (!defined POSIX::setsid()) { exit 0 if fork; POSIX::setsid(); }\nexec @ARGV or die \"setsid: $ARGV[0]: $!\\n\";\n",
+            )
+            .unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(bin.join("setsid"), std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+            std::fs::write(home.join(".profile"), "export PATH=\"$HOME/bin:$PATH\"\n").unwrap();
+        }
         let mut child = Command::new(env!("CARGO_BIN_EXE_alas-helper"))
             .arg("serve")
             .env("HOME", &home)
@@ -301,7 +316,6 @@ fn a_signal_exit_reports_128_plus_the_signal() {
     }
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn what_the_root_leaves_running_is_stopped_when_it_exits() {
     let mut helper = Helper::start();

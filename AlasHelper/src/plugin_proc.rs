@@ -1264,6 +1264,34 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn strays_are_the_processes_holding_the_runs_output() {
+        use std::os::fd::{FromRawFd, OwnedFd};
+        let mut fds = [0; 2];
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        // Close-on-exec, like the supervisor's pipes: only the holder gets one.
+        for fd in fds {
+            assert_eq!(unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) }, 0);
+        }
+        let (read, write) = unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) };
+        let mut holder = Command::new("sleep")
+            .arg("30")
+            .stdout(Stdio::from(write))
+            .spawn()
+            .unwrap();
+        let mut other = Command::new("sleep").arg("30").spawn().unwrap();
+        let pins = platform::pin(vec![read]);
+        let found: Vec<i32> = platform::strays(&pins, None, 0)
+            .into_iter()
+            .map(|(pid, _)| pid)
+            .collect();
+        let _ = (holder.kill(), other.kill(), holder.wait(), other.wait());
+        assert!(found.contains(&(holder.id() as i32)), "{found:?}");
+        assert!(!found.contains(&(other.id() as i32)), "{found:?}");
+        assert!(!found.contains(&(std::process::id() as i32)), "{found:?}");
+    }
+
     #[test]
     fn argv_bounds_leave_room_for_any_declared_command() {
         let args = |count: usize, size: usize| vec!["x".repeat(size); count];
