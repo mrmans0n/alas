@@ -61,10 +61,14 @@ import Testing
         #expect(layout.linkSpans().map(\.text) == ["docs", "docs again", "docs"])
     }
 
-    @Test func adjacentLinksToOneURLStayDistinct() throws {
-        let layout = try #require(ACPTranscriptMarkdownLayout.make(
-            source: "[first](https://example.com) [second](https://example.com)", width: 600, theme: theme, typography: .default
-        ))
+    @Test(arguments: [
+        "[first](https://example.com) [second](https://example.com)",
+        #"[first](https://example.com "one")[second](https://example.com "two")"#,
+        "[first](https://example.com 'one')[second](https://example.com 'two')",
+        "[first](https://example.com (one))[second](https://example.com (two))",
+    ])
+    func adjacentLinksToOneURLStayDistinct(source: String) throws {
+        let layout = try #require(ACPTranscriptMarkdownLayout.make(source: source, width: 600, theme: theme, typography: .default))
         #expect(layout.linkSpans().map(\.text) == ["first", "second"])
     }
 
