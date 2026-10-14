@@ -1669,8 +1669,8 @@ public final class ACPSession: ChangeTracking, Identifiable {
         case .agentMessageChunk(let chunk):
             dirty = []
             // A `/goal` confirmation is persisted as a notice, not an agent row.
-            matchedIndex = goalCommandNoticeIndex(text(of: chunk.content), atOrAfter: suppressedReplayInsertionCursor)
-                ?? chunk.messageId.flatMap { transcript.messageIndex(messageId: $0, kind: .agent) }
+            matchedIndex = chunk.messageId.flatMap { transcript.messageIndex(messageId: $0, kind: .agent) }
+                ?? goalCommandNoticeIndex(text(of: chunk.content), atOrAfter: suppressedReplayInsertionCursor)
                 ?? firstIdLessMatch(of: .agent, atOrAfter: suppressedReplayInsertionCursor)
         case .agentThoughtChunk(let chunk):
             dirty = []
