@@ -2288,14 +2288,109 @@ struct GitLabCLIProviderTests {
     )
     func reviewersOnHeadSelection(_ testCase: GitLabReviewersOnHeadCase) throws {
         let notBefore = try testCase.notBefore.map { try #require(ISO8601DateFormatter().date(from: $0)) }
-        let reviewers = try GitLabCLIProvider.parseReviewersOnHead(
-            approvalsJSON: "{\"approved_by\": [\(testCase.approvals)]}",
-            notesJSON: "[\(testCase.notes)]",
+        let cutoff = try GitLabCLIProvider.reviewersOnHeadCutoff(
             headCommitJSON: #"{"id": "head123", "created_at": "2026-10-13T10:00:00.000Z"}"#,
             notBefore: notBefore
         )
+        let reviewers = try GitLabCLIProvider.parseReviewersOnHead(
+            approvalsJSON: "{\"approved_by\": [\(testCase.approvals)]}",
+            notePages: [GitLabCLIProvider.parseReviewersOnHeadNotesPage("[\(testCase.notes)]")],
+            cutoff: cutoff
+        )
 
         #expect(reviewers == testCase.expected)
+    }
+
+    /// `count` notes by `author` at `createdAt`.
+    struct GitLabScriptedNotes: Sendable {
+        let author: String
+        let createdAt: String
+        var count = 1
+    }
+
+    struct GitLabReviewersOnHeadPagingCase: Sendable, CustomTestStringConvertible {
+        let testDescription: String
+        /// Notes pages, newest first; the head commit is dated 10:00 and Alas first saw it at 10:01.
+        let notePages: [[GitLabScriptedNotes]]
+        let expectedPageCount: Int
+        let expected: Set<String>
+    }
+
+    @Test(
+        "Reviewers on head page newest-first through notes until the cutoff, up to the page cap",
+        arguments: [
+            GitLabReviewersOnHeadPagingCase(
+                testDescription: "required reviewer's note only on the second page counts",
+                notePages: [
+                    [GitLabScriptedNotes(author: "teammate", createdAt: "2026-10-13T10:30:00.000Z", count: 100)],
+                    [GitLabScriptedNotes(author: "Codex", createdAt: "2026-10-13T10:20:00.000Z")],
+                ],
+                expectedPageCount: 2,
+                expected: ["teammate", "codex"]
+            ),
+            GitLabReviewersOnHeadPagingCase(
+                testDescription: "a full page reaching the cutoff stops paging",
+                notePages: [
+                    [
+                        GitLabScriptedNotes(author: "codex", createdAt: "2026-10-13T10:30:00.000Z"),
+                        GitLabScriptedNotes(author: "stale", createdAt: "2026-10-13T09:50:00.000Z", count: 99),
+                    ],
+                    [GitLabScriptedNotes(author: "older", createdAt: "2026-10-13T09:40:00.000Z")],
+                ],
+                expectedPageCount: 1,
+                expected: ["codex"]
+            ),
+            GitLabReviewersOnHeadPagingCase(
+                testDescription: "page cap keeps notes from the pages it read",
+                notePages: (0...GitLabCLIProvider.reviewersOnHeadMaxNotePages).map {
+                    [GitLabScriptedNotes(author: "reviewer-\($0)", createdAt: "2026-10-13T10:30:00.000Z", count: 100)]
+                },
+                expectedPageCount: GitLabCLIProvider.reviewersOnHeadMaxNotePages,
+                expected: Set((0..<GitLabCLIProvider.reviewersOnHeadMaxNotePages).map { "reviewer-\($0)" })
+            ),
+        ]
+    )
+    func reviewersOnHeadPaging(_ testCase: GitLabReviewersOnHeadPagingCase) async throws {
+        let notesOutputs = testCase.notePages.map { page in
+            let notes = page.flatMap { scripted in
+                let note = #"{"body": "Looks good.", "system": false, "author": {"username": "\#(scripted.author)"}, "#
+                    + #""created_at": "\#(scripted.createdAt)"}"#
+                return Array(repeating: note, count: scripted.count)
+            }
+            return ProcessResult(exitCode: 0, stdout: "[\(notes.joined(separator: ","))]", stderr: "")
+        }
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: #"{"approved_by": []}"#, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: #"{"id": "head123", "created_at": "2026-10-13T10:00:00.000Z"}"#, stderr: ""),
+        ] + notesOutputs)
+
+        let reviewers = try await GitLabCLIProvider(runner: runner).reviewersOnHead(
+            remote: Self.remote,
+            request: Self.makeRequest(),
+            notBefore: try #require(ISO8601DateFormatter().date(from: "2026-10-13T10:01:00Z")),
+            cwd: Self.cwd
+        )
+
+        #expect(reviewers == testCase.expected)
+        let commands = await runner.commands
+        #expect(commands.map { Array($0.args.prefix(2)) }.prefix(2) == [
+            ["api", "projects/platform%2Fmobile%2Falas/merge_requests/42/approvals"],
+            ["api", "projects/platform%2Fmobile%2Falas/repository/commits/head123"],
+        ])
+        let notesCommands = commands.dropFirst(2)
+        #expect(notesCommands.count == testCase.expectedPageCount)
+        for (index, command) in notesCommands.enumerated() {
+            #expect(command.args == [
+                "api", "projects/platform%2Fmobile%2Falas/merge_requests/42/notes",
+                "--hostname", "gitlab.example.com",
+                "--output", "json",
+                "--method", "GET",
+                "-f", "sort=desc",
+                "-f", "order_by=created_at",
+                "-f", "per_page=100",
+                "-f", "page=\(index + 1)",
+            ])
+        }
     }
 
     @Test func noteIDRequiresNumericCommentID() throws {

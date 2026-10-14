@@ -1430,6 +1430,13 @@ public struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
         )
     }
 
+    /// Notes per page `reviewersOnHead` asks for; GitLab caps `per_page` at 100.
+    public static let reviewersOnHeadNotesPageSize = 100
+
+    /// Note pages fetched before `reviewersOnHead` stops and judges what it
+    /// has; a note it never reads only means "not reviewed".
+    public static let reviewersOnHeadMaxNotePages = 10
+
     public func reviewersOnHead(
         remote: CodeHostRemote,
         request: ReviewRequest,
@@ -1444,23 +1451,33 @@ public struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
             remote: remote,
             cwd: cwd
         )
-        let notes = try await apiJSON(
-            Self.mergeRequestAPIPath(remote: remote, request: request, suffix: "notes"),
-            query: ["sort=desc", "order_by=created_at", "per_page=100"],
-            remote: remote,
-            cwd: cwd
-        )
         let headCommit = try await apiJSON(
             "projects/\(Self.encodedProjectPath(remote.repositorySlug))/repository/commits/\(headSHA)",
             remote: remote,
             cwd: cwd
         )
-        return try Self.parseReviewersOnHead(
-            approvalsJSON: approvals,
-            notesJSON: notes,
-            headCommitJSON: headCommit,
-            notBefore: notBefore
-        )
+        let cutoff = try Self.reviewersOnHeadCutoff(headCommitJSON: headCommit, notBefore: notBefore)
+        var notePages: [GitLabReviewersOnHeadNotesPage] = []
+        if let cutoff {
+            // Newest first, so paging stops once a page reaches the cutoff.
+            for page in 1...Self.reviewersOnHeadMaxNotePages {
+                let notes = try await apiJSON(
+                    Self.mergeRequestAPIPath(remote: remote, request: request, suffix: "notes"),
+                    query: [
+                        "sort=desc",
+                        "order_by=created_at",
+                        "per_page=\(Self.reviewersOnHeadNotesPageSize)",
+                        "page=\(page)",
+                    ],
+                    remote: remote,
+                    cwd: cwd
+                )
+                let notesPage = try Self.parseReviewersOnHeadNotesPage(notes)
+                notePages.append(notesPage)
+                if Self.isLastReviewersOnHeadNotesPage(notesPage, cutoff: cutoff) { break }
+            }
+        }
+        return try Self.parseReviewersOnHead(approvalsJSON: approvals, notePages: notePages, cutoff: cutoff)
     }
 
     /// `glab api <path>` as JSON. Query fields switch the call to an explicit
@@ -2251,37 +2268,73 @@ public struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
         return user.bot ?? false
     }
 
-    /// Lowercased usernames that approved or commented on the head commit.
-    /// A dated approval (`approved_at`, newer GitLab) and a note count only
-    /// when created after both the head commit and `notBefore`, when Alas
-    /// first saw this head: the commit's `created_at` is authored locally, so
+    /// When Alas starts counting dated approvals and notes on the head: the
+    /// later of the head commit's `created_at` and `notBefore`, when Alas
+    /// first saw this head. The commit's `created_at` is authored locally, so
     /// a commit made before a comment but pushed after it would otherwise
     /// count the stale comment. The cost is that a note posted between the
     /// push and Alas's first poll of the head doesn't count. A nil
-    /// `notBefore` leaves dated approvals and notes counting for nobody. An
-    /// approval without `approved_at` counts. System notes ("added 1
-    /// commit", "approved this merge request") never count.
-    public static func parseReviewersOnHead(
-        approvalsJSON: String,
-        notesJSON: String,
-        headCommitJSON: String,
-        notBefore: Date?
-    ) throws -> Set<String> {
-        let decoder = JSONDecoder()
-        let approvals: GitLabApprovalsResponse
-        let notes: [GitLabDiscussionNote]
+    /// `notBefore` gives no cutoff: dated approvals and notes count for nobody.
+    public static func reviewersOnHeadCutoff(headCommitJSON: String, notBefore: Date?) throws -> Date? {
         let headCommit: GitLabCommitResponse
         do {
-            approvals = try decoder.decode(GitLabApprovalsResponse.self, from: Data(approvalsJSON.utf8))
-            notes = try decoder.decode([GitLabDiscussionNote].self, from: Data(notesJSON.utf8))
-            headCommit = try decoder.decode(GitLabCommitResponse.self, from: Data(headCommitJSON.utf8))
+            headCommit = try JSONDecoder().decode(GitLabCommitResponse.self, from: Data(headCommitJSON.utf8))
         } catch {
             throw CodeHostProviderError.malformedOutput("Unable to parse glab reviewers output")
         }
         guard let headCreatedAt = try? parseOptionalGitLabDate(headCommit.createdAt) else {
             throw CodeHostProviderError.malformedOutput("glab commit output is missing created_at")
         }
-        let cutoff = notBefore.map { max($0, headCreatedAt) }
+        return notBefore.map { max($0, headCreatedAt) }
+    }
+
+    /// One page of merge request notes. System notes ("added 1 commit",
+    /// "approved this merge request") never count, but still date the page.
+    public static func parseReviewersOnHeadNotesPage(_ json: String) throws -> GitLabReviewersOnHeadNotesPage {
+        let notes: [GitLabDiscussionNote]
+        do {
+            notes = try JSONDecoder().decode([GitLabDiscussionNote].self, from: Data(json.utf8))
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse glab reviewers output")
+        }
+        var humanNotes: [GitLabReviewersOnHeadNotesPage.Note] = []
+        var oldestCreatedAt: Date?
+        for note in notes {
+            guard let createdAt = try? parseOptionalGitLabDate(note.createdAt) else { continue }
+            oldestCreatedAt = min(oldestCreatedAt ?? createdAt, createdAt)
+            guard !note.isSystem, let username = normalizedOptionalString(note.author?.username) else { continue }
+            humanNotes.append(.init(username: username.lowercased(), createdAt: createdAt))
+        }
+        return GitLabReviewersOnHeadNotesPage(
+            humanNotes: humanNotes,
+            noteCount: notes.count,
+            oldestCreatedAt: oldestCreatedAt
+        )
+    }
+
+    /// Whether older pages hold nothing after `cutoff`: this short page is
+    /// GitLab's last, or newest-first order already reached `cutoff`.
+    private static func isLastReviewersOnHeadNotesPage(_ page: GitLabReviewersOnHeadNotesPage, cutoff: Date) -> Bool {
+        if page.noteCount < reviewersOnHeadNotesPageSize { return true }
+        guard let oldestCreatedAt = page.oldestCreatedAt else { return false }
+        return oldestCreatedAt <= cutoff
+    }
+
+    /// Lowercased usernames that approved or commented on the head commit.
+    /// A dated approval (`approved_at`, newer GitLab) and a note count only
+    /// when created after `cutoff` (see `reviewersOnHeadCutoff`); with no
+    /// cutoff, neither counts. An approval without `approved_at` counts.
+    public static func parseReviewersOnHead(
+        approvalsJSON: String,
+        notePages: [GitLabReviewersOnHeadNotesPage],
+        cutoff: Date?
+    ) throws -> Set<String> {
+        let approvals: GitLabApprovalsResponse
+        do {
+            approvals = try JSONDecoder().decode(GitLabApprovalsResponse.self, from: Data(approvalsJSON.utf8))
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse glab reviewers output")
+        }
 
         var reviewers = Set<String>()
         for approval in approvals.approvedBy ?? [] {
@@ -2292,12 +2345,10 @@ public struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
             reviewers.insert(username.lowercased())
         }
         guard let cutoff else { return reviewers }
-        for note in notes where !note.isSystem {
-            guard let username = normalizedOptionalString(note.author?.username),
-                  let createdAt = try? parseOptionalGitLabDate(note.createdAt),
-                  createdAt > cutoff
-            else { continue }
-            reviewers.insert(username.lowercased())
+        for page in notePages {
+            for note in page.humanNotes where note.createdAt > cutoff {
+                reviewers.insert(note.username)
+            }
         }
         return reviewers
     }
@@ -2920,6 +2971,21 @@ private struct GitLabDiscussion: Decodable {
         self.resolved = resolved
         self.notes = notes
     }
+}
+
+/// One page of `GitLabCLIProvider.reviewersOnHead`'s merge request notes,
+/// newest first.
+public struct GitLabReviewersOnHeadNotesPage: Sendable {
+    fileprivate struct Note: Sendable {
+        /// Lowercased.
+        let username: String
+        let createdAt: Date
+    }
+
+    fileprivate let humanNotes: [Note]
+    /// Every note on the page, system notes and undated ones included.
+    fileprivate let noteCount: Int
+    fileprivate let oldestCreatedAt: Date?
 }
 
 private struct GitLabDiscussionNote: Decodable {
