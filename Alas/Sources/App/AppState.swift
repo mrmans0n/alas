@@ -7027,7 +7027,7 @@ final class AppState {
                 continue
             }
             guard !hasLiveSessions(worktreeId: worktree.id),
-                  projectsManager.operationState(for: worktree) == nil
+                  WorktreeOperationState.admitsLifecycleOperation(projectsManager.operationState(for: worktree))
             else {
                 results.append(WorktreeBatchResult(
                     worktreeId: worktree.id,
@@ -11565,7 +11565,7 @@ final class AppState {
                 unavailableReasons[worktree.id] = "This worktree is managed by a Workspace Checkout"
                 continue
             }
-            guard projectsManager.operationState(for: worktree) == nil else {
+            guard WorktreeOperationState.admitsLifecycleOperation(projectsManager.operationState(for: worktree)) else {
                 unavailableReasons[worktree.id] = "Another operation is in progress"
                 continue
             }
@@ -11653,7 +11653,7 @@ final class AppState {
             let ownershipIsValid = workspacesManager.canMutate && worktreeCleanupWorkspaceOwners(for: worktree).isEmpty
             guard dirtyIsAcknowledged,
                   sessionsAreAcknowledged,
-                  projectsManager.operationState(for: worktree) == nil,
+                  WorktreeOperationState.admitsLifecycleOperation(projectsManager.operationState(for: worktree)),
                   ownershipIsValid
             else {
                 results.append(.init(
