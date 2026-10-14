@@ -691,8 +691,8 @@ jobs:
         run: bash scripts/tests/test-growth/run.sh
 
   rust-tests:
-    name: Rust tests (${{ matrix.project }})
-    runs-on: ubuntu-26.04
+    name: Rust tests (${{ matrix.project }}${{ matrix.os && format(', {0}', matrix.os) || '' }})
+    runs-on: ${{ matrix.os || 'ubuntu-26.04' }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -702,6 +702,10 @@ jobs:
             toolchain: "1.98.1"
           - project: AlasHelper
             toolchain: "1.98.1"
+          # The helper supervises plugin processes differently on macOS hosts.
+          - project: AlasHelper
+            toolchain: "1.98.1"
+            os: macos-26
           # tree-sitter-pack's build script declares this toolchain until the
           # crate owns a rust-toolchain.toml like the other first-party crates.
           - project: ThirdParty/treesitter-pack
