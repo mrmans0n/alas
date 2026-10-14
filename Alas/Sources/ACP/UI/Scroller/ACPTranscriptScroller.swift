@@ -133,7 +133,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         let rowExpansionStore = ACPTranscriptRowExpansionStore()
         /// Whether eligible rows draw natively; the flag, unless a test sets it.
         var nativeRowsEnabled = ACPTranscriptNativeRows.isEnabled
-        private var hasPendingRowExpansionUpdate = false
+        private var hasPendingDeferredUpdate = false
         /// VoiceOver toggles message-action visibility. Full Keyboard Access
         /// has no notification, so it is read at each rebuild instead.
         private var voiceOverObservation: NSKeyValueObservation?
@@ -180,14 +180,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             // button action is still on the stack, so it waits for the next
             // main-actor turn; toggles before then share one update.
             rowExpansionStore.onChange = { [weak self] in
-                guard let self, !self.hasPendingRowExpansionUpdate else { return }
-                self.hasPendingRowExpansionUpdate = true
-                Task { @MainActor [weak self] in
-                    guard let self else { return }
-                    self.hasPendingRowExpansionUpdate = false
-                    guard let host = self.host else { return }
-                    self.update(host: host)
-                }
+                self?.scheduleDeferredUpdate()
             }
             voiceOverObservation = NSWorkspace.shared.observe(\.isVoiceOverEnabled, options: [.new]) { [weak self] _, _ in
                 // Deferred like the expansion store: KVO can fire mid-update.
@@ -330,6 +323,19 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             syncLogicalScrollerMetrics()
         }
 
+        /// Rebuilds the specs on the next main-actor turn; requests before
+        /// then share one update.
+        private func scheduleDeferredUpdate() {
+            guard !hasPendingDeferredUpdate else { return }
+            hasPendingDeferredUpdate = true
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.hasPendingDeferredUpdate = false
+                guard let host = self.host else { return }
+                self.update(host: host)
+            }
+        }
+
         func update(host: ACPTranscriptScroller) {
             self.host = host
             schedulePendingLogicalTargetResolutionIfPossible()
@@ -359,7 +365,9 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 // re-slice and re-fold the whole window.
                 renderRows: currentRenderRows(host: host),
                 nativeRowsEnabled: nativeRowsEnabled,
-                showsActionsPermanently: currentShowsActionsPermanently()
+                showsActionsPermanently: currentShowsActionsPermanently(),
+                // A native agent row whose growing text it can no longer draw.
+                requestRespec: { [weak self] in self?.scheduleDeferredUpdate() }
             )
             hasNonSyntheticRow = specs.contains {
                 !$0.id.hasPrefix(ACPTranscriptScrollerReconciler.syntheticIdPrefix)
@@ -533,7 +541,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             rowExpansionStore: ACPTranscriptRowExpansionStore = ACPTranscriptRowExpansionStore(),
             renderRows: [ACPTranscriptRenderRow]? = nil,
             nativeRowsEnabled: Bool = ACPTranscriptNativeRows.isEnabled,
-            showsActionsPermanently: Bool = Coordinator.systemShowsActionsPermanently()
+            showsActionsPermanently: Bool = Coordinator.systemShowsActionsPermanently(),
+            requestRespec: @escaping @MainActor () -> Void = {}
         ) -> [ACPTranscriptRowSpec] {
             let transcript = host.transcript
             var specs: [ACPTranscriptRowSpec] = []
@@ -565,7 +574,9 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             var forkDividerEmitted = false
             // Read once: each `@Published` read goes through the property
             // wrapper, and this loop visits every row in the window.
-            let snapshot = RowSnapshot(host: host, showsActionsPermanently: showsActionsPermanently)
+            let snapshot = RowSnapshot(
+                host: host, showsActionsPermanently: showsActionsPermanently, requestRespec: requestRespec
+            )
             let messages = snapshot.messages
             let isTurnActive = transcript.streamingState != .idle
             let latestUserIndex = transcript.latestUserMessageIndex ?? 0
@@ -680,10 +691,12 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             let canFork: (Int) -> Bool
             /// VoiceOver or Full Keyboard Access: message actions stay visible.
             let showsActionsPermanently: Bool
+            let requestRespec: @MainActor () -> Void
 
             @MainActor
-            init(host: ACPTranscriptScroller, showsActionsPermanently: Bool) {
+            init(host: ACPTranscriptScroller, showsActionsPermanently: Bool, requestRespec: @escaping @MainActor () -> Void) {
                 self.showsActionsPermanently = showsActionsPermanently
+                self.requestRespec = requestRespec
                 let transcript = host.transcript
                 messages = transcript.messages
                 liveNarrationIndex = ACPNarrationLiveness.liveIndex(
@@ -766,7 +779,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                     actions: nativeActions(
                         host: host, snapshot: snapshot, row: row, message: message,
                         toggleExpanded: expansion?.setExpanded
-                    )
+                    ),
+                    source: Self.agentText(of: message)
                 )
             }
             return spec
@@ -852,8 +866,13 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 menu: menu,
                 toggleExpanded: toggleExpanded,
                 openURL: { url in openLink(host: host, url) },
-                showsActionsPermanently: snapshot.showsActionsPermanently
+                showsActionsPermanently: snapshot.showsActionsPermanently,
+                requestRespec: snapshot.requestRespec
             )
+        }
+
+        private static func agentText(of message: ACPMessage) -> StreamingText? {
+            if case .agent(_, _, let buffer) = message { buffer } else { nil }
         }
 
         private struct MessageRowTokenInputs: Equatable {

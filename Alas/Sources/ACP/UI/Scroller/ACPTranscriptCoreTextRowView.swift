@@ -139,6 +139,14 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
     var tiles: [Int: CALayer] = [:]
     lazy var tileDelegate = TileDelegate(view: self)
 
+    /// The agent message's text. A finished row's text never changes, but
+    /// steering can route chunks to an agent row that is already native, and
+    /// the row's token compares the buffer by identity, so the row follows
+    /// the buffer itself while it is in a superview.
+    private(set) var followedText: StreamingText?
+    private var followedRevision: UInt64 = 0
+    private var followSubscription: ChangeSubscription?
+
     var observedClipView: NSClipView?
     var clipObserver: NSObjectProtocol?
 
@@ -177,6 +185,8 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
     override func viewDidMoveToSuperview() {
         super.viewDidMoveToSuperview()
         observeClipView()
+        // A parked row stops following and catches up when it is mounted again.
+        syncFollowSubscription()
     }
 
     override func viewDidChangeBackingProperties() {
@@ -188,10 +198,11 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
 
     func configure(
         content: Content, contentMaxWidth: CGFloat, inToolCallGroup: Bool, theme: Theme, typography: ACPChatTypography,
-        actions: ACPTranscriptNativeRows.Actions = .inert
+        actions: ACPTranscriptNativeRows.Actions = .inert, source: FollowedText? = nil
     ) {
         self.actions = actions
         defer { syncActionsButton() }
+        follow(source)
         let sizeChanged = content != self.content || contentMaxWidth != self.contentMaxWidth
             || inToolCallGroup != self.inToolCallGroup || typography != self.typography
         guard sizeChanged || theme != self.theme else { return }
@@ -216,6 +227,51 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
         invalidateTiles()
         actionsButton?.apply(theme: theme)
         if sizeChanged { onIntrinsicSizeInvalidated?() }
+    }
+
+    // MARK: - Following streaming text
+
+    /// The text an agent row's content was built from, and its revision
+    /// then: a spec can be mounted after its buffer moved on.
+    typealias FollowedText = (text: StreamingText, revision: UInt64)
+
+    private func follow(_ source: FollowedText?) {
+        if source?.text !== followedText {
+            followSubscription = nil
+            followedText = source?.text
+        }
+        if let source { followedRevision = source.revision }
+        syncFollowSubscription()
+    }
+
+    private func syncFollowSubscription() {
+        guard let followedText, superview != nil else {
+            followSubscription = nil
+            return
+        }
+        guard followSubscription == nil else { return }
+        followSubscription = followedText.willChange.observe { [weak self] in
+            MainActor.assumeIsolated { self?.followedTextDidChange() }
+        }
+        followedTextDidChange()
+    }
+
+    /// Redraws with the latest text, which re-measures the row; text this
+    /// view cannot draw (a table appeared) moves the row to SwiftUI instead.
+    private func followedTextDidChange() {
+        guard let followedText, followedText.revision != followedRevision,
+              case .agent(_, let commentary) = content, let theme else { return }
+        followedRevision = followedText.revision
+        let markdown = followedText.value
+        guard ACPTranscriptNativeRows.supportsMarkdown(markdown) else {
+            actions.requestRespec()
+            return
+        }
+        configure(
+            content: .agent(markdown: markdown, commentary: commentary), contentMaxWidth: contentMaxWidth,
+            inToolCallGroup: inToolCallGroup, theme: theme, typography: typography, actions: actions,
+            source: (followedText, followedText.revision)
+        )
     }
 
     func markNeedsRemeasure() {

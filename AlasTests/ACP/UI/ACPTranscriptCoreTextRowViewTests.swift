@@ -53,6 +53,69 @@ import Testing
         #expect(view.measuredHeight(forWidth: 800) > short)
     }
 
+    /// An agent row drawn natively while its message still receives chunks
+    /// (steering routes them to an earlier row) must grow with the text.
+    private func followingRow(_ text: StreamingText, respec: @escaping @MainActor () -> Void = {}) -> ACPTranscriptCoreTextRowView {
+        var actions = ACPTranscriptNativeRows.Actions.inert
+        actions.requestRespec = respec
+        let view = ACPTranscriptCoreTextRowView(frame: .zero)
+        view.configure(
+            content: .agent(markdown: text.value, commentary: true), contentMaxWidth: 720, inToolCallGroup: false,
+            theme: theme, typography: .default, actions: actions, source: (text, text.revision)
+        )
+        return view
+    }
+
+    private static let longerText = "Short" + String(repeating: " and more text.", count: 80)
+
+    @Test func aMountedAgentRowFollowsItsStreamingText() {
+        let text = StreamingText("Short")
+        let view = followingRow(text)
+        let container = NSView()
+        container.addSubview(view)
+        withExtendedLifetime(container) {
+            let short = view.measuredHeight(forWidth: 800)
+            var invalidated = false
+            view.onIntrinsicSizeInvalidated = { invalidated = true }
+            text.replace(with: Self.longerText)
+            #expect(invalidated)
+            #expect(view.content == .agent(markdown: Self.longerText, commentary: true))
+            #expect(view.measuredHeight(forWidth: 800) > short)
+        }
+    }
+
+    /// A spec can be mounted after its buffer moved on, and a parked row
+    /// misses publishes; either catches up only once it is in a superview.
+    @Test func aRowMountedFromAStaleSpecCatchesUpOnlyWhenAttached() throws {
+        let text = StreamingText("Short")
+        let spec = ACPTranscriptNativeRows.row(
+            .agent(markdown: text.value, commentary: true), contentMaxWidth: 720, inToolCallGroup: false,
+            theme: theme, typography: .default, actions: .inert, source: text
+        )
+        text.replace(with: Self.longerText)
+        let view = try #require(spec.make() as? ACPTranscriptCoreTextRowView)
+        spec.configure(view)
+        #expect(view.content == .agent(markdown: "Short", commentary: true))
+        let container = NSView()
+        container.addSubview(view)
+        withExtendedLifetime(container) {
+            #expect(view.content == .agent(markdown: Self.longerText, commentary: true))
+        }
+    }
+
+    @Test func textANativeRowCannotDrawAsksForANewRowSpec() {
+        let text = StreamingText("Short")
+        var respecs = 0
+        let view = followingRow(text) { respecs += 1 }
+        let container = NSView()
+        container.addSubview(view)
+        withExtendedLifetime(container) {
+            text.replace(with: "Short\n\n| a | b |\n|---|---|\n| 1 | 2 |")
+            #expect(respecs == 1)
+            #expect(view.content == .agent(markdown: "Short", commentary: true))
+        }
+    }
+
     @Test func actionsButtonAppearsOnHoverAndStaysWhileTheMenuIsOpen() throws {
         let view = row(.agent(markdown: "Hi", commentary: false), actions: .testing(menu: true))
         _ = view.measuredHeight(forWidth: 1_000)

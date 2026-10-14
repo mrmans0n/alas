@@ -22,7 +22,7 @@ enum ACPTranscriptNativeRows {
 
     /// Parsing is the expensive part and specs rebuild on every publish, so
     /// each source string is parsed once.
-    private static func supportsMarkdown(_ source: String) -> Bool {
+    static func supportsMarkdown(_ source: String) -> Bool {
         let key = source as NSString
         if let cached = supportCache.object(forKey: key) { return cached.boolValue }
         let supported = ACPTranscriptMarkdownLayout.supports(ACPMarkdownParser.parse(source))
@@ -105,6 +105,9 @@ enum ACPTranscriptNativeRows {
         /// VoiceOver or Full Keyboard Access is on, so the actions affordance
         /// stays visible instead of appearing on hover.
         var showsActionsPermanently: Bool
+        /// Rebuilds the row specs on a later main-actor turn, for a row whose
+        /// content can no longer be drawn natively.
+        var requestRespec: @MainActor () -> Void = {}
 
         static var inert: Actions {
             Actions(menu: nil, toggleExpanded: nil, openURL: { _ in }, showsActionsPermanently: false)
@@ -117,9 +120,12 @@ enum ACPTranscriptNativeRows {
         inToolCallGroup: Bool,
         theme: Theme,
         typography: ACPChatTypography,
-        actions: Actions
+        actions: Actions,
+        source: StreamingText? = nil
     ) -> ACPTranscriptNativeRow {
-        ACPTranscriptNativeRow(
+        // Read with the content, which the view may mount later.
+        let followed = source.map { (text: $0, revision: $0.revision) }
+        return ACPTranscriptNativeRow(
             make: { ACPTranscriptCoreTextRowView(frame: .zero) },
             configure: { view in
                 (view as? ACPTranscriptCoreTextRowView)?.configure(
@@ -128,7 +134,8 @@ enum ACPTranscriptNativeRows {
                     inToolCallGroup: inToolCallGroup,
                     theme: theme,
                     typography: typography,
-                    actions: actions
+                    actions: actions,
+                    source: followed
                 )
             }
         )
