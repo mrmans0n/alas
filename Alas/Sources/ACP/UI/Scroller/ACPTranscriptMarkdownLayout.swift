@@ -304,29 +304,17 @@ struct ACPTranscriptMarkdownLayout {
         /// accessibility can tell them apart; a range whose labels don't add up
         /// stays one link.
         private static func markLinkBoundaries(in rendered: NSMutableAttributedString, source: String) {
-            // `[label](destination)` or an angle-bracket autolink, whose label is its URL.
-            let pattern = #"\[((?:[^\[\]]|\[[^\]]*\])*)\]\(\s*<?((?:[^()\s<>]|\([^()\s<>]*\))+)>?(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)|<([A-Za-z][A-Za-z0-9+.-]*:[^<>\s]+)>"#
-            guard let regex = try? NSRegularExpression(pattern: pattern) else { return }
-            // Scan what the renderer parses, where bare URLs are already `<url>` autolinks. Link syntax
-            // inside a code span renders as code, and an escaped bracket renders as text.
-            let withoutCode = ACPBareURLLinkifier.markdownAutolinkingBareURLs(source, preserveFencedCodeBlocks: false)
-                .replacingOccurrences(of: #"(`+)[\s\S]*?\1"#, with: " ", options: .regularExpression)
-                .replacingOccurrences(of: #"\\[!-/:-@\[-`{-~]"#, with: " ", options: .regularExpression)
-            let nsSource = withoutCode as NSString
-            var sourceLinks = regex.matches(in: withoutCode, range: NSRange(location: 0, length: nsSource.length)).map { match in
-                if match.range(at: 3).location != NSNotFound {
-                    let url = nsSource.substring(with: match.range(at: 3))
-                    return (label: url, url: url, isAutolink: true)
-                }
-                return (label: nsSource.substring(with: match.range(at: 1)), url: nsSource.substring(with: match.range(at: 2)), isAutolink: false)
-            }
+            // Scan what the renderer parses, where bare URLs are already `<url>` autolinks.
+            var sourceLinks = MarkdownLinkScanner.links(
+                in: ACPBareURLLinkifier.markdownAutolinkingBareURLs(source, preserveFencedCodeBlocks: false)
+            )
             var ordinal = 0
             rendered.enumerateAttribute(.link, in: NSRange(location: 0, length: rendered.length)) { value, range, _ in
                 guard let url = (value as? URL) ?? (value as? String).flatMap(URL.init(string:)) else { return }
                 // The source links this range was rendered from, in order.
                 // Source links before the first one to this URL didn't render as links and are skipped.
                 // Candidates are consumed only when their lengths add up to the range.
-                let matches = { (candidate: (label: String, url: String, isAutolink: Bool)) in
+                let matches = { (candidate: MarkdownLinkScanner.Link) in
                     URL(string: candidate.url)?.absoluteString == url.absoluteString || candidate.url == url.absoluteString
                 }
                 let start = sourceLinks.firstIndex(where: matches) ?? sourceLinks.endIndex
@@ -567,4 +555,165 @@ private enum TextKitLineHeight {
         cache[key] = height
         return height
     }
+}
+
+/// Finds the inline links in Markdown source, in order: `[label](destination "title")`,
+/// with brackets and parentheses balanced to any depth, and `<scheme:…>` autolinks, whose
+/// label is their URL. Backslash escapes and code spans are skipped, as the renderer skips them.
+private enum MarkdownLinkScanner {
+    struct Link {
+        let label: String
+        let url: String
+        let isAutolink: Bool
+    }
+
+    static func links(in source: String) -> [Link] {
+        let chars = Array(source)
+        var links: [Link] = []
+        var index = 0
+        while index < chars.count {
+            switch chars[index] {
+            case "\\":
+                index += 2
+            case "`":
+                index = codeSpanEnd(chars, at: index)
+            case "[":
+                if let (link, end) = inlineLink(chars, at: index) {
+                    links.append(link)
+                    index = end
+                } else {
+                    index += 1
+                }
+            case "<":
+                if let (link, end) = autolink(chars, at: index) {
+                    links.append(link)
+                    index = end
+                } else {
+                    index += 1
+                }
+            default:
+                index += 1
+            }
+        }
+        return links
+    }
+
+    /// The index after the code span opening at `start`, or after its backtick run if it never closes.
+    private static func codeSpanEnd(_ chars: [Character], at start: Int) -> Int {
+        var run = 0
+        while start + run < chars.count, chars[start + run] == "`" { run += 1 }
+        var index = start + run
+        while index < chars.count {
+            guard chars[index] == "`" else {
+                index += 1
+                continue
+            }
+            var closing = 0
+            while index + closing < chars.count, chars[index + closing] == "`" { closing += 1 }
+            if closing == run { return index + closing }
+            index += closing
+        }
+        return start + run
+    }
+
+    private static func inlineLink(_ chars: [Character], at start: Int) -> (Link, Int)? {
+        // Label: balanced brackets.
+        var index = start + 1
+        var depth = 1
+        while index < chars.count {
+            switch chars[index] {
+            case "\\": index += 1
+            case "`": index = codeSpanEnd(chars, at: index) - 1
+            case "[": depth += 1
+            case "]": depth -= 1
+            default: break
+            }
+            if depth == 0 { break }
+            index += 1
+        }
+        guard depth == 0, index + 1 < chars.count, chars[index + 1] == "(" else { return nil }
+        let label = String(chars[(start + 1) ..< index])
+        index = skipWhitespace(chars, from: index + 2)
+
+        // Destination: `<…>`, or a run without spaces whose parentheses balance.
+        var url = ""
+        if index < chars.count, chars[index] == "<" {
+            index += 1
+            while index < chars.count, chars[index] != ">" {
+                guard chars[index] != "<", !chars[index].isNewline else { return nil }
+                if chars[index] == "\\", index + 1 < chars.count, chars[index + 1].isPunctuationOrSymbol { index += 1 }
+                url.append(chars[index])
+                index += 1
+            }
+            guard index < chars.count else { return nil }
+            index += 1
+        } else {
+            var parentheses = 0
+            while index < chars.count, !chars[index].isWhitespace {
+                let char = chars[index]
+                if char == "(" {
+                    parentheses += 1
+                } else if char == ")" {
+                    if parentheses == 0 { break }
+                    parentheses -= 1
+                } else if char == "\\", index + 1 < chars.count, chars[index + 1].isPunctuationOrSymbol {
+                    index += 1
+                }
+                url.append(chars[index])
+                index += 1
+            }
+            guard parentheses == 0 else { return nil }
+        }
+
+        // Optional title after whitespace, then the closing parenthesis.
+        let afterDestination = index
+        index = skipWhitespace(chars, from: index)
+        if index > afterDestination, index < chars.count, let closer = titleCloser(chars[index]) {
+            index += 1
+            while index < chars.count, chars[index] != closer {
+                if chars[index] == "\\" { index += 1 }
+                index += 1
+            }
+            guard index < chars.count else { return nil }
+            index = skipWhitespace(chars, from: index + 1)
+        }
+        guard index < chars.count, chars[index] == ")" else { return nil }
+        return (Link(label: label, url: url, isAutolink: false), index + 1)
+    }
+
+    private static func autolink(_ chars: [Character], at start: Int) -> (Link, Int)? {
+        var index = start + 1
+        guard index < chars.count, chars[index].isASCII, chars[index].isLetter else { return nil }
+        while index < chars.count, chars[index].isASCII,
+              chars[index].isLetter || chars[index].isNumber || "+.-".contains(chars[index]) {
+            index += 1
+        }
+        guard index < chars.count, chars[index] == ":" else { return nil }
+        while index < chars.count, chars[index] != ">" {
+            guard chars[index] != "<", !chars[index].isWhitespace else { return nil }
+            index += 1
+        }
+        guard index < chars.count else { return nil }
+        let url = String(chars[(start + 1) ..< index])
+        return (Link(label: url, url: url, isAutolink: true), index + 1)
+    }
+
+    private static func skipWhitespace(_ chars: [Character], from start: Int) -> Int {
+        var index = start
+        while index < chars.count, chars[index].isWhitespace { index += 1 }
+        return index
+    }
+
+    private static func titleCloser(_ char: Character) -> Character? {
+        switch char {
+        case "\"": "\""
+        case "'": "'"
+        case "(": ")"
+        default: nil
+        }
+    }
+}
+
+private extension Character {
+    var isPunctuationOrSymbol: Bool { isASCII && (isPunctuation || isSymbol) }
 }
