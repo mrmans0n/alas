@@ -373,6 +373,20 @@ import Testing
         #expect(view.textPosition(at: point)?.block == right.block)
     }
 
+    @Test func aClickInACellsPaddingResolvesToThatCell() throws {
+        let view = row(.agent(markdown: "| a | b | c |\n|---|---|---|\n| x | y | z |", commentary: false))
+        _ = view.measuredHeight(forWidth: 800)
+        let (layout, origin) = try #require(view.markdown)
+        let table = try #require(layout.tables.first)
+        let block = try #require(layout.texts.firstIndex(of: "z"))
+        // Column 2's top padding in the body row, clear of any line.
+        let point = NSPoint(
+            x: origin.x + (table.columnXs[1] + table.rect.maxX) / 2,
+            y: origin.y + table.rowBottoms[0] + ACPTranscriptMarkdownLayout.tableDividerWidth + 2
+        )
+        #expect(view.textPosition(at: point) == .init(block: block, index: 0))
+    }
+
     @Test func copyingATableKeepsItsShape() throws {
         let view = row(.agent(markdown: "| a | b |\n|---|---|\n| 1 |", commentary: false))
         _ = view.measuredHeight(forWidth: 800)

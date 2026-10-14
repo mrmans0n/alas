@@ -233,6 +233,23 @@ extension ACPTranscriptCoreTextRowView {
             ?? markdown.lines.first { $0.block != nil && point.y < $0.origin.y + $0.height }
     }
 
+    /// The cell of a table under `point`, in markdown coordinates, picked by
+    /// the grid's column dividers and row bottoms, so its padding counts too.
+    /// Returns the cell's block and its lines, which an empty cell has none of.
+    private static func tableCell(
+        at point: CGPoint, in markdown: ACPTranscriptMarkdownLayout
+    ) -> (block: Int, lines: [ACPTranscriptMarkdownLayout.Line])? {
+        guard let table = markdown.tables.first(where: { $0.rect.contains(point) }),
+              let row = table.rowBottoms.firstIndex(where: { point.y < $0 }) ?? table.rowBottoms.indices.last
+        else { return nil }
+        let column = table.columnXs.firstIndex { point.x < $0 } ?? table.columnXs.count
+        let block = table.blocks.lowerBound + row * (table.columnXs.count + 1) + column
+        guard table.blocks.contains(block) else { return nil }
+        let top = row == 0 ? table.rect.minY : table.rowBottoms[row - 1]
+        let band = CGRect(x: 0, y: top, width: 0, height: table.rowBottoms[row] - top)
+        return (block, markdown.linesIntersecting(band).filter { $0.block == block })
+    }
+
     /// The block and offset nearest `point`. Points above or below the text
     /// clamp to its start or end, as a drag past the edge does; with
     /// `inside`, only points over the markdown resolve.
@@ -240,13 +257,27 @@ extension ACPTranscriptCoreTextRowView {
         guard let (markdown, origin) = markdown else { return nil }
         let local = CGPoint(x: point.x - origin.x, y: point.y - origin.y)
         if inside, !CGRect(x: 0, y: 0, width: markdown.width, height: markdown.height).contains(local) { return nil }
+        // In a table, the cell under the point: its start above its lines, its end below them.
+        if let cell = Self.tableCell(at: local, in: markdown) {
+            guard let line = cell.lines.first(where: { local.y < $0.origin.y + $0.height }) else {
+                return .init(block: cell.block, index: (markdown.texts[cell.block] as NSString).length)
+            }
+            return Self.position(at: local, on: line, block: cell.block)
+        }
         guard let line = Self.selectableLine(atOrAfter: local, in: markdown), let block = line.block else {
             guard let last = markdown.texts.indices.last else { return nil }
             return .init(block: last, index: (markdown.texts[last] as NSString).length)
         }
+        return Self.position(at: local, on: line, block: block)
+    }
+
+    /// The caret position on `line` nearest `point`; above the line, its start.
+    private static func position(
+        at point: CGPoint, on line: ACPTranscriptMarkdownLayout.Line, block: Int
+    ) -> TextSelection.Position {
         // Between blocks, the next block's start.
-        guard local.y >= line.origin.y, line.visibleLength > 0 else { return .init(block: block, index: line.range.location) }
-        let index = CTLineGetStringIndexForPosition(line.line, CGPoint(x: local.x - line.origin.x, y: 0))
+        guard point.y >= line.origin.y, line.visibleLength > 0 else { return .init(block: block, index: line.range.location) }
+        let index = CTLineGetStringIndexForPosition(line.line, CGPoint(x: point.x - line.origin.x, y: 0))
         guard index != kCFNotFound else { return .init(block: block, index: line.range.location) }
         return .init(block: block, index: min(max(index, line.range.location), line.range.location + line.visibleLength))
     }
