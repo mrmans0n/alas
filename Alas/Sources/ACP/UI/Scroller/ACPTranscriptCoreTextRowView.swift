@@ -259,19 +259,29 @@ final class ACPTranscriptCoreTextRowView: NSView, ACPTranscriptRowView {
     /// Redraws with the latest text, which re-measures the row; text this
     /// view cannot draw (a table appeared) moves the row to SwiftUI instead.
     private func followedTextDidChange() {
-        guard let followedText, followedText.revision != followedRevision,
-              case .agent(_, let commentary) = content, let theme else { return }
-        followedRevision = followedText.revision
-        let markdown = followedText.value
-        guard ACPTranscriptNativeRows.supportsMarkdown(markdown) else {
-            actions.requestRespec()
+        guard let followedText, followedText.revision != followedRevision, let theme else { return }
+        let updated: Content
+        switch content {
+        case .agent(_, let commentary):
+            let markdown = followedText.value
+            guard ACPTranscriptNativeRows.supportsMarkdown(markdown) else {
+                followedRevision = followedText.revision
+                actions.requestRespec()
+                return
+            }
+            updated = .agent(markdown: markdown, commentary: commentary)
+        case .thought:
+            // A collapsed thought shows its inline label, as `ACPThoughtView` does.
+            updated = .thought(label: ACPThoughtView.inlineLabel(for: followedText.value) ?? "Thinking…")
+        default:
             return
         }
+        followedRevision = followedText.revision
         // The invalidation below is dropped while the reconciler applies specs;
         // the flag makes its next layout pass measure the row anyway.
         markNeedsRemeasure()
         configure(
-            content: .agent(markdown: markdown, commentary: commentary), contentMaxWidth: contentMaxWidth,
+            content: updated, contentMaxWidth: contentMaxWidth,
             inToolCallGroup: inToolCallGroup, theme: theme, typography: typography, actions: actions,
             source: (followedText, followedText.revision)
         )

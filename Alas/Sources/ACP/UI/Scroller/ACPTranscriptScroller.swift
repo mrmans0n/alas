@@ -780,7 +780,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                         host: host, snapshot: snapshot, row: row, message: message,
                         toggleExpanded: expansion?.setExpanded
                     ),
-                    source: Self.agentText(of: message)
+                    source: Self.followedText(of: message)
                 )
             }
             return spec
@@ -871,8 +871,11 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             )
         }
 
-        private static func agentText(of message: ACPMessage) -> StreamingText? {
-            if case .agent(_, _, let buffer) = message { buffer } else { nil }
+        private static func followedText(of message: ACPMessage) -> StreamingText? {
+            switch message {
+            case .agent(_, _, let buffer), .thought(_, _, let buffer): buffer
+            default: nil
+            }
         }
 
         private struct MessageRowTokenInputs: Equatable {

@@ -84,6 +84,22 @@ import Testing
         }
     }
 
+    @Test func aMountedThoughtRowFollowsItsStreamingText() throws {
+        let text = StreamingText("Reading the files")
+        let spec = ACPTranscriptNativeRows.row(
+            .thought(label: ACPThoughtView.inlineLabel(for: text.value) ?? "Thinking…"), contentMaxWidth: 720,
+            inToolCallGroup: false, theme: theme, typography: .default, actions: .inert, source: text
+        )
+        let view = try #require(spec.make() as? ACPTranscriptCoreTextRowView)
+        spec.configure(view)
+        let container = NSView()
+        container.addSubview(view)
+        withExtendedLifetime(container) {
+            text.replace(with: "Planning the change")
+            #expect(view.content == .thought(label: ACPThoughtView.inlineLabel(for: "Planning the change") ?? "Thinking…"))
+        }
+    }
+
     /// A spec can be mounted after its buffer moved on, and a parked row
     /// misses publishes; either catches up only once it is in a superview.
     @Test func aRowMountedFromAStaleSpecCatchesUpOnlyWhenAttached() throws {
