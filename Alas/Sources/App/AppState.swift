@@ -4195,10 +4195,10 @@ final class AppState {
         guard workspacesManager.canMutate else { throw WorkspaceStoreError.recoveryRequired }
         // Claimed before the dirty-buffer prompt and save, so nothing new is
         // admitted into the member while it is being removed.
-        let claimed = try claimWorkspaceMembersForDeletion(
+        let claimed = try core.claimWorkspaceMembersForDeletion(
             workspacesManager.checkout(id: checkoutID).flatMap { workspaceMemberWorktrees($0)[memberID] }.map { [$0] } ?? []
         )
-        defer { releaseWorkspaceMemberDeletionClaims(claimed) }
+        defer { core.releaseWorktreeClaims(claimed) }
         let resolvedWorktree = try await resolveDirtyBuffersBeforeWorkspaceMemberDeletion(checkoutID: checkoutID, memberID: memberID)
         guard workspacesManager.canMutate else { throw WorkspaceStoreError.recoveryRequired }
         if let resolvedWorktree {
@@ -4270,31 +4270,7 @@ final class AppState {
         return MemberReviewRollupBuilder(gg: WorkspaceCachedGGStackReader(stacksByWorktreeID: stacks))
     }
 
-    /// Claims each member worktree `.deleting`, all or none: a member another
-    /// operation holds refuses the deletion and releases what was claimed.
-    private func claimWorkspaceMembersForDeletion(_ worktrees: [Worktree]) throws -> [(Worktree, UUID)] {
-        var claimed: [(Worktree, UUID)] = []
-        for worktree in worktrees {
-            switch projectsManager.operationState(for: worktree) {
-            case nil, .deleteFailed:
-                claimed.append((worktree, projectsManager.claimOperation(.deleting(projectId: worktree.projectId), for: worktree)))
-            default:
-                releaseWorkspaceMemberDeletionClaims(claimed)
-                throw WorkspaceCheckoutCoordinatorError.operationInProgress
-            }
-        }
-        return claimed
-    }
-
-    /// Releases only claims still held by this deletion; one a checkout
-    /// recreated at the same path installed meanwhile is left alone.
-    private func releaseWorkspaceMemberDeletionClaims(_ claims: [(Worktree, UUID)]) {
-        for (worktree, claim) in claims {
-            projectsManager.releaseOperation(claim, for: worktree)
-        }
-    }
-
-    private func cleanupDeletedWorkspaceMemberRuntime(_ worktree: Worktree, claimed: [(Worktree, UUID)]) async {
+    private func cleanupDeletedWorkspaceMemberRuntime(_ worktree: Worktree, claimed: [(worktree: Worktree, claim: UUID)]) async {
         cleanupWorktreeState(worktreeId: worktree.id)
         removePersistedGGWorktreeMode(projectId: worktree.projectId, worktreeId: worktree.id)
         // The claim outlives the refresh: until then the removed row is still
@@ -4303,7 +4279,7 @@ final class AppState {
         // Deleted: finished, not released, so no state it replaced returns
         // for the removed path.
         for (claimedWorktree, claim) in claimed where claimedWorktree.id == worktree.id && claimedWorktree.projectId == worktree.projectId {
-            projectsManager.finishOperation(claim, for: claimedWorktree)
+            core.finishWorktreeClaim(claim, for: claimedWorktree)
         }
         if selectedWorktreeId == worktree.id {
             selectedWorktreeId = nil
@@ -4490,8 +4466,8 @@ final class AppState {
         )
         let nearest = WorkspaceCheckoutDetailModel.nearestPeer(afterDeleting: id, orderedCheckoutIDs: ordered)
         // Every member is claimed for the whole deletion, before any prompt.
-        let claimed = try claimWorkspaceMembersForDeletion(Array(workspaceMemberWorktrees(before).values))
-        defer { releaseWorkspaceMemberDeletionClaims(claimed) }
+        let claimed = try core.claimWorkspaceMembersForDeletion(Array(workspaceMemberWorktrees(before).values))
+        defer { core.releaseWorktreeClaims(claimed) }
         var resolvedWorktrees: [UUID: Worktree] = [:]
         for member in before.members {
             if let worktree = try await resolveDirtyBuffersBeforeWorkspaceMemberDeletion(checkoutID: id, memberID: member.id) {
@@ -6883,14 +6859,9 @@ final class AppState {
         let archived = projects.flatMap { projectsManager.archivedWorktrees(projectId: $0.id) }
         let deletable = workspacesManager.canMutate
             ? Self.bulkDeleteTargets(archived, id: \.id) { worktree in
-                // The batch skips any claimed worktree; a failed delete is
-                // released below so this run retries it.
-                let operationAllowsBatch: Bool
-                switch projectsManager.operationState(for: worktree) {
-                case nil, .deleteFailed: operationAllowsBatch = true
-                default: operationAllowsBatch = false
-                }
-                return operationAllowsBatch
+                // The batch skips any claimed worktree and retries a failed
+                // delete.
+                return WorktreeOperationState.admitsLifecycleOperation(projectsManager.operationState(for: worktree))
                     && !worktree.path.isRemoteAlasPath
                     && worktreeCleanupWorkspaceOwners(for: worktree).isEmpty
             }
@@ -6926,11 +6897,6 @@ final class AppState {
 
         isDeletingArchivedWorktrees = true
         defer { isDeletingArchivedWorktrees = false }
-        for worktree in deletable {
-            if case .deleteFailed = projectsManager.operationState(for: worktree) {
-                projectsManager.setOperationState(for: worktree, state: nil)
-            }
-        }
         let results = await batchDeleteWorktrees(deletable, keepBranch: !deleteBranches)
         if results.contains(where: { $0.outcome != .deleted }) {
             showFileActionError(
@@ -11136,7 +11102,7 @@ final class AppState {
                 workspacesManager.canMutate && worktreeCleanupWorkspaceOwners(for: worktree).isEmpty
             )
             guard sessionStateIsAcknowledged,
-                  projectsManager.operationState(for: worktree) == nil,
+                  WorktreeOperationState.admitsLifecycleOperation(projectsManager.operationState(for: worktree)),
                   ownershipIsValid
             else {
                 results.append(WorktreeBatchResult(
@@ -11205,7 +11171,7 @@ final class AppState {
                     guard postPreflightDirtyIsAcknowledged,
                           postPreflightSessionsAreAcknowledged,
                           postPreflightBranchMatches,
-                          projectsManager.operationState(for: worktree) == nil,
+                          WorktreeOperationState.admitsLifecycleOperation(projectsManager.operationState(for: worktree)),
                           postPreflightOwnershipIsValid
                     else {
                         results.append(WorktreeBatchResult(
@@ -11532,7 +11498,7 @@ final class AppState {
                 unavailableReasons[worktree.id] = "This worktree is managed by a Workspace Checkout"
                 continue
             }
-            guard projectsManager.operationState(for: worktree) == nil else {
+            guard WorktreeOperationState.admitsLifecycleOperation(projectsManager.operationState(for: worktree)) else {
                 unavailableReasons[worktree.id] = "Another operation is in progress"
                 continue
             }

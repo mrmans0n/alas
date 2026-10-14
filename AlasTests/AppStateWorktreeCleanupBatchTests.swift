@@ -22,6 +22,24 @@ struct AppStateWorktreeCleanupBatchTests {
             .contains { $0.id == main.id })
     }
 
+    /// A row left `.deleteFailed` is waiting for a retry, which is what
+    /// "Delete All Archived" offers, so a batch deletes it like any other.
+    @Test func batchRetriesAFailedDelete() async throws {
+        let fixture = try await makeCleanupFixture(worktreeCount: 2)
+        defer { fixture.cleanUpAfterTest() }
+        let target = fixture.worktrees[1]
+        fixture.state.core.failWorktreeClaim(
+            try fixture.state.core.beginDelete(target),
+            for: target,
+            message: "permission denied"
+        )
+
+        let results = await fixture.state.batchDeleteWorktrees([target], keepBranch: true)
+
+        #expect(results.map(\.outcome) == [.deleted])
+        #expect(!FileManager.default.fileExists(atPath: target.path.path))
+    }
+
     @Test func oneFailingItemDoesNotAbortTheBatch() async throws {
         let fixture = try await makeCleanupFixture(worktreeCount: 3)
         defer { fixture.cleanUpAfterTest() }

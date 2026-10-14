@@ -225,9 +225,8 @@ extension AlasCoreContext {
             throw ProjectCreationError.projectNotFound
         }
         guard !projects.isMain(worktree, in: project) else { throw WorktreeArchiveRefusal.mainWorktree }
-        switch projects.operationState(for: worktree) {
-        case nil, .deleteFailed: break
-        default: throw WorktreeArchiveRefusal.operationInProgress
+        guard WorktreeOperationState.admitsLifecycleOperation(projects.operationState(for: worktree)) else {
+            throw WorktreeArchiveRefusal.operationInProgress
         }
         return projects.claimOperation(.archiving(projectId: project.id), for: worktree)
     }
@@ -408,11 +407,39 @@ extension AlasCoreContext {
             throw ProjectCreationError.projectNotFound
         }
         guard !projects.isMain(worktree, in: project) else { throw WorktreeDeletionRefusal.mainWorktree }
-        switch projects.operationState(for: worktree) {
-        case nil, .deleteFailed: break
-        default: throw WorktreeDeletionRefusal.operationInProgress
+        guard WorktreeOperationState.admitsLifecycleOperation(projects.operationState(for: worktree)) else {
+            throw WorktreeDeletionRefusal.operationInProgress
         }
         return projects.claimOperation(.preparingDelete, for: worktree)
+    }
+
+    /// Claims a Workspace checkout's member worktrees `.deleting`, all or
+    /// none, for the checkout's own deletion: a member another operation
+    /// holds refuses it, and what was claimed is released.
+    public func claimWorkspaceMembersForDeletion(_ worktrees: [Worktree]) throws -> [(worktree: Worktree, claim: UUID)] {
+        var claimed: [(worktree: Worktree, claim: UUID)] = []
+        for worktree in worktrees {
+            guard WorktreeOperationState.admitsLifecycleOperation(projects.operationState(for: worktree)) else {
+                releaseWorktreeClaims(claimed)
+                throw WorkspaceCheckoutCoordinatorError.operationInProgress
+            }
+            claimed.append((worktree, projects.claimOperation(.deleting(projectId: worktree.projectId), for: worktree)))
+        }
+        return claimed
+    }
+
+    /// Releases claims a deletion did not use; one a checkout recreated at
+    /// the same path opened meanwhile is left alone.
+    public func releaseWorktreeClaims(_ claims: [(worktree: Worktree, claim: UUID)]) {
+        for (worktree, claim) in claims {
+            projects.releaseOperation(claim, for: worktree)
+        }
+    }
+
+    /// Ends the claim of a worktree that is gone, so nothing the claim
+    /// replaced comes back for its path.
+    public func finishWorktreeClaim(_ claim: UUID, for worktree: Worktree) {
+        projects.finishOperation(claim, for: worktree)
     }
 
     /// Marks a claimed deletion as confirmed: the row reads as being deleted

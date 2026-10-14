@@ -74,6 +74,15 @@ public enum WorktreeOperationState: Equatable, Sendable {
 }
 
 extension WorktreeOperationState {
+    /// Whether a worktree in `state` may be claimed for an archive or a
+    /// deletion: nothing holds it, or a failed delete is waiting for retry.
+    public static func admitsLifecycleOperation(_ state: WorktreeOperationState?) -> Bool {
+        switch state {
+        case nil, .deleteFailed: true
+        default: false
+        }
+    }
+
     /// Whether this claim keeps new terminals, agent sessions and runs out of
     /// the worktree: it is being created, or a delete is being confirmed or
     /// carried out. Failed operations no longer hold the worktree.
