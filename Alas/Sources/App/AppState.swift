@@ -1139,8 +1139,13 @@ final class AppState {
 
     /// The agent a handoff opens for `id` (an agent id or Automatic) on this
     /// worktree's host; nil when AI is disabled or the agent is unavailable.
+    /// Handoffs open ACP chats, so only agents with an ACP launch spec qualify.
     func availableAgentForHandoff(id: String?, worktree: Worktree) -> AgentDefinition? {
-        RepositoryAgentSelectionPolicy.selection(selectedID: id, availability: agentAvailability(for: worktree)).agent
+        RepositoryAgentSelectionPolicy.selection(
+            selectedID: id,
+            availability: agentAvailability(for: worktree),
+            where: Self.canOpenACPChat
+        ).agent
     }
 
     func availableAgentForHandoff(id: String?, checkout: WorkspaceCheckout) -> AgentDefinition? {
@@ -1149,8 +1154,13 @@ final class AppState {
             availability: agentAvailability(
                 worktreePath: URL(fileURLWithPath: checkout.rootPath),
                 executionTarget: checkout.executionLocation.agentExecutionTarget
-            )
+            ),
+            where: Self.canOpenACPChat
         ).agent
+    }
+
+    private nonisolated static func canOpenACPChat(_ agent: AgentDefinition) -> Bool {
+        ACPLaunchCatalog.spec(for: agent.id) != nil
     }
 
     private func loadAgentAvailabilityForDelegation(_ worktree: Worktree) async -> AgentAvailabilityState {
@@ -12688,12 +12698,15 @@ final class AppState {
         case .workspaceCheckout:
             acpManager(for: owner)
         }
-        guard let manager,
-              !manager.isWriter(for: sessionId),
-              manager.placeholderSession(id: sessionId) != nil
-        else { return }
-        manager.retainSession(id: sessionId)
-        defer { manager.releaseSession(id: sessionId) }
+        guard let manager, !manager.isWriter(for: sessionId) else { return }
+        // A cold restored tab's row is not cached yet, and the synchronous
+        // `placeholderSession` only starts loading it. Load it first.
+        if manager.liveSession(for: sessionId) == nil {
+            guard await manager.persistedSessionRow(id: sessionId) != nil else { return }
+        }
+        // Not retained: a release here would evict a session that failed to
+        // attach before the send could report it. The activated tab retains it.
+        guard manager.placeholderSession(id: sessionId) != nil else { return }
         await hydrateAndAttachACP(manager: manager, sessionId: sessionId)
     }
 

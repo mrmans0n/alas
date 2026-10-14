@@ -32,7 +32,7 @@ struct WorkspaceACPSessionTests {
         state.projectsManager = ProjectsManager(persistedProjects: [project])
         state.projectsManager.insertOptimisticWorktree(worktree)
         state.agentRegistry = AgentRegistry(
-            builtinState: [:],
+            builtinState: ["claude": BuiltinAgentState(isEnabled: true, binaryOverride: nil, extraTerminalArgs: nil)],
             customs: [.init(
                 id: "test",
                 displayName: "Test",
@@ -45,7 +45,7 @@ struct WorkspaceACPSessionTests {
                 isEnabled: true,
                 builtinLogoAssetName: nil
             )],
-            installedIds: ["test"]
+            installedIds: ["test", "claude"]
         )
         state.config.changes.aiToolId = AppConfig.Changes.disabledAIToolID
         _ = await workspacesManager.load(spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
@@ -71,7 +71,7 @@ struct WorkspaceACPSessionTests {
         #expect(state.selectedWorkspaceCheckout?.id == checkout.id)
 
         let result = await withCheckedContinuation { continuation in
-            sender.send("New review feedback", .newChat(agentID: "test", title: "New chat")) {
+            sender.send("New review feedback", .newChat(agentID: "claude", title: "New chat")) {
                 continuation.resume(returning: $0)
             }
         }

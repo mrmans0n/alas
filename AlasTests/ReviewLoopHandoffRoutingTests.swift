@@ -250,13 +250,44 @@ struct ReviewLoopHandoffRoutingTests {
         #expect(acpTabs(in: state).isEmpty)
     }
 
-    @Test func automaticReviewFeedbackOffersNewChatWithFirstAvailableAgent() throws {
-        let state = makeState(installedAgentIDs: ["other-agent"])
+    @Test func automaticReviewFeedbackOffersNewChatWithFirstACPCapableAgent() throws {
+        let state = makeState()
         state.config.changes.aiToolId = AppConfig.Changes.automaticAIToolID
         let worktreeId = try #require(state.selectedWorktreeId)
         let sender = ReviewFeedbackAgentSender.production(appState: state, worktreeID: worktreeId)
 
-        #expect(sender.availableTargets() == [.newChat(agentID: "other-agent", title: "New chat")])
+        // The custom test agents have no ACP launch spec, so they cannot open a chat.
+        #expect(sender.availableTargets().isEmpty)
+
+        state.agentRegistry = AgentRegistry(
+            builtinState: ["claude": BuiltinAgentState(isEnabled: true, binaryOverride: nil, extraTerminalArgs: nil)],
+            customs: state.agentRegistry.agents.filter { !$0.isBuiltin },
+            installedIds: ["test-agent", "other-agent", "claude"]
+        )
+
+        #expect(sender.availableTargets() == [.newChat(agentID: "claude", title: "New chat")])
+    }
+
+    @Test func preparingAColdRestoredChatMakesItsSessionLive() async throws {
+        let state = makeState()
+        state.openNewACPSession(agentID: "test-agent")
+        let tab = try #require(acpTabs(in: state).first)
+        let worktreeId = try #require(state.selectedWorktreeId)
+        let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
+        await manager.flushPersistence()
+
+        // A fresh app over the same store: the tab is restored, its session row is not cached.
+        let project = try #require(state.projectsManager.projects.first)
+        let worktree = try #require(state.worktree(withId: worktreeId))
+        let restored = AppState(store: TestPersistenceStore(ProjectsFile(projects: [project]), AppConfig.defaults))
+        restored.projectsManager.insertOptimisticWorktree(worktree)
+        restored.agentRegistry = state.agentRegistry
+        _ = restored.tabs.append(acpSession: tab, to: .worktree(worktreeId))
+        try #require(restored.session(for: tab.sessionId) == nil)
+
+        await restored.prepareACPSessionForPrompt(sessionId: tab.sessionId, owner: .worktree(worktreeId))
+
+        #expect(restored.session(for: tab.sessionId) != nil)
     }
 
     private func makeState(installedAgentIDs: Set<String> = ["test-agent", "other-agent"]) -> AppState {
