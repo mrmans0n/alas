@@ -444,6 +444,16 @@ extension AppState {
               !projectsManager.isWorktreeHidden(projectId: resolved.project.id, path: resolved.worktree.path)
         else { return .declined }
         let worktree = resolved.worktree
+        // Archiving hides the worktree, and the shepherd then drops every record
+        // in it, including one still watching another open request.
+        if hasActiveShepherdRecord(worktreeID: worktreeID) {
+            inAppNotifications.post(
+                "Kept \(worktree.branch): another pull request in it is still shepherded.",
+                severity: .information,
+                worktreeID: worktreeID
+            )
+            return .declined
+        }
         if await shepherdSessionState(sessionID: sessionID, worktreeID: worktreeID) == .busy {
             return .deferredBusy
         }
@@ -460,9 +470,14 @@ extension AppState {
         // worktree may have changed meanwhile.
         guard isStillWanted(),
               config.changes.shepherd.archiveAfterMerge,
-              !projectsManager.isWorktreeHidden(projectId: resolved.project.id, path: worktree.path)
+              !projectsManager.isWorktreeHidden(projectId: resolved.project.id, path: worktree.path),
+              !hasActiveShepherdRecord(worktreeID: worktreeID)
         else { return .declined }
         archiveWorktree(worktree)
         return .archived
+    }
+
+    private func hasActiveShepherdRecord(worktreeID: String) -> Bool {
+        reviewShepherd.records.values.contains { $0.id.worktreeID == worktreeID && !$0.phase.isTerminal }
     }
 }
