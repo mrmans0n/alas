@@ -83,7 +83,7 @@ final class WorktreeCleanupModel {
     /// once it re-confirms, immediately before deleting, that the branch's
     /// tip still matches this SHA and no new commit has landed since the scan.
     private let deleteBatch: ([Worktree], Bool, [String: String]) async -> [WorktreeBatchResult]
-    private let archiveBatch: ([Worktree]) -> [WorktreeBatchResult]
+    private let archiveBatch: ([Worktree]) async -> [WorktreeBatchResult]
     /// `(title, message, confirmButtonTitle) -> confirmed`. The button title is
     /// passed in because both destructive batch actions route through the same
     /// prompt, and an archive confirmation must not offer a "Delete" button.
@@ -107,7 +107,7 @@ final class WorktreeCleanupModel {
             @escaping @Sendable (WorktreeCleanupScanUpdate) async -> Void
         ) async -> Result<[WorktreeCleanupCandidate], Error>,
         deleteBatch: @escaping ([Worktree], Bool, [String: String]) async -> [WorktreeBatchResult],
-        archiveBatch: @escaping ([Worktree]) -> [WorktreeBatchResult],
+        archiveBatch: @escaping ([Worktree]) async -> [WorktreeBatchResult],
         confirm: @escaping (String, String, String) -> Bool,
         authorizeDelete: @escaping ([Worktree]) async -> WorktreeCleanupDeleteAuthorization = { _ in .init() },
         authorizedDeleteBatch: ((WorktreeCleanupDeleteAuthorization, [Worktree], Bool, [String: String]) async -> [WorktreeBatchResult])? = nil,
@@ -404,7 +404,7 @@ final class WorktreeCleanupModel {
             "Archive"
         ) else { return }
         isRunning = true
-        results = archiveBatch(requestedTargets)
+        results = await archiveBatch(requestedTargets)
         isRunning = false
         await runScan()
     }

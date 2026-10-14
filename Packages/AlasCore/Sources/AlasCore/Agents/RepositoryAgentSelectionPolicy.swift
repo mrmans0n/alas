@@ -14,9 +14,13 @@ public enum RepositoryAgentSelectionPolicy: Sendable {
         }
     }
 
+    /// Resolves Settings → Changes → AI tool for one feature. Automatic (or
+    /// nil) picks the first available agent the feature can run; an explicit
+    /// id must name one; `disabledAIToolID` names none.
     public static func selection(
         selectedID: String?,
-        availability: AgentAvailabilityState
+        availability: AgentAvailabilityState,
+        where isEligible: (AgentDefinition) -> Bool = { _ in true }
     ) -> Selection {
         switch availability {
         case .loading:
@@ -24,10 +28,11 @@ public enum RepositoryAgentSelectionPolicy: Sendable {
         case .failed(let message):
             return .failed(message)
         case .available(let agents):
-            guard !agents.isEmpty else { return .empty }
-            guard let selectedID,
-                  selectedID != "none",
-                  let agent = agents.first(where: { $0.id == selectedID }) else {
+            let eligible = agents.filter(isEligible)
+            guard let first = eligible.first else { return .empty }
+            let selectedID = selectedID ?? AppConfig.Changes.automaticAIToolID
+            if selectedID == AppConfig.Changes.automaticAIToolID { return .agent(first) }
+            guard let agent = eligible.first(where: { $0.id == selectedID }) else {
                 return .selectionUnavailable
             }
             return .agent(agent)

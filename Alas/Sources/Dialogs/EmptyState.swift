@@ -2,9 +2,11 @@ import SwiftUI
 
 struct EmptyState: View {
     let onAddProject: () -> Void
+    let onAddFolder: () -> Void
     /// Set when shown from Settings > Debug; adds a button back to the workspace.
     var onExitPreview: (() -> Void)? = nil
     @State private var flock = WelcomeFlock()
+    @State private var folderLinkHovered = false
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -14,7 +16,7 @@ struct EmptyState: View {
             // lays it out, and the glass, from this button's size and offset.
             Button(action: onAddProject) {
                 let shape = RoundedRectangle(cornerRadius: WelcomeFlock.buttonCornerRadius)
-                Label("Add a project to start", systemImage: "folder.badge.plus")
+                Label("Add a repository to start", systemImage: "folder.badge.plus")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(.white)
                     .padding(.horizontal, 18)
@@ -27,6 +29,22 @@ struct EmptyState: View {
             .buttonStyle(.plain)
             .keyboardShortcut(.defaultAction)
             .offset(y: WelcomeFlock.buttonOffset)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            // Kept out of the glass button's layout: the sky sizes the glass
+            // from that button alone.
+            Button(action: onAddFolder) {
+                Text("or add a plain folder")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.white.opacity(folderLinkHovered ? 0.95 : 0.7))
+                    .underline(folderLinkHovered)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .onHover { folderLinkHovered = $0 }
+            .offset(y: WelcomeFlock.buttonOffset + (flock.buttonSize?.height ?? 38) / 2 + 22)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             if let onExitPreview {

@@ -77,6 +77,12 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
     /// card re-reads (and re-reads when `changes` fires), so a mounted row
     /// follows writer ownership without a new value reaching this struct.
     var visualAidActions: ACPVisualAidActions = .readOnly
+    /// Seeds a tool card's or thought's disclosure, which then keeps its own
+    /// state; `onExpandedChange` reports toggles back to the scroller's
+    /// `ACPTranscriptRowExpansionStore`. Not compared: the scroller's row
+    /// token carries the flag.
+    var isExpanded: Bool = false
+    var onExpandedChange: ((Bool) -> Void)?
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         guard lhs.messagePhase == rhs.messagePhase else { return false }
@@ -274,7 +280,9 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
             }
             .environment(\.acpTrustedImageRoot, trustedImageRoot)
         case .thought(_, _, let buf):
-            ACPThoughtView(buffer: buf, isLive: isLiveNarration)
+            ACPThoughtView(
+                buffer: buf, isLive: isLiveNarration,
+                initiallyExpanded: isExpanded, onExpandedChange: onExpandedChange)
         case .toolCall(let tc):
             if let compaction = ACPContextCompaction(toolCall: tc) {
                 ACPContextCompactionView(compaction: compaction)
@@ -305,7 +313,9 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
                     toolCall: tc,
                     messageCreatedAt: messageCreatedAt,
                     trustedImageRoot: trustedImageRoot,
-                    loadFullContent: tc.isContentTruncated ? onLoadFullToolCallContent : nil)
+                    loadFullContent: tc.isContentTruncated ? onLoadFullToolCallContent : nil,
+                    initiallyExpanded: isExpanded,
+                    onExpandedChange: onExpandedChange)
                     .environment(\.acpTerminalHost, session.terminalHost)
             }
         case .fileEdit(_, let edit):

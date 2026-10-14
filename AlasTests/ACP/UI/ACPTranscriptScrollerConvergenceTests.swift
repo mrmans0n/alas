@@ -318,6 +318,9 @@ private struct ConvergenceMarkdownRow: View {
     var body: some View {
         ACPMarkdownText(raw: content.raw)
             .environment(\.theme, theme)
+            // Chipping keeps the text views these tests are about; plain
+            // markdown renders as SwiftUI text.
+            .environment(\.acpAbsolutePathChipping, true)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
@@ -362,6 +365,7 @@ private final class ConvergenceScrollerFixture {
                 AnyView(
                     ACPMarkdownText(raw: ACPTranscriptScrollerConvergenceTests.markdown)
                         .environment(\.theme, theme)
+                        .environment(\.acpAbsolutePathChipping, true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 )
             }

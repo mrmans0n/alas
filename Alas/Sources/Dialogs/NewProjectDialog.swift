@@ -5,9 +5,10 @@ import UniformTypeIdentifiers
 struct NewProjectDialog: View {
     @Bindable var state: AppState
     @Binding var presented: Bool
+    var kind: ProjectKind = .git
 
     var body: some View {
-        ProjectDialog(state: state, presented: $presented, mode: .add)
+        ProjectDialog(state: state, presented: $presented, mode: .add(kind))
     }
 }
 
@@ -22,7 +23,7 @@ struct EditProjectDialog: View {
 }
 
 private enum ProjectDialogMode {
-    case add
+    case add(ProjectKind)
     case edit(ProjectConfig)
 }
 
@@ -94,10 +95,16 @@ private struct ProjectDialog: View {
         var clonesRepository: Bool {
             self == .github || self == .gitlab || self == .gitURL
         }
+
+        /// Folders are registered in place, so cloning locations do not apply.
+        static func available(for kind: ProjectKind) -> [ProjectLocation] {
+            switch kind {
+            case .git: allCases
+            case .folder: [.local, .remoteSSH]
+            }
+        }
     }
     @State private var location: ProjectLocation = .local
-    /// Register a plain directory instead of a git repository (local or SSH).
-    @State private var addsFolder = false
     @State private var sshHost: String = ""
     @State private var showHostPicker = false
     @State private var sshHosts: [SSHConfigHost] = []
@@ -193,14 +200,28 @@ private struct ProjectDialog: View {
     }
 
     var body: some View {
-        DialogContainer(
-            title: title,
-            subtitle: subtitle,
-            width: DialogContainerLayout.projectWidth,
-            content: {
-                ProjectSettingsTabBar(selection: $selectedTab)
-                ScrollView {
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(theme.color("fg"))
+                Text(subtitle)
+                    .font(.system(size: 12))
+                    .foregroundStyle(theme.color("fg-dim"))
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 22)
+            .padding(.vertical, 18)
+
+            Divider()
+            HStack(spacing: 0) {
+                ProjectSettingsSidebar(selection: $selectedTab)
+                Divider()
+                ScrollView(.vertical) {
                     VStack(alignment: .leading, spacing: 16) {
+                        Text(selectedTab.rawValue)
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(theme.color("fg"))
                         switch selectedTab {
                         case .general:
                             generalSettings
@@ -220,23 +241,47 @@ private struct ProjectDialog: View {
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, 4)
+                    .padding(22)
                 }
-                .frame(height: 330)
+                .scrollBounceBehavior(.basedOnSize)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .disabled(isValidating)
-                if let sshConnectionIssue {
-                    sshConnectionIssueField(sshConnectionIssue)
-                } else if let errorMessage {
-                    errorField(errorMessage)
+            }
+            .frame(maxHeight: .infinity)
+
+            if sshConnectionIssue != nil || errorMessage != nil {
+                ScrollView(.vertical) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        if let sshConnectionIssue {
+                            sshConnectionIssueField(sshConnectionIssue)
+                        } else if let errorMessage {
+                            errorField(errorMessage)
+                        }
+                    }
+                    .padding(.horizontal, 22)
+                    .padding(.vertical, 12)
                 }
-            },
-            cancelTitle: "Cancel",
-            confirmTitle: confirmTitle,
-            confirmStyle: .primary,
-            onCancel: cancel,
-            onConfirm: confirm,
-            confirmEnabled: confirmEnabled
-        )
+                .frame(maxHeight: 140)
+                .scrollBounceBehavior(.basedOnSize)
+            }
+
+            HStack(spacing: 8) {
+                Spacer()
+                AlasButton(title: "Cancel", style: .subtle, action: cancel)
+                AlasButton(title: confirmTitle, style: .primary, action: confirm)
+                    .disabled(!confirmEnabled)
+                    .opacity(confirmEnabled ? 1 : 0.5)
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 12)
+            .background(theme.color("bg-2"))
+            .overlay(Divider(), alignment: .top)
+        }
+        .frame(width: 800)
+        .frame(minHeight: 480, idealHeight: 660, maxHeight: .infinity)
+        .background(theme.color("bg-1"))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .background(ProjectSettingsSheetSizing())
         .onAppear {
             populateInitialValues()
             Task { await loadAvatarPresetIfAvailable() }
@@ -320,14 +365,9 @@ private struct ProjectDialog: View {
 
     @ViewBuilder
     private var generalSettings: some View {
-        if case .add = mode {
+        if case .add(let kind) = mode {
             DialogField(label: "Location") {
-                Seg(value: $location, options: ProjectLocation.allCases.map { ($0, $0.rawValue) })
-            }
-            if !location.clonesRepository {
-                DialogField(label: "Kind") {
-                    Seg(value: $addsFolder, options: [(false, "Git repository"), (true, "Plain folder")])
-                }
+                Seg(value: $location, options: ProjectLocation.available(for: kind).map { ($0, $0.rawValue) })
             }
         }
         DialogField(label: locationFieldLabel) {
@@ -369,14 +409,16 @@ private struct ProjectDialog: View {
 
     private var title: String {
         switch mode {
-        case .add: "Add project"
+        case .add(.git): "Add repository"
+        case .add(.folder): "Add folder"
         case .edit: "Edit project"
         }
     }
 
     private var subtitle: String {
         switch mode {
-        case .add: "Register a git repository or a plain folder as an Alas project."
+        case .add(.git): "Register or clone a git repository as an Alas project."
+        case .add(.folder): "Register a plain folder as an Alas project. Folders have no git status or worktrees."
         case .edit: "Update this project's settings."
         }
     }
@@ -384,7 +426,7 @@ private struct ProjectDialog: View {
     private var isFolderProject: Bool {
         switch mode {
         case .edit(let project): project.isFolder
-        case .add: addsFolder && !location.clonesRepository
+        case .add(let kind): kind == .folder
         }
     }
 
@@ -421,8 +463,8 @@ private struct ProjectDialog: View {
         case .edit: isFolderProject ? "Folder path" : "Repository path"
         case .add:
             switch location {
-            case .local where addsFolder: "Folder path"
-            case .remoteSSH where addsFolder: "Remote folder path"
+            case .local where isFolderProject: "Folder path"
+            case .remoteSSH where isFolderProject: "Remote folder path"
             case .local: "Repository path"
             case .github, .gitlab: "Repository"
             case .gitURL: "Git remote"
@@ -436,7 +478,7 @@ private struct ProjectDialog: View {
         switch location {
         case .local:
             HStack(spacing: 6) {
-                AlasField(text: $path, placeholder: "/path/to/repo", monospaced: true)
+                AlasField(text: $path, placeholder: isFolderProject ? "/path/to/folder" : "/path/to/repo", monospaced: true)
                 AlasButton(title: "Choose…", action: choose)
             }
         case .github, .gitlab:
@@ -476,7 +518,7 @@ private struct ProjectDialog: View {
                         )
                     }
                 }
-                AlasField(text: $path, placeholder: "/home/me/repo", monospaced: true)
+                AlasField(text: $path, placeholder: isFolderProject ? "/home/me/folder" : "/home/me/repo", monospaced: true)
             }
         }
     }
@@ -568,8 +610,10 @@ private struct ProjectDialog: View {
         case .add:
             if location.clonesRepository {
                 isValidating ? "Cloning…" : "Clone and add"
+            } else if isFolderProject {
+                isValidating ? "Adding…" : "Add folder"
             } else {
-                isValidating ? "Adding…" : "Add project"
+                isValidating ? "Adding…" : "Add repository"
             }
         case .edit: "Save changes"
         }
@@ -1259,7 +1303,7 @@ private struct ProjectDialog: View {
     private func suggestName(for newPath: String) async {
         guard !newPath.isEmpty else { return }
         let url = URL(fileURLWithPath: newPath)
-        if addsFolder {
+        if isFolderProject {
             if name.isEmpty { name = url.lastPathComponent }
             return
         }
@@ -1780,6 +1824,33 @@ private struct SSHConnectionAssistant: View {
         case .failed: onRetry()
         case .incompatible: onCancel()
         case .connecting, .verifying: break
+        }
+    }
+}
+
+/// Fixes the sheet's width while allowing its detail pane to grow vertically.
+private struct ProjectSettingsSheetSizing: NSViewRepresentable {
+    func makeNSView(context: Context) -> SizingView { SizingView() }
+
+    func updateNSView(_ nsView: SizingView, context: Context) {}
+
+    final class SizingView: NSView {
+        private weak var configuredWindow: NSWindow?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            // Wait until the hosting view has installed its sizing constraints.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, let window = self.window,
+                      self.configuredWindow !== window else { return }
+                self.configuredWindow = window
+                let screenHeight = window.screen?.visibleFrame.height ?? 900
+                let maximumHeight = max(480, screenHeight - 80)
+                window.styleMask.insert(.resizable)
+                window.contentMinSize = NSSize(width: 800, height: 480)
+                window.contentMaxSize = NSSize(width: 800, height: maximumHeight)
+                window.setContentSize(NSSize(width: 800, height: min(660, maximumHeight)))
+            }
         }
     }
 }

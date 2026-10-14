@@ -41,4 +41,8 @@ struct ACPTranscriptRowSpec {
     /// stays small and bounded (at most a handful of live prompts) rather
     /// than defeating the mount band's memory bound.
     var keepsMountedOffscreen: Bool = false
+
+    /// When set, the row mounts a native view instead of a SwiftUI hosting
+    /// view, and `build` is not invoked.
+    var native: ACPTranscriptNativeRow?
 }

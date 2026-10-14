@@ -2,12 +2,10 @@ import SwiftUI
 import AppKit
 
 struct SidebarAttentionPresentation {
-    let showsInbox: Bool
     let count: Int
 
-    init(enabled: Bool, aggregation: AttentionAggregation, peerRows: [RemoteSessionSummary] = [], pluginUpdateCount: Int = 0) {
-        showsInbox = enabled
-        count = enabled ? aggregation.unresolvedCount + peerRows.count + pluginUpdateCount : 0
+    init(aggregation: AttentionAggregation, peerRows: [RemoteSessionSummary] = [], pluginUpdateCount: Int = 0) {
+        count = aggregation.unresolvedCount + peerRows.count + pluginUpdateCount
     }
 }
 
@@ -16,6 +14,7 @@ struct SidebarView: View {
     @Binding var collapsedProjects: Set<String>
     let onSettings: () -> Void
     let onAddProject: () -> Void
+    let onAddFolder: () -> Void
     let onEditProject: (_ projectId: String) -> Void
     let onRemoveProject: (_ projectId: String) -> Void
     let onNewWorktree: (_ projectId: String?) -> Void
@@ -48,6 +47,7 @@ struct SidebarView: View {
                     state: state,
                     onSettings: onSettings,
                     onAddProject: onAddProject,
+                    onAddFolder: onAddFolder,
                     onHideSidebar: onHideSidebar,
                     showingNewWorkspace: $showingNewWorkspace
                 )
@@ -367,11 +367,6 @@ struct SidebarView: View {
             }
             .sidebarChromeTheme(textContrast: override.textContrast)
             .background {
-                if let nativePeerSessions = state.nativePeerSessions {
-                    NativePeerSidebarExpansion(client: nativePeerSessions, model: peerSidebarModel)
-                }
-            }
-            .background {
                 if state.spacesManager.shouldShowSpaceAffordance {
                     SpacePagerScrollCaptureView { offset in
                         pageSpace(offset: offset)
@@ -496,26 +491,26 @@ private struct SidebarAttentionHeader: View {
     @Bindable var state: AppState
     let onSettings: () -> Void
     let onAddProject: () -> Void
+    let onAddFolder: () -> Void
     let onHideSidebar: () -> Void
     @Binding var showingNewWorkspace: Bool
 
     var body: some View {
         let aggregation = state.attentionAggregation
-        let peerRows = state.config.needsAttentionEnabled
-            ? state.nativePeerSessions?.snapshot.attentionRows ?? [] : []
-        let pluginUpdates = state.config.needsAttentionEnabled ? state.pluginManager?.catalogUpdates ?? [] : []
+        let peerRows = state.nativePeerSessions?.snapshot.attentionRows ?? []
+        let pluginUpdates = state.pluginManager?.catalogUpdates ?? []
         let presentation = SidebarAttentionPresentation(
-            enabled: state.config.needsAttentionEnabled, aggregation: aggregation,
+            aggregation: aggregation,
             peerRows: peerRows, pluginUpdateCount: pluginUpdates.count
         )
         SidebarHeaderView(
             onSettings: onSettings,
             onAddProject: onAddProject,
+            onAddFolder: onAddFolder,
             onSearch: { NotificationCenter.default.post(name: .alasOpenSearch, object: nil) },
             onHideSidebar: onHideSidebar,
             onNewWorkspace: { showingNewWorkspace = true },
             attentionCount: presentation.count,
-            showsAttentionInbox: presentation.showsInbox,
             attentionInboxOpen: $state.isAttentionInboxOpen,
             attentionAggregation: aggregation,
             peerAttentionRows: peerRows,

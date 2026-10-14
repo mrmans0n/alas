@@ -36,6 +36,23 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(await sessions.stopped.isEmpty)
     }
 
+    /// Headless callers reach the coordinator directly, so it enforces member
+    /// admission itself rather than relying on the app to check first.
+    @Test func unarchiveRefusesWhileAMemberIsHeldByAnotherOperation() async throws {
+        let fixture = try await Fixture.make()
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: fixture.store,
+            git: FixtureGit(),
+            scripts: FixtureScripts(),
+            lifecycle: FixtureLifecycle(),
+            memberAdmitsWork: { _, _ in false }
+        )
+
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.operationInProgress) {
+            try await coordinator.unarchive(checkoutID: fixture.checkout.id)
+        }
+    }
+
     @Test func archivedCheckoutsRejectMemberMutationEntryPoints() async throws {
         let fixture = try await Fixture.make()
         try await fixture.store.mutate { state in

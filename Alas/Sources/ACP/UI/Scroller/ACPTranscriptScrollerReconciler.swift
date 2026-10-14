@@ -877,7 +877,7 @@ final class ACPTranscriptScrollerReconciler {
     /// height actually changed. Safe to call from within a layout pass:
     /// `layoutMountedRows()` coalesces re-entrant calls rather than
     /// recursing, so this never interleaves with an in-progress pass.
-    private func applyMeasuredHeight(id: String, view: ACPTranscriptRowHostingView) {
+    private func applyMeasuredHeight(id: String, view: any ACPTranscriptRowView) {
         let height = view.measuredHeight(forWidth: contentWidth)
         isUpdatingRowHeight = true
         let heightChanged = applyHeightToTiling(id: id, height: height)
@@ -947,7 +947,7 @@ final class ACPTranscriptScrollerReconciler {
     /// its intrinsic size. Attaching first makes the first measurement the
     /// final one. Rows outside the mount band are released by the layout
     /// pass that ends every `apply()`.
-    private func measuredHeight(of view: ACPTranscriptRowHostingView) -> CGFloat {
+    private func measuredHeight(of view: any ACPTranscriptRowView) -> CGFloat {
         if view.superview !== scroller.flippedDocumentView {
             scroller.flippedDocumentView.addSubview(view)
         }

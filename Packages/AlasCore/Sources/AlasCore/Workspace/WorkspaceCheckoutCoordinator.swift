@@ -220,28 +220,28 @@ public actor ProjectMutationGate {
         projectIDs: [String],
         operation: @MainActor @Sendable () async throws -> Value
     ) async rethrows -> Value {
-        let orderedProjectIDs = Array(Set(projectIDs)).sorted()
-        return try await withMainActorMutations(
-            orderedProjectIDs,
-            index: 0,
-            operation: operation
-        )
+        try await withMutations(projectIDs: projectIDs) { try await operation() }
     }
 
-    private func withMainActorMutations<Value: Sendable>(
+    /// Holds every listed project's gate, taken in sorted order so two
+    /// callers locking overlapping sets cannot deadlock.
+    public func withMutations<Value: Sendable>(
+        projectIDs: [String],
+        operation: @Sendable () async throws -> Value
+    ) async rethrows -> Value {
+        try await withMutations(Array(Set(projectIDs)).sorted(), index: 0, operation: operation)
+    }
+
+    private func withMutations<Value: Sendable>(
         _ projectIDs: [String],
         index: Int,
-        operation: @MainActor @Sendable () async throws -> Value
+        operation: @Sendable () async throws -> Value
     ) async rethrows -> Value {
         guard index < projectIDs.count else {
             return try await operation()
         }
         return try await withMutation(projectID: projectIDs[index]) {
-            try await self.withMainActorMutations(
-                projectIDs,
-                index: index + 1,
-                operation: operation
-            )
+            try await self.withMutations(projectIDs, index: index + 1, operation: operation)
         }
     }
 
@@ -280,6 +280,9 @@ public struct WorkspaceRepoHookRequest: Sendable {
     }
 }
 
+/// Whether new work may start in a member worktree (project, in-app path).
+public typealias WorkspaceMemberAdmission = @Sendable (_ projectID: String, _ worktreePath: String) async -> Bool
+
 public typealias WorkspaceRepoHookResolving = @Sendable (WorkspaceRepoHookRequest) async throws -> String?
 
 public actor WorkspaceCheckoutCoordinator {
@@ -290,6 +293,7 @@ public actor WorkspaceCheckoutCoordinator {
     private let sessions: any WorkspaceCheckoutSessionStopping
     private let lifecycle: any WorkspaceCheckoutLifecycleOperating
     private let resolveRepoHook: WorkspaceRepoHookResolving
+    private let memberAdmitsWork: WorkspaceMemberAdmission
     private let manifests: any WorkspaceCheckoutManifestWriting
     private let observer: any WorkspaceCheckoutObserving
     private var creationTasks: [UUID: Task<Void, Never>] = [:]
@@ -311,8 +315,10 @@ public actor WorkspaceCheckoutCoordinator {
         lifecycle: any WorkspaceCheckoutLifecycleOperating = WorkspaceCheckoutLifecycleOperator(),
         observer: any WorkspaceCheckoutObserving = WorkspaceCheckoutObserver(),
         manifests: (any WorkspaceCheckoutManifestWriting)? = nil,
-        resolveRepoHook: @escaping WorkspaceRepoHookResolving = { _ in nil }
+        resolveRepoHook: @escaping WorkspaceRepoHookResolving = { _ in nil },
+        memberAdmitsWork: @escaping WorkspaceMemberAdmission = { _, _ in true }
     ) {
+        self.memberAdmitsWork = memberAdmitsWork
         self.store = store
         self.git = git
         self.scripts = scripts
@@ -358,9 +364,24 @@ public actor WorkspaceCheckoutCoordinator {
         return try await self.checkout(id: checkoutID)
     }
 
+    /// Reactivates an archived checkout under its member projects' mutation
+    /// gate, refused while any member worktree is held by another operation
+    /// (a delete or archive in progress), so ownership cannot change under it.
     public func unarchive(checkoutID: UUID) async throws -> WorkspaceCheckout {
+        let projectIDs = try await checkout(id: checkoutID).members.map(\.projectID)
+        return try await projectMutationGate.withMutations(projectIDs: projectIDs) {
+            try await self.unarchiveHoldingGates(checkoutID: checkoutID)
+        }
+    }
+
+    private func unarchiveHoldingGates(checkoutID: UUID) async throws -> WorkspaceCheckout {
         let checkout = try await checkout(id: checkoutID)
         guard checkout.operation == .idle else { throw WorkspaceCheckoutCoordinatorError.operationInProgress }
+        for member in checkout.members {
+            guard await memberAdmitsWork(member.projectID, checkout.inAppWorktreePath(member.worktreePath)) else {
+                throw WorkspaceCheckoutCoordinatorError.operationInProgress
+            }
+        }
         try await mutateCheckout(checkoutID) { $0.archivedAt = nil }
         return try await self.checkout(id: checkoutID)
     }
@@ -628,6 +649,10 @@ public actor WorkspaceCheckoutCoordinator {
               observedLineage == candidate.lineageID
         else {
             throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict
+        }
+        // An existing worktree being archived or deleted must not be adopted.
+        guard await memberAdmitsWork(currentMember.projectID, currentCheckout.inAppWorktreePath(candidate.path)) else {
+            throw WorkspaceCheckoutCoordinatorError.operationInProgress
         }
         try await store.mutate { state in
             guard let checkoutIndex = state.checkouts.firstIndex(where: { $0.id == checkoutID }),
@@ -1455,6 +1480,13 @@ public actor WorkspaceCheckoutCoordinator {
               Set(plan.members.map(\.workspaceMemberID)).count == plan.members.count,
               Set(plan.members.map(\.checkoutMemberID)).count == plan.members.count
         else { throw WorkspaceCheckoutCoordinatorError.incompletePlan }
+        // A destination another operation holds (an existing worktree being
+        // archived or deleted) must not become a member.
+        for planned in plan.members where plan.executionLocation.normalized == .local {
+            guard await memberAdmitsWork(planned.projectID, planned.destinationPath) else {
+                throw WorkspaceCheckoutCoordinatorError.operationInProgress
+            }
+        }
         let workspaceMembers = Dictionary(uniqueKeysWithValues: workspace.members.map { ($0.id, $0) })
         let members = try plan.members.map { planned -> WorkspaceCheckoutMember in
             guard let source = workspaceMembers[planned.workspaceMemberID] else {

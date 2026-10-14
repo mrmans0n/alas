@@ -552,7 +552,7 @@ private struct ACPSessionView: View {
                     )
                     return true
                 }
-                switch state.transcriptLinkRoute(url, worktreeId: worktree.id) {
+                switch state.transcriptLinkRoute(url, in: worktree) {
                 case .opened, .ignored:
                     return true
                 case .systemOpen(let fileURL):
@@ -562,6 +562,12 @@ private struct ACPSessionView: View {
                     // only ever yields paramErr -50. The resolved `file:`
                     // URL is the sole form the system can act on.
                     _ = NSWorkspace.shared.open(fileURL)
+                    return true
+                case .missing(let path):
+                    state.showFileActionError(
+                        title: "File Not Found",
+                        message: "Nothing exists at \(path). The agent may have linked a file that was moved, deleted, or never created."
+                    )
                     return true
                 case .unhandled:
                     return false

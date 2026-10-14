@@ -10,6 +10,39 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Shepherd pull and merge requests from the agent session that opened them: the new `pr_create` and `pr_status` MCP tools, background watching of CI, trusted review threads and merge conflicts on GitHub and GitLab, fix turns queued into the owning session, optional auto-merge through the existing merge gate, project shepherd rules from `.alas/shepherd.md`, and a PR status pill in the agent toolbar whose "Ship with agent" action has the session write, open and shepherd the PR. PRs created from the Changes tab's Draft PR and Commit & PR flows can go to a session through a "Shepherd with" picker.
 
+### Changed
+
+- Start sidebar peers collapsed instead of automatically expanding them.
+
+### Fixes
+
+- Align inline diff highlights with their text in the CoreText renderer, including wrapped lines.
+
+## [0.21.3] - 2026-10-14
+
+### ✨ Features
+
+- Add plain folders as a first-class project type, with dedicated sidebar and welcome-screen entry points (#1976).
+- Simplify peer host chrome and show connection state and session counts in the peer marker (#1975).
+- Share worktree creation scripts and approved repository hooks with headless clients (#1966).
+
+### 🐛 Fixes
+
+- Fix a crash about a second after splitting a terminal pane, restoring a terminal tab, or opening a Workspace checkout terminal, when the harness detector polled the pane off the main thread (regression in 0.21.1; #1968, #1970).
+- Release worktree operation claims only from the operation that acquired them, and protect Workspace members while their checkout is being unarchived (#1972, #1973).
+- Retry failed worktree deletions in batch cleanup and preserve edits made after deletion confirmation (#1979, #1980).
+
+### ⚡ Performance
+
+- Render common finished transcript rows natively with CoreText and tiled drawing, reducing scrolling overhead while preserving selection, links, message actions, and accessibility (#1969, #1978).
+- Preserve expanded tool cards and thoughts when scrolling away and back (#1978).
+
+### 🏗️ Internal
+
+- Route worktree archive, unarchive, deletion, creation, and Workspace member claims through `AlasCoreContext` (#1965, #1967, #1977, #1979, #1980, #1981).
+- Restrict project claim and hidden-state mutation to core operations, exposing fixture helpers only through the testing SPI (#1982).
+- Document the shared AlasCore host API design (#1974).
+
 ## [0.21.2] - 2026-10-13
 
 ### ✨ Features

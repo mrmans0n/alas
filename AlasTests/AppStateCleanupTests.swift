@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+@_spi(Testing) import AlasCore
 @testable import Alas
 
 @MainActor
@@ -684,6 +685,7 @@ struct AppStateCleanupTests {
         let state = AppState()
         // Name from the request's words, without a model in the loop.
         state.config.issueWorktreeNameSuggestionsEnabled = false
+        state.config.changes.aiToolId = AppConfig.Changes.disabledAIToolID
         let project = try await state.projectsManager.addProject(
             path: repo,
             displayName: "auto-name-delete",
@@ -1368,6 +1370,7 @@ struct AppStateCleanupTests {
 
         let pending = AppState.pendingForceDelete(
             for: worktree,
+            claim: UUID(),
             repoPath: URL(fileURLWithPath: "/tmp/repo"),
             deleteBranchIfMerged: true,
             removedIndex: 2,
@@ -1395,6 +1398,7 @@ struct AppStateCleanupTests {
 
         let pending = AppState.pendingForceDelete(
             for: worktree,
+            claim: UUID(),
             repoPath: repoPath,
             deleteBranchIfMerged: true,
             removedIndex: 3,
@@ -1421,6 +1425,7 @@ struct AppStateCleanupTests {
 
         let pending = AppState.pendingForceDelete(
             for: worktree,
+            claim: UUID(),
             repoPath: repoPath,
             deleteBranchIfMerged: true,
             removedIndex: 2,
@@ -1436,46 +1441,17 @@ struct AppStateCleanupTests {
         #expect(pending?.removedIndex == 2)
     }
 
-    @Test func cancelForceDeleteClearsPendingState() async throws {
-        let repo = try await makeRepo(name: "cancel-force")
-        defer { try? FileManager.default.removeItem(at: repo) }
-        let state = AppState()
-        let project = try await state.projectsManager.addProject(path: repo, displayName: "cancel-force", color: "#5fb7c4")
-        try await state.projectsManager.refreshWorktrees(projectId: project.id)
-        let trees = state.projectsManager.worktrees(projectId: project.id)
-        let wt = try #require(trees.first)
-
-        state.pendingForceDeleteWorktree = AppState.PendingForceDeleteWorktree(
-            id: wt.id,
-            branch: wt.branch,
-            projectId: wt.projectId,
-            repoPath: repo,
-            worktreePath: wt.path,
-            deleteBranchIfMerged: false,
-            removedIndex: 0
-        )
-        #expect(state.pendingForceDeleteWorktree != nil)
-
-        state.cancelForceDeletePendingWorktree()
-        #expect(state.pendingForceDeleteWorktree == nil)
-        #expect(state.projectsManager.operationState(forWorktreeId: wt.id, projectId: project.id) == nil)
-    }
-
     /// Regression: the force-delete alert used to clear operation state to
     /// `nil` while it waited on the user, leaving the worktree unclaimed —
     /// a scheduled run or remote session could be admitted during that
     /// window, then have its writes silently discarded once the user
     /// confirmed force delete (which skips the cleanliness audits).
-    @Test func preparingDeleteDuringForceAlertBlocksAdmissionUntilResolved() async throws {
+    @Test func forcePromptHoldsTheClaimUntilCancelled() async throws {
         let repo = try await makeRepo(name: "force-alert-claim")
         defer { try? FileManager.default.removeItem(at: repo) }
         let state = AppState()
-        let project = try await state.projectsManager.addProject(path: repo, displayName: "force-alert-claim", color: "#5fb7c4")
-        try await state.projectsManager.refreshWorktrees(projectId: project.id)
-        let trees = state.projectsManager.worktrees(projectId: project.id)
-        let wt = try #require(trees.first)
-
-        state.projectsManager.setOperationState(forWorktreeId: wt.id, projectId: project.id, state: .preparingDelete)
+        let (project, wt) = try await addProjectWithLinkedWorktree(state, repo: repo, branch: "force-alert-claim")
+        let claim = try state.core.beginDelete(wt)
         state.pendingForceDeleteWorktree = AppState.PendingForceDeleteWorktree(
             id: wt.id,
             branch: wt.branch,
@@ -1483,7 +1459,8 @@ struct AppStateCleanupTests {
             repoPath: repo,
             worktreePath: wt.path,
             deleteBranchIfMerged: false,
-            removedIndex: 0
+            removedIndex: 0,
+            claim: claim
         )
 
         #expect(AppState.blocksWorktreeSessionAdmission(state.projectsManager.operationState(forWorktreeId: wt.id, projectId: project.id)))
@@ -1815,57 +1792,58 @@ struct AppStateCleanupTests {
 
     // MARK: - Archive from delete-failed state
 
-    @Test func archiveWorktreeFromDeleteFailedStateHidesWorktree() async throws {
+    @Test func archiveFromDeleteFailedStateHidesTheWorktreeAndClosesItsTabs() async throws {
         let repo = try await makeRepo(name: "archive-from-failed")
         defer { try? FileManager.default.removeItem(at: repo) }
-
         let state = AppState()
-        let project = try await state.projectsManager.addProject(path: repo, displayName: "archive", color: "#5fb7c4")
-        try await state.projectsManager.refreshWorktrees(projectId: project.id)
-
-        let trees = state.projectsManager.worktrees(projectId: project.id)
-        #expect(trees.count == 1)
-        let wt = trees[0]
-
-        // Simulate a failed delete.
-        state.projectsManager.setOperationState(forWorktreeId: wt.id, projectId: project.id, state: .deleteFailed(message: "permission denied"))
+        let (project, wt) = try await addProjectWithLinkedWorktree(state, repo: repo, branch: "archive-from-failed")
+        state.tabs.appendTerminal(worktreeId: wt.id, title: "term", sessionId: "s1")
+        state.projectsManager.setOperationState(for: wt, state: .deleteFailed(message: "permission denied"))
         state.projectsManager.setGGWorktreeMode(projectId: project.id, worktreeId: wt.id, mode: .on)
         state.selectedWorktreeId = wt.id
 
-        // Archive should succeed and hide the worktree.
-        state.archiveWorktree(wt)
+        await state.archiveWorktree(wt)?.value
 
         #expect(state.projectsManager.isWorktreeHidden(projectId: project.id, path: wt.path))
-        #expect(state.projectsManager.archivedWorktrees(projectId: project.id).count == 1)
-        #expect(state.projectsManager.visibleWorktrees(projectId: project.id).isEmpty)
+        #expect(state.projectsManager.archivedWorktrees(projectId: project.id).map(\.id) == [wt.id])
         #expect(state.projectsManager.ggWorktreeMode(projectId: project.id, worktreeId: wt.id) == .on)
-        // Operation state should be cleared.
-        #expect(state.projectsManager.operationState(forWorktreeId: wt.id, projectId: project.id) == nil)
-        // Selection should move away because the worktree is no longer visible.
+        #expect(state.projectsManager.operationState(for: wt) == nil)
+        #expect(state.tabs.tabs(forWorktree: wt.id).isEmpty)
         #expect(state.selectedWorktreeId != wt.id)
     }
 
-    @Test func archiveWorktreeFromDeleteFailedStateClosesTabs() async throws {
-        let repo = try await makeRepo(name: "archive-from-failed-tabs")
+    /// Archiving used to clear whatever claim the worktree held, reopening it
+    /// to sessions mid-delete. Now a blocking claim refuses the archive.
+    @Test func archiveIsRefusedWhileADeleteHoldsTheWorktree() async throws {
+        let repo = try await makeRepo(name: "archive-while-deleting")
         defer { try? FileManager.default.removeItem(at: repo) }
 
-        let state = AppState()
-        let project = try await state.projectsManager.addProject(path: repo, displayName: "archive-tabs", color: "#5fb7c4")
+        var refusal: String?
+        let state = AppState(fileActionErrorHandler: { _, message in refusal = message })
+        let (project, wt) = try await addProjectWithLinkedWorktree(state, repo: repo, branch: "archive-while-deleting")
+        state.projectsManager.setOperationState(for: wt, state: .deleting(projectId: project.id))
+
+        await state.archiveWorktree(wt)?.value
+
+        #expect(refusal != nil)
+        #expect(!state.projectsManager.isWorktreeHidden(projectId: project.id, path: wt.path))
+        #expect(state.projectsManager.operationState(for: wt) == .deleting(projectId: project.id))
+    }
+
+    /// Only linked worktrees can be archived; the main checkout never is.
+    private func addProjectWithLinkedWorktree(
+        _ state: AppState,
+        repo: URL,
+        branch: String
+    ) async throws -> (ProjectConfig, Worktree) {
+        let project = try await state.projectsManager.addProject(path: repo, displayName: branch, color: "#5fb7c4")
+        let linked = repo.appendingPathComponent(".linked-\(branch)")
+        _ = try await Process.git(["worktree", "add", "-q", "-b", branch, linked.path, "HEAD"], cwd: repo)
         try await state.projectsManager.refreshWorktrees(projectId: project.id)
-
-        let wt = state.projectsManager.worktrees(projectId: project.id)[0]
-        state.tabs.appendTerminal(worktreeId: wt.id, title: "term", sessionId: "s1")
-        #expect(state.tabs.tabs(forWorktree: wt.id).count == 1)
-
-        state.projectsManager.setOperationState(forWorktreeId: wt.id, projectId: project.id, state: .deleteFailed(message: "permission denied"))
-        state.selectedWorktreeId = wt.id
-
-        state.archiveWorktree(wt)
-
-        // Tabs should be closed.
-        #expect(state.tabs.tabs(forWorktree: wt.id).isEmpty)
-        // And selection updated.
-        #expect(state.selectedWorktreeId != wt.id)
+        let worktree = try #require(state.projectsManager.worktrees(projectId: project.id).first {
+            $0.path.standardizedFileURL.path == linked.standardizedFileURL.path
+        })
+        return (project, worktree)
     }
 
     @Test func createWorktreeAfterProjectRemovalDoesNotMutateState() async throws {

@@ -8,9 +8,13 @@ struct AiSplitButton: View {
 
     @Environment(\.theme) var theme
 
-    /// Currently-selected agent, or nil for "none" / unknown id.
+    /// Agent the button runs: the pinned one, or the first on Automatic.
+    /// Nil for None or an agent missing from `availableAgents`.
     private var selected: AgentDefinition? {
-        availableAgents.first(where: { $0.id == selectedToolId })
+        RepositoryAgentSelectionPolicy.selection(
+            selectedID: selectedToolId,
+            availability: .available(availableAgents)
+        ).agent
     }
 
     private var primaryLabel: String {
@@ -48,6 +52,17 @@ struct AiSplitButton: View {
                       : "Generate commit message with \(selected?.displayName ?? "")")
 
             Menu {
+                Button {
+                    selectedToolId = AppConfig.Changes.automaticAIToolID
+                } label: {
+                    HStack {
+                        Text("Automatic")
+                        if selectedToolId == AppConfig.Changes.automaticAIToolID {
+                            Icon(name: "check", size: 10)
+                        }
+                    }
+                }
+                Divider()
                 ForEach(availableAgents) { agent in
                     Button {
                         selectedToolId = agent.id
@@ -61,7 +76,7 @@ struct AiSplitButton: View {
                     }
                 }
                 Divider()
-                Button("None") { selectedToolId = "none" }
+                Button("None") { selectedToolId = AppConfig.Changes.disabledAIToolID }
             } label: {
                 Icon(name: "chev-down", size: 9, color: theme.color("fg-faint"))
                     .padding(.horizontal, 7).padding(.vertical, 7)

@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+@_spi(Testing) import AlasCore
 @testable import Alas
 
 /// End-to-end coverage of the Run tab's state: launching, completion versus
@@ -181,6 +182,9 @@ struct AppStateRunRecordTests {
                 name: branch,
                 branch: branch,
                 path: directory,
+                // Shares the project's path, but stands for a linked
+                // worktree: the main checkout cannot be archived or deleted.
+                isMainWorktree: false,
                 status: .clean,
                 lastActivity: Date()
             )
@@ -711,7 +715,7 @@ struct AppStateRunRecordTests {
         )
         try await fixture.history.append(entry)
 
-        fixture.state.archiveWorktree(fixture.worktree)
+        await fixture.state.archiveWorktree(fixture.worktree)?.value
 
         let archivedEntry = try await fixture.history.entry(id: entry.id)
         #expect(archivedEntry?.id == entry.id)
@@ -729,7 +733,7 @@ struct AppStateRunRecordTests {
         await awaitLaunches(fixture)
         let runID = try #require(runRecord(fixture)?.id)
 
-        fixture.state.archiveWorktree(fixture.worktree)
+        await fixture.state.archiveWorktree(fixture.worktree)?.value
         await fixture.state.flushRunHistoryPersistence()
 
         let archivedEntry = try await fixture.history.entry(id: runID)

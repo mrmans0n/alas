@@ -52,7 +52,7 @@ struct ACPMarkdownText: View {
     private func view(for renderBlock: RenderBlock) -> some View {
         switch renderBlock.block {
         case .heading(let level, let text):
-            ACPMarkdownInlineTextView(
+            ACPMarkdownInlineText(
                 source: text,
                 typography: typography,
                 role: .heading(level: level),
@@ -62,7 +62,7 @@ struct ACPMarkdownText: View {
                 .padding(.top, level == 1 ? 4 : 2)
                 .frame(maxWidth: .infinity, alignment: .leading)
         case .paragraph(let text):
-            ACPMarkdownInlineTextView(
+            ACPMarkdownInlineText(
                 source: text,
                 typography: typography,
                 role: .body,
@@ -83,7 +83,7 @@ struct ACPMarkdownText: View {
                         )
                             .frame(width: 16, height: 16)
                             .padding(.top, 1)
-                        ACPMarkdownInlineTextView(
+                        ACPMarkdownInlineText(
                             source: item.text,
                             typography: typography,
                             role: .body,
@@ -100,7 +100,7 @@ struct ACPMarkdownText: View {
                 Rectangle()
                     .fill(theme.color("accent").opacity(0.55))
                     .frame(width: 2)
-                ACPMarkdownInlineTextView(
+                ACPMarkdownInlineText(
                     source: text,
                     typography: typography,
                     role: .quote,
@@ -194,7 +194,7 @@ struct ACPMarkdownText: View {
         HStack(alignment: .top, spacing: 0) {
             ForEach(0..<columnCount, id: \.self) { i in
                 let value = i < cells.count ? cells[i] : ""
-                ACPMarkdownInlineTextView(
+                ACPMarkdownInlineText(
                     source: value,
                     typography: typography,
                     role: .tableCell(isHeader: isHeader),
@@ -338,7 +338,7 @@ private struct ACPMarkdownTaskCheckbox: NSViewRepresentable {
 /// Fenced code block with optional language label and a copy button on
 /// the right side of the header. Click flashes a checkmark + "Copied"
 /// for ~1.5s, mirroring the SHA-copy affordance in the commit editor.
-private struct CodeBlockView: View {
+struct CodeBlockView: View {
     let language: String?
     let code: String
     let typography: ACPChatTypography

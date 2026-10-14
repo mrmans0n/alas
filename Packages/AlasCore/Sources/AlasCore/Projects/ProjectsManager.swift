@@ -61,6 +61,8 @@ public enum WorktreeOperationState: Equatable, Sendable {
     /// the same path can exist under more than one host's project, so the id
     /// alone cannot say which checkout is being removed.
     case deleting(projectId: String)
+    /// Archive is stopping everything in the worktree before hiding it.
+    case archiving(projectId: String)
     /// The raw GG policy is retry metadata only; AppState removes its effective
     /// optimistic overlay before entering this state.
     case createFailed(
@@ -78,12 +80,21 @@ public enum WorktreeOperationState: Equatable, Sendable {
 }
 
 extension WorktreeOperationState {
+    /// Whether a worktree in `state` may be claimed for an archive or a
+    /// deletion: nothing holds it, or a failed delete is waiting for retry.
+    public static func admitsLifecycleOperation(_ state: WorktreeOperationState?) -> Bool {
+        switch state {
+        case nil, .deleteFailed: true
+        default: false
+        }
+    }
+
     /// Whether this claim keeps new terminals, agent sessions and runs out of
     /// the worktree: it is being created, or a delete is being confirmed or
     /// carried out. Failed operations no longer hold the worktree.
     public var blocksAdmission: Bool {
         switch self {
-        case .creating, .preparingDelete, .deleting: true
+        case .creating, .preparingDelete, .deleting, .archiving: true
         case .createFailed, .launchFailed, .deleteFailed: false
         }
     }
@@ -113,6 +124,9 @@ public final class ProjectsManager {
     /// the other's, so cancelling a delete on one host would silently reopen
     /// admission for a worktree the other host is still removing.
     public private(set) var worktreeOperationStates: [WorktreeOperationKey: WorktreeOperationState] = [:]
+    /// Who opened each claim through `claimOperation`. Any other write to a
+    /// claim drops its token.
+    @ObservationIgnored private var claimTokens: [WorktreeOperationKey: (token: UUID, replaced: WorktreeOperationState?)] = [:]
     public private(set) var worktreeRefreshFailures: Set<String> = []
     /// Rows a project lists but does not show because another local project
     /// owns the same directory: `[losing projectId][worktree id] = winner`.
@@ -456,8 +470,53 @@ public final class ProjectsManager {
     }
 
     /// Opens or clears a claim for a worktree value.
-    public func setOperationState(for worktree: Worktree, state: WorktreeOperationState?) {
+    @_spi(Testing) public func setOperationState(for worktree: Worktree, state: WorktreeOperationState?) {
         setOperationState(forWorktreeId: worktree.id, projectId: worktree.projectId, state: state)
+    }
+
+    /// Opens `state` as a claim only the returned token releases. Equal
+    /// states are not enough to tell operations apart: a worktree deleted,
+    /// recreated at the same path and deleted again gets the same claim, and
+    /// the first deletion must not release the second one's.
+    @_spi(Testing) public func claimOperation(_ state: WorktreeOperationState, for worktree: Worktree) -> UUID {
+        let replaced = operationState(for: worktree)
+        setOperationState(for: worktree, state: state)
+        let token = UUID()
+        claimTokens[WorktreeOperationKey(projectId: worktree.projectId, worktreeId: worktree.id)] = (token, replaced)
+        return token
+    }
+
+    /// Whether the claim on `worktree` is still the one `token` opened.
+    public func holdsClaim(_ token: UUID, for worktree: Worktree) -> Bool {
+        let key = WorktreeOperationKey(projectId: worktree.projectId, worktreeId: worktree.id)
+        return claimTokens[key]?.token == token && worktreeOperationStates[key] != nil
+    }
+
+    /// Gives up the claim `token` opened, for an operation that did not go
+    /// ahead: the state it replaced (such as a failed delete awaiting retry)
+    /// comes back. The token is dropped even when a refresh already cleared
+    /// the claim, and then nothing is restored.
+    @_spi(Testing) public func releaseOperation(_ token: UUID, for worktree: Worktree) {
+        let key = WorktreeOperationKey(projectId: worktree.projectId, worktreeId: worktree.id)
+        guard let claim = claimTokens[key], claim.token == token else { return }
+        let restored = worktreeOperationStates[key] == nil ? nil : claim.replaced
+        setOperationState(for: worktree, state: restored)
+    }
+
+    /// Ends the claim `token` opened, for an operation that ran: cleared, or
+    /// left as `state` (such as a failure to retry), which no claim holds.
+    @_spi(Testing) public func finishOperation(_ token: UUID, for worktree: Worktree, leaving state: WorktreeOperationState? = nil) {
+        let key = WorktreeOperationKey(projectId: worktree.projectId, worktreeId: worktree.id)
+        guard claimTokens[key]?.token == token else { return }
+        setOperationState(for: worktree, state: state)
+    }
+
+    /// Moves the claim `token` holds to another stage of its operation,
+    /// keeping the token and the state it replaced.
+    @_spi(Testing) public func updateClaim(_ token: UUID, to state: WorktreeOperationState, for worktree: Worktree) {
+        let key = WorktreeOperationKey(projectId: worktree.projectId, worktreeId: worktree.id)
+        guard let claim = claimTokens[key], claim.token == token, worktreeOperationStates[key] != nil else { return }
+        worktreeOperationStates[key] = state
     }
 
     /// Whether new terminals, agent sessions and runs may start in `worktree`.
@@ -477,8 +536,9 @@ public final class ProjectsManager {
         worktreeOperationStates
     }
 
-    public func setOperationState(forWorktreeId worktreeId: String, projectId: String, state: WorktreeOperationState?) {
+    @_spi(Testing) public func setOperationState(forWorktreeId worktreeId: String, projectId: String, state: WorktreeOperationState?) {
         let key = WorktreeOperationKey(projectId: projectId, worktreeId: worktreeId)
+        claimTokens.removeValue(forKey: key)
         if let state {
             worktreeOperationStates[key] = state
         } else {
@@ -713,6 +773,44 @@ public final class ProjectsManager {
         return worktrees(projectId: projectId).filter { hidden.contains(canonical($0.path)) }
     }
 
+    /// Archived paths of local git projects whose directory is gone or no
+    /// longer holds a checkout. Archived rows are hidden, so nothing else
+    /// notices when they disappear; this reads the persisted paths, so it
+    /// works before the first refresh too.
+    public func staleArchivedWorktreePaths(projectId: String) -> [String] {
+        guard let project = projects.first(where: { $0.id == projectId }),
+              project.host == nil, !project.isFolder
+        else { return [] }
+        return project.hiddenWorktreePaths.filter { path in
+            operationState(forWorktreeId: path, projectId: projectId) == nil
+                && (!Self.isDirectory(path)
+                    || !FileManager.default.fileExists(atPath: URL(fileURLWithPath: path).appendingPathComponent(".git").path))
+        }
+    }
+
+    /// Drops git's registration of every stale archived worktree whose
+    /// directory is gone, and returns the projects that had stale archived
+    /// paths. A refresh of those projects then forgets the archived rows,
+    /// since git no longer lists them as live. `git worktree remove` without
+    /// `--force` only touches the administrative files of a missing
+    /// directory, keeps the branch, and leaves locked worktrees alone. A
+    /// directory that is still there but lost its `.git` keeps git's
+    /// registration: removing it would delete the files left inside.
+    @discardableResult
+    public func pruneStaleArchivedWorktrees() async -> Set<String> {
+        var pruned: Set<String> = []
+        for project in projects {
+            let stale = staleArchivedWorktreePaths(projectId: project.id)
+            guard !stale.isEmpty else { continue }
+            pruned.insert(project.id)
+            let repo = localGitAnchor(project)
+            for path in stale where !FileManager.default.fileExists(atPath: path) {
+                _ = try? await Process.git(["worktree", "remove", path], cwd: repo)
+            }
+        }
+        return pruned
+    }
+
     public func visibleMainWorktree(projectId: String) -> Worktree? {
         guard let project = projects.first(where: { $0.id == projectId }) else { return nil }
         return visibleWorktrees(projectId: projectId).first { isMainWorktree($0, project: project) }
@@ -793,7 +891,7 @@ public final class ProjectsManager {
         ))
     }
 
-    public func setWorktreeHidden(projectId: String, path: URL, hidden: Bool) {
+    @_spi(Testing) public func setWorktreeHidden(projectId: String, path: URL, hidden: Bool) {
         guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
         let key = canonical(path)
         var paths = projects[idx].hiddenWorktreePaths
@@ -823,23 +921,29 @@ public final class ProjectsManager {
         !worktreeRefreshFailures.contains(projectId)
     }
 
+    /// Where to run git for a local project. gg clean, or deleting an
+    /// archived worktree, can remove the linked worktree stored as the
+    /// project path; another checkout that still exists answers instead, so
+    /// the deleted row can be reconciled. Cached rows count too, since the
+    /// live list is empty until the first refresh after launch. A directory
+    /// that lost its `.git` is no checkout, and git would run from whatever
+    /// repository encloses it.
+    private func localGitAnchor(_ project: ProjectConfig) -> URL {
+        let configured = URL(fileURLWithPath: project.path)
+        // `HEAD` admits a bare repository.
+        func isRepository(_ url: URL) -> Bool {
+            [".git", "HEAD"].contains { FileManager.default.fileExists(atPath: url.appendingPathComponent($0).path) }
+        }
+        guard project.host == nil, !isRepository(configured) else { return configured }
+        return (worktreesByProject[project.id, default: []] + project.cachedWorktrees)
+            .map(\.path)
+            .first(where: isRepository) ?? configured
+    }
+
     private func refreshWorktreesImpl(projectId: String) async throws -> Bool {
         guard let project = projects.first(where: { $0.id == projectId }) else { return false }
         let configuredURL = URL(fileURLWithPath: project.path)
-        let url: URL
-        // gg clean can remove the linked worktree stored as the project path.
-        // Query from another cached checkout so the deleted row can be reconciled.
-        if project.isFolder {
-            url = configuredURL
-        } else if project.host == nil,
-           !FileManager.default.fileExists(atPath: configuredURL.path),
-           let survivingWorktree = worktreesByProject[projectId, default: []].first(where: {
-               FileManager.default.fileExists(atPath: $0.path.path)
-           }) {
-            url = survivingWorktree.path
-        } else {
-            url = configuredURL
-        }
+        let url = project.isFolder ? configuredURL : localGitAnchor(project)
         // A deleted local folder fails like a deleted repository, so stale
         // project cleanup can find it.
         if project.isFolder, project.host == nil, !Self.isDirectory(configuredURL.path) {
@@ -887,8 +991,8 @@ public final class ProjectsManager {
                 if !liveIds.contains(id) {
                     clearedOperationKeys.append(key)
                 }
-            case .deleting:
-                // If the row is gone from git, the deletion succeeded.
+            case .deleting, .archiving:
+                // If the row is gone from git, the operation has nothing left to claim.
                 if !liveIds.contains(id) {
                     clearedOperationKeys.append(key)
                 }
@@ -996,7 +1100,7 @@ public final class ProjectsManager {
             if let op = operationState(forWorktreeId: worktree.id, projectId: projectId) {
                 switch op {
                 case .creating, .createFailed: return false
-                case .preparingDelete, .deleting, .launchFailed, .deleteFailed: return true
+                case .preparingDelete, .deleting, .archiving, .launchFailed, .deleteFailed: return true
                 }
             }
             return true

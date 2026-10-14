@@ -3,8 +3,8 @@ import Foundation
 @testable import Alas
 
 struct AppConfigChangesTests {
-    @Test func defaultsHaveNoneToolAndNonEmptyPrompt() {
-        #expect(AppConfig.defaults.changes.aiToolId == "none")
+    @Test func defaultsUseAutomaticToolAndNonEmptyPrompt() {
+        #expect(AppConfig.defaults.changes.aiToolId == AppConfig.Changes.automaticAIToolID)
         #expect(!AppConfig.defaults.changes.prompt.isEmpty)
     }
 
@@ -48,7 +48,7 @@ struct AppConfigChangesTests {
         }
         """
         let cfg = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
-        #expect(cfg.changes.aiToolId == "none")
+        #expect(cfg.changes.aiToolId == AppConfig.Changes.automaticAIToolID)
         #expect(!cfg.changes.prompt.isEmpty)
     }
 
@@ -60,6 +60,17 @@ struct AppConfigChangesTests {
         let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
         #expect(decoded.changes.aiToolId == "claude")
         #expect(decoded.changes.prompt == "custom prompt")
+    }
+
+    @Test(arguments: [
+        ("none", AppConfig.Changes.automaticAIToolID),
+        (AppConfig.Changes.disabledAIToolID, AppConfig.Changes.disabledAIToolID),
+    ])
+    func legacyNoneDecodesAsAutomaticWhileExplicitOffStays(stored: String, expected: String) throws {
+        var cfg = AppConfig.defaults
+        cfg.changes.aiToolId = stored
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: JSONEncoder().encode(cfg))
+        #expect(decoded.changes.aiToolId == expected)
     }
 
     @Test func decodesLegacyChangesWithoutReviewRequestPrompt() throws {

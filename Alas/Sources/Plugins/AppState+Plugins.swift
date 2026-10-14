@@ -280,7 +280,7 @@ extension AppState {
         } catch {
             if Task.isCancelled || error is CancellationError { return cancelled }
             // Thrown only by the agent check before any session exists, so Retry Launch is safe.
-            markWorktreeLaunchFailed(worktree: worktree, projectId: project.id, error: error, launchSurface: surface)
+            markWorktreeLaunchFailed(worktree: worktree, error: error, launchSurface: surface)
             return error.localizedDescription
         }
         // As for scheduled chat sessions: the launch returns normally when the session could not

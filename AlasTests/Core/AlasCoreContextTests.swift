@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+@_spi(Testing) import AlasCore
 @testable import Alas
 
 @MainActor
@@ -92,6 +93,14 @@ struct AlasCoreContextTests {
             return
         }
         #expect(text.contains("hello from feature"))
+
+        try await context.archiveWorktree(worktree)
+        #expect(!context.projects.visibleWorktrees(projectId: project.id).map(\.id).contains(worktree.id))
+        #expect(context.sessionManagers[.worktree(worktree.id)] == nil)
+        #expect(try await context.runHistory.store?.entry(id: record.id) != nil, "archiving keeps run history")
+        #expect(context.projects.operationState(for: worktree) == nil, "the archive claim is released")
+        try context.unarchiveWorktree(path: worktree.path, projectID: project.id)
+        #expect(context.projects.visibleWorktrees(projectId: project.id).map(\.id).contains(worktree.id))
 
         let longURL = root.appendingPathComponent("long.sh")
         try "sleep 300\n".write(to: longURL, atomically: true, encoding: .utf8)
@@ -210,9 +219,87 @@ struct AlasCoreContextTests {
         #expect(context.runRecords.record(worktreeID: worktree.id, scriptKey: script.key) == nil)
     }
 
+    /// Once Git has added the worktree it exists, so a refresh failing after
+    /// that is left to the next refresh instead of failing the creation,
+    /// which a retry could only repeat against the existing path.
+    @Test func creationSurvivesARefreshThatFails() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-core-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let repo = root.appendingPathComponent("repo")
+        try FileManager.default.copyItem(at: try await Self.repoTemplate.value, to: repo)
+        let environment = TestHostEnvironment()
+        environment.refresh = { _ in throw CocoaError(.fileReadUnknown) }
+        let context = AlasCoreContext(
+            projects: ProjectsManager(persistedProjects: []),
+            store: TestPersistenceStore(),
+            projectsFile: root.appendingPathComponent("projects.json"),
+            runHistoryStore: nil,
+            environment: environment
+        )
+        let project = try await context.addProject(path: repo, displayName: "repo", icon: .default(color: "blue"))
+
+        let worktree = try await context.createWorktree(
+            projectID: project.id, branch: "feature", base: "main", destination: root.appendingPathComponent("feature")
+        )
+
+        #expect(FileManager.default.fileExists(atPath: worktree.path.path))
+        #expect(context.projects.operationState(for: worktree) == nil)
+    }
+
+    enum UnsavedCreation: CaseIterable {
+        /// Its GG mode is only persisted by the creation's last save.
+        case created
+        /// Its pending branch name was not saved, then the app's hook
+        /// approval was cancelled.
+        case failedAfterward
+    }
+
+    /// A save that fails during a creation is reported, whether the creation
+    /// then stands or fails: what it recorded is otherwise lost on restart.
+    @Test(arguments: UnsavedCreation.allCases)
+    func creationReportsAProjectListItCannotSave(_ scenario: UnsavedCreation) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-core-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let repo = root.appendingPathComponent("repo")
+        try FileManager.default.copyItem(at: try await Self.repoTemplate.value, to: repo)
+        let store = TestPersistenceStore()
+        let environment = TestHostEnvironment()
+        let context = AlasCoreContext(
+            projects: ProjectsManager(persistedProjects: []),
+            store: store,
+            projectsFile: root.appendingPathComponent("projects.json"),
+            runHistoryStore: nil,
+            environment: environment
+        )
+        let project = try await context.addProject(path: repo, displayName: "repo", icon: .default(color: "blue"))
+        var request = WorktreeCreateRequest(projectID: project.id, base: "main", branch: "feature", destination: root.appendingPathComponent("feature"))
+        switch scenario {
+        case .created:
+            request.ggWorktreeMode = .on
+        case .failedAfterward:
+            request.namesBranchFromFirstPrompt = true
+            request.cancelledHookApprovalFails = true
+            environment.repoHookLoader = RepoHookLoader { _, _, _ in .data(Data("true\n".utf8)) }
+            environment.repoHookPrompter = RepoHookPrompter(decide: { _, _, _ in .cancel }, decideFailure: { _, _ in .cancel })
+        }
+        let pending = try await context.beginCreate(request)
+        store.writeError = CocoaError(.fileWriteOutOfSpace)
+
+        switch (scenario, await context.finishCreate(pending)) {
+        case (.created, .createdButNotSaved), (.failedAfterward, .failed(_, unsaved: .some)):
+            break
+        case (_, let outcome):
+            Issue.record("Expected the save failure to be reported, got \(outcome)")
+        }
+    }
+
     /// The removal cannot be undone, so a project list that cannot be saved
-    /// afterwards is reported rather than left to restore the deleted row.
-    @Test func deletionThatCannotSaveTheProjectListThrows() async throws {
+    /// afterwards is reported rather than left to restore the deleted row,
+    /// by the headless call and by the claimed deletion the app makes.
+    @Test(arguments: [false, true])
+    func deletionThatCannotSaveTheProjectListIsReported(throughClaim: Bool) async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-core-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -234,8 +321,17 @@ struct AlasCoreContextTests {
         )
         store.writeError = CocoaError(.fileWriteOutOfSpace)
 
-        await #expect(throws: CocoaError.self) {
-            try await context.deleteWorktree(worktree)
+        if throughClaim {
+            let claim = try context.beginDelete(worktree)
+            let outcome = await context.deleteWorktree(worktree, claim: claim, options: WorktreeDeleteOptions())
+            guard case .deletedButNotSaved = outcome else {
+                Issue.record("Expected the save failure to be reported, got \(outcome)")
+                return
+            }
+        } else {
+            await #expect(throws: CocoaError.self) {
+                try await context.deleteWorktree(worktree)
+            }
         }
         #expect(!context.projects.worktrees(projectId: project.id).map(\.id).contains(worktree.id))
     }
@@ -330,5 +426,83 @@ struct AlasCoreContextTests {
             try await context.deleteWorktree(worktree)
         }
         #expect(context.runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status == .running)
+    }
+
+    enum HookApproval: CaseIterable {
+        case approvedEarlier, unapproved, cancelled
+    }
+
+    /// A headless create runs the repository's create hook only when it was
+    /// already approved: there is nobody to ask. A cancelled approval still
+    /// leaves a created, listed worktree.
+    @Test(arguments: HookApproval.allCases)
+    func createRunsOnlyApprovedRepoHooks(_ approval: HookApproval) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-core-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let repo = root.appendingPathComponent("repo")
+        try FileManager.default.copyItem(at: try await Self.repoTemplate.value, to: repo)
+        let environment = TestHostEnvironment()
+        environment.repoHookLoader = RepoHookLoader { _, _, _ in .data(Data("touch hook-ran\n".utf8)) }
+        let context = AlasCoreContext(
+            projects: ProjectsManager(persistedProjects: []),
+            store: TestPersistenceStore(),
+            projectsFile: root.appendingPathComponent("projects.json"),
+            runHistoryStore: nil,
+            environment: environment
+        )
+        let project = try await context.addProject(path: repo, displayName: "repo", icon: .default(color: "blue"))
+        if approval == .cancelled {
+            environment.repoHookPrompter = RepoHookPrompter(decide: { _, _, _ in .cancel }, decideFailure: { _, _ in .cancel })
+        }
+        if approval == .approvedEarlier {
+            guard case let .loaded(hook) = await environment.repoHookLoader.load(event: .worktreeCreate, worktreeRoot: repo, host: nil) else {
+                Issue.record("the fake hook loads")
+                return
+            }
+            #expect(context.projects.approveRepoHook(projectId: project.id, hash: hook.hash))
+        }
+
+        let worktree = try await context.createWorktree(
+            projectID: project.id, branch: "feature", base: "main", destination: root.appendingPathComponent("feature")
+        )
+
+        #expect(FileManager.default.fileExists(atPath: worktree.path.appendingPathComponent("hook-ran").path) == (approval == .approvedEarlier))
+        #expect(context.projects.worktrees(projectId: project.id).map(\.id).contains(worktree.id))
+    }
+
+    /// Archiving claims the worktree, so nothing new starts in it and it
+    /// cannot be unarchived until the archive is done.
+    @Test func archiveClaimRefusesUnarchive() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-core-\(UUID().uuidString)")
+        let project = ProjectConfig(id: "p", name: "p", path: root.path, color: "blue", addedAt: Date())
+        let worktree = Worktree(
+            id: Worktree.makeId(path: root), projectId: "p", name: "main", branch: "main", path: root,
+            status: .clean, lastActivity: Date()
+        )
+        let context = AlasCoreContext(
+            projects: ProjectsManager(persistedProjects: [project]),
+            store: TestPersistenceStore(),
+            runHistoryStore: nil
+        )
+        context.projects.setOperationState(for: worktree, state: .archiving(projectId: "p"))
+
+        #expect(throws: WorktreeArchiveRefusal.operationInProgress) {
+            try context.unarchiveWorktree(path: root, projectID: "p")
+        }
+        #expect(!context.projects.admitsNewWork(in: worktree))
+    }
+}
+
+/// A headless environment whose repository hooks and refresh a test sets.
+@MainActor
+private final class TestHostEnvironment: AlasHostEnvironment {
+    var repoHookLoader = RepoHookLoader()
+    var repoHookPrompter: RepoHookPrompter = .skipping
+    var refresh: ((String) async throws -> Bool)?
+
+    func refreshProjectWorktrees(_ projectID: String, in core: AlasCoreContext) async throws -> Bool {
+        if let refresh { return try await refresh(projectID) }
+        return try await core.projects.refreshWorktrees(projectId: projectID)
     }
 }

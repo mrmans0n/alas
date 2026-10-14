@@ -113,11 +113,12 @@ extension AppState {
     /// Nil when none is selected or available, or when it fails or answers
     /// with anything but a name.
     private func providerBranchName(source: String, worktree: Worktree) async -> String? {
-        guard config.changes.aiToolId != "none" else { return nil }
+        guard config.changes.aiToolId != AppConfig.Changes.disabledAIToolID else { return nil }
         await loadAgentAvailability(for: worktree)
         guard let agent = RepositoryAgentSelectionPolicy.selection(
             selectedID: config.changes.aiToolId,
-            availability: agentAvailability(for: worktree)
+            availability: agentAvailability(for: worktree),
+            where: \.supportsTerminal
         ).agent else { return nil }
         do {
             let output = try await AgentRunner.runPromptRaw(
@@ -147,7 +148,7 @@ extension AppState {
         try await ProjectMutationGate.shared.withMutation(projectID: worktree.projectId) { [self] in
             let isIdle = await MainActor.run {
                 switch projectsManager.operationState(forWorktreeId: worktree.id, projectId: worktree.projectId) {
-                case .creating, .preparingDelete, .deleting: false
+                case .creating, .preparingDelete, .deleting, .archiving: false
                 case nil, .createFailed, .launchFailed, .deleteFailed: true
                 }
             }

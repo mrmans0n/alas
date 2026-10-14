@@ -1,3 +1,4 @@
+@_spi(AppHost) import AlasCore
 import Foundation
 import os
 
@@ -506,7 +507,6 @@ extension AppState {
             }
             markWorktreeLaunchFailed(
                 worktree: worktree,
-                projectId: project.id,
                 error: error,
                 launchSurface: launchSurface
             )

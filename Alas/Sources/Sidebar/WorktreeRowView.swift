@@ -327,7 +327,7 @@ struct WorktreeRowView: View {
 
     nonisolated static func isPending(operationState: WorktreeOperationState?) -> Bool {
         switch operationState {
-        case .creating, .preparingDelete, .deleting: return true
+        case .creating, .preparingDelete, .deleting, .archiving: return true
         default: return false
         }
     }
@@ -337,6 +337,7 @@ struct WorktreeRowView: View {
         case .creating: return "Creating…"
         case .preparingDelete: return "Preparing deletion…"
         case .deleting: return "Deleting…"
+        case .archiving: return "Archiving…"
         case .createFailed(_, let msg, _, _, _, _, _): return "Create failed: \(msg.trimmedForDisplay)"
         case .launchFailed(_, let msg, _): return "Launch failed: \(msg.trimmedForDisplay)"
         case .deleteFailed(let msg): return "Delete failed: \(msg.trimmedForDisplay)"
@@ -346,7 +347,7 @@ struct WorktreeRowView: View {
 
     nonisolated static func showsProgress(operationState: WorktreeOperationState?) -> Bool {
         switch operationState {
-        case .preparingDelete, .deleting: return true
+        case .preparingDelete, .deleting, .archiving: return true
         case .creating, .createFailed, .launchFailed, .deleteFailed, .none: return false
         }
     }
@@ -359,7 +360,7 @@ struct WorktreeRowView: View {
         switch operationState {
         case .createFailed(_, let message, _, _, _, _, _), .launchFailed(_, let message, _), .deleteFailed(let message):
             return message
-        case .creating, .preparingDelete, .deleting, .none:
+        case .creating, .preparingDelete, .deleting, .archiving, .none:
             return nil
         }
     }

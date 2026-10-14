@@ -52,7 +52,8 @@ func makeCleanupFixture(
     worktreeCount: Int,
     worktreeCleanupLauncher: @escaping AppState.WorktreeCleanupLauncher = {
         try WorktreeTrashCleaner.launch($0)
-    }
+    },
+    hostEnvironment: AppHostEnvironment = AppHostEnvironment()
 ) async throws -> WorktreeCleanupFixture {
     precondition(worktreeCount >= 1, "a fixture needs at least the main worktree")
 
@@ -82,7 +83,8 @@ func makeCleanupFixture(
                 path: temporaryRoot.appendingPathComponent("run-history.sqlite").path
             ),
             worktreeCleanupLauncher: worktreeCleanupLauncher,
-            attentionStore: AttentionStore(url: attentionStoreURL, persistence: persistence)
+            attentionStore: AttentionStore(url: attentionStoreURL, persistence: persistence),
+            hostEnvironment: hostEnvironment
         )
         let project = try await state.projectsManager.addProject(
             path: repoPath,

@@ -1084,6 +1084,23 @@ struct ACPSubagentSessionTests {
         #expect(ACPSubagentRowDescriptor(toolCall: spawnRow)?.subagentSessionId == "child-1")
     }
 
+    @Test("a replayed /goal confirmation resolves to its notice, so a recovered spawn lands after it")
+    func replayedGoalConfirmationKeepsRecoveryPosition() {
+        let session = makeSession()
+        session.transcript.appendMessage(.systemNotice(id: UUID(), text: "Goal set: Ship it"))
+        session.beginSuppressedReplaySideEffects()
+
+        _ = session.applySuppressedReplaySideEffects(.agentMessageChunk(.text("Goal set: Ship it")))
+        _ = session.applySuppressedReplaySideEffects(
+            .subagentSpawned(.init(subagentSessionId: "child-1", name: "Explore")))
+
+        guard case .systemNotice = session.transcript.messages[0],
+              case .toolCall = session.transcript.messages[1] else {
+            Issue.record("expected the recovered spawn row after the goal notice")
+            return
+        }
+    }
+
     @Test("a replayed restart continuation echo resolves to its notice, fragment by fragment, without claiming the next user turn",
           arguments: [false, true])
     func replayedContinuationEchoKeepsRecoveryPosition(promptReplayedBeforeSpawn: Bool) {

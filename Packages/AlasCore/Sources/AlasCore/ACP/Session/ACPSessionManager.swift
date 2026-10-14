@@ -566,12 +566,7 @@ public final class ACPSessionManager: ChangeTracking {
               runners[id] === runner
         else { throw ACPGoalControlError.unavailable }
 
-        try await runner.connection.controlGoal(
-            sessionId: session.remoteSessionId ?? id,
-            capability: capability,
-            action: action,
-            objective: objective
-        )
+        try await runner.controlGoal(capability: capability, action: action, objective: objective)
         if action == .set, let objective {
             if editedGoalDrafts[id] == nil || editedGoalDrafts[id] == objective {
                 editedGoalDrafts[id] = ""

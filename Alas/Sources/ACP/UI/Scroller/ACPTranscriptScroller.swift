@@ -128,6 +128,19 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         /// Lives for the Coordinator's lifetime, i.e. as long as this chat
         /// tab's transcript stays mounted.
         private let toolCallGroupExpansionSeeds = ACPToolCallGroupExpansionSeeds()
+        /// Which tool calls and thoughts are expanded, so an expanded row
+        /// stays SwiftUI and a collapsed one can be drawn natively.
+        let rowExpansionStore = ACPTranscriptRowExpansionStore()
+        /// Whether eligible rows draw natively; the flag, unless a test sets it.
+        var nativeRowsEnabled = ACPTranscriptNativeRows.isEnabled
+        private var hasPendingDeferredUpdate = false
+        /// VoiceOver toggles message-action visibility. Full Keyboard Access
+        /// has no notification, so it is read at each rebuild instead.
+        private var voiceOverObservation: NSKeyValueObservation?
+        /// Full Keyboard Access posts nothing when it changes, so it is
+        /// re-read when the app becomes active, as `AssistiveTechnologyStatus` does.
+        private var appActivationObserver: (any NSObjectProtocol)?
+        private var lastShowsActionsPermanently = false
         private var minimapRenderer: ACPTranscriptMinimap?
         private var pendingMinimapUpdate: DispatchWorkItem?
 
@@ -159,6 +172,29 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             // must produce a fresh spec list to take effect on screen.
             toolCallGroupExpansionSeeds.onChange = { [weak self] in
                 guard let self, let host = self.host else { return }
+                self.update(host: host)
+            }
+            // Same for a tool call or thought: its expanded flag decides
+            // between the native row and the expanded SwiftUI card. That
+            // swap removes the view whose click, accessibility press, or
+            // button action is still on the stack, so it waits for the next
+            // main-actor turn; toggles before then share one update.
+            rowExpansionStore.onChange = { [weak self] in
+                self?.scheduleDeferredUpdate()
+            }
+            voiceOverObservation = NSWorkspace.shared.observe(\.isVoiceOverEnabled, options: [.new]) { [weak self] _, _ in
+                // Deferred like the expansion store: KVO can fire mid-update.
+                Task { @MainActor [weak self] in
+                    guard let self, let host = self.host else { return }
+                    self.update(host: host)
+                }
+            }
+            appActivationObserver = NotificationCenter.default.addMainActorObserver(
+                forName: NSApplication.didBecomeActiveNotification, object: nil
+            ) { [weak self] in
+                guard let self, let host = self.host,
+                      Self.systemShowsActionsPermanently() != self.lastShowsActionsPermanently
+                else { return }
                 self.update(host: host)
             }
             self.reconciler = reconciler
@@ -287,6 +323,19 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             syncLogicalScrollerMetrics()
         }
 
+        /// Rebuilds the specs on the next main-actor turn; requests before
+        /// then share one update.
+        private func scheduleDeferredUpdate() {
+            guard !hasPendingDeferredUpdate else { return }
+            hasPendingDeferredUpdate = true
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.hasPendingDeferredUpdate = false
+                guard let host = self.host else { return }
+                self.update(host: host)
+            }
+        }
+
         func update(host: ACPTranscriptScroller) {
             self.host = host
             schedulePendingLogicalTargetResolutionIfPossible()
@@ -310,10 +359,15 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                     contentMaxWidth: host.contentMaxWidth
                 ),
                 expansionSeeds: toolCallGroupExpansionSeeds,
+                rowExpansionStore: rowExpansionStore,
                 // Same memoized fold the scroll-anchor and minimap lookups
                 // read, so a width-only or expand-toggle update doesn't
                 // re-slice and re-fold the whole window.
-                renderRows: currentRenderRows(host: host)
+                renderRows: currentRenderRows(host: host),
+                nativeRowsEnabled: nativeRowsEnabled,
+                showsActionsPermanently: currentShowsActionsPermanently(),
+                // A native agent row whose growing text it can no longer draw.
+                requestRespec: { [weak self] in self?.scheduleDeferredUpdate() }
             )
             hasNonSyntheticRow = specs.contains {
                 !$0.id.hasPrefix(ACPTranscriptScrollerReconciler.syntheticIdPrefix)
@@ -484,7 +538,11 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             availableRowContentWidth: CGFloat? = nil,
             availableTrailingGutterWidth: CGFloat? = nil,
             expansionSeeds: ACPToolCallGroupExpansionSeeds = ACPToolCallGroupExpansionSeeds(),
-            renderRows: [ACPTranscriptRenderRow]? = nil
+            rowExpansionStore: ACPTranscriptRowExpansionStore = ACPTranscriptRowExpansionStore(),
+            renderRows: [ACPTranscriptRenderRow]? = nil,
+            nativeRowsEnabled: Bool = ACPTranscriptNativeRows.isEnabled,
+            showsActionsPermanently: Bool = Coordinator.systemShowsActionsPermanently(),
+            requestRespec: @escaping @MainActor () -> Void = {}
         ) -> [ACPTranscriptRowSpec] {
             let transcript = host.transcript
             var specs: [ACPTranscriptRowSpec] = []
@@ -516,7 +574,9 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             var forkDividerEmitted = false
             // Read once: each `@Published` read goes through the property
             // wrapper, and this loop visits every row in the window.
-            let snapshot = RowSnapshot(host: host)
+            let snapshot = RowSnapshot(
+                host: host, showsActionsPermanently: showsActionsPermanently, requestRespec: requestRespec
+            )
             let messages = snapshot.messages
             let isTurnActive = transcript.streamingState != .idle
             let latestUserIndex = transcript.latestUserMessageIndex ?? 0
@@ -533,11 +593,19 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                     specs.append(Self.forkDividerSpec(host: host, fork: fork))
                     forkDividerEmitted = true
                 }
+                // Decided before the spec so a row that stays live (active
+                // turn, running tool) never pays the native eligibility parse:
+                // it keeps streaming into its SwiftUI graph.
+                let isActiveTurnRow = isTurnActive && Self.firstIndex(of: renderRow) >= latestUserIndex
+                let parks = !isActiveTurnRow && !Self.hasLiveTool(in: renderRow, messages: messages, host: host)
+                let mayBeNative = nativeRowsEnabled && parks
                 let lastIndex: Int
                 switch renderRow {
                 case .message(let row):
                     guard let spec = Self.messageRowSpec(
                         host: host, snapshot: snapshot, row: row, inToolCallGroup: false,
+                        rowExpansionStore: rowExpansionStore,
+                        mayBeNative: mayBeNative,
                         availableRowContentWidth: availableRowContentWidth,
                         availableTrailingGutterWidth: availableTrailingGutterWidth
                     ) else { continue }
@@ -546,6 +614,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 case .toolCallGroupMember(let row, _):
                     guard let spec = Self.messageRowSpec(
                         host: host, snapshot: snapshot, row: row, inToolCallGroup: true,
+                        rowExpansionStore: rowExpansionStore,
+                        mayBeNative: mayBeNative,
                         availableRowContentWidth: availableRowContentWidth,
                         availableTrailingGutterWidth: availableTrailingGutterWidth
                     ) else { continue }
@@ -553,7 +623,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                     lastIndex = row.index
                 case .toolCallGroup(let group), .toolCallGroupHeader(let group):
                     specs.append(Self.toolCallGroupHeaderSpec(
-                        host: host, messages: messages, group: group, expansionSeeds: expansionSeeds
+                        host: host, messages: messages, group: group, expansionSeeds: expansionSeeds,
+                        mayBeNative: mayBeNative
                     ))
                     if case .toolCallGroup = renderRow {
                         // A collapsed bundle stands in for every member, so
@@ -568,10 +639,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                         lastIndex = .min
                     }
                 }
-                let isActiveTurnRow = isTurnActive && Self.firstIndex(of: renderRow) >= latestUserIndex
-                if isActiveTurnRow || Self.hasLiveTool(in: renderRow, messages: messages, host: host) {
-                    specs[specs.count - 1].parksWhenReleased = false
-                }
+                if !parks { specs[specs.count - 1].parksWhenReleased = false }
                 // A parked graph would keep the visual's web page and its process alive.
                 if case .message(let row) = renderRow,
                    messages.indices.contains(row.index),
@@ -606,7 +674,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             case .toolCallGroup(let group), .toolCallGroupHeader(let group): group.members.map(\.index)
             }
             return indices.contains { index in
-                guard case .toolCall(let call) = messages[index] else { return false }
+                // A memoized fold can name rows past a shrunken transcript.
+                guard messages.indices.contains(index), case .toolCall(let call) = messages[index] else { return false }
                 return call.status == "pending" || call.status == "in_progress" || call.terminalIds.contains { id in
                     guard let terminal = host.session.terminalHost.terminal(id: id) else { return false }
                     return !terminal.released && terminal.exitStatus == nil
@@ -620,9 +689,14 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             let messages: [ACPMessage]
             let liveNarrationIndex: Int?
             let canFork: (Int) -> Bool
+            /// VoiceOver or Full Keyboard Access: message actions stay visible.
+            let showsActionsPermanently: Bool
+            let requestRespec: @MainActor () -> Void
 
             @MainActor
-            init(host: ACPTranscriptScroller) {
+            init(host: ACPTranscriptScroller, showsActionsPermanently: Bool, requestRespec: @escaping @MainActor () -> Void) {
+                self.showsActionsPermanently = showsActionsPermanently
+                self.requestRespec = requestRespec
                 let transcript = host.transcript
                 messages = transcript.messages
                 liveNarrationIndex = ACPNarrationLiveness.liveIndex(
@@ -645,11 +719,22 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             snapshot: RowSnapshot,
             row: ACPTranscriptVisibleRow,
             inToolCallGroup: Bool,
+            rowExpansionStore: ACPTranscriptRowExpansionStore,
+            mayBeNative: Bool,
             availableRowContentWidth: CGFloat,
             availableTrailingGutterWidth: CGFloat
         ) -> ACPTranscriptRowSpec? {
             guard snapshot.messages.indices.contains(row.index) else { return nil }
             let message = snapshot.messages[row.index]
+            let expansion = Self.rowExpansion(of: message, stableId: row.stableId, store: rowExpansionStore)
+            // `mayBeNative` is false for any row that stays live.
+            let nativeContent = mayBeNative ? ACPTranscriptNativeRows.content(
+                for: message,
+                isLive: snapshot.liveNarrationIndex == row.index,
+                isCommentary: ACPTranscriptRowContent.presentationPhase(of: message) == .commentary,
+                isExpanded: expansion?.isExpanded ?? false,
+                createdAt: host.transcript.createdAt(forStableId: row.stableId)
+            ) : nil
             let rowToken = token(
                 MessageRowTokenInputs(
                     key: Self.messageRowKey(
@@ -658,11 +743,14 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                         availableTrailingGutterWidth: availableTrailingGutterWidth
                     ),
                     inToolCallGroup: inToolCallGroup,
-                    canCancelSubagent: host.onCancelSubagent != nil
+                    canCancelSubagent: host.onCancelSubagent != nil,
+                    isExpanded: expansion?.isExpanded ?? false,
+                    showsActionsPermanently: snapshot.showsActionsPermanently && Self.hasActionsMenu(message),
+                    isNative: nativeContent != nil
                 ),
                 host: host
             )
-            return ACPTranscriptRowSpec(
+            var spec = ACPTranscriptRowSpec(
                 id: row.stableId,
                 equalityToken: rowToken,
                 build: {
@@ -672,7 +760,9 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                             row: row,
                             message: message,
                             availableRowContentWidth: availableRowContentWidth,
-                            availableTrailingGutterWidth: availableTrailingGutterWidth
+                            availableTrailingGutterWidth: availableTrailingGutterWidth,
+                            isExpanded: expansion?.isExpanded ?? false,
+                            onExpandedChange: expansion?.setExpanded
                         )
                         if inToolCallGroup {
                             ACPToolCallGroupMemberRow { card }
@@ -682,6 +772,110 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                     }
                 }
             )
+            if let content = nativeContent {
+                spec.native = ACPTranscriptNativeRows.row(
+                    content, contentMaxWidth: host.contentMaxWidth, inToolCallGroup: inToolCallGroup,
+                    theme: host.theme, typography: host.typography,
+                    actions: nativeActions(
+                        host: host, snapshot: snapshot, row: row, message: message,
+                        toggleExpanded: expansion?.setExpanded
+                    ),
+                    source: Self.followedText(of: message)
+                )
+            }
+            return spec
+        }
+
+        /// A tool call's or thought's expanded flag and its setter; nil for
+        /// rows that do not expand.
+        private static func rowExpansion(
+            of message: ACPMessage, stableId: String, store: ACPTranscriptRowExpansionStore
+        ) -> (isExpanded: Bool, setExpanded: (Bool) -> Void)? {
+            switch message {
+            case .toolCall, .thought:
+                (store.expanded.contains(stableId), { store.setExpanded($0, stableID: stableId) })
+            default:
+                nil
+            }
+        }
+
+        private func currentShowsActionsPermanently() -> Bool {
+            lastShowsActionsPermanently = Self.systemShowsActionsPermanently()
+            return lastShowsActionsPermanently
+        }
+
+        isolated deinit {
+            if let appActivationObserver { NotificationCenter.default.removeObserver(appActivationObserver) }
+        }
+
+        static func systemShowsActionsPermanently() -> Bool {
+            NSWorkspace.shared.isVoiceOverEnabled || NSApp.isFullKeyboardAccessEnabled
+        }
+
+        /// The same route as `openTranscriptURLAction`, with the system
+        /// opener as the fallback the SwiftUI `.systemAction` provides.
+        private static func openLink(host: ACPTranscriptScroller, _ url: URL) {
+            if !host.onOpenTranscriptLink(url) { NSWorkspace.shared.open(url) }
+        }
+
+        /// Native-row actions mirroring what `ACPTranscriptRowContent` hands
+        /// `ACPMessageGutter`. Only user and agent rows have a menu.
+        private static func nativeActions(
+            host: ACPTranscriptScroller,
+            snapshot: RowSnapshot,
+            row: ACPTranscriptVisibleRow,
+            message: ACPMessage,
+            toggleExpanded: ((Bool) -> Void)?
+        ) -> ACPTranscriptNativeRows.Actions {
+            var menu: ACPMessageActionsMenu.Input?
+            let kind: ACPForkMessageBoundary.Kind?
+            let markdown: (() -> String)?
+            var checkpointID: CheckpointID?
+            switch message {
+            case .user(_, _, let text, _, _, _):
+                kind = .user
+                markdown = { text }
+                checkpointID = ACPTranscriptRowContent.checkpointID(in: message)
+            case .agent(_, _, let buffer):
+                kind = .agent
+                markdown = { buffer.value }
+            default:
+                kind = nil
+                markdown = nil
+            }
+            if let kind, let markdown {
+                let forkTargets = host.forkTargets
+                let boundary = ACPMessageForkMenuPolicy.showsForkAction(
+                    messageKind: message.kind,
+                    isEligible: snapshot.canFork(row.index),
+                    targetCount: forkTargets.count
+                ) ? ACPForkMessageBoundary(stableID: row.stableId, kind: kind) : nil
+                menu = .init(
+                    markdown: markdown,
+                    createdAt: host.transcript.createdAt(forStableId: row.stableId),
+                    checkpointID: checkpointID,
+                    forkBoundary: boundary,
+                    forkTargets: forkTargets,
+                    onQuote: host.onQuote,
+                    onFork: host.onFork,
+                    onRestoreCheckpoint: host.onRestoreCheckpoint,
+                    messageMenuItems: host.messageMenuItems
+                )
+            }
+            return .init(
+                menu: menu,
+                toggleExpanded: toggleExpanded,
+                openURL: { url in openLink(host: host, url) },
+                showsActionsPermanently: snapshot.showsActionsPermanently,
+                requestRespec: snapshot.requestRespec
+            )
+        }
+
+        private static func followedText(of message: ACPMessage) -> StreamingText? {
+            switch message {
+            case .agent(_, _, let buffer), .thought(_, _, let buffer): buffer
+            default: nil
+            }
         }
 
         private struct MessageRowTokenInputs: Equatable {
@@ -695,6 +889,23 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             /// its mounted row — and its hidden Cancel — until some
             /// unrelated field of that message happened to change.
             let canCancelSubagent: Bool
+            /// A tool call or thought the user expanded: a toggle swaps
+            /// between the native row and the expanded SwiftUI card.
+            let isExpanded: Bool
+            /// Assistive tech keeps the actions button visible on rows that
+            /// have a menu; a change must reconfigure mounted rows.
+            let showsActionsPermanently: Bool
+            /// Which renderer the row uses. A row that stops being live (its
+            /// turn ended) can switch to native with every other input equal;
+            /// without this the mounted SwiftUI view would stay until remount.
+            let isNative: Bool
+        }
+
+        private static func hasActionsMenu(_ message: ACPMessage) -> Bool {
+            switch message {
+            case .user, .agent: true
+            default: false
+            }
         }
 
         private static func readyFork(host: ACPTranscriptScroller) -> ACPSessionForkRecord? {
@@ -810,7 +1021,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             host: ACPTranscriptScroller,
             messages: [ACPMessage],
             group: ACPTranscriptToolCallGroup,
-            expansionSeeds: ACPToolCallGroupExpansionSeeds
+            expansionSeeds: ACPToolCallGroupExpansionSeeds,
+            mayBeNative: Bool
         ) -> ACPTranscriptRowSpec {
             let toolCalls: [ACPMessage.ToolCall] = group.members.compactMap { row in
                 guard messages.indices.contains(row.index),
@@ -837,14 +1049,16 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             let hiddenMemberCount = expanded
                 ? max(0, memberStableIds.count - (expansionSeeds.memberLimit(group) ?? memberStableIds.count))
                 : 0
-            return ACPTranscriptRowSpec(
+            let isNativeHeader = mayBeNative && !group.isLive && hiddenMemberCount == 0
+            var spec = ACPTranscriptRowSpec(
                 id: group.id,
                 equalityToken: token(
                     ToolCallGroupTokenInputs(
                         summary: summary,
                         expanded: expanded,
                         hiddenMemberCount: hiddenMemberCount,
-                        memberStableIds: memberStableIds
+                        memberStableIds: memberStableIds,
+                        isNative: isNativeHeader
                     ),
                     host: host
                 ),
@@ -859,6 +1073,21 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                     }
                 }
             )
+            // The native header has no "Show N earlier" button.
+            if isNativeHeader {
+                spec.native = ACPTranscriptNativeRows.row(
+                    .toolGroupHeader(label: summary.label, iconSystemName: summary.iconSystemName, expanded: expanded),
+                    contentMaxWidth: host.contentMaxWidth, inToolCallGroup: false,
+                    theme: host.theme, typography: host.typography,
+                    actions: .init(
+                        menu: nil,
+                        toggleExpanded: { expansionSeeds.setExpanded($0, members: memberStableIds) },
+                        openURL: { url in openLink(host: host, url) },
+                        showsActionsPermanently: false
+                    )
+                )
+            }
+            return spec
         }
 
         private struct ToolCallGroupTokenInputs: Equatable {
@@ -868,6 +1097,9 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             // Thinking can extend a group without changing its tool count.
             // Refresh the toggle closure so expansion includes those members.
             let memberStableIds: [String]
+            /// Which renderer the header uses, so a group that stops being
+            /// live swaps its mounted SwiftUI header for the native one.
+            let isNative: Bool
         }
 
         static func messageRow(
@@ -875,7 +1107,9 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             row: ACPTranscriptVisibleRow,
             message: ACPMessage,
             availableRowContentWidth: CGFloat? = nil,
-            availableTrailingGutterWidth: CGFloat? = nil
+            availableTrailingGutterWidth: CGFloat? = nil,
+            isExpanded: Bool = false,
+            onExpandedChange: ((Bool) -> Void)? = nil
         ) -> some View {
             ACPTranscriptRowContent(
                 stableId: row.stableId,
@@ -901,7 +1135,9 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 messageMenuItems: host.messageMenuItems,
                 onCancelSubagent: host.onCancelSubagent,
                 delegatedLabel: delegatedLabel(host: host, message: message),
-                visualAidActions: host.visualAidActions
+                visualAidActions: host.visualAidActions,
+                isExpanded: isExpanded,
+                onExpandedChange: onExpandedChange
             )
             // Column framing (max width / horizontal padding / centering)
             // is applied uniformly to every row by `wrapRow`, not here —
@@ -1906,6 +2142,10 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             for id in reconciler.mountedRowIdsForTesting {
                 reconciler.remeasureRow(id: id)
             }
+        }
+
+        func mountedRowViewForTesting(id: String) -> (any ACPTranscriptRowView)? {
+            pool.mountedView(id: id)
         }
 
         var mountedRowCountForTesting: Int {

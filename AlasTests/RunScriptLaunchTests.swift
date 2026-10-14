@@ -1,6 +1,8 @@
 import Foundation
+import Synchronization
 import Testing
 import UserNotifications
+@_spi(Testing) import AlasCore
 @testable import Alas
 
 struct RunScriptLaunchTests {
@@ -908,7 +910,7 @@ struct RunScriptLaunchTests {
 
     @MainActor
     @Test func transientMissingPidDoesNotCancelRunMonitor() async throws {
-        var pidChecks = 0
+        let pidChecks = Mutex(0)
         let fixture = try makeAppStateFixture(
             waiter: { _ in
                 try await Task.sleep(for: .seconds(5))
@@ -916,8 +918,10 @@ struct RunScriptLaunchTests {
             },
             terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
                 AppState.OpenedTerminalSession(id: "session", foregroundPid: {
-                    pidChecks += 1
-                    return pidChecks == 1 ? nil : 123
+                    pidChecks.withLock { checks in
+                        checks += 1
+                        return checks == 1 ? nil : 123
+                    }
                 })
             },
             localMonitorGrace: Self.localMonitorGrace

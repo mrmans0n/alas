@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+@_spi(Testing) import AlasCore
 @testable import Alas
 
 /// The plain worktree-delete path (CLI and, by extension, the sidebar's
@@ -62,6 +63,31 @@ struct WorkspaceOwnedWorktreeDeletionGuardTests {
         }
 
         #expect(fixture.state.workspacesManager.checkout(id: checkoutID)?.archivedAt != nil)
+    }
+
+    /// Members of a checkout being unarchived count as owned until the
+    /// caller's snapshot catches up, and that holds until the last of two
+    /// overlapping unarchives is done.
+    @Test func checkoutStaysInFlightUntilTheLastOverlappingUnarchiveFinishes() async throws {
+        let fixture = try await Fixture.make(suffix: "overlapping-unarchive", checkoutArchived: true)
+        defer { fixture.removeFiles() }
+        let checkoutID = try #require(fixture.checkoutID)
+        let core = fixture.state.core
+        let (entered, enter) = AsyncStream<Void>.makeStream()
+        let (released, release) = AsyncStream<Void>.makeStream()
+        let pending = Task { @MainActor in
+            try await core.unarchiveWorkspaceCheckout(id: checkoutID) {
+                enter.yield()
+                for await _ in released { break }
+            }
+        }
+        for await _ in entered { break }
+        _ = try await core.unarchiveWorkspaceCheckout(id: checkoutID)
+
+        #expect(core.isUnarchivingWorkspaceCheckout(checkoutID))
+        release.yield()
+        _ = try await pending.value
+        #expect(!core.isUnarchivingWorkspaceCheckout(checkoutID))
     }
 
     @Test func deleteAndForgetUnarchivesAnArchivedCheckoutInsteadOfRefusingIt() async throws {
