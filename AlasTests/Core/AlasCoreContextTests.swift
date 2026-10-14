@@ -337,6 +337,33 @@ struct AlasCoreContextTests {
         #expect(context.runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status == .finished(.stopped))
     }
 
+    /// A caller cancelled before its run even started still stops that run.
+    @Test(.timeLimit(.minutes(1)))
+    func runScriptCancelledBeforeStartingStopsItsRun() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-core-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try "sleep 300\n".write(to: root.appendingPathComponent("long.sh"), atomically: true, encoding: .utf8)
+        let project = ProjectConfig(id: "p", name: "p", path: root.path, color: "blue", addedAt: Date())
+        let worktree = Worktree(
+            id: root.path, projectId: "p", name: "main", branch: "main", path: root,
+            status: .clean, lastActivity: Date()
+        )
+        let script = RunScript(
+            scope: .repo, fileName: "long.sh", fileURL: root.appendingPathComponent("long.sh"),
+            displayName: "Long", onExit: .close, cwd: nil, isExecutable: false
+        )
+        let context = AlasCoreContext(projects: ProjectsManager(persistedProjects: [project]), runHistoryStore: nil)
+
+        let run = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await context.runScript(script, in: worktree)
+        }
+
+        await #expect(throws: CancellationError.self) { _ = try await run.value }
+        #expect(context.runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status == .finished(.stopped))
+    }
+
     /// A second run of a script that is still running would displace the
     /// first one's record and drop its history, so it is refused.
     @Test func refusesToStartAScriptThatIsAlreadyRunning() async throws {
