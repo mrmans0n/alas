@@ -269,6 +269,9 @@ public final class ACPSessionRunner {
     /// invalidations (steer, userCancel) so a slow `session/cancel`
     /// can't let a stale completion clobber the successor task.
     private var activePromptID: Int? { willSet { session.nextPromptActivity.send() } }
+    /// Goal controls in flight. Like an active prompt, each one keeps the
+    /// streaming boundary open when load-replay suppression finishes.
+    private var activeGoalControls = 0
     private var cancelledPromptIDs: Set<Int> = []
     /// Retains the most recently dispatched prompt RPC so steering can wait
     /// for its response after sending the cancellation notification.
@@ -1813,7 +1816,7 @@ public final class ACPSessionRunner {
         session.endSuppressedReplaySideEffects()
         // Keep late replay behind the boundary unless this runner owns a
         // new prompt. Live steering bindings resolve per chunk independently.
-        if activePromptID == nil {
+        if activePromptID == nil, activeGoalControls == 0 {
             session.allowsStreamingBoundaryCrossing = false
         }
     }
@@ -2731,15 +2734,32 @@ public final class ACPSessionRunner {
 }
 
 extension ACPSessionRunner {
-    /// Opens the streaming boundary for a goal control, whose agent answers
-    /// with fresh output. Updates already queued are applied first, as the
-    /// prompt path does, so a late replay frame is still judged under the
-    /// closed boundary. Returns the value before opening it.
-    func openStreamingBoundaryForGoalControl() -> Bool {
+    /// Sends a goal control. Its agent answers with fresh output, so like a
+    /// prompt it opens the streaming boundary a restored session keeps closed
+    /// against late replay; otherwise repeating an earlier objective would
+    /// read as replay. Updates already queued are applied first, as the prompt
+    /// path does. A rejected control produces no output, so it restores the
+    /// boundary unless something else has set it in the meantime.
+    func controlGoal(capability: ACPGoalCapability, action: ACPGoalAction, objective: String?) async throws {
         flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
-        let before = session.allowsStreamingBoundaryCrossing
+        let boundaryCrossingBefore = session.allowsStreamingBoundaryCrossing
         session.allowsStreamingBoundaryCrossing = true
-        return before
+        let boundaryGeneration = session.streamingBoundaryGeneration
+        activeGoalControls += 1
+        defer { activeGoalControls -= 1 }
+        do {
+            try await connection.controlGoal(
+                sessionId: session.remoteSessionId ?? session.id,
+                capability: capability,
+                action: action,
+                objective: objective
+            )
+        } catch {
+            if session.streamingBoundaryGeneration == boundaryGeneration {
+                session.allowsStreamingBoundaryCrossing = boundaryCrossingBefore
+            }
+            throw error
+        }
     }
 
     /// Cancels one native subagent. `session/cancel` addressed to the CHILD
