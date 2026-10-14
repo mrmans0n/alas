@@ -10434,6 +10434,10 @@ final class AppState {
         /// relative URL), and `NSWorkspace` rejects that form with paramErr
         /// (-50) instead of opening the file.
         case systemOpen(URL)
+        /// A local path (absolute, relative, or `file:`) that names nothing on
+        /// disk. Claimed so the caller can say so: the system's default action
+        /// rejects the schemeless form with a bare paramErr (-50) dialog.
+        case missing(path: String)
         /// Not a local path we can resolve; let the default URL action run.
         case unhandled
         /// A remote worktree's absolute link outside it: claimed, nothing opens.
@@ -10477,9 +10481,26 @@ final class AppState {
         return .remoteEditor(relativePath: String(target.dropFirst(root.count + 1)), line: line, column: column)
     }
 
-    /// Opens or claims a remote absolute link; nil lets local routing run.
-    private func routeRemoteAbsoluteLink(_ raw: String, worktree: Worktree) -> TranscriptLinkRoute? {
-        switch Self.absoluteLinkRoute(raw, worktreeRoot: worktree.path.path) {
+    /// How a transcript link from a session rooted at `worktreeRoot` routes
+    /// on a remote host. A relative path names a file on that host, so it
+    /// joins the virtual root and routes lexically, unprobed. That includes
+    /// `Package.swift:2`, which Foundation parses as having a scheme, unless
+    /// the system has an app for that scheme (`tel:123`). A `mailto:` link
+    /// is no path and stays `.local`.
+    nonisolated static func transcriptRemoteLinkRoute(
+        _ rawPath: String,
+        isLocalPathForm: Bool,
+        schemeHasSystemHandler: Bool,
+        worktreeRoot: String
+    ) -> AbsoluteLinkRoute {
+        let isRelativePath = !rawPath.hasPrefix("/") && (isLocalPathForm
+            || (!schemeHasSystemHandler && parseLocalPathPosition(rawPath) != nil))
+        return absoluteLinkRoute(isRelativePath ? worktreeRoot + "/" + rawPath : rawPath, worktreeRoot: worktreeRoot)
+    }
+
+    /// Opens or claims a remote link; nil lets local routing run.
+    private func routeRemoteLink(_ route: AbsoluteLinkRoute, worktree: Worktree) -> TranscriptLinkRoute? {
+        switch route {
         case .local:
             return nil
         case .ignored:
@@ -10502,21 +10523,48 @@ final class AppState {
     /// a sibling worktree of the same repo — open there, switching the
     /// selected worktree. Anything else that exists on disk comes back as a
     /// `file:` URL for the system to open.
-    func transcriptLinkRoute(_ url: URL, worktreeId: String) -> TranscriptLinkRoute {
-        guard let worktree = worktree(withId: worktreeId) else { return .unhandled }
+    ///
+    /// `session` is the tab's worktree. A Workspace checkout's tab gets a
+    /// synthetic root worktree no project lists: its links still resolve
+    /// against that root and open in the member worktree that contains them.
+    func transcriptLinkRoute(_ url: URL, in session: Worktree) -> TranscriptLinkRoute {
+        let registered = worktree(withId: session.id)
 
         let rawPath: String
+        // Only file URLs and schemeless paths are unambiguously local. A
+        // `scheme:rest` destination may be `Package.swift:2` or `mailto:`, so
+        // the system keeps it when nothing on disk matches.
+        let isLocalPathForm: Bool
         if url.isFileURL {
+            // `file://server/share` names a network volume, not a local path.
+            guard url.host.map({ $0.isEmpty || $0.lowercased() == "localhost" }) ?? true else { return .unhandled }
             rawPath = url.path
+            isLocalPathForm = true
         } else if url.scheme == nil {
+            // `//host/path` names an authority, not a local path.
+            guard url.host == nil else { return .unhandled }
             rawPath = url.path.removingPercentEncoding ?? url.path
+            isLocalPathForm = true
         } else if !url.absoluteString.contains("://") {
             rawPath = url.absoluteString.removingPercentEncoding ?? url.absoluteString
+            isLocalPathForm = false
         } else {
             return .unhandled
         }
         guard !rawPath.isEmpty else { return .unhandled }
-        if let remote = routeRemoteAbsoluteLink(rawPath, worktree: worktree) { return remote }
+        let remoteRoute = Self.transcriptRemoteLinkRoute(
+            rawPath,
+            isLocalPathForm: isLocalPathForm,
+            schemeHasSystemHandler: !isLocalPathForm && NSWorkspace.shared.urlForApplication(toOpen: url) != nil,
+            worktreeRoot: session.path.path
+        )
+        if let registered {
+            if let remote = routeRemoteLink(remoteRoute, worktree: registered) { return remote }
+        } else if remoteRoute != .local {
+            // A remote checkout root has no editor of its own and nothing
+            // local to probe.
+            return .ignored
+        }
 
         var candidates = [rawPath]
         // Trailing-period fallback: transcript prose can include sentence
@@ -10526,32 +10574,32 @@ final class AppState {
         }
 
         for candidate in candidates {
-            switch transcriptRoute(forLocalPath: candidate, worktree: worktree) {
+            switch transcriptRoute(forLocalPath: candidate, session: session, opensInSession: registered != nil) {
             case .opened:
                 NSApp.activate(ignoringOtherApps: true)
                 return .opened
             case .systemOpen(let fileURL):
                 return .systemOpen(fileURL)
-            case .unhandled, .ignored:
+            case .unhandled, .ignored, .missing:
                 continue
             }
         }
 
-        return .unhandled
+        return isLocalPathForm ? .missing(path: rawPath) : .unhandled
     }
 
-    private func transcriptRoute(forLocalPath candidatePath: String, worktree: Worktree) -> TranscriptLinkRoute {
+    private func transcriptRoute(forLocalPath candidatePath: String, session: Worktree, opensInSession: Bool) -> TranscriptLinkRoute {
         guard let target = localFileOpenTarget(
             candidatePath,
-            worktree: worktree,
-            baseDirectory: worktree.path
+            worktree: session,
+            baseDirectory: session.path
         ) else { return .unhandled }
         guard !target.isDirectory else { return .systemOpen(target.url) }
 
-        if let relativePath = Self.containedRelativePath(for: target.url, in: worktree.path) {
+        if opensInSession, let relativePath = Self.containedRelativePath(for: target.url, in: session.path) {
             openFile(
                 relativePath: relativePath,
-                worktreeId: worktree.id,
+                worktreeId: session.id,
                 revealLine: target.revealLine,
                 revealCharacter: target.revealCharacter
             )
@@ -10577,7 +10625,9 @@ final class AppState {
     func routeTerminalOpenURL(rawURL: String, sessionId: String) -> Bool {
         guard let session = terminal.registry.session(for: sessionId),
               let worktree = worktree(withId: session.worktreeId) else { return false }
-        if routeRemoteAbsoluteLink(rawURL, worktree: worktree) != nil { return true }
+        if routeRemoteLink(Self.absoluteLinkRoute(rawURL, worktreeRoot: worktree.path.path), worktree: worktree) != nil {
+            return true
+        }
 
         let path: String
         if let parsed = URL(string: rawURL), parsed.isFileURL {

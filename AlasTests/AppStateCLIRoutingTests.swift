@@ -623,7 +623,7 @@ struct AppStateCLIRoutingTests {
 
         let route = state.transcriptLinkRoute(
             URL(string: "\(file.path):2")!,
-            worktreeId: worktree.id
+            in: worktree
         )
 
         #expect(route == .opened)
@@ -646,7 +646,7 @@ struct AppStateCLIRoutingTests {
 
         let route = state.transcriptLinkRoute(
             URL(string: "Package.swift:2")!,
-            worktreeId: worktree.id
+            in: worktree
         )
 
         #expect(route == .opened)
@@ -684,7 +684,7 @@ struct AppStateCLIRoutingTests {
 
         let route = state.transcriptLinkRoute(
             URL(string: "\(file.path):2")!,
-            worktreeId: worktree.id
+            in: worktree
         )
 
         #expect(route == .opened)
@@ -701,6 +701,34 @@ struct AppStateCLIRoutingTests {
         })
     }
 
+    /// A Workspace checkout's tab carries a synthetic root worktree that no
+    /// project lists. Its `path:line` links still open in the member worktree
+    /// that contains them instead of reaching the system raw (paramErr -50).
+    @Test func routeTranscriptOpenURLFromCheckoutRootOpensMemberFileAtLine() async throws {
+        let (state, _, member) = try await makeStateWithWorktree(name: "transcript-checkout")
+        defer { try? FileManager.default.removeItem(at: member.path) }
+        let file = member.path.appendingPathComponent("Fragment.kt")
+        try "first\nsecond\n".write(to: file, atomically: true, encoding: .utf8)
+        let checkoutRoot = Worktree(
+            id: "workspace-checkout:test",
+            projectId: "workspace-checkout",
+            name: "checkout",
+            branch: "main",
+            path: member.path.deletingLastPathComponent(),
+            status: .clean,
+            lastActivity: Date(),
+            createdAt: Date()
+        )
+
+        let route = state.transcriptLinkRoute(URL(string: "\(file.path):2")!, in: checkoutRoot)
+
+        #expect(route == .opened)
+        #expect(state.tabs.tabs(forWorktree: member.id).contains {
+            if case .editor(let s) = $0 { return s.relativePath == "Fragment.kt" && s.revealLine == 1 }
+            return false
+        })
+    }
+
     @Test func routeTranscriptOpenURLHandsOutsideFileToTheSystemAsAFileURL() async throws {
         let (state, _, worktree) = try await makeStateWithWorktree(name: "transcript-outside")
         defer { try? FileManager.default.removeItem(at: worktree.path) }
@@ -711,7 +739,7 @@ struct AppStateCLIRoutingTests {
         let file = externalDir.appendingPathComponent("notes.md")
         try "x\n".write(to: file, atomically: true, encoding: .utf8)
 
-        let route = state.transcriptLinkRoute(URL(string: file.path)!, worktreeId: worktree.id)
+        let route = state.transcriptLinkRoute(URL(string: file.path)!, in: worktree)
 
         #expect(route == .systemOpen(file.standardizedFileURL))
         #expect(state.tabs.tabs(forWorktree: worktree.id).allSatisfy {
@@ -720,16 +748,30 @@ struct AppStateCLIRoutingTests {
         })
     }
 
-    @Test func routeTranscriptOpenURLIsUnhandledForMissingAbsolutePath() async throws {
+    /// A missing local path is claimed instead of falling through to the
+    /// system, which rejects a schemeless path with a paramErr (-50) dialog.
+    /// `scheme:rest` and `//host/path` destinations stay with the system.
+    /// `{root}` stands for the session worktree's path; a nil path expects
+    /// `.unhandled`.
+    @Test(arguments: [
+        ("{root}/nope.kt:521", "{root}/nope.kt:521"),
+        ("file://{root}/nope.kt", "{root}/nope.kt"),
+        ("file://LOCALHOST{root}/nope.kt", "{root}/nope.kt"),
+        ("docs/nope.md", "docs/nope.md"),
+        ("mailto:a@b.c", nil),
+        ("//example.com/nope.md", nil),
+        ("file://server/share/nope.md", nil),
+    ] as [(String, String?)])
+    func routeTranscriptOpenURLClaimsMissingLocalPaths(raw: String, missingPath: String?) async throws {
         let (state, _, worktree) = try await makeStateWithWorktree(name: "transcript-missing")
         defer { try? FileManager.default.removeItem(at: worktree.path) }
+        let root = worktree.path.path
+        let url = try #require(URL(string: raw.replacingOccurrences(of: "{root}", with: root)))
+        let expected: AppState.TranscriptLinkRoute = missingPath.map {
+            .missing(path: $0.replacingOccurrences(of: "{root}", with: root))
+        } ?? .unhandled
 
-        let route = state.transcriptLinkRoute(
-            URL(string: worktree.path.appendingPathComponent("nope.md").path)!,
-            worktreeId: worktree.id
-        )
-
-        #expect(route == .unhandled)
+        #expect(state.transcriptLinkRoute(url, in: worktree) == expected)
     }
 
     /// A remote session's absolute links open in the remote editor or are
@@ -752,6 +794,58 @@ struct AppStateCLIRoutingTests {
     ])
     func absoluteLinkRoutesOnTheWorktreesOwnHost(root: String, raw: String, expected: AppState.AbsoluteLinkRoute) {
         #expect(AppState.absoluteLinkRoute(raw, worktreeRoot: root) == expected)
+    }
+
+    /// Relative transcript paths, including `Package.swift:2` that Foundation
+    /// parses with a scheme, join a remote session's root; `scheme:` links an
+    /// app handles (`tel:123`) or that aren't `path:line`, and every link in a
+    /// local session, keep the local routing.
+    @Test(arguments: [
+        ("Sources/a.swift:3", true, false, AppState.AbsoluteLinkRoute.remoteEditor(relativePath: "Sources/a.swift", line: 3, column: nil)),
+        ("Package.swift:2", false, false, .remoteEditor(relativePath: "Package.swift", line: 2, column: nil)),
+        ("tel:123", false, true, .local),
+        ("mailto:a@b.c", false, true, .local),
+        ("../escape.swift", true, false, .ignored),
+        ("/srv/repo/a.swift", true, false, .remoteEditor(relativePath: "a.swift", line: nil, column: nil)),
+    ])
+    func transcriptRemoteLinkRouteJoinsRelativePaths(
+        raw: String,
+        isLocalPathForm: Bool,
+        schemeHasSystemHandler: Bool,
+        expected: AppState.AbsoluteLinkRoute
+    ) {
+        func route(root: String) -> AppState.AbsoluteLinkRoute {
+            AppState.transcriptRemoteLinkRoute(
+                raw,
+                isLocalPathForm: isLocalPathForm,
+                schemeHasSystemHandler: schemeHasSystemHandler,
+                worktreeRoot: root
+            )
+        }
+        #expect(route(root: "/.alas-remote/mini/srv/repo") == expected)
+        #expect(route(root: "/srv/repo") == .local)
+    }
+
+    /// A remote Workspace checkout root has no editor of its own: its path
+    /// links are claimed, while `mailto:` still reaches the system.
+    @Test(arguments: [
+        ("/srv/repo/a.swift:2", AppState.TranscriptLinkRoute.ignored),
+        ("mailto:a@b.c", .unhandled),
+    ])
+    func routeTranscriptOpenURLFromRemoteCheckoutRoot(raw: String, expected: AppState.TranscriptLinkRoute) throws {
+        let state = AppState(store: MemoryStore())
+        let checkoutRoot = Worktree(
+            id: "workspace-checkout:remote",
+            projectId: "workspace-checkout",
+            name: "checkout",
+            branch: "main",
+            path: URL(fileURLWithPath: "/.alas-remote/mini/srv/repo"),
+            status: .clean,
+            lastActivity: Date(),
+            createdAt: Date()
+        )
+
+        #expect(state.transcriptLinkRoute(try #require(URL(string: raw)), in: checkoutRoot) == expected)
     }
 
     @Test func routeTerminalOpenURLReturnsFalseForPathOutsideWorkspace() async throws {
