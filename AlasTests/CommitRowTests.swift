@@ -61,10 +61,11 @@ struct CommitRowTests {
         #expect(commit.id == "aabbccdd11223344556677889900aabbccdd1122")
     }
 
-    @Test func contextMenuShowsReviewCommitImmediatelyAfterEditCommit() {
-        #expect(CommitRow.leadingContextMenuActions(canEdit: true, canReview: true) == [.edit, .review])
-        #expect(CommitRow.leadingContextMenuActions(canEdit: false, canReview: true) == [.review])
-        #expect(CommitRow.leadingContextMenuActions(canEdit: true, canReview: false) == [.edit])
+    @Test func contextMenuOrdersEditThenReviewThenReviewRange() {
+        #expect(CommitRow.leadingContextMenuActions(canEdit: true, canReview: true, canReviewRange: true)
+            == [.edit, .review, .reviewRange])
+        #expect(CommitRow.leadingContextMenuActions(canEdit: false, canReview: true, canReviewRange: false) == [.review])
+        #expect(CommitRow.leadingContextMenuActions(canEdit: true, canReview: false, canReviewRange: false) == [.edit])
     }
 
     @Test func contextMenuPlacesGGIDAfterCommitMessage() {

@@ -8,6 +8,7 @@ struct CommitRow: View {
     enum ContextMenuAction: Hashable {
         case edit
         case review
+        case reviewRange
     }
 
     enum CopyContextMenuAction: Hashable {
@@ -26,6 +27,9 @@ struct CommitRow: View {
     var onOpenRemote: (() -> Void)? = nil
     var onEdit: (() -> Void)? = nil
     var onReview: (() -> Void)? = nil
+    /// Opens the review scope palette anchored at this commit. Only offered on
+    /// commits the palette lists, i.e. commits ahead of the base.
+    var onReviewRange: (() -> Void)? = nil
     var onCherryPick: (() -> Void)? = nil
     var onRevert: (() -> Void)? = nil
     var ggMenu: GGCommitMenuModel? = nil
@@ -69,15 +73,21 @@ struct CommitRow: View {
         }
         .copyFeedbackOverlay(message: copyFeedback.message)
         .contextMenu {
-            ForEach(Self.leadingContextMenuActions(canEdit: onEdit != nil, canReview: onReview != nil), id: \.self) { action in
+            ForEach(Self.leadingContextMenuActions(
+                canEdit: onEdit != nil,
+                canReview: onReview != nil,
+                canReviewRange: onReviewRange != nil
+            ), id: \.self) { action in
                 switch action {
                 case .edit:
                     Button("Edit Commit…") { onEdit?() }
                 case .review:
                     Button("Review Commit…") { onReview?() }
+                case .reviewRange:
+                    Button("Review Range From Here…") { onReviewRange?() }
                 }
             }
-            if onEdit != nil || onReview != nil {
+            if onEdit != nil || onReview != nil || onReviewRange != nil {
                 Divider()
             }
             ForEach(Self.copyContextMenuActions(ggID: ggID), id: \.self) { action in
@@ -148,13 +158,16 @@ struct CommitRow: View {
         }
     }
 
-    static func leadingContextMenuActions(canEdit: Bool, canReview: Bool) -> [ContextMenuAction] {
+    static func leadingContextMenuActions(canEdit: Bool, canReview: Bool, canReviewRange: Bool) -> [ContextMenuAction] {
         var actions: [ContextMenuAction] = []
         if canEdit {
             actions.append(.edit)
         }
         if canReview {
             actions.append(.review)
+        }
+        if canReviewRange {
+            actions.append(.reviewRange)
         }
         return actions
     }

@@ -79,6 +79,9 @@ final class ReviewTargetPaletteModel {
     /// view without fighting hover-driven selection (see RepoSelectorModel).
     private(set) var scrollToSelectionTick = 0
     private(set) var rangeAnchor: CommitInfo?
+    /// Commit SHA requested as the range anchor when the palette opens, resolved
+    /// against the palette's own commits once `loadTargets` lands.
+    private var pendingRangeAnchorSHA: String?
     private(set) var launchError: String?
 
     // Level 1 metrics, keyed by worktree id. nil = still loading/unavailable.
@@ -102,10 +105,15 @@ final class ReviewTargetPaletteModel {
         canGoBack = true
     }
 
-    func open(prefill worktree: Worktree) {
+    /// Opens on the worktree's targets. With `rangeAnchorSHA`, the matching
+    /// commit is anchored and selected once the targets load, so the next
+    /// commit pick completes a range. An anchor absent from the commits ahead
+    /// is dropped.
+    func open(prefill worktree: Worktree, rangeAnchorSHA: String? = nil) {
         reset()
         level = .targets(worktree)
         canGoBack = false
+        pendingRangeAnchorSHA = rangeAnchorSHA
     }
 
     func close() {
@@ -117,6 +125,7 @@ final class ReviewTargetPaletteModel {
         query = ""
         selectedIndex = 0
         rangeAnchor = nil
+        pendingRangeAnchorSHA = nil
         launchError = nil
         commits = []
         branches = []
@@ -298,6 +307,7 @@ final class ReviewTargetPaletteModel {
         query = ""
         selectedIndex = 0
         rangeAnchor = nil
+        pendingRangeAnchorSHA = nil
         targetsError = nil
         commits = []
         branches = []
@@ -362,7 +372,17 @@ final class ReviewTargetPaletteModel {
             }
             isLoadingTargets = false
             let rows = targetRows()
-            setSelectedIndex(0, selectable: rows.map(\.isSelectable))
+            let anchorSHA = pendingRangeAnchorSHA
+            pendingRangeAnchorSHA = nil
+            if let anchorSHA,
+               let anchor = commits.first(where: { $0.sha == anchorSHA }),
+               let anchorRow = rows.firstIndex(of: .commit(anchor)) {
+                rangeAnchor = anchor
+                selectedIndex = anchorRow
+                scrollToSelectionTick &+= 1
+            } else {
+                setSelectedIndex(0, selectable: rows.map(\.isSelectable))
+            }
         } catch {
             guard case .targets(let current) = level, current.id == worktree.id else { return }
             targetsError = "Could not load commits: \(error.localizedDescription)"
