@@ -307,8 +307,9 @@ struct ACPTranscriptMarkdownLayout {
             // `[label](destination)` or an angle-bracket autolink, whose label is its URL.
             let pattern = #"\[((?:[^\[\]]|\[[^\]]*\])*)\]\(\s*<?([^)\s>]+)>?(?:\s+"[^"]*")?\s*\)|<([A-Za-z][A-Za-z0-9+.-]*:[^<>\s]+)>"#
             guard let regex = try? NSRegularExpression(pattern: pattern) else { return }
-            // Link syntax inside a code span renders as code, and an escaped bracket renders as text.
-            let withoutCode = source
+            // Scan what the renderer parses, where bare URLs are already `<url>` autolinks. Link syntax
+            // inside a code span renders as code, and an escaped bracket renders as text.
+            let withoutCode = ACPBareURLLinkifier.markdownAutolinkingBareURLs(source, preserveFencedCodeBlocks: false)
                 .replacingOccurrences(of: #"(`+)[\s\S]*?\1"#, with: " ", options: .regularExpression)
                 .replacingOccurrences(of: #"\\[!-/:-@\[-`{-~]"#, with: " ", options: .regularExpression)
             let nsSource = withoutCode as NSString
@@ -324,9 +325,7 @@ struct ACPTranscriptMarkdownLayout {
                 guard let url = (value as? URL) ?? (value as? String).flatMap(URL.init(string:)) else { return }
                 // The source links this range was rendered from, in order.
                 // Source links before the first one to this URL didn't render as links and are skipped.
-                // Candidates are consumed only when their lengths add up to the range, so a range
-                // with no source link of its own (a bare URL the renderer autolinked) leaves the
-                // explicit links that follow it for their own range.
+                // Candidates are consumed only when their lengths add up to the range.
                 let matches = { (candidate: (label: String, url: String, isAutolink: Bool)) in
                     URL(string: candidate.url)?.absoluteString == url.absoluteString || candidate.url == url.absoluteString
                 }
