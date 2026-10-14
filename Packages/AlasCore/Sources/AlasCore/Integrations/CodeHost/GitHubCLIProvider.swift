@@ -703,35 +703,49 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
 
     /// A workflow run that is queued, or has not created its jobs yet, has no
     /// check runs, so `gh pr checks` does not report it. Each such run becomes
-    /// a pending check. When the runs cannot be listed, one pending check
-    /// stands in for them, so a caller never reads the gap as "no checks".
+    /// a pending check. Runs are read page by page, up to
+    /// `workflowRunsPageLimit` pages. When a page cannot be read, or runs
+    /// remain past the last page read, one pending check stands in for the
+    /// unread runs, so a caller never reads the gap as "no checks".
     private func addingPendingWorkflowRuns(
         to checks: [ReviewCheck],
         remote: CodeHostRemote,
         headSHA: String,
         cwd: URL
     ) async throws -> [ReviewCheck] {
-        let result: ProcessResult
-        do {
-            result = try await runner.run(
-                "gh",
-                args: [
-                    "api",
-                    "--hostname", remote.host,
-                    "repos/\(remote.repositorySlug)/actions/runs?head_sha=\(headSHA)&per_page=50",
-                ],
-                cwd: cwd
-            )
-        } catch let error as CancellationError {
-            throw error
-        } catch {
-            return checks + [Self.workflowRunsUnavailableCheck]
+        var merged = checks
+        var runsRead = 0
+        for page in 1...Self.workflowRunsPageLimit {
+            let result: ProcessResult
+            do {
+                result = try await runner.run(
+                    "gh",
+                    args: [
+                        "api",
+                        "--hostname", remote.host,
+                        "repos/\(remote.repositorySlug)/actions/runs?head_sha=\(headSHA)"
+                            + "&per_page=\(Self.workflowRunsPageSize)&page=\(page)",
+                    ],
+                    cwd: cwd
+                )
+            } catch let error as CancellationError {
+                throw error
+            } catch {
+                return merged + [Self.workflowRunsUnavailableCheck]
+            }
+            guard result.exitCode == 0,
+                  let response = try? Self.decodeWorkflowRuns(result.stdout)
+            else { return merged + [Self.workflowRunsUnavailableCheck] }
+
+            merged = Self.mergingPendingWorkflowRuns(response.workflowRuns, into: merged)
+            runsRead += response.workflowRuns.count
+            if Self.isLastWorkflowRunsPage(response, runsRead: runsRead) { return merged }
         }
-        guard result.exitCode == 0,
-              let merged = try? Self.mergingPendingWorkflowRuns(result.stdout, into: checks)
-        else { return checks + [Self.workflowRunsUnavailableCheck] }
-        return merged
+        return merged + [Self.workflowRunsUnavailableCheck]
     }
+
+    private static let workflowRunsPageSize = 100
+    private static let workflowRunsPageLimit = 5
 
     static let workflowRunsUnavailableCheck = ReviewCheck(
         id: "workflow-runs-unavailable",
@@ -746,15 +760,31 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
     /// `GET /repos/{owner}/{repo}/actions/runs` response whose workflow has no
     /// pending check yet.
     public static func mergingPendingWorkflowRuns(_ json: String, into checks: [ReviewCheck]) throws -> [ReviewCheck] {
-        let response: WorkflowRunsResponse
+        mergingPendingWorkflowRuns(try decodeWorkflowRuns(json).workflowRuns, into: checks)
+    }
+
+    private static func decodeWorkflowRuns(_ json: String) throws -> WorkflowRunsResponse {
         do {
-            response = try JSONDecoder().decode(WorkflowRunsResponse.self, from: Data(json.utf8))
+            return try JSONDecoder().decode(WorkflowRunsResponse.self, from: Data(json.utf8))
         } catch {
             throw CodeHostProviderError.malformedOutput("Unable to parse gh api actions/runs output")
         }
+    }
 
+    /// A page shorter than the page size is the last one; so is any page that
+    /// brings the runs read up to the reported `total_count`.
+    private static func isLastWorkflowRunsPage(_ response: WorkflowRunsResponse, runsRead: Int) -> Bool {
+        if response.workflowRuns.count < workflowRunsPageSize { return true }
+        guard let totalCount = response.totalCount else { return false }
+        return runsRead >= totalCount
+    }
+
+    private static func mergingPendingWorkflowRuns(
+        _ runs: [WorkflowRunsResponse.WorkflowRun],
+        into checks: [ReviewCheck]
+    ) -> [ReviewCheck] {
         var merged = checks
-        for run in response.workflowRuns where run.status != "completed" {
+        for run in runs where run.status != "completed" {
             let workflow = run.name ?? "Workflow run \(run.id)"
             guard !merged.contains(where: { $0.bucket == .pending && $0.workflow == workflow }) else { continue }
             let detailURL = run.htmlURL.flatMap(URL.init(string:)).flatMap { $0.isHTTPOrHTTPS ? $0 : nil }
@@ -2689,6 +2719,7 @@ private struct GitHubQueueMetadataResponse: Decodable {
 }
 
 private struct WorkflowRunsResponse: Decodable {
+    let totalCount: Int?
     let workflowRuns: [WorkflowRun]
 
     struct WorkflowRun: Decodable {
@@ -2704,6 +2735,7 @@ private struct WorkflowRunsResponse: Decodable {
     }
 
     enum CodingKeys: String, CodingKey {
+        case totalCount = "total_count"
         case workflowRuns = "workflow_runs"
     }
 }

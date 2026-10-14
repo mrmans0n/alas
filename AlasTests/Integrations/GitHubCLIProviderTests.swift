@@ -1839,36 +1839,82 @@ struct GitHubCLIProviderTests {
 
     struct NoChecksReportedCase: Sendable, CustomTestStringConvertible {
         let testDescription: String
-        let runsResult: ProcessResult
+        let runsResults: [ProcessResult]
         let expectedNames: [String]
+        var expectedPages = 1
     }
 
     @Test(arguments: [
         NoChecksReportedCase(
             testDescription: "no workflow runs for the head",
-            runsResult: ProcessResult(exitCode: 0, stdout: GitHubCLIProviderTests.workflowRunsOutput(), stderr: ""),
+            runsResults: [ProcessResult(exitCode: 0, stdout: GitHubCLIProviderTests.workflowRunsOutput(), stderr: "")],
             expectedNames: []
         ),
         NoChecksReportedCase(
             testDescription: "a queued workflow run with no check runs yet",
-            runsResult: ProcessResult(
+            runsResults: [ProcessResult(
                 exitCode: 0,
                 stdout: GitHubCLIProviderTests.workflowRunsOutput(
                     #"{"id": 101, "name": "Build", "status": "queued", "html_url": "https://github.com/mrmans0n/alas/actions/runs/101"}"#
                 ),
                 stderr: ""
-            ),
+            )],
             expectedNames: ["Build (queued)"]
         ),
         NoChecksReportedCase(
             testDescription: "workflow runs request fails",
-            runsResult: ProcessResult(exitCode: 1, stdout: "", stderr: "HTTP 502"),
+            runsResults: [ProcessResult(exitCode: 1, stdout: "", stderr: "HTTP 502")],
             expectedNames: ["Workflow runs unavailable"]
         ),
         NoChecksReportedCase(
             testDescription: "workflow runs output is malformed",
-            runsResult: ProcessResult(exitCode: 0, stdout: "not json", stderr: ""),
+            runsResults: [ProcessResult(exitCode: 0, stdout: "not json", stderr: "")],
             expectedNames: ["Workflow runs unavailable"]
+        ),
+        NoChecksReportedCase(
+            testDescription: "unfinished run only on the second page",
+            runsResults: [
+                ProcessResult(
+                    exitCode: 0,
+                    stdout: GitHubCLIProviderTests.completedWorkflowRunsPage(page: 1, totalCount: 101),
+                    stderr: ""
+                ),
+                ProcessResult(
+                    exitCode: 0,
+                    stdout: GitHubCLIProviderTests.workflowRunsOutput(
+                        [#"{"id": 101, "name": "Build", "status": "in_progress", "html_url": null}"#],
+                        totalCount: 101
+                    ),
+                    stderr: ""
+                ),
+            ],
+            expectedNames: ["Build (running)"],
+            expectedPages: 2
+        ),
+        NoChecksReportedCase(
+            testDescription: "runs remain past the page limit",
+            runsResults: (1...5).map { page in
+                ProcessResult(
+                    exitCode: 0,
+                    stdout: GitHubCLIProviderTests.completedWorkflowRunsPage(page: page, totalCount: 600),
+                    stderr: ""
+                )
+            },
+            expectedNames: ["Workflow runs unavailable"],
+            expectedPages: 5
+        ),
+        NoChecksReportedCase(
+            testDescription: "second page fails",
+            runsResults: [
+                ProcessResult(
+                    exitCode: 0,
+                    stdout: GitHubCLIProviderTests.completedWorkflowRunsPage(page: 1, totalCount: 150),
+                    stderr: ""
+                ),
+                ProcessResult(exitCode: 1, stdout: "", stderr: "HTTP 502"),
+            ],
+            expectedNames: ["Workflow runs unavailable"],
+            expectedPages: 2
         ),
     ])
     func checksAddUnfinishedWorkflowRunsWhenNoChecksAreReported(_ testCase: NoChecksReportedCase) async throws {
@@ -1879,8 +1925,7 @@ struct GitHubCLIProviderTests {
                 stdout: "",
                 stderr: "no checks reported on the 'feature/github-provider' branch"
             ),
-            testCase.runsResult,
-        ])
+        ] + testCase.runsResults)
 
         let checks = try await GitHubCLIProvider(runner: runner).checks(
             remote: Self.remote,
@@ -1890,10 +1935,12 @@ struct GitHubCLIProviderTests {
 
         #expect(checks.map(\.name) == testCase.expectedNames)
         #expect(checks.allSatisfy { $0.bucket == .pending })
-        #expect(await runner.commands.map(\.args).last == [
-            "api", "--hostname", "github.com",
-            "repos/mrmans0n/alas/actions/runs?head_sha=head-sha-42&per_page=50",
-        ])
+        #expect(await runner.commands.dropFirst().map(\.args) == (1...testCase.expectedPages).map { page in
+            [
+                "api", "--hostname", "github.com",
+                "repos/mrmans0n/alas/actions/runs?head_sha=head-sha-42&per_page=100&page=\(page)",
+            ]
+        })
     }
 
     @Test func checksSkipWorkflowRunsWithoutAHeadSHA() async throws {
@@ -2722,8 +2769,19 @@ struct GitHubCLIProviderTests {
         workflowRunsOutput(runs)
     }
 
-    static func workflowRunsOutput(_ runs: [String]) -> String {
-        #"{"total_count": \#(runs.count), "workflow_runs": [\#(runs.joined(separator: ", "))]}"#
+    static func workflowRunsOutput(_ runs: [String], totalCount: Int? = nil) -> String {
+        #"{"total_count": \#(totalCount ?? runs.count), "workflow_runs": [\#(runs.joined(separator: ", "))]}"#
+    }
+
+    /// A full page of 100 completed runs, numbered so no two pages share an ID.
+    static func completedWorkflowRunsPage(page: Int, totalCount: Int) -> String {
+        let firstID = (page - 1) * 100
+        return workflowRunsOutput(
+            (firstID..<firstID + 100).map { id in
+                #"{"id": \#(id), "name": "Build", "status": "completed", "html_url": null}"#
+            },
+            totalCount: totalCount
+        )
     }
 
     static let checksOutput = """
