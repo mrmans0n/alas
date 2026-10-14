@@ -445,7 +445,13 @@ struct ACPTranscriptMarkdownLayout {
 /// re-breaks lines without highlighting again. Entries are immutable copies.
 @MainActor
 private enum HighlightCache {
-    private static let cache = NSCache<NSString, NSAttributedString>()
+    private static let cache: NSCache<NSString, NSAttributedString> = {
+        let cache = NSCache<NSString, NSAttributedString>()
+        // Long histories hold many unique blocks; keep the cache bounded.
+        cache.countLimit = 256
+        cache.totalCostLimit = 16 << 20
+        return cache
+    }()
 
     static func attributedString(
         code: String, language: String?, theme: Theme, typography: ACPChatTypography
