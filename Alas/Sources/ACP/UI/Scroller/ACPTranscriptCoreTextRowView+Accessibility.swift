@@ -69,23 +69,30 @@ extension ACPTranscriptCoreTextRowView {
         // AppKit asks on the main thread.
         let hit: (
             button: NSButton?, copy: ACPTranscriptCodeCopyAccessibilityElement?,
+            label: ACPTranscriptCodeLabelAccessibilityElement?,
             link: ACPTranscriptLinkAccessibilityElement?, element: ACPTranscriptTextAccessibilityElement?
         ) =
             MainActor.assumeIsolated {
-                guard let window else { return (nil, nil, nil, nil) }
+                guard let window else { return (nil, nil, nil, nil, nil) }
                 let local = convert(window.convertPoint(fromScreen: point), from: nil)
                 // A visible actions button answers for itself.
-                if let actionsButton, actionsButton.alphaValue > 0, actionsButton.frame.contains(local) { return (actionsButton, nil, nil, nil) }
+                if let actionsButton, actionsButton.alphaValue > 0, actionsButton.frame.contains(local) {
+                    return (actionsButton, nil, nil, nil, nil)
+                }
                 if let copy = codeCopyAccessibilityElements().first(where: { $0.accessibilityFrameInParentSpace().contains(local) }) {
-                    return (nil, copy, nil, nil)
+                    return (nil, copy, nil, nil, nil)
+                }
+                if let label = codeLabelAccessibilityElement(at: local) {
+                    return (nil, nil, label, nil, nil)
                 }
                 if let link = linkAccessibilityElement(at: local) {
-                    return (nil, nil, link, nil)
+                    return (nil, nil, nil, link, nil)
                 }
-                return (nil, nil, nil, textAccessibilityElements().first { $0.accessibilityFrameInParentSpace().contains(local) })
+                return (nil, nil, nil, nil, textAccessibilityElements().first { $0.accessibilityFrameInParentSpace().contains(local) })
             }
         if let button = hit.button { return button }
         if let copy = hit.copy { return copy }
+        if let label = hit.label { return label }
         if let link = hit.link { return link }
         let element = hit.element
         return element ?? super.accessibilityHitTest(point)
@@ -152,6 +159,11 @@ extension ACPTranscriptCoreTextRowView {
             element.setAccessibilityFrameInParentSpace(label.rect.offsetBy(dx: origin.x, dy: origin.y))
         }
         return codeLabelElements
+    }
+
+    /// The code-block language label drawn under `point` (row coordinates).
+    func codeLabelAccessibilityElement(at point: NSPoint) -> ACPTranscriptCodeLabelAccessibilityElement? {
+        codeLabelAccessibilityElements().first { $0.accessibilityFrameInParentSpace().contains(point) }
     }
 
     /// Code-block Copy buttons, framed where they are drawn.

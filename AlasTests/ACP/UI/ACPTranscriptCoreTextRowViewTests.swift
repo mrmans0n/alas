@@ -350,7 +350,8 @@ import Testing
         _ = view.measuredHeight(forWidth: 800)
         let labels = (view.accessibilityChildren() ?? []).compactMap { $0 as? ACPTranscriptCodeLabelAccessibilityElement }
         #expect(labels.map { $0.accessibilityLabel() } == ["SWIFT"])
-        #expect(!(labels.first?.accessibilityFrameInParentSpace().isEmpty ?? true))
+        let frame = try #require(labels.first?.accessibilityFrameInParentSpace())
+        #expect(view.codeLabelAccessibilityElement(at: NSPoint(x: frame.midX, y: frame.midY)) === labels.first)
     }
 
     @Test func codeBlockCopyCopiesOnlyTheCodeAndShowsCopiedUntilTheDelayEnds() async throws {
