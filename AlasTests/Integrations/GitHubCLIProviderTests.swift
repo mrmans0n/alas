@@ -788,10 +788,111 @@ struct GitHubCLIProviderTests {
         )
 
         let notBefore = try testCase.notBefore.map { try #require(ISO8601DateFormatter().date(from: $0)) }
+        let page = try GitHubCLIProvider.parseReviewersOnHeadPage(output)
         #expect(
-            try GitHubCLIProvider.parseReviewersOnHead(output, headSHA: "head-sha-42", notBefore: notBefore)
+            GitHubCLIProvider.reviewersOnHead(in: [page], headSHA: "head-sha-42", notBefore: notBefore)
                 == testCase.expected
         )
+    }
+
+    struct ReviewersOnHeadPagingCase: Sendable, CustomTestStringConvertible {
+        let testDescription: String
+        /// Review author logins, newest page first; each page reports an older page while one follows it.
+        let reviewPages: [[String]]
+        /// Whether the oldest scripted page still reports an older page.
+        var oldestHasPreviousPage = false
+        let expectedPageCount: Int
+        let expected: Set<String>
+    }
+
+    @Test(
+        "Reviewers on head page backwards through older reviews, up to the page cap",
+        arguments: [
+            ReviewersOnHeadPagingCase(
+                testDescription: "head review only on the older page counts",
+                reviewPages: [["stale"], ["codex"]],
+                expectedPageCount: 2,
+                expected: ["codex"]
+            ),
+            ReviewersOnHeadPagingCase(
+                testDescription: "page cap keeps reviews from the pages it read",
+                reviewPages: (0...GitHubCLIProvider.reviewersOnHeadMaxPages).map { ["reviewer-\($0)"] },
+                oldestHasPreviousPage: true,
+                expectedPageCount: GitHubCLIProvider.reviewersOnHeadMaxPages,
+                expected: Set((0..<GitHubCLIProvider.reviewersOnHeadMaxPages).map { "reviewer-\($0)" })
+            ),
+        ]
+    )
+    func reviewersOnHeadPaging(_ testCase: ReviewersOnHeadPagingCase) async throws {
+        let runner = FakeRunner(results: testCase.reviewPages.indices.map { index in
+            let isOldest = index == testCase.reviewPages.count - 1
+            return ProcessResult(
+                exitCode: 0,
+                stdout: Self.reviewersOnHeadPagedOutput(
+                    page: index,
+                    reviewers: testCase.reviewPages[index],
+                    hasPreviousPage: !isOldest || testCase.oldestHasPreviousPage
+                ),
+                stderr: ""
+            )
+        })
+
+        let reviewers = try await GitHubCLIProvider(runner: runner).reviewersOnHead(
+            remote: Self.remote,
+            request: Self.makeRequest(),
+            notBefore: nil,
+            cwd: Self.cwd
+        )
+
+        #expect(reviewers == testCase.expected)
+        let commands = await runner.commands
+        #expect(commands.count == testCase.expectedPageCount)
+        let baseArgs = [
+            "api", "graphql",
+            "--hostname", "github.com",
+            "-f", "query=\(GitHubCLIProvider.reviewersOnHeadQuery)",
+            "-F", "owner=mrmans0n",
+            "-F", "repo=alas",
+            "-F", "number=42",
+        ]
+        #expect(commands.first?.args == baseArgs)
+        for (index, command) in commands.enumerated().dropFirst() {
+            #expect(command.args == baseArgs + [
+                "-F", "withCommits=false",
+                "-F", "reviewsBefore=reviews-cursor-\(index - 1)",
+                "-F", "withComments=false",
+                "-F", "withReactions=false",
+            ])
+        }
+    }
+
+    /// Only the first page carries the head commit and the comment and
+    /// reaction connections, as the provider skips them afterwards.
+    private static func reviewersOnHeadPagedOutput(page: Int, reviewers: [String], hasPreviousPage: Bool) -> String {
+        let reviews = reviewers.map { login in
+            let oid = login == "stale" ? "old-sha" : "head-sha-42"
+            return #"{"author": {"login": "\#(login)"}, "commit": {"oid": "\#(oid)"}}"#
+        }
+        let pageInfo = #"{"hasPreviousPage": \#(hasPreviousPage), "startCursor": "reviews-cursor-\#(page)"}"#
+        let firstPageConnections = page == 0
+            ? """
+            "commits": { "nodes": [{ "commit": { "oid": "head-sha-42", "committedDate": "2026-10-13T10:00:00Z" } }] },
+            "comments": { "nodes": [], "pageInfo": { "hasPreviousPage": false, "startCursor": null } },
+            "reactions": { "nodes": [], "pageInfo": { "hasPreviousPage": false, "startCursor": null } },
+            """
+            : ""
+        return """
+        {
+          "data": {
+            "repository": {
+              "pullRequest": {
+                \(firstPageConnections)
+                "reviews": { "nodes": [\(reviews.joined(separator: ","))], "pageInfo": \(pageInfo) }
+              }
+            }
+          }
+        }
+        """
     }
 
     private static func reviewersOnHeadOutput(

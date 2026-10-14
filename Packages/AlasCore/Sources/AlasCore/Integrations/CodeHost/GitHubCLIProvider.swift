@@ -110,11 +110,19 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
     }
     """
 
+    /// Every connection is fetched on the first page. Later pages walk each
+    /// connection backwards with its `before` cursor and skip the commit and
+    /// any connection that has run out.
     public static let reviewersOnHeadQuery = """
-    query($owner: String!, $repo: String!, $number: Int!) {
+    query(
+      $owner: String!, $repo: String!, $number: Int!,
+      $reviewsBefore: String, $commentsBefore: String, $reactionsBefore: String,
+      $withCommits: Boolean = true, $withReviews: Boolean = true,
+      $withComments: Boolean = true, $withReactions: Boolean = true
+    ) {
       repository(owner: $owner, name: $repo) {
         pullRequest(number: $number) {
-          commits(last: 1) {
+          commits(last: 1) @include(if: $withCommits) {
             nodes {
               commit {
                 oid
@@ -122,7 +130,9 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
               }
             }
           }
-          reviews(last: 100, states: [APPROVED, CHANGES_REQUESTED, COMMENTED]) {
+          reviews(
+            last: 100, before: $reviewsBefore, states: [APPROVED, CHANGES_REQUESTED, COMMENTED]
+          ) @include(if: $withReviews) {
             nodes {
               author {
                 login
@@ -131,16 +141,24 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
                 oid
               }
             }
+            pageInfo {
+              hasPreviousPage
+              startCursor
+            }
           }
-          comments(last: 100) {
+          comments(last: 100, before: $commentsBefore) @include(if: $withComments) {
             nodes {
               author {
                 login
               }
               createdAt
             }
+            pageInfo {
+              hasPreviousPage
+              startCursor
+            }
           }
-          reactions(last: 100) {
+          reactions(last: 100, before: $reactionsBefore) @include(if: $withReactions) {
             nodes {
               content
               createdAt
@@ -148,11 +166,19 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
                 login
               }
             }
+            pageInfo {
+              hasPreviousPage
+              startCursor
+            }
           }
         }
       }
     }
     """
+
+    /// Pages fetched per connection before `reviewersOnHead` stops and
+    /// judges what it has; evidence it never reads only means "not reviewed".
+    public static let reviewersOnHeadMaxPages = 10
 
     public static let mergeQueueMetadataQuery = """
     query($owner: String!, $name: String!, $number: Int!) {
@@ -908,22 +934,30 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
         guard let headSHA = request.headSHA, !headSHA.isEmpty else {
             throw CodeHostProviderError.malformedOutput("GitHub reviewers on head require the pull request head SHA.")
         }
-        let result = try await runner.run(
-            "gh",
-            args: [
-                "api", "graphql",
-                "--hostname", remote.host,
-                "-f", "query=\(Self.reviewersOnHeadQuery)",
-                "-F", "owner=\(remote.owner)",
-                "-F", "repo=\(remote.repository)",
-                "-F", "number=\(request.number)",
-            ],
-            cwd: cwd
-        )
-        guard result.exitCode == 0 else {
-            throw CodeHostProviderError.commandFailed(command: "gh api graphql", stderr: result.stderr)
+        var pages: [ReviewersOnHeadPage] = []
+        var cursors = ReviewersOnHeadCursors()
+        for _ in 0..<Self.reviewersOnHeadMaxPages {
+            let result = try await runner.run(
+                "gh",
+                args: [
+                    "api", "graphql",
+                    "--hostname", remote.host,
+                    "-f", "query=\(Self.reviewersOnHeadQuery)",
+                    "-F", "owner=\(remote.owner)",
+                    "-F", "repo=\(remote.repository)",
+                    "-F", "number=\(request.number)",
+                ] + cursors.arguments,
+                cwd: cwd
+            )
+            guard result.exitCode == 0 else {
+                throw CodeHostProviderError.commandFailed(command: "gh api graphql", stderr: result.stderr)
+            }
+            let page = try Self.parseReviewersOnHeadPage(result.stdout)
+            pages.append(page)
+            cursors = try page.cursorsForPreviousPage()
+            if cursors.isExhausted { break }
         }
-        return try Self.parseReviewersOnHead(result.stdout, headSHA: headSHA, notBefore: notBefore)
+        return Self.reviewersOnHead(in: pages, headSHA: headSHA, notBefore: notBefore)
     }
 
     private func fetchPRNodeID(
@@ -1970,10 +2004,11 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
         }
     }
 
-    /// Logins with a submitted review on `headSHA`, plus authors of top-level
-    /// comments and thumbs-up reactions created after both the head commit
-    /// and `notBefore`. Codex reacts with a thumbs-up instead of reviewing
-    /// when it finds nothing; its in-progress eyes reaction doesn't count.
+    /// Across all `pages`: logins with a submitted review on `headSHA`, plus
+    /// authors of top-level comments and thumbs-up reactions created after
+    /// both the head commit and `notBefore`. Codex reacts with a thumbs-up
+    /// instead of reviewing when it finds nothing; its in-progress eyes
+    /// reaction doesn't count.
     /// `committedDate` is authored locally, so `notBefore` (when Alas first
     /// saw this head) keeps a comment that predates the push from counting;
     /// the cost is that a thumbs-up posted between the push and Alas's first
@@ -1981,35 +2016,33 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
     /// that moved since the request was fetched, leaves comments and
     /// reactions counting for nobody. Logins are normalized by
     /// `normalizedReviewerLogin`.
-    public static func parseReviewersOnHead(_ json: String, headSHA: String, notBefore: Date?) throws -> Set<String> {
-        let response: ReviewersOnHeadResponse
-        do {
-            response = try JSONDecoder().decode(ReviewersOnHeadResponse.self, from: Data(json.utf8))
-        } catch {
-            throw CodeHostProviderError.malformedOutput("Unable to parse gh reviewers output")
-        }
-        let pullRequest = response.data.repository.pullRequest
+    public static func reviewersOnHead(
+        in pages: [ReviewersOnHeadPage],
+        headSHA: String,
+        notBefore: Date?
+    ) -> Set<String> {
+        let evidence = mergeReviewersOnHeadPages(pages)
         let head = headSHA.lowercased()
 
         var reviewers = Set<String>()
-        for review in pullRequest.reviews.nodes {
+        for review in evidence.reviews {
             guard review.commit?.oid.lowercased() == head, let login = review.author?.login else { continue }
             reviewers.insert(normalizedReviewerLogin(login))
         }
         guard let notBefore,
-              let lastCommit = pullRequest.commits.nodes.last?.commit,
+              let lastCommit = evidence.lastCommit,
               lastCommit.oid.lowercased() == head,
               let headCommittedAt = try? parseOptionalDate(lastCommit.committedDate)
         else { return reviewers }
         let cutoff = max(headCommittedAt, notBefore)
-        for comment in pullRequest.comments.nodes {
+        for comment in evidence.comments {
             guard let login = comment.author?.login,
                   let createdAt = try? parseOptionalDate(comment.createdAt),
                   createdAt > cutoff
             else { continue }
             reviewers.insert(normalizedReviewerLogin(login))
         }
-        for reaction in pullRequest.reactions.nodes where reaction.content == "THUMBS_UP" {
+        for reaction in evidence.reactions where reaction.content == "THUMBS_UP" {
             guard let login = reaction.user?.login,
                   let createdAt = try? parseOptionalDate(reaction.createdAt),
                   createdAt > cutoff
@@ -2017,6 +2050,28 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
             reviewers.insert(normalizedReviewerLogin(login))
         }
         return reviewers
+    }
+
+    public static func parseReviewersOnHeadPage(_ json: String) throws -> ReviewersOnHeadPage {
+        do {
+            let response = try JSONDecoder().decode(ReviewersOnHeadResponse.self, from: Data(json.utf8))
+            return ReviewersOnHeadPage(pullRequest: response.data.repository.pullRequest)
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse gh reviewers output")
+        }
+    }
+
+    /// The head commit comes from the first page, the only one that asks for it.
+    private static func mergeReviewersOnHeadPages(_ pages: [ReviewersOnHeadPage]) -> ReviewersOnHeadEvidence {
+        var evidence = ReviewersOnHeadEvidence(
+            lastCommit: pages.first?.pullRequest.commits?.nodes.last?.commit
+        )
+        for page in pages {
+            evidence.reviews += page.pullRequest.reviews?.nodes ?? []
+            evidence.comments += page.pullRequest.comments?.nodes ?? []
+            evidence.reactions += page.pullRequest.reactions?.nodes ?? []
+        }
+        return evidence
     }
 
     /// Lowercased, without the `[bot]` suffix GitHub adds to app logins, so a
@@ -3032,9 +3087,87 @@ private struct ReviewThreadAuthor: Decodable {
     }
 }
 
+/// One page of `GitHubCLIProvider.reviewersOnHeadQuery`.
+public struct ReviewersOnHeadPage {
+    fileprivate let pullRequest: ReviewersOnHeadResponse.PullRequest
+
+    /// Where the next page reads each connection from; a connection that
+    /// this page skipped or that has no older entries is exhausted.
+    fileprivate func cursorsForPreviousPage() throws -> ReviewersOnHeadCursors {
+        func position<Node>(_ connection: ReviewersOnHeadResponse.Nodes<Node>?) throws -> ReviewersOnHeadCursors.Position {
+            guard let pageInfo = connection?.pageInfo, pageInfo.hasPreviousPage else { return .exhausted }
+            guard let startCursor = pageInfo.startCursor, !startCursor.isEmpty else {
+                throw CodeHostProviderError.malformedOutput("gh reviewers output is missing a pagination cursor")
+            }
+            return .before(startCursor)
+        }
+        return try ReviewersOnHeadCursors(
+            includesCommits: false,
+            reviews: position(pullRequest.reviews),
+            comments: position(pullRequest.comments),
+            reactions: position(pullRequest.reactions)
+        )
+    }
+}
+
+private struct ReviewersOnHeadCursors {
+    enum Position: Equatable {
+        case latest
+        case before(String)
+        case exhausted
+    }
+
+    var includesCommits = true
+    var reviews = Position.latest
+    var comments = Position.latest
+    var reactions = Position.latest
+
+    var isExhausted: Bool {
+        [reviews, comments, reactions].allSatisfy { $0 == .exhausted }
+    }
+
+    /// `gh api graphql` fields for `reviewersOnHeadQuery`; omitted ones keep
+    /// the query's defaults, which read the latest page of everything.
+    var arguments: [String] {
+        var arguments: [String] = []
+        if !includesCommits {
+            arguments += ["-F", "withCommits=false"]
+        }
+        let connections = [
+            (cursor: "reviewsBefore", include: "withReviews", position: reviews),
+            (cursor: "commentsBefore", include: "withComments", position: comments),
+            (cursor: "reactionsBefore", include: "withReactions", position: reactions),
+        ]
+        for connection in connections {
+            switch connection.position {
+            case .latest:
+                break
+            case let .before(cursor):
+                arguments += ["-F", "\(connection.cursor)=\(cursor)"]
+            case .exhausted:
+                arguments += ["-F", "\(connection.include)=false"]
+            }
+        }
+        return arguments
+    }
+}
+
+private struct ReviewersOnHeadEvidence {
+    let lastCommit: ReviewersOnHeadResponse.HeadCommit?
+    var reviews: [ReviewersOnHeadResponse.Review] = []
+    var comments: [ReviewersOnHeadResponse.Comment] = []
+    var reactions: [ReviewersOnHeadResponse.Reaction] = []
+}
+
 private struct ReviewersOnHeadResponse: Decodable {
     struct Nodes<Node: Decodable>: Decodable {
         let nodes: [Node]
+        let pageInfo: PageInfo?
+    }
+
+    struct PageInfo: Decodable {
+        let hasPreviousPage: Bool
+        let startCursor: String?
     }
 
     struct Login: Decodable {
@@ -3070,11 +3203,12 @@ private struct ReviewersOnHeadResponse: Decodable {
         let user: Login?
     }
 
+    /// A connection is absent when the page skipped it with `@include`.
     struct PullRequest: Decodable {
-        let commits: Nodes<CommitNode>
-        let reviews: Nodes<Review>
-        let comments: Nodes<Comment>
-        let reactions: Nodes<Reaction>
+        let commits: Nodes<CommitNode>?
+        let reviews: Nodes<Review>?
+        let comments: Nodes<Comment>?
+        let reactions: Nodes<Reaction>?
     }
 
     struct Repository: Decodable {
