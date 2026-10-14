@@ -919,7 +919,16 @@ private struct ProjectDialog: View {
                     Text("Instructions")
                         .font(.system(size: 11.5, weight: .medium))
                         .foregroundColor(theme.color("fg"))
-                    ProjectStartupScriptEditor(text: $shepherdInstructions, minHeight: 60)
+                    ProjectStartupScriptEditor(
+                        text: $shepherdInstructions,
+                        minHeight: 80,
+                        placeholder: """
+                        Only what Alas can't know about this repository, for example:
+                        Our review bot comments within 10 minutes of each push. Address its findings before waiting for CI.
+                        CI takes about 40 minutes and a new push cancels the run in flight, so batch fixes into one push.
+                        Run only the affected test suites locally.
+                        """
+                    )
                         .accessibilityLabel("PR shepherd instructions")
                 }
                 VStack(alignment: .leading, spacing: 6) {
@@ -1660,6 +1669,8 @@ private struct ProjectDialog: View {
 struct ProjectStartupScriptEditor: View {
     @Binding var text: String
     let minHeight: CGFloat
+    /// Shown while `text` is empty; never inserted into the text.
+    var placeholder: String? = nil
     @Environment(\.theme) private var theme
 
     var body: some View {
@@ -1669,6 +1680,17 @@ struct ProjectStartupScriptEditor: View {
             textColor: NSColor(theme.color("fg"))
         )
         .frame(minHeight: minHeight)
+        .overlay(alignment: .topLeading) {
+            if let placeholder, text.isEmpty {
+                Text(placeholder)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(theme.color("fg-faint"))
+                    // NSTextView's default line fragment padding.
+                    .padding(.leading, 5)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
         .padding(8)
         .background(theme.color("bg-0"))
         .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.5))
