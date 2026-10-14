@@ -624,14 +624,87 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
             ],
             cwd: cwd
         )
+        let checks: [ReviewCheck]
         if result.exitCode == 1, Self.isNoChecksReported(result) {
-            return []
-        }
-        guard result.exitCode == 0 || result.exitCode == 1 || result.exitCode == 8 else {
-            throw CodeHostProviderError.commandFailed(command: "gh pr checks", stderr: result.stderr)
+            checks = []
+        } else {
+            guard result.exitCode == 0 || result.exitCode == 1 || result.exitCode == 8 else {
+                throw CodeHostProviderError.commandFailed(command: "gh pr checks", stderr: result.stderr)
+            }
+            checks = try Self.parseChecks(result.stdout)
         }
 
-        return try Self.parseChecks(result.stdout)
+        guard let headSHA = Self.normalizedOptionalString(request.headSHA) else { return checks }
+        return try await addingPendingWorkflowRuns(to: checks, remote: remote, headSHA: headSHA, cwd: cwd)
+    }
+
+    /// A workflow run that is queued, or has not created its jobs yet, has no
+    /// check runs, so `gh pr checks` does not report it. Each such run becomes
+    /// a pending check. When the runs cannot be listed, one pending check
+    /// stands in for them, so a caller never reads the gap as "no checks".
+    private func addingPendingWorkflowRuns(
+        to checks: [ReviewCheck],
+        remote: CodeHostRemote,
+        headSHA: String,
+        cwd: URL
+    ) async throws -> [ReviewCheck] {
+        let result: ProcessResult
+        do {
+            result = try await runner.run(
+                "gh",
+                args: [
+                    "api",
+                    "--hostname", remote.host,
+                    "repos/\(remote.repositorySlug)/actions/runs?head_sha=\(headSHA)&per_page=50",
+                ],
+                cwd: cwd
+            )
+        } catch let error as CancellationError {
+            throw error
+        } catch {
+            return checks + [Self.workflowRunsUnavailableCheck]
+        }
+        guard result.exitCode == 0,
+              let merged = try? Self.mergingPendingWorkflowRuns(result.stdout, into: checks)
+        else { return checks + [Self.workflowRunsUnavailableCheck] }
+        return merged
+    }
+
+    static let workflowRunsUnavailableCheck = ReviewCheck(
+        id: "workflow-runs-unavailable",
+        name: "Workflow runs unavailable",
+        workflow: nil,
+        bucket: .pending,
+        detailURL: nil,
+        completedAt: nil
+    )
+
+    /// Appends a pending check for each unfinished run in a
+    /// `GET /repos/{owner}/{repo}/actions/runs` response whose workflow has no
+    /// pending check yet.
+    public static func mergingPendingWorkflowRuns(_ json: String, into checks: [ReviewCheck]) throws -> [ReviewCheck] {
+        let response: WorkflowRunsResponse
+        do {
+            response = try JSONDecoder().decode(WorkflowRunsResponse.self, from: Data(json.utf8))
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse gh api actions/runs output")
+        }
+
+        var merged = checks
+        for run in response.workflowRuns where run.status != "completed" {
+            let workflow = run.name ?? "Workflow run \(run.id)"
+            guard !merged.contains(where: { $0.bucket == .pending && $0.workflow == workflow }) else { continue }
+            let detailURL = run.htmlURL.flatMap(URL.init(string:)).flatMap { $0.isHTTPOrHTTPS ? $0 : nil }
+            merged.append(ReviewCheck(
+                id: "run-\(run.id)",
+                name: "\(workflow) (\(run.status == "in_progress" ? "running" : "queued"))",
+                workflow: workflow,
+                bucket: .pending,
+                detailURL: detailURL,
+                completedAt: nil
+            ))
+        }
+        return merged
     }
 
     public func reviewDiff(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> String {
@@ -2425,6 +2498,26 @@ private struct GitHubQueueMetadataResponse: Decodable {
 
     public init(data: DataPayload) {
         self.data = data
+    }
+}
+
+private struct WorkflowRunsResponse: Decodable {
+    let workflowRuns: [WorkflowRun]
+
+    struct WorkflowRun: Decodable {
+        let id: Int
+        let name: String?
+        let status: String?
+        let htmlURL: String?
+
+        enum CodingKeys: String, CodingKey {
+            case id, name, status
+            case htmlURL = "html_url"
+        }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case workflowRuns = "workflow_runs"
     }
 }
 

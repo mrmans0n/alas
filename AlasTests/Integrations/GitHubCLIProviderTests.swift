@@ -1483,6 +1483,7 @@ struct GitHubCLIProviderTests {
         let request = try #require(try GitHubCLIProvider.parsePRList(Self.prListOutput, remote: Self.remote))
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: testCase.exitCode, stdout: testCase.stdout, stderr: testCase.stderr),
+            ProcessResult(exitCode: 0, stdout: Self.workflowRunsOutput(), stderr: ""),
         ])
 
         let checks = try await GitHubCLIProvider(runner: runner).checks(
@@ -1599,7 +1600,41 @@ struct GitHubCLIProviderTests {
         #expect(await runner.commands.isEmpty)
     }
 
-    @Test func checksTreatNoChecksReportedAsEmptyChecks() async throws {
+    struct NoChecksReportedCase: Sendable, CustomTestStringConvertible {
+        let testDescription: String
+        let runsResult: ProcessResult
+        let expectedNames: [String]
+    }
+
+    @Test(arguments: [
+        NoChecksReportedCase(
+            testDescription: "no workflow runs for the head",
+            runsResult: ProcessResult(exitCode: 0, stdout: GitHubCLIProviderTests.workflowRunsOutput(), stderr: ""),
+            expectedNames: []
+        ),
+        NoChecksReportedCase(
+            testDescription: "a queued workflow run with no check runs yet",
+            runsResult: ProcessResult(
+                exitCode: 0,
+                stdout: GitHubCLIProviderTests.workflowRunsOutput(
+                    #"{"id": 101, "name": "Build", "status": "queued", "html_url": "https://github.com/mrmans0n/alas/actions/runs/101"}"#
+                ),
+                stderr: ""
+            ),
+            expectedNames: ["Build (queued)"]
+        ),
+        NoChecksReportedCase(
+            testDescription: "workflow runs request fails",
+            runsResult: ProcessResult(exitCode: 1, stdout: "", stderr: "HTTP 502"),
+            expectedNames: ["Workflow runs unavailable"]
+        ),
+        NoChecksReportedCase(
+            testDescription: "workflow runs output is malformed",
+            runsResult: ProcessResult(exitCode: 0, stdout: "not json", stderr: ""),
+            expectedNames: ["Workflow runs unavailable"]
+        ),
+    ])
+    func checksAddUnfinishedWorkflowRunsWhenNoChecksAreReported(_ testCase: NoChecksReportedCase) async throws {
         let request = try #require(try GitHubCLIProvider.parsePRList(Self.prListOutput, remote: Self.remote))
         let runner = FakeRunner(results: [
             ProcessResult(
@@ -1607,6 +1642,7 @@ struct GitHubCLIProviderTests {
                 stdout: "",
                 stderr: "no checks reported on the 'feature/github-provider' branch"
             ),
+            testCase.runsResult,
         ])
 
         let checks = try await GitHubCLIProvider(runner: runner).checks(
@@ -1615,7 +1651,91 @@ struct GitHubCLIProviderTests {
             cwd: Self.cwd
         )
 
-        #expect(checks.isEmpty)
+        #expect(checks.map(\.name) == testCase.expectedNames)
+        #expect(checks.allSatisfy { $0.bucket == .pending })
+        #expect(await runner.commands.map(\.args).last == [
+            "api", "--hostname", "github.com",
+            "repos/mrmans0n/alas/actions/runs?head_sha=head-sha-42&per_page=50",
+        ])
+    }
+
+    @Test func checksSkipWorkflowRunsWithoutAHeadSHA() async throws {
+        let request = Self.makeRequest(checks: [], headSHA: nil)
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.checksOutput, stderr: ""),
+        ])
+
+        let checks = try await GitHubCLIProvider(runner: runner).checks(
+            remote: Self.remote,
+            request: request,
+            cwd: Self.cwd
+        )
+
+        #expect(checks.count == 1)
+        #expect(await runner.commands.count == 1)
+    }
+
+    struct WorkflowRunsCase: Sendable, CustomTestStringConvertible {
+        let testDescription: String
+        let existing: [ReviewCheck]
+        let runs: [String]
+        let expected: [ReviewCheck]
+    }
+
+    @Test(arguments: [
+        WorkflowRunsCase(
+            testDescription: "queued run becomes a pending check",
+            existing: [],
+            runs: [#"{"id": 101, "name": "Build", "status": "queued", "html_url": "https://github.com/mrmans0n/alas/actions/runs/101"}"#],
+            expected: [ReviewCheck(
+                id: "run-101", name: "Build (queued)", workflow: "Build", bucket: .pending,
+                detailURL: URL(string: "https://github.com/mrmans0n/alas/actions/runs/101"), completedAt: nil
+            )]
+        ),
+        WorkflowRunsCase(
+            testDescription: "in-progress run reads as running",
+            existing: [],
+            runs: [#"{"id": 102, "name": "Lint", "status": "in_progress", "html_url": null}"#],
+            expected: [ReviewCheck(
+                id: "run-102", name: "Lint (running)", workflow: "Lint", bucket: .pending,
+                detailURL: nil, completedAt: nil
+            )]
+        ),
+        WorkflowRunsCase(
+            testDescription: "workflow that already has a pending check is not duplicated",
+            existing: [ReviewCheck(id: "job-1", name: "build", workflow: "Build", bucket: .pending, detailURL: nil, completedAt: nil)],
+            runs: [#"{"id": 101, "name": "Build", "status": "in_progress", "html_url": null}"#],
+            expected: [ReviewCheck(id: "job-1", name: "build", workflow: "Build", bucket: .pending, detailURL: nil, completedAt: nil)]
+        ),
+        WorkflowRunsCase(
+            testDescription: "workflow with only a finished check still gets its rerun",
+            existing: [ReviewCheck(id: "job-1", name: "build", workflow: "Build", bucket: .pass, detailURL: nil, completedAt: nil)],
+            runs: [#"{"id": 103, "name": "Build", "status": "queued", "html_url": null}"#],
+            expected: [
+                ReviewCheck(id: "job-1", name: "build", workflow: "Build", bucket: .pass, detailURL: nil, completedAt: nil),
+                ReviewCheck(id: "run-103", name: "Build (queued)", workflow: "Build", bucket: .pending, detailURL: nil, completedAt: nil),
+            ]
+        ),
+        WorkflowRunsCase(
+            testDescription: "completed run is ignored",
+            existing: [],
+            runs: [#"{"id": 104, "name": "Build", "status": "completed", "html_url": null}"#],
+            expected: []
+        ),
+        WorkflowRunsCase(
+            testDescription: "empty run list leaves the checks alone",
+            existing: [ReviewCheck(id: "job-1", name: "build", workflow: "Build", bucket: .pass, detailURL: nil, completedAt: nil)],
+            runs: [],
+            expected: [ReviewCheck(id: "job-1", name: "build", workflow: "Build", bucket: .pass, detailURL: nil, completedAt: nil)]
+        ),
+    ])
+    func workflowRunsAddPendingChecks(_ testCase: WorkflowRunsCase) throws {
+        let checks = try GitHubCLIProvider.mergingPendingWorkflowRuns(
+            Self.workflowRunsOutput(testCase.runs),
+            into: testCase.existing
+        )
+
+        #expect(checks == testCase.expected)
     }
 
     @Test func createReviewRequestQualifiesForkHeadOwner() async throws {
@@ -2360,6 +2480,14 @@ struct GitHubCLIProviderTests {
     static let mergeQueueDisabledOutput = """
     {"data":{"repository":{"pullRequest":{"isMergeQueueEnabled":false,"isInMergeQueue":false}}}}
     """
+
+    static func workflowRunsOutput(_ runs: String...) -> String {
+        workflowRunsOutput(runs)
+    }
+
+    static func workflowRunsOutput(_ runs: [String]) -> String {
+        #"{"total_count": \#(runs.count), "workflow_runs": [\#(runs.joined(separator: ", "))]}"#
+    }
 
     static let checksOutput = """
     [
