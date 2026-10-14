@@ -10443,9 +10443,24 @@ final class AppState {
         return .remoteEditor(relativePath: String(target.dropFirst(root.count + 1)), line: line, column: column)
     }
 
-    /// Opens or claims a remote absolute link; nil lets local routing run.
-    private func routeRemoteAbsoluteLink(_ raw: String, worktree: Worktree) -> TranscriptLinkRoute? {
-        switch Self.absoluteLinkRoute(raw, worktreeRoot: worktree.path.path) {
+    /// How a transcript link from a session rooted at `worktreeRoot` routes
+    /// on a remote host. A relative path names a file on that host, so it
+    /// joins the virtual root and routes lexically, unprobed. That includes
+    /// `Package.swift:2`, which Foundation parses as having a scheme; a
+    /// `mailto:` link is no path and stays `.local`.
+    nonisolated static func transcriptRemoteLinkRoute(
+        _ rawPath: String,
+        isLocalPathForm: Bool,
+        worktreeRoot: String
+    ) -> AbsoluteLinkRoute {
+        let isRelativePath = !rawPath.hasPrefix("/")
+            && (isLocalPathForm || parseLocalPathPosition(rawPath) != nil)
+        return absoluteLinkRoute(isRelativePath ? worktreeRoot + "/" + rawPath : rawPath, worktreeRoot: worktreeRoot)
+    }
+
+    /// Opens or claims a remote link; nil lets local routing run.
+    private func routeRemoteLink(_ route: AbsoluteLinkRoute, worktree: Worktree) -> TranscriptLinkRoute? {
+        switch route {
         case .local:
             return nil
         case .ignored:
@@ -10497,14 +10512,14 @@ final class AppState {
             return .unhandled
         }
         guard !rawPath.isEmpty else { return .unhandled }
-        // A remote session's relative path names a file on its host, so it
-        // joins the virtual worktree root and routes lexically, unprobed.
-        let remoteCandidate = isLocalPathForm && !rawPath.hasPrefix("/")
-            ? session.path.path + "/" + rawPath
-            : rawPath
+        let remoteRoute = Self.transcriptRemoteLinkRoute(
+            rawPath,
+            isLocalPathForm: isLocalPathForm,
+            worktreeRoot: session.path.path
+        )
         if let registered {
-            if let remote = routeRemoteAbsoluteLink(remoteCandidate, worktree: registered) { return remote }
-        } else if RemotePath.split(session.path.path) != nil {
+            if let remote = routeRemoteLink(remoteRoute, worktree: registered) { return remote }
+        } else if remoteRoute != .local {
             // A remote checkout root has no editor of its own and nothing
             // local to probe.
             return .ignored
@@ -10569,7 +10584,9 @@ final class AppState {
     func routeTerminalOpenURL(rawURL: String, sessionId: String) -> Bool {
         guard let session = terminal.registry.session(for: sessionId),
               let worktree = worktree(withId: session.worktreeId) else { return false }
-        if routeRemoteAbsoluteLink(rawURL, worktree: worktree) != nil { return true }
+        if routeRemoteLink(Self.absoluteLinkRoute(rawURL, worktreeRoot: worktree.path.path), worktree: worktree) != nil {
+            return true
+        }
 
         let path: String
         if let parsed = URL(string: rawURL), parsed.isFileURL {

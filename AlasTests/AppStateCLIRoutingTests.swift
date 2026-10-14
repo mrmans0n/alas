@@ -787,9 +787,6 @@ struct AppStateCLIRoutingTests {
         ("/.alas-remote/mini/srv/repo", "/srv/other/b.swift", .ignored),
         ("/.alas-remote/mini/srv/repo", "file:///etc/hosts", .ignored),
         ("/.alas-remote/mini/srv/repo", "/.alas-remote/other/srv/repo/a.swift", .ignored),
-        // A relative link joined to the virtual root routes the same way.
-        ("/.alas-remote/mini/srv/repo", "/.alas-remote/mini/srv/repo/Sources/a.swift:3", .remoteEditor(relativePath: "Sources/a.swift", line: 3, column: nil)),
-        ("/.alas-remote/mini/srv/repo", "/.alas-remote/mini/srv/repo/../escape.swift", .ignored),
         ("/.alas-remote/mini/srv/repo", "Sources/a.swift", .local),
         ("/.alas-remote/mini/srv/repo", "https://example.com/a", .local),
         ("/srv/repo", "/srv/repo/a.swift", .local),
@@ -797,6 +794,43 @@ struct AppStateCLIRoutingTests {
     ])
     func absoluteLinkRoutesOnTheWorktreesOwnHost(root: String, raw: String, expected: AppState.AbsoluteLinkRoute) {
         #expect(AppState.absoluteLinkRoute(raw, worktreeRoot: root) == expected)
+    }
+
+    /// Relative transcript paths, including `Package.swift:2` that Foundation
+    /// parses with a scheme, join a remote session's root; other `scheme:`
+    /// links and local sessions keep the local routing.
+    @Test(arguments: [
+        ("Sources/a.swift:3", true, AppState.AbsoluteLinkRoute.remoteEditor(relativePath: "Sources/a.swift", line: 3, column: nil)),
+        ("Package.swift:2", false, .remoteEditor(relativePath: "Package.swift", line: 2, column: nil)),
+        ("../escape.swift", true, .ignored),
+        ("/srv/repo/a.swift", true, .remoteEditor(relativePath: "a.swift", line: nil, column: nil)),
+        ("mailto:a@b.c", false, .local),
+    ])
+    func transcriptRemoteLinkRouteJoinsRelativePaths(raw: String, isLocalPathForm: Bool, expected: AppState.AbsoluteLinkRoute) {
+        #expect(AppState.transcriptRemoteLinkRoute(raw, isLocalPathForm: isLocalPathForm, worktreeRoot: "/.alas-remote/mini/srv/repo") == expected)
+        #expect(AppState.transcriptRemoteLinkRoute(raw, isLocalPathForm: isLocalPathForm, worktreeRoot: "/srv/repo") == .local)
+    }
+
+    /// A remote Workspace checkout root has no editor of its own: its path
+    /// links are claimed, while `mailto:` still reaches the system.
+    @Test(arguments: [
+        ("/srv/repo/a.swift:2", AppState.TranscriptLinkRoute.ignored),
+        ("mailto:a@b.c", .unhandled),
+    ])
+    func routeTranscriptOpenURLFromRemoteCheckoutRoot(raw: String, expected: AppState.TranscriptLinkRoute) throws {
+        let state = AppState(store: MemoryStore())
+        let checkoutRoot = Worktree(
+            id: "workspace-checkout:remote",
+            projectId: "workspace-checkout",
+            name: "checkout",
+            branch: "main",
+            path: URL(fileURLWithPath: "/.alas-remote/mini/srv/repo"),
+            status: .clean,
+            lastActivity: Date(),
+            createdAt: Date()
+        )
+
+        #expect(state.transcriptLinkRoute(try #require(URL(string: raw)), in: checkoutRoot) == expected)
     }
 
     @Test func routeTerminalOpenURLReturnsFalseForPathOutsideWorkspace() async throws {
