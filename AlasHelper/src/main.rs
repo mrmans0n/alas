@@ -2,6 +2,7 @@ mod plugin_proc;
 mod watch;
 
 use alas_helper::acp_broker_process;
+use alas_helper::mcp_relay::McpRelay;
 use alas_helper::remote_sessions::{RemoteSessionError, RemoteSessionFence, RemoteSessionStore};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
@@ -65,6 +66,7 @@ struct HelperState {
     event_sender: Option<Sender<ServerMessage>>,
     proc_tailers: HashSet<String>,
     remote_sessions: Option<RemoteSessionStore>,
+    mcp_relay: Option<McpRelay>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -230,6 +232,8 @@ pub(crate) enum ServerMessage {
     /// A fully-formed JSON-RPC response produced off the serve loop, waiting
     /// to be written. See `AcpJob`.
     Response(String),
+    /// A fully-formed JSON-RPC notification produced off the serve loop.
+    Notification(String),
     Watch(WatchNotification),
     Search(SearchNotification),
     Proc(ProcNotification),
@@ -260,7 +264,8 @@ fn capabilities() -> Value {
         "proc": true
         ,
         "acp": true,
-        "sessionCoordination": 1
+        "sessionCoordination": 1,
+        "visualMCPRelay": 1
     })
 }
 
@@ -291,6 +296,7 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        Some("mcp-proxy") => std::process::exit(alas_helper::mcp_relay::proxy_main(args)),
         Some("plugin-proc-supervise") => plugin_proc::supervise_main(args.next()),
         Some("plugin-proc-anchor") => plugin_proc::anchor_main(),
         Some("acp-broker-supervise") => {
@@ -391,7 +397,7 @@ fn serve() -> io::Result<()> {
                     }
                 }
             }
-            Some(ServerMessage::Response(line)) => {
+            Some(ServerMessage::Response(line) | ServerMessage::Notification(line)) => {
                 flush_due_watch_events(&mut stdout, &state, &mut pending_events, &mut flush_at)?;
                 write_json_line(&mut stdout, &line)?;
             }
@@ -785,6 +791,7 @@ fn handle_request(
                 })
                 .map_err(Into::into)
         }
+        method if method.starts_with("mcp/") => mcp_relay_request(state, method, params),
         method if method.starts_with("acp/") => {
             acp_broker_process::handle_control_request(method, params).map_err(|error| {
                 HelperError {
@@ -803,6 +810,23 @@ fn remote_session_store(state: &mut HelperState) -> Result<&mut RemoteSessionSto
         state.remote_sessions = Some(RemoteSessionStore::open(&root)?);
     }
     Ok(state.remote_sessions.as_mut().expect("initialized remote session store"))
+}
+
+fn mcp_relay_request(state: &mut HelperState, method: &str, params: Option<Value>) -> Result<Value, HelperError> {
+    remote_session_store(state)?;
+    if state.mcp_relay.is_none() {
+        // Relay workers answer through the serve loop's writer; outside it
+        // there is nothing to deliver their requests on.
+        let sender = state.event_sender.clone()
+            .ok_or_else(|| jsonrpc_error(-32000, "visual relay requires the serve loop"))?;
+        let root = alas_helper::helper_state_dir().ok_or_else(|| jsonrpc_error(-32080, "HOME is not set"))?;
+        state.mcp_relay = Some(McpRelay::new(root, move |line| {
+            let _ = sender.send(ServerMessage::Notification(line));
+        }));
+    }
+    let relay = state.mcp_relay.as_ref().expect("initialized visual relay");
+    let store = state.remote_sessions.as_mut().expect("initialized remote session store");
+    relay.handle(store, method, params).map_err(Into::into)
 }
 
 fn fenced_proc_request(state: &mut HelperState, method: &str, params: Option<Value>) -> Result<Value, HelperError> {
@@ -2492,6 +2516,7 @@ mod tests {
             json!(["files", "git"])
         );
         assert_eq!(value["result"]["capabilities"]["fs"]["read"], true);
+        assert_eq!(value["result"]["capabilities"]["visualMCPRelay"], 1);
     }
 
     #[test]

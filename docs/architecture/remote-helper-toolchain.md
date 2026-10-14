@@ -54,5 +54,6 @@ Zig binary and version are fingerprint inputs. Xcode builds reuse matching
 artifacts from `.build`.
 
 The helper serves filesystem, watch, search, persistent process, and SSH ACP
-session-coordination RPCs. Session leases and transcript replicas use bundled
+session-coordination RPCs, and relays the visual-only Alas MCP tool for SSH ACP
+sessions through its `mcp-proxy` command. Session leases and transcript replicas use bundled
 SQLite in the private helper state directory.

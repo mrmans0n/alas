@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Show visual aids in ACP sessions of SSH projects. The remote helper relays the built-in `visual_show` tool, and only that tool, back to the Mac that owns the session, with no port forwarding or listening port; this needs remote helper 0.8.0, which Alas installs on connect (#1996).
+
 ### Changed
 
 - Start sidebar peers collapsed instead of automatically expanding them.

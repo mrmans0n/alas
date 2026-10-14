@@ -271,7 +271,11 @@ impl RemoteSessionStore {
                 record_id TEXT NOT NULL REFERENCES remote_sessions(record_id) ON DELETE CASCADE,
                 kind TEXT NOT NULL, item_key TEXT NOT NULL, payload BLOB, revision INTEGER NOT NULL,
                 PRIMARY KEY(record_id,kind,item_key));
-            CREATE INDEX IF NOT EXISTS remote_replica_revision ON remote_replica(record_id,revision,kind,item_key);")?;
+            CREATE INDEX IF NOT EXISTS remote_replica_revision ON remote_replica(record_id,revision,kind,item_key);
+            CREATE TABLE IF NOT EXISTS remote_mcp_routes(
+                record_id TEXT PRIMARY KEY REFERENCES remote_sessions(record_id) ON DELETE CASCADE,
+                relay_id TEXT NOT NULL, fence_token TEXT NOT NULL, socket_path TEXT NOT NULL,
+                registered_at INTEGER NOT NULL);")?;
         Ok(Self {
             connection,
             path,
@@ -641,6 +645,153 @@ impl RemoteSessionStore {
     }
 }
 
+/// A visual MCP relay route that is usable right now: its fence is the
+/// record's current lease token and that lease is owned and fresh.
+#[derive(Clone, Debug, PartialEq)]
+pub struct McpRoute {
+    pub relay_id: String,
+    pub fence_token: String,
+    pub socket_path: String,
+}
+fn current_mcp_route(
+    db: &Connection,
+    record_id: &str,
+    now: i64,
+) -> Result<Option<McpRoute>, RemoteSessionError> {
+    // A route row outlives a takeover until its owner cleans up; the join
+    // makes it unusable the moment the lease moves on or goes stale.
+    Ok(db
+        .query_row(
+            "SELECT r.relay_id,r.fence_token,r.socket_path FROM remote_mcp_routes r
+            JOIN remote_sessions s ON s.record_id=r.record_id
+            WHERE r.record_id=? AND r.fence_token=s.token
+              AND s.owner_server_id IS NOT NULL AND s.heartbeat_at>?",
+            params![record_id, now - STALE_AFTER],
+            |r| {
+                Ok(McpRoute {
+                    relay_id: r.get(0)?,
+                    fence_token: r.get(1)?,
+                    socket_path: r.get(2)?,
+                })
+            },
+        )
+        .optional()?)
+}
+
+/// Read-only access to relay routes for processes that do not own the
+/// registry: the `mcp-proxy` command and the helper's socket workers.
+pub struct McpRouteReader {
+    connection: Connection,
+}
+impl McpRouteReader {
+    /// Opens an existing registry. Never creates the database: a proxy started
+    /// before any registration simply finds no route.
+    pub fn open(root: &Path) -> Result<Self, RemoteSessionError> {
+        let path = root.join("remote_leases.sqlite");
+        if std::fs::symlink_metadata(root).is_ok_and(|m| m.file_type().is_symlink())
+            || std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink())
+        {
+            return Err(error(-32080, "Unsafe remote lease database"));
+        }
+        let connection = Connection::open_with_flags(
+            &path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        connection.busy_timeout(std::time::Duration::from_secs(5))?;
+        Ok(Self { connection })
+    }
+    pub fn resolve_mcp_route(
+        &self,
+        record_id: &str,
+        now: i64,
+    ) -> Result<Option<McpRoute>, RemoteSessionError> {
+        current_mcp_route(&self.connection, record_id, now)
+    }
+    /// Whether this exact registration is still the record's current route.
+    pub fn validate_mcp_route(
+        &self,
+        record_id: &str,
+        relay_id: &str,
+        fence_token: &str,
+        now: i64,
+    ) -> Result<bool, RemoteSessionError> {
+        Ok(self
+            .resolve_mcp_route(record_id, now)?
+            .is_some_and(|route| route.relay_id == relay_id && route.fence_token == fence_token))
+    }
+}
+
+impl RemoteSessionStore {
+    /// Publishes a bound relay socket as the record's route. The caller binds
+    /// the listener first so a published path is always live.
+    pub fn register_mcp_route(
+        &mut self,
+        fence: &RemoteSessionFence,
+        relay_id: &str,
+        socket_path: &str,
+        now: i64,
+    ) -> Result<(), RemoteSessionError> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        check(&tx, fence, now)?;
+        tx.execute(
+            "INSERT INTO remote_mcp_routes(record_id,relay_id,fence_token,socket_path,registered_at) VALUES(?,?,?,?,?)
+            ON CONFLICT(record_id) DO UPDATE SET relay_id=excluded.relay_id,fence_token=excluded.fence_token,
+                socket_path=excluded.socket_path,registered_at=excluded.registered_at",
+            params![fence.record_id, relay_id, fence.token, socket_path, now],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+    pub fn resolve_mcp_route(
+        &self,
+        record_id: &str,
+        now: i64,
+    ) -> Result<Option<McpRoute>, RemoteSessionError> {
+        current_mcp_route(&self.connection, record_id, now)
+    }
+    /// Fails with lost authority unless `fence` is the record's fresh lease and
+    /// `relay_id` is its published route.
+    pub fn validate_mcp_route(
+        &self,
+        fence: &RemoteSessionFence,
+        relay_id: &str,
+        now: i64,
+    ) -> Result<(), RemoteSessionError> {
+        check(&self.connection, fence, now)?;
+        let current = current_mcp_route(&self.connection, &fence.record_id, now)?;
+        if !current.is_some_and(|route| route.relay_id == relay_id && route.fence_token == fence.token)
+        {
+            return Err(lost());
+        }
+        Ok(())
+    }
+    /// Compare-and-delete: removes the route only while it is still this
+    /// relay's registration under this fence, so a stale unregister can never
+    /// remove a replacement. An expired but still matching owner may clean up.
+    pub fn unregister_mcp_route(
+        &mut self,
+        fence: &RemoteSessionFence,
+        relay_id: &str,
+        now: i64,
+    ) -> Result<(), RemoteSessionError> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current = record(&tx, &fence.record_id, now)?.ok_or_else(lost)?;
+        if current.token.as_deref() != Some(fence.token.as_str()) {
+            return Err(lost());
+        }
+        tx.execute(
+            "DELETE FROM remote_mcp_routes WHERE record_id=? AND relay_id=? AND fence_token=?",
+            params![fence.record_id, relay_id, fence.token],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -697,6 +848,51 @@ mod tests {
             -32081
         );
         drop(store);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn mcp_routes_follow_the_current_lease_and_stale_cleanup_spares_replacements() {
+        let dir = std::env::temp_dir().join(format!(
+            "lease-mcp-routes-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut store = RemoteSessionStore::open(&dir).unwrap();
+        let reader = McpRouteReader::open(&dir).unwrap();
+        let claim = |owner: &str| json!({"key":{"worktreePath":dir,"agentId":"test","remoteSessionId":"one"},"owner":{"serverId":owner,"instanceId":owner},"proposedProcId":"acp-r","requestedToken":owner});
+        let fence = |value: &Value| -> RemoteSessionFence {
+            serde_json::from_value(value["fence"].clone()).unwrap()
+        };
+        let a = fence(&store.handle("lease/claim", Some(claim("a")), 100, |_| Ok(())).unwrap());
+        store.register_mcp_route(&a, "relay-a", "/a", 100).unwrap();
+        assert_eq!(reader.resolve_mcp_route("acp-r", 100).unwrap().unwrap().relay_id, "relay-a");
+        assert!(reader.resolve_mcp_route("acp-r", 100 + STALE_AFTER).unwrap().is_none());
+
+        let b = fence(&store.handle("lease/seize", Some(claim("b")), 110, |_| Ok(())).unwrap());
+        // A's row still exists, but it no longer carries the lease's token.
+        assert!(reader.resolve_mcp_route("acp-r", 110).unwrap().is_none());
+        assert_eq!(store.validate_mcp_route(&a, "relay-a", 110).unwrap_err().code, -32081);
+        assert_eq!(store.register_mcp_route(&a, "relay-a", "/a", 110).unwrap_err().code, -32081);
+
+        store.register_mcp_route(&b, "relay-b", "/b", 110).unwrap();
+        assert_eq!(store.unregister_mcp_route(&a, "relay-a", 110).unwrap_err().code, -32081);
+        store.unregister_mcp_route(&b, "relay-a", 110).unwrap();
+        assert!(reader.validate_mcp_route("acp-r", "relay-b", "b", 110).unwrap());
+
+        store
+            .handle("lease/delete", Some(json!({"fence":b})), 110, |_| Ok(()))
+            .unwrap();
+        let routes: i64 = store
+            .connection
+            .query_row("SELECT COUNT(*) FROM remote_mcp_routes", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(routes, 0);
+        drop((store, reader));
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

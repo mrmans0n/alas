@@ -8,8 +8,9 @@ ssh <batch opts> <host> /bin/sh -c '... "$HOME/.alas/bin/alas-helper" serve'
 ```
 
 The app speaks JSON-RPC 2.0 using one newline-delimited JSON object per frame on
-stdin/stdout. Stderr is diagnostic-only. The helper binds to no socket and opens
-no listening port.
+stdin/stdout. Stderr is diagnostic-only. The helper opens no TCP listener and
+needs no SSH port forwarding. Its only sockets are the private Unix sockets of
+the [visual MCP relay](#visual-mcp-relay).
 
 ## Lifecycle
 
@@ -23,7 +24,9 @@ failure through `RemoteHostStatusStore`. Other exits are treated as helper
 crashes: in-flight requests fail with a fallback-capable client error, but the
 host is not marked offline. Watch consumers are notified immediately so they
 resume their pre-helper polling cadence; the next retry starts a new helper
-channel and replays the active subscriptions.
+channel and replays the active subscriptions. Open visual relay routes also keep
+the helper alive and are re-registered on that replay; relayed MCP frames never
+are.
 
 ## Handshake
 
@@ -45,7 +48,8 @@ Result:
     "fs": {"read": true, "write": true, "stat": true},
     "ping": true,
     "proc": true,
-    "sessionCoordination": 1
+    "sessionCoordination": 1,
+    "visualMCPRelay": 1
   }
 }
 ```
@@ -313,6 +317,77 @@ hidden row for immediate cold cleanup, even when its activity timestamp is
 fresh. The marker does not bypass live ownership or promotion to a normal
 session, and stale metadata writes cannot clear it.
 
+## Visual MCP relay
+
+SSH ACP sessions get the built-in Alas MCP server's `visual_show` tool, and only
+that tool, through the helper. Helpers advertise it with `visualMCPRelay: 1`;
+Alas gates on that value, not on the binary version, and an older helper leaves
+the tool unavailable without sending it an unknown method.
+
+```text
+remote ACP agent
+  -> stdio: alas-helper mcp-proxy --state-dir <state dir> --record-id <record>
+  -> current route for the record, read from the remote session registry
+  -> one framed exchange over that route's private Unix socket
+  -> `mcp/request` notification over the existing SSH channel
+  -> the owning Mac, which runs `alas mcp --visual-only` for the session
+```
+
+The agent's MCP configuration holds only the helper path, its absolute state
+directory, and the stable remote session `recordId`. It never contains a Mac
+command, socket, URL, credential, local session ID, fence token, relay ID, or
+socket path, so a retained proxy keeps working across reconnects and takeover.
+The proxy resolves the route again for every frame and never replays one.
+
+| Method | Direction | Params | Result / effect |
+| --- | --- | --- | --- |
+| `mcp/register` | app → helper | `fence`, `relayId` | Binds a private socket, then publishes it as the record's route. Returns `recordId`, `relayId`, `proxyCommand`, `proxyArgs`, and `relayProtocolVersion: 1` |
+| `mcp/request` | helper → app (notification) | `requestId`, `recordId`, `relayId`, `frameBase64` | One MCP frame from the proxy; the outer envelope is a notification even for an inner request |
+| `mcp/complete` | app → helper | `fence`, `relayId`, `requestId`, and exactly one of `responseBase64` (response bytes), `responseBase64: null` (inner notification), or `error: {code, message}` | `{"ok":true}` |
+| `mcp/unregister` | app → helper | `fence`, `relayId` | Compare-and-delete of the route; `{"ok":true}` |
+
+Each registration binds a fresh socket, mode 0600, in a new mode-0700
+directory under the system temporary directory, with a short random name that
+fits Darwin's socket path limit. The helper generates the path; the app never
+supplies one. The `remote_mcp_routes` table maps a record to its current relay
+ID, fence token, and socket path. A route is usable only while its token is the
+record's current, fresh lease token, so a takeover invalidates the old route at
+once even if the old helper is still running. Registration, frame forwarding,
+and completion all revalidate the fence. Unregister deletes only a row matching
+record, relay ID, and token, so stale cleanup cannot remove a replacement.
+Deleting the remote session deletes its route. No HTML, request, or response is
+stored.
+
+Socket frames are `ALASMCP1 <decimal byte count>\n<exact bytes>`, one exchange
+per connection, with the same framing for the reply. An empty reply
+acknowledges an inner notification. Raw frames are at most 4 MiB; relay
+envelopes at most 6 MiB. Lengths are checked before allocation. Header reads
+time out after 5 seconds, body reads after 10, the helper's wait for a
+completion after 35, and the proxy's wait for a reply after 40. Each record has
+at most two exchanges in flight and each `serve` process at most eight; excess
+work fails at once. Frames are opaque and never path-rewritten.
+
+When the relay fails, an inner request gets
+`{"jsonrpc":"2.0","id":<original id>,"error":{"code":-32000,"message":"Alas visual relay unavailable"}}`,
+and an inner notification gets no reply. A visual may already have been saved
+when its response is lost; the agent sees a failure or an unknown outcome, never
+a fabricated success, and Alas does not retry the call.
+
+On the Mac, the session manager prepares the route after confirming remote
+authority and before sending the session's MCP servers, and revokes it when that
+attachment ends: reconnect, stand-down, takeover, detach, deletion, or manager
+disposal. Each relayed request is checked against the attachment that prepared
+it and that attachment's fence, and `visual_show` confirms writer authority
+again before appending. The Mac-side bridge gives each relayed request a unique
+backend ID and restores the caller's ID in the response, so proxies whose MCP
+IDs collide cannot receive each other's results. A completion reaches only the
+registration and helper generation that delivered its request. When the helper
+exits, pending exchanges are dropped and routes re-register under still-current
+fences with fresh relay IDs.
+
+Filesystem permissions and fences protect against other Unix users and stale
+Alas instances. They do not isolate processes running as the same remote user.
+
 ## Security
 
 Filesystem RPCs only serve paths under registered roots. `watch/subscribe` resolves
@@ -346,3 +421,6 @@ range:
 | `-32081` | remote session lease was lost or expired |
 | `-32082` | remote session identity conflicts |
 | `-32083` | replica page token expired or is unknown |
+
+The visual relay reuses `-32081` for lost authority, `-32602` for malformed
+parameters, and `-32000` for an unavailable, busy, or timed-out relay.

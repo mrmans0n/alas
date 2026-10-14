@@ -4,7 +4,7 @@ use std::net::TcpStream;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
@@ -16,6 +16,8 @@ enum ServerEvent {
 struct FakeAlas {
     socket: PathBuf,
     events: mpsc::Receiver<ServerEvent>,
+    /// Every request the fake app received, in arrival order.
+    requests: Arc<Mutex<Vec<Value>>>,
     stop: mpsc::Sender<()>,
     handle: Option<thread::JoinHandle<()>>,
 }
@@ -41,6 +43,8 @@ fn start_fake_alas(test_name: &str) -> FakeAlas {
     listener.set_nonblocking(true).unwrap();
     let (events_tx, events_rx) = mpsc::channel();
     let (stop_tx, stop_rx) = mpsc::channel();
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let server_requests = Arc::clone(&requests);
     let handle = thread::spawn(move || {
         loop {
             if stop_rx.try_recv().is_ok() {
@@ -49,7 +53,8 @@ fn start_fake_alas(test_name: &str) -> FakeAlas {
             match listener.accept() {
                 Ok((stream, _)) => {
                     let events_tx = events_tx.clone();
-                    thread::spawn(move || handle_fake_connection(stream, events_tx));
+                    let requests = Arc::clone(&server_requests);
+                    thread::spawn(move || handle_fake_connection(stream, events_tx, requests));
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     thread::sleep(Duration::from_millis(5));
@@ -61,12 +66,17 @@ fn start_fake_alas(test_name: &str) -> FakeAlas {
     FakeAlas {
         socket,
         events: events_rx,
+        requests,
         stop: stop_tx,
         handle: Some(handle),
     }
 }
 
-fn handle_fake_connection(mut stream: UnixStream, events_tx: mpsc::Sender<ServerEvent>) {
+fn handle_fake_connection(
+    mut stream: UnixStream,
+    events_tx: mpsc::Sender<ServerEvent>,
+    requests: Arc<Mutex<Vec<Value>>>,
+) {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 1024];
     loop {
@@ -80,6 +90,7 @@ fn handle_fake_connection(mut stream: UnixStream, events_tx: mpsc::Sender<Server
         }
     }
     let request: Value = serde_json::from_slice(&buf).unwrap();
+    requests.lock().unwrap().push(request.clone());
     match request.get("command").and_then(Value::as_str) {
         Some("preview_wait") => {
             let (release_tx, release_rx) = mpsc::channel();
@@ -99,6 +110,11 @@ fn handle_fake_connection(mut stream: UnixStream, events_tx: mpsc::Sender<Server
             events_tx.send(ServerEvent::Cancel).unwrap();
             stream
                 .write_all(br#"{"ok":true,"lines":["{\"version\":1,\"event\":\"cancelled\"}"]}"#)
+                .unwrap();
+        }
+        Some("visual_show") => {
+            stream
+                .write_all(br#"{"ok":true,"lines":["{\"visual_id\":\"visual-42\"}"]}"#)
                 .unwrap();
         }
         Some("preview_capture") => {
@@ -144,8 +160,12 @@ impl Drop for McpProcess {
 }
 
 fn start_mcp(socket: &PathBuf) -> McpProcess {
+    start_mcp_with_args(socket, &["mcp"])
+}
+
+fn start_mcp_with_args(socket: &PathBuf, args: &[&str]) -> McpProcess {
     let mut child = Command::new(env!("CARGO_BIN_EXE_alas"))
-        .arg("mcp")
+        .args(args)
         .env("ALAS_SOCKET_PATH", socket)
         .env("ALAS_WORKTREE_DIR", "/tmp")
         .env("ALAS_SESSION_ID", "session-1")
@@ -454,4 +474,53 @@ fn http_stalled_response_reader_does_not_pin_connection_worker_forever() {
     for handle in stalled {
         let _ = handle.join();
     }
+}
+
+#[test]
+fn stdio_visual_only_forwards_html_bytes_and_returns_the_visual_id_without_hello() {
+    let fake = start_fake_alas("visual-only");
+    let mut mcp = start_mcp_with_args(&fake.socket, &["mcp", "--visual-only"]);
+    let html = "<h2 class=\"pick\">Choose \u{2014} \u{1F600}</h2>\n<p>'/.alas-remote/example/srv/repo'</p>\n";
+
+    send_line(
+        &mut mcp.stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "visual_show",
+                "arguments": {
+                    "title": "Layouts",
+                    "html": html,
+                    "question": {
+                        "prompt": "Which one?",
+                        "options": [{ "id": "a", "label": "One" }, { "id": "b", "label": "Two" }]
+                    }
+                }
+            }
+        }),
+    );
+    let reply = read_reply(&mut mcp.stdout);
+
+    assert_eq!(reply["id"], json!(1));
+    assert_eq!(reply["result"]["isError"], json!(false), "{reply}");
+    assert!(
+        reply["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("visual-42")
+    );
+    let requests = fake.requests.lock().unwrap().clone();
+    assert!(
+        requests.iter().all(|request| request["kind"] != json!("mcp_hello")),
+        "{requests:?}"
+    );
+    let [request] = requests.as_slice() else {
+        panic!("expected exactly the visual_show request: {requests:?}");
+    };
+    assert_eq!(request["command"], json!("visual_show"));
+    assert_eq!(request["session_id"], json!("session-1"));
+    assert_eq!(request["params"]["html"].as_str(), Some(html));
+    assert_eq!(request["params"]["question"]["prompt"], json!("Which one?"));
 }
