@@ -194,13 +194,15 @@ public enum ShepherdPolicy {
         // provider no longer reports, falls back to watching. A provider
         // without merge-queue reporting (a GitLab merge train) can accept a
         // merge that lands later: that holds while the head stands and no
-        // check failed, so the record is not merged a second time.
+        // check failed or was cancelled (a stopped train), so the record is
+        // not merged a second time.
         switch record.phase {
         case .merging:
             record.phase = .watching
         case .queued:
             if request.isInMergeQueue { return .wait }
-            if !request.isMergeQueueEnabled, headUnchanged, request.worstCheckBucket != .fail { return .wait }
+            let trainStopped = request.worstCheckBucket == .fail || request.worstCheckBucket == .cancel
+            if !request.isMergeQueueEnabled, headUnchanged, !trainStopped { return .wait }
             record.phase = .watching
         default:
             break
