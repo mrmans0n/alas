@@ -237,15 +237,19 @@ private struct ProjectDialog: View {
             .frame(maxHeight: .infinity)
 
             if sshConnectionIssue != nil || errorMessage != nil {
-                VStack(alignment: .leading, spacing: 0) {
-                    if let sshConnectionIssue {
-                        sshConnectionIssueField(sshConnectionIssue)
-                    } else if let errorMessage {
-                        errorField(errorMessage)
+                ScrollView(.vertical) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        if let sshConnectionIssue {
+                            sshConnectionIssueField(sshConnectionIssue)
+                        } else if let errorMessage {
+                            errorField(errorMessage)
+                        }
                     }
+                    .padding(.horizontal, 22)
+                    .padding(.vertical, 12)
                 }
-                .padding(.horizontal, 22)
-                .padding(.vertical, 12)
+                .frame(maxHeight: 140)
+                .scrollBounceBehavior(.basedOnSize)
             }
 
             HStack(spacing: 8) {
