@@ -552,7 +552,7 @@ private struct ACPSessionView: View {
                     )
                     return true
                 }
-                switch state.transcriptLinkRoute(url, worktreeId: worktree.id) {
+                switch state.transcriptLinkRoute(url, in: worktree) {
                 case .opened, .ignored:
                     return true
                 case .systemOpen(let fileURL):

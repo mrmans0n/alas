@@ -623,7 +623,7 @@ struct AppStateCLIRoutingTests {
 
         let route = state.transcriptLinkRoute(
             URL(string: "\(file.path):2")!,
-            worktreeId: worktree.id
+            in: worktree
         )
 
         #expect(route == .opened)
@@ -646,7 +646,7 @@ struct AppStateCLIRoutingTests {
 
         let route = state.transcriptLinkRoute(
             URL(string: "Package.swift:2")!,
-            worktreeId: worktree.id
+            in: worktree
         )
 
         #expect(route == .opened)
@@ -684,7 +684,7 @@ struct AppStateCLIRoutingTests {
 
         let route = state.transcriptLinkRoute(
             URL(string: "\(file.path):2")!,
-            worktreeId: worktree.id
+            in: worktree
         )
 
         #expect(route == .opened)
@@ -701,6 +701,34 @@ struct AppStateCLIRoutingTests {
         })
     }
 
+    /// A Workspace checkout's tab carries a synthetic root worktree that no
+    /// project lists. Its `path:line` links still open in the member worktree
+    /// that contains them instead of reaching the system raw (paramErr -50).
+    @Test func routeTranscriptOpenURLFromCheckoutRootOpensMemberFileAtLine() async throws {
+        let (state, _, member) = try await makeStateWithWorktree(name: "transcript-checkout")
+        defer { try? FileManager.default.removeItem(at: member.path) }
+        let file = member.path.appendingPathComponent("Fragment.kt")
+        try "first\nsecond\n".write(to: file, atomically: true, encoding: .utf8)
+        let checkoutRoot = Worktree(
+            id: "workspace-checkout:test",
+            projectId: "workspace-checkout",
+            name: "checkout",
+            branch: "main",
+            path: member.path.deletingLastPathComponent(),
+            status: .clean,
+            lastActivity: Date(),
+            createdAt: Date()
+        )
+
+        let route = state.transcriptLinkRoute(URL(string: "\(file.path):2")!, in: checkoutRoot)
+
+        #expect(route == .opened)
+        #expect(state.tabs.tabs(forWorktree: member.id).contains {
+            if case .editor(let s) = $0 { return s.relativePath == "Fragment.kt" && s.revealLine == 1 }
+            return false
+        })
+    }
+
     @Test func routeTranscriptOpenURLHandsOutsideFileToTheSystemAsAFileURL() async throws {
         let (state, _, worktree) = try await makeStateWithWorktree(name: "transcript-outside")
         defer { try? FileManager.default.removeItem(at: worktree.path) }
@@ -711,7 +739,7 @@ struct AppStateCLIRoutingTests {
         let file = externalDir.appendingPathComponent("notes.md")
         try "x\n".write(to: file, atomically: true, encoding: .utf8)
 
-        let route = state.transcriptLinkRoute(URL(string: file.path)!, worktreeId: worktree.id)
+        let route = state.transcriptLinkRoute(URL(string: file.path)!, in: worktree)
 
         #expect(route == .systemOpen(file.standardizedFileURL))
         #expect(state.tabs.tabs(forWorktree: worktree.id).allSatisfy {
@@ -743,7 +771,7 @@ struct AppStateCLIRoutingTests {
             .missing(path: $0.replacingOccurrences(of: "{root}", with: root))
         } ?? .unhandled
 
-        #expect(state.transcriptLinkRoute(url, worktreeId: worktree.id) == expected)
+        #expect(state.transcriptLinkRoute(url, in: worktree) == expected)
     }
 
     /// A remote session's absolute links open in the remote editor or are

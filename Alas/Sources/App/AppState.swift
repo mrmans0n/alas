@@ -10468,8 +10468,12 @@ final class AppState {
     /// a sibling worktree of the same repo — open there, switching the
     /// selected worktree. Anything else that exists on disk comes back as a
     /// `file:` URL for the system to open.
-    func transcriptLinkRoute(_ url: URL, worktreeId: String) -> TranscriptLinkRoute {
-        guard let worktree = worktree(withId: worktreeId) else { return .unhandled }
+    ///
+    /// `session` is the tab's worktree. A Workspace checkout's tab gets a
+    /// synthetic root worktree no project lists: its links still resolve
+    /// against that root and open in the member worktree that contains them.
+    func transcriptLinkRoute(_ url: URL, in session: Worktree) -> TranscriptLinkRoute {
+        let registered = worktree(withId: session.id)
 
         let rawPath: String
         // Only file URLs and schemeless paths are unambiguously local. A
@@ -10496,9 +10500,15 @@ final class AppState {
         // A remote session's relative path names a file on its host, so it
         // joins the virtual worktree root and routes lexically, unprobed.
         let remoteCandidate = isLocalPathForm && !rawPath.hasPrefix("/")
-            ? worktree.path.path + "/" + rawPath
+            ? session.path.path + "/" + rawPath
             : rawPath
-        if let remote = routeRemoteAbsoluteLink(remoteCandidate, worktree: worktree) { return remote }
+        if let registered {
+            if let remote = routeRemoteAbsoluteLink(remoteCandidate, worktree: registered) { return remote }
+        } else if RemotePath.split(session.path.path) != nil {
+            // A remote checkout root has no editor of its own and nothing
+            // local to probe.
+            return .ignored
+        }
 
         var candidates = [rawPath]
         // Trailing-period fallback: transcript prose can include sentence
@@ -10508,7 +10518,7 @@ final class AppState {
         }
 
         for candidate in candidates {
-            switch transcriptRoute(forLocalPath: candidate, worktree: worktree) {
+            switch transcriptRoute(forLocalPath: candidate, session: session, opensInSession: registered != nil) {
             case .opened:
                 NSApp.activate(ignoringOtherApps: true)
                 return .opened
@@ -10522,18 +10532,18 @@ final class AppState {
         return isLocalPathForm ? .missing(path: rawPath) : .unhandled
     }
 
-    private func transcriptRoute(forLocalPath candidatePath: String, worktree: Worktree) -> TranscriptLinkRoute {
+    private func transcriptRoute(forLocalPath candidatePath: String, session: Worktree, opensInSession: Bool) -> TranscriptLinkRoute {
         guard let target = localFileOpenTarget(
             candidatePath,
-            worktree: worktree,
-            baseDirectory: worktree.path
+            worktree: session,
+            baseDirectory: session.path
         ) else { return .unhandled }
         guard !target.isDirectory else { return .systemOpen(target.url) }
 
-        if let relativePath = Self.containedRelativePath(for: target.url, in: worktree.path) {
+        if opensInSession, let relativePath = Self.containedRelativePath(for: target.url, in: session.path) {
             openFile(
                 relativePath: relativePath,
-                worktreeId: worktree.id,
+                worktreeId: session.id,
                 revealLine: target.revealLine,
                 revealCharacter: target.revealCharacter
             )
