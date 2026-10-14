@@ -13,10 +13,11 @@
 //! - owned by the lease of the plugin instance that started it: every call
 //!   names that lease, and a call for another lease's process is refused;
 //! - stopped with everything it started, by a supervisor that leads nothing
-//!   itself but holds a pidfd for every process it owns (see `linux`).
+//!   itself (see `supervisor`), through the host's `platform` module.
 //!
-//! Only Linux hosts with pidfds qualify. macOS has no subreaper, so a
-//! double-forked daemon could escape, and API 6 promises none does.
+//! Linux hosts with pidfds and macOS hosts qualify. On Linux nothing escapes;
+//! on macOS a descendant that leaves the group and redirects its output before
+//! a sample sees it can (see `macos`), much as with the local launcher.
 
 use crate::{HelperError, ServerMessage, decode_params, jsonrpc_error, validate_proc_id};
 use base64::Engine;
