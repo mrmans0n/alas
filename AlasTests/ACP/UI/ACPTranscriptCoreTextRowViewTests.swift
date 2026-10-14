@@ -392,6 +392,21 @@ import Testing
         #expect(extent.upperBound - extent.lowerBound > 10)
     }
 
+    @Test func aSelectionRunningPastATableCellStopsAtTheCellEdge() throws {
+        typealias V = ACPTranscriptCoreTextRowView
+        let layout = try #require(ACPTranscriptMarkdownLayout.make(
+            source: "Intro.\n\n| a | b |\n|---|---|\n| 1 | 2 |", width: 400, theme: theme, typography: .default
+        ))
+        let intro = try #require(layout.lines.first { $0.block == 0 })
+        let cell = try #require(layout.lines.first { $0.block.map { layout.texts[$0] } == "a" })
+        #expect(V.selectionRunOnEdge(of: intro, in: layout, edge: 400) == 400)
+        let cellEdge = V.selectionRunOnEdge(of: cell, in: layout, edge: 400)
+        #expect(cellEdge == cell.maxX + ACPTranscriptMarkdownLayout.tableCellHorizontalPadding)
+        let extent = V.selectionExtent(of: cell.line, from: 0, to: 1, hasText: true, runsTo: cellEdge - cell.origin.x)
+        let divider = try #require(layout.tables.first?.columnXs.first)
+        #expect(cell.origin.x + extent.upperBound <= divider)
+    }
+
     @Test func codeBlockLanguageIsAccessibleStaticText() throws {
         let view = row(.agent(markdown: "```swift\nlet x = 1\n```\n\n```\nplain\n```", commentary: false))
         _ = view.measuredHeight(forWidth: 800)

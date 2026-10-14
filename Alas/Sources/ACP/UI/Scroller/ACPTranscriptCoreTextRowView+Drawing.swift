@@ -528,14 +528,25 @@ extension ACPTranscriptCoreTextRowView {
             let lower = max(span.lowerBound, line.range.location)
             let upper = min(span.upperBound, visibleEnd)
             guard span.lowerBound <= visibleEnd, span.upperBound >= line.range.location, lower < upper || runsOn else { continue }
+            let runsTo = runsOn ? Self.selectionRunOnEdge(of: line, in: markdown, edge: edge) - line.origin.x : nil
             let extent = Self.selectionExtent(
-                of: line.line, from: lower, to: upper, hasText: line.visibleLength > 0, runsTo: runsOn ? edge - line.origin.x : nil
+                of: line.line, from: lower, to: upper, hasText: line.visibleLength > 0, runsTo: runsTo
             )
             context.fill(CGRect(
                 x: origin.x + line.origin.x + extent.lowerBound, y: origin.y + line.origin.y,
                 width: extent.upperBound - extent.lowerBound, height: line.height
             ))
         }
+    }
+
+    /// Where a selection running past `line`'s end stops, in markdown
+    /// coordinates: a table cell's right edge, so it never paints over the
+    /// next column, or `edge` for any other text.
+    static func selectionRunOnEdge(
+        of line: ACPTranscriptMarkdownLayout.Line, in markdown: ACPTranscriptMarkdownLayout, edge: CGFloat
+    ) -> CGFloat {
+        guard let block = line.block, markdown.table(containing: block) != nil else { return edge }
+        return line.maxX + ACPTranscriptMarkdownLayout.tableCellHorizontalPadding
     }
 
     /// The x range to highlight for `lower..<upper` of `line`, or from `lower` to

@@ -25,11 +25,14 @@ struct ACPTranscriptMarkdownLayout {
         var maxX: CGFloat = 0
     }
 
-    /// A table's grid: its frame, the x of each column divider, and the bottom of each row (header first).
+    /// A table's grid: its frame, the x of each column divider, and the
+    /// bottom of each row (header first).
     struct Table {
         let rect: CGRect
         let columnXs: [CGFloat]
         let rowBottoms: [CGFloat]
+        /// The indices into `texts` of its cells, row-major.
+        let blocks: Range<Int>
         let fill: NSColor
         let headerFill: NSColor
         let headerRule: NSColor
@@ -187,6 +190,11 @@ struct ACPTranscriptMarkdownLayout {
         let block = codeBlocks[index]
         let width = copyButtonStyle.width(copied: copied)
         return CGRect(x: block.maxX - width, y: block.minY, width: width, height: block.height)
+    }
+
+    /// The table whose cell shows `block`, if any.
+    func table(containing block: Int) -> Table? {
+        tables.first { $0.blocks.contains(block) }
     }
 
     /// The lines whose boxes overlap `rect` vertically, including ones it only cuts.
@@ -543,6 +551,7 @@ struct ACPTranscriptMarkdownLayout {
             let columnWidth = L.tableColumnWidth(available: width, columns: columns)
             let top = y
             let firstLine = lines.count
+            let firstBlock = texts.count
             var rowBottoms: [CGFloat] = []
             for (rowIndex, cells) in ([header] + rows).enumerated() {
                 let rowTop = y
@@ -568,6 +577,7 @@ struct ACPTranscriptMarkdownLayout {
                 rect: CGRect(x: 0, y: top, width: width, height: y - top),
                 columnXs: (1..<columns).map { CGFloat($0) * (columnWidth + L.tableDividerWidth) - L.tableDividerWidth },
                 rowBottoms: rowBottoms,
+                blocks: firstBlock..<texts.count,
                 fill: theme.nsColor("bg-1").withAlphaComponent(0.4),
                 headerFill: theme.nsColor("bg-2").withAlphaComponent(0.5),
                 headerRule: theme.nsColor("line"),
