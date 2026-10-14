@@ -11316,12 +11316,13 @@ final class AppState {
                                 self.worktreeCleanupSessionCounts(worktreeId: worktreeId).busy
                             }
                         },
+                        // A failed delete awaits retry, so it does not block selection.
                         operationInFlight: { worktreeId in
                             await MainActor.run {
-                                self.projectsManager.operationState(
+                                !WorktreeOperationState.admitsLifecycleOperation(self.projectsManager.operationState(
                                     forWorktreeId: worktreeId,
                                     projectId: projectId
-                                ) != nil
+                                ))
                             }
                         },
                         workspaceOwners: { worktree in
