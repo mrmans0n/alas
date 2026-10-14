@@ -518,6 +518,27 @@ struct AlasCLIRequestTests {
         #expect(AppState.prCreateLookupBranches(local) == expected)
     }
 
+    /// A remote branch with commits the worktree lacks blocks `pr_create`,
+    /// unless that upstream is the base, which is never pushed or adopted.
+    @MainActor
+    @Test(arguments: [
+        ("feature", 2, false, true),
+        ("feature", 2, true, true),
+        ("feature", 0, true, false),
+        ("review-feature", 1, false, true),
+        ("main", 3, false, false),
+    ] as [(String, Int, Bool, Bool)])
+    func prCreateRejectsAStaleUpstream(upstream: String, upstreamAhead: Int, needsPush: Bool, blocked: Bool) {
+        let local = ReviewLoopLocalState(
+            branchName: "feature", headSHA: "a3f9c1e", baseBranch: "main",
+            hasWorkingTreeChanges: false, hasStagedChanges: false, aheadCommitCount: 1,
+            hasUpstream: true, upstreamRemoteName: "origin", upstreamBranchName: upstream,
+            upstreamAheadCommitCount: upstreamAhead, needsPush: needsPush
+        )
+        let blocker = AppState.prCreateBranchBlocker(local, baseBranch: "main")
+        #expect((blocker?.contains("has commits this worktree doesn't") ?? false) == blocked)
+    }
+
     /// An open request on this branch gets the pending HEAD pushed first; one
     /// on a differently named upstream is never pushed to, so unpushed
     /// commits block instead of being silently left out.

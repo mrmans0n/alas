@@ -333,6 +333,14 @@ extension AppState {
         if local.aheadCommitCount == 0 {
             return "\(local.branchName) has no commits ahead of \(baseBranch)."
         }
+        // The upstream holds commits this worktree lacks: adopting or
+        // publishing would leave the request's head ahead of HEAD, and the
+        // shepherd could never call it ready. An upstream that is the base
+        // (a worktree created from origin/main) is never pushed or adopted.
+        if let upstream = local.upstreamBranchName, upstream != baseBranch,
+           local.pushState == .stale || local.pushState == .diverged {
+            return "\(upstream) on the remote has commits this worktree doesn't. Pull or merge them into \(local.branchName), then call pr_create again."
+        }
         return nil
     }
 
