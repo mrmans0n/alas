@@ -83,10 +83,9 @@ import Testing
         #expect(layout.linkSpans().map(\.text) == ["first", "second", "a bold link"])
     }
 
-    @Test func backToBackAutolinksStayDistinct() throws {
-        let layout = try #require(ACPTranscriptMarkdownLayout.make(
-            source: "<https://example.com><https://example.com>", width: 800, theme: theme, typography: .default
-        ))
+    @Test(arguments: ["<https://example.com><https://example.com>", "<dev@example.com><dev@example.com>"])
+    func backToBackAutolinksStayDistinct(source: String) throws {
+        let layout = try #require(ACPTranscriptMarkdownLayout.make(source: source, width: 800, theme: theme, typography: .default))
         #expect(layout.linkSpans().count == 2)
     }
 

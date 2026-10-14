@@ -681,21 +681,23 @@ private enum MarkdownLinkScanner {
         return (Link(label: label, url: url, isAutolink: false), index + 1)
     }
 
+    /// `<scheme:…>`, or `<address@domain>`, which renders as a `mailto:` link.
     private static func autolink(_ chars: [Character], at start: Int) -> (Link, Int)? {
         var index = start + 1
-        guard index < chars.count, chars[index].isASCII, chars[index].isLetter else { return nil }
-        while index < chars.count, chars[index].isASCII,
-              chars[index].isLetter || chars[index].isNumber || "+.-".contains(chars[index]) {
-            index += 1
-        }
-        guard index < chars.count, chars[index] == ":" else { return nil }
         while index < chars.count, chars[index] != ">" {
             guard chars[index] != "<", !chars[index].isWhitespace else { return nil }
             index += 1
         }
         guard index < chars.count else { return nil }
-        let url = String(chars[(start + 1) ..< index])
-        return (Link(label: url, url: url, isAutolink: true), index + 1)
+        let content = String(chars[(start + 1) ..< index])
+        if content.range(of: #"^[A-Za-z][A-Za-z0-9+.-]{1,31}:"#, options: .regularExpression) != nil {
+            return (Link(label: content, url: content, isAutolink: true), index + 1)
+        }
+        let email = #"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$"#
+        if content.range(of: email, options: .regularExpression) != nil {
+            return (Link(label: content, url: "mailto:" + content, isAutolink: true), index + 1)
+        }
+        return nil
     }
 
     private static func skipWhitespace(_ chars: [Character], from start: Int) -> Int {
