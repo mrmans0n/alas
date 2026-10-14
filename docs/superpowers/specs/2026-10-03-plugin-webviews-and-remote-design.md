@@ -230,7 +230,7 @@ Same messages, limits and error codes as API 6. Differences:
   process by its pid and start time (`proc_pidinfo`) and checks both again
   immediately before every signal; the anchor polls for its parent instead of
   a parent-death signal. Orphans reparent to launchd at once, so cleanup also
-  signals any process of the user's, started after the supervisor, that is in
+  signals any process started after the supervisor that is in
   the anchor's group or still holds either end of the run's stdout or stderr
   pipe (`PROC_PIDLISTFDS`, `PROC_PIDFDPIPEINFO`); the supervisor keeps its own
   read ends open so the pipes' kernel handles can't be reused meanwhile. An

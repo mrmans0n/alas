@@ -205,22 +205,21 @@ pub(super) fn pin(pipes: Vec<std::os::fd::OwnedFd>) -> Pins {
     }
 }
 
-/// The user's processes started since `since` that launchd may have adopted
-/// but still belong to the run: in the anchor's group while it lives, or
+/// The processes started since `since` that launchd may have adopted but still
+/// belong to the run: in the anchor's group while it lives, or
 /// holding either end of the run's output pipes.
 /// ponytail: one that left the group and redirected its output before a
 /// sample saw it below the supervisor escapes.
 pub(super) fn strays(pins: &Pins, anchor: Option<i32>, since: u64) -> Vec<(i32, Stat)> {
     let me = std::process::id() as i32;
-    // SAFETY: getuid only.
-    let uid = unsafe { libc::getuid() };
+    // Not limited to this user: the group or the pipe proves a process is the
+    // run's, and a command run as root may drop a child's privileges.
     pids()
         .into_iter()
         .filter(|pid| *pid != me && Some(*pid) != anchor)
         .filter_map(|pid| {
-            let info = bsdinfo(pid)?;
-            let stat = stat_of(&info);
-            (info.pbi_uid == uid && stat.start >= since && !stat.dead).then_some((pid, stat))
+            let stat = stat(pid)?;
+            (stat.start >= since && !stat.dead).then_some((pid, stat))
         })
         .filter(|(pid, stat)| {
             Some(stat.pgrp) == anchor
