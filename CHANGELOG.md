@@ -6,19 +6,40 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.21.4] - 2026-10-14
+
 ### Added
 
 - Show visual aids in ACP sessions of SSH projects. The remote helper relays the built-in `visual_show` tool, and only that tool, back to the Mac that owns the session, with no port forwarding or listening port; this needs remote helper 0.8.0, which Alas installs on connect (#1996).
+- Enable the Needs Attention inbox for everyone (#1985).
+- Add a resizable, settings-style project dialog and vendor logos in the default agent picker (#1991, #2005).
+- Open the review scope palette from the Commits header or an anchored commit row (#2003).
+- Prune archived local worktree registrations when their directory is gone, preserving branches and locked worktrees (#1995).
 
 ### Changed
 
 - Start sidebar peers collapsed instead of automatically expanding them.
 - Check for Alas updates periodically while the app is running and keep available releases in Needs Attention across app restarts instead of opening an automatic update sheet. Limit automatic attempts, including failed checks, to once per day.
+- Use segmented controls for the default chat launch surface and follow-up behavior (#2007).
+- Always show the review's Send to agent control, attach restored chat targets when sending, and default AI-tool selection to Automatic. Previously saved legacy None settings now resolve to Automatic; choose None again to opt out (#1994).
 
 ### Fixes
 
 - Align inline diff highlights with their text in the CoreText renderer, including wrapped lines.
 - Keep the repository's Build run script console hidden by using the correct `alas-console` header.
+- Keep the sidebar worktree filter from taking focus at launch (#2009).
+- Open transcript path-and-line links from Workspace checkout tabs and show a File Not Found alert for missing local paths (#1997).
+- Show matching `/goal` confirmations as transcript notices rather than agent prose (#1998).
+- Restore native transcript code-block header bands, outlines, and Copy icons (#1988).
+- Preserve zsh PATH during checkout hooks and fall back to upstream when a local submodule cache lacks the pinned commit.
+
+### Performance
+
+- Draw transcript tables with up to five columns natively, retaining selection, links, copy, and accessibility while reducing scrolling hitches. Wider tables retain the SwiftUI renderer (#2001).
+
+### Internal
+
+- Replace core hook closures with `AlasHostEnvironment`, restrict app-only plumbing to `AppHost` SPI, and share script execution through one core routine and `RunLauncher` (#1983, #1984, #1986, #1999).
 
 ## [0.21.3] - 2026-10-14
 
