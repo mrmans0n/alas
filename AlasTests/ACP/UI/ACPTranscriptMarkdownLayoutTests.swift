@@ -87,6 +87,21 @@ import Testing
         #expect(layout.link(at: CGPoint(x: x, y: line.origin.y + line.height + 50)) == nil)
     }
 
+    /// A caret index past the glyph's midpoint is the run's end, so hit
+    /// testing has to use the run's drawn bounds instead.
+    @Test func theTrailingHalfOfALinkGlyphStillHitsTheLink() throws {
+        let layout = try #require(ACPTranscriptMarkdownLayout.make(source: "See [x](https://example.com) now.", width: 400, theme: theme, typography: .default))
+        let line = try #require(layout.lines.first)
+        let runs = CTLineGetGlyphRuns(line.line) as! [CTRun]
+        let linkRun = try #require(runs.first { (CTRunGetAttributes($0) as NSDictionary)[NSAttributedString.Key.link] != nil })
+        var position = CGPoint.zero
+        CTRunGetPositions(linkRun, CFRange(location: 0, length: 1), &position)
+        let width = CGFloat(CTRunGetTypographicBounds(linkRun, CFRange(location: 0, length: 0), nil, nil, nil))
+        let y = line.origin.y + line.height / 2
+        #expect(layout.link(at: CGPoint(x: line.origin.x + position.x + width * 0.9, y: y)) == URL(string: "https://example.com"))
+        #expect(layout.link(at: CGPoint(x: line.origin.x + position.x + width + 0.5, y: y)) == nil)
+    }
+
     @Test func linesIntersectingIncludesLinesCutByTheRect() throws {
         let layout = try #require(ACPTranscriptMarkdownLayout.make(source: String(repeating: "word ", count: 400), width: 300, theme: theme, typography: .default))
         let second = layout.lines[1]

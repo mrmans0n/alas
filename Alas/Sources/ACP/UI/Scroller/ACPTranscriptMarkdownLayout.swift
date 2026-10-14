@@ -190,11 +190,13 @@ struct ACPTranscriptMarkdownLayout {
         guard let line = lines.first(where: { $0.origin.y <= point.y && point.y < $0.origin.y + $0.height }) else { return nil }
         let x = point.x - line.origin.x
         guard x >= 0, x < CGFloat(CTLineGetTypographicBounds(line.line, nil, nil, nil)) else { return nil }
-        let index = CTLineGetStringIndexForPosition(line.line, CGPoint(x: x, y: 0))
-        guard index != kCFNotFound else { return nil }
-        for run in CTLineGetGlyphRuns(line.line) as! [CTRun] {
-            let range = CTRunGetStringRange(run)
-            guard index >= range.location, index < range.location + range.length else { continue }
+        // The run's drawn extent, not a caret index: past a glyph's midpoint
+        // the caret index is the next character, outside a link's last run.
+        for run in CTLineGetGlyphRuns(line.line) as! [CTRun] where CTRunGetGlyphCount(run) > 0 {
+            var position = CGPoint.zero
+            CTRunGetPositions(run, CFRange(location: 0, length: 1), &position)
+            let width = CGFloat(CTRunGetTypographicBounds(run, CFRange(location: 0, length: 0), nil, nil, nil))
+            guard x >= position.x, x < position.x + width else { continue }
             let value = (CTRunGetAttributes(run) as NSDictionary)[NSAttributedString.Key.link]
             return (value as? URL) ?? (value as? String).flatMap(URL.init(string:))
         }
