@@ -1668,8 +1668,9 @@ public final class ACPSession: ChangeTracking, Identifiable {
             dirty = applyBackgroundTask(update, ownerSessionId: remoteSessionId ?? id)
         case .agentMessageChunk(let chunk):
             dirty = []
-            matchedIndex = chunk.messageId
-                .flatMap { transcript.messageIndex(messageId: $0, kind: .agent) }
+            // A `/goal` confirmation is persisted as a notice, not an agent row.
+            matchedIndex = goalCommandNoticeIndex(text(of: chunk.content), atOrAfter: suppressedReplayInsertionCursor)
+                ?? chunk.messageId.flatMap { transcript.messageIndex(messageId: $0, kind: .agent) }
                 ?? firstIdLessMatch(of: .agent, atOrAfter: suppressedReplayInsertionCursor)
         case .agentThoughtChunk(let chunk):
             dirty = []
@@ -2352,12 +2353,26 @@ public final class ACPSession: ChangeTracking, Identifiable {
         return nil
     }
 
+    /// The first notice at or after `start` recording `text` as a `/goal`
+    /// confirmation, so suppressed replay can advance past it.
+    private func goalCommandNoticeIndex(_ text: String, atOrAfter start: Int) -> Int? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard Self.isGoalCommandConfirmation(trimmed), start < transcript.messages.count else { return nil }
+        return transcript.messages[start...].firstIndex {
+            if case .systemNotice(_, trimmed) = $0 { true } else { false }
+        }
+    }
+
+    private static func isGoalCommandConfirmation(_ trimmed: String) -> Bool {
+        trimmed.hasPrefix("Goal set: ") || trimmed.hasPrefix("Goal cleared: ")
+    }
+
     /// Whether `text` is a `/goal` confirmation the transcript already shows:
     /// as a notice, or as agent text recorded before notices existed. Matches
     /// any objective, since the cleared one is not kept across a restart.
     private func showsGoalCommandConfirmation(_ text: String) -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.hasPrefix("Goal set: ") || trimmed.hasPrefix("Goal cleared: ") else { return false }
+        guard Self.isGoalCommandConfirmation(trimmed) else { return false }
         return transcript.messages.contains { message in
             switch message {
             case .systemNotice(_, let notice): notice == trimmed
