@@ -1668,10 +1668,11 @@ public final class ACPSession: ChangeTracking, Identifiable {
             dirty = applyBackgroundTask(update, ownerSessionId: remoteSessionId ?? id)
         case .agentMessageChunk(let chunk):
             dirty = []
-            // A `/goal` confirmation is persisted as a notice, not an agent row.
+            // A `/goal` confirmation is persisted as a notice, not an agent row;
+            // older builds stored it as agent text, so take whichever is first.
             matchedIndex = chunk.messageId.flatMap { transcript.messageIndex(messageId: $0, kind: .agent) }
-                ?? goalCommandNoticeIndex(text(of: chunk.content), atOrAfter: suppressedReplayInsertionCursor)
-                ?? firstIdLessMatch(of: .agent, atOrAfter: suppressedReplayInsertionCursor)
+                ?? [goalCommandNoticeIndex(text(of: chunk.content), atOrAfter: suppressedReplayInsertionCursor),
+                    firstIdLessMatch(of: .agent, atOrAfter: suppressedReplayInsertionCursor)].compactMap { $0 }.min()
         case .agentThoughtChunk(let chunk):
             dirty = []
             matchedIndex = chunk.messageId

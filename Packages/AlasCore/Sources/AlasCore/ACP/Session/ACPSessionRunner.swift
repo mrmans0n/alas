@@ -272,6 +272,13 @@ public final class ACPSessionRunner {
     /// Goal controls in flight. Like an active prompt, each one keeps the
     /// streaming boundary open when load-replay suppression finishes.
     private var activeGoalControls = 0
+    /// The boundary before the first of the in-flight goal controls opened it.
+    private var goalControlBoundary: GoalControlBoundary?
+    private struct GoalControlBoundary {
+        let crossingBefore: Bool
+        let generation: Int
+        var anyAccepted = false
+    }
     private var cancelledPromptIDs: Set<Int> = []
     /// Retains the most recently dispatched prompt RPC so steering can wait
     /// for its response after sending the cancellation notification.
@@ -2738,28 +2745,33 @@ extension ACPSessionRunner {
     /// prompt it opens the streaming boundary a restored session keeps closed
     /// against late replay; otherwise repeating an earlier objective would
     /// read as replay. Updates already queued are applied first, as the prompt
-    /// path does. A rejected control produces no output, so it restores the
-    /// boundary unless something else has set it in the meantime.
+    /// path does. Rejected controls produce no output, so once every control
+    /// in flight has been rejected the boundary is restored, unless something
+    /// else has set it in the meantime.
     func controlGoal(capability: ACPGoalCapability, action: ACPGoalAction, objective: String?) async throws {
         flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
-        let boundaryCrossingBefore = session.allowsStreamingBoundaryCrossing
-        session.allowsStreamingBoundaryCrossing = true
-        let boundaryGeneration = session.streamingBoundaryGeneration
-        activeGoalControls += 1
-        defer { activeGoalControls -= 1 }
-        do {
-            try await connection.controlGoal(
-                sessionId: session.remoteSessionId ?? session.id,
-                capability: capability,
-                action: action,
-                objective: objective
-            )
-        } catch {
-            if session.streamingBoundaryGeneration == boundaryGeneration {
-                session.allowsStreamingBoundaryCrossing = boundaryCrossingBefore
-            }
-            throw error
+        if activeGoalControls == 0 {
+            let crossingBefore = session.allowsStreamingBoundaryCrossing
+            session.allowsStreamingBoundaryCrossing = true
+            goalControlBoundary = .init(crossingBefore: crossingBefore, generation: session.streamingBoundaryGeneration)
         }
+        activeGoalControls += 1
+        defer {
+            activeGoalControls -= 1
+            if activeGoalControls == 0, let boundary = goalControlBoundary {
+                goalControlBoundary = nil
+                if !boundary.anyAccepted, session.streamingBoundaryGeneration == boundary.generation {
+                    session.allowsStreamingBoundaryCrossing = boundary.crossingBefore
+                }
+            }
+        }
+        try await connection.controlGoal(
+            sessionId: session.remoteSessionId ?? session.id,
+            capability: capability,
+            action: action,
+            objective: objective
+        )
+        goalControlBoundary?.anyAccepted = true
     }
 
     /// Cancels one native subagent. `session/cancel` addressed to the CHILD
