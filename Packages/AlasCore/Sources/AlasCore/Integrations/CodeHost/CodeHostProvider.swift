@@ -283,10 +283,16 @@ public protocol CodeHostProvider: Sendable {
     func repositoryParent(remote: CodeHostRemote, cwd: URL) async throws -> CodeHostRemote?
 
     /// Lowercased logins that reviewed the request's current head: a review
-    /// or approval on `request.headSHA`, or a top-level comment posted after
-    /// the head commit. Throws when the provider can't tell, so callers fail
-    /// closed instead of reading an empty set as "nobody reviewed".
-    func reviewersOnHead(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> Set<String>
+    /// or approval on `request.headSHA`, or timestamped evidence (a top-level
+    /// comment, a reaction, a dated approval) created after both the head
+    /// commit and `notBefore`. The commit date is authored locally, so a
+    /// commit made before a reviewer's comment but pushed after it would
+    /// otherwise count that stale comment; `notBefore` is when Alas first saw
+    /// this head, a time the pusher can't backdate. With a nil `notBefore`
+    /// timestamped evidence counts for nobody. Throws when the provider can't
+    /// tell, so callers fail closed instead of reading an empty set as
+    /// "nobody reviewed".
+    func reviewersOnHead(remote: CodeHostRemote, request: ReviewRequest, notBefore: Date?, cwd: URL) async throws -> Set<String>
 }
 
 extension CodeHostProvider {
@@ -509,7 +515,12 @@ extension CodeHostProvider {
 
     // Throwing for the same reason as `mergedReviewRequests`: an empty set
     // would read as "nobody reviewed" rather than "can't tell".
-    public func reviewersOnHead(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> Set<String> {
+    public func reviewersOnHead(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        notBefore: Date?,
+        cwd: URL
+    ) async throws -> Set<String> {
         throw CodeHostProviderError.unsupportedProvider(remote.kind)
     }
 }

@@ -1430,7 +1430,12 @@ public struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
         )
     }
 
-    public func reviewersOnHead(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> Set<String> {
+    public func reviewersOnHead(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        notBefore: Date?,
+        cwd: URL
+    ) async throws -> Set<String> {
         guard let headSHA = Self.normalizedOptionalString(request.headSHA) else {
             throw CodeHostProviderError.malformedOutput("GitLab reviewers on head require the merge request head SHA.")
         }
@@ -1450,7 +1455,12 @@ public struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
             remote: remote,
             cwd: cwd
         )
-        return try Self.parseReviewersOnHead(approvalsJSON: approvals, notesJSON: notes, headCommitJSON: headCommit)
+        return try Self.parseReviewersOnHead(
+            approvalsJSON: approvals,
+            notesJSON: notes,
+            headCommitJSON: headCommit,
+            notBefore: notBefore
+        )
     }
 
     /// `glab api <path>` as JSON. Query fields switch the call to an explicit
@@ -2242,14 +2252,20 @@ public struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
     }
 
     /// Lowercased usernames that approved or commented on the head commit.
-    /// An approval counts unless its `approved_at` (newer GitLab) is older
-    /// than the head commit. Notes count when posted after the head commit.
-    /// System notes ("added 1 commit", "approved this merge request") never
-    /// count.
+    /// A dated approval (`approved_at`, newer GitLab) and a note count only
+    /// when created after both the head commit and `notBefore`, when Alas
+    /// first saw this head: the commit's `created_at` is authored locally, so
+    /// a commit made before a comment but pushed after it would otherwise
+    /// count the stale comment. The cost is that a note posted between the
+    /// push and Alas's first poll of the head doesn't count. A nil
+    /// `notBefore` leaves dated approvals and notes counting for nobody. An
+    /// approval without `approved_at` counts. System notes ("added 1
+    /// commit", "approved this merge request") never count.
     public static func parseReviewersOnHead(
         approvalsJSON: String,
         notesJSON: String,
-        headCommitJSON: String
+        headCommitJSON: String,
+        notBefore: Date?
     ) throws -> Set<String> {
         let decoder = JSONDecoder()
         let approvals: GitLabApprovalsResponse
@@ -2265,19 +2281,21 @@ public struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
         guard let headCreatedAt = try? parseOptionalGitLabDate(headCommit.createdAt) else {
             throw CodeHostProviderError.malformedOutput("glab commit output is missing created_at")
         }
+        let cutoff = notBefore.map { max($0, headCreatedAt) }
 
         var reviewers = Set<String>()
         for approval in approvals.approvedBy ?? [] {
             guard let username = normalizedOptionalString(approval.user?.username) else { continue }
-            if let approvedAt = try? parseOptionalGitLabDate(approval.approvedAt), approvedAt < headCreatedAt {
-                continue
+            if let approvedAt = try? parseOptionalGitLabDate(approval.approvedAt) {
+                guard let cutoff, approvedAt >= cutoff else { continue }
             }
             reviewers.insert(username.lowercased())
         }
+        guard let cutoff else { return reviewers }
         for note in notes where !note.isSystem {
             guard let username = normalizedOptionalString(note.author?.username),
                   let createdAt = try? parseOptionalGitLabDate(note.createdAt),
-                  createdAt > headCreatedAt
+                  createdAt > cutoff
             else { continue }
             reviewers.insert(username.lowercased())
         }

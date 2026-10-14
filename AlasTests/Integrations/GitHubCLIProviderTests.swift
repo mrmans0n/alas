@@ -661,11 +661,13 @@ struct GitHubCLIProviderTests {
         let reviews: String
         let comments: String
         var reactions = ""
+        /// When Alas first saw the head, ISO 8601; the head commit is dated 10:00.
+        var notBefore: String? = "2026-10-13T10:01:00Z"
         let expected: Set<String>
     }
 
     @Test(
-        "Reviewers on head keep head-commit reviews, and comments and thumbs-up reactions after the head commit",
+        "Reviewers on head keep head-commit reviews, and comments and thumbs-up reactions after the head commit and Alas first seeing it",
         arguments: [
             ReviewersOnHeadCase(
                 testDescription: "review on head counts, lowercased",
@@ -740,6 +742,41 @@ struct GitHubCLIProviderTests {
                 reactions: #"{"content": "THUMBS_UP", "createdAt": "2026-10-13T09:55:00Z", "user": {"login": "chatgpt-codex-connector[bot]"}}"#,
                 expected: []
             ),
+            ReviewersOnHeadCase(
+                testDescription: "comment after the head commit but before Alas saw the head does not count",
+                lastCommitOID: "head-sha-42",
+                reviews: "",
+                comments: #"{"author": {"login": "maintainer"}, "createdAt": "2026-10-13T10:05:00Z"}"#,
+                notBefore: "2026-10-13T10:10:00Z",
+                expected: []
+            ),
+            ReviewersOnHeadCase(
+                testDescription: "thumbs-up after the head commit but before Alas saw the head does not count",
+                lastCommitOID: "head-sha-42",
+                reviews: "",
+                comments: "",
+                reactions: #"{"content": "THUMBS_UP", "createdAt": "2026-10-13T10:05:00Z", "user": {"login": "chatgpt-codex-connector[bot]"}}"#,
+                notBefore: "2026-10-13T10:10:00Z",
+                expected: []
+            ),
+            ReviewersOnHeadCase(
+                testDescription: "thumbs-up after the head commit and after Alas saw the head counts",
+                lastCommitOID: "head-sha-42",
+                reviews: "",
+                comments: "",
+                reactions: #"{"content": "THUMBS_UP", "createdAt": "2026-10-13T10:15:00Z", "user": {"login": "chatgpt-codex-connector[bot]"}}"#,
+                notBefore: "2026-10-13T10:10:00Z",
+                expected: ["chatgpt-codex-connector"]
+            ),
+            ReviewersOnHeadCase(
+                testDescription: "unknown first-seen time counts only reviews on the head commit",
+                lastCommitOID: "head-sha-42",
+                reviews: #"{"author": {"login": "maintainer"}, "commit": {"oid": "head-sha-42"}}"#,
+                comments: #"{"author": {"login": "commenter"}, "createdAt": "2026-10-13T10:05:00Z"}"#,
+                reactions: #"{"content": "THUMBS_UP", "createdAt": "2026-10-13T10:05:00Z", "user": {"login": "chatgpt-codex-connector[bot]"}}"#,
+                notBefore: nil,
+                expected: ["maintainer"]
+            ),
         ]
     )
     func reviewersOnHeadSelection(_ testCase: ReviewersOnHeadCase) throws {
@@ -750,7 +787,11 @@ struct GitHubCLIProviderTests {
             reactions: testCase.reactions
         )
 
-        #expect(try GitHubCLIProvider.parseReviewersOnHead(output, headSHA: "head-sha-42") == testCase.expected)
+        let notBefore = try testCase.notBefore.map { try #require(ISO8601DateFormatter().date(from: $0)) }
+        #expect(
+            try GitHubCLIProvider.parseReviewersOnHead(output, headSHA: "head-sha-42", notBefore: notBefore)
+                == testCase.expected
+        )
     }
 
     private static func reviewersOnHeadOutput(

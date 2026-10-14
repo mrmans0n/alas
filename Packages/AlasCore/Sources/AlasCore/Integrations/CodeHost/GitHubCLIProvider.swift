@@ -899,7 +899,12 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
         return try Self.parseReviewThreadsPage(result.stdout)
     }
 
-    public func reviewersOnHead(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> Set<String> {
+    public func reviewersOnHead(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        notBefore: Date?,
+        cwd: URL
+    ) async throws -> Set<String> {
         guard let headSHA = request.headSHA, !headSHA.isEmpty else {
             throw CodeHostProviderError.malformedOutput("GitHub reviewers on head require the pull request head SHA.")
         }
@@ -918,7 +923,7 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
         guard result.exitCode == 0 else {
             throw CodeHostProviderError.commandFailed(command: "gh api graphql", stderr: result.stderr)
         }
-        return try Self.parseReviewersOnHead(result.stdout, headSHA: headSHA)
+        return try Self.parseReviewersOnHead(result.stdout, headSHA: headSHA, notBefore: notBefore)
     }
 
     private func fetchPRNodeID(
@@ -1966,13 +1971,17 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
     }
 
     /// Logins with a submitted review on `headSHA`, plus authors of top-level
-    /// comments and thumbs-up reactions created after the head commit. Codex
-    /// reacts with a thumbs-up instead of reviewing when it finds nothing; its
-    /// in-progress eyes reaction doesn't count. The cutoff only applies while
-    /// the newest PR commit is `headSHA`; if the head moved since the request
-    /// was fetched, comments and reactions count for nobody. Logins are
-    /// normalized by `normalizedReviewerLogin`.
-    public static func parseReviewersOnHead(_ json: String, headSHA: String) throws -> Set<String> {
+    /// comments and thumbs-up reactions created after both the head commit
+    /// and `notBefore`. Codex reacts with a thumbs-up instead of reviewing
+    /// when it finds nothing; its in-progress eyes reaction doesn't count.
+    /// `committedDate` is authored locally, so `notBefore` (when Alas first
+    /// saw this head) keeps a comment that predates the push from counting;
+    /// the cost is that a thumbs-up posted between the push and Alas's first
+    /// poll of the head doesn't count either. A nil `notBefore`, or a head
+    /// that moved since the request was fetched, leaves comments and
+    /// reactions counting for nobody. Logins are normalized by
+    /// `normalizedReviewerLogin`.
+    public static func parseReviewersOnHead(_ json: String, headSHA: String, notBefore: Date?) throws -> Set<String> {
         let response: ReviewersOnHeadResponse
         do {
             response = try JSONDecoder().decode(ReviewersOnHeadResponse.self, from: Data(json.utf8))
@@ -1987,21 +1996,23 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
             guard review.commit?.oid.lowercased() == head, let login = review.author?.login else { continue }
             reviewers.insert(normalizedReviewerLogin(login))
         }
-        guard let lastCommit = pullRequest.commits.nodes.last?.commit,
+        guard let notBefore,
+              let lastCommit = pullRequest.commits.nodes.last?.commit,
               lastCommit.oid.lowercased() == head,
               let headCommittedAt = try? parseOptionalDate(lastCommit.committedDate)
         else { return reviewers }
+        let cutoff = max(headCommittedAt, notBefore)
         for comment in pullRequest.comments.nodes {
             guard let login = comment.author?.login,
                   let createdAt = try? parseOptionalDate(comment.createdAt),
-                  createdAt > headCommittedAt
+                  createdAt > cutoff
             else { continue }
             reviewers.insert(normalizedReviewerLogin(login))
         }
         for reaction in pullRequest.reactions.nodes where reaction.content == "THUMBS_UP" {
             guard let login = reaction.user?.login,
                   let createdAt = try? parseOptionalDate(reaction.createdAt),
-                  createdAt > headCommittedAt
+                  createdAt > cutoff
             else { continue }
             reviewers.insert(normalizedReviewerLogin(login))
         }

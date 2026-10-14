@@ -152,6 +152,14 @@ public struct ShepherdRecord: Codable, Equatable, Sendable {
     }
 
     public var owner: SessionOwnerID { .worktree(id.worktreeID) }
+
+    /// When the policy first saw `headSHA`: the lower bound for timestamped
+    /// review evidence on that head. Nil for any head other than the one this
+    /// record has seen, including a new head the policy has not recorded yet.
+    public func headFirstSeenAt(of headSHA: String?) -> Date? {
+        guard let headSHA, headSHA == lastSeenHeadSHA else { return nil }
+        return headFirstSeenAt
+    }
 }
 
 public enum ShepherdSessionState: Equatable, Sendable {

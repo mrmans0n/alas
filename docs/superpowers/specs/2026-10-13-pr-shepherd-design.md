@@ -239,10 +239,20 @@ changed state (head moved, gate no longer passes) return the record to
 reviewed the current head when any of these holds:
 
 - GitHub: a submitted review whose `commit.oid` is the head; a top-level
-  comment, or a THUMBS_UP reaction on the PR, created after the head commit's
-  `committedDate` (only while the PR's last commit is still the head).
-- GitLab: an approval not older than the head commit, or a note created after
-  it.
+  comment, or a THUMBS_UP reaction on the PR, created after the cutoff (only
+  while the PR's last commit is still the head).
+- GitLab: an approval without `approved_at`, an approval at or after the
+  cutoff, or a note created after it.
+
+The cutoff is the later of the head commit's date (`committedDate`,
+`created_at`) and `ShepherdRecord.headFirstSeenAt`, when Alas first saw this
+head. The commit date is authored locally, so a commit made before a
+reviewer's comment or thumbs-up but pushed after it would otherwise count that
+stale evidence for the new head. While the record has no first-seen time for
+the current head (the poll that discovers it, or no record at all), only
+reviews tied to the head SHA and undated GitLab approvals count, so the merge
+gate fails closed. The cost: a thumbs-up posted between the push and Alas's
+first poll of the head does not count.
 
 Logins are lowercased and a trailing `[bot]` is stripped, so
 `chatgpt-codex-connector` matches `chatgpt-codex-connector[bot]`. Checked

@@ -490,12 +490,25 @@ public final class ReviewShepherd {
 
     /// Lowercased logins that reviewed the request's current head. Nil when
     /// the provider could not say, which keeps a required-reviewer gate closed.
-    public func headReviewers(for snapshot: ReviewLoopSnapshot, worktreePath: URL) async -> Set<String>? {
+    /// `notBefore` is when Alas first saw this head
+    /// (`ShepherdRecord.headFirstSeenAt(of:)`); comments, reactions and dated
+    /// approvals older than it don't count, and with nil none of them do.
+    /// See `CodeHostProvider.reviewersOnHead`.
+    public func headReviewers(
+        for snapshot: ReviewLoopSnapshot,
+        worktreePath: URL,
+        notBefore: Date? = nil
+    ) async -> Set<String>? {
         guard let remote = snapshot.remote,
               let request = snapshot.reviewRequest,
               let provider = providerRegistry.provider(for: remote.kind)
         else { return nil }
-        return try? await provider.reviewersOnHead(remote: remote, request: request, cwd: worktreePath)
+        return try? await provider.reviewersOnHead(
+            remote: remote,
+            request: request,
+            notBefore: notBefore,
+            cwd: worktreePath
+        )
     }
 
     // MARK: - Scheduling
@@ -585,7 +598,11 @@ public final class ReviewShepherd {
         if rules.requiredReviewers.isEmpty || observed.reviewRequest?.state != .open {
             reviewers = nil
         } else {
-            reviewers = await headReviewers(for: observed, worktreePath: context.path)
+            reviewers = await headReviewers(
+                for: observed,
+                worktreePath: context.path,
+                notBefore: records[id]?.headFirstSeenAt(of: observed.reviewRequest?.headSHA)
+            )
         }
         guard let owner = records[id]?.sessionID else { return }
         let session = await effects.sessionState(owner, id.worktreeID)
@@ -827,7 +844,11 @@ public final class ReviewShepherd {
         let rules = effects.rules(id.worktreeID)
         let reviewers = rules.requiredReviewers.isEmpty || request.state != .open
             ? nil
-            : await headReviewers(for: latest, worktreePath: worktreePath)
+            : await headReviewers(
+                for: latest,
+                worktreePath: worktreePath,
+                notBefore: records[id]?.headFirstSeenAt(of: request.headSHA)
+            )
         guard mayStillMerge(id, generation), let owner = records[id]?.sessionID else { return .abandoned }
         let session = await effects.sessionState(owner, id.worktreeID)
         guard mayStillMerge(id, generation), let record = records[id] else { return .abandoned }

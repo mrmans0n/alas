@@ -2212,11 +2212,13 @@ struct GitLabCLIProviderTests {
         let testDescription: String
         let approvals: String
         let notes: String
+        /// When Alas first saw the head, ISO 8601; the head commit is dated 10:00.
+        var notBefore: String? = "2026-10-13T10:01:00Z"
         let expected: Set<String>
     }
 
     @Test(
-        "Reviewers on head keep current approvals and human notes posted after the head commit",
+        "Reviewers on head keep current approvals and human notes posted after the head commit and Alas first seeing it",
         arguments: [
             GitLabReviewersOnHeadCase(
                 testDescription: "approval without approved_at counts, lowercased",
@@ -2254,13 +2256,43 @@ struct GitLabCLIProviderTests {
                 notes: #"{"id": 1, "body": "approved this merge request", "system": true, "author": {"username": "maintainer"}, "created_at": "2026-10-13T10:05:00.000Z"}"#,
                 expected: []
             ),
+            GitLabReviewersOnHeadCase(
+                testDescription: "note after the head commit but before Alas saw the head does not count",
+                approvals: "",
+                notes: #"{"id": 1, "body": "Looks good.", "system": false, "author": {"username": "codex"}, "created_at": "2026-10-13T10:05:00.000Z"}"#,
+                notBefore: "2026-10-13T10:10:00Z",
+                expected: []
+            ),
+            GitLabReviewersOnHeadCase(
+                testDescription: "approval after the head commit but before Alas saw the head does not count",
+                approvals: #"{"user": {"username": "maintainer"}, "approved_at": "2026-10-13T10:05:00.000Z"}"#,
+                notes: "",
+                notBefore: "2026-10-13T10:10:00Z",
+                expected: []
+            ),
+            GitLabReviewersOnHeadCase(
+                testDescription: "note after the head commit and after Alas saw the head counts",
+                approvals: "",
+                notes: #"{"id": 1, "body": "Looks good.", "system": false, "author": {"username": "codex"}, "created_at": "2026-10-13T10:15:00.000Z"}"#,
+                notBefore: "2026-10-13T10:10:00Z",
+                expected: ["codex"]
+            ),
+            GitLabReviewersOnHeadCase(
+                testDescription: "unknown first-seen time ignores dated approvals and notes",
+                approvals: #"{"user": {"username": "maintainer"}, "approved_at": "2026-10-13T10:05:00.000Z"}"#,
+                notes: #"{"id": 1, "body": "Looks good.", "system": false, "author": {"username": "codex"}, "created_at": "2026-10-13T10:05:00.000Z"}"#,
+                notBefore: nil,
+                expected: []
+            ),
         ]
     )
     func reviewersOnHeadSelection(_ testCase: GitLabReviewersOnHeadCase) throws {
+        let notBefore = try testCase.notBefore.map { try #require(ISO8601DateFormatter().date(from: $0)) }
         let reviewers = try GitLabCLIProvider.parseReviewersOnHead(
             approvalsJSON: "{\"approved_by\": [\(testCase.approvals)]}",
             notesJSON: "[\(testCase.notes)]",
-            headCommitJSON: #"{"id": "head123", "created_at": "2026-10-13T10:00:00.000Z"}"#
+            headCommitJSON: #"{"id": "head123", "created_at": "2026-10-13T10:00:00.000Z"}"#,
+            notBefore: notBefore
         )
 
         #expect(reviewers == testCase.expected)

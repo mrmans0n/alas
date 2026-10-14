@@ -216,12 +216,14 @@ private struct ShepherdPopover: View {
         isLoading = false
     }
 
-    /// Required-reviewer evidence belongs to one bound request head. A new
-    /// head or a different record changes the key, which restarts the load
-    /// and hides the old result.
+    /// Required-reviewer evidence belongs to one bound request head and the
+    /// time Alas first saw it. A new head, a different record or the policy
+    /// recording when it first saw the head changes the key, which restarts
+    /// the load and hides the old result.
     private struct ReviewerKey: Hashable {
         let id: ShepherdRecordID
         let headSHA: String?
+        let headFirstSeenAt: Date?
     }
 
     private struct ReviewerResult {
@@ -232,7 +234,11 @@ private struct ShepherdPopover: View {
 
     private func reviewerKey(_ context: ShepherdSessionContext) -> ReviewerKey? {
         guard let record = context.record, let request = context.request else { return nil }
-        return ReviewerKey(id: record.id, headSHA: request.headSHA)
+        return ReviewerKey(
+            id: record.id,
+            headSHA: request.headSHA,
+            headFirstSeenAt: record.headFirstSeenAt(of: request.headSHA)
+        )
     }
 
     /// The loaded evidence for the context's current head, or nil while it loads.
@@ -247,7 +253,11 @@ private struct ShepherdPopover: View {
             sessionID: session.id, worktree: worktree, state: state, fetched: fetchedSnapshot
         )
         guard let key = reviewerKey(context), let snapshot = context.snapshot else { return }
-        let logins = await state.reviewShepherd.headReviewers(for: snapshot, worktreePath: worktree.path)
+        let logins = await state.reviewShepherd.headReviewers(
+            for: snapshot,
+            worktreePath: worktree.path,
+            notBefore: key.headFirstSeenAt
+        )
         guard !Task.isCancelled else { return }
         reviewerResult = ReviewerResult(key: key, logins: logins)
     }
