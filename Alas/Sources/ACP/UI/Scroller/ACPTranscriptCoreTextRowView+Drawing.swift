@@ -479,12 +479,26 @@ extension ACPTranscriptCoreTextRowView {
             let lower = max(span.lowerBound, line.range.location)
             let upper = min(span.upperBound, visibleEnd)
             guard span.lowerBound <= visibleEnd, span.upperBound >= line.range.location, lower < upper || runsOn else { continue }
-            let minX = line.visibleLength > 0 ? CTLineGetOffsetForStringIndex(line.line, lower, nil) : 0
-            let maxX = runsOn ? edge - line.origin.x : CTLineGetOffsetForStringIndex(line.line, upper, nil)
+            let extent = Self.selectionExtent(
+                of: line.line, from: lower, to: upper, hasText: line.visibleLength > 0, runsTo: runsOn ? edge - line.origin.x : nil
+            )
             context.fill(CGRect(
-                x: origin.x + line.origin.x + minX, y: origin.y + line.origin.y, width: max(0, maxX - minX), height: line.height
+                x: origin.x + line.origin.x + extent.lowerBound, y: origin.y + line.origin.y,
+                width: extent.upperBound - extent.lowerBound, height: line.height
             ))
         }
+    }
+
+    /// The x range to highlight for `lower..<upper` of `line`, or from `lower` to
+    /// `edge` when the selection runs on past the line. A right-to-left run's
+    /// caret offsets fall right to left, so the two are ordered here.
+    static func selectionExtent(
+        of line: CTLine, from lower: Int, to upper: Int, hasText: Bool, runsTo edge: CGFloat?
+    ) -> ClosedRange<CGFloat> {
+        let start = hasText ? CTLineGetOffsetForStringIndex(line, lower, nil) : 0
+        if let edge { return min(start, edge)...max(start, edge) }
+        let end = CTLineGetOffsetForStringIndex(line, upper, nil)
+        return min(start, end)...max(start, end)
     }
 
     /// Each code block's "Copy" button, or "Copied" just after a click.
