@@ -19,6 +19,49 @@ import Testing
         return DiffPaneTextDocumentBuilder.buildSplit(rows: rows, fileExtension: "swift", font: font, showWhitespace: false, theme: theme)
     }
 
+    @Test(arguments: [false, true])
+    func inlineBackgroundEnclosesItsGlyphs(wraps: Bool) throws {
+        let text = NSAttributedString(string: "MMMM", attributes: [
+            .font: font, .foregroundColor: NSColor.white, .backgroundColor: NSColor.red,
+        ])
+        let document = DiffPaneTextDocumentBuilder.CodeDocument(
+            attributedString: text,
+            lines: [.init(kind: .add, range: NSRange(location: 0, length: text.length))]
+        )
+        let view = DiffSplitCoreTextRowView(frame: NSRect(x: 0, y: 0, width: 300, height: 80))
+        view.configure(
+            stacked: DiffPaneTextDocumentBuilder.StackedResult(code: document, gutter: NSAttributedString(string: "")),
+            font: font, theme: theme, wraps: wraps
+        )
+        view.updateLayer()
+        let tile = try #require(view.layer?.sublayers?.first { $0.value(forKey: "tileIndex") != nil })
+        let bitmap = try #require(NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: 300, pixelsHigh: 80, bitsPerSample: 8,
+            samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+            bytesPerRow: 0, bitsPerPixel: 0
+        ))
+        let context = try #require(NSGraphicsContext(bitmapImageRep: bitmap))
+        tile.delegate?.draw?(tile, in: context.cgContext)
+        var backgroundRows: [Int] = []
+        var glyphRows: [Int] = []
+        for y in 0..<80 {
+            for x in 0..<100 {
+                let color = try #require(bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
+                if color.redComponent > 0.9 && color.greenComponent < 0.1 {
+                    backgroundRows.append(y)
+                } else if color.redComponent > 0.9 && color.greenComponent > 0.9 && color.blueComponent > 0.9 {
+                    glyphRows.append(y)
+                }
+            }
+        }
+        let backgroundTop = try #require(backgroundRows.min())
+        let backgroundBottom = try #require(backgroundRows.max())
+        let glyphTop = try #require(glyphRows.min())
+        let glyphBottom = try #require(glyphRows.max())
+        #expect(backgroundTop <= glyphTop)
+        #expect(backgroundBottom >= glyphBottom)
+    }
+
     @Test func narrowContentCannotScroll() {
         var model = DiffSplitHorizontalScroll(oldContentWidth: 100, newContentWidth: 100, oldViewportWidth: 300, newViewportWidth: 300)
         #expect(model.maxOffset(.new) == 0)
