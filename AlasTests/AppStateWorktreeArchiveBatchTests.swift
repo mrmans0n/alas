@@ -53,7 +53,8 @@ struct AppStateWorktreeArchiveBatchTests {
     /// edits were never acknowledged, so the archive is refused rather than
     /// closing their editor.
     @Test func archiveRefusesEditsMadeAfterTheUnsavedChangesWereAcknowledged() async throws {
-        let fixture = try await makeCleanupFixture(worktreeCount: 2)
+        let environment = EditingBeforeQuiesce()
+        let fixture = try await makeCleanupFixture(worktreeCount: 2, hostEnvironment: environment)
         defer { fixture.cleanUpAfterTest() }
         let target = fixture.worktrees[1]
         try "disk\n".write(to: target.path.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
@@ -67,11 +68,7 @@ struct AppStateWorktreeArchiveBatchTests {
             unavailableReasons: [:],
             bufferResolution: .discard
         )
-        let quiesce = fixture.state.core.quiesceWorktree
-        fixture.state.core.quiesceWorktree = { worktree in
-            buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "later ")
-            try await quiesce(worktree)
-        }
+        environment.edit = { buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "later ") }
 
         let results = await fixture.state.batchArchiveWorktrees(authorization, [target])
 
@@ -134,5 +131,16 @@ struct AppStateWorktreeArchiveBatchTests {
         let decoded = try JSONDecoder().decode(ProjectConfig.self, from: data)
 
         #expect(decoded.hiddenWorktreePaths.isEmpty)
+    }
+}
+
+/// Edits a buffer right as the archive starts stopping the worktree, after
+/// every check made before it.
+private final class EditingBeforeQuiesce: AppHostEnvironment {
+    var edit: () -> Void = {}
+
+    override func quiesceWorktree(_ worktree: Worktree, in core: AlasCoreContext) async throws {
+        edit()
+        try await super.quiesceWorktree(worktree, in: core)
     }
 }

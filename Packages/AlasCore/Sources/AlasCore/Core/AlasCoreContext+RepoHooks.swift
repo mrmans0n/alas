@@ -57,11 +57,11 @@ extension AlasCoreContext {
             return nil
         }
         while true {
-            switch await repoHookLoader.load(event: event, worktreeRoot: worktree.path, host: project.host) {
+            switch await environment.repoHookLoader.load(event: event, worktreeRoot: worktree.path, host: project.host) {
             case .missing, .empty:
                 return nil
             case let .failed(source, message):
-                switch await repoHookPrompter.decideFailure(.init(event: event, source: source, message: message), context) {
+                switch await environment.repoHookPrompter.decideFailure(.init(event: event, source: source, message: message), context) {
                 case .retry, .approve: continue
                 case .skip: return nil
                 case .cancel: throw RepoHookPreflightError.cancelled
@@ -70,7 +70,7 @@ extension AlasCoreContext {
                 if projects.isRepoHookApproved(projectId: project.id, hash: hook.hash) {
                     return hook.text
                 }
-                switch await repoHookPrompter.decide(hook, project.id, context) {
+                switch await environment.repoHookPrompter.decide(hook, project.id, context) {
                 case .approve:
                     while true {
                         do {
@@ -78,7 +78,7 @@ extension AlasCoreContext {
                             return hook.text
                         } catch {
                             let failure = RepoHookFailure(event: event, source: hook.source, message: error.localizedDescription)
-                            switch await repoHookPrompter.decideFailure(failure, context) {
+                            switch await environment.repoHookPrompter.decideFailure(failure, context) {
                             case .retry, .approve: continue
                             case .skip: return nil
                             case .cancel: throw RepoHookPreflightError.cancelled
@@ -129,7 +129,7 @@ extension AlasCoreContext {
             includeUserStartupScript: includeUserStartupScript
         )
         let script = StartupScriptResolver.worktreeCreateScript(
-            global: globalTerminalConfig(),
+            global: environment.globalTerminalConfig(),
             repoScript: repoScript,
             project: project
         )
