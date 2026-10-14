@@ -46,6 +46,18 @@ private typealias F = ShepherdFixtures
         }
     }
 
+    @Test("fix prompt labels cancelled checks and suggests a rerun")
+    func cancelledLabel() {
+        let request = F.request(checks: [F.failing, F.check("train", .cancel)])
+        let prompt = ShepherdPromptBuilder.fixPrompt(
+            request: request, fix: ShepherdPolicy.problems(in: request, handled: []), logs: [], rules: .none
+        )
+        #expect(prompt.contains("## Failing or cancelled checks (2)"))
+        #expect(prompt.contains("### train (CI) (cancelled)"))
+        #expect(!prompt.contains("### unit-tests (CI) (cancelled)"))
+        #expect(prompt.contains("A cancelled check usually needs a rerun with gh, not a code change."))
+    }
+
     @Test("fix prompt quotes every comment in a thread with author and trust")
     func fullThreadChain() {
         let thread = F.thread("PRRT_1", comments: [

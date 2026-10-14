@@ -181,8 +181,9 @@ Rules run in order. The first one that produces an action wins.
      poll gives `escalate(.noProgress)`, earlier ones give `wait`.
 7. Collect problems:
    - conflict when `mergeState == .dirty`;
-   - failed checks (failing bucket), only when no check is pending, so partial
-     results never trigger a fix;
+   - failed or cancelled checks (failing or cancel bucket), only when no check
+     is pending, so partial results never trigger a fix. A cancelled check
+     usually needs a rerun, which the session does with gh or glab;
    - review threads where `!isResolved && !isOutdated` and the head comment's
      `authorTrust == .trusted`.
 

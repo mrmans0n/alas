@@ -70,7 +70,9 @@ public enum ShepherdPromptBuilder {
         } else {
             var lines = ["## Current problems"]
             if fix.hasConflict { lines.append("- Merge conflict with \(request.baseRefName)") }
-            lines += fix.failingChecks.map { "- Failing check: \(checkTitle($0))" }
+            lines += fix.failingChecks.map {
+                ($0.bucket == .cancel ? "- Cancelled check: " : "- Failing check: ") + checkTitle($0)
+            }
             lines += fix.threads.map { "- Review thread at \(threadLocation($0)) from @\($0.author ?? "unknown")" }
             lines.append("Alas sends the details and logs in a follow-up turn when it asks for a fix.")
             sections.append(lines.joined(separator: "\n"))
@@ -104,9 +106,10 @@ public enum ShepherdPromptBuilder {
 
     private static func checksSection(_ checks: [ReviewCheck], logs: [ShepherdCheckLog]) -> String {
         let logsByID = Dictionary(logs.map { ($0.checkID, $0) }, uniquingKeysWith: { first, _ in first })
-        var lines = ["## Failing checks (\(checks.count))"]
+        let heading = checks.contains { $0.bucket == .cancel } ? "Failing or cancelled checks" : "Failing checks"
+        var lines = ["## \(heading) (\(checks.count))"]
         for check in checks.prefix(maxCheckLogs) {
-            lines.append("### \(checkTitle(check))")
+            lines.append("### \(checkTitle(check))" + (check.bucket == .cancel ? " (cancelled)" : ""))
             let log = logsByID[check.id]
             let body = log?.body.trimmingCharacters(in: .newlines) ?? ""
             if body.trimmingCharacters(in: .whitespaces).isEmpty {
@@ -124,7 +127,8 @@ public enum ShepherdPromptBuilder {
         if !rest.isEmpty {
             lines.append("### Other failing checks (logs not included)")
             for check in rest {
-                lines.append("- \(checkTitle(check))" + (check.detailURL.map { ": \($0.absoluteString)" } ?? ""))
+                let marker = check.bucket == .cancel ? " (cancelled)" : ""
+                lines.append("- \(checkTitle(check))\(marker)" + (check.detailURL.map { ": \($0.absoluteString)" } ?? ""))
             }
         }
         return lines.joined(separator: "\n")
@@ -157,6 +161,7 @@ public enum ShepherdPromptBuilder {
         - Batch every fix you can make now into one push.
         - Run the tests your repository instructions require for the files you touch.
         - If a check failure is unrelated to your change and the log shows a flake or infrastructure error, rerun it with \(cli) and say why.
+        - A cancelled check usually needs a rerun with \(cli), not a code change.
         - Reply on threads you decline. Resolve threads you fixed.
         - If you can't make progress, say so plainly. Alas will notify the user.
         """

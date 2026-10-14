@@ -114,7 +114,8 @@ public enum ShepherdPolicy {
         return ShepherdFixRequest(
             hasConflict: request.mergeState == .dirty,
             // Partial CI results never trigger a fix.
-            failingChecks: hasIncompleteChecks(request) ? [] : request.checks.filter { $0.bucket == .fail },
+            failingChecks: hasIncompleteChecks(request)
+                ? [] : request.checks.filter { $0.bucket == .fail || $0.bucket == .cancel },
             threads: trustedThreads(in: request).filter { !handled.contains(ShepherdFixRequest.revision(of: $0)) }
         )
     }
