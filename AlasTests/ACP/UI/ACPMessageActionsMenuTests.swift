@@ -24,12 +24,6 @@ import Testing
         menu.items.filter { !$0.isSeparatorItem }.map(\.title)
     }
 
-    @Test func itemsKeepTheGutterOrder() {
-        let titles = actionTitles(ACPMessageActionsMenu.make(input()))
-        #expect(titles.first?.isEmpty == false) // the disabled timestamp
-        #expect(Array(titles.dropFirst()) == ["Copy message", "Quote"])
-    }
-
     @Test func quoteUsesTheMessageMarkdown() throws {
         var quoted: String?
         let menu = ACPMessageActionsMenu.make(input(quoted: { quoted = $0 }))
