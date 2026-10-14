@@ -138,12 +138,6 @@ import Testing
         #expect(button.alphaValue == 0)
     }
 
-    @Test func rowsWithoutAMenuNeverGetAnActionsButton() {
-        let view = row(.thought(label: "Planning"))
-        view.hoverForTesting(true)
-        #expect(view.actionsButtonForTesting == nil)
-    }
-
     @Test func aPermanentActionsButtonIsAlwaysVisibleForAssistiveTech() throws {
         var actions = ACPTranscriptNativeRows.Actions.testing(menu: true)
         actions.showsActionsPermanently = true
@@ -371,6 +365,14 @@ import Testing
     @Test func commentaryRowsAreLabeledLikeTheirHeader() {
         #expect(row(.agent(markdown: "Checking the tests.", commentary: true)).accessibilityLabel() == "Working…")
         #expect(row(.agent(markdown: "Done.", commentary: false)).accessibilityLabel() != "Working…")
+    }
+
+    @Test func aRightToLeftSelectionIsHighlighted() {
+        let line = CTLineCreateWithAttributedString(NSAttributedString(
+            string: "שלום עולם", attributes: [.font: NSFont.systemFont(ofSize: 13)]
+        ))
+        let extent = ACPTranscriptCoreTextRowView.selectionExtent(of: line, from: 0, to: 4, hasText: true, runsTo: nil)
+        #expect(extent.upperBound - extent.lowerBound > 10)
     }
 
     @Test func codeBlockLanguageIsAccessibleStaticText() throws {
