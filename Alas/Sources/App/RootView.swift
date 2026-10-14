@@ -890,8 +890,8 @@ private struct RootUpdatePresentationHandlers: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .onAppear {
-                state.updates.checkOnLaunch()
+            .task(id: state.config.general.autoUpdate) {
+                await state.updates.monitorAutomatically()
             }
             .sheet(item: Binding(
                 get: { state.updates.presentedUpdate },

@@ -74,13 +74,14 @@ struct AttentionInboxPresentation {
     let activeRows: [AttentionInboxRowPresentation]
     let peerRows: [RemoteSessionSummary]
     let pluginUpdates: [PluginManager.CatalogUpdate]
+    let appUpdate: ReleaseInfo?
     let historyRows: [AttentionInboxRowPresentation]
     let errors: [PersistenceError]
-    var totalCount: Int { activeRows.count + peerRows.count + pluginUpdates.count }
+    var totalCount: Int { activeRows.count + peerRows.count + pluginUpdates.count + (appUpdate == nil ? 0 : 1) }
     var emptyTitle: String? { totalCount == 0 ? "Nothing needs attention" : nil }
     var acknowledgeLabel: String? {
         guard !activeRows.isEmpty else { return nil }
-        return peerRows.isEmpty && pluginUpdates.isEmpty ? "Acknowledge all" : "Acknowledge local"
+        return peerRows.isEmpty && pluginUpdates.isEmpty && appUpdate == nil ? "Acknowledge all" : "Acknowledge local"
     }
 
     /// Label for the collapsed-by-default history section, used for both the tooltip and VoiceOver.
@@ -90,10 +91,12 @@ struct AttentionInboxPresentation {
     }
 
     init(aggregation: AttentionAggregation, loadError: String?, writeError: String? = nil,
-         peerRows: [RemoteSessionSummary] = [], pluginUpdates: [PluginManager.CatalogUpdate] = [], now: Date = Date()) {
+         peerRows: [RemoteSessionSummary] = [], pluginUpdates: [PluginManager.CatalogUpdate] = [],
+         appUpdate: ReleaseInfo? = nil, now: Date = Date()) {
         activeRows = aggregation.items.map { AttentionInboxRowPresentation(item: $0, now: now) }
         self.peerRows = peerRows
         self.pluginUpdates = pluginUpdates
+        self.appUpdate = appUpdate
         historyRows = aggregation.history.map { AttentionInboxRowPresentation(item: $0, now: now) }
         errors = [
             loadError.map { PersistenceError(title: "History could not be loaded", message: $0) },
@@ -106,6 +109,7 @@ struct AttentionInboxView: View {
     let aggregation: AttentionAggregation
     let peerRows: [RemoteSessionSummary]
     var pluginUpdates: [PluginManager.CatalogUpdate] = []
+    var appUpdate: ReleaseInfo? = nil
     let loadError: String?
     let writeError: String?
     let navigationErrors: [UUID: String]
@@ -113,6 +117,7 @@ struct AttentionInboxView: View {
     let onOpen: (AttentionItem) async -> Void
     let onOpenPeer: (RemoteSessionSummary) -> Void
     var onOpenPluginSettings: () -> Void = {}
+    var onOpenAppUpdate: () -> Void = {}
     /// Nil hides the roll-up entirely, leaving the ordinary inbox.
     var rollUpSummarizer: AttentionRollUpSummarizer? = nil
     @Environment(\.theme) private var theme
@@ -129,7 +134,7 @@ struct AttentionInboxView: View {
         TimelineView(.periodic(from: .now, by: 60)) { context in
             let presentation = AttentionInboxPresentation(
                 aggregation: aggregation, loadError: loadError, writeError: writeError,
-                peerRows: peerRows, pluginUpdates: pluginUpdates, now: context.date
+                peerRows: peerRows, pluginUpdates: pluginUpdates, appUpdate: appUpdate, now: context.date
             )
             VStack(spacing: 0) {
                 HStack(spacing: 9) {
@@ -178,7 +183,8 @@ struct AttentionInboxView: View {
                         AttentionInboxList(presentation: presentation, historyExpanded: $historyExpanded,
                                            navigationErrors: navigationErrors, onDismiss: onDismiss,
                                            onOpen: onOpen, onOpenPeer: onOpenPeer,
-                                           onOpenPluginSettings: onOpenPluginSettings)
+                                           onOpenPluginSettings: onOpenPluginSettings,
+                                           onOpenAppUpdate: onOpenAppUpdate)
                     }
                     .padding(14)
                 }
@@ -223,6 +229,7 @@ struct AttentionInboxList: View {
     let onOpen: (AttentionItem) async -> Void
     var onOpenPeer: (RemoteSessionSummary) -> Void = { _ in }
     var onOpenPluginSettings: () -> Void = {}
+    var onOpenAppUpdate: () -> Void = {}
     @Environment(\.theme) private var theme
 
     var body: some View {
@@ -265,6 +272,34 @@ struct AttentionInboxList: View {
                     .padding(10)
                     .background(theme.color("bg-2"), in: RoundedRectangle(cornerRadius: 8))
                 }
+            }
+            if let update = presentation.appUpdate {
+                Text("App update")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(theme.color("fg-muted"))
+                    .padding(.top, 10)
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "arrow.down.app")
+                        .foregroundStyle(theme.color("accent"))
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Alas").font(.system(size: 13, weight: .medium))
+                        switch update {
+                        case .stable(let release):
+                            Text("Version \(release.version.description) available")
+                                .font(.system(size: 11))
+                                .foregroundStyle(theme.color("fg-muted"))
+                        case .nightly(let release):
+                            Text("Nightly \(release.shortSHA) available")
+                                .font(.system(size: 11))
+                                .foregroundStyle(theme.color("fg-muted"))
+                        }
+                    }
+                    Spacer()
+                    Button("View update", action: onOpenAppUpdate)
+                        .controlSize(.small)
+                }
+                .padding(10)
+                .background(theme.color("bg-2"), in: RoundedRectangle(cornerRadius: 8))
             }
             if !presentation.pluginUpdates.isEmpty {
                 Text("Plugin updates")
