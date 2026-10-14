@@ -21,6 +21,15 @@ struct ACPTranscriptMarkdownLayout {
         var range = NSRange(location: 0, length: 0)
         /// How much of `range` the line draws, without that whitespace.
         var visibleLength = 0
+        /// The right edge of the box the line was broken into.
+        var maxX: CGFloat = 0
+    }
+
+    /// A table's grid: its frame, the x of each column divider, and the bottom of each row (header first).
+    struct Table {
+        let rect: CGRect
+        let columnXs: [CGFloat]
+        let rowBottoms: [CGFloat]
     }
 
     /// A code block's "Copy" button in its header.
@@ -100,6 +109,12 @@ struct ACPTranscriptMarkdownLayout {
     static let copyButtonVerticalPadding: CGFloat = 2
     static let copyButtonCornerRadius: CGFloat = 4
     static let copyButtonStrokeWidth: CGFloat = 0.5
+    // Copied from `ACPMarkdownText.tableView` and `tableRow`.
+    static let maxNativeTableColumns = 5
+    static let tableCellHorizontalPadding: CGFloat = 10
+    static let tableCellVerticalPadding: CGFloat = 6
+    static let tableDividerWidth: CGFloat = 0.5
+    static let tableCornerRadius: CGFloat = 6
 
     let width: CGFloat
     let height: CGFloat
@@ -112,16 +127,26 @@ struct ACPTranscriptMarkdownLayout {
     let attributedTexts: [NSAttributedString]
     let codeBlocks: [CodeBlock]
     let copyButtonStyle: CopyButtonStyle
+    let tables: [Table]
+    /// The separator copied after each block in `texts`: `"\t"` between the
+    /// cells of a table row, `"\n"` otherwise.
+    let blockSeparators: [String]
+    /// The tallest line, so a vertical lookup can search on line tops alone.
+    let maxLineHeight: CGFloat
 
-    /// Whether every block can be drawn here. Tables, images, Mermaid diagrams
-    /// and task lists need views of their own, and so does prose with an
-    /// inline image: the SwiftUI renderer turns it into a text attachment that
-    /// `CTLineDraw` cannot show. `![` is a conservative stand-in for the inline
-    /// renderer's image matching, which needs a theme.
-    static func supports(_ blocks: [ACPMarkdownParser.Block]) -> Bool {
+    /// Whether every block can be drawn here. Images, Mermaid diagrams and
+    /// task lists need views of their own, and so do tables unless `tables`
+    /// allows ones of at most `maxNativeTableColumns` columns. So does prose
+    /// with an inline image: the SwiftUI renderer turns it into a text
+    /// attachment that `CTLineDraw` cannot show. `![` is a conservative
+    /// stand-in for the inline renderer's image matching, which needs a theme.
+    static func supports(_ blocks: [ACPMarkdownParser.Block], tables: Bool = false) -> Bool {
         blocks.allSatisfy { block in
             switch block {
-            case .table, .image, .mermaid, .taskList: false
+            case .image, .mermaid, .taskList: false
+            case .table(let header, let rows):
+                tables && max(header.count, rows.map(\.count).max() ?? 0) <= maxNativeTableColumns
+                    && !(header + rows.flatMap { $0 }).contains { $0.contains("![") }
             case .heading(_, let text), .paragraph(let text), .quote(let text): !text.contains("![")
             case .code, .streamingCode: true
             }
@@ -130,7 +155,7 @@ struct ACPTranscriptMarkdownLayout {
 
     static func make(source: String, width: CGFloat, theme: Theme, typography: ACPChatTypography) -> ACPTranscriptMarkdownLayout? {
         let blocks = ACPMarkdownParser.parse(source)
-        guard supports(blocks) else { return nil }
+        guard supports(blocks, tables: true) else { return nil }
         var builder = Builder(width: max(1, width), theme: theme, typography: typography)
         for (index, block) in blocks.enumerated() {
             if index > 0 { builder.y += blockSpacing }
@@ -139,8 +164,17 @@ struct ACPTranscriptMarkdownLayout {
         return ACPTranscriptMarkdownLayout(
             width: max(1, width), height: builder.y, lines: builder.lines, backgrounds: builder.backgrounds,
             texts: builder.texts, attributedTexts: builder.attributedTexts, codeBlocks: builder.codeBlocks,
-            copyButtonStyle: builder.copyButtonStyle
+            copyButtonStyle: builder.copyButtonStyle, tables: builder.tables, blockSeparators: builder.blockSeparators,
+            maxLineHeight: builder.lines.map(\.height).max() ?? 0
         )
+    }
+
+    /// As `ACPMarkdownText.tableColumnWidth`, except a table that cannot fit its
+    /// 100 pt minimum shrinks to the width instead of scrolling sideways.
+    static func tableColumnWidth(available: CGFloat, columns: Int) -> CGFloat {
+        guard columns > 0 else { return 0 }
+        let fill = (available - tableDividerWidth * CGFloat(columns - 1)) / CGFloat(columns)
+        return max(1, fill)
     }
 
     /// Code block `index`'s "Copy" button, sized for the label it shows.
@@ -152,8 +186,10 @@ struct ACPTranscriptMarkdownLayout {
 
     /// The lines whose boxes overlap `rect` vertically, including ones it only cuts.
     func linesIntersecting(_ rect: CGRect) -> ArraySlice<Line> {
-        // Lines never overlap, so both edges are monotonic in index.
-        let first = partitionPoint { $0.origin.y + $0.height <= rect.minY }
+        // Lines are sorted by top, but a table's cells share a row, so bottoms
+        // are not monotonic; search on tops and the tallest line instead.
+        // Callers re-check each line, so a few extra at the top edge are harmless.
+        let first = partitionPoint { $0.origin.y + maxLineHeight <= rect.minY }
         let last = partitionPoint { $0.origin.y < rect.maxY }
         return first < last ? lines[first..<last] : lines[first..<first]
     }
@@ -261,6 +297,8 @@ struct ACPTranscriptMarkdownLayout {
         var texts: [String] = []
         var attributedTexts: [NSAttributedString] = []
         var codeBlocks: [CodeBlock] = []
+        var tables: [Table] = []
+        var blockSeparators: [String] = []
         let copyButtonStyle: CopyButtonStyle
 
         init(width: CGFloat, theme: Theme, typography: ACPChatTypography) {
@@ -312,7 +350,9 @@ struct ACPTranscriptMarkdownLayout {
                 addCode(language: language, body: body, highlighted: true)
             case .streamingCode(let language, let body):
                 addCode(language: language, body: body, highlighted: false)
-            case .taskList, .image, .mermaid, .table:
+            case .table(let header, let rows):
+                addTable(header: header, rows: rows)
+            case .taskList, .image, .mermaid:
                 break
             }
         }
@@ -477,12 +517,50 @@ struct ACPTranscriptMarkdownLayout {
             )
         }
 
-        /// Adds a selectable block: its lines map back into `texts`.
+        private mutating func addTable(header: [String], rows: [[String]]) {
+            typealias L = ACPTranscriptMarkdownLayout
+            let columns = max(header.count, rows.map(\.count).max() ?? 0)
+            guard columns > 0 else { return }
+            let columnWidth = L.tableColumnWidth(available: width, columns: columns)
+            let top = y
+            let firstLine = lines.count
+            var rowBottoms: [CGFloat] = []
+            for (rowIndex, cells) in ([header] + rows).enumerated() {
+                let rowTop = y
+                var rowBottom = rowTop + 2 * L.tableCellVerticalPadding
+                for column in 0..<columns {
+                    y = rowTop + L.tableCellVerticalPadding
+                    let x = CGFloat(column) * (columnWidth + L.tableDividerWidth) + L.tableCellHorizontalPadding
+                    addBlockText(
+                        inline(column < cells.count ? cells[column] : "", role: .tableCell(isHeader: rowIndex == 0)),
+                        x: x, width: max(1, columnWidth - 2 * L.tableCellHorizontalPadding),
+                        separator: column == columns - 1 ? "\n" : "\t"
+                    )
+                    rowBottom = max(rowBottom, y + L.tableCellVerticalPadding)
+                }
+                rowBottoms.append(rowBottom)
+                // A 0.5 pt rule follows every row but the last, as the SwiftUI table's dividers do.
+                y = rowBottom + (rowIndex < rows.count ? L.tableDividerWidth : 0)
+            }
+            // Cells of one row share a y range; keep `lines` in y order (then x) so vertical lookups stay valid.
+            lines[firstLine...].sort { ($0.origin.y, $0.origin.x) < ($1.origin.y, $1.origin.x) }
+            tables.append(Table(
+                // Columns fill the width exactly, as the SwiftUI table's background does.
+                rect: CGRect(x: 0, y: top, width: width, height: y - top),
+                columnXs: (1..<columns).map { CGFloat($0) * (columnWidth + L.tableDividerWidth) - L.tableDividerWidth },
+                rowBottoms: rowBottoms
+            ))
+        }
+
+        /// Adds a selectable block: its lines map back into `texts`, and
+        /// `separator` follows it when the text is copied.
         private mutating func addBlockText(
-            _ text: NSAttributedString, x: CGFloat, width: CGFloat, lineSpacing: CGFloat = 0, lineHeight: CGFloat? = nil
+            _ text: NSAttributedString, x: CGFloat, width: CGFloat, lineSpacing: CGFloat = 0, lineHeight: CGFloat? = nil,
+            separator: String = "\n"
         ) {
             texts.append(text.string)
             attributedTexts.append(text)
+            blockSeparators.append(separator)
             addText(text, x: x, width: width, lineSpacing: lineSpacing, lineHeight: lineHeight, block: texts.count - 1)
         }
 
@@ -508,7 +586,7 @@ struct ACPTranscriptMarkdownLayout {
                     )
                     lines.append(Line(
                         line: line, origin: CGPoint(x: x, y: y), height: (measured > 0 ? measured : typography.paragraphSize) + lineSpacing,
-                        block: block, range: NSRange(location: start, length: 0), visibleLength: 0
+                        block: block, range: NSRange(location: start, length: 0), visibleLength: 0, maxX: x + width
                     ))
                     y += lines[lines.count - 1].height
                     break
@@ -529,7 +607,7 @@ struct ACPTranscriptMarkdownLayout {
                 let height = (measured > 0 ? measured : typography.paragraphSize) + lineSpacing
                 lines.append(Line(
                     line: line, origin: CGPoint(x: x, y: y), height: height, underlines: Self.underlines(of: line),
-                    block: block, range: NSRange(location: start, length: count), visibleLength: visible
+                    block: block, range: NSRange(location: start, length: count), visibleLength: visible, maxX: x + width
                 ))
                 y += height
                 start += count
