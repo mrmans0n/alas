@@ -499,6 +499,25 @@ struct AlasCLIRequestTests {
         #expect(AppState.prCreateUpstreamToKeep(branch: branch, upstream: upstream) == kept)
     }
 
+    /// An open request on a differently named upstream is adopted, not
+    /// duplicated; an upstream that is the base is never searched.
+    @MainActor
+    @Test(arguments: [
+        ("review-feature", ["feature", "review-feature"]),
+        ("feature", ["feature"]),
+        ("main", ["feature"]),
+        (nil, ["feature"]),
+    ] as [(String?, [String])])
+    func prCreateLooksUpADifferentlyNamedUpstream(upstream: String?, expected: [String]) {
+        let local = ReviewLoopLocalState(
+            branchName: "feature", headSHA: "a3f9c1e", baseBranch: "main",
+            hasWorkingTreeChanges: false, hasStagedChanges: false, aheadCommitCount: 1,
+            hasUpstream: upstream != nil, upstreamRemoteName: upstream.map { _ in "origin" },
+            upstreamBranchName: upstream, needsPush: true
+        )
+        #expect(AppState.prCreateLookupBranches(local) == expected)
+    }
+
     private struct ProbeParams: Decodable, Equatable {
         var name: String
         var count: Int?

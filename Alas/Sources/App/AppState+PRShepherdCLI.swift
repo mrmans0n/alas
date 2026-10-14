@@ -126,12 +126,16 @@ extension AppState {
             return await bound(existing, created: false)
         }
         // A failed lookup aborts: treating it as "no request" could open a second
-        // one against another base.
-        if let existing = try await openRequest(
-            remote: remote, branch: local.branchName, headOwner: local.headRemoteOwner,
-            bases: [""], worktreePath: context.path
-        ) {
-            return await bound(existing, created: false)
+        // one against another base. A differently named upstream is searched too:
+        // its open request is adopted as is, since the push below never targets
+        // that name.
+        for branch in Self.prCreateLookupBranches(local) {
+            if let existing = try await openRequest(
+                remote: remote, branch: branch, headOwner: local.headRemoteOwner,
+                bases: [""], worktreePath: context.path
+            ) {
+                return await bound(existing, created: false)
+            }
         }
 
         // Same exact-SHA publish path as Commit & publish: capture validates the
@@ -335,6 +339,15 @@ extension AppState {
     /// is dropped, so the push goes to `refs/heads/<branch>`.
     static func prCreateUpstreamToKeep(branch: String, upstream: String?) -> String? {
         upstream == branch ? upstream : nil
+    }
+
+    /// Branch names whose open request `pr_create` adopts before pushing: the
+    /// local branch, and a differently named upstream unless it is the base.
+    static func prCreateLookupBranches(_ local: ReviewLoopLocalState) -> [String] {
+        guard let upstream = local.upstreamBranchName, !upstream.isEmpty,
+              upstream != local.branchName, upstream != local.baseBranch
+        else { return [local.branchName] }
+        return [local.branchName, upstream]
     }
 
     static func prProviderSetupProblem(_ snapshot: ReviewLoopSnapshot) -> String? {
