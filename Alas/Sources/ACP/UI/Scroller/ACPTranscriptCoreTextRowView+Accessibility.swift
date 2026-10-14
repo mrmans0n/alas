@@ -27,6 +27,9 @@ extension ACPTranscriptCoreTextRowView {
         case .toolCall(let presentation, let target, let duration, _, let failed):
             let name = [presentation.label, target].compactMap { $0 }.joined(separator: " ")
             return [name, duration, failed ? "failed" : nil].compactMap { $0 }.joined(separator: ", ")
+        // The drawn header that sets narration apart from the final answer.
+        case .agent(_, commentary: true):
+            return "Working…"
         case .agent, .user, nil:
             return super.accessibilityLabel()
         }

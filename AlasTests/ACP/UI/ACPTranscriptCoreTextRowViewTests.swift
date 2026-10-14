@@ -345,6 +345,11 @@ import Testing
         #expect(pasteboard.string(forType: .string) == "let x = 1")
     }
 
+    @Test func commentaryRowsAreLabeledLikeTheirHeader() {
+        #expect(row(.agent(markdown: "Checking the tests.", commentary: true)).accessibilityLabel() == "Working…")
+        #expect(row(.agent(markdown: "Done.", commentary: false)).accessibilityLabel() != "Working…")
+    }
+
     @Test func codeBlockLanguageIsAccessibleStaticText() throws {
         let view = row(.agent(markdown: "```swift\nlet x = 1\n```\n\n```\nplain\n```", commentary: false))
         _ = view.measuredHeight(forWidth: 800)
