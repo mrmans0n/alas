@@ -305,7 +305,7 @@ struct ACPTranscriptMarkdownLayout {
         /// stays one link.
         private static func markLinkBoundaries(in rendered: NSMutableAttributedString, source: String) {
             // `[label](destination)` or an angle-bracket autolink, whose label is its URL.
-            let pattern = #"\[((?:[^\[\]]|\[[^\]]*\])*)\]\(\s*<?([^)\s>]+)>?(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)|<([A-Za-z][A-Za-z0-9+.-]*:[^<>\s]+)>"#
+            let pattern = #"\[((?:[^\[\]]|\[[^\]]*\])*)\]\(\s*<?((?:[^()\s<>]|\([^()\s<>]*\))+)>?(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)|<([A-Za-z][A-Za-z0-9+.-]*:[^<>\s]+)>"#
             guard let regex = try? NSRegularExpression(pattern: pattern) else { return }
             // Scan what the renderer parses, where bare URLs are already `<url>` autolinks. Link syntax
             // inside a code span renders as code, and an escaped bracket renders as text.
