@@ -23,6 +23,7 @@ final class UpdateController {
     @ObservationIgnored private var announceCheckResult = false
 
     private let lastCheckedKey = "io.nlopez.alas.updates.lastCheckedAt"
+    private static let availableUpdateKey = "io.nlopez.alas.updates.availableUpdate"
 
     init(
         identity: BuildIdentity = BuildIdentity.current(),
@@ -38,6 +39,7 @@ final class UpdateController {
         self.defaults = defaults
         self.isEnabled = isEnabled
         self.now = now
+        availableUpdate = Self.restoreUpdate(defaults: defaults, identity: identity)
     }
 
     /// Where this copy was installed — used by the sheet to tailor the action.
@@ -99,17 +101,60 @@ final class UpdateController {
         switch result {
         case .updateAvailable(let info):
             // Only a successful fetch consumes the daily throttle.
-            defaults.set(now(), forKey: lastCheckedKey)
+            persistUpdate(info)
             availableUpdate = info
+            defaults.set(now(), forKey: lastCheckedKey)
             if announceCheckResult { presentedUpdate = info }
         case .upToDate:
-            defaults.set(now(), forKey: lastCheckedKey)
+            defaults.removeObject(forKey: Self.availableUpdateKey)
             availableUpdate = nil
+            defaults.set(now(), forKey: lastCheckedKey)
             if announceCheckResult {
                 presentInfo(title: "You're up to date", message: upToDateMessage())
             }
         case .failed(let message):
             if announceCheckResult { presentInfo(title: "Couldn't check for updates", message: message) }
+        }
+    }
+
+    private func persistUpdate(_ info: ReleaseInfo) {
+        var cached = [
+            "installedVersion": identity.version.description,
+            "track": identity.track.rawValue,
+            "releaseNotes": info.releaseNotes,
+            "htmlURL": info.htmlURL.absoluteString,
+        ]
+        cached["installedSHA"] = identity.gitSHA
+        cached["dmgURL"] = info.dmgURL?.absoluteString
+        switch info {
+        case .stable(let release):
+            cached["version"] = release.version.description
+        case .nightly(let release):
+            cached["sha"] = release.fullSHA
+        }
+        defaults.set(cached, forKey: Self.availableUpdateKey)
+    }
+
+    private static func restoreUpdate(defaults: UserDefaults, identity: BuildIdentity) -> ReleaseInfo? {
+        guard let cached = defaults.dictionary(forKey: availableUpdateKey) as? [String: String],
+              cached["installedVersion"] == identity.version.description,
+              cached["track"] == identity.track.rawValue,
+              cached["installedSHA"] == identity.gitSHA,
+              let notes = cached["releaseNotes"],
+              let htmlURL = cached["htmlURL"].flatMap(URL.init(string:)) else { return nil }
+        let dmgURL = cached["dmgURL"].flatMap(URL.init(string:))
+        switch identity.track {
+        case .stable:
+            guard let version = cached["version"].flatMap(SemanticVersion.init(parsing:)),
+                  version > identity.version else { return nil }
+            return .stable(StableReleaseInfo(version: version, releaseNotes: notes, htmlURL: htmlURL, dmgURL: dmgURL))
+        case .nightly:
+            guard let installedSHA = identity.gitSHA, let sha = cached["sha"],
+                  !sha.isEmpty, sha != installedSHA else { return nil }
+            return .nightly(NightlyReleaseInfo(
+                shortSHA: String(sha.prefix(7)), fullSHA: sha,
+                releaseNotes: notes, htmlURL: htmlURL, dmgURL: dmgURL
+            ))
         }
     }
 

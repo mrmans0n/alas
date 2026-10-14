@@ -61,6 +61,11 @@ struct UpdateControllerTests {
         #expect(controller.availableUpdate == nil)
         #expect(controller.presentedUpdate == nil)
         #expect(defaults.object(forKey: lastCheckedKey) as? Date == now)
+        let relaunched = UpdateController(
+            identity: identity, checker: ReleaseChecker(fetch: { try await source.fetch($0) }),
+            installSource: .direct, defaults: defaults, isEnabled: { true }
+        )
+        #expect(relaunched.availableUpdate == nil)
     }
 
     @Test func manualCheckJoinsTheAutomaticFetchAndBypassesTheDailyThrottle() async throws {
@@ -88,6 +93,39 @@ struct UpdateControllerTests {
         #expect(controller.presentedUpdate == controller.availableUpdate)
     }
 
+    @Test(arguments: [
+        BuildIdentity(track: .stable, version: SemanticVersion(major: 1, minor: 0, patch: 0)),
+        BuildIdentity(track: .stable, version: SemanticVersion(major: 2, minor: 0, patch: 0)),
+        BuildIdentity(track: .nightly, version: SemanticVersion(major: 1, minor: 0, patch: 0), gitSHA: "installed-sha"),
+        BuildIdentity(track: .nightly, version: SemanticVersion(major: 1, minor: 0, patch: 0), gitSHA: "release-sha"),
+    ])
+    func detectedUpdateSurvivesOnlyCompatibleThrottledRelaunches(relaunchedBuild: BuildIdentity) async throws {
+        let source = ReleaseSource()
+        let domain = "UpdateControllerTests.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let installedBuild = BuildIdentity(
+            track: relaunchedBuild.track, version: identity.version,
+            gitSHA: relaunchedBuild.track == .nightly ? "installed-sha" : nil
+        )
+        let checker = ReleaseChecker(fetch: { try await source.fetch($0) })
+        let original = UpdateController(
+            identity: installedBuild, checker: checker, installSource: .direct,
+            defaults: defaults, isEnabled: { true }
+        )
+        await original.checkAutomatically()
+        let detected = try #require(original.availableUpdate)
+        let relaunched = UpdateController(
+            identity: relaunchedBuild, checker: checker, installSource: .direct,
+            defaults: try #require(UserDefaults(suiteName: domain)), isEnabled: { true }
+        )
+        await relaunched.checkAutomatically()
+
+        #expect(relaunched.availableUpdate == (installedBuild == relaunchedBuild ? detected : nil))
+        #expect(relaunched.presentedUpdate == nil)
+        #expect(await source.checkCount == 1)
+    }
+
     private var identity: BuildIdentity {
         BuildIdentity(track: .stable, version: SemanticVersion(major: 1, minor: 0, patch: 0))
     }
@@ -110,6 +148,9 @@ struct UpdateControllerTests {
 
         func fetch(_ url: URL) async throws -> Data {
             if url.lastPathComponent == "CHANGELOG.md" { return Data() }
+            if url.path.contains("/git/ref/tags/nightly") {
+                return Data(#"{"object":{"sha":"release-sha","type":"commit"}}"#.utf8)
+            }
             checkCount += 1
             if holdFirstCheck && checkCount == 1 {
                 await withCheckedContinuation {

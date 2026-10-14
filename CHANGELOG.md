@@ -9,7 +9,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - Start sidebar peers collapsed instead of automatically expanding them.
-- Check for Alas updates periodically while the app is running and show available releases in Needs Attention instead of opening an automatic update sheet.
+- Check for Alas updates periodically while the app is running and keep available releases in Needs Attention across app restarts instead of opening an automatic update sheet.
 
 ### Fixes
 
