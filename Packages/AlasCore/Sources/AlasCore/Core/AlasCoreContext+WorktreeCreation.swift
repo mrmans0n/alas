@@ -142,9 +142,16 @@ extension AlasCoreContext {
             return .projectRemoved
         }
         let repoPath = URL(fileURLWithPath: project.path)
+        // Each save writes the whole project list, so the last one decides
+        // whether what the creation recorded is durable.
         var saveFailure: String?
         func save() {
-            do { try saveProjects() } catch { saveFailure = saveFailure ?? error.localizedDescription }
+            do {
+                try saveProjects()
+                saveFailure = nil
+            } catch {
+                saveFailure = error.localizedDescription
+            }
         }
         do {
             if request.fetchesBaseFirst {
