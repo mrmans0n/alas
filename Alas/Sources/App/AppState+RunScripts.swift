@@ -648,6 +648,16 @@ final class AppRunLauncher: RunLauncher {
         app.closeTab(worktreeId: worktreeID, tabId: tab.id)
     }
 
+    func endRunHost(sessionID: String, worktreeID: String) {
+        guard let app,
+              let tab = app.tabs.tabs(forWorktree: worktreeID).first(where: { tab in
+                  guard case .terminal(let state) = tab else { return false }
+                  return state.root.find(leafId: sessionID) != nil
+              })
+        else { return }
+        app.closeTab(worktreeId: worktreeID, tabId: tab.id)
+    }
+
     func hostSessionExists(_ sessionID: String) -> Bool {
         app?.terminal.registry.session(for: sessionID) != nil
     }

@@ -9,6 +9,11 @@ public final class RunService {
     /// exit status once it has exited.
     public typealias Launch = @Sendable (_ shellScript: String, _ workingDirectory: URL) async throws -> Int32
 
+    /// The shell never started, so nothing ran.
+    public struct NeverStarted: Error {
+        public let underlying: any Error
+    }
+
     public enum RunError: Error, Equatable {
         /// The shell exited without writing the completion file, for example
         /// because the script removed the capture directory or the disk filled.
@@ -83,9 +88,13 @@ public final class RunService {
         let exitCode: Int32
         do {
             exitCode = try await launch(command, worktree.path)
-        } catch {
+        } catch is CancellationError {
             RunScriptCompletionMonitor.removeLocalCapture(location.paths)
-            throw error
+            throw CancellationError()
+        } catch {
+            // A launch reports how the shell exited; throwing means it never ran.
+            RunScriptCompletionMonitor.removeLocalCapture(location.paths)
+            throw NeverStarted(underlying: error)
         }
         // The command publishes its completion file before the shell exits, so
         // a missing file now means it never will be.

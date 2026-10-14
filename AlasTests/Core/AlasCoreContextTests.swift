@@ -181,6 +181,42 @@ struct AlasCoreContextTests {
         #expect(context.runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status == .finished(.unknown))
     }
 
+    /// A shell that never spawned ran nothing: the previous outcome stays,
+    /// and the caller gets the spawn error.
+    @Test func processThatNeverSpawnedLeavesThePreviousRecord() async throws {
+        struct SpawnFailed: Error {}
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-core-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try "true\n".write(to: root.appendingPathComponent("noop.sh"), atomically: true, encoding: .utf8)
+        let project = ProjectConfig(id: "p", name: "p", path: root.path, color: "blue", addedAt: Date())
+        let worktree = Worktree(
+            id: root.path, projectId: "p", name: "main", branch: "main", path: root,
+            status: .clean, lastActivity: Date()
+        )
+        let script = RunScript(
+            scope: .repo, fileName: "noop.sh", fileURL: root.appendingPathComponent("noop.sh"),
+            displayName: "Noop", onExit: .close, cwd: nil, isExecutable: false
+        )
+        let context = AlasCoreContext(
+            projects: ProjectsManager(persistedProjects: [project]),
+            runs: RunService(launch: { _, _ in throw SpawnFailed() }),
+            runHistoryStore: nil
+        )
+        var previous = RunRecord(
+            id: "previous", scriptKey: script.key, scriptName: "Noop", worktreeID: worktree.id, branch: "main",
+            target: RunExecutionTarget(host: nil, workingDirectory: root.path), status: .running, startedAt: Date()
+        )
+        context.runRecords.begin(previous)
+        let finished = context.runRecords.finish(runID: "previous", outcome: .succeeded, at: Date())
+        previous = try #require(finished)
+
+        await #expect(throws: SpawnFailed.self) {
+            try await context.runScript(script, in: worktree)
+        }
+        #expect(context.runRecords.record(worktreeID: worktree.id, scriptKey: script.key) == previous)
+    }
+
     /// A second run of a script that is still running would displace the
     /// first one's record and drop its history, so it is refused.
     @Test func refusesToStartAScriptThatIsAlreadyRunning() async throws {

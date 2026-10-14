@@ -117,6 +117,8 @@ extension AlasCoreContext {
                     )
                     finalizeRun(finalized, capture: .completion(completion))
                     if let finalized { onFinished(finalized, completion) }
+                } catch is RunUndone {
+                    // The run never started and was already put back.
                 } catch is CancellationError where Task.isCancelled {
                     // `stopObservingRun` already recorded the lost
                     // observation; it owns that transition. A cancellation

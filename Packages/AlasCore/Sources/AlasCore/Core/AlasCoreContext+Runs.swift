@@ -51,6 +51,8 @@ public protocol RunLauncher: AnyObject {
     func hostsRun(scriptKey: String, worktreeID: String) -> Bool
     /// Ends that host, for a run stopped on purpose or about to restart.
     func endRunHost(scriptKey: String, worktreeID: String)
+    /// Ends the host session a launch opened, for a launch stopped while starting.
+    func endRunHost(sessionID: String, worktreeID: String)
     /// Whether the terminal session hosting a run still exists.
     func hostSessionExists(_ sessionID: String) -> Bool
     /// Whether the terminal session hosting a run has no foreground process left.
@@ -63,6 +65,7 @@ extension RunLauncher {
     public func refusal(for script: RunScript, in worktree: Worktree, project: ProjectConfig) -> String? { nil }
     public func hostsRun(scriptKey: String, worktreeID: String) -> Bool { false }
     public func endRunHost(scriptKey: String, worktreeID: String) {}
+    public func endRunHost(sessionID: String, worktreeID: String) {}
     public func hostSessionExists(_ sessionID: String) -> Bool { false }
     public func hostSessionIsIdle(_ sessionID: String) -> Bool { false }
     public func runDidFinish(_ record: RunRecord, completion: RunScriptCompletion, script: RunScript, worktree: Worktree, sessionID: String?) {}
@@ -210,12 +213,17 @@ extension AlasCoreContext {
                     throw error
                 }
                 if Task.isCancelled {
-                    // Stopped while starting; the stop already settled it.
-                    if case .process(let process) = launch { process.cancel() }
-                    launcher.endRunHost(scriptKey: script.key, worktreeID: worktree.id)
+                    // Stopped while starting; the stop already settled it. Only
+                    // what this launch opened is ended: a restart may already
+                    // host the script's next run.
+                    switch launch {
+                    case .process(let process): process.cancel()
+                    case .hosted(let sessionID): launcher.endRunHost(sessionID: sessionID, worktreeID: worktree.id)
+                    case .unobservable: break
+                    }
                     return
                 }
-                observe(launch, request: request, launcher: launcher)
+                observe(launch, request: request, displaced: displaced, launcher: launcher)
             } catch {
                 if Task.isCancelled { return }
                 // The command never started, so the previous outcome is still
@@ -406,6 +414,7 @@ extension AlasCoreContext {
         }
         switch settlement {
         case .launchFailed(let message):
+            if let runID, let error = processRunErrors.removeValue(forKey: runID) { throw error }
             throw RunLaunchFailure(message: message)
         case .finished(.stopped):
             throw CancellationError()
@@ -421,7 +430,12 @@ extension AlasCoreContext {
     /// ended, before the worktree goes. Launches still starting are cancelled
     /// first, so none can start a process in the worktree afterwards.
     func stopProcessRuns(worktreeID: String) async {
+        // Cancellation is cooperative: wait for the launches to unwind too.
+        let launches = pendingRunLaunches.filter { $0.key.worktreeID == worktreeID }.compactMap(\.value.task)
         cancelStartingRuns(worktreeID: worktreeID)
+        for launch in launches {
+            await launch.value
+        }
         let stopping = processRuns.filter { $0.value.worktreeID == worktreeID }
         for (_, run) in stopping {
             if let worktree = projects.worktrees(projectId: run.projectID).first(where: { $0.id == worktreeID }) {
@@ -444,7 +458,7 @@ extension AlasCoreContext {
 
     // MARK: - Private
 
-    private func observe(_ launch: RunLaunch, request: RunLaunchRequest, launcher: any RunLauncher) {
+    private func observe(_ launch: RunLaunch, request: RunLaunchRequest, displaced: RunRecord?, launcher: any RunLauncher) {
         let runID = request.runID
         let script = request.script
         let worktree = request.worktree
@@ -471,7 +485,15 @@ extension AlasCoreContext {
                 worktreeID: worktree.id,
                 awaitCompletion: { [weak self] in
                     defer { self?.processRuns.removeValue(forKey: runID) }
-                    return try await process.value
+                    do {
+                        return try await process.value
+                    } catch let neverStarted as RunService.NeverStarted {
+                        // Like a launch that failed: put the previous outcome back.
+                        self?.runRecords.rollback(runID: runID, to: displaced)
+                        self?.processRunErrors[runID] = neverStarted.underlying
+                        self?.resolveRunSettlement(runID: runID, .launchFailed(neverStarted.underlying.localizedDescription))
+                        throw RunUndone()
+                    }
                 },
                 onFinished: onFinished
             )
@@ -504,6 +526,9 @@ extension AlasCoreContext {
         return .externalProcess
     }
 }
+
+/// Thrown by a completion source whose run never started and was undone.
+struct RunUndone: Error {}
 
 /// A run whose command never started.
 public struct RunLaunchFailure: LocalizedError, Equatable {
