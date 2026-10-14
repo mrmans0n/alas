@@ -211,15 +211,21 @@ extension AppState {
         return nil
     }
 
-    /// `probe`'s open request, else the branch's open request against any other
-    /// base. Read-only callers only: a lookup failure reads as no request.
+    /// `probe`'s open request, else the open request of the branch or its
+    /// differently named upstream against any base. Read-only callers only: a
+    /// lookup failure reads as no request.
     private func openRequestAnyBase(probe: ReviewLoopSnapshot, worktreePath: URL) async -> ReviewRequest? {
         if let request = probe.reviewRequest, request.state == .open { return request }
         guard let remote = probe.remote, !probe.local.branchName.isEmpty else { return nil }
-        return try? await openRequest(
-            remote: remote, branch: probe.local.branchName, headOwner: probe.local.headRemoteOwner,
-            bases: [""], worktreePath: worktreePath
-        )
+        for branch in Self.prCreateLookupBranches(probe.local) {
+            if let request = try? await openRequest(
+                remote: remote, branch: branch, headOwner: probe.local.headRemoteOwner,
+                bases: [""], worktreePath: worktreePath
+            ) {
+                return request
+            }
+        }
+        return nil
     }
 
     /// Read-only: neither path runs the shepherd's policy or changes its record.
