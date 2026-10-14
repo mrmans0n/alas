@@ -10,22 +10,30 @@ source="$(git worktree list --porcelain | awk '/^worktree /{print $2; exit}')"
 # alone via the network path. `-c protocol.file.allow=always` is needed
 # because git blocks the local-path/file transport for *nested* (submodule)
 # clones by default (CVE-2022-39253) -- safe here since the source is our
-# own trusted sibling checkout, not attacker-controlled input. `submodule
-# sync` afterwards restores the real GitHub url so a later manual
-# `git submodule update` (e.g. to pick up a new pinned commit) doesn't stay
-# wired to this local path.
+# own trusted sibling checkout, not attacker-controlled input. Use the local
+# checkout only when it contains the pinned commit; otherwise fetch upstream.
+# Restore the upstream URL even after failures so later updates can retry.
 #
 # Best-effort throughout: a failure on one module or one file must not block
 # the rest, since every artifact below is fingerprint-checked by its own
 # build script and falls back to a real build on any mismatch or absence.
 for module in fff ghostty zmx; do
-  path="ThirdParty/$module"
-  local_src="$source/$path"
-  git submodule init -- "$path" >/dev/null 2>&1
-  git config "submodule.${path}.url" "$local_src"
-  if git -c protocol.file.allow=always submodule update --reference-if-able "$local_src" -- "$path"; then
-    git submodule sync -- "$path" >/dev/null 2>&1
-  else
+  # zsh's `path` parameter is tied to PATH; keep the module path separate.
+  module_path="ThirdParty/$module"
+  local_src="$source/$module_path"
+  git submodule init -- "$module_path" >/dev/null 2>&1
+  # Also repair URLs left behind by an earlier failed hook.
+  git submodule sync -- "$module_path" >/dev/null 2>&1
+  module_commit="$(git rev-parse ":$module_path")"
+  updated_locally=false
+  if git -C "$local_src" cat-file -e "$module_commit^{commit}" 2>/dev/null; then
+    if git -c protocol.file.allow=always -c "submodule.${module_path}.url=$local_src" \
+      submodule update --reference "$local_src" -- "$module_path"; then
+      updated_locally=true
+    fi
+    git submodule sync -- "$module_path" >/dev/null 2>&1
+  fi
+  if [[ "$updated_locally" == false ]] && ! git submodule update -- "$module_path"; then
     echo "worktree-init: warning: submodule update failed for $module, continuing" >&2
   fi
 done

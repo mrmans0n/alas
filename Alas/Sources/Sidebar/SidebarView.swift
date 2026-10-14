@@ -343,6 +343,9 @@ struct SidebarView: View {
                         onClear: clearWorktreeFilter
                     )
                 }
+                // The filter is the window's first text field, so AppKit would
+                // otherwise hand it focus at launch.
+                .defaultFocus($worktreeFilterFocused, false)
                 .clipped()
                 if state.spacesManager.shouldShowSpaceAffordance {
                     SpacePagerIndicator(

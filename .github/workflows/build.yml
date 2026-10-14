@@ -4,8 +4,8 @@ name: Build
 # builds, tests, or reads: docs, agent skill/config directories, marketing art,
 # and the other workflows. `paths` is used instead of `paths-ignore` because
 # only `paths` supports re-including a subtree after excluding its parent
-# (`.alas/scripts/**` is exercised by the alas-build harness). Keep both event
-# lists identical; scripts/tests/ci-workflow enforces that. No branch protection
+# (`.alas/scripts/**` and `.alas/hooks/**` are exercised by shell harnesses).
+# Keep both event lists identical; scripts/tests/ci-workflow enforces that. No branch protection
 # requires these checks, so a skipped run leaves PRs mergeable.
 on:
   push:
@@ -27,6 +27,7 @@ on:
       - "!.github/workflows/update-cask.py"
       - "!.alas/**"
       - ".alas/scripts/**"
+      - ".alas/hooks/**"
   pull_request:
     paths:
       - "**"
@@ -43,6 +44,7 @@ on:
       - "!.github/workflows/update-cask.py"
       - "!.alas/**"
       - ".alas/scripts/**"
+      - ".alas/hooks/**"
 
 # Cancel superseded runs on the same ref (e.g. force-push to a PR branch).
 # Saves CI minutes and frees the macos-26 queue when iterating fast.
@@ -166,6 +168,10 @@ jobs:
       - name: Test Alas build harness
         if: ${{ !cancelled() }}
         run: bash scripts/tests/alas-build/run.sh
+
+      - name: Test worktree create hook
+        if: ${{ !cancelled() }}
+        run: bash scripts/tests/worktree-create/run.sh
 
       - name: Test release project preparation
         if: ${{ !cancelled() }}
