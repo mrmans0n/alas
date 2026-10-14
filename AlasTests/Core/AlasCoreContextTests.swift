@@ -217,6 +217,44 @@ struct AlasCoreContextTests {
         #expect(context.runRecords.record(worktreeID: worktree.id, scriptKey: script.key) == previous)
     }
 
+    /// Cancelling a headless run stops that run, never one that replaced it
+    /// before the stop got to run.
+    @Test(.timeLimit(.minutes(1)))
+    func cancellingARunLeavesTheRunThatReplacedIt() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-core-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try "sleep 300\n".write(to: root.appendingPathComponent("long.sh"), atomically: true, encoding: .utf8)
+        let project = ProjectConfig(id: "p", name: "p", path: root.path, color: "blue", addedAt: Date())
+        let worktree = Worktree(
+            id: root.path, projectId: "p", name: "main", branch: "main", path: root,
+            status: .clean, lastActivity: Date()
+        )
+        let script = RunScript(
+            scope: .repo, fileName: "long.sh", fileURL: root.appendingPathComponent("long.sh"),
+            displayName: "Long", onExit: .close, cwd: nil, isExecutable: false
+        )
+        let context = AlasCoreContext(projects: ProjectsManager(persistedProjects: [project]), runHistoryStore: nil)
+        let first = Task { try await context.runScript(script, in: worktree) }
+        while context.runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status != .running {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        // Same turn: the restart takes the slot before the cancellation's stop runs.
+        first.cancel()
+        let replacement = context.startRun(script, in: worktree, isHidden: true)
+        defer { context.stopRun(scriptKey: script.key, in: worktree) }
+
+        await #expect(throws: CancellationError.self) { _ = try await first.value }
+        guard case .started(let replacementID) = replacement else {
+            Issue.record("Expected the restart to start, got \(replacement)")
+            return
+        }
+        let current = context.runRecords.record(worktreeID: worktree.id, scriptKey: script.key)
+        #expect(current?.id == replacementID)
+        #expect(current?.status.isActive == true)
+    }
+
     /// A second run of a script that is still running would displace the
     /// first one's record and drop its history, so it is refused.
     @Test func refusesToStartAScriptThatIsAlreadyRunning() async throws {

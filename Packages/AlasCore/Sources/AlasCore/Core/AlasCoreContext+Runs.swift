@@ -395,12 +395,12 @@ extension AlasCoreContext {
         guard runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status.isActive != true else {
             throw RunService.RunError.alreadyRunning
         }
-        var runID: String?
+        let started = StartedRun()
         let settlement: RunScriptSettlement = await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
                 switch startRun(script, in: worktree, isHidden: true, onSettled: { continuation.resume(returning: $0) }) {
-                case .started(let started):
-                    runID = started
+                case .started(let runID):
+                    started.runID = runID
                 case .alreadyStarting:
                     continuation.resume(returning: .launchFailed("\(script.displayName) is already starting."))
                 case .projectUnavailable:
@@ -410,16 +410,19 @@ extension AlasCoreContext {
                 }
             }
         } onCancel: {
-            Task { @MainActor [weak self] in self?.stopRun(scriptKey: script.key, in: worktree) }
+            Task { @MainActor [weak self] in
+                guard let runID = started.runID else { return }
+                self?.stopRun(runID: runID, scriptKey: script.key, in: worktree)
+            }
         }
         switch settlement {
         case .launchFailed(let message):
-            if let runID, let error = processRunErrors.removeValue(forKey: runID) { throw error }
+            if let runID = started.runID, let error = processRunErrors.removeValue(forKey: runID) { throw error }
             throw RunLaunchFailure(message: message)
         case .finished(.stopped):
             throw CancellationError()
         case .finished(.unknown):
-            if let runID, let error = processRunErrors.removeValue(forKey: runID) { throw error }
+            if let runID = started.runID, let error = processRunErrors.removeValue(forKey: runID) { throw error }
             return .unknown
         case .finished(let outcome):
             return outcome
@@ -457,6 +460,18 @@ extension AlasCoreContext {
     }
 
     // MARK: - Private
+
+    /// Stops one run. When a restart has already taken the script's slot, only
+    /// the run's own process is ended; the replacement is left alone.
+    private func stopRun(runID: String, scriptKey: String, in worktree: Worktree) {
+        let key = RunSlotKey(worktreeID: worktree.id, scriptKey: scriptKey)
+        if pendingRunLaunches[key]?.runID == runID
+            || runRecords.record(worktreeID: worktree.id, scriptKey: scriptKey)?.id == runID {
+            stopRun(scriptKey: scriptKey, in: worktree)
+        } else {
+            processRuns.removeValue(forKey: runID)?.task.cancel()
+        }
+    }
 
     private func observe(_ launch: RunLaunch, request: RunLaunchRequest, displaced: RunRecord?, launcher: any RunLauncher) {
         let runID = request.runID
@@ -525,6 +540,12 @@ extension AlasCoreContext {
         guard !target.isRemote, RunPortProbe.isLocalPortInUse(port) else { return nil }
         return .externalProcess
     }
+}
+
+/// The run a `runScript` call started, read by its cancellation handler.
+@MainActor
+private final class StartedRun {
+    var runID: String?
 }
 
 /// Thrown by a completion source whose run never started and was undone.
