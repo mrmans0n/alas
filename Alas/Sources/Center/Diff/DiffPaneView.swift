@@ -569,24 +569,25 @@ struct DiffPaneHunkCardOutline: Shape {
         let openTop = fusion.fusedWithPrevious && !showsHeader
         let openBottom = fusion.fusedWithNext
         guard openTop || openBottom else { return DiffPaneHunkCardShape(fusion: fusion).path(in: rect) }
-        // Open edges are square, so the sides run straight to them.
-        let radius: CGFloat = 7
+        // Fused edges are square, so the sides run straight to open ones.
+        let top: CGFloat = fusion.fusedWithPrevious ? 0 : 7
+        let bottom: CGFloat = fusion.fusedWithNext ? 0 : 7
         var path = Path()
         if openTop {
             path.move(to: CGPoint(x: rect.maxX, y: rect.minY))
         } else {
-            path.move(to: CGPoint(x: rect.minX, y: rect.minY + radius))
-            path.addArc(tangent1End: CGPoint(x: rect.minX, y: rect.minY), tangent2End: CGPoint(x: rect.maxX, y: rect.minY), radius: radius)
-            path.addArc(tangent1End: CGPoint(x: rect.maxX, y: rect.minY), tangent2End: CGPoint(x: rect.maxX, y: rect.maxY), radius: radius)
+            path.move(to: CGPoint(x: rect.minX, y: rect.minY + top))
+            path.addArc(tangent1End: CGPoint(x: rect.minX, y: rect.minY), tangent2End: CGPoint(x: rect.maxX, y: rect.minY), radius: top)
+            path.addArc(tangent1End: CGPoint(x: rect.maxX, y: rect.minY), tangent2End: CGPoint(x: rect.maxX, y: rect.maxY), radius: top)
         }
         if openBottom {
             path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
             path.move(to: CGPoint(x: rect.minX, y: rect.maxY))
         } else {
-            path.addArc(tangent1End: CGPoint(x: rect.maxX, y: rect.maxY), tangent2End: CGPoint(x: rect.minX, y: rect.maxY), radius: radius)
-            path.addArc(tangent1End: CGPoint(x: rect.minX, y: rect.maxY), tangent2End: CGPoint(x: rect.minX, y: rect.minY), radius: radius)
+            path.addArc(tangent1End: CGPoint(x: rect.maxX, y: rect.maxY), tangent2End: CGPoint(x: rect.minX, y: rect.maxY), radius: bottom)
+            path.addArc(tangent1End: CGPoint(x: rect.minX, y: rect.maxY), tangent2End: CGPoint(x: rect.minX, y: rect.minY), radius: bottom)
         }
-        path.addLine(to: CGPoint(x: rect.minX, y: openTop ? rect.minY : rect.minY + radius))
+        path.addLine(to: CGPoint(x: rect.minX, y: openTop ? rect.minY : rect.minY + top))
         return path
     }
 }
