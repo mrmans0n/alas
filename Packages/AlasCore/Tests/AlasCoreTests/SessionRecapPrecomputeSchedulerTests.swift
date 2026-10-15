@@ -41,23 +41,32 @@ struct SessionRecapPrecomputeSchedulerTests {
         }
     }
 
-    /// Records runs and holds each one open until the test finishes it.
+    /// Records runs and holds each one open until the test finishes it,
+    /// even when cancelled, which it reports on `cancellations`.
     @MainActor
     private final class FakeRunner {
         private(set) var started: [String] = []
         private var finishers: [String: CheckedContinuation<Void, Never>] = [:]
         let starts: AsyncStream<String>
         private let startsContinuation: AsyncStream<String>.Continuation
+        let cancellations: AsyncStream<String>
+        private let cancellationsContinuation: AsyncStream<String>.Continuation
 
         init() {
             (starts, startsContinuation) = AsyncStream.makeStream()
+            (cancellations, cancellationsContinuation) = AsyncStream.makeStream()
         }
 
         func run(_ sessionId: String) async {
             started.append(sessionId)
-            await withCheckedContinuation { continuation in
-                finishers[sessionId] = continuation
-                startsContinuation.yield(sessionId)
+            let cancellations = cancellationsContinuation
+            await withTaskCancellationHandler {
+                await withCheckedContinuation { continuation in
+                    finishers[sessionId] = continuation
+                    startsContinuation.yield(sessionId)
+                }
+            } onCancel: {
+                cancellations.yield(sessionId)
             }
         }
 
@@ -107,19 +116,36 @@ struct SessionRecapPrecomputeSchedulerTests {
         #expect(scheduler.pendingSessionIds.isEmpty)
     }
 
-    @Test(arguments: ["seen", "busy", "closed"])
-    func droppingBeforeTheThresholdNeverRuns(reason: String) async throws {
+    @Test
+    func droppingBeforeTheThresholdNeverRuns() async throws {
         scheduler.schedule(sessionId: "A", lastSeenAt: Self.now, threshold: Self.threshold)
         let call = try await next(sleeper.calls)
 
         scheduler.drop(sessionId: "A")
-        #expect(scheduler.pendingSessionIds.isEmpty, "dropped as \(reason)")
+        #expect(scheduler.pendingSessionIds.isEmpty)
         await sleeper.resume(call.index)
 
         // A later due entry runs, and it is the only run.
         scheduler.schedule(sessionId: "B", lastSeenAt: pastDue(60), threshold: Self.threshold)
         #expect(try await next(runner.starts) == "B")
         #expect(runner.started == ["B"])
+    }
+
+    @Test
+    func droppingTheRunningJobCancelsItButTheNextStillWaitsForItToReturn() async throws {
+        scheduler.isSuspended = true
+        scheduler.schedule(sessionId: "running", lastSeenAt: pastDue(30), threshold: Self.threshold)
+        scheduler.schedule(sessionId: "queued", lastSeenAt: pastDue(60), threshold: Self.threshold)
+        scheduler.isSuspended = false
+        #expect(try await next(runner.starts) == "running")
+
+        scheduler.drop(sessionId: "running")
+        #expect(try await next(runner.cancellations) == "running")
+        #expect(scheduler.runningSessionId == "running")
+        #expect(scheduler.pendingSessionIds == ["queued"])
+
+        runner.finish("running")
+        #expect(try await next(runner.starts) == "queued")
     }
 
     @Test

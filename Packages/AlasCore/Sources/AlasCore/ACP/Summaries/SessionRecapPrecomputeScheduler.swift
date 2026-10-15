@@ -19,9 +19,10 @@ public final class SessionRecapPrecomputeScheduler {
 
     private var waiting: [String: Waiting] = [:]
     private var ready: [String: Date] = [:]
-    /// The session whose job is running, if any. Dropping it does not stop
-    /// the job; the caller cancels the work itself.
+    /// The session whose job is running, if any. Dropping it cancels the
+    /// job's task; the next job still waits until `run` returns.
     public private(set) var runningSessionId: String?
+    private var runningJob: Task<Void, Never>?
 
     /// Low Power Mode; when true, due jobs wait.
     public var isSuspended = false {
@@ -72,12 +73,14 @@ public final class SessionRecapPrecomputeScheduler {
     public func drop(sessionId: String) {
         waiting.removeValue(forKey: sessionId)?.timer.cancel()
         ready[sessionId] = nil
+        if runningSessionId == sessionId { runningJob?.cancel() }
     }
 
     public func dropAll() {
         for entry in waiting.values { entry.timer.cancel() }
         waiting.removeAll()
         ready.removeAll()
+        runningJob?.cancel()
     }
 
     private func becameDue(sessionId: String, token: UUID) {
@@ -95,10 +98,11 @@ public final class SessionRecapPrecomputeScheduler {
         ready[next] = nil
         runningSessionId = next
         let run = run
-        Task { [weak self] in
+        runningJob = Task { [weak self] in
             await run(next)
             guard let self else { return }
             self.runningSessionId = nil
+            self.runningJob = nil
             self.startNextIfIdle()
         }
     }

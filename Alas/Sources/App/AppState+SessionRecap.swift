@@ -9,7 +9,8 @@ private let sessionRecapLogger = Logger(subsystem: "io.nlopez.alas", category: "
 /// observers: seen-tracking must keep working while local text is off.
 @MainActor
 final class SessionRecapRuntime {
-    var appFocusObservers: [AnyCancellable] = []
+    /// App-focus and power-state notification observers.
+    var sessionRecapObservers: [AnyCancellable] = []
     /// One in-flight return check per session, so a seen/unseen flap never
     /// stacks two waits.
     private var pendingChecks: [ACPSession.ID: (token: UUID, task: Task<Void, Never>)] = [:]
@@ -17,8 +18,8 @@ final class SessionRecapRuntime {
     /// find its manager even when the session is not loaded.
     var precomputeOwners: [ACPSession.ID: SessionOwnerID] = [:]
     /// Activity observation for each scheduled session that was live when
-    /// it was scheduled.
-    var precomputeActivity: [ACPSession.ID: ChangeSubscription] = [:]
+    /// it was scheduled, keyed to the session object it observes.
+    var precomputeActivity: [ACPSession.ID: (session: ObjectIdentifier, subscription: ChangeSubscription)] = [:]
 
     func startCheck(sessionId: ACPSession.ID, _ operation: @escaping @MainActor (UUID) async -> Void) {
         cancelCheck(sessionId: sessionId)
@@ -81,7 +82,7 @@ extension AppState {
             ) { [weak self] _ in
                 MainActor.assumeIsolated { self?.setSessionsAppActive(active) }
             }
-            sessionRecapRuntime.appFocusObservers.append(
+            sessionRecapRuntime.sessionRecapObservers.append(
                 AnyCancellable { NotificationCenter.default.removeObserver(token) }
             )
         }
@@ -93,7 +94,7 @@ extension AppState {
                 self?.sessionRecapPrecomputeScheduler.isSuspended = ProcessInfo.processInfo.isLowPowerModeEnabled
             }
         }
-        sessionRecapRuntime.appFocusObservers.append(
+        sessionRecapRuntime.sessionRecapObservers.append(
             AnyCancellable { NotificationCenter.default.removeObserver(power) }
         )
     }
@@ -360,8 +361,7 @@ extension AppState {
             guard let snapshot, acpManager(for: manager.owner) === manager,
                   !manager.seenTracker.isSeen(sessionId),
                   // A seen event since the scan started has fresher timing.
-                  !sessionRecapPrecomputeScheduler.pendingSessionIds.contains(sessionId),
-                  sessionRecapPrecomputeScheduler.runningSessionId != sessionId
+                  !sessionRecapPrecomputeScheduler.pendingSessionIds.contains(sessionId)
             else { continue }
             let origin = Date(timeIntervalSince1970: TimeInterval(snapshot.lastSeenAt ?? snapshot.updatedAt))
             scheduleRecapPrecompute(sessionId: sessionId, lastSeenAt: origin, manager: manager)
@@ -374,15 +374,15 @@ extension AppState {
               hasOpenACPTab(sessionId: sessionId, owner: manager.owner),
               !manager.seenTracker.isSeen(sessionId) else { return }
         sessionRecapRuntime.precomputeOwners[sessionId] = manager.owner
-        if sessionRecapRuntime.precomputeActivity[sessionId] == nil,
-           let session = manager.liveSession(for: sessionId) {
+        if let session = manager.liveSession(for: sessionId),
+           sessionRecapRuntime.precomputeActivity[sessionId]?.session != ObjectIdentifier(session) {
+            sessionRecapRuntime.precomputeActivity[sessionId]?.subscription.cancel()
             // A busy session is dropped and only rescheduled on its next
             // `.becameUnseen`, so an open tab that goes busy and then idle
             // while hidden is not precomputed until the user leaves it again.
             // The signal fires before the change lands, so check on the next
             // turn; activity that leaves the session idle keeps its entry.
-            sessionRecapRuntime.precomputeActivity[sessionId] = session.nextPromptActivity.observe {
-                [weak self, weak session, weak manager] in
+            let subscription = session.nextPromptActivity.observe { [weak self, weak session, weak manager] in
                 Task { @MainActor in
                     guard let self, let session, let manager, manager.liveSession(for: sessionId) === session,
                           !SessionSummaryIdleFacts.current(session: session, composer: session.composer).isIdle
@@ -390,6 +390,7 @@ extension AppState {
                     self.dropRecapPrecompute(sessionId: sessionId)
                 }
             }
+            sessionRecapRuntime.precomputeActivity[sessionId] = (ObjectIdentifier(session), subscription)
         }
         sessionRecapPrecomputeScheduler.schedule(sessionId: sessionId, lastSeenAt: lastSeenAt, threshold: threshold)
     }
@@ -400,7 +401,9 @@ extension AppState {
         let wasRunning = scheduler.runningSessionId == sessionId
         scheduler.drop(sessionId: sessionId)
         sessionRecapRuntime.precomputeOwners[sessionId] = nil
-        sessionRecapRuntime.precomputeActivity.removeValue(forKey: sessionId)?.cancel()
+        sessionRecapRuntime.precomputeActivity.removeValue(forKey: sessionId)?.subscription.cancel()
+        // The scheduler cancels the job's task; this stops a generation the
+        // engine already started.
         if wasRunning {
             let coordinator = sessionSummaryCoordinator
             Task { await coordinator.cancelPrecompute(sessionId: sessionId) }
@@ -412,7 +415,7 @@ extension AppState {
         let running = scheduler.runningSessionId
         scheduler.dropAll()
         sessionRecapRuntime.precomputeOwners.removeAll()
-        for subscription in sessionRecapRuntime.precomputeActivity.values { subscription.cancel() }
+        for entry in sessionRecapRuntime.precomputeActivity.values { entry.subscription.cancel() }
         sessionRecapRuntime.precomputeActivity.removeAll()
         if let running {
             let coordinator = sessionSummaryCoordinator
@@ -435,7 +438,7 @@ extension AppState {
         defer {
             if !sessionRecapPrecomputeScheduler.pendingSessionIds.contains(sessionId) {
                 sessionRecapRuntime.precomputeOwners[sessionId] = nil
-                sessionRecapRuntime.precomputeActivity.removeValue(forKey: sessionId)?.cancel()
+                sessionRecapRuntime.precomputeActivity.removeValue(forKey: sessionId)?.subscription.cancel()
             }
         }
         guard recapPrecomputeAllowed,
@@ -462,7 +465,11 @@ extension AppState {
             guard let snapshot, snapshot.isIdle, snapshot.source.turns.count >= minimumTurns else { return }
             context = SessionSummaryContext.snapshot(source: snapshot.source)
         }
-        guard let context, recapPrecomputeAllowed, !manager.seenTracker.isSeen(sessionId) else { return }
+        // A drop during the awaits above cancels this task; re-check everything.
+        guard let context, !Task.isCancelled, recapPrecomputeAllowed,
+              acpManager(for: owner) === manager,
+              hasOpenACPTab(sessionId: sessionId, owner: owner),
+              !manager.seenTracker.isSeen(sessionId) else { return }
         _ = await sessionSummaryCoordinator.precompute(
             sessionId: sessionId,
             context: context,
