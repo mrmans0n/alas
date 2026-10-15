@@ -21,7 +21,7 @@ extension AppState {
                 ) ?? .failed
             },
             rules: { [weak self] worktreeID in
-                self?.shepherdRules(worktreeID: worktreeID) ?? ShepherdRules.none
+                await self?.shepherdRules(worktreeID: worktreeID) ?? ShepherdRules.none
             },
             notify: { [weak self] event in
                 self?.notifyShepherdEvent(event)
@@ -46,11 +46,13 @@ extension AppState {
 
     // MARK: - Eligibility, rules and base
 
-    /// Local git worktrees outside Workspace checkouts. Remote (SSH)
-    /// projects, folders and checkout members are out of scope for v1.
+    /// Git worktrees, local or SSH, outside Workspace checkouts. On an SSH
+    /// project git and `gh`/`glab` run on the remote host, which must have
+    /// the CLI installed and signed in. Folders and checkout members are out
+    /// of scope.
     func isShepherdEligible(_ worktree: Worktree) -> Bool {
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else { return false }
-        return project.host == nil && !project.isFolder && !isWorkspaceCheckoutMember(worktree)
+        return !project.isFolder && !isWorkspaceCheckoutMember(worktree)
     }
 
     /// Whether a session tab offers Ship, as the toolbar pill and `/ship`:
@@ -59,9 +61,9 @@ extension AppState {
         !isWorkspaceCheckoutOwner && isShepherdEligible(worktree)
     }
 
-    func shepherdRules(worktreeID: String) -> ShepherdRules {
+    func shepherdRules(worktreeID: String) async -> ShepherdRules {
         guard let resolved = projectAndWorktree(withWorktreeId: worktreeID) else { return ShepherdRules.none }
-        return ShepherdRulesResolver.load(
+        return await ShepherdRulesResolver.load(
             worktreePath: resolved.worktree.path,
             projectSettings: resolved.project.shepherd
         )
@@ -280,7 +282,7 @@ extension AppState {
         let prompt = ShepherdPromptBuilder.bindPrompt(
             request: request,
             fix: ShepherdPolicy.problems(in: request, handled: []),
-            rules: shepherdRules(worktreeID: worktree.id)
+            rules: await shepherdRules(worktreeID: worktree.id)
         )
         let prepared = PreparedWorktreeACPPrompt(sessionID: UUID().uuidString, promptID: UUID(), text: prompt)
         do {
@@ -388,7 +390,9 @@ extension AppState {
     }
 
     private func notifyShepherdEvent(_ event: ReviewShepherd.Event) {
-        let message = Self.shepherdNotification(for: event)
+        let message = Self.shepherdNotification(for: event) { record in
+            projectAndWorktree(withWorktreeId: record.id.worktreeID)?.project.host
+        }
         let record = message.record
         guard let resolved = projectAndWorktree(withWorktreeId: record.id.worktreeID) else { return }
         let agent = shepherdAgentKind(sessionID: record.sessionID, worktreeID: record.id.worktreeID)
@@ -435,8 +439,10 @@ extension AppState {
         return agentID.map { ACPHarnessBridge.agentKind(for: $0) } ?? .codex
     }
 
+    /// `host` is the SSH host of the record's project, where `gh`/`glab` run.
     private static func shepherdNotification(
-        for event: ReviewShepherd.Event
+        for event: ReviewShepherd.Event,
+        host: (ShepherdRecord) -> String?
     ) -> (record: ShepherdRecord, escalation: ShepherdEscalation?, title: String, body: String) {
         switch event {
         case .ready(let record, let title):
@@ -455,7 +461,12 @@ extension AppState {
             case .noProgress: "has not moved since the last fix prompt."
             case .deliveryFailed: "could not reach its chat session."
             case .ownerGone: "lost its chat session. Pick another one in Changes."
-            case .authFailed: "can't be checked: \(cli) is missing or signed out. Run \(cli) auth login."
+            case .authFailed:
+                if let host = host(record) {
+                    "can't be checked: \(cli) is missing or signed out on \(host). Run \(cli) auth login there."
+                } else {
+                    "can't be checked: \(cli) is missing or signed out. Run \(cli) auth login."
+                }
             }
             return (record, reason, "PR shepherd needs you", "\(subject) \(detail)")
         }

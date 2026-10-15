@@ -200,9 +200,7 @@ private struct ShepherdPopover: View {
     private func load() async {
         let settings = state.projectsManager.projects.first(where: { $0.id == worktree.projectId })?.shepherd
         let root = worktree.path
-        rules = await Task.detached {
-            ShepherdRulesResolver.load(worktreePath: root, projectSettings: settings)
-        }.value
+        rules = await ShepherdRulesResolver.load(worktreePath: root, projectSettings: settings)
         let context = ShepherdSessionContext(sessionID: session.id, worktree: worktree, state: state)
         // Read-only fetches: the UI never runs the shepherd policy.
         if context.request == nil, let bound = context.record ?? context.otherRecord {

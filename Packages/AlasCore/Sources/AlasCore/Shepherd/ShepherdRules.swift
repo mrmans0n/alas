@@ -103,16 +103,22 @@ public enum ShepherdRulesResolver {
     }
 
     /// Reads the two files under `worktreePath` (a missing or unreadable file
-    /// is nil), then `resolve`.
-    public static func load(worktreePath: URL, projectSettings: ProjectShepherdSettings?) -> ShepherdRules {
-        func read(_ relativePath: String) -> String? {
-            try? String(contentsOf: worktreePath.appendingPathComponent(relativePath), encoding: .utf8)
-        }
-        return resolve(
-            localFile: read(localFilePath),
-            repoFile: read(repoFilePath),
+    /// is nil), over ssh for a remote worktree, then `resolve`.
+    public static func load(worktreePath: URL, projectSettings: ProjectShepherdSettings?) async -> ShepherdRules {
+        let host = RemoteHostRegistry.shared.host(forPath: worktreePath.path)
+        async let localFile = read(worktreePath.appendingPathComponent(localFilePath), host: host)
+        async let repoFile = read(worktreePath.appendingPathComponent(repoFilePath), host: host)
+        return await resolve(
+            localFile: localFile,
+            repoFile: repoFile,
             projectSettings: projectSettings
         )
+    }
+
+    private static func read(_ url: URL, host: String?) async -> String? {
+        guard let host else { return try? String(contentsOf: url, encoding: .utf8) }
+        guard case .file(let data, _)? = try? await RemoteFileAccess.read(host: host, path: url.path) else { return nil }
+        return String(data: data, encoding: .utf8)
     }
 
     static func normalizedReviewers(_ raw: [String]) -> [String] {

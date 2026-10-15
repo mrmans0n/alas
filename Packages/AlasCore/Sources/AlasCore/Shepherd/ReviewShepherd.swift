@@ -131,7 +131,7 @@ public final class ReviewShepherd {
             _ text: String,
             _ isStillWanted: @escaping @MainActor () -> Bool
         ) async -> Delivery
-        public var rules: @MainActor (_ worktreeID: String) -> ShepherdRules
+        public var rules: @MainActor (_ worktreeID: String) async -> ShepherdRules
         public var notify: @MainActor (Event) -> Void
         public var refreshPaneIfCached: @MainActor (_ worktreeID: String) -> Void
         /// Checks the archive-after-merge setting and the finished record's
@@ -153,7 +153,7 @@ public final class ReviewShepherd {
                 _ text: String,
                 _ isStillWanted: @escaping @MainActor () -> Bool
             ) async -> Delivery,
-            rules: @escaping @MainActor (_ worktreeID: String) -> ShepherdRules,
+            rules: @escaping @MainActor (_ worktreeID: String) async -> ShepherdRules,
             notify: @escaping @MainActor (Event) -> Void,
             refreshPaneIfCached: @escaping @MainActor (_ worktreeID: String) -> Void,
             archiveWorktreeIfAllowed: @escaping @MainActor (
@@ -338,7 +338,7 @@ public final class ReviewShepherd {
             let prompt = ShepherdPromptBuilder.bindPrompt(
                 request: request,
                 fix: ShepherdPolicy.problems(in: request, handled: record.handledThreadRevisions ?? []),
-                rules: effects.rules(worktreeID)
+                rules: await effects.rules(worktreeID)
             )
             let delivery = await effects.deliverPrompt(sessionID, worktreeID, prompt) { [weak self] in
                 self?.isCurrent(id, generation, before: "the bind delivery") ?? false
@@ -600,7 +600,7 @@ public final class ReviewShepherd {
         }
         endAuthPause(id)
         guard let observed = await snapshotCarryingRequest(id, from: snapshot, worktreePath: context.path) else { return }
-        let rules = effects.rules(id.worktreeID)
+        let rules = await effects.rules(id.worktreeID)
         let reviewers: Set<String>?
         if rules.requiredReviewers.isEmpty || observed.reviewRequest?.state != .open {
             reviewers = nil
@@ -854,7 +854,7 @@ public final class ReviewShepherd {
               let request = latest.reviewRequest,
               ShepherdRecordID(worktreeID: id.worktreeID, request: request) == id
         else { return .finished(nil) }
-        let rules = effects.rules(id.worktreeID)
+        let rules = await effects.rules(id.worktreeID)
         let reviewers = rules.requiredReviewers.isEmpty || request.state != .open
             ? nil
             : await headReviewers(

@@ -255,7 +255,7 @@ extension AppState {
             }
             snapshot = fresh
         }
-        let rules = effects.rules(worktreeID)
+        let rules = await effects.rules(worktreeID)
         var pullRequest: PRStatusWire.PullRequest?
         if let request = snapshot.reviewRequest {
             var headReviewers: Set<String>?
@@ -289,7 +289,7 @@ extension AppState {
         }
         guard context.isEligible else {
             throw PRShepherdCLIError(
-                message: "The PR shepherd works on local worktrees only. Remote worktrees and Workspace checkouts are not supported yet."
+                message: "The PR shepherd works on git worktrees only. Folders and Workspace checkouts are not supported yet."
             )
         }
         return (effects, context)
