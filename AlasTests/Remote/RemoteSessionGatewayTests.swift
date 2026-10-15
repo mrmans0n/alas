@@ -733,7 +733,7 @@ struct RemoteSessionGatewayTests {
         #expect(provider.remoteProjectsCallCount == 1)
 
         // A project's own change refreshes the project list too.
-        projects.setWorktreeHidden(projectId: "p", path: path, hidden: true)
+        projects.updateProject(id: "p", update: ProjectUpdate(name: "renamed", icon: .default()))
         while provider.remoteProjectsCallCount < 2, ContinuousClock.now < deadline + .seconds(5) {
             try await Task.sleep(for: .milliseconds(10))
         }
