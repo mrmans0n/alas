@@ -73,15 +73,17 @@ struct ACPSideQuestionCard: View {
                 modelName: nil,
                 enforcesReadOnly: enforcesReadOnly,
                 needsAttention: false,
+                hasPendingInput: false,
                 answer: nil,
                 hasContent: false,
                 // Retry after a failure; not while the question is starting.
                 canAsk: entry.question.isEmpty || entry.error != nil,
+                blocked: ACPSideQuestionBlockedSummary([]),
                 onAsk: onAsk,
                 onDismiss: onDismiss,
                 onInsert: onInsert,
                 onKeep: nil
-            ) { EmptyView() }
+            ) { EmptyView() } prompt: { EmptyView() }
         }
     }
 
@@ -148,6 +150,19 @@ struct ACPSideQuestionCard: View {
             side.readOnlyBlockedTools.filter { $0.messageIndex > latestTurn.startIndex }
         }
 
+        /// The agent waits on input the card has no view for; offer to end the turn.
+        private var showsAwaitingInputNotice: Bool {
+            transcript.streamingState == .awaitingInput && transcript.pendingPermission == nil
+                && transcript.pendingPlan == nil && transcript.pendingUserInputs.isEmpty
+                && transcript.urlElicitationWaits.isEmpty
+        }
+
+        private var hasPendingInput: Bool {
+            transcript.pendingPermission != nil || transcript.pendingPlan != nil
+                || !transcript.pendingUserInputs.isEmpty || !transcript.urlElicitationWaits.isEmpty
+                || showsAwaitingInputNotice
+        }
+
         private var awaitingInputNotice: some View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("The side agent is waiting for input the card can't show.")
@@ -189,10 +204,12 @@ struct ACPSideQuestionCard: View {
                 enforcesReadOnly: enforcesReadOnly,
                 needsAttention: transcript.pendingPermission != nil || transcript.pendingPlan != nil
                     || !transcript.pendingUserInputs.isEmpty,
+                hasPendingInput: hasPendingInput,
                 answer: latestAnswer.isEmpty ? nil : latestAnswer,
                 hasContent: !ownMessages.isEmpty || !side.readOnlyBlockedTools.isEmpty || !side.queue.isEmpty,
                 // A follow-up before the first question is sent would run first.
                 canAsk: entry.isSubmitted,
+                blocked: ACPSideQuestionBlockedSummary(latestBlocked),
                 onAsk: onAsk,
                 onDismiss: onDismiss,
                 onInsert: onInsert,
@@ -217,14 +234,20 @@ struct ACPSideQuestionCard: View {
                             }
                         }
                     }
-                    ForEach(Array(latestBlocked.enumerated()), id: \.offset) { _, blocked in
-                        blockedNotice(blocked.title)
-                    }
                     if phase == .answered, !latestHasOutput {
                         Text("The side agent finished without an answer.")
                             .font(.system(size: 11.5))
                             .foregroundStyle(theme.color("fg-faint"))
                     }
+                    // Follow-ups wait here until the current turn ends; a
+                    // failed one blocks the ones behind it.
+                    // One being sent is about to show up in the transcript.
+                    ForEach(side.queue.filter { $0.status == .pending || $0.lastError != nil }) { item in
+                        queuedFollowUp(item)
+                    }
+                }
+            } prompt: {
+                VStack(alignment: .leading, spacing: 6) {
                     if let pendingPlan = transcript.pendingPlan {
                         ACPPlanApprovalPrompt(plan: pendingPlan.params) { response in
                             inputActions.onPlan(pendingPlan.id, response)
@@ -249,16 +272,8 @@ struct ACPSideQuestionCard: View {
                     }
                     // Anything else the agent waits on has no place in the
                     // card; let the user end the turn instead of waiting.
-                    if transcript.streamingState == .awaitingInput, transcript.pendingPermission == nil,
-                       transcript.pendingPlan == nil, transcript.pendingUserInputs.isEmpty,
-                       transcript.urlElicitationWaits.isEmpty {
+                    if showsAwaitingInputNotice {
                         awaitingInputNotice
-                    }
-                    // Follow-ups wait here until the current turn ends; a
-                    // failed one blocks the ones behind it.
-                    // One being sent is about to show up in the transcript.
-                    ForEach(side.queue.filter { $0.status == .pending || $0.lastError != nil }) { item in
-                        queuedFollowUp(item)
                     }
                     if transcript.pendingPermission != nil, let policy = policy() {
                         ACPPermissionPrompt(
@@ -343,16 +358,6 @@ struct ACPSideQuestionCard: View {
             }
         }
 
-        private func blockedNotice(_ title: String) -> some View {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Image(systemName: "nosign")
-                    .foregroundStyle(theme.color("del"))
-                Text("Blocked \(title). Side questions are read-only.")
-                    .foregroundStyle(theme.color("fg-muted"))
-            }
-            .font(.system(size: 11.5))
-        }
-
         private static func scopeKey(for pending: ACPSession.PendingPermission?) -> String {
             guard let pending else { return "" }
             return "tool:\(pending.params.toolCall.title ?? pending.params.toolCall.toolCallId)"
@@ -370,37 +375,64 @@ struct ACPSideQuestionCard: View {
     }
 }
 
-/// Header, scrolling body, and follow-up footer shared by every card state.
-private struct ACPSideQuestionCardChrome<Content: View>: View {
+/// Header, scrolling answer, pinned prompt, and follow-up footer shared by
+/// every card state.
+private struct ACPSideQuestionCardChrome<Content: View, Prompt: View>: View {
     let question: String
     let phase: ACPSideQuestionPhase
     let modelName: String?
     let enforcesReadOnly: Bool
     /// The agent is waiting on the user; a collapsed card opens.
     let needsAttention: Bool
+    /// `prompt` has something to show; it is pinned under the answer.
+    let hasPendingInput: Bool
     /// The latest answer, for Copy and Insert; nil until there is one.
     let answer: String?
     let hasContent: Bool
     let canAsk: Bool
+    /// Calls the read-only gate blocked in the latest turn.
+    let blocked: ACPSideQuestionBlockedSummary
     let onAsk: ACPSideQuestionAsk
     let onDismiss: () -> Void
     let onInsert: (String) -> Void
     let onKeep: (() -> Void)?
     @ViewBuilder let content: () -> Content
+    @ViewBuilder let prompt: () -> Prompt
 
     @State private var isCollapsed = false
     @State private var followUp = ""
+    @State private var headerHeight: CGFloat = 0
+    @State private var footerHeight: CGFloat = 0
+    @State private var promptIdeal: CGFloat = 0
+    @State private var showsBlocked = false
     @FocusState private var fieldFocused: Bool
     @Environment(\.theme) private var theme
+    @Environment(\.acpSideQuestionCardLayout) private var layout
+    @Environment(\.acpSideQuestionDockActions) private var dockActions
+
+    /// The side dock gives the card the column's full height.
+    private var fillsColumn: Bool { layout.dock == .side }
+
+    private var heights: ACPSideQuestionDockLayout.BodyHeights {
+        ACPSideQuestionDockLayout.bodyHeights(
+            cap: layout.cap,
+            limit: layout.limit,
+            chrome: headerHeight + footerHeight,
+            promptIdeal: hasPendingInput ? promptIdeal : 0
+        )
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { headerHeight = $0 }
             // Collapsing hides the body rather than removing it, so a
             // half-filled input prompt keeps what the user typed.
             VStack(alignment: .leading, spacing: 0) {
                 body(for: phase)
+                if fillsColumn { Spacer(minLength: 0) }
                 footer
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { footerHeight = $0 }
             }
             .frame(height: isCollapsed ? 0 : nil, alignment: .top)
             .clipped()
@@ -410,6 +442,7 @@ private struct ACPSideQuestionCardChrome<Content: View>: View {
             .disabled(isCollapsed)
             .accessibilityHidden(isCollapsed)
         }
+        .frame(maxHeight: fillsColumn && !isCollapsed ? .infinity : nil, alignment: .top)
         .background(
             RoundedRectangle(cornerRadius: 12)
                 .fill(theme.color("bg-1"))
@@ -448,6 +481,7 @@ private struct ACPSideQuestionCardChrome<Content: View>: View {
                     ? "The side agent runs in a read-only mode, and Alas rejects writes and commands."
                     : "This agent can run tools without asking, so it may still change files or run commands. Alas rejects the writes and commands it's asked about.")
             status
+            dockMenu
             Button { isCollapsed.toggle() } label: {
                 Image(systemName: isCollapsed ? "chevron.up" : "chevron.down")
             }
@@ -463,6 +497,34 @@ private struct ACPSideQuestionCardChrome<Content: View>: View {
         .padding(.vertical, 8)
         .contentShape(Rectangle())
         .onTapGesture { isCollapsed.toggle() }
+        // Dragging the header moves the card; the host shows the drop zones.
+        .gesture(
+            DragGesture(minimumDistance: 6, coordinateSpace: .global)
+                .onChanged { dockActions.onHeaderDrag($0.location) }
+                .onEnded { _ in dockActions.onHeaderDrag(nil) }
+        )
+    }
+
+    private var dockMenu: some View {
+        Menu {
+            ForEach(ACPSideQuestionDock.allCases, id: \.self) { dock in
+                Button {
+                    dockActions.onSelectDock(dock)
+                } label: {
+                    if dock == layout.dock {
+                        Label(dock.title, systemImage: "checkmark")
+                    } else {
+                        Text(dock.title)
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: layout.dock.symbol)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Move the side question (or drag its header)")
     }
 
     @ViewBuilder
@@ -503,33 +565,93 @@ private struct ACPSideQuestionCardChrome<Content: View>: View {
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
             }
-            .frame(maxHeight: 220)
-            .fixedSize(horizontal: false, vertical: true)
+            // Hugs a short answer up to the chosen height; fills the side column.
+            .frame(maxHeight: fillsColumn ? .infinity : heights.answer)
+            .fixedSize(horizontal: false, vertical: !fillsColumn)
+            if hasPendingInput {
+                Divider().overlay(theme.color("warn").opacity(0.2))
+                // Outside the answer's scroll view, so the prompt is never
+                // scrolled out of sight under a long answer.
+                ScrollView {
+                    prompt()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { promptIdeal = $0 }
+                }
+                .frame(maxHeight: heights.prompt)
+                .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 
     private var footer: some View {
-        HStack(spacing: 6) {
-            TextField(phase == .composing ? "Ask a side question…" : "Ask a follow-up…", text: $followUp)
-                .textFieldStyle(.roundedBorder)
-                .font(.system(size: 12))
-                .focused($fieldFocused)
-                .disabled(!canAsk)
-                .onSubmit(submit)
-                .onExitCommand(perform: onDismiss)
-            if let answer {
-                Button("Copy") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(answer, forType: .string)
-                }
-                .controlSize(.small)
-                Button("Insert into composer") { onInsert(answer) }.controlSize(.small)
+        VStack(alignment: .leading, spacing: 6) {
+            if blocked.total > 0 {
+                blockedChip
             }
-            if let onKeep, phase != .composing {
-                Button("Keep as session", action: onKeep).controlSize(.small)
+            HStack(spacing: 6) {
+                TextField(phase == .composing ? "Ask a side question…" : "Ask a follow-up…", text: $followUp)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 12))
+                    .focused($fieldFocused)
+                    .disabled(!canAsk)
+                    .onSubmit(submit)
+                    .onExitCommand(perform: onDismiss)
+                if let answer {
+                    Button("Copy") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(answer, forType: .string)
+                    }
+                    .controlSize(.small)
+                    Button("Insert into composer") { onInsert(answer) }.controlSize(.small)
+                }
+                if let onKeep, phase != .composing {
+                    Button("Keep as session", action: onKeep).controlSize(.small)
+                }
             }
         }
         .padding(8)
+    }
+
+    private var blockedChip: some View {
+        Button { showsBlocked.toggle() } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "nosign")
+                Text(blocked.label)
+            }
+            .font(.system(size: 11))
+            .foregroundStyle(theme.color("fg-muted"))
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2)
+            .overlay(Capsule().strokeBorder(theme.color("line")))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .help("Show what the side agent tried to do")
+        .popover(isPresented: $showsBlocked, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Side questions can only read. Alas skipped:")
+                    .font(.system(size: 12, weight: .medium))
+                ForEach(blocked.entries, id: \.title) { entry in
+                    Text(entry.count > 1 ? "\(entry.title) ×\(entry.count)" : entry.title)
+                        .font(.system(size: 11.5, design: .monospaced))
+                        .foregroundStyle(theme.color("fg-muted"))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                if let onKeep {
+                    Button("Continue as full session") {
+                        showsBlocked = false
+                        onKeep()
+                    }
+                    .controlSize(.small)
+                    .help("Keep this side question as a session that can change files and run commands")
+                }
+            }
+            .padding(12)
+            .frame(width: 320, alignment: .leading)
+        }
     }
 
     private func submit() {
