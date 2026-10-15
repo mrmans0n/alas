@@ -36,6 +36,9 @@ extension AppState {
         if saveConfig() {
             sessionSummaryDisableSavePending = false
             sessionSummarySettingsError = nil
+            dropAllRecapPrecompute()
+            let stores = core.sessionManagers.values.map(\.persistence)
+            Task { await sessionSummaryCoordinator.clearPersistedSummaries(in: stores) }
         } else {
             config.sessionSummariesEnabled = previous
             sessionSummaryDisableSavePending = true
