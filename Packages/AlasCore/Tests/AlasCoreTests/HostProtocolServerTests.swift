@@ -30,7 +30,7 @@ struct HostProtocolServerTests {
         #expect(events == [
             .worktreeChanged(WorktreeSnapshot(worktree: fixture.worktree, operation: .archiving, isArchived: false)),
         ])
-        #expect(cursor.generation == snapshot.cursor.generation && cursor > snapshot.cursor)
+        #expect(cursor.generation == snapshot.cursor.generation && cursor.sequence > snapshot.cursor.sequence)
     }
 
     /// A client that reads slowly holds its events back, where they coalesce,
