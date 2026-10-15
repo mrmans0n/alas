@@ -535,9 +535,10 @@ struct ChangesTabView: View {
         }
 
         if Self.shouldShowChangesPreparationCard(preparationIsVisible: preparation.isVisible) {
+            let reviewScopeShortcut = appState.binding(for: .openReviewPalette)
             rows.append(appKitRow(
                 id: "changes-preparation",
-                token: String(reflecting: preparation),
+                token: String(reflecting: preparation) + String(reflecting: reviewScopeShortcut),
                 estimatedHeight: 92
             ) {
                 ChangesPreparationCard(
@@ -546,7 +547,7 @@ struct ChangesTabView: View {
                     onChooseReviewScope: { [appState, rps] in
                         appState.openReviewPaletteOverlay(prefill: rps.worktree)
                     },
-                    reviewScopeShortcut: appState.binding(for: .openReviewPalette),
+                    reviewScopeShortcut: reviewScopeShortcut,
                     onDraftCommit: openDraftTab,
                     onPublishCommit: openPublishTab,
                     onGGAction: handleGGPreparationAction,
