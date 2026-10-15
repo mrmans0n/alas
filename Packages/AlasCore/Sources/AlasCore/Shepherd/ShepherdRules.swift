@@ -143,18 +143,24 @@ public enum ShepherdRulesResolver {
                 return nil
             }
         }
-        let result = try await RemoteExec.runData(host: host, cwd: nil, command: remoteReadScript(path: url.path))
-        if result.exitCode == 4 { return nil }
-        guard result.exitCode == 0, let text = String(data: result.stdout, encoding: .utf8) else {
-            throw ShepherdRulesReadError(file: url.lastPathComponent, host: host, detail: result.stderr)
-        }
-        return text
+        let script = "LC_ALL=C cat -- \(SSHCommand.shellQuote(url.path))"
+        let result = try await RemoteExec.runData(host: host, cwd: nil, command: script)
+        return try remoteReadContents(result, file: url.lastPathComponent, host: host)
     }
 
-    /// Exit 4 when nothing (or a dangling link) is at `path`, like a local
-    /// read's no-such-file.
-    static func remoteReadScript(path: String) -> String {
-        "f=\(SSHCommand.shellQuote(path)); [ -e \"$f\" ] || exit 4; cat -- \"$f\""
+    /// The remote `cat`'s result. Only `cat` itself reporting ENOENT means
+    /// missing, as a local read's no-such-file does (a dangling link
+    /// included). A permission error on the file or a parent, an ssh failure,
+    /// or bytes that aren't UTF-8 throw.
+    static func remoteReadContents(_ result: ProcessResultData, file: String, host: String) throws -> String? {
+        if result.exitCode == 0, let text = String(data: result.stdout, encoding: .utf8) {
+            return text
+        }
+        let catReportedMissing = result.stderr.split(whereSeparator: \.isNewline).contains {
+            $0.hasPrefix("cat: ") && $0.hasSuffix(": No such file or directory")
+        }
+        if result.exitCode == 1, catReportedMissing { return nil }
+        throw ShepherdRulesReadError(file: file, host: host, detail: result.stderr)
     }
 
     static func normalizedReviewers(_ raw: [String]) -> [String] {

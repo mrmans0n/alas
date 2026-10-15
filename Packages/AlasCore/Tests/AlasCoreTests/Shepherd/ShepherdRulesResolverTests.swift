@@ -111,4 +111,23 @@ private let parseCases: [ShepherdRulesParseCase] = [
             }
         }
     }
+
+    @Test("a remote read is missing only when cat reports ENOENT", arguments: [
+        (Int32(0), "", "rules" as String?),
+        (1, "cat: /r/.alas/shepherd.md: No such file or directory\n", nil),
+        (1, "cat: can't open '/r/.alas/shepherd.md': No such file or directory\n", nil),
+        (1, "cat: /r/.alas/shepherd.md: Permission denied\n", "throws"),
+        (1, "cat: /r/.alas/shepherd.md: Is a directory\n", "throws"),
+        (255, "ssh: connect to host box: No such file or directory\n", "throws"),
+    ])
+    func remoteReadContents(exitCode: Int32, stderr: String, expected: String?) throws {
+        let result = ProcessResultData(exitCode: exitCode, stdout: Data("rules".utf8), stderr: stderr)
+        if expected == "throws" {
+            #expect(throws: ShepherdRulesReadError.self) {
+                try ShepherdRulesResolver.remoteReadContents(result, file: "shepherd.md", host: "box")
+            }
+        } else {
+            #expect(try ShepherdRulesResolver.remoteReadContents(result, file: "shepherd.md", host: "box") == expected)
+        }
+    }
 }
