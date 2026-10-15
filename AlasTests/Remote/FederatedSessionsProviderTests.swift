@@ -471,6 +471,7 @@ struct FederatedSessionsProviderTests {
 
     @Test func aDownstreamThatGoesAwayWithoutDetachingIsForgottenOnTheNextFrame() {
         let links = FakeLinks()
+        links.olderPeers = ["srv-b"]   // polled, so the poll shows who is attached
         let provider = FederatedSessionsProvider(links: links)
         let client = Client()
         provider.attach(client.downstream)
@@ -489,6 +490,7 @@ struct FederatedSessionsProviderTests {
 
     @Test func aDownstreamThatGoesAwayWithoutDetachingLeavesSurvivingSubscriptionsAlone() {
         let links = FakeLinks()
+        links.olderPeers = ["srv-b"]   // polled, so the poll shows who is attached
         let provider = FederatedSessionsProvider(links: links)
         let survivor = Client()
         let lost = Client()
@@ -510,8 +512,24 @@ struct FederatedSessionsProviderTests {
         #expect(!provider.isPollingPeerLists)
     }
 
+    /// A peer that pushes its list on change is not polled for it.
+    @Test func onlyPeersThatDoNotPushTheirListsArePolled() {
+        let links = FakeLinks()
+        let provider = FederatedSessionsProvider(links: links)
+        let client = Client()
+        provider.attach(client.downstream)
+        links.goOnline("srv-b", name: "Mac B")
+        #expect(!provider.isPollingPeerLists)
+        links.olderPeers = ["srv-c"]
+        links.goOnline("srv-c", name: "Mac C")
+        #expect(provider.isPollingPeerLists)
+        links.goOffline("srv-c")
+        #expect(!provider.isPollingPeerLists)
+    }
+
     @Test func downstreamsLostAcrossServerRestartsDoNotAccumulate() {
         let links = FakeLinks()
+        links.olderPeers = ["srv-b"]   // polled, so the poll shows who is attached
         let provider = FederatedSessionsProvider(links: links)
         links.goOnline("srv-b", name: "Mac B")
         // One leaked downstream per restart; the provider outlives them all.

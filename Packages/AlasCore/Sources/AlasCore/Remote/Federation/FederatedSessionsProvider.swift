@@ -43,9 +43,8 @@ public final class FederatedDownstream {
 public final class FederatedSessionsProvider {
     public static let peerUnavailableMessage = "Peer is unavailable."
 
-    /// How often a peer is re-asked for its list while anyone is attached.
-    /// Matches the web client's own idle poll, so a peer's status changes
-    /// reach a phone about as fast as its own Mac's do.
+    /// How often a peer that does not push its list is re-asked for it
+    /// while anyone is attached.
     public static let listPollInterval: TimeInterval = 15
     /// Several phones polling at once must not turn into a burst upstream.
     public static let listRequestThrottle: TimeInterval = 2
@@ -236,7 +235,8 @@ public final class FederatedSessionsProvider {
     }
 
     /// True while the idle peer-list poll is running: it needs both a live
-    /// downstream to tell and a session-carrying peer to ask.
+    /// downstream to tell and a session-carrying peer that does not push
+    /// its list (`PeerListPushCapability`) to ask.
     public var isPollingPeerLists: Bool { pollTimer != nil }
 
     /// Forgets one downstream and everything it had asked for. The clean
@@ -493,11 +493,11 @@ public final class FederatedSessionsProvider {
         pruneDeadDownstreams()
     }
 
-    private func requestPeerSessionLists() {
+    private func requestPeerSessionLists(onlyPolled: Bool = false) {
         let at = now()
         if let last = lastListRequestAt, at.timeIntervalSince(last) < Self.listRequestThrottle { return }
         lastListRequestAt = at
-        for serverId in activePeers.keys {
+        for serverId in activePeers.keys where !onlyPolled || !pushesLists(serverId) {
             links.sendToPeer(.listSessions, serverId: serverId)
             links.sendToPeer(.listProjects, serverId: serverId)
         }
@@ -505,8 +505,12 @@ public final class FederatedSessionsProvider {
 
     /// Runs only while there is someone to tell and someone to ask. Reads
     /// liveness without mutating `downstreams`, so pruning can call it.
+    private func pushesLists(_ serverId: String) -> Bool {
+        links.peerSupports(PeerListPushCapability.v1, serverId: serverId)
+    }
+
     private func updatePollTimer() {
-        let shouldRun = downstreams.values.contains { $0.value != nil } && !activePeers.isEmpty
+        let shouldRun = downstreams.values.contains { $0.value != nil } && activePeers.keys.contains { !pushesLists($0) }
         if shouldRun, pollTimer == nil {
             pollTimer = Task { @MainActor [weak self] in
                 while !Task.isCancelled {
@@ -517,7 +521,7 @@ public final class FederatedSessionsProvider {
                     // is then the thing that has to stop itself.
                     self.pruneDeadDownstreams()
                     guard !Task.isCancelled else { return }
-                    self.requestPeerSessionLists()
+                    self.requestPeerSessionLists(onlyPolled: true)
                 }
             }
         } else if !shouldRun {

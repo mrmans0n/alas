@@ -22,7 +22,8 @@ struct NativePeerSessionsTests {
         func sendToPeer(_ message: RemoteClientMessage, serverId: String) {
             sent.append((serverId, message))
         }
-        func peerSupports(_ capability: String, serverId: String) -> Bool { true }
+        // Peers here predate list pushes, so the poll shows who is attached.
+        func peerSupports(_ capability: String, serverId: String) -> Bool { capability != PeerListPushCapability.v1 }
         func online(_ id: String, name: String) {
             sessionCarryingPeers.append(.init(serverId: id, name: name))
             onFederationEvent?(.availabilityChanged(serverId: id))
