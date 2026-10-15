@@ -568,6 +568,7 @@ private struct ACPSideQuestionCardChrome<Content: View, Prompt: View>: View {
             // Hugs a short answer up to the chosen height; fills the side column.
             .frame(maxHeight: fillsColumn ? .infinity : heights.answer)
             .fixedSize(horizontal: false, vertical: !fillsColumn)
+            .layoutPriority(1)
             if hasPendingInput {
                 Divider().overlay(theme.color("warn").opacity(0.2))
                 // Outside the answer's scroll view, so the prompt is never
