@@ -20,6 +20,11 @@ final class SessionRecapRuntime {
     /// Activity observation for each scheduled session that was live when
     /// it was scheduled, keyed to the session object it observes.
     var precomputeActivity: [ACPSession.ID: (session: ObjectIdentifier, subscription: ChangeSubscription)] = [:]
+    /// Away origin of each offered return recap that has not settled yet.
+    /// Leaving mid-load resets the seen tracker's clock, so this keeps the
+    /// original origin until the card reaches a result, is dismissed, or a
+    /// prompt cancels it.
+    var pendingRecapAwayOrigin: [ACPSession.ID: Date] = [:]
 
     func startCheck(sessionId: ACPSession.ID, _ operation: @escaping @MainActor (UUID) async -> Void) {
         cancelCheck(sessionId: sessionId)
@@ -39,7 +44,10 @@ final class SessionRecapRuntime {
 }
 
 /// Whether a returning session can be checked for a recap yet. Idleness and
-/// the coordinator both need hydrated history and a connected agent.
+/// the coordinator both need hydrated history and a connected agent. Agent
+/// readiness also implies the tail-first transcript backfill is done:
+/// `ACPSessionManager.attach` awaits the backfill before it marks the agent
+/// `.ready`.
 enum SessionRecapReadiness: Equatable {
     case ready
     case waiting
@@ -122,8 +130,11 @@ extension AppState {
     /// The single route for seen-tracker events.
     func handleSeenEvent(_ event: SessionSeenTracker.Event, manager: ACPSessionManager) {
         switch event {
-        case .becameSeen(let sessionId, let awayFrom):
+        case .becameSeen(let sessionId, let seenAwayFrom):
             dropRecapPrecompute(sessionId: sessionId)
+            // A recap that was cleared before its result keeps the earlier origin.
+            let pending = sessionRecapRuntime.pendingRecapAwayOrigin[sessionId]
+            let awayFrom = [seenAwayFrom, pending].compactMap { $0 }.min()
             sessionRecapRuntime.startCheck(sessionId: sessionId) { [weak self, weak manager] token in
                 guard let self else { return }
                 defer { self.sessionRecapRuntime.finishCheck(sessionId: sessionId, token: token) }
@@ -136,7 +147,13 @@ extension AppState {
                sessionSummaryCoordinator.boundSessionIncarnation == incarnation {
                 sessionSummaryCoordinator.dismissCard()
             }
-            scheduleRecapPrecompute(sessionId: sessionId, lastSeenAt: at, manager: manager)
+            guard hasOpenACPTab(sessionId: sessionId, owner: manager.owner) else {
+                sessionRecapRuntime.pendingRecapAwayOrigin[sessionId] = nil
+                return
+            }
+            // With a pending origin the job is due at once and runs hidden.
+            let origin = sessionRecapRuntime.pendingRecapAwayOrigin[sessionId] ?? at
+            scheduleRecapPrecompute(sessionId: sessionId, lastSeenAt: origin, manager: manager)
         }
     }
 
@@ -151,7 +168,18 @@ extension AppState {
         awayFrom: Date?,
         manager: ACPSessionManager
     ) async {
-        guard sessionRecapAvailable else { return }
+        // Only `.becameUnseen` (or a newer check) cancels this task, and it
+        // also dismisses a loading card, so the pending away origin survives.
+        // Any other exit means the card reached a result, failed, was
+        // dismissed with ×, a prompt cleared it, or no recap was due; either
+        // way the origin is used up and must not stretch a later absence.
+        defer {
+            if !Task.isCancelled { sessionRecapRuntime.pendingRecapAwayOrigin[sessionId] = nil }
+        }
+        // Only settings gates here: on relaunch the runtime flag and the model
+        // state turn ready asynchronously, after the visible tab is seen. The
+        // full availability check runs once the session is ready.
+        guard config.sessionSummariesEnabled, config.sessionRecapThreshold != .off else { return }
         guard let session = await Self.readySession(
             id: sessionId,
             manager: manager,
@@ -191,6 +219,7 @@ extension AppState {
                   completeTurnCount: completeTurnCount
               ) else { return }
 
+        sessionRecapRuntime.pendingRecapAwayOrigin[sessionId] = lastSeenAt ?? updatedAt
         sessionSummaryCoordinator.bind(to: session)
         await sessionSummaryCoordinator.summary(for: session, mode: .recap)
     }
@@ -205,11 +234,15 @@ extension AppState {
     ) async -> ACPSession? {
         func readiness() -> (SessionRecapReadiness, ACPSession?) {
             guard let session = manager.liveSession(for: id) else { return (.waiting, nil) }
-            return (SessionRecapReadiness.readiness(
+            let state = SessionRecapReadiness.readiness(
                 hydration: session.hydrationState,
                 agent: session.agentState,
                 setup: session.setupState
-            ), session)
+            )
+            // Belt and braces: agent-ready already implies backfill is done.
+            // A flip of this flag alone is caught by the timeout's re-check.
+            if state == .ready, session.transcript.isBackfillingOlderMessages { return (.waiting, session) }
+            return (state, session)
         }
         func ready() -> ACPSession? {
             let (state, session) = readiness()
@@ -449,7 +482,11 @@ extension AppState {
 
         let minimumTurns = SessionRecapPolicy.minimumCompleteTurns
         let context: SessionSummaryContext?
-        if let session = manager.liveSession(for: sessionId), session.hydrationState == .ready {
+        // Live only when hydrated with a ready agent; agent readiness implies
+        // the transcript backfill is done, since attach awaits it. Otherwise
+        // the store has the full history.
+        if let session = manager.liveSession(for: sessionId), session.hydrationState == .ready,
+           session.agentState == .ready, !session.transcript.isBackfillingOlderMessages {
             guard SessionSummaryIdleFacts.current(session: session, composer: session.composer).isIdle,
                   SessionSummaryContext.completeTurnCount(session: session, limit: minimumTurns) >= minimumTurns
             else { return }
