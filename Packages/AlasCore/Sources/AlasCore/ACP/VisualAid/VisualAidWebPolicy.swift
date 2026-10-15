@@ -186,7 +186,9 @@ public enum VisualAidWebPolicy: Sendable {
       addEventListener('load', reportHeight);
       // Captured so nested scroll containers, whose scroll events do not bubble, report too.
       document.addEventListener('scroll', scheduleEdges, { passive: true, capture: true });
-      document.addEventListener('mousemove', (event) => { pointer = [event.clientX, event.clientY]; scheduleEdges(); }, { passive: true, capture: true });
+      // The app also reports the pointer when the card moves under a still one, which fires no mousemove.
+      globalThis.alasVisualPointer = (x, y) => { pointer = [x, y]; scheduleEdges(); };
+      document.addEventListener('mousemove', (event) => globalThis.alasVisualPointer(event.clientX, event.clientY), { passive: true, capture: true });
       addEventListener('resize', scheduleEdges);
       // Content or style can change scrollability without resizing either observed box.
       new MutationObserver(scheduleEdges).observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });

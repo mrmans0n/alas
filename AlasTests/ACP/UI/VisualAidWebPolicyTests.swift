@@ -267,6 +267,10 @@ extension VisualAidWebPolicyTests {
         #expect(inside as? [String: Bool] == ["scrollUp": false, "scrollDown": true])
         let outside = try await page.webView.evaluateJavaScript("alasVisualScrollEdges(40, 160)", in: nil, contentWorld: world)
         #expect(outside as? [String: Bool] == ["scrollUp": false, "scrollDown": false])
+        // A pointer the app reports, with no DOM mousemove (the card moved under a still pointer), is used.
+        let reported = try await page.webView.evaluateJavaScript(
+            "alasVisualPointer(40, 40); alasVisualScrollEdges()", in: nil, contentWorld: world)
+        #expect(reported as? [String: Bool] == ["scrollUp": false, "scrollDown": true])
     }
 
     @MainActor

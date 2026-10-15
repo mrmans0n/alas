@@ -94,6 +94,7 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
         controller.add(self, contentWorld: Self.bridgeWorld, name: VisualAidWebPolicy.bridgeHandlerName)
         webView.navigationDelegate = self
         webView.uiDelegate = self
+        webView.onPointerMoved = { [weak self] point in self?.reportPointer(point) }
         guard peerConnectionDisabled else {
             status = .sandboxFailed
             return
@@ -221,6 +222,13 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
             "alasVisualSelect(ids)", arguments: ["ids": ids], in: nil, in: Self.bridgeWorld, completionHandler: nil)
     }
 
+    private func reportPointer(_ point: CGPoint) {
+        guard !isClosed, status == .ready else { return }
+        webView.callAsyncJavaScript(
+            "alasVisualPointer(x, y)", arguments: ["x": point.x, "y": point.y],
+            in: nil, in: Self.bridgeWorld, completionHandler: nil)
+    }
+
     func applyTheme(_ theme: Theme) {
         themeVariables = PluginWebPolicy.cssVariables(theme)
         guard !isClosed, status == .ready else { return }
@@ -244,6 +252,7 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
         webView.stopLoading()
         webView.navigationDelegate = nil
         webView.uiDelegate = nil
+        webView.onPointerMoved = { _ in }
     }
 
     // MARK: Bridge
@@ -296,6 +305,7 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
 
     private func markReady() {
         status = .ready
+        webView.reportPointer(force: true)
         // Fragments bake the theme into their frame; a full document is served unmodified, so it always gets
         // the theme pushed. Either way, replay any theme change made while it was loading or crashed.
         if themeVariables != documentThemeVariables {
@@ -362,6 +372,55 @@ final class VisualAidWKWebView: WKWebView {
 
     /// Where the page can still scroll, as last reported by the bridge.
     var scrollEdges = VisualAidScrollRouting.Edges()
+    /// The pointer in page coordinates, reported when the card moves under a still pointer (mounting, or the
+    /// transcript scrolling it), which fires no DOM `mousemove`; the page's scroll edges depend on what is under it.
+    var onPointerMoved: (CGPoint) -> Void = { _ in }
+    private var lastReportedPointer: CGPoint?
+    private var clipObservers: [any NSObjectProtocol] = []
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        observeEnclosingClipViews()
+        reportPointer(force: true)
+    }
+
+    /// Block-based observers: Combine's NotificationCenter publisher retains `object`, which would form a
+    /// web view -> clip view -> document view cycle.
+    private func observeEnclosingClipViews() {
+        removeClipObservers()
+        guard window != nil else { return }
+        var ancestor = superview
+        while let view = ancestor {
+            if let clipView = view as? NSClipView {
+                clipView.postsBoundsChangedNotifications = true
+                clipObservers.append(NotificationCenter.default.addObserver(
+                    forName: NSView.boundsDidChangeNotification, object: clipView, queue: .main
+                ) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.reportPointer() }
+                })
+            }
+            ancestor = view.superview
+        }
+    }
+
+    private func removeClipObservers() {
+        for observer in clipObservers { NotificationCenter.default.removeObserver(observer) }
+        clipObservers.removeAll()
+    }
+
+    isolated deinit {
+        removeClipObservers()
+    }
+
+    /// Reports where the pointer is over the page, when it is and has changed since the last report.
+    func reportPointer(force: Bool = false) {
+        guard let window else { return }
+        var point = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        if !isFlipped { point.y = bounds.height - point.y }
+        guard bounds.contains(point), force || point != lastReportedPointer else { return }
+        lastReportedPointer = point
+        onPointerMoved(point)
+    }
     private var scrollRouting = VisualAidScrollRouting()
     /// The undecided gesture's start (`.mayBegin`, `.began`), held until its owner is known.
     private var pendingScrollEvents: [NSEvent] = []
