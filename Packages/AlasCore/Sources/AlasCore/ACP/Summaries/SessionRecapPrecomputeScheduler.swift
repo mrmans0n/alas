@@ -23,6 +23,8 @@ public final class SessionRecapPrecomputeScheduler {
     /// job's task; the next job still waits until `run` returns.
     public private(set) var runningSessionId: String?
     private var runningJob: Task<Void, Never>?
+    /// A start is queued for a later main-actor turn.
+    private var startQueued = false
 
     /// Low Power Mode; when true, due jobs wait.
     public var isSuspended = false {
@@ -52,7 +54,7 @@ public final class SessionRecapPrecomputeScheduler {
         let delay = lastSeenAt.addingTimeInterval(Self.seconds(threshold)).timeIntervalSince(now())
         guard delay > 0 else {
             ready[sessionId] = lastSeenAt
-            startNextIfIdle()
+            queueStart()
             return
         }
         let token = UUID()
@@ -87,7 +89,19 @@ public final class SessionRecapPrecomputeScheduler {
         guard let entry = waiting[sessionId], entry.token == token else { return }
         waiting[sessionId] = nil
         ready[sessionId] = entry.lastSeenAt
-        startNextIfIdle()
+        queueStart()
+    }
+
+    /// Starts on a later main-actor turn, so every entry made ready in this
+    /// turn competes for the first slot, most recently seen first.
+    private func queueStart() {
+        guard !startQueued else { return }
+        startQueued = true
+        Task { [weak self] in
+            guard let self else { return }
+            self.startQueued = false
+            self.startNextIfIdle()
+        }
     }
 
     /// Picks the next job synchronously so the order reflects every entry

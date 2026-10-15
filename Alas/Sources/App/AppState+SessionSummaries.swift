@@ -1,4 +1,7 @@
 import Foundation
+import os
+
+private let sessionSummariesLogger = Logger(subsystem: "io.nlopez.alas", category: "session-summaries")
 
 extension AppState {
     func enableSessionSummaries() async {
@@ -39,11 +42,26 @@ extension AppState {
             dropAllRecapPrecompute()
             let stores = core.sessionManagers.values.map(\.persistence)
             Task { await sessionSummaryCoordinator.clearPersistedSummaries(in: stores) }
+            // Session databases are per worktree, and most are not loaded.
+            Task.detached(priority: .utility) { Self.clearSessionSummariesOnDisk() }
         } else {
             config.sessionSummariesEnabled = previous
             sessionSummaryDisableSavePending = true
             sessionSummarySettingsError =
                 "Could not save disabling. Retry before quitting or summaries may turn on again after relaunch."
+        }
+    }
+
+    /// Clears the summaries in every worktree session database on disk.
+    nonisolated private static func clearSessionSummariesOnDisk() {
+        let root = Paths.acpSessionsRoot
+        let files = (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? []
+        for file in files where file.pathExtension == "sqlite" {
+            do {
+                try ACPSessionStore.deleteAllSessionSummaries(path: file.path)
+            } catch {
+                sessionSummariesLogger.error("clearing summaries in \(file.lastPathComponent, privacy: .public) failed: \(String(describing: error))")
+            }
         }
     }
 

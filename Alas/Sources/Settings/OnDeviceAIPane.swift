@@ -166,8 +166,14 @@ struct OnDeviceAIPane: View {
                 Picker("Recap when returning after", selection: Binding(
                     get: { state.config.sessionRecapThreshold },
                     set: { value in
+                        let previous = state.config.sessionRecapThreshold
                         state.config.sessionRecapThreshold = value
-                        state.saveConfig()
+                        guard state.saveConfig() else {
+                            state.config.sessionRecapThreshold = previous
+                            state.sessionSummarySettingsError = "Could not save the recap setting."
+                            return
+                        }
+                        if !state.sessionSummaryDisableSavePending { state.sessionSummarySettingsError = nil }
                         state.rescheduleRecapPrecompute()
                     }
                 )) {

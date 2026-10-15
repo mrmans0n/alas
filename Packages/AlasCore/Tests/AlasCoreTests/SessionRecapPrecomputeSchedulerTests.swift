@@ -148,13 +148,12 @@ struct SessionRecapPrecomputeSchedulerTests {
         #expect(try await next(runner.starts) == "queued")
     }
 
+    /// Entries due in the same turn compete for the first slot, so the one
+    /// scheduled first does not jump ahead of a more recently seen one.
     @Test
     func dueEntriesRunMostRecentlySeenFirstAndOneAtATime() async throws {
-        scheduler.isSuspended = true
         scheduler.schedule(sessionId: "older", lastSeenAt: pastDue(60), threshold: Self.threshold)
         scheduler.schedule(sessionId: "newer", lastSeenAt: pastDue(30), threshold: Self.threshold)
-        #expect(scheduler.pendingSessionIds == ["newer", "older"])
-        scheduler.isSuspended = false
 
         let first = try await next(runner.starts)
         #expect(first == "newer")

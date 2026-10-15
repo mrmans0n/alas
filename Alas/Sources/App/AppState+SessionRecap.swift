@@ -114,12 +114,6 @@ extension AppState {
             self.handleSeenEvent(event, manager: manager)
         }
         manager.seenTracker.setAppActive(NSApp?.isActive ?? false)
-        // Disabling clears only loaded managers' stores; session databases are
-        // per worktree, so clear each one again as its manager comes up.
-        if !config.sessionSummariesEnabled {
-            let persistence = manager.persistence
-            Task { try? await persistence.deleteAllSessionSummaries() }
-        }
         // Runs after the caller's synchronous tab restore for this owner.
         Task { [weak self, weak manager] in
             guard let self, let manager else { return }
@@ -373,21 +367,37 @@ extension AppState {
         guard recapPrecomputeAllowed else { return }
         let managers = Array(core.sessionManagers.values)
         Task { [weak self] in
+            var found: [(manager: ACPSessionManager, tabs: [RecapPrecomputeCandidate])] = []
             for manager in managers {
-                await self?.scheduleRecapPrecomputeForOpenTabs(of: manager)
+                guard let self else { return }
+                found.append((manager, await self.recapPrecomputeCandidates(of: manager)))
+            }
+            // One turn, so the scheduler orders every due tab together.
+            for (manager, candidates) in found {
+                self?.scheduleRecapPrecompute(candidates, manager: manager)
             }
         }
     }
 
     /// Schedules the hidden open ACP tabs of `manager`'s owner, timed from
-    /// the persisted away origin. The store is read rather than
-    /// `sessionRows`, which can be empty before a manager hydrates.
+    /// the persisted away origin.
     func scheduleRecapPrecomputeForOpenTabs(of manager: ACPSessionManager) async {
-        guard recapPrecomputeAllowed else { return }
+        let candidates = await recapPrecomputeCandidates(of: manager)
+        scheduleRecapPrecompute(candidates, manager: manager)
+    }
+
+    typealias RecapPrecomputeCandidate = (sessionId: ACPSession.ID, origin: Date)
+
+    /// The hidden open ACP tabs of `manager`'s owner with their persisted away
+    /// origins. The store is read rather than `sessionRows`, which can be
+    /// empty before a manager hydrates.
+    private func recapPrecomputeCandidates(of manager: ACPSessionManager) async -> [RecapPrecomputeCandidate] {
+        guard recapPrecomputeAllowed else { return [] }
         let sessionIds = tabs.tabs(for: manager.owner).compactMap { tab -> ACPSession.ID? in
             guard case .acpSession(let state) = tab else { return nil }
             return state.sessionId
         }
+        var candidates: [RecapPrecomputeCandidate] = []
         for sessionId in sessionIds where !manager.seenTracker.isSeen(sessionId) {
             let snapshot: StoredSummarySourceSnapshot?
             do {
@@ -396,13 +406,20 @@ extension AppState {
                 sessionRecapLogger.error("loading a recap source failed: \(String(describing: error))")
                 continue
             }
-            guard let snapshot, acpManager(for: manager.owner) === manager,
-                  !manager.seenTracker.isSeen(sessionId),
-                  // A seen event since the scan started has fresher timing.
-                  !sessionRecapPrecomputeScheduler.pendingSessionIds.contains(sessionId)
-            else { continue }
+            guard let snapshot else { continue }
             let origin = Date(timeIntervalSince1970: TimeInterval(snapshot.lastSeenAt ?? snapshot.updatedAt))
-            scheduleRecapPrecompute(sessionId: sessionId, lastSeenAt: origin, manager: manager)
+            candidates.append((sessionId, origin))
+        }
+        return candidates
+    }
+
+    /// Schedules every candidate synchronously, in one main-actor turn.
+    private func scheduleRecapPrecompute(_ candidates: [RecapPrecomputeCandidate], manager: ACPSessionManager) {
+        guard acpManager(for: manager.owner) === manager else { return }
+        for candidate in candidates where !manager.seenTracker.isSeen(candidate.sessionId)
+            // A seen event since the scan started has fresher timing.
+            && !sessionRecapPrecomputeScheduler.pendingSessionIds.contains(candidate.sessionId) {
+            scheduleRecapPrecompute(sessionId: candidate.sessionId, lastSeenAt: candidate.origin, manager: manager)
         }
     }
 

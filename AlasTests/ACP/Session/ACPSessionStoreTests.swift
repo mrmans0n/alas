@@ -602,6 +602,23 @@ struct ACPSessionStoreSchemaTests {
         #expect(try store.loadSessionSummary(sessionId: "b", inputHash: "hash", modelID: "model") == nil)
     }
 
+    @Test("clearing summaries by path needs no open store and skips databases without them")
+    func deleteAllSessionSummariesAtPath() throws {
+        let store = try tmpStore()
+        try seedSession(store)
+        try store.saveSessionSummary(sessionId: "s", sampleStoredSummary())
+        try ACPSessionStore.deleteAllSessionSummaries(path: store.path)
+        #expect(try store.loadSessionSummary(sessionId: "s", inputHash: "hash", modelID: "model") == nil)
+
+        let directory = FileManager.default.temporaryDirectory
+        let missing = directory.appendingPathComponent("acp-missing-\(UUID()).sqlite").path
+        try ACPSessionStore.deleteAllSessionSummaries(path: missing)
+        #expect(!FileManager.default.fileExists(atPath: missing))
+        let bare = directory.appendingPathComponent("acp-bare-\(UUID()).sqlite").path
+        _ = try SQLiteDatabase(path: bare)
+        try ACPSessionStore.deleteAllSessionSummaries(path: bare)
+    }
+
     @Test("the summary source snapshot reports turns and idleness from stored rows")
     func summarySourceSnapshot() throws {
         let store = try tmpStore()

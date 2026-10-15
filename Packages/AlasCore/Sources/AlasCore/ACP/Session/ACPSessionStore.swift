@@ -900,6 +900,18 @@ extension ACPSessionStore {
         try db.exec("DELETE FROM session_summaries")
     }
 
+    /// Clears every summary through a bare connection, without migrating, so
+    /// it reaches databases whose worktree is not loaded. A missing file or a
+    /// database that predates the summaries table is a no-op.
+    public static func deleteAllSessionSummaries(path: String) throws {
+        guard FileManager.default.fileExists(atPath: path) else { return }
+        let db = try SQLiteDatabase(path: path)
+        let tables = try db.query(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'")
+        guard !tables.isEmpty else { return }
+        try db.exec("DELETE FROM session_summaries")
+    }
+
     public func loadSession(acpBrokerId: String) throws -> ACPSessionRow? {
         let rows = try db.query("""
         SELECT * FROM sessions
