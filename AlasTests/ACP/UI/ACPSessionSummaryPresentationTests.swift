@@ -106,6 +106,25 @@ struct ACPSessionSummaryPresentationTests {
         #expect(ACPSessionSummaryPresentation.cardContent(cardMode: mode, phase: phase) == expected)
     }
 
+    @Test(arguments: [
+        (.ready, .ready, .ready, .ready),
+        // Relaunch: history is loaded but the agent is still connecting.
+        (.ready, .spawning, .checking, .waiting),
+        (.loading, .ready, .ready, .waiting),
+        (.ready, .disconnected, .ready, .waiting),
+        (.failed("disk"), .spawning, .checking, .failed),
+        (.ready, .failed("exited"), .ready, .failed),
+        (.loading, .idle, .needsSetup(reason: "install"), .failed),
+    ] as [(ACPSession.HydrationState, ACPSession.AgentState, ACPSession.SetupState, SessionRecapReadiness)])
+    func recapReadinessWaitsForHydrationAndAgent(
+        _ hydration: ACPSession.HydrationState,
+        _ agent: ACPSession.AgentState,
+        _ setup: ACPSession.SetupState,
+        _ expected: SessionRecapReadiness
+    ) {
+        #expect(SessionRecapReadiness.readiness(hydration: hydration, agent: agent, setup: setup) == expected)
+    }
+
     private func presentation(
         phase: SessionSummaryCoordinator.Phase
     ) -> ACPSessionSummaryPresentation {

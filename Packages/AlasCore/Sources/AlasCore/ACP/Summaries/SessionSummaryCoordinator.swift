@@ -24,8 +24,9 @@ public final class SessionSummaryCoordinator: ChangeTracking {
     @Tracked public private(set) var presentationGeneration: UInt64 = 0
     /// The mode of the request the card presents; nil means no card.
     @Tracked public private(set) var cardMode: SessionSummaryRequestMode?
-    /// Incarnation of the bound session. Views gate the card on it so two
-    /// mounted tabs never both render this coordinator's card.
+    /// Incarnation of the bound session. Views gate the card on it, so only
+    /// tabs showing that session render the card; a primary tab and its
+    /// mirror share an incarnation and both show it.
     @Tracked public private(set) var boundSessionIncarnation: UUID?
     /// Per-session store lookup; manager-owned persistence differs per worktree.
     public var storeProvider: (@MainActor (ACPSession) -> (any SessionSummaryStoring)?)?

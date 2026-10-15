@@ -24,7 +24,8 @@ struct ACPSessionRecapCard: View {
             card(content)
                 .frame(maxWidth: maxWidth)
                 .padding(.horizontal, 20)
-                .onChange(of: content) { _, value in
+                // `initial`: a card can appear already filled from a cache.
+                .onChange(of: content, initial: true) { _, value in
                     guard let announcement = Self.announcement(for: value) else { return }
                     AccessibilityNotification.Announcement(announcement).post()
                 }

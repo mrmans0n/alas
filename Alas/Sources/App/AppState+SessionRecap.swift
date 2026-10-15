@@ -31,8 +31,34 @@ final class SessionRecapRuntime {
     }
 }
 
+/// Whether a returning session can be checked for a recap yet. Idleness and
+/// the coordinator both need hydrated history and a connected agent.
+enum SessionRecapReadiness: Equatable {
+    case ready
+    case waiting
+    case failed
+
+    static func readiness(
+        hydration: ACPSession.HydrationState,
+        agent: ACPSession.AgentState,
+        setup: ACPSession.SetupState
+    ) -> SessionRecapReadiness {
+        switch (hydration, agent, setup) {
+        case (.failed, _, _), (_, .failed, _),
+             (_, _, .needsSetup), (_, _, .setupError), (_, _, .needsAuth):
+            return .failed
+        case (.ready, .ready, _):
+            return .ready
+        default:
+            // `.disconnected` reattaches on its own, so it is not terminal.
+            return .waiting
+        }
+    }
+}
+
 extension AppState {
-    static let sessionRecapHydrationTimeout: Duration = .seconds(5)
+    /// Covers a relaunch: hydration plus the agent reconnecting.
+    static let sessionRecapReadinessTimeout: Duration = .seconds(30)
 
     /// Startup wiring: the coordinator's store lookup and app-focus forwarding.
     func installSessionRecap() {
@@ -101,10 +127,10 @@ extension AppState {
         manager: ACPSessionManager
     ) async {
         guard sessionRecapAvailable else { return }
-        guard let session = await Self.hydratedSession(
+        guard let session = await Self.readySession(
             id: sessionId,
             manager: manager,
-            timeout: Self.sessionRecapHydrationTimeout
+            timeout: Self.sessionRecapReadinessTimeout
         ) else { return }
         guard !Task.isCancelled, manager.seenTracker.isSeen(sessionId) else { return }
 
@@ -144,19 +170,31 @@ extension AppState {
         await sessionSummaryCoordinator.summary(for: session, mode: .recap)
     }
 
-    /// Waits until the session exists and has hydrated, re-checking whenever
-    /// the manager or the session announce a change. Nil on timeout, failed
-    /// hydration, or cancellation.
-    private static func hydratedSession(
+    /// Waits until the session exists, has hydrated, and its agent is ready,
+    /// re-checking whenever the manager or the session announce a change.
+    /// Nil on a terminal failure, timeout, or cancellation.
+    private static func readySession(
         id: ACPSession.ID,
         manager: ACPSessionManager,
         timeout: Duration
     ) async -> ACPSession? {
-        func ready() -> ACPSession? {
-            guard let session = manager.liveSession(for: id), session.hydrationState == .ready else { return nil }
-            return session
+        func readiness() -> (SessionRecapReadiness, ACPSession?) {
+            guard let session = manager.liveSession(for: id) else { return (.waiting, nil) }
+            return (SessionRecapReadiness.readiness(
+                hydration: session.hydrationState,
+                agent: session.agentState,
+                setup: session.setupState
+            ), session)
         }
-        if let session = ready() { return session }
+        func ready() -> ACPSession? {
+            let (state, session) = readiness()
+            return state == .ready ? session : nil
+        }
+        switch readiness() {
+        case (.ready, let session): return session
+        case (.failed, _): return nil
+        case (.waiting, _): break
+        }
         let waiter = HydrationWaiter()
         return await withTaskCancellationHandler {
             await withCheckedContinuation { (continuation: CheckedContinuation<ACPSession?, Never>) in
@@ -165,13 +203,10 @@ extension AppState {
                 // the next main-actor turn.
                 func recheck() {
                     Task { @MainActor in
-                        if let session = ready() {
-                            waiter.finish(session)
-                        } else if let session = manager.liveSession(for: id),
-                                  case .failed = session.hydrationState {
-                            waiter.finish(nil)
-                        } else {
-                            waiter.observeSession(manager.liveSession(for: id), onChange: recheck)
+                        switch readiness() {
+                        case (.ready, let session): waiter.finish(session)
+                        case (.failed, _): waiter.finish(nil)
+                        case (.waiting, let session): waiter.observeSession(session, onChange: recheck)
                         }
                     }
                 }
