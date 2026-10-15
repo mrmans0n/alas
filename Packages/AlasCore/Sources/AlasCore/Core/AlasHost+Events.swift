@@ -21,6 +21,8 @@ public enum HostEvent: Equatable, Sendable {
     case workspaceCheckoutRemoved(id: UUID)
     case runChanged(RunRecord)
     case runRemoved(id: String)
+    case sessionChanged(HostSessionSummary)
+    case sessionRemoved(owner: SessionOwnerID, id: String)
     /// Changes were missed: read a new snapshot and subscribe after its cursor.
     case resync
 
@@ -34,6 +36,8 @@ public enum HostEvent: Equatable, Sendable {
         case .workspaceCheckoutRemoved(let id): .workspaceCheckout(id)
         case .runChanged(let record): .run(record.id)
         case .runRemoved(let id): .run(id)
+        case .sessionChanged(let summary): .session(owner: summary.owner, id: summary.row.id)
+        case .sessionRemoved(let owner, let id): .session(owner: owner, id: id)
         case .resync: .resync
         }
     }
@@ -45,6 +49,7 @@ enum HostEventKey: Hashable {
     case worktree(projectID: String, worktreeID: String)
     case workspaceCheckout(UUID)
     case run(String)
+    case session(owner: SessionOwnerID, id: String)
     case resync
 }
 
@@ -179,6 +184,10 @@ final class HostEventSource {
     private var projects: [String: ProjectConfig] = [:]
     private var worktrees: [HostEventKey: WorktreeSnapshot] = [:]
     private var runs: [String: RunRecord] = [:]
+    private var sessions: [HostEventKey: HostSessionSummary] = [:]
+    /// Session managers and live transcripts announce changes through
+    /// signals rather than Observation; renewed on every refresh.
+    private var sessionSignals: Set<ChangeSubscription> = []
     /// Nil until the first load, which is the baseline rather than a change.
     private var checkouts: [UUID: WorkspaceCheckout]?
     private var checkoutList: [WorkspaceCheckout] = []
@@ -195,7 +204,9 @@ final class HostEventSource {
         projects = Self.byID(ProjectsAPI(core: core).list())
         worktrees = Self.keyed(WorktreesAPI(core: core).list(includingArchived: true))
         runs = Self.byID(RunsAPI(core: core).list())
+        sessions = Self.keyed(SessionsAPI(core: core).list())
         observeInMemoryState()
+        renewSessionSignals()
         let store = core.workspaceStore
         let changes = Task { await store.changes() }
         checkoutChanges = changes
@@ -225,6 +236,14 @@ final class HostEventSource {
         let currentRuns = Self.byID(RunsAPI(core: core).list())
         events += Self.diff(old: runs, new: currentRuns, changed: HostEvent.runChanged, removed: { .runRemoved(id: $0) })
         runs = currentRuns
+
+        let currentSessions = Self.keyed(SessionsAPI(core: core).list())
+        events += Self.diff(old: sessions, new: currentSessions, changed: HostEvent.sessionChanged) { key in
+            guard case let .session(owner, id) = key else { return .resync }
+            return .sessionRemoved(owner: owner, id: id)
+        }
+        sessions = currentSessions
+        renewSessionSignals()
         log.publish(events)
     }
 
@@ -255,14 +274,33 @@ final class HostEventSource {
             _ = core.projects.worktreesByProject
             _ = core.projects.worktreeOperationStates
             _ = core.runRecords
+            _ = core.sessionManagers
         } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.observeInMemoryState()
+                self?.scheduleRefresh()
+            }
+        }
+    }
+
+    /// Follows the current session managers and live transcripts. Signals
+    /// fire before the change is stored; the refresh they schedule runs after.
+    private func renewSessionSignals() {
+        sessionSignals.removeAll()
+        let changed: () -> Void = { [weak self] in
             Task { @MainActor [weak self] in self?.scheduleRefresh() }
+        }
+        for manager in core.sessionManagers.values {
+            manager.willChange.observe(changed).store(in: &sessionSignals)
+            manager.summaryWillChange.observe(changed).store(in: &sessionSignals)
+            for runner in manager.runners.values {
+                runner.session.transcript.$streamingState.signal.observe { _ in changed() }.store(in: &sessionSignals)
+            }
         }
     }
 
     /// Several changes in one turn become one refresh.
     private func scheduleRefresh() {
-        observeInMemoryState()
         guard !refreshScheduled else { return }
         refreshScheduled = true
         Task { @MainActor [weak self] in
@@ -273,6 +311,13 @@ final class HostEventSource {
 
     private static func byID<Value: Identifiable>(_ values: [Value]) -> [Value.ID: Value] {
         Dictionary(values.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
+    }
+
+    private static func keyed(_ summaries: [HostSessionSummary]) -> [HostEventKey: HostSessionSummary] {
+        Dictionary(
+            summaries.map { (HostEventKey.session(owner: $0.owner, id: $0.row.id), $0) },
+            uniquingKeysWith: { _, last in last }
+        )
     }
 
     private static func keyed(_ snapshots: [WorktreeSnapshot]) -> [HostEventKey: WorktreeSnapshot] {
