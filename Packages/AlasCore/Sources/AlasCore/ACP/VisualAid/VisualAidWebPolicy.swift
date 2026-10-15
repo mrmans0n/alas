@@ -139,11 +139,20 @@ public enum VisualAidWebPolicy: Sendable {
       // wheel gesture to the transcript once the page has nothing left to scroll.
       let edgesFrame = 0;
       let lastEdges = '';
+      // Named so tests can call it. The viewport scrolls per the root's overflow, or the body's when the
+      // root leaves it visible; `hidden` and `clip` mean the user cannot scroll it at all.
+      globalThis.alasVisualScrollEdges = () => {
+        const root = document.documentElement;
+        let overflow = getComputedStyle(root).overflowY;
+        if (overflow === 'visible' && document.body) overflow = getComputedStyle(document.body).overflowY;
+        if (overflow === 'hidden' || overflow === 'clip') return { scrollUp: false, scrollDown: false };
+        const scroller = document.scrollingElement || root;
+        const top = scroller.scrollTop;
+        return { scrollUp: top > 1, scrollDown: top < scroller.scrollHeight - scroller.clientHeight - 1 };
+      };
       const reportEdges = () => {
         edgesFrame = 0;
-        const scroller = document.scrollingElement || document.documentElement;
-        const top = scroller.scrollTop;
-        const edges = { scrollUp: top > 1, scrollDown: top < scroller.scrollHeight - scroller.clientHeight - 1 };
+        const edges = globalThis.alasVisualScrollEdges();
         const key = JSON.stringify(edges);
         if (key === lastEdges) return;
         lastEdges = key;

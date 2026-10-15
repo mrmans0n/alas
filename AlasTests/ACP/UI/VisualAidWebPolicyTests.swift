@@ -230,6 +230,26 @@ extension VisualAidWebPolicyTests {
         ])
     }
 
+    @MainActor
+    @Test("a tall page offers to scroll only when its overflow lets the user scroll it", arguments: [
+        ("", true),
+        ("html { overflow: hidden; }", false),
+        ("body { overflow: hidden; }", false),
+        ("html { overflow-y: clip; }", false),
+    ])
+    func scrollEdgesRespectOverflow(style: String, scrollsDown: Bool) async throws {
+        let page = VisualAidWebPage(
+            visualID: UUID(), html: "<style>\(style)</style><div style=\"height: 2000px\"></div>",
+            theme: try Theme.loadBundled(id: "cool-slate"), locksNetworkAfterLoad: false)
+        page.webView.frame = CGRect(x: 0, y: 0, width: 200, height: 200)
+        defer { page.close() }
+        try await waitUntilReady(page)
+        let edges = try await page.webView.evaluateJavaScript(
+            "alasVisualScrollEdges()", in: nil, contentWorld: .world(name: VisualAidWebPolicy.bridgeWorldName))
+        let result = try #require(edges as? [String: Bool])
+        #expect(result == ["scrollUp": false, "scrollDown": scrollsDown])
+    }
+
     /// Waits until the page leaves `.loading` and requires that it landed on `.ready`.
     @MainActor
     private func waitUntilReady(_ page: VisualAidWebPage) async throws {
