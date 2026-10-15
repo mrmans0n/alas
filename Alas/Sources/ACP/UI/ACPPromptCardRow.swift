@@ -196,7 +196,12 @@ struct PromptCardRow: View {
     private func excerptView(_ excerpt: ACPPromptCard.Excerpt) -> some View {
         switch excerpt.style {
         case .code:
-            ACPMarkdownText(raw: Self.fenced(excerpt), typography: typography)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Commented code")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(theme.color("fg-faint"))
+                ACPMarkdownText(raw: Self.fenced(excerpt), typography: typography)
+            }
         case .log:
             Text(excerpt.text)
                 .font(.system(size: typography.codeSize, design: .monospaced))
