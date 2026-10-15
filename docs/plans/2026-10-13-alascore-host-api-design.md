@@ -220,6 +220,7 @@ Each phase is one or more independent PRs. It is done when its exit criterion ho
    - *Decided:* no verb takes a `HostCaller` yet; it arrives with the host protocol in phase 5, built by each transport adapter.
 5. **Events and the host protocol.**
    - Add `HostEvent` with cursors, coalescing and resync.
+     - *Decided:* events are diffs of observed state: projects, worktrees and claims, and run records through Observation, and Workspace checkouts on each `WorkspaceStore` write. The source starts with the first `snapshot()`, which publishes pending diffs before reading its cursor. The log keeps the last 1024 events, and a subscription coalesces at most 512 keys before it falls back to `resync`.
    - Add read-only session summaries to the host (`sessions.list`, `sessionChanged`, `sessionRemoved`). Session verbs and transcripts stay in phase 6.
    - Add the host message set (snapshot, events, the phase 4 verbs and the session list), served on a local Unix socket and as a versioned namespace on the Remote server.
    - The Remote layer subscribes to host events instead of polling.

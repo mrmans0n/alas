@@ -43,6 +43,7 @@ public actor WorkspaceStore {
 
     private let store: PersistenceStore
     private let url: URL
+    private var changeContinuations: [UUID: AsyncStream<Void>.Continuation] = [:]
 
     public init(store: PersistenceStore = PersistenceStore(), url: URL = Paths.workspacesFile) {
         self.store = store
@@ -185,6 +186,24 @@ public actor WorkspaceStore {
 
     private func checkpointLoaded(_ state: WorkspaceStateFile) throws {
         try store.write(try state.validated(), to: url)
+        for continuation in changeContinuations.values {
+            continuation.yield()
+        }
+    }
+
+    /// Yields after every write to the state this store holds.
+    public func changes() -> AsyncStream<Void> {
+        let (stream, continuation) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        let id = UUID()
+        changeContinuations[id] = continuation
+        continuation.onTermination = { [weak self] _ in
+            Task { await self?.stopNotifying(id) }
+        }
+        return stream
+    }
+
+    private func stopNotifying(_ id: UUID) {
+        changeContinuations.removeValue(forKey: id)
     }
 
     private func withExclusiveLock<Value>(_ body: () throws -> Value) throws -> Value {

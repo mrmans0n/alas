@@ -6,6 +6,8 @@ import Foundation
 @MainActor
 public final class AlasHost {
     let core: AlasCoreContext
+    /// Started by the first snapshot: nobody holds a cursor before it.
+    private var eventSource: HostEventSource?
 
     public init(core: AlasCoreContext) {
         self.core = core
@@ -21,21 +23,44 @@ public final class AlasHost {
     /// store (an unreadable one throws) and describe the moment they were
     /// loaded, just before. Clients kept current by the host's events
     /// reconcile the two.
+    ///
+    /// Its cursor follows every change it shows: subscribe after it for
+    /// the ones that come next.
     public func snapshot() async throws -> HostSnapshot {
         // Loaded first: the in-memory state is read after it with no
         // suspension in between, so that part describes one moment.
         let workspaceCheckouts = try await workspaces.list()
+        let source = events
+        // Whatever changed since the source last looked is published now,
+        // before the cursor is read, so the cursor covers what this shows.
+        source.refreshInMemoryState()
+        source.publishCheckouts(workspaceCheckouts)
         return HostSnapshot(
+            cursor: source.log.cursor,
             projects: projects.list(),
             worktrees: worktrees.list(includingArchived: true),
             workspaceCheckouts: workspaceCheckouts,
             runs: runs.list()
         )
     }
+
+    /// The changes after `cursor`, from a snapshot. A subscriber that falls
+    /// behind, or whose cursor is too old, gets `.resync`.
+    public func subscribe(after cursor: HostCursor) -> HostSubscription {
+        events.log.subscribe(after: cursor)
+    }
+
+    private var events: HostEventSource {
+        if let eventSource { return eventSource }
+        let source = HostEventSource(core: core)
+        eventSource = source
+        return source
+    }
 }
 
 /// The host's state, as `AlasHost.snapshot()` describes it.
 public struct HostSnapshot: Equatable, Sendable {
+    public var cursor: HostCursor
     public var projects: [ProjectConfig]
     public var worktrees: [WorktreeSnapshot]
     /// Checkouts that are not archived, as of their load from the store.
