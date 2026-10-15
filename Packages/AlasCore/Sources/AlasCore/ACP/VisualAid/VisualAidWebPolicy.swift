@@ -135,20 +135,32 @@ public enum VisualAidWebPolicy: Sendable {
     public static let bridgeScript = """
     (() => {
       const post = (message) => window.webkit.messageHandlers.\(bridgeHandlerName).postMessage(message);
-      // Whether the document can still scroll up or down, so the app can hand a
-      // wheel gesture to the transcript once the page has nothing left to scroll.
+      // Whether the page can still scroll up or down under the pointer, so the app can hand a wheel
+      // gesture to the transcript once nothing there has room left to scroll.
       let edgesFrame = 0;
       let lastEdges = '';
-      // Named so tests can call it. The viewport scrolls per the root's overflow, or the body's when the
-      // root leaves it visible; `hidden` and `clip` mean the user cannot scroll it at all.
-      globalThis.alasVisualScrollEdges = () => {
+      let pointer = null;
+      const blocksScrolling = (overflow) => overflow === 'hidden' || overflow === 'clip';
+      // Named so tests can call it with a point. Scroll chaining moves whichever box under the point still
+      // can, so the page has room when any scroll container there does, or the viewport itself. The
+      // viewport scrolls per the root's overflow, or the body's when the root leaves it visible.
+      globalThis.alasVisualScrollEdges = (x, y) => {
+        let scrollUp = false;
+        let scrollDown = false;
+        const add = (box) => {
+          scrollUp ||= box.scrollTop > 1;
+          scrollDown ||= box.scrollTop < box.scrollHeight - box.clientHeight - 1;
+        };
         const root = document.documentElement;
+        const at = x === undefined ? (pointer && document.elementFromPoint(pointer[0], pointer[1])) : document.elementFromPoint(x, y);
+        for (let box = at; box && box !== root && box !== document.body; box = box.parentElement) {
+          const overflow = getComputedStyle(box).overflowY;
+          if (overflow === 'auto' || overflow === 'scroll') add(box);
+        }
         let overflow = getComputedStyle(root).overflowY;
         if (overflow === 'visible' && document.body) overflow = getComputedStyle(document.body).overflowY;
-        if (overflow === 'hidden' || overflow === 'clip') return { scrollUp: false, scrollDown: false };
-        const scroller = document.scrollingElement || root;
-        const top = scroller.scrollTop;
-        return { scrollUp: top > 1, scrollDown: top < scroller.scrollHeight - scroller.clientHeight - 1 };
+        if (!blocksScrolling(overflow)) add(document.scrollingElement || root);
+        return { scrollUp, scrollDown };
       };
       const reportEdges = () => {
         edgesFrame = 0;
@@ -167,7 +179,9 @@ public enum VisualAidWebPolicy: Sendable {
       observer.observe(document.documentElement);
       if (document.body) observer.observe(document.body);
       addEventListener('load', reportHeight);
-      addEventListener('scroll', scheduleEdges, { passive: true });
+      // Captured so nested scroll containers, whose scroll events do not bubble, report too.
+      document.addEventListener('scroll', scheduleEdges, { passive: true, capture: true });
+      document.addEventListener('mousemove', (event) => { pointer = [event.clientX, event.clientY]; scheduleEdges(); }, { passive: true, capture: true });
       addEventListener('resize', scheduleEdges);
       // Content or style can change scrollability without resizing either observed box.
       new MutationObserver(scheduleEdges).observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });

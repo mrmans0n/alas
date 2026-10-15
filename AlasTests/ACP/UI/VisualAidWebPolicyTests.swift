@@ -252,6 +252,23 @@ extension VisualAidWebPolicyTests {
         #expect(result == ["scrollUp": false, "scrollDown": scrollsDown])
     }
 
+    @MainActor
+    @Test("a nested scroll container under the pointer gives the page room to scroll")
+    func scrollEdgesFollowNestedScrollers() async throws {
+        let page = VisualAidWebPage(
+            visualID: UUID(),
+            html: #"<div style="height: 80px; width: 120px; overflow: auto"><div style="height: 1000px"></div></div>"#,
+            theme: try Theme.loadBundled(id: "cool-slate"), locksNetworkAfterLoad: false)
+        page.webView.frame = CGRect(x: 0, y: 0, width: 200, height: 200)
+        defer { page.close() }
+        try await waitUntilReady(page)
+        let world = WKContentWorld.world(name: VisualAidWebPolicy.bridgeWorldName)
+        let inside = try await page.webView.evaluateJavaScript("alasVisualScrollEdges(40, 40)", in: nil, contentWorld: world)
+        #expect(inside as? [String: Bool] == ["scrollUp": false, "scrollDown": true])
+        let outside = try await page.webView.evaluateJavaScript("alasVisualScrollEdges(40, 160)", in: nil, contentWorld: world)
+        #expect(outside as? [String: Bool] == ["scrollUp": false, "scrollDown": false])
+    }
+
     /// Waits until the page leaves `.loading` and requires that it landed on `.ready`.
     @MainActor
     private func waitUntilReady(_ page: VisualAidWebPage) async throws {
