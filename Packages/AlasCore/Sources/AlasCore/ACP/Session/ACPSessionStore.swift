@@ -1,7 +1,7 @@
 import Foundation
 
 public final class ACPSessionStore {
-    public static let targetSchemaVersion = 26
+    public static let targetSchemaVersion = 27
     public let path: String
     public let db: SQLiteDatabase
 
@@ -58,6 +58,7 @@ public final class ACPSessionStore {
                 try db.exec("ALTER TABLE sessions ADD COLUMN goal_draft TEXT NOT NULL DEFAULT ''")
             }
         }
+        if current < 27 { try migrate_to_v27() }
         try recoverFromConcurrentWriters()
         if current == 0 {
             try db.exec("INSERT INTO schema_version (version) VALUES (?)", bindings: [Int64(Self.targetSchemaVersion)])
@@ -65,6 +66,22 @@ public final class ACPSessionStore {
             try db.exec("UPDATE schema_version SET version = ?", bindings: [Int64(Self.targetSchemaVersion)])
         }
         try db.exec("CREATE INDEX IF NOT EXISTS messages_session_kind_seq_idx ON messages(session_id, kind, seq)")
+    }
+
+    private func migrate_to_v27() throws {
+        let columns = try db.query("PRAGMA table_info(sessions)")
+        if !columns.contains(where: { ($0["name"] as? String) == "last_seen_at" }) {
+            try db.exec("ALTER TABLE sessions ADD COLUMN last_seen_at INTEGER")
+        }
+        try db.exec("""
+        CREATE TABLE IF NOT EXISTS session_summaries (
+          session_id   TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+          input_hash   TEXT NOT NULL,
+          model_id     TEXT NOT NULL,
+          summary_json TEXT NOT NULL,
+          created_at   INTEGER NOT NULL
+        )
+        """)
     }
 
     private func migrate_to_v23() throws {
@@ -806,6 +823,61 @@ extension ACPSessionStore {
     public func loadSession(id: String) throws -> ACPSessionRow? {
         let rows = try db.query("SELECT * FROM sessions WHERE id = ?", bindings: [id])
         return rows.first.map(Self.rowToSession)
+    }
+
+    /// Written only here; upserts and row decoders never touch `last_seen_at`,
+    /// so a stale in-memory row cannot clobber the stamp.
+    public func setLastSeenAt(id: String, at: Int64) throws {
+        try db.exec("UPDATE sessions SET last_seen_at = ? WHERE id = ?", bindings: [at, id])
+    }
+
+    public func loadLastSeenAt(id: String) throws -> Int64? {
+        let rows = try db.query("SELECT last_seen_at FROM sessions WHERE id = ?", bindings: [id])
+        return rows.first?["last_seen_at"] as? Int64
+    }
+
+    public func loadSummarySourceSnapshot(sessionId: String) throws -> StoredSummarySourceSnapshot? {
+        try db.transaction {
+            guard let row = try loadSession(id: sessionId) else { return nil }
+            let decoder = JSONDecoder()
+            let wires = try loadMessages(sessionId: sessionId).compactMap {
+                try? ACPMessageWire.decode(kind: $0.kind, payload: $0.payload, decoder: decoder)
+            }
+            let queue = try loadQueue(sessionId: sessionId)
+            return StoredSummarySourceSnapshot(
+                source: SessionSummarySource(
+                    goal: nil,
+                    plan: SessionSummarySource.currentPlan(in: wires),
+                    turns: SessionSummarySource.turns(in: wires)),
+                isIdle: queue.isEmpty && !row.contextRecoveryPending && !row.directTurnInFlight,
+                lastSeenAt: try loadLastSeenAt(id: sessionId),
+                updatedAt: row.updatedAt)
+        }
+    }
+
+    public func loadSessionSummary(sessionId: String, inputHash: String, modelID: String) throws -> SessionSummary? {
+        let rows = try db.query(
+            "SELECT summary_json FROM session_summaries WHERE session_id = ? AND input_hash = ? AND model_id = ?",
+            bindings: [sessionId, inputHash, modelID])
+        guard let json = rows.first?["summary_json"] as? String else { return nil }
+        return try? JSONDecoder().decode(StoredSummaryJSON.self, from: Data(json.utf8)).summary
+    }
+
+    public func saveSessionSummary(sessionId: String, _ stored: StoredSessionSummary) throws {
+        let data = try JSONEncoder().encode(StoredSummaryJSON(stored.summary))
+        try db.exec("""
+        INSERT INTO session_summaries (session_id, input_hash, model_id, summary_json, created_at)
+        VALUES (?,?,?,?,?)
+        ON CONFLICT(session_id) DO UPDATE SET
+            input_hash = excluded.input_hash,
+            model_id = excluded.model_id,
+            summary_json = excluded.summary_json,
+            created_at = excluded.created_at
+        """, bindings: [sessionId, stored.inputHash, stored.modelID, String(decoding: data, as: UTF8.self), stored.createdAt])
+    }
+
+    public func deleteAllSessionSummaries() throws {
+        try db.exec("DELETE FROM session_summaries")
     }
 
     public func loadSession(acpBrokerId: String) throws -> ACPSessionRow? {
@@ -1662,5 +1734,26 @@ extension ACPSessionStore {
             try? db.exec("ROLLBACK")
             throw error
         }
+    }
+}
+
+/// Persistence mirror of `SessionSummary`; keeps that type free of `Codable`.
+private struct StoredSummaryJSON: Codable {
+    let goal: String?
+    let completed: [String]
+    let blockers: [String]
+    let nextAction: String?
+    let isPartial: Bool
+
+    init(_ summary: SessionSummary) {
+        goal = summary.goal
+        completed = summary.completed
+        blockers = summary.blockers
+        nextAction = summary.nextAction
+        isPartial = summary.isPartial
+    }
+
+    var summary: SessionSummary {
+        SessionSummary(goal: goal, completed: completed, blockers: blockers, nextAction: nextAction, isPartial: isPartial)
     }
 }
