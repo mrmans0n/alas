@@ -14,7 +14,13 @@ public struct SessionSummaryContext: Equatable, Sendable {
     /// Cheap gate for showing the summarize control: stops at the first complete turn.
     @MainActor
     public static func hasCompleteTurn(session: ACPSession) -> Bool {
-        !SessionSummarySource.turns(in: session.transcript.messages, limit: 1).isEmpty
+        completeTurnCount(session: session, limit: 1) > 0
+    }
+
+    /// Complete turns over the whole transcript, counting no further than `limit`.
+    @MainActor
+    public static func completeTurnCount(session: ACPSession, limit: Int) -> Int {
+        SessionSummarySource.turns(in: session.transcript.messages, limit: limit).count
     }
 
     @MainActor

@@ -174,6 +174,7 @@ final class AppState {
     }
     var sessionSummaryCoordinator: SessionSummaryCoordinator { core.sessionSummaries }
     @ObservationIgnored let localTextObservers = LocalTextObservers()
+    @ObservationIgnored let sessionRecapRuntime = SessionRecapRuntime()
     @ObservationIgnored let qwenTitleRequests = ACPQwenTitleRequests()
     @ObservationIgnored private var worktreeExplainerStoreInstance: WorktreeExplainerStore?
     var worktreeExplainerStore: WorktreeExplainerStore {
@@ -1729,6 +1730,7 @@ final class AppState {
         }
         installRunScheduleRunner()
         installReviewShepherdEffects()
+        installSessionRecap()
         startLocalTextObservers()
         AlasTerminationCoordinator.shared.flush = { [weak self] in
             await self?.shutdownLocalTextFeatures()
@@ -13451,6 +13453,7 @@ final class AppState {
         acpManagers[owner] = mgr
         acpManagerProjectIds[owner] = worktree.projectId
         observeNextPromptSessions(mgr, owner: owner)
+        installSessionRecapHandler(on: mgr)
         acpHarnessBridge.attach(manager: mgr)
         Task {
             await previousManagerDisposal?.value
@@ -13786,6 +13789,7 @@ final class AppState {
         }
         acpManagers[owner] = manager
         observeNextPromptSessions(manager, owner: owner)
+        installSessionRecapHandler(on: manager)
         acpHarnessBridge.attach(manager: manager)
         Task { await manager.purgeOrphanedEphemeralSessions() }
         #if DEBUG

@@ -75,27 +75,35 @@ struct ACPSessionSummaryPresentationTests {
             isPartial: false
         )
 
-        #expect(presentation(phase: .result(summary)).sections == [
+        #expect(ACPSessionSummaryPresentation.cardContent(cardMode: .manual, phase: .result(summary)) == .sections([
             .init(kind: .completed, items: ["Implemented toolbar"]),
             .init(kind: .nextAction, items: ["Run focused tests"])
-        ])
+        ], recentContext: false))
     }
 
-    @Test func partialResultAddsRecentContextLabel() {
-        let summary = SessionSummary(
-            goal: "Ship search",
-            completed: [],
-            blockers: [],
-            nextAction: nil,
-            isPartial: true
-        )
+    private static let partialSummary = SessionSummary(
+        goal: "Ship search",
+        completed: [],
+        blockers: [],
+        nextAction: nil,
+        isPartial: true
+    )
 
-        #expect(presentation(phase: .result(summary)).showsRecentContextLabel)
-    }
-
-    @Test func presentationGenerationForcesPopoverClosed() {
-        #expect(!ACPSessionSummaryPresentation.popoverOpenAfterGenerationChange(wasOpen: true))
-        #expect(!ACPSessionSummaryPresentation.popoverOpenAfterGenerationChange(wasOpen: false))
+    @Test(arguments: [
+        (nil, .result(partialSummary), .hidden),
+        (.recap, .loading, .loading),
+        (.recap, .result(partialSummary), .sections([.init(kind: .goal, items: ["Ship search"])], recentContext: true)),
+        (.manual, .failed("Generation failed", previous: nil), .failed("Generation failed")),
+        (.recap, .idle, .hidden),
+        // The user clicked, so a blank card would look like a dead button.
+        (.manual, .loading, .loading),
+    ] as [(SessionSummaryRequestMode?, SessionSummaryCoordinator.Phase, ACPSessionSummaryPresentation.CardContent)])
+    func cardContentFollowsModeAndPhase(
+        _ mode: SessionSummaryRequestMode?,
+        _ phase: SessionSummaryCoordinator.Phase,
+        _ expected: ACPSessionSummaryPresentation.CardContent
+    ) {
+        #expect(ACPSessionSummaryPresentation.cardContent(cardMode: mode, phase: phase) == expected)
     }
 
     private func presentation(

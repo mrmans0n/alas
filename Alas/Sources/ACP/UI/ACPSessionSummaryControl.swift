@@ -11,10 +11,13 @@ struct ACPSessionSummaryControl: View {
 
     @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var popoverOpen = false
     @State private var hovering = false
 
-    private var isLit: Bool { hovering || popoverOpen }
+    private var isLit: Bool { hovering || cardIsShown }
+
+    private var cardIsShown: Bool {
+        coordinator.cardMode != nil && coordinator.boundSessionIncarnation == session.incarnation
+    }
 
     init(
         coordinator: SessionSummaryCoordinator,
@@ -45,44 +48,18 @@ struct ACPSessionSummaryControl: View {
             phase: coordinator.phase
         )
 
-        Group {
-            if presentation.isVisible {
-                control(presentation: presentation)
-            }
-        }
-        .onChange(of: popoverOpen) { wasOpen, isOpen in
-            if wasOpen, !isOpen {
-                coordinator.cancelPresentation()
-            }
-        }
-        .onChange(of: coordinator.presentationGeneration) {
-            popoverOpen = ACPSessionSummaryPresentation.popoverOpenAfterGenerationChange(
-                wasOpen: popoverOpen
-            )
-        }
-        .onDisappear {
-            guard popoverOpen || coordinator.phase == .loading else { return }
-            popoverOpen = false
-            coordinator.cancelPresentation()
+        if presentation.isVisible {
+            control(presentation: presentation)
         }
     }
 
     private func control(presentation: ACPSessionSummaryPresentation) -> some View {
         Button {
-            if popoverOpen {
-                popoverOpen = false
-            } else if coordinator.phase == .loading {
+            if coordinator.phase == .loading {
                 coordinator.cancelPresentation()
             } else {
-                // Generate first, then present the finished summary; a cancel or
-                // session activity in between leaves the phase idle, so nothing opens.
-                Task {
-                    await coordinator.summary(for: session)
-                    switch coordinator.phase {
-                    case .result, .failed: popoverOpen = true
-                    case .idle, .loading: break
-                    }
-                }
+                // The inline recap card above the composer shows the result.
+                Task { await coordinator.summary(for: session, mode: .manual) }
             }
         } label: {
             HStack(spacing: 5) {
@@ -119,15 +96,7 @@ struct ACPSessionSummaryControl: View {
         .accessibilityLabel("Summarize Session")
         .accessibilityHint(ACPSessionSummaryPresentation.help)
         .accessibilityValue(presentation.accessibilityValue)
-        .accessibilityAddTraits(popoverOpen ? .isSelected : [])
+        .accessibilityAddTraits(cardIsShown ? .isSelected : [])
         .accessibilityIdentifier("acp-session-summary")
-        .popover(isPresented: $popoverOpen, arrowEdge: .top) {
-            ACPSessionSummaryPopover(
-                coordinator: coordinator,
-                session: session,
-                presentation: presentation,
-                isPresented: $popoverOpen
-            )
-        }
     }
 }
