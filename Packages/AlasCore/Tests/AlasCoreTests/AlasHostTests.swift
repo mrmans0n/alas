@@ -89,6 +89,45 @@ struct AlasHostTests {
         #expect(await Self.next(log.subscribe(after: caughtUp)) == [.runRemoved(id: "d")])
     }
 
+    /// Sessions join the host's list and events, keyed by their owner.
+    @Test func sessionsAreListedAndAnnounced() async throws {
+        let project = ProjectConfig(id: "p", name: "p", path: "/srv/repo", color: "blue", addedAt: .distantPast)
+        let projects = ProjectsManager(persistedProjects: [project])
+        let shown = Self.worktree("shown")
+        projects.insertOptimisticWorktree(shown)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let core = AlasCoreContext(
+            projects: projects,
+            runHistoryStore: nil,
+            workspaceStore: WorkspaceStore(url: directory.appendingPathComponent("workspaces.json")),
+            makeSessionManager: { owner, worktree in
+                ACPSessionManager(
+                    worktreeId: worktree.id,
+                    worktreePath: worktree.path.path,
+                    owner: owner,
+                    persistence: ACPSessionPersistence(path: directory.appendingPathComponent("sessions.sqlite").path)
+                )
+            }
+        )
+        let host = AlasHost(core: core)
+        let subscription = host.subscribe(after: try await host.snapshot().cursor)
+        let owner = SessionOwnerID.worktree(shown.id)
+
+        let manager = try core.sessionManager(for: shown)
+        _ = manager.createSession(id: "s", agentId: "codex")
+        let created = try #require(await Self.next(subscription) { events in
+            events.contains { if case .sessionChanged(let summary) = $0 { summary.row.id == "s" } else { false } }
+        })
+        #expect(host.sessions.list().map(\.row.id) == ["s"])
+        #expect(created.contains { if case .sessionChanged(let summary) = $0 { summary.owner == owner } else { false } })
+
+        try await manager.deleteSession(id: "s")
+        #expect(await Self.next(subscription) { $0.contains(.sessionRemoved(owner: owner, id: "s")) } != nil)
+        #expect(host.sessions.list().isEmpty)
+    }
+
     private static func worktree(_ name: String) -> Worktree {
         let path = URL(fileURLWithPath: "/srv/\(name)")
         return Worktree(
@@ -99,11 +138,20 @@ struct AlasHostTests {
 
     /// The subscription's next batch, or nil if none arrives in time.
     private static func next(_ subscription: HostSubscription) async -> [HostEvent]? {
+        await next(subscription) { _ in true }
+    }
+
+    /// The first batch `matches` accepts, skipping others, or nil if none
+    /// arrives in time.
+    private static func next(_ subscription: HostSubscription, where matches: ([HostEvent]) -> Bool) async -> [HostEvent]? {
         let timeout = Task { @MainActor in
             try await Task.sleep(for: .seconds(5))
             subscription.cancel()
         }
         defer { timeout.cancel() }
-        return await subscription.next()
+        while let events = await subscription.next() {
+            if matches(events) { return events }
+        }
+        return nil
     }
 }

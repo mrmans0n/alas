@@ -125,6 +125,9 @@ public final class VisualAidAnswerCancellation: @unchecked Sendable {
 @MainActor
 public final class ACPSessionManager: ChangeTracking {
     nonisolated(unsafe) public let willChange = ChangeSignal<Void>()
+    /// Announces what session summaries read and `willChange` does not:
+    /// runners and writer leases.
+    nonisolated(unsafe) public let summaryWillChange = ChangeSignal<Void>()
     public typealias ACPSetupEvaluator = @MainActor (_ spec: ACPLaunchSpec) async -> ACPSetupResult
     public typealias ACPRemoteAdapterResolver = @MainActor (
         _ host: String,
@@ -304,7 +307,9 @@ public final class ACPSessionManager: ChangeTracking {
     /// creator installs one that refuses while the worktree is being created
     /// or deleted.
     public var admitsNewWork: () -> Bool = { true }
-    public private(set) var runners: [ACPSession.ID: ACPSessionRunner] = [:]
+    public private(set) var runners: [ACPSession.ID: ACPSessionRunner] = [:] {
+        willSet { summaryWillChange.send() }
+    }
     private var elicitationCoordinators: [ACPSession.ID: ACPElicitationCoordinator] = [:]
     private var autoReconnectTasks: [ACPSession.ID: Task<Void, Never>] = [:] {
         willSet { sessions.values.forEach { $0.nextPromptActivity.send() } }
@@ -1476,12 +1481,14 @@ public final class ACPSessionManager: ChangeTracking {
     /// Sessions for which THIS instance holds the writer lease (backing store).
     public var _ownedLeases: Set<ACPSession.ID> = [] {
         willSet {
+            summaryWillChange.send()
             for id in _ownedLeases.subtracting(newValue) { sessions[id]?.nextPromptActivity.send() }
         }
     }
     private var ownedLeaseTokens: [ACPSession.ID: String] = [:]
     private var observedLeases: [ACPSession.ID: ACPSessionLease?] = [:] {
         willSet {
+            summaryWillChange.send()
             let previous = observedLeases
             for id in _ownedLeases where newValue[id] != previous[id] {
                 let lease = newValue[id] ?? nil

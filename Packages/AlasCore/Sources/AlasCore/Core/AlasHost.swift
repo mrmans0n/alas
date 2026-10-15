@@ -17,6 +17,7 @@ public final class AlasHost {
     public var worktrees: WorktreesAPI { WorktreesAPI(core: core) }
     public var workspaces: WorkspacesAPI { WorkspacesAPI(core: core) }
     public var runs: RunsAPI { RunsAPI(core: core) }
+    public var sessions: SessionsAPI { SessionsAPI(core: core) }
 
     /// Everything the host holds, as values. Projects, worktrees and runs
     /// describe one moment; Workspace checkouts are read from their own
@@ -39,7 +40,8 @@ public final class AlasHost {
             projects: projects.list(),
             worktrees: worktrees.list(includingArchived: true),
             workspaceCheckouts: workspaceCheckouts,
-            runs: runs.list()
+            runs: runs.list(),
+            sessions: sessions.list()
         )
     }
 
@@ -65,6 +67,7 @@ public struct HostSnapshot: Equatable, Sendable {
     /// Checkouts that are not archived, as of their load from the store.
     public var workspaceCheckouts: [WorkspaceCheckout]
     public var runs: [RunRecord]
+    public var sessions: [HostSessionSummary]
 }
 
 /// A worktree with what the host knows about it beyond Git.
@@ -229,5 +232,44 @@ public struct RunsAPI {
     /// Runs the script and waits for how it ended.
     public func run(_ script: RunScript, in worktree: Worktree) async throws -> RunOutcome {
         try await core.runScript(script, in: worktree)
+    }
+}
+
+// MARK: - Sessions
+
+/// A session as lists show it: read-only, without its transcript.
+public struct HostSessionSummary: Equatable, Sendable {
+    /// The worktree or Workspace checkout the session belongs to.
+    public var owner: SessionOwnerID
+    /// The stored row, carrying the live session's agent-side id once it has one.
+    public var row: ACPSessionRow
+    /// Nil while no agent process runs the session.
+    public var streamingState: ACPSession.StreamingState?
+    /// Whether this instance holds the session's writer lease.
+    public var isWriter: Bool
+}
+
+@MainActor
+public struct SessionsAPI {
+    let core: AlasCoreContext
+
+    /// The sessions that are not archived, in each owner's recent order.
+    public func list() -> [HostSessionSummary] {
+        core.sessionManagers.values.flatMap { manager in
+            manager.sessionRows.compactMap { row -> HostSessionSummary? in
+                guard !row.archived else { return nil }
+                var row = row
+                if let remoteID = manager.liveSession(for: row.id)?.remoteSessionId?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !remoteID.isEmpty {
+                    row.remoteSessionId = remoteID
+                }
+                return HostSessionSummary(
+                    owner: manager.owner,
+                    row: row,
+                    streamingState: manager.runners[row.id]?.session.transcript.streamingState,
+                    isWriter: manager.isWriter(for: row.id)
+                )
+            }
+        }
     }
 }
