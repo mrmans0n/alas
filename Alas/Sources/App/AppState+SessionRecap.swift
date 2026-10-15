@@ -114,6 +114,12 @@ extension AppState {
             self.handleSeenEvent(event, manager: manager)
         }
         manager.seenTracker.setAppActive(NSApp?.isActive ?? false)
+        // Disabling clears only loaded managers' stores; session databases are
+        // per worktree, so clear each one again as its manager comes up.
+        if !config.sessionSummariesEnabled {
+            let persistence = manager.persistence
+            Task { try? await persistence.deleteAllSessionSummaries() }
+        }
         // Runs after the caller's synchronous tab restore for this owner.
         Task { [weak self, weak manager] in
             guard let self, let manager else { return }
@@ -330,17 +336,14 @@ private final class HydrationWaiter {
 
 extension AppState {
     /// Synchronous on purpose: the process is exiting, so no actor hop. A
-    /// second store handle writes `last_seen_at = now` for every session the
-    /// user can see right now.
+    /// bare second connection, without migrations, writes `last_seen_at = now`
+    /// for every session the user can see right now.
     func stampSeenSessionsForTermination(now: Date = Date()) {
         let seconds = Int64(now.timeIntervalSince1970)
         for manager in core.sessionManagers.values {
             let seen = manager.sessions.keys.filter { manager.seenTracker.isSeen($0) }
-            guard !seen.isEmpty,
-                  let store = try? ACPSessionStore(path: manager.persistence.path) else { continue }
-            for id in seen {
-                try? store.setLastSeenAt(id: id, at: seconds)
-            }
+            guard !seen.isEmpty else { continue }
+            try? ACPSessionStore.stampLastSeenAt(path: manager.persistence.path, ids: Array(seen), at: seconds)
         }
     }
 }

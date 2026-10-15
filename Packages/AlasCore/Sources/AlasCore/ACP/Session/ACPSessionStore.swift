@@ -828,7 +828,27 @@ extension ACPSessionStore {
     /// Written only here; upserts and row decoders never touch `last_seen_at`,
     /// so a stale in-memory row cannot clobber the stamp.
     public func setLastSeenAt(id: String, at: Int64) throws {
-        try db.exec("UPDATE sessions SET last_seen_at = ? WHERE id = ?", bindings: [at, id])
+        try db.exec(Self.setLastSeenAtSQL, bindings: [at, id])
+    }
+
+    private static let setLastSeenAtSQL = "UPDATE sessions SET last_seen_at = ? WHERE id = ?"
+
+    /// Stamps `last_seen_at` through a bare connection: no migrations and no
+    /// directory creation, so it is cheap enough for the main thread at quit.
+    /// A missing database is a no-op; a busy one fails after the short timeout.
+    public static func stampLastSeenAt(
+        path: String,
+        ids: [String],
+        at: Int64,
+        busyTimeoutMilliseconds: Int32 = 250
+    ) throws {
+        guard !ids.isEmpty, FileManager.default.fileExists(atPath: path) else { return }
+        let db = try SQLiteDatabase(path: path, busyTimeoutMilliseconds: busyTimeoutMilliseconds)
+        try db.transaction {
+            for id in ids {
+                try db.exec(setLastSeenAtSQL, bindings: [at, id])
+            }
+        }
     }
 
     public func loadLastSeenAt(id: String) throws -> Int64? {
