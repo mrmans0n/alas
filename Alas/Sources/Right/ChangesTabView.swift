@@ -531,14 +531,19 @@ struct ChangesTabView: View {
         }
 
         if Self.shouldShowChangesPreparationCard(preparationIsVisible: preparation.isVisible) {
+            let reviewScopeShortcut = appState.binding(for: .openReviewPalette)
             rows.append(appKitRow(
                 id: "changes-preparation",
-                token: String(reflecting: preparation),
+                token: String(reflecting: preparation) + String(reflecting: reviewScopeShortcut),
                 estimatedHeight: 92
             ) {
                 ChangesPreparationCard(
                     model: preparation,
                     onReviewChanges: openReviewChangesTab,
+                    onChooseReviewScope: { [appState, rps] in
+                        appState.openReviewPaletteOverlay(prefill: rps.worktree)
+                    },
+                    reviewScopeShortcut: reviewScopeShortcut,
                     onDraftCommit: openDraftTab,
                     onPublishCommit: openPublishTab,
                     onGGAction: handleGGPreparationAction,
@@ -1156,9 +1161,6 @@ struct ChangesTabView: View {
                 appState.openReviewPaletteOverlay(prefill: rps.worktree, rangeAnchorSHA: commit.sha)
             },
             reviewRangeAnchorSHAs: Set(rps.commits.map(\.sha)),
-            onChooseReviewScope: { [appState, rps] in
-                appState.openReviewPaletteOverlay(prefill: rps.worktree)
-            },
             onLoadOlder: { Task { @MainActor in await rps.loadOlder() } },
             onSelectBaseBranch: { rps.selectBaseBranch($0) },
             onOpenBaseBranchSelector: { Task { @MainActor in await rps.fetchBranches() } },

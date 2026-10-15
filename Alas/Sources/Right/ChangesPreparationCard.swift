@@ -2,6 +2,9 @@ import SwiftUI
 
 enum ChangesPreparationCardText {
     static let openLandingTitle = "Open landing"
+    static let reviewScopeMenuTitle = "Review Something Else…"
+    static let reviewScopeButtonTitle = "Review…"
+    static let reviewScopeButtonSubtitle = "Commit, range, or branch"
 
     static func landingTitle(_ landing: ChangesPreparationModel.GGLandingStatus) -> String {
         "Landing \(landing.completed) of \(landing.total)"
@@ -69,6 +72,10 @@ struct ChangesPreparationReconciliationPresentation: Equatable {
 struct ChangesPreparationCard: View {
     let model: ChangesPreparationModel
     let onReviewChanges: () -> Void
+    /// Opens the review target palette (the ⇧⌘R action).
+    let onChooseReviewScope: () -> Void
+    /// Effective binding of the palette action, shown next to its entrypoints.
+    let reviewScopeShortcut: ShortcutBinding?
     let onDraftCommit: () -> Void
     let onPublishCommit: () -> Void
     let onGGAction: (GGChangesPreparationAction) -> Void
@@ -127,11 +134,16 @@ struct ChangesPreparationCard: View {
                     ggDestinationButton(action)
                 }
             }
+            if model.reviewAction == nil {
+                secondaryReviewScopeButton
+            }
         } else if model.draftAction != nil || model.publishAction != nil || !model.reviewRequestActions.isEmpty {
             ViewThatFits(in: .horizontal) {
                 secondaryActionsHorizontal
                 secondaryActionsVertical
             }
+        } else if model.reviewAction == nil {
+            secondaryReviewScopeButton
         }
     }
 
@@ -238,40 +250,77 @@ struct ChangesPreparationCard: View {
     }
 
     private func primaryReviewButton(_ action: ChangesPreparationModel.ReviewAction) -> some View {
-        Button(action: onReviewChanges) {
-            HStack(spacing: 9) {
-                Icon(name: "diff", size: 13, color: theme.color("bg-0"))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(action.title)
-                        .font(.system(size: 12.5, weight: .semibold))
-                        .foregroundColor(theme.color("bg-0"))
+        HStack(spacing: 1) {
+            Button(action: onReviewChanges) {
+                HStack(spacing: 9) {
+                    Icon(name: "diff", size: 13, color: theme.color("bg-0"))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(action.title)
+                            .font(.system(size: 12.5, weight: .semibold))
+                            .foregroundColor(theme.color("bg-0"))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        Text(ChangesPreparationCardText.reviewStats(
+                            fileCount: action.fileCount,
+                            additions: action.additions,
+                            deletions: action.deletions
+                        ))
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(theme.color("bg-0").opacity(0.72))
                         .lineLimit(1)
                         .truncationMode(.tail)
-                    Text(ChangesPreparationCardText.reviewStats(
-                        fileCount: action.fileCount,
-                        additions: action.additions,
-                        deletions: action.deletions
-                    ))
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(theme.color("bg-0").opacity(0.72))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    Spacer(minLength: 8)
+                    Icon(name: "chev-right", size: 11, color: theme.color("bg-0").opacity(0.72))
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                Spacer(minLength: 8)
-                Icon(name: "chev-right", size: 11, color: theme.color("bg-0").opacity(0.72))
+                .padding(.horizontal, 10)
+                .frame(height: 44)
+                .background(theme.color("accent"))
+                .contentShape(Rectangle())
             }
-            .padding(.horizontal, 10)
-            .frame(minHeight: 44)
-            .contentShape(RoundedRectangle(cornerRadius: 7))
+            .buttonStyle(.plain)
+            .help(action.title)
+            .accessibilityIdentifier("changes-preparation-review")
+
+            Menu {
+                Button(ChangesPreparationCardText.reviewScopeMenuTitle, action: onChooseReviewScope)
+                    .keyboardShortcut(reviewScopeShortcut?.asKeyboardShortcut())
+            } label: {
+                Icon(name: "chev-down", size: 10, color: theme.color("bg-0").opacity(0.72))
+                    .frame(width: 26, height: 44)
+                    .background(theme.color("accent"))
+                    .contentShape(Rectangle())
+            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help(reviewScopeHelp(ChangesPreparationCardText.reviewScopeMenuTitle))
+            .accessibilityLabel(ChangesPreparationCardText.reviewScopeMenuTitle)
+            .accessibilityIdentifier("changes-preparation-review-scope-menu")
         }
-        .buttonStyle(.plain)
-        .background(
-            RoundedRectangle(cornerRadius: 7)
-                .fill(theme.color("accent"))
+        .clipShape(RoundedRectangle(cornerRadius: 7))
+    }
+
+    /// Stands in for the split button when there are no uncommitted changes
+    /// to review, so the palette stays reachable.
+    private var secondaryReviewScopeButton: some View {
+        secondaryButton(
+            title: ChangesPreparationCardText.reviewScopeButtonTitle,
+            subtitle: reviewScopeShortcut?.displayString ?? ChangesPreparationCardText.reviewScopeButtonSubtitle,
+            iconName: "diff",
+            showsDot: false,
+            isEnabled: true,
+            help: reviewScopeHelp(ChangesPreparationCardText.reviewScopeButtonTitle),
+            action: onChooseReviewScope
         )
-        .help(action.title)
-        .accessibilityIdentifier("changes-preparation-review")
+        .accessibilityIdentifier("changes-preparation-review-scope")
+    }
+
+    private func reviewScopeHelp(_ title: String) -> String {
+        guard let shortcut = reviewScopeShortcut else { return title }
+        return "\(title) (\(shortcut.displayString))"
     }
 
     private var secondaryActionsHorizontal: some View {
@@ -284,6 +333,10 @@ struct ChangesPreparationCard: View {
             }
             ForEach(model.reviewRequestActions, id: \.kind) { action in
                 secondaryReviewRequestButton(action)
+            }
+            if model.reviewAction == nil {
+                secondaryReviewScopeButton
+                    .fixedSize(horizontal: true, vertical: false)
             }
         }
     }
@@ -298,6 +351,9 @@ struct ChangesPreparationCard: View {
             }
             ForEach(model.reviewRequestActions, id: \.kind) { action in
                 secondaryReviewRequestButton(action)
+            }
+            if model.reviewAction == nil {
+                secondaryReviewScopeButton
             }
         }
     }
