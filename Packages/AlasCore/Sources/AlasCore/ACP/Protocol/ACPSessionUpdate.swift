@@ -385,15 +385,25 @@ public struct ACPTextChunk: Codable, Equatable, Sendable {
     public let messageId: String?
     public let content: ACPContentBlock
     public let metadata: AnyCodable?
+    /// Set when this chunk came from a revised-form `session_message`, a
+    /// message between sessions rather than a human turn. Never on the wire;
+    /// see `ACPRevisedSubagentUpdate`.
+    public var directed: ACPDirectedMessage? = nil
 
     public var phase: ACPMessagePhase? {
         ACPMessagePhase.codexPhase(in: metadata)
     }
 
-    public init(messageId: String? = nil, content: ACPContentBlock, metadata: AnyCodable? = nil) {
+    public init(
+        messageId: String? = nil,
+        content: ACPContentBlock,
+        metadata: AnyCodable? = nil,
+        directed: ACPDirectedMessage? = nil
+    ) {
         self.messageId = messageId
         self.content = content
         self.metadata = metadata
+        self.directed = directed
     }
 
     private enum CodingKeys: String, CodingKey {

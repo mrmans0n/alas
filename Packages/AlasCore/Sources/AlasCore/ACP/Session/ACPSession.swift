@@ -1070,6 +1070,9 @@ public final class ACPSession: ChangeTracking, Identifiable {
             }
             return flushedForAgent.union([i])
         case .userMessageChunk(let chunk):
+            // A message between sessions is not a human turn; on the root it
+            // must never claim prompt ownership (see `ACPDirectedMessage`).
+            guard chunk.directed == nil else { return [] }
             guard !isEchoedSymbolExpansion(chunk.content) else { return [] }
             let txt = text(of: chunk.content)
             // Recorded as a notice, not a user row: an echo has nothing to merge into.
@@ -1679,6 +1682,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
                 .flatMap { transcript.messageIndex(messageId: $0, kind: .thought) }
                 ?? firstIdLessMatch(of: .thought, atOrAfter: suppressedReplayInsertionCursor)
         case .userMessageChunk(let chunk):
+            guard chunk.directed == nil else { return [] }
             dirty = []
             matchedIndex = chunk.messageId
                 .flatMap { transcript.messageIndex(messageId: $0, kind: .user) }

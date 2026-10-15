@@ -55,9 +55,9 @@ public enum ACPRevisedSubagentUpdate: Decodable, Equatable, Sendable {
                 case "error": return .failed
                 default: return .completed
                 }
-            // The agent can no longer tell what the child is doing — the
-            // adapter's own mapping of the earlier draft's `disconnected`.
-            case "unknown": return .disconnected
+            // `unknown` (the agent cannot currently tell what the child is
+            // doing) is NOT terminal: the work may still be live and a later
+            // snapshot replaces it, so it decodes to a still-running `.other`.
             default: return ACPSubagentState(rawValue: state)
             }
         }
@@ -70,7 +70,11 @@ public enum ACPRevisedSubagentUpdate: Decodable, Equatable, Sendable {
         public let messageId: String
         public let senderSessionId: String?
         public let recipientSessionId: String?
-        public let content: [ACPContentBlock]
+        /// Nil when a `session_message` omits it (content unchanged).
+        public let content: [ACPContentBlock]?
+        /// A `session_message`: its content replaces whatever the message
+        /// held, and `[]`/`null` clears it. A chunk appends.
+        public let replacesContent: Bool
     }
 
     private enum Keys: String, CodingKey {
@@ -103,12 +107,15 @@ public enum ACPRevisedSubagentUpdate: Decodable, Equatable, Sendable {
                 capabilities: capabilities,
                 state: Self.workState(c)))
         case "session_message", "session_message_chunk":
-            let content: [ACPContentBlock]
-            if kind == "session_message_chunk" {
+            let isChunk = kind == "session_message_chunk"
+            let content: [ACPContentBlock]?
+            if isChunk {
                 content = [try c.decode(ACPContentBlock.self, forKey: .content)]
+            } else if !c.contains(.content) {
+                content = nil
             } else {
-                // Invalid items are skipped, per the schema, rather than
-                // failing the whole message.
+                // `null` clears like `[]`. Invalid items are skipped, per the
+                // schema, rather than failing the whole message.
                 let lossy = (try? c.decodeIfPresent([Lossy<ACPContentBlock>].self, forKey: .content)) ?? nil
                 content = (lossy ?? []).compactMap(\.value)
             }
@@ -116,7 +123,8 @@ public enum ACPRevisedSubagentUpdate: Decodable, Equatable, Sendable {
                 messageId: try c.decode(String.self, forKey: .messageId),
                 senderSessionId: (try? c.decodeIfPresent(String.self, forKey: .senderSessionId)) ?? nil,
                 recipientSessionId: (try? c.decodeIfPresent(String.self, forKey: .recipientSessionId)) ?? nil,
-                content: content))
+                content: content,
+                replacesContent: !isChunk))
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .sessionUpdate, in: c,
@@ -162,21 +170,43 @@ public enum ACPRevisedSubagentUpdate: Decodable, Equatable, Sendable {
             }
             return result
         case .sessionMessage(let message):
-            // Claude only sends messages INTO a child (its launch prompt and
-            // each SendMessage resume), which is the child's user turn. A
-            // message the session itself sent elsewhere is its own output.
-            // Anything else is not this transcript's to show — never a user
-            // turn, which on the root would claim prompt ownership.
-            let addressedHere = message.recipientSessionId.map { $0 == sessionId } ?? true
-            let isOutgoing = !addressedHere && message.senderSessionId == sessionId
-            guard addressedHere || isOutgoing else { return [] }
-            return message.content.map { block in
-                let chunk = ACPTextChunk(messageId: message.messageId, content: block)
-                return .init(
-                    sessionId: sessionId,
-                    update: isOutgoing ? .agentMessageChunk(chunk) : .userMessageChunk(chunk))
+            // A message between sessions is neither a human turn nor an
+            // agent answer, so the chunks carry `directed`: the root
+            // transcript ignores them, and a child shows a message INTO it
+            // (its launch prompt, each SendMessage resume) as the task it
+            // was handed — the same row the earlier draft's prompt makes.
+            // Claude sends nothing else; the other view of a message (one
+            // this session sent elsewhere) is not this transcript's to show.
+            guard message.recipientSessionId.map({ $0 == sessionId }) ?? true,
+                  let content = message.content else { return [] }
+            // An upsert replaces the message's content: the first block
+            // carries that, the rest append to it. A clear has no block.
+            let blocks = content.isEmpty && message.replacesContent ? [ACPContentBlock.text("")] : content
+            return blocks.enumerated().map { offset, block in
+                .init(sessionId: sessionId, update: .userMessageChunk(.init(
+                    messageId: message.messageId,
+                    content: block,
+                    directed: .init(
+                        senderSessionId: message.senderSessionId,
+                        recipientSessionId: message.recipientSessionId,
+                        replacesContent: message.replacesContent && offset == 0))))
             }
         }
+    }
+}
+
+/// Provenance of a chunk normalized from a revised-form `session_message`.
+public struct ACPDirectedMessage: Equatable, Sendable {
+    public let senderSessionId: String?
+    public let recipientSessionId: String?
+    /// The chunk starts a whole-content upsert of its message: it replaces
+    /// what the message's row held instead of extending it.
+    public let replacesContent: Bool
+
+    public init(senderSessionId: String?, recipientSessionId: String?, replacesContent: Bool) {
+        self.senderSessionId = senderSessionId
+        self.recipientSessionId = recipientSessionId
+        self.replacesContent = replacesContent
     }
 }
 

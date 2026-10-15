@@ -955,11 +955,7 @@ struct ACPSubagentRoutingTests {
         #expect(run.name == "general-purpose")
         #expect(run.capabilities.supportsCancel)
         #expect(run.state == .completed)
-        let prompts = run.messages.compactMap { message -> String? in
-            guard case .user(_, _, let text, _, _, _) = message else { return nil }
-            return text
-        }
-        #expect(prompts == ["Fix the build", "Now run the tests"])
+        #expect(Self.prompts(in: run) == ["Fix the build", "Now run the tests"])
         #expect(run.messages.count == 3)
     }
 
@@ -979,6 +975,42 @@ struct ACPSubagentRoutingTests {
         // Nothing is assumed locally: the agent reports the outcome.
         #expect(runner.session.subagentRun("agent_a")?.state == .running)
         #expect(runner.session.subagentRun("agent_b")?.state == .running)
+    }
+
+    @Test("a revised session_message upserts its prompt row instead of appending to it")
+    func revisedSessionMessageUpsertsItsRow() async throws {
+        let (runner, _, _) = try makeRunner()
+        feed(runner, #"{"sessionId":"remote-parent","update":{"sessionId":"agent_n","sessionUpdate":"subagent_update","state":{"state":"running"}}}"#)
+        feed(runner, #"{"sessionId":"agent_n","update":{"sessionUpdate":"session_message_chunk","messageId":"toolu_launch","content":{"type":"text","text":"Fix the"}}}"#)
+        feed(runner, #"{"sessionId":"agent_n","update":{"sessionUpdate":"agent_message_chunk","messageId":"m1","content":{"type":"text","text":"On it."}}}"#)
+        let run = try #require(runner.session.subagentRun("agent_n"))
+
+        // The whole message rewrites the row it streamed into, even when it
+        // is no longer the trailing row, and repeating it changes nothing.
+        let whole = #"{"sessionId":"agent_n","update":{"sessionUpdate":"session_message","messageId":"toolu_launch","recipientSessionId":"agent_n","content":[{"type":"text","text":"Fix the build"}]}}"#
+        feed(runner, whole)
+        feed(runner, whole)
+        #expect(Self.prompts(in: run) == ["Fix the build"])
+
+        feed(runner, #"{"sessionId":"agent_n","update":{"sessionUpdate":"session_message","messageId":"toolu_launch","content":[]}}"#)
+        #expect(Self.prompts(in: run) == [""])
+        #expect(run.messages.count == 2)
+    }
+
+    @Test("a revised session_message on the root never becomes a user turn")
+    func revisedSessionMessageOnRootIsIgnored() async throws {
+        let (runner, _, _) = try makeRunner()
+        feed(runner, #"{"sessionId":"remote-parent","update":{"sessionUpdate":"session_message","messageId":"m1","senderSessionId":"agent_n","recipientSessionId":"remote-parent","content":[{"type":"text","text":"Child result"}]}}"#)
+
+        #expect(runner.session.transcript.messages.isEmpty)
+        #expect(runner.session.transcript.pendingUserInputs.isEmpty)
+    }
+
+    private static func prompts(in run: ACPSubagentRun) -> [String] {
+        run.messages.compactMap { message in
+            guard case .user(_, _, let text, _, _, _) = message else { return nil }
+            return text
+        }
     }
 
     private func feed(_ runner: ACPSessionRunner, _ json: String) {

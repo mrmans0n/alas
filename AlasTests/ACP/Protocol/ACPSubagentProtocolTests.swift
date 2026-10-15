@@ -185,12 +185,24 @@ struct ACPSubagentProtocolTests {
         """)
 
         // The malformed block is skipped rather than failing the whole message.
+        // The whole message replaces the row's content; the chunk extends it.
         #expect(updates + chunk == [
-            .init(sessionId: "agent_n", update: .userMessageChunk(
-                .init(messageId: "toolu_native", content: .text("Make the build pass")))),
-            .init(sessionId: "agent_n", update: .userMessageChunk(
-                .init(messageId: "toolu_native", content: .text("and run tests"))))
+            .init(sessionId: "agent_n", update: .userMessageChunk(.init(
+                messageId: "toolu_native", content: .text("Make the build pass"),
+                directed: .init(senderSessionId: "root", recipientSessionId: "agent_n", replacesContent: true)))),
+            .init(sessionId: "agent_n", update: .userMessageChunk(.init(
+                messageId: "toolu_native", content: .text("and run tests"),
+                directed: .init(senderSessionId: nil, recipientSessionId: nil, replacesContent: false))))
         ])
+    }
+
+    @Test("a revised session_message addressed to another session is not this transcript's turn")
+    func revisedMessageForAnotherSession() throws {
+        let updates = try Self.frame("""
+        {"sessionId":"agent_n","update":{"sessionUpdate":"session_message","messageId":"m1",\
+        "senderSessionId":"agent_n","recipientSessionId":"root","content":[{"type":"text","text":"done"}]}}
+        """)
+        #expect(updates.isEmpty)
     }
 
     @Test("revised work states map onto the subagent lifecycle", arguments: [
@@ -199,7 +211,8 @@ struct ACPSubagentProtocolTests {
         (#"{"state":"idle"}"#, .completed, nil),
         (#"{"state":"idle","stopReason":"cancelled"}"#, .cancelled, nil),
         (#"{"state":"idle","stopReason":"error","error":{"code":-32603,"message":"boom"}}"#, .failed, "boom"),
-        (#"{"state":"unknown"}"#, .disconnected, nil)
+        // Not terminal: the work may still be live, and a later snapshot replaces it.
+        (#"{"state":"unknown"}"#, .other("unknown"), nil)
     ])
     func revisedStatesNormalize(state json: String, expected: ACPSubagentState, error: String?) throws {
         let updates = try Self.frame("""
