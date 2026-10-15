@@ -178,7 +178,7 @@ final class AppState {
     @ObservationIgnored lazy var sessionRecapPrecomputeScheduler = SessionRecapPrecomputeScheduler(
         now: { Date() },
         sleep: { try await Task.sleep(for: $0) },
-        run: { [weak self] sessionId in await self?.runRecapPrecompute(sessionId: sessionId) }
+        run: { [weak self] sessionId in await self?.runRecapPrecompute(sessionId: sessionId) ?? .skipped }
     )
     @ObservationIgnored let qwenTitleRequests = ACPQwenTitleRequests()
     @ObservationIgnored private var worktreeExplainerStoreInstance: WorktreeExplainerStore?

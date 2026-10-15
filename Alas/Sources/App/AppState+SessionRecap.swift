@@ -487,11 +487,14 @@ extension AppState {
 
     /// The scheduler's job: summarize an idle, hidden session from memory when
     /// it is loaded, otherwise from the store.
-    func runRecapPrecompute(sessionId: ACPSession.ID) async {
+    func runRecapPrecompute(sessionId: ACPSession.ID) async -> SessionRecapPrecomputeOutcome {
+        var outcome = SessionRecapPrecomputeOutcome.skipped
         // Activity stays observed during the job, so going busy cancels it.
-        // Afterwards the bookkeeping goes unless the id was scheduled again.
+        // Afterwards the bookkeeping goes unless the id was scheduled again
+        // or the scheduler will retry it after a preemption.
         defer {
-            if !sessionRecapPrecomputeScheduler.pendingSessionIds.contains(sessionId) {
+            if outcome != .preempted,
+               !sessionRecapPrecomputeScheduler.pendingSessionIds.contains(sessionId) {
                 sessionRecapRuntime.precomputeOwners[sessionId] = nil
                 sessionRecapRuntime.precomputeActivity.removeValue(forKey: sessionId)?.subscription.cancel()
             }
@@ -500,7 +503,7 @@ extension AppState {
               let owner = sessionRecapRuntime.precomputeOwners[sessionId],
               let manager = acpManager(for: owner),
               hasOpenACPTab(sessionId: sessionId, owner: owner),
-              !manager.seenTracker.isSeen(sessionId) else { return }
+              !manager.seenTracker.isSeen(sessionId) else { return outcome }
 
         let minimumTurns = SessionRecapPolicy.minimumCompleteTurns
         let context: SessionSummaryContext?
@@ -511,7 +514,7 @@ extension AppState {
            session.agentState == .ready, !session.transcript.isBackfillingOlderMessages {
             guard SessionSummaryIdleFacts.current(session: session, composer: session.composer).isIdle,
                   SessionSummaryContext.completeTurnCount(session: session, limit: minimumTurns) >= minimumTurns
-            else { return }
+            else { return outcome }
             context = SessionSummaryContext.snapshot(session: session)
         } else {
             let snapshot: StoredSummarySourceSnapshot?
@@ -519,20 +522,23 @@ extension AppState {
                 snapshot = try await manager.persistence.loadSummarySourceSnapshot(sessionId: sessionId)
             } catch {
                 sessionRecapLogger.error("loading a recap source failed: \(String(describing: error))")
-                return
+                return outcome
             }
-            guard let snapshot, snapshot.isIdle, snapshot.source.turns.count >= minimumTurns else { return }
+            guard let snapshot, snapshot.isIdle, snapshot.source.turns.count >= minimumTurns else { return outcome }
             context = SessionSummaryContext.snapshot(source: snapshot.source)
         }
         // A drop during the awaits above cancels this task; re-check everything.
         guard let context, !Task.isCancelled, recapPrecomputeAllowed,
               acpManager(for: owner) === manager,
               hasOpenACPTab(sessionId: sessionId, owner: owner),
-              !manager.seenTracker.isSeen(sessionId) else { return }
-        _ = await sessionSummaryCoordinator.precompute(
+              !manager.seenTracker.isSeen(sessionId) else { return outcome }
+        outcome = await sessionSummaryCoordinator.precompute(
             sessionId: sessionId,
             context: context,
             store: manager.persistence
         )
+        // A drop cancels the job; that is not a preemption to retry.
+        if Task.isCancelled, outcome == .preempted { outcome = .skipped }
+        return outcome
     }
 }

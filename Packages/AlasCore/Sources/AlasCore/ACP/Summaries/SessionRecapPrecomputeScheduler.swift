@@ -7,6 +7,9 @@ import Foundation
 public final class SessionRecapPrecomputeScheduler {
     public typealias Sleeper = @Sendable (Duration) async throws -> Void
 
+    /// How long draining pauses after a foreground inference preempts a job.
+    public static let preemptionBackoff: Duration = .seconds(30)
+
     private struct Waiting {
         let lastSeenAt: Date
         let token: UUID
@@ -15,7 +18,7 @@ public final class SessionRecapPrecomputeScheduler {
 
     private let now: () -> Date
     private let sleep: Sleeper
-    private let run: @MainActor (String) async -> Void
+    private let run: @MainActor (String) async -> SessionRecapPrecomputeOutcome
 
     private var waiting: [String: Waiting] = [:]
     private var ready: [String: Date] = [:]
@@ -25,17 +28,22 @@ public final class SessionRecapPrecomputeScheduler {
     private var runningJob: Task<Void, Never>?
     /// A start is queued for a later main-actor turn.
     private var startQueued = false
+    /// A preempted entry, retried before any other ready entry.
+    private var retryFirst: String?
+    /// Draining is paused while a foreground inference holds the engine.
+    private var backoff: Task<Void, Never>?
 
     /// Low Power Mode; when true, due jobs wait.
     public var isSuspended = false {
         didSet { if !isSuspended { startNextIfIdle() } }
     }
 
-    /// `run` returns when the job finished (any outcome). Jobs run one at a time.
+    /// `run` returns when the job finished. Jobs run one at a time; a
+    /// preempted job is retried first after `preemptionBackoff`.
     public init(
         now: @escaping () -> Date,
         sleep: @escaping Sleeper,
-        run: @escaping @MainActor (String) async -> Void
+        run: @escaping @MainActor (String) async -> SessionRecapPrecomputeOutcome
     ) {
         self.now = now
         self.sleep = sleep
@@ -75,6 +83,7 @@ public final class SessionRecapPrecomputeScheduler {
     public func drop(sessionId: String) {
         waiting.removeValue(forKey: sessionId)?.timer.cancel()
         ready[sessionId] = nil
+        if retryFirst == sessionId { retryFirst = nil }
         if runningSessionId == sessionId { runningJob?.cancel() }
     }
 
@@ -82,6 +91,7 @@ public final class SessionRecapPrecomputeScheduler {
         for entry in waiting.values { entry.timer.cancel() }
         waiting.removeAll()
         ready.removeAll()
+        retryFirst = nil
         runningJob?.cancel()
     }
 
@@ -107,16 +117,42 @@ public final class SessionRecapPrecomputeScheduler {
     /// Picks the next job synchronously so the order reflects every entry
     /// due at this moment.
     private func startNextIfIdle() {
-        guard runningSessionId == nil, !isSuspended,
-              let next = Self.dueOrder(ready).first else { return }
-        ready[next] = nil
+        guard runningSessionId == nil, !isSuspended, backoff == nil else { return }
+        let next: String
+        if let retry = retryFirst, ready[retry] != nil {
+            next = retry
+        } else if let first = Self.dueOrder(ready).first {
+            next = first
+        } else {
+            return
+        }
+        retryFirst = nil
+        guard let lastSeenAt = ready.removeValue(forKey: next) else { return }
         runningSessionId = next
         let run = run
         runningJob = Task { [weak self] in
-            await run(next)
+            let outcome = await run(next)
+            let dropped = Task.isCancelled
             guard let self else { return }
             self.runningSessionId = nil
             self.runningJob = nil
+            // A dropped job never comes back, and neither does one that was
+            // scheduled again while it ran.
+            if outcome == .preempted, !dropped, self.ready[next] == nil, self.waiting[next] == nil {
+                self.ready[next] = lastSeenAt
+                self.retryFirst = next
+                self.startBackoff()
+            }
+            self.startNextIfIdle()
+        }
+    }
+
+    private func startBackoff() {
+        let sleep = sleep
+        backoff = Task { [weak self] in
+            try? await sleep(Self.preemptionBackoff)
+            guard let self else { return }
+            self.backoff = nil
             self.startNextIfIdle()
         }
     }

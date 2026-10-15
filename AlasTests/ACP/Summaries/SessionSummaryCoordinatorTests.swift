@@ -299,7 +299,7 @@ struct SessionSummaryCoordinatorTests {
             sessionId: fixture.session.id, context: context, store: fixture.store
         )
 
-        #expect(stored)
+        #expect(stored == .stored)
         #expect(fixture.coordinator.phase == .idle)
         #expect(fixture.coordinator.cardMode == nil)
         #expect(await fixture.engine.callers == [.sessionRecapPrecompute(fixture.session.id)])

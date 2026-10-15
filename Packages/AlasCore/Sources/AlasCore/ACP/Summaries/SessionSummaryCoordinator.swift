@@ -5,6 +5,16 @@ private let sessionSummaryLogger = Logger(subsystem: "io.nlopez.alas", category:
 
 /// Who asked for a summary: the popover (`manual`) or the automatic recap card,
 /// which fails silently.
+/// How a background recap precompute ended.
+public enum SessionRecapPrecomputeOutcome: Sendable, Equatable {
+    /// A valid summary is now stored.
+    case stored
+    /// Ended without a summary; not worth retrying soon.
+    case skipped
+    /// A foreground inference took the engine; retry after a back-off.
+    case preempted
+}
+
 public enum SessionSummaryRequestMode: Sendable {
     case manual
     case recap
@@ -146,33 +156,35 @@ public final class SessionSummaryCoordinator: ChangeTracking {
         }
     }
 
-    /// Background job; does not touch `phase` or `cardMode`. Returns true when a valid summary now exists.
+    /// Background job; does not touch `phase` or `cardMode`.
     public func precompute(
         sessionId: String,
         context: SessionSummaryContext,
         store: any SessionSummaryStoring
-    ) async -> Bool {
+    ) async -> SessionRecapPrecomputeOutcome {
         let inputHash = context.inputHash(modelID: modelID)
         do {
             if try await store.loadSessionSummary(sessionId: sessionId, inputHash: inputHash, modelID: modelID) != nil {
-                return true
+                return .stored
             }
             let raw = try await engine.generate(
                 Self.request(for: context),
                 caller: .sessionRecapPrecompute(sessionId),
                 priority: .background
             )
-            guard let summary = Self.parse(raw, context: context) else { return false }
+            guard let summary = Self.parse(raw, context: context) else { return .skipped }
             try await store.saveSessionSummary(sessionId: sessionId, .init(
                 inputHash: inputHash,
                 modelID: modelID,
                 summary: summary,
                 createdAt: Int64(Date().timeIntervalSince1970)
             ))
-            return true
+            return .stored
+        } catch LocalTextInferenceFailure.preempted {
+            return .preempted
         } catch {
             sessionSummaryLogger.debug("recap precompute ended without a summary: \(String(describing: error))")
-            return false
+            return .skipped
         }
     }
 

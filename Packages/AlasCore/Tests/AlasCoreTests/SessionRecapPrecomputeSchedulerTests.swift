@@ -46,7 +46,7 @@ struct SessionRecapPrecomputeSchedulerTests {
     @MainActor
     private final class FakeRunner {
         private(set) var started: [String] = []
-        private var finishers: [String: CheckedContinuation<Void, Never>] = [:]
+        private var finishers: [String: CheckedContinuation<SessionRecapPrecomputeOutcome, Never>] = [:]
         let starts: AsyncStream<String>
         private let startsContinuation: AsyncStream<String>.Continuation
         let cancellations: AsyncStream<String>
@@ -57,10 +57,10 @@ struct SessionRecapPrecomputeSchedulerTests {
             (cancellations, cancellationsContinuation) = AsyncStream.makeStream()
         }
 
-        func run(_ sessionId: String) async {
+        func run(_ sessionId: String) async -> SessionRecapPrecomputeOutcome {
             started.append(sessionId)
             let cancellations = cancellationsContinuation
-            await withTaskCancellationHandler {
+            return await withTaskCancellationHandler {
                 await withCheckedContinuation { continuation in
                     finishers[sessionId] = continuation
                     startsContinuation.yield(sessionId)
@@ -70,8 +70,8 @@ struct SessionRecapPrecomputeSchedulerTests {
             }
         }
 
-        func finish(_ sessionId: String) {
-            finishers.removeValue(forKey: sessionId)?.resume()
+        func finish(_ sessionId: String, _ outcome: SessionRecapPrecomputeOutcome = .stored) {
+            finishers.removeValue(forKey: sessionId)?.resume(returning: outcome)
         }
     }
 
@@ -163,6 +163,26 @@ struct SessionRecapPrecomputeSchedulerTests {
         runner.finish(first)
         _ = try await next(runner.starts)
         #expect(runner.started == ["newer", "older"])
+    }
+
+    @Test
+    func preemptedJobBacksOffThenRetriesBeforeTheRest() async throws {
+        scheduler.schedule(sessionId: "older", lastSeenAt: pastDue(60), threshold: Self.threshold)
+        scheduler.schedule(sessionId: "newer", lastSeenAt: pastDue(30), threshold: Self.threshold)
+        #expect(try await next(runner.starts) == "newer")
+
+        runner.finish("newer", .preempted)
+        let backoff = try await next(sleeper.calls)
+        #expect(backoff.duration == SessionRecapPrecomputeScheduler.preemptionBackoff)
+        #expect(scheduler.runningSessionId == nil)
+        #expect(scheduler.pendingSessionIds == ["newer", "older"])
+        #expect(runner.started == ["newer"])
+
+        await sleeper.resume(backoff.index)
+        #expect(try await next(runner.starts) == "newer")
+        runner.finish("newer")
+        #expect(try await next(runner.starts) == "older")
+        #expect(runner.started == ["newer", "newer", "older"])
     }
 
     @Test
