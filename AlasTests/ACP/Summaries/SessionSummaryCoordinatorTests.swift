@@ -38,7 +38,7 @@ struct SessionSummaryCoordinatorTests {
         withExtendedLifetime(observation) {}
     }
 
-    @Test func resultSubscriberActivityCannotRestoreOrCacheStaleResult() async {
+    @Test func resultSubscriberActivityCannotRestoreStaleResult() async {
         let fixture = SummaryCoordinatorFixture()
         fixture.coordinator.bind(to: fixture.session)
         var mutated = false
@@ -54,9 +54,6 @@ struct SessionSummaryCoordinatorTests {
         await generation.value
 
         #expect(fixture.coordinator.phase == .idle)
-        await fixture.engine.enqueue(fixture.result)
-        await fixture.coordinator.summary(for: fixture.session)
-        #expect(await fixture.engine.requestCount == 2)
         withExtendedLifetime(observation) {}
     }
 
@@ -94,26 +91,10 @@ struct SessionSummaryCoordinatorTests {
         await fixture.finishSummary()
 
         fixture.session.nextPromptActivity.send()
-        await Task.yield()
         await fixture.coordinator.summary(for: fixture.session)
 
         #expect(fixture.coordinator.phase == .result(fixture.summary))
         #expect(await fixture.engine.requestCount == 1)
-    }
-
-    @Test func changedBroadActivityInvalidatesCachedSummary() async {
-        let fixture = SummaryCoordinatorFixture()
-        await fixture.finishSummary()
-
-        fixture.session.transcript.appendMessage(.systemNotice(id: UUID(), text: "changed"))
-        await Task.yield()
-        let regenerated = fixture.start()
-        await fixture.engine.waitUntilRequested(count: 2)
-        await fixture.engine.complete(with: fixture.result)
-        await regenerated.value
-
-        #expect(fixture.coordinator.phase == .result(fixture.summary))
-        #expect(await fixture.engine.requestCount == 2)
     }
 
     @Test func replacementIncarnationCannotReusePersistedSessionIDCache() async {
@@ -261,9 +242,77 @@ struct SessionSummaryCoordinatorTests {
         #expect(summary.isPartial)
     }
 
+    @Test func storeHitPublishesResultWithoutCallingEngine() async throws {
+        let fixture = SummaryCoordinatorFixture()
+        let context = try #require(SessionSummaryContext.snapshot(session: fixture.session))
+        await fixture.store.seed(sessionId: fixture.session.id, .init(
+            inputHash: context.inputHash(modelID: fixture.modelID),
+            modelID: fixture.modelID,
+            summary: fixture.summary,
+            createdAt: 1
+        ))
+        fixture.useStore()
+
+        await fixture.coordinator.summary(for: fixture.session)
+
+        #expect(fixture.coordinator.phase == .result(fixture.summary))
+        #expect(await fixture.engine.requestCount == 0)
+    }
+
+    @Test(arguments: [LocalTextInferenceFailure.timedOut, .generationFailed])
+    func recapFailureHidesCardSilently(_ failure: LocalTextInferenceFailure) async {
+        let fixture = SummaryCoordinatorFixture()
+        fixture.coordinator.bind(to: fixture.session)
+        let generation = fixture.start(mode: .recap)
+        await fixture.engine.waitUntilRequested()
+        #expect(fixture.coordinator.cardMode == .recap)
+
+        await fixture.engine.fail(with: failure)
+        await generation.value
+
+        #expect(fixture.coordinator.phase == .idle)
+        #expect(fixture.coordinator.cardMode == nil)
+    }
+
+    @Test func activityDuringRecapLoadingCancelsCardAndDropsLateResult() async {
+        let fixture = SummaryCoordinatorFixture()
+        fixture.coordinator.bind(to: fixture.session)
+        let generation = fixture.start(mode: .recap)
+        await fixture.engine.waitUntilRequested()
+
+        fixture.session.nextPromptActivity.send()
+        #expect(fixture.coordinator.cardMode == nil)
+        await fixture.engine.complete(with: fixture.result)
+        await generation.value
+
+        #expect(fixture.coordinator.phase == .idle)
+        #expect(fixture.coordinator.cardMode == nil)
+        #expect(await fixture.engine.cancelledCallers == [.sessionSummary(fixture.session.incarnation)])
+    }
+
+    @Test func precomputeSavesSummaryThatLaterRequestReadsFromStore() async throws {
+        let fixture = SummaryCoordinatorFixture()
+        let context = try #require(SessionSummaryContext.snapshot(session: fixture.session))
+        await fixture.engine.enqueue(fixture.result)
+
+        let stored = await fixture.coordinator.precompute(
+            sessionId: fixture.session.id, context: context, store: fixture.store
+        )
+
+        #expect(stored)
+        #expect(fixture.coordinator.phase == .idle)
+        #expect(fixture.coordinator.cardMode == nil)
+        #expect(await fixture.engine.callers == [.sessionRecapPrecompute(fixture.session.id)])
+        #expect(await fixture.engine.priorities == [.background])
+        fixture.useStore()
+        await fixture.coordinator.summary(for: fixture.session)
+        #expect(fixture.coordinator.phase == .result(fixture.summary))
+        #expect(await fixture.engine.requestCount == 1)
+    }
+
     @Test func missingContextFailsLocallyWithoutCallingEngine() async {
         let engine = SessionSummaryEngine()
-        let coordinator = SessionSummaryCoordinator(engine: engine)
+        let coordinator = SessionSummaryCoordinator(engine: engine, modelID: "test-model")
         let session = ACPSession(id: "empty", agentId: "codex", worktreeId: "w", title: "Empty")
         session.agentState = .ready
         coordinator.bind(to: session)
@@ -283,7 +332,9 @@ struct SessionSummaryCoordinatorTests {
 @MainActor
 private final class SummaryCoordinatorFixture {
     let engine = SessionSummaryEngine()
-    lazy var coordinator = SessionSummaryCoordinator(engine: engine)
+    let store = InMemorySessionSummaryStore()
+    let modelID = "test-model"
+    lazy var coordinator = SessionSummaryCoordinator(engine: engine, modelID: modelID)
     lazy var session = makeSession(id: "summary-session")
     let result = LocalTextGenerationResult(
         text: #"{"goal":"Ship search","completed":[],"blockers":[],"next_action":"Run tests"}"#,
@@ -301,8 +352,13 @@ private final class SummaryCoordinatorFixture {
         return session
     }
 
-    func start() -> Task<Void, Never> {
-        Task { await coordinator.summary(for: session) }
+    func start(mode: SessionSummaryRequestMode = .manual) -> Task<Void, Never> {
+        Task { await coordinator.summary(for: session, mode: mode) }
+    }
+
+    func useStore() {
+        let store = store
+        coordinator.storeProvider = { _ in store }
     }
 
     func finishSummary(requestCount: Int = 1) async {
@@ -422,4 +478,25 @@ private actor SessionSummaryEngine: LocalTextGenerating {
     }
 
     func cancelAndUnload() async {}
+}
+
+private actor InMemorySessionSummaryStore: SessionSummaryStoring {
+    private var entries: [String: StoredSessionSummary] = [:]
+
+    func seed(sessionId: String, _ stored: StoredSessionSummary) {
+        entries[sessionId] = stored
+    }
+
+    func loadSessionSummary(sessionId: String, inputHash: String, modelID: String) -> SessionSummary? {
+        guard let entry = entries[sessionId], entry.inputHash == inputHash, entry.modelID == modelID else { return nil }
+        return entry.summary
+    }
+
+    func saveSessionSummary(sessionId: String, _ stored: StoredSessionSummary) {
+        entries[sessionId] = stored
+    }
+
+    func deleteAllSessionSummaries() {
+        entries.removeAll()
+    }
 }

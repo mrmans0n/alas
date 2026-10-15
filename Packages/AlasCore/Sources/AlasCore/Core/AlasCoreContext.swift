@@ -38,7 +38,10 @@ public final class AlasCoreContext {
     /// The on-device text engine every local-text feature shares.
     @ObservationIgnored public private(set) lazy var localText: any LocalTextGenerating =
         localTextOverride ?? LocalTextEngine.make(localTextModelStore)
-    @ObservationIgnored public private(set) lazy var sessionSummaries = SessionSummaryCoordinator(engine: localText)
+    @ObservationIgnored public private(set) lazy var sessionSummaries = SessionSummaryCoordinator(
+        engine: localText,
+        modelID: "\(LocalTextModelManifest.pinnedModel)@\(LocalTextModelManifest.pinnedRevision)"
+    )
     @ObservationIgnored private let localTextOverride: (any LocalTextGenerating)?
     /// Durable Workspace definitions and checkouts.
     @ObservationIgnored public let workspaceStore: WorkspaceStore

@@ -9,6 +9,8 @@ public enum LocalTextJobPriority: Int, Sendable {
 public enum LocalTextCaller: Hashable, Sendable {
     case nextPrompt
     case sessionSummary(UUID)
+    /// Background recap precompute, keyed by the ACP session id.
+    case sessionRecapPrecompute(String)
     case worktreeName
     case worktreeExplainer
     case sessionTitle
