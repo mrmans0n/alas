@@ -280,7 +280,6 @@ struct ReviewShepherdActionButton: View {
     }
 }
 
-
 /// The shepherd's chip in the review drawer's collapsed row, styled like the
 /// status chips beside it. Names the owning session and jumps to it; while the
 /// shepherd acts on the PR it shows the phase instead and runs the AI beam.
