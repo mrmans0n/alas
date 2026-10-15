@@ -4788,7 +4788,8 @@ final class AppState {
         ggWorktreeMode: GGWorktreeMode = .inherit,
         issueAttachment: IssueAttachment? = nil,
         destinationAlreadyPrepared: Bool = false,
-        namesBranchFromFirstPrompt: Bool = false
+        namesBranchFromFirstPrompt: Bool = false,
+        caller: HostCaller = .app
     ) async -> String {
         guard let project = projects.first(where: { $0.id == projectId }), !project.isFolder else {
             // Should not happen if the dialog validated the project; fail silently.
@@ -4805,7 +4806,7 @@ final class AppState {
         request.cancelledHookApprovalFails = true
         let pending: PendingWorktreeCreation
         do {
-            pending = try await host.worktrees.beginCreate(request)
+            pending = try await host.worktrees.beginCreate(request, caller: caller)
         } catch WorktreeCreationRefusal.alreadyListed {
             return ""
         } catch {
@@ -4932,7 +4933,8 @@ final class AppState {
         destination: URL,
         runStartup: Bool,
         ggWorktreeMode: GGWorktreeMode = .inherit,
-        destinationAlreadyPrepared: Bool = false
+        destinationAlreadyPrepared: Bool = false,
+        caller: HostCaller = .app
     ) async -> Result<Worktree, WorktreeCreationFailure> {
         let id = await createWorktree(
             projectId: projectId,
@@ -4942,7 +4944,8 @@ final class AppState {
             runStartup: runStartup,
             launchSurface: .delegated,
             ggWorktreeMode: ggWorktreeMode,
-            destinationAlreadyPrepared: destinationAlreadyPrepared
+            destinationAlreadyPrepared: destinationAlreadyPrepared,
+            caller: caller
         )
         guard !id.isEmpty else {
             return .failure(.init(message: "Could not start worktree creation."))
@@ -5005,7 +5008,8 @@ final class AppState {
             branch: branch,
             destination: destination,
             runStartup: true,
-            destinationAlreadyPrepared: true
+            destinationAlreadyPrepared: true,
+            caller: .cli
         )
         switch result {
         case .success(let worktree):
@@ -10955,7 +10959,7 @@ final class AppState {
         if saveBuffersFirst {
             Task { @MainActor in
                 guard await !checkpointWorktreeRemovalDisabledAfterDiscovery(worktree) else {
-                    if let claim = try? host.worktrees.beginDelete(worktree) {
+                    if let claim = try? host.worktrees.beginDelete(worktree, caller: .app) {
                         host.worktrees.failClaim(claim, for: worktree, message: Self.checkpointRecoveryBlocksWorktreeRemovalMessage)
                     }
                     return
@@ -11181,7 +11185,7 @@ final class AppState {
                 .firstIndex(where: { $0.id == worktree.id }) ?? 0
             let claim: UUID
             do {
-                claim = try host.worktrees.beginDelete(worktree)
+                claim = try host.worktrees.beginDelete(worktree, caller: .app)
             } catch {
                 results.append(WorktreeBatchResult(
                     worktreeId: worktree.id,
@@ -11733,7 +11737,7 @@ final class AppState {
         // loop could otherwise admit new work into the worktree.
         let claim: UUID
         do {
-            claim = try host.worktrees.beginDelete(worktree)
+            claim = try host.worktrees.beginDelete(worktree, caller: .app)
         } catch {
             showFileActionError(title: "Delete Failed", message: error.localizedDescription)
             return
@@ -11799,7 +11803,7 @@ final class AppState {
         // main-actor work, and an unclaimed gap would admit new sessions.
         let claim: UUID
         do {
-            claim = try host.worktrees.beginDelete(worktree)
+            claim = try host.worktrees.beginDelete(worktree, caller: .cli)
         } catch {
             return .error(error.localizedDescription)
         }
