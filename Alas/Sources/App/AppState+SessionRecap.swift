@@ -214,6 +214,8 @@ extension AppState {
                 return
             }
         }
+        // On relaunch the agent can be ready before model verification finishes.
+        if !sessionRecapAvailable { await waitForLocalTextReadiness() }
         guard !Task.isCancelled, manager.seenTracker.isSeen(sessionId), sessionRecapAvailable,
               manager.liveSession(for: sessionId) === session,
               SessionRecapPolicy.shouldOffer(
