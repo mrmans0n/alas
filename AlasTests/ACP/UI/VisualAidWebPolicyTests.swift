@@ -94,6 +94,15 @@ struct VisualAidWebPolicyTests {
             == .deliver(.transcript, includingHeld: true))
     }
 
+    @Test("momentum that begins well after the card's own gesture ended belongs to the transcript")
+    func lateMomentumGoesToTheTranscript() {
+        var routing = VisualAidScrollRouting()
+        _ = routing.route(phase: .began, momentumPhase: [], deltaX: 0, deltaY: -3, edges: Self.midway, timestamp: 1)
+        _ = routing.route(phase: .ended, momentumPhase: [], deltaX: 0, deltaY: 0, edges: Self.midway, timestamp: 1)
+        #expect(routing.route(phase: [], momentumPhase: .began, deltaX: 0, deltaY: -4, edges: Self.midway, timestamp: 5)
+            == .deliver(.transcript, includingHeld: true))
+    }
+
     @Test("a gesture that started over the transcript stays with it after sliding onto the card")
     func gestureArrivingMidwayStaysWithTheTranscript() {
         var routing = VisualAidScrollRouting()

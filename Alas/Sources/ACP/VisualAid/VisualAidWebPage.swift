@@ -371,7 +371,8 @@ final class VisualAidWKWebView: WKWebView {
     override func scrollWheel(with event: NSEvent) {
         let route = scrollRouting.route(
             phase: event.phase, momentumPhase: event.momentumPhase,
-            deltaX: event.scrollingDeltaX, deltaY: event.scrollingDeltaY, edges: scrollEdges)
+            deltaX: event.scrollingDeltaX, deltaY: event.scrollingDeltaY, edges: scrollEdges,
+            timestamp: event.timestamp)
         guard case .deliver(let owner, let includingHeld) = route else {
             // `.began` legitimately follows its own `.mayBegin`; anything else held belongs to an abandoned gesture.
             let continuesMayBegin = event.phase.contains(.began)
@@ -449,21 +450,28 @@ struct VisualAidScrollRouting: Equatable {
     /// The start this view saw for the current gesture. A gesture that started over the transcript and slid
     /// onto the card belongs to the transcript for the rest of its life.
     private var seenStart: NSEvent.Phase?
-    /// Who owned the gesture that just ended here; only the momentum that begins right after it inherits it.
+    /// Who owned the gesture that just ended here, and when; only momentum that begins right after it inherits it.
     private var endedOwner: Owner?
+    private var endedAt: TimeInterval = 0
+    /// A gesture's momentum begins right after its `.ended`; momentum that begins later is another gesture's.
+    static let momentumHandoff: TimeInterval = 0.1
     /// Who owns the momentum in flight. Momentum this view did not see begin (content scrolling the card
     /// under a still pointer) belongs to the transcript.
     private var momentumOwner: Owner?
 
     mutating func route(
-        phase: NSEvent.Phase, momentumPhase: NSEvent.Phase, deltaX: CGFloat, deltaY: CGFloat, edges: Edges
+        phase: NSEvent.Phase, momentumPhase: NSEvent.Phase, deltaX: CGFloat, deltaY: CGFloat, edges: Edges,
+        timestamp: TimeInterval = 0
     ) -> Route {
         let moved = deltaX != 0 || deltaY != 0
         guard !phase.isEmpty || !momentumPhase.isEmpty else {
+            endedOwner = nil
             return .deliver(moved ? Self.decide(deltaX: deltaX, deltaY: deltaY, edges: edges) : .transcript, includingHeld: true)
         }
         guard !phase.isEmpty else {
-            if momentumPhase.contains(.began) { momentumOwner = endedOwner }
+            if momentumPhase.contains(.began) {
+                momentumOwner = timestamp - endedAt <= Self.momentumHandoff ? endedOwner : nil
+            }
             endedOwner = nil
             let owner = momentumOwner ?? .transcript
             if momentumPhase.contains(.ended) || momentumPhase.contains(.cancelled) { momentumOwner = nil }
@@ -474,6 +482,7 @@ struct VisualAidScrollRouting: Equatable {
         let route = gestureRoute(phase: phase, moved: moved, deltaX: deltaX, deltaY: deltaY, edges: edges)
         if phase.contains(.ended) || phase.contains(.cancelled), case .deliver(let owner, _) = route {
             endedOwner = owner
+            endedAt = timestamp
         }
         return route
     }
