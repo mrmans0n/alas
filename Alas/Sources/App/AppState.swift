@@ -15125,7 +15125,9 @@ private extension WorkspaceCheckoutMember {
 // worktrees not opened this run simply don't appear (documented v1 behavior).
 /// What the Remote session list shows of a worktree beyond host events.
 private struct RemoteSessionListInputs: Equatable {
-    var sessionTabs: [ACPSession.ID]
+    /// Each session tab by its position among all the worktree's tabs,
+    /// which is the `tabIndex` the list reports.
+    var sessionTabs: [Int: ACPSession.ID]
     var status: WorktreeDirtyState
     var diff: WorktreeDiffStats?
 }
@@ -15141,14 +15143,13 @@ extension AppState: RemoteSessionsProvider {
         return signal
     }
 
-    /// Per worktree with sessions: its session tabs in order, and its Git status.
+    /// Per worktree with sessions: where its session tabs are, and its Git status.
     private func currentRemoteSessionListInputs() -> [String: RemoteSessionListInputs] {
         let statuses = WorktreeStatusStore.shared
         return Dictionary(acpManagers.values.map { manager in
             (manager.worktreeId, RemoteSessionListInputs(
-                sessionTabs: tabs.tabs(forWorktree: manager.worktreeId).compactMap { tab -> ACPSession.ID? in
-                    guard case .acpSession(let state) = tab else { return nil }
-                    return state.sessionId
+                sessionTabs: tabs.tabs(forWorktree: manager.worktreeId).enumerated().reduce(into: [:]) { tabs, entry in
+                    if case .acpSession(let state) = entry.element { tabs[entry.offset] = state.sessionId }
                 },
                 status: statuses.status(forPath: manager.worktreePath),
                 diff: statuses.diffStats(forPath: manager.worktreePath)

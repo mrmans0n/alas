@@ -503,10 +503,19 @@ struct RemoteAppStateAccessTests {
         try await waitForChange(after: 0)
         let afterOpen = changes
         #expect(afterOpen > 0)
-        #expect(await state.closeSessionTab(for: id) == .success)
+        // Moving another kind of tab ahead of a session tab moves its index.
+        let commit = state.tabs.appendCommit(worktreeId: worktreeId, sha: "abc", title: "abc")
+        let sessionTab = try #require(state.tabs.tabs(forWorktree: worktreeId).first {
+            if case .acpSession(let tab) = $0 { tab.sessionId == id } else { false }
+        })
+        state.tabs.moveTab(worktreeId: worktreeId, fromId: commit.id, toId: sessionTab.id)
         try await waitForChange(after: afterOpen)
+        let afterMove = changes
+        #expect(afterMove > afterOpen)
+        #expect(await state.closeSessionTab(for: id) == .success)
+        try await waitForChange(after: afterMove)
         let afterClose = changes
-        #expect(afterClose > afterOpen)
+        #expect(afterClose > afterMove)
 
         defer {
             let store = WorktreeStatusStore.shared
