@@ -3245,6 +3245,53 @@ struct ACPSessionRunnerQueueTests {
         #expect(userTexts == ["queued-q"])
     }
 
+    @Test("app actions keep their attribution through dispatch failure, retry and agent echo", arguments: [false, true])
+    func appActionRetryKeepsAttribution(queued: Bool) async throws {
+        let (runner, mock, session, store) = try mkRunner()
+        let source = ACPDelegatedPromptSource.shipCreate(kind: .github, messageID: UUID())
+        var finished = false
+        if queued { session.transcript.streamingState = .streaming }
+        runner.sendRegistered(
+            text: "Open a PR.", attachments: [], intent: .auto,
+            delegatedSource: source, normalUserTurn: false, onDispatchRegistered: {},
+            onPromptFinished: { _ in finished = true })
+        if queued {
+            await runner.flushPersistence()
+            #expect(try store.loadQueue(sessionId: "s").first?.delegatedSource == source)
+            session.transcript.streamingState = .idle
+            runner.flushQueueIfIdle()
+            try await waitUntil { session.queue.first?.lastError != nil }
+            let failed = try #require(session.queue.first)
+            #expect(failed.delegatedSource == source)
+            mock.scriptAsync(method: "session/prompt") { _ in
+                await MainActor.run {
+                    _ = session.apply(.userMessageChunk(.text("Open a PR.")))
+                }
+                return Data("null".utf8)
+            }
+            #expect(session.retryQueueItem(id: failed.id))
+            runner.flushQueueIfIdle()
+            try await waitUntil { session.queue.isEmpty && session.transcript.streamingState == .idle }
+        } else {
+            try await waitUntil { finished }
+        }
+        await runner.flushPersistence()
+        let requests = session.transcript.messages.filter { if case .user = $0 { true } else { false } }
+        #expect(requests.count == 1)
+        guard case .user(_, _, let text, _, let recordedSource, _) = requests.first else {
+            Issue.record("Expected one recorded app action")
+            return
+        }
+        #expect(text == "Open a PR.")
+        #expect(recordedSource == source)
+        let stored = try #require(try store.loadMessages(sessionId: "s").first { $0.kind == "user" })
+        guard case .user(_, _, _, let restoredSource, _) = try ACPMessageWire.decode(kind: stored.kind, payload: stored.payload) else {
+            Issue.record("Expected a restorable app action")
+            return
+        }
+        #expect(restoredSource == source)
+    }
+
     @Test("queued retry publishes the original user row once after success")
     func queuedRetryDoesNotDoubleRecord() async throws {
         var turns: [NextPromptCompletedTurn] = []

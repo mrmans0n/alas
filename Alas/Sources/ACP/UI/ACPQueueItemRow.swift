@@ -82,6 +82,7 @@ struct ACPQueueItemRow: View {
     }
 
     private var removable: Bool { canRemove ?? item.canRemoveFromQueue }
+    private var editable: Bool { canEdit && item.delegatedSource?.appAction == nil }
 
     // MARK: - Leading position marker
 
@@ -148,19 +149,23 @@ struct ACPQueueItemRow: View {
 
     @ViewBuilder
     private func contentColumn(preview: String, pastedSpans: [ACPPastedTextSpan]) -> some View {
-        if !imageURLs.isEmpty {
-            imageRow
-        }
-        if !preview.isEmpty {
-            ACPMarkdownText(
-                raw: ACPUserMessageImageMarkers.displayText(text: preview, attachments: [], pastedSpans: pastedSpans),
-                typography: typography
-            )
-            .environment(\.acpPastedTextContents, ACPPastedTextContents(text: preview, spans: pastedSpans))
-        } else if imageURLs.isEmpty {
-            Text("(empty prompt)")
-                .font(.system(size: 13))
-                .foregroundStyle(theme.color("fg-faint"))
+        if let action = item.delegatedSource?.appAction {
+            AppActionRow(action: action, text: preview, typography: typography)
+        } else {
+            if !imageURLs.isEmpty {
+                imageRow
+            }
+            if !preview.isEmpty {
+                ACPMarkdownText(
+                    raw: ACPUserMessageImageMarkers.displayText(text: preview, attachments: [], pastedSpans: pastedSpans),
+                    typography: typography
+                )
+                .environment(\.acpPastedTextContents, ACPPastedTextContents(text: preview, spans: pastedSpans))
+            } else if imageURLs.isEmpty {
+                Text("(empty prompt)")
+                    .font(.system(size: 13))
+                    .foregroundStyle(theme.color("fg-faint"))
+            }
         }
     }
 
@@ -220,7 +225,7 @@ struct ACPQueueItemRow: View {
                 }
                 // Editing the resume item would pull it out of the queue and
                 // silently drop auto-resume.
-                if removable, canEdit, item.usageLimit == nil {
+                if removable, editable, item.usageLimit == nil {
                     actionButton(
                         systemName: "pencil",
                         foreground: theme.color("fg-muted"),
@@ -282,7 +287,7 @@ struct ACPQueueItemRow: View {
             if item.lastError != nil {
                 Button("Retry", action: onRetry)
             }
-            if removable, canEdit, item.usageLimit == nil {
+            if removable, editable, item.usageLimit == nil {
                 Button("Edit", action: onEdit)
             }
             if removable {

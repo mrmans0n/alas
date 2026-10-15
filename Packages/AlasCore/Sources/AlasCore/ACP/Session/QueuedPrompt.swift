@@ -39,7 +39,7 @@ public struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
     /// rolled-back direct sends) — those fall back to the heuristic via
     /// `restorableDraft`. Not sent to the agent; `blocks` remains the wire form.
     public var draft: ACPComposerDraft?
-    /// Present only for prompts delivered by a direct delegated-session edge.
+    /// Present for delegated deliveries and requests made through Alas controls.
     /// It is intentionally omitted from ordinary prompt JSON for compatibility.
     public var delegatedSource: ACPDelegatedPromptSource?
     /// The first task remains in the legacy field so older readers continue
@@ -72,13 +72,15 @@ public struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
     /// carries the limit so a relaunch restores the session's Limited state.
     public var usageLimit: ACPUsageLimit?
 
-    /// Whether the queue UI lists this item. A delegated prompt is hidden
+    /// Whether the queue UI lists this item. User-triggered Alas actions stay
+    /// visible with their attribution. A delegated session prompt is hidden
     /// while it waits its turn — it is not the user's to edit or reorder —
     /// but surfaces once a send fails or its delivery is uncertain: the
     /// flusher will not retry it until the user does, so a hidden failed
     /// head would block the whole queue.
     public var isShownToUser: Bool {
-        (delegatedSource == nil && backgroundTaskWake == nil) || lastError != nil || deliveryUncertain
+        delegatedSource?.appAction != nil
+            || (delegatedSource == nil && backgroundTaskWake == nil) || lastError != nil || deliveryUncertain
     }
     public var backgroundTaskWakes: [BackgroundTaskWake] {
         if let backgroundTaskWakeBatch, !backgroundTaskWakeBatch.isEmpty {

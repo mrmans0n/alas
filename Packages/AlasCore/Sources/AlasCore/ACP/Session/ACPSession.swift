@@ -2827,9 +2827,10 @@ public final class ACPSession: ChangeTracking, Identifiable {
     public func enqueueScheduled(
         blocks: [ACPContentBlock],
         scheduledAt: Date,
-        draft: ACPComposerDraft? = nil
+        draft: ACPComposerDraft? = nil,
+        delegatedSource: ACPDelegatedPromptSource? = nil
     ) -> UUID {
-        let item = QueuedPrompt(blocks: blocks, scheduledAt: scheduledAt, draft: draft)
+        let item = QueuedPrompt(blocks: blocks, scheduledAt: scheduledAt, draft: draft, delegatedSource: delegatedSource)
         let insertAt = queue.firstIndex {
             $0.status == .pending && ($0.scheduledAt.map { $0 > scheduledAt } ?? false)
         } ?? queue.endIndex
@@ -2884,7 +2885,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
     /// flusher-promoted item be duplicated into the composer.
     public func takeForEditing(id: UUID) -> ACPComposerDraft? {
         guard let idx = queue.firstIndex(where: { $0.id == id }) else { return nil }
-        guard queue[idx].canRemoveFromQueue else { return nil }
+        guard queue[idx].canRemoveFromQueue, queue[idx].delegatedSource?.appAction == nil else { return nil }
         if forceSendAfterSendingHeadId == id {
             forceSendAfterSendingHeadId = nil
         }
@@ -2950,7 +2951,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
     /// now-stale `draft` survives and mis-restores on the next edit.
     public func editQueueItem(id: UUID, blocks: [ACPContentBlock]) {
         guard let idx = queue.firstIndex(where: { $0.id == id }) else { return }
-        guard queue[idx].canRemoveFromQueue else { return }
+        guard queue[idx].canRemoveFromQueue, queue[idx].delegatedSource?.appAction == nil else { return }
         queue[idx].blocks = blocks
         queue[idx].interruptedTurnContinuation = false
         queue[idx].draft = nil

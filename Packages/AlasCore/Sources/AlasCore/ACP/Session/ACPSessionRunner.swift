@@ -2829,6 +2829,7 @@ extension ACPSessionRunner {
         attachments: [ACPMessage.Attachment],
         intent: ACPSubmitIntent,
         draft: ACPComposerDraft? = nil,
+        delegatedSource: ACPDelegatedPromptSource? = nil,
         normalUserTurn: Bool = true,
         onQueuedPromptEnqueued: (@MainActor (UUID) -> Void)? = nil,
         onDispatchRegistered: @escaping @Sendable () -> Void,
@@ -2838,6 +2839,7 @@ extension ACPSessionRunner {
             blocks: Self.blocks(text: text, attachments: attachments),
             intent: intent,
             draft: draft,
+            delegatedSource: delegatedSource,
             normalUserTurn: normalUserTurn,
             onQueuedPromptEnqueued: onQueuedPromptEnqueued,
             onDispatchRegistered: onDispatchRegistered,
@@ -2993,6 +2995,7 @@ extension ACPSessionRunner {
         blocks: [ACPContentBlock],
         intent: ACPSubmitIntent,
         draft: ACPComposerDraft? = nil,
+        delegatedSource: ACPDelegatedPromptSource? = nil,
         normalUserTurn: Bool = true,
         onQueuedPromptEnqueued: (@MainActor (UUID) -> Void)? = nil,
         onDispatchRegistered: (@Sendable () -> Void)? = nil,
@@ -3004,7 +3007,7 @@ extension ACPSessionRunner {
                 Task { @MainActor in onPromptFinished?(false) }
                 return
             }
-            let queuedId = session.enqueueScheduled(blocks: blocks, scheduledAt: date, draft: draft)
+            let queuedId = session.enqueueScheduled(blocks: blocks, scheduledAt: date, draft: draft, delegatedSource: delegatedSource)
             if normalUserTurn { session.normalQueuedTurnIDs.insert(queuedId) }
             onDispatchRegistered?()
             persistQueue(completion: { [weak self] persisted in
@@ -3028,7 +3031,7 @@ extension ACPSessionRunner {
                 return
             }
             let queuedPromptId = UUID()
-            session.enqueue(id: queuedPromptId, blocks: blocks, draft: draft)
+            session.enqueue(id: queuedPromptId, blocks: blocks, draft: draft, delegatedSource: delegatedSource)
             if normalUserTurn { session.normalQueuedTurnIDs.insert(queuedPromptId) }
             persistQueue()
             if let onDispatchRegistered {
@@ -3061,6 +3064,7 @@ extension ACPSessionRunner {
             sendNow(
                 blocks: blocks,
                 queuedItemId: nil,
+                delegatedSource: delegatedSource,
                 normalUserTurn: normalUserTurn,
                 draft: draft,
                 onDispatchRegistered: onDispatchRegistered,
@@ -3069,7 +3073,7 @@ extension ACPSessionRunner {
         case .enqueue:
             let scheduledWasHead = session.queue.first?.scheduledAt != nil
             let queuedPromptId = UUID()
-            session.enqueue(id: queuedPromptId, blocks: blocks, draft: draft)
+            session.enqueue(id: queuedPromptId, blocks: blocks, draft: draft, delegatedSource: delegatedSource)
             if normalUserTurn { session.normalQueuedTurnIDs.insert(queuedPromptId) }
             persistQueue()
             if let onDispatchRegistered {
@@ -3088,6 +3092,7 @@ extension ACPSessionRunner {
         case .steer:
             steer(
                 blocks: blocks,
+                delegatedSource: delegatedSource,
                 normalUserTurn: normalUserTurn,
                 draft: draft,
                 onDispatchRegistered: onDispatchRegistered,
