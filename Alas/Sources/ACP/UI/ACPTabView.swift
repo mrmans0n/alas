@@ -205,6 +205,11 @@ private struct ACPSessionView: View {
     var onNextPromptStateChange: (NextPromptEligibilitySnapshot.Environment) -> Void = { _ in }
     var nextPromptInputBlocked: () -> Bool = { false }
     @State private var pendingComposerDrops = 0
+    /// Global frame of the chat area, side column included; drop zones and
+    /// dock sizes are measured against it.
+    @State private var sideQuestionSurface: CGRect = .zero
+    /// Global pointer location while the `/btw` header is dragged.
+    @State private var sideQuestionDrag: CGPoint?
     @State private var updateState: AdapterUpdateState?
     @State private var dismissedLatest: String?
     /// Hides the install nudge for this view only. Never persisted: without
@@ -350,7 +355,38 @@ private struct ACPSessionView: View {
         }
     }
 
-    private func sideQuestionSlot(contentMaxWidth: CGFloat) -> some View {
+    private var sideQuestionDockActions: ACPSideQuestionDockActions {
+        ACPSideQuestionDockActions(
+            onSelectDock: { setSideQuestionDock($0) },
+            onHeaderDrag: { point in
+                if let point {
+                    sideQuestionDrag = point
+                    return
+                }
+                // Released: snap to the zone under the last pointer location;
+                // outside every zone the card stays where it was.
+                if let last = sideQuestionDrag, let target = sideQuestionDropTarget(for: last) {
+                    setSideQuestionDock(target)
+                }
+                sideQuestionDrag = nil
+            }
+        )
+    }
+
+    private func sideQuestionDropTarget(for global: CGPoint) -> ACPSideQuestionDock? {
+        let local = CGPoint(x: global.x - sideQuestionSurface.minX, y: global.y - sideQuestionSurface.minY)
+        return ACPSideQuestionDockLayout.dock(at: local, in: sideQuestionSurface.size)
+    }
+
+    private func setSideQuestionDock(_ dock: ACPSideQuestionDock) {
+        guard state.config.sideQuestionDock.dock != dock else { return }
+        withAnimation(.snappy(duration: 0.25)) {
+            state.config.sideQuestionDock.dock = dock
+        }
+        state.saveConfig()
+    }
+
+    private func sideQuestionSlot(_ placement: ACPSideQuestionDock, contentMaxWidth: CGFloat) -> some View {
         ACPSideQuestionSlot(
             manager: manager,
             parentID: sessionId,
@@ -358,10 +394,19 @@ private struct ACPSessionView: View {
             onInsert: insertSideAnswer,
             onKeep: {
                 state.keepACPSideQuestion(worktree: worktree, owner: owner, parentID: sessionId)
+            },
+            placement: placement,
+            preferences: state.config.sideQuestionDock,
+            surfaceSize: sideQuestionSurface.size,
+            dockActions: sideQuestionDockActions,
+            onCommitPreferences: { next in
+                state.config.sideQuestionDock = next
+                state.saveConfig()
             }
         )
-        .frame(maxWidth: contentMaxWidth)
-        .padding(.horizontal, 20)
+        // The side column sizes itself; the others follow the chat column.
+        .frame(maxWidth: placement == .side ? nil : contentMaxWidth)
+        .padding(.horizontal, placement == .side ? 0 : 20)
     }
 
     private func insertSideAnswer(_ answer: String) {
@@ -444,7 +489,8 @@ private struct ACPSessionView: View {
     }
 
     private var transcriptAndComposer: some View {
-        GeometryReader { chatProxy in
+        HStack(spacing: 0) {
+            GeometryReader { chatProxy in
             let chatContentMaxWidth = ACPChatLayout.contentMaxWidth(
                 forChatColumnWidth: chatProxy.size.width
             )
@@ -460,6 +506,20 @@ private struct ACPSessionView: View {
                 .animation(emptyStateAnimation, value: isNewEmptySession)
                 .animation(emptyStateAnimation, value: isFirstRunConnecting)
                 .onDrop(of: [.alasDropPayload], isTargeted: nil, perform: handleDrop)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if !showsPreSessionUserInput {
+                sideQuestionSlot(.side, contentMaxWidth: .infinity)
+            }
+        }
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { sideQuestionSurface = $0 }
+        .overlay {
+            if let drag = sideQuestionDrag {
+                ACPSideQuestionDropZones(
+                    size: sideQuestionSurface.size,
+                    highlighted: sideQuestionDropTarget(for: drag)
+                )
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -549,7 +609,7 @@ private struct ACPSessionView: View {
                 }
 
                 VStack(spacing: 8) {
-                    sideQuestionSlot(contentMaxWidth: contentMaxWidth)
+                    sideQuestionSlot(.composer, contentMaxWidth: contentMaxWidth)
                     composerView(
                         placement: composerPlacement,
                         contentMaxWidth: contentMaxWidth,
@@ -557,6 +617,13 @@ private struct ACPSessionView: View {
                     )
                 }
                 .padding(.trailing, showMinimap && !isConnecting ? MinimapView.width : 0)
+            }
+        }
+        .overlay(alignment: .top) {
+            if !showsPreSessionUserInput {
+                sideQuestionSlot(.top, contentMaxWidth: contentMaxWidth)
+                    .padding(.top, 12)
+                    .padding(.trailing, showMinimap && !isConnecting ? MinimapView.width : 0)
             }
         }
     }
@@ -793,7 +860,7 @@ private struct ACPSessionView: View {
             intro()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             // `/btw` can be the first thing asked in a new session.
-            sideQuestionSlot(contentMaxWidth: contentMaxWidth)
+            sideQuestionSlot(.composer, contentMaxWidth: contentMaxWidth)
                 .padding(.bottom, 8)
             composerView(
                 placement: .inFlow,
@@ -1544,9 +1611,29 @@ private struct ACPSideQuestionSlot: View {
     let typography: ACPChatTypography
     let onInsert: (String) -> Void
     let onKeep: () -> Void
+    /// The dock this slot renders; it shows nothing unless the card is docked here.
+    let placement: ACPSideQuestionDock
+    let preferences: ACPSideQuestionDockPreferences
+    /// The whole chat area, side column included.
+    let surfaceSize: CGSize
+    let dockActions: ACPSideQuestionDockActions
+    /// Stores a resized dock once the drag ends.
+    let onCommitPreferences: (ACPSideQuestionDockPreferences) -> Void
+
+    /// The size while a resize drag runs; committed on release.
+    @State private var liveSize: CGFloat?
+    @State private var dragStartSize: CGFloat?
 
     var body: some View {
-        if let entry = manager.sideQuestions[parentID] {
+        if let entry = manager.sideQuestions[parentID], preferences.dock == placement {
+            docked(sideQuestionCard(entry))
+                .environment(\.acpSideQuestionDockActions, dockActions)
+                .transition(.move(edge: transitionEdge).combined(with: .opacity))
+        }
+    }
+
+    @ViewBuilder
+    private func sideQuestionCard(_ entry: ACPSideQuestion) -> some View {
             let side = entry.sessionID.flatMap { manager.liveSession(for: $0) }
             ACPSideQuestionCard(
                 entry: entry,
@@ -1611,7 +1698,103 @@ private struct ACPSideQuestionSlot: View {
                 )
             )
             .id(entry.id)
-            .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+
+    private var transitionEdge: Edge {
+        switch placement {
+        case .composer: .bottom
+        case .top: .top
+        case .side: .trailing
+        }
+    }
+
+    private var storedSize: CGFloat {
+        switch placement {
+        case .composer: CGFloat(preferences.composerHeight)
+        case .top: CGFloat(preferences.topHeight)
+        case .side: CGFloat(preferences.sideWidth)
+        }
+    }
+
+    /// Clamped against the live surface, so a window that shrank since the
+    /// size was stored still fits the card.
+    private var size: CGFloat {
+        let raw = liveSize ?? storedSize
+        return placement == .side
+            ? ACPSideQuestionDockLayout.clampedSideWidth(raw, surfaceWidth: surfaceSize.width)
+            : ACPSideQuestionDockLayout.clampedHeight(raw, surfaceHeight: surfaceSize.height)
+    }
+
+    /// `sign` is +1 when dragging along the axis grows the card.
+    private func resize(by translation: CGFloat, sign: CGFloat) {
+        let start = dragStartSize ?? size
+        if dragStartSize == nil { dragStartSize = start }
+        liveSize = placement == .side
+            ? ACPSideQuestionDockLayout.clampedSideWidth(start + sign * translation, surfaceWidth: surfaceSize.width)
+            : ACPSideQuestionDockLayout.clampedHeight(start + sign * translation, surfaceHeight: surfaceSize.height)
+    }
+
+    private func commitResize() {
+        defer { dragStartSize = nil; liveSize = nil }
+        guard let liveSize else { return }
+        var next = preferences
+        switch placement {
+        case .composer: next.composerHeight = Double(liveSize)
+        case .top: next.topHeight = Double(liveSize)
+        case .side: next.sideWidth = Double(liveSize)
+        }
+        onCommitPreferences(next)
+    }
+
+    @ViewBuilder
+    private func docked(_ card: some View) -> some View {
+        switch placement {
+        case .composer:
+            card
+                .environment(\.acpSideQuestionCardLayout, .init(
+                    dock: .composer,
+                    cap: size,
+                    limit: ACPSideQuestionDockLayout.maxHeight(surfaceHeight: surfaceSize.height)
+                ))
+                // Dragging up grows a card that sits above the composer.
+                .overlay(alignment: .top) {
+                    ACPSideQuestionResizeGrip(
+                        onDragChanged: { resize(by: $0, sign: -1) },
+                        onDragEnded: commitResize
+                    )
+                    .offset(y: -6)
+                }
+        case .top:
+            card
+                .environment(\.acpSideQuestionCardLayout, .init(
+                    dock: .top,
+                    cap: size,
+                    limit: ACPSideQuestionDockLayout.maxHeight(surfaceHeight: surfaceSize.height)
+                ))
+                .overlay(alignment: .bottom) {
+                    ACPSideQuestionResizeGrip(
+                        onDragChanged: { resize(by: $0, sign: 1) },
+                        onDragEnded: commitResize
+                    )
+                    .offset(y: 6)
+                }
+        case .side:
+            let columnHeight = max(0, surfaceSize.height - 24)
+            HStack(spacing: 0) {
+                // Dragging left grows the column.
+                DragHandle(
+                    axis: .horizontal,
+                    onDragChanged: { resize(by: $0, sign: -1) },
+                    onDragEnded: commitResize
+                )
+                card
+                    .environment(\.acpSideQuestionCardLayout, .init(
+                        dock: .side, cap: columnHeight, limit: columnHeight
+                    ))
+                    .frame(maxHeight: .infinity, alignment: .top)
+                    .padding(12)
+            }
+            .frame(width: size)
         }
     }
 }
