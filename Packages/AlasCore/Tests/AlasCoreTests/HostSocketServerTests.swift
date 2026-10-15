@@ -60,14 +60,16 @@ struct HostSocketServerTests {
         }
 
         let ref = WorktreeRef(projectID: project.id, path: destination.path)
-        #expect(try await client.request(.archiveWorktree(worktree: ref, lineageID: created.lineageID, branch: created.branch)) == .done)
+        let archived = try await client.request(.archiveWorktree(worktree: ref, lineageID: created.lineageID, branch: created.branch))
+        #expect(archived == .done, "\(archived)")
         try await client.waitForEvent { event in
             if case .worktreeChanged(let worktree) = event { worktree.worktree.id == created.id && worktree.isArchived } else { false }
         }
 
-        #expect(try await client.request(.deleteWorktree(
+        let deleted = try await client.request(.deleteWorktree(
             worktree: ref, lineageID: created.lineageID, branch: created.branch, force: false, deleteBranchIfMerged: false
-        )) == .done)
+        ))
+        #expect(deleted == .done, "\(deleted)")
         try await client.waitForEvent { $0 == .worktreeRemoved(projectID: project.id, worktreeID: created.id) }
         #expect(!FileManager.default.fileExists(atPath: destination.path))
     }
