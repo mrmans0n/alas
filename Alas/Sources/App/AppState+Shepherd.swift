@@ -195,7 +195,7 @@ extension AppState {
                 for: sessionID,
                 text: ShepherdPromptBuilder.createPrompt(kind: kind),
                 attachments: [],
-                delegatedSource: .shipCreate(kind: kind, messageID: UUID()),
+                delegatedSource: .shipCreate(kind: kind, branch: worktree.branch, messageID: UUID()),
                 normalUserTurn: false
             ) { [weak self] sent in
                 guard !sent else { return }

@@ -9337,16 +9337,18 @@ extension ACPSessionManager {
     public func enqueuePrompt(
         id: UUID,
         text: String,
+        card: ACPPromptCard? = nil,
         into sessionId: ACPSession.ID
     ) async -> Bool {
         guard !mergingForks.contains(sessionId), var session = sessions[sessionId] else { return false }
         let suggestionSession = session
         suggestionSession.nextPromptWorkCount += 1
         defer { suggestionSession.nextPromptWorkCount -= 1 }
-        let source = ACPDelegatedPromptSource(
+        var source = ACPDelegatedPromptSource(
             sessionId: "mission:\(sessionId)",
             messageId: id.uuidString
         )
+        source.card = card
         guard !session.queue.contains(where: {
             $0.id == id || $0.delegatedSource?.messageId == source.messageId
         }) else { return true }

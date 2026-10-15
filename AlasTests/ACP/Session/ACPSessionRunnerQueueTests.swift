@@ -3248,7 +3248,7 @@ struct ACPSessionRunnerQueueTests {
     @Test("app actions keep their attribution through dispatch failure, retry and agent echo", arguments: [false, true])
     func appActionRetryKeepsAttribution(queued: Bool) async throws {
         let (runner, mock, session, store) = try mkRunner()
-        let source = ACPDelegatedPromptSource.shipCreate(kind: .github, messageID: UUID())
+        let source = ACPDelegatedPromptSource.shipCreate(kind: .github, branch: "feature", messageID: UUID())
         var finished = false
         if queued { session.transcript.streamingState = .streaming }
         runner.sendRegistered(

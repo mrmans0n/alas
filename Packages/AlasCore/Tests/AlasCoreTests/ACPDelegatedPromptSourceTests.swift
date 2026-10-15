@@ -32,7 +32,7 @@ struct ACPDelegatedPromptSourceTests {
     @MainActor // Queue mutations belong to the main-actor session.
     func editingKeepsAppActionAttribution(action: String) throws {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "wt", title: "Chat")
-        let source = ACPDelegatedPromptSource.shipCreate(kind: .github, messageID: UUID())
+        let source = ACPDelegatedPromptSource.shipCreate(kind: .github, branch: "feature", messageID: UUID())
         session.enqueue(blocks: [.text("Open a PR.")], delegatedSource: source)
         let original = try #require(session.queue.first)
         if action == "compose" {
@@ -53,7 +53,7 @@ struct ACPDelegatedPromptSourceTests {
         try reader.upsertSession(.init(id: "reader", agentId: "codex", title: "Chat", autoRun: false,
                                        createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
         try writer.enableReplicaExport(sessionId: "writer", recordId: "record")
-        let source = ACPDelegatedPromptSource.shipCreate(kind: .github, messageID: UUID())
+        let source = ACPDelegatedPromptSource.shipCreate(kind: .github, branch: "feature", messageID: UUID())
         let message = ACPMessage.user(
             id: UUID(), messageId: nil, text: "Open a PR.", attachments: [], delegatedSource: source)
         try writer.appendMessage(sessionId: "writer", id: "request", kind: message.kind, seq: 0,
@@ -71,5 +71,29 @@ struct ACPDelegatedPromptSourceTests {
             return
         }
         #expect(restoredSource == source)
+    }
+
+    @Test("a card round-trips with its source, and an app-action-only source gets a header card")
+    func cardPersistenceAndLegacyMapping() throws {
+        let card = ACPPromptCard(
+            origin: .review,
+            title: "Review Changes",
+            facts: [.init(kind: .repository, text: "alas"), .init(kind: .init(rawValue: "future"), text: "x")],
+            sections: [.init(title: "A.swift", items: [
+                .init(location: .init(path: "A.swift", startLine: 2, endLine: 2, side: "new"),
+                      bodyMarkdown: "Extract helper.", reviewCommentID: "a"),
+            ])],
+            action: .reviewChanges(worktreeID: "wt")
+        )
+        let source = ACPDelegatedPromptSource.reviewFeedback(card: card, commentCount: 1, messageID: UUID())
+        let restored = try JSONDecoder().decode(ACPDelegatedPromptSource.self, from: JSONEncoder().encode(source))
+        #expect(restored == source)
+        #expect(ACPPromptCard.resolved(for: restored) == card)
+        #expect(ACPDelegatedPromptSource.transcriptLabel(for: restored) { $0 } == "Alas · Address 1 review comment")
+
+        let legacyJSON = #"{"sessionId":"alas:ship","messageId":"m","senderRelationship":"alas-action","appAction":{"title":"Create pull request","source":"Ship"}}"#
+        let legacy = try JSONDecoder().decode(ACPDelegatedPromptSource.self, from: Data(legacyJSON.utf8))
+        #expect(ACPPromptCard.resolved(for: legacy) == ACPPromptCard(origin: .ship, title: "Create pull request"))
+        #expect(ACPPromptCard.resolved(for: ACPDelegatedPromptSource(sessionId: "parent", messageId: "m1")) == nil)
     }
 }
