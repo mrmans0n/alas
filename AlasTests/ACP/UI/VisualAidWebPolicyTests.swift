@@ -269,6 +269,26 @@ extension VisualAidWebPolicyTests {
         #expect(outside as? [String: Bool] == ["scrollUp": false, "scrollDown": false])
     }
 
+    @MainActor
+    @Test("a nested scroller at its edge passes the page's room on only without an overscroll barrier", arguments: [
+        ("auto", true),
+        ("contain", false),
+        ("none", false),
+    ])
+    func scrollEdgesStopAtOverscrollBarriers(behavior: String, scrollsDown: Bool) async throws {
+        let page = VisualAidWebPage(
+            visualID: UUID(),
+            html: #"<div id="box" style="height: 80px; width: 120px; overflow: auto; overscroll-behavior-y: \#(behavior)"><div style="height: 1000px"></div></div><div style="height: 2000px"></div>"#,
+            theme: try Theme.loadBundled(id: "cool-slate"), locksNetworkAfterLoad: false)
+        page.webView.frame = CGRect(x: 0, y: 0, width: 200, height: 200)
+        defer { page.close() }
+        try await waitUntilReady(page)
+        let world = WKContentWorld.world(name: VisualAidWebPolicy.bridgeWorldName)
+        let edges = try await page.webView.evaluateJavaScript(
+            "document.getElementById('box').scrollTop = 1e6; alasVisualScrollEdges(40, 40)", in: nil, contentWorld: world)
+        #expect(edges as? [String: Bool] == ["scrollUp": true, "scrollDown": scrollsDown])
+    }
+
     /// Waits until the page leaves `.loading` and requires that it landed on `.ready`.
     @MainActor
     private func waitUntilReady(_ page: VisualAidWebPage) async throws {

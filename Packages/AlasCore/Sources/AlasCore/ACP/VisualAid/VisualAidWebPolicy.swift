@@ -154,8 +154,13 @@ public enum VisualAidWebPolicy: Sendable {
         const root = document.documentElement;
         const at = x === undefined ? (pointer && document.elementFromPoint(pointer[0], pointer[1])) : document.elementFromPoint(x, y);
         for (let box = at; box && box !== root && box !== document.body; box = box.parentElement) {
-          const overflow = getComputedStyle(box).overflowY;
-          if (overflow === 'auto' || overflow === 'scroll') add(box);
+          const style = getComputedStyle(box);
+          if (style.overflowY !== 'auto' && style.overflowY !== 'scroll') continue;
+          add(box);
+          // WebKit does not chain a wheel past an overscroll barrier, so nothing beyond it can move.
+          if (style.overscrollBehaviorY === 'contain' || style.overscrollBehaviorY === 'none') {
+            return { scrollUp, scrollDown };
+          }
         }
         let overflow = getComputedStyle(root).overflowY;
         if (overflow === 'visible' && document.body) overflow = getComputedStyle(document.body).overflowY;
