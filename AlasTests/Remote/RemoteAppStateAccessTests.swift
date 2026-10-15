@@ -1323,7 +1323,8 @@ struct RemoteAppStateAccessTests {
             branch: "feature/phone",
             agentId: "claude",
             modelId: nil,
-            effortId: nil
+            effortId: nil,
+            caller: .remotePeer(deviceID: "phone")
         )
 
         guard case let .success(summary) = result else {

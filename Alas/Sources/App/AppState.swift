@@ -15549,7 +15549,8 @@ extension AppState: RemoteSessionsProvider {
         branch: String,
         agentId: String,
         modelId: String? = nil,
-        effortId: String? = nil
+        effortId: String? = nil,
+        caller: HostCaller = .app
     ) async -> RemoteCreateWorktreeSessionResult {
         guard let project = projects.first(where: { $0.id == projectId }) else {
             return .failure(
@@ -15611,7 +15612,8 @@ extension AppState: RemoteSessionsProvider {
             destination: destination,
             runStartup: true,
             ggWorktreeMode: .inherit,
-            destinationAlreadyPrepared: true
+            destinationAlreadyPrepared: true,
+            caller: caller
         )
         switch worktreeResult {
         case .success(let worktree):

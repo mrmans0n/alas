@@ -54,10 +54,16 @@ public final class RemoteSessionGateway {
     private var inFlightFileRequests: Set<String> = []
     private static let coalesceNanos: UInt64 = 80_000_000  // ~80ms
 
+    /// The paired device this connection authenticated. Nil for a gateway
+    /// built without one, whose requests act as the app's.
+    private let caller: HostCaller?
+
     public init(provider: RemoteSessionsProvider, federation: FederatedSessionsProvider? = nil,
          consoleLink: PeerConsoleLink? = nil,
+         caller: HostCaller? = nil,
          send: @escaping (RemoteServerMessage) -> Void) {
         self.provider = provider
+        self.caller = caller
         self.federation = federation
         self.consoleLink = consoleLink
         self.send = send
@@ -101,7 +107,8 @@ public final class RemoteSessionGateway {
                 branch: branch,
                 agentId: agentId,
                 modelId: modelId,
-                effortId: effortId
+                effortId: effortId,
+                caller: caller ?? .app
             )
             switch result {
             case .success(let summary):
