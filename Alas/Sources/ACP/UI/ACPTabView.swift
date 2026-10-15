@@ -491,21 +491,21 @@ private struct ACPSessionView: View {
     private var transcriptAndComposer: some View {
         HStack(spacing: 0) {
             GeometryReader { chatProxy in
-            let chatContentMaxWidth = ACPChatLayout.contentMaxWidth(
-                forChatColumnWidth: chatProxy.size.width
-            )
-            let showMinimap = ACPTranscriptScrollerView.shouldShowMinimap(
-                preferred: state.config.harness.acpShowMinimap,
-                availableWidth: chatProxy.size.width
-            )
-            chatSurface(
-                contentMaxWidth: chatContentMaxWidth,
-                showMinimap: showMinimap
-            )
-                .frame(width: chatProxy.size.width, height: chatProxy.size.height)
-                .animation(emptyStateAnimation, value: isNewEmptySession)
-                .animation(emptyStateAnimation, value: isFirstRunConnecting)
-                .onDrop(of: [.alasDropPayload], isTargeted: nil, perform: handleDrop)
+                let chatContentMaxWidth = ACPChatLayout.contentMaxWidth(
+                    forChatColumnWidth: chatProxy.size.width
+                )
+                let showMinimap = ACPTranscriptScrollerView.shouldShowMinimap(
+                    preferred: state.config.harness.acpShowMinimap,
+                    availableWidth: chatProxy.size.width
+                )
+                chatSurface(
+                    contentMaxWidth: chatContentMaxWidth,
+                    showMinimap: showMinimap
+                )
+                    .frame(width: chatProxy.size.width, height: chatProxy.size.height)
+                    .animation(emptyStateAnimation, value: isNewEmptySession)
+                    .animation(emptyStateAnimation, value: isFirstRunConnecting)
+                    .onDrop(of: [.alasDropPayload], isTargeted: nil, perform: handleDrop)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             if !showsPreSessionUserInput {
@@ -1634,70 +1634,70 @@ private struct ACPSideQuestionSlot: View {
 
     @ViewBuilder
     private func sideQuestionCard(_ entry: ACPSideQuestion) -> some View {
-            let side = entry.sessionID.flatMap { manager.liveSession(for: $0) }
-            ACPSideQuestionCard(
-                entry: entry,
-                side: side,
-                enforcesReadOnly: manager.liveSession(for: parentID).map {
-                    ACPSideQuestionSupportPolicy.enforcesReadOnly(agentId: $0.agentId)
-                } ?? true,
-                policy: { side.flatMap { manager.permissionPolicy(for: $0.id) } },
-                typography: typography,
-                onAsk: { text, completion in
-                    if let side {
-                        let accepted = manager.submit(
-                            sessionId: side.id,
-                            text: text,
-                            attachments: [],
-                            intent: .auto,
-                            onCompleted: completion
-                        )
-                        // The card shows the session's last prompt error as a
-                        // failure; a new turn supersedes it.
-                        if accepted { side.lastError = nil }
-                        return accepted
-                    }
-                    Task { _ = try? await manager.startSideQuestion(parentID: parentID, question: text) }
-                    return true
-                },
-                onDismiss: {
-                    Task { await manager.dismissSideQuestion(parentID: parentID) }
-                },
-                onInsert: onInsert,
-                onKeep: onKeep,
-                onRetryQueued: { itemID in
+        let side = entry.sessionID.flatMap { manager.liveSession(for: $0) }
+        ACPSideQuestionCard(
+            entry: entry,
+            side: side,
+            enforcesReadOnly: manager.liveSession(for: parentID).map {
+                ACPSideQuestionSupportPolicy.enforcesReadOnly(agentId: $0.agentId)
+            } ?? true,
+            policy: { side.flatMap { manager.permissionPolicy(for: $0.id) } },
+            typography: typography,
+            onAsk: { text, completion in
+                if let side {
+                    let accepted = manager.submit(
+                        sessionId: side.id,
+                        text: text,
+                        attachments: [],
+                        intent: .auto,
+                        onCompleted: completion
+                    )
+                    // The card shows the session's last prompt error as a
+                    // failure; a new turn supersedes it.
+                    if accepted { side.lastError = nil }
+                    return accepted
+                }
+                Task { _ = try? await manager.startSideQuestion(parentID: parentID, question: text) }
+                return true
+            },
+            onDismiss: {
+                Task { await manager.dismissSideQuestion(parentID: parentID) }
+            },
+            onInsert: onInsert,
+            onKeep: onKeep,
+            onRetryQueued: { itemID in
+                guard let side else { return }
+                side.lastError = nil
+                Task { await manager.queueRetry(for: side.id, itemId: itemID) }
+            },
+            onRemoveQueued: { itemID in
+                guard let side else { return }
+                Task { await manager.queueRemove(for: side.id, itemId: itemID) }
+            },
+            onCancelTurn: {
+                guard let side, let runner = manager.runners[side.id] else { return }
+                Task { await runner.userCancel() }
+            },
+            inputActions: ACPSideQuestionInputActions(
+                onUserInput: { token, action in
                     guard let side else { return }
-                    side.lastError = nil
-                    Task { await manager.queueRetry(for: side.id, itemId: itemID) }
+                    manager.respondToUserInput(for: side.id, token: token, action: action)
                 },
-                onRemoveQueued: { itemID in
+                onPlan: { requestId, response in
                     guard let side else { return }
-                    Task { await manager.queueRemove(for: side.id, itemId: itemID) }
+                    manager.respondToPlan(for: side.id, requestId: requestId, response)
                 },
-                onCancelTurn: {
-                    guard let side, let runner = manager.runners[side.id] else { return }
-                    Task { await runner.userCancel() }
+                onOpenURL: { token in
+                    guard let side else { return false }
+                    return await manager.openElicitationURL(for: side.id, token: token)
                 },
-                inputActions: ACPSideQuestionInputActions(
-                    onUserInput: { token, action in
-                        guard let side else { return }
-                        manager.respondToUserInput(for: side.id, token: token, action: action)
-                    },
-                    onPlan: { requestId, response in
-                        guard let side else { return }
-                        manager.respondToPlan(for: side.id, requestId: requestId, response)
-                    },
-                    onOpenURL: { token in
-                        guard let side else { return false }
-                        return await manager.openElicitationURL(for: side.id, token: token)
-                    },
-                    onDismissURLWait: { elicitationId in
-                        guard let side else { return }
-                        manager.dismissElicitationURLWait(for: side.id, elicitationId: elicitationId)
-                    }
-                )
+                onDismissURLWait: { elicitationId in
+                    guard let side else { return }
+                    manager.dismissElicitationURLWait(for: side.id, elicitationId: elicitationId)
+                }
             )
-            .id(entry.id)
+        )
+        .id(entry.id)
     }
 
     private var transitionEdge: Edge {
