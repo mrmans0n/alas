@@ -6686,6 +6686,7 @@ extension ACPSessionManager {
             session.supportsSteering = initialized.supportsSteering
             session.supportsContextBreakdown = initialized.supportsContextBreakdown
             session.supportsCodexSteeringCompletion = (ACPManagedAdapterDescriptor.codex.verifiedPackageNames + ["codex-acp"]).contains(initialized.agentInfo?.name ?? "")
+            connection.mcpStartupAwaitTimeoutMs = ACPMCPStartupWaitPolicy.timeoutMilliseconds(for: initialized.agentInfo)
             session.backgroundTaskStopSupported = initialized.supportsAsyncTasks
             session.sessionCapabilities = initialized.sessionCapabilities
             session.authMethods = initialized.authMethods

@@ -144,10 +144,21 @@ public final class ACPConnection: @unchecked Sendable {
     /// policy the Alas session was created with — so a reconnect or restore
     /// re-sends exactly what the fresh session got.
     public var sessionMeta: ACPSessionMeta?
+    /// Set after `initialize` from `ACPMCPStartupWaitPolicy`. Sent on
+    /// session/new, session/resume, and session/fork when Alas requests MCP
+    /// servers; never on session/load, which ignores it.
+    public var mcpStartupAwaitTimeoutMs: Int?
 
     public init(client: ACPClient, sessionMeta: ACPSessionMeta? = nil) {
         self.client = client
         self.sessionMeta = sessionMeta
+    }
+
+    private func startupMeta(mcpServers: [ACPMCPServer]) -> ACPSessionMeta? {
+        guard let mcpStartupAwaitTimeoutMs, !mcpServers.isEmpty else { return sessionMeta }
+        var meta = sessionMeta ?? ACPSessionMeta()
+        meta.mcpStartupAwaitTimeoutMs = mcpStartupAwaitTimeoutMs
+        return meta
     }
 
     /// Returns the initialize outcome advertised by the agent, defaulting
@@ -190,7 +201,7 @@ public final class ACPConnection: @unchecked Sendable {
         brokerOperationKey: String? = nil
     ) async throws -> ACPSessionNewResult {
         let req = ACPRequest(method: "session/new",
-                             params: ACPSessionNewParams(cwd: cwd, mcpServers: mcpServers, meta: sessionMeta),
+                             params: ACPSessionNewParams(cwd: cwd, mcpServers: mcpServers, meta: startupMeta(mcpServers: mcpServers)),
                              brokerOperationKey: brokerOperationKey)
         let resp = try await client.send(req)
         let result = try JSONDecoder().decode(ACPSessionNewResult.self, from: resp.body)
@@ -235,7 +246,7 @@ public final class ACPConnection: @unchecked Sendable {
     ) async throws -> ACPSessionNewResult {
         let req = ACPRequest(
             method: "session/resume",
-            params: ACPSessionResumeParams(cwd: cwd, sessionId: sessionId, mcpServers: mcpServers, meta: sessionMeta),
+            params: ACPSessionResumeParams(cwd: cwd, sessionId: sessionId, mcpServers: mcpServers, meta: startupMeta(mcpServers: mcpServers)),
             brokerOperationKey: brokerOperationKey
         )
         let resp = try await client.send(req)
@@ -262,7 +273,7 @@ public final class ACPConnection: @unchecked Sendable {
     ) async throws -> ACPSessionNewResult {
         let req = ACPRequest(
             method: "session/fork",
-            params: ACPSessionForkParams(cwd: cwd, sessionId: sessionId, mcpServers: mcpServers, meta: sessionMeta),
+            params: ACPSessionForkParams(cwd: cwd, sessionId: sessionId, mcpServers: mcpServers, meta: startupMeta(mcpServers: mcpServers)),
             brokerOperationKey: brokerOperationKey
         )
         let resp = try await client.send(req)
