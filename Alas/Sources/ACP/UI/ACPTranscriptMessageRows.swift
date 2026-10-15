@@ -1,58 +1,5 @@
 import SwiftUI
 
-/// A request from an Alas control, with its instruction available on demand.
-struct AppActionRow: View {
-    let action: ACPDelegatedPromptSource.AppAction
-    let text: String
-    let typography: ACPChatTypography
-    var onExpandedChange: ((Bool) -> Void)?
-    @State private var expanded: Bool
-    @Environment(\.theme) private var theme
-
-    init(
-        action: ACPDelegatedPromptSource.AppAction, text: String, typography: ACPChatTypography,
-        initiallyExpanded: Bool = false, onExpandedChange: ((Bool) -> Void)? = nil
-    ) {
-        self.action = action
-        self.text = text
-        self.typography = typography
-        self.onExpandedChange = onExpandedChange
-        _expanded = State(initialValue: initiallyExpanded)
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Button {
-                expanded.toggle()
-                onExpandedChange?(expanded)
-            } label: {
-                HStack(spacing: 7) {
-                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 9, weight: .medium))
-                        .frame(width: 10)
-                    Text("Alas · \(action.title)")
-                    Text("via \(action.source)")
-                        .foregroundStyle(theme.color("fg-faint"))
-                }
-                .font(.system(size: 12))
-                .foregroundStyle(theme.color("fg-muted"))
-                .multilineTextAlignment(.leading)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Alas · \(action.title), via \(action.source)")
-            .accessibilityValue(expanded ? "Expanded" : "Collapsed")
-            .accessibilityHint(expanded ? "Hide instruction sent to agent" : "Show instruction sent to agent")
-            if expanded {
-                ACPMarkdownText(raw: text, typography: typography.flatteningHeadings())
-                    .padding(.leading, 17)
-            }
-        }
-        .padding(.vertical, 4)
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
 // MARK: - User bubble (right-aligned)
 
 struct UserMessageRow: View {

@@ -741,6 +741,10 @@ private struct ACPSessionView: View {
             showMinimap: showMinimap,
             collapsesFinishedToolCalls: state.config.harness.acpCollapseFinishedToolCalls,
             upstreamReferences: manager.upstreamReferences.store(for: worktree.path),
+            promptCardContext: ACPPromptCardContext(
+                reviewComments: .shared,
+                perform: { action in state.performPromptCardAction(action) }
+            ),
             visualAidActions: .driven(by: manager, session: session, popOut: { visual in
                 let resolvedOwner = owner ?? .worktree(worktree.id)
                 state.tabs.openOrFocusVisualAid(

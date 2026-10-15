@@ -49,6 +49,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
     /// `ACPToolCallGrouping`.
     var collapsesFinishedToolCalls: Bool = false
     var upstreamReferences: ACPUpstreamReferenceStore? = nil
+    var promptCardContext: ACPPromptCardContext? = nil
     var visualAidActions: ACPVisualAidActions = .readOnly
 
     /// Ambient theme at the point this representable sits in the SwiftUI
@@ -461,6 +462,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                     .environment(\.theme, host.theme)
                     .environment(\.openURL, host.openTranscriptURLAction)
                     .environment(\.acpUpstreamReferenceStore, host.upstreamReferences)
+                    .environment(\.acpPromptCardContext, host.promptCardContext)
             )
         }
 
@@ -786,7 +788,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             return spec
         }
 
-        /// A tool call's, thought's or app action's expanded flag and its setter; nil for
+        /// A tool call's, thought's or prompt card's expanded flag and its setter; nil for
         /// rows that do not expand.
         private static func rowExpansion(
             of message: ACPMessage, stableId: String, store: ACPTranscriptRowExpansionStore
@@ -794,7 +796,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             switch message {
             case .toolCall, .thought:
                 (store.expanded.contains(stableId), { store.setExpanded($0, stableID: stableId) })
-            case .user(_, _, _, _, let source, _) where source?.appAction != nil:
+            case .user(_, _, _, _, let source, _) where ACPPromptCard.resolved(for: source) != nil:
                 (store.expanded.contains(stableId), { store.setExpanded($0, stableID: stableId) })
             default:
                 nil
