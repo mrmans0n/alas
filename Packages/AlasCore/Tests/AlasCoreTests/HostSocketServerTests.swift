@@ -129,5 +129,4 @@ private final class SocketClient {
         case .events(let batch, _): events += batch
         }
     }
-
 }
