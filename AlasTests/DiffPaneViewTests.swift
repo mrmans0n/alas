@@ -269,6 +269,35 @@ struct DiffPaneViewTests {
         #expect(states[1] == DiffPaneHunkFusionState(fusedWithPrevious: true, fusedWithNext: false))
     }
 
+    @Test(arguments: [
+        (false, false, true),
+        (false, true, true),
+        (true, false, false),
+        (true, true, true),
+    ])
+    func fusedHunkDropsItsHeaderUnlessItCarriesActions(fusedWithPrevious: Bool, hasActions: Bool, showsHeader: Bool) {
+        let fusion = DiffPaneHunkFusionState(fusedWithPrevious: fusedWithPrevious, fusedWithNext: false)
+
+        #expect(fusion.showsHeader(hasActions: hasActions) == showsHeader)
+    }
+
+    @Test func fusedHunkKeepingItsHeaderOutlinesSquareJoiningCorners() {
+        let fusion = DiffPaneHunkFusionState(fusedWithPrevious: true, fusedWithNext: true)
+        let rect = CGRect(x: 0, y: 0, width: 100, height: 40)
+        var points: [CGPoint] = []
+        DiffPaneHunkCardOutline(fusion: fusion, showsHeader: true).path(in: rect).forEach { element in
+            switch element {
+            case let .move(to: point), let .line(to: point):
+                points.append(point)
+            default:
+                break
+            }
+        }
+
+        #expect(points.contains(CGPoint(x: rect.minX, y: rect.minY)))
+        #expect(points.contains(CGPoint(x: rect.maxX, y: rect.minY)))
+    }
+
     @MainActor
     @Test func diffTabRenderContextCacheReusesMatchingKeyAndEvictsPastLimit() throws {
         let model = DiffDisplayModelBuilder.build(diff: parsedDiff(), filePath: "Sources/App.swift")

@@ -28,6 +28,8 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         var headerFont: NSFont
         var fusion: DiffPaneHunkFusionState
         var actions: [Action] = []
+
+        var showsHeader: Bool { fusion.showsHeader(hasActions: !actions.isEmpty) }
     }
 
     /// Commenting on lines: what the gutter may select, and the comment
@@ -358,9 +360,9 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
 
     private var lineCount: Int { max(old.code.count, new.code.count) }
 
-    /// Height of the hunk header strip, or 0 without chrome.
+    /// Height of the hunk header strip, or 0 without chrome or a shown header.
     var headerHeight: CGFloat {
-        guard let chrome else { return 0 }
+        guard let chrome, chrome.showsHeader else { return 0 }
         let font = chrome.headerFont
         return ceil(font.ascender - font.descender + font.leading) + 2 * Self.headerVerticalPadding
     }
@@ -1449,16 +1451,23 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
             NSRect(x: divider.minX, y: top, width: divider.width, height: max(0, dirtyRect.maxY - top)).fill()
         }
         context.restoreGState()
-        if let hunkPath {
+        if let chrome {
+            let outline = Self.outlinePath(
+                in: cardRect,
+                top: fusion.fusedWithPrevious ? 0 : Self.hunkCornerRadius,
+                bottom: fusion.fusedWithNext ? 0 : Self.hunkCornerRadius,
+                openTop: fusion.fusedWithPrevious && !chrome.showsHeader,
+                openBottom: fusion.fusedWithNext
+            )
             palette.line.setStroke()
-            hunkPath.lineWidth = 0.75
-            hunkPath.stroke()
+            outline.lineWidth = 0.75
+            outline.stroke()
         }
         drawFileCardEdges(palette: palette)
     }
 
     private func drawHeader(palette: Palette, context: CGContext, dirtyRect: NSRect) {
-        guard chrome != nil, let headerLine = header(), dirtyRect.minY < headerHeight else { return }
+        guard chrome?.showsHeader == true, let headerLine = header(), dirtyRect.minY < headerHeight else { return }
         palette.bg2.setFill()
         NSRect(x: 0, y: 0, width: bounds.width, height: headerHeight).fill()
         palette.line.setFill()
@@ -1699,6 +1708,37 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         path.line(to: NSPoint(x: r.minX + bottom, y: r.maxY))
         if bottom > 0 { path.appendArc(from: NSPoint(x: r.minX, y: r.maxY), to: NSPoint(x: r.minX, y: r.maxY - bottom), radius: bottom) }
         path.close()
+        return path
+    }
+
+    /// The hunk card's border, leaving out the edges where it joins a fused
+    /// neighbour: the next hunk's header draws that seam, and with no header
+    /// the two hunks read as one card. Open edges are square, so the sides
+    /// run straight to them.
+    private static func outlinePath(
+        in rect: NSRect, top: CGFloat, bottom: CGFloat, openTop: Bool, openBottom: Bool
+    ) -> NSBezierPath {
+        guard openTop || openBottom else { return roundedPath(in: rect, top: top, bottom: bottom) }
+        let r = rect.insetBy(dx: 0.375, dy: 0.375)
+        let path = NSBezierPath()
+        if openTop {
+            path.move(to: NSPoint(x: r.maxX, y: rect.minY))
+        } else {
+            path.move(to: NSPoint(x: r.minX, y: r.minY + top))
+            if top > 0 { path.appendArc(from: NSPoint(x: r.minX, y: r.minY), to: NSPoint(x: r.minX + top, y: r.minY), radius: top) }
+            path.line(to: NSPoint(x: r.maxX - top, y: r.minY))
+            if top > 0 { path.appendArc(from: NSPoint(x: r.maxX, y: r.minY), to: NSPoint(x: r.maxX, y: r.minY + top), radius: top) }
+        }
+        if openBottom {
+            path.line(to: NSPoint(x: r.maxX, y: rect.maxY))
+            path.move(to: NSPoint(x: r.minX, y: rect.maxY))
+        } else {
+            path.line(to: NSPoint(x: r.maxX, y: r.maxY - bottom))
+            if bottom > 0 { path.appendArc(from: NSPoint(x: r.maxX, y: r.maxY), to: NSPoint(x: r.maxX - bottom, y: r.maxY), radius: bottom) }
+            path.line(to: NSPoint(x: r.minX + bottom, y: r.maxY))
+            if bottom > 0 { path.appendArc(from: NSPoint(x: r.minX, y: r.maxY), to: NSPoint(x: r.minX, y: r.maxY - bottom), radius: bottom) }
+        }
+        path.line(to: NSPoint(x: r.minX, y: openTop ? rect.minY : r.minY + top))
         return path
     }
 
