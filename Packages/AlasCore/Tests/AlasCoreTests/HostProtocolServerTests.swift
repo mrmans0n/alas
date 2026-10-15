@@ -117,6 +117,10 @@ struct HostProtocolServerTests {
             )),
             HostError.notFound(what: "worktree /srv/missing in project p")
         ),
+        (
+            HostClientMessage(id: 8, request: .unarchiveWorktree(worktree: WorktreeRef(projectID: "p", path: "/srv/missing"))),
+            HostError.notFound(what: "worktree /srv/missing in project p")
+        ),
         // A delete or archive names the checkout the client saw; one
         // replaced or switched since is not removed in its place.
         (

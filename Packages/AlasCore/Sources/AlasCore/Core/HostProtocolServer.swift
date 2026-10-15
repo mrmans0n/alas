@@ -160,7 +160,7 @@ public final class HostProtocolConnection {
             try await host.worktrees.archive(listed, verifiesCheckout: true, caller: caller)
             return .done
         case .unarchiveWorktree(let ref):
-            try host.worktrees.unarchive(path: URL(fileURLWithPath: ref.path), projectID: ref.projectID, caller: caller)
+            try host.worktrees.unarchive(path: try worktree(ref).path, projectID: ref.projectID, caller: caller)
             return .done
         case .listWorkspaceCheckouts:
             return .workspaceCheckouts(checkouts: try await host.workspaces.list())
