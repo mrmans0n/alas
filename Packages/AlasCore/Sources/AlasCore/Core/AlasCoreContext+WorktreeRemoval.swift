@@ -305,14 +305,18 @@ public enum WorktreeArchiveRefusal: Codable, LocalizedError, Equatable {
     case operationInProgress
     /// An active Workspace checkout manages this worktree.
     case ownedByWorkspaceCheckout(String)
+    /// The checkout was replaced or switched branch since the caller looked.
+    case changed(String)
 
     private enum OwnedByWorkspaceCheckoutCodingKeys: String, CodingKey { case _0 = "reason" }
+    private enum ChangedCodingKeys: String, CodingKey { case _0 = "reason" }
 
     public var errorDescription: String? {
         switch self {
         case .mainWorktree: "The main checkout cannot be archived."
         case .operationInProgress: "Wait for the current worktree operation to finish."
         case .ownedByWorkspaceCheckout(let reason): "\(reason)."
+        case .changed(let reason): reason
         }
     }
 }

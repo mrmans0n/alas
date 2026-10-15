@@ -61,8 +61,8 @@ struct HostProtocolTests {
         func json(_ value: some Encodable) throws -> String {
             String(decoding: try encoder.encode(value), as: UTF8.self)
         }
-        #expect(try json(HostClientMessage(id: 1, request: .archiveWorktree(worktree: Self.ref))) ==
-            #"{"id":1,"request":{"archiveWorktree":{"worktree":{"path":"\/srv\/feature","projectID":"p"}}},"version":1}"#)
+        #expect(try json(HostClientMessage(id: 1, request: .archiveWorktree(worktree: Self.ref, lineageID: "l", branch: "feature"))) ==
+            #"{"id":1,"request":{"archiveWorktree":{"branch":"feature","lineageID":"l","worktree":{"path":"\/srv\/feature","projectID":"p"}}},"version":1}"#)
         #expect(try json(HostServerMessage.events(events: [
             .sessionRemoved(owner: .worktree("w"), id: "s"),
             .runRemoved(id: "r"),

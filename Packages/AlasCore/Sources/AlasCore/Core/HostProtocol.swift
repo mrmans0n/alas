@@ -46,7 +46,8 @@ public enum HostRequest: Codable, Equatable, Sendable {
     /// `lineageID` and `branch` are the worktree's as the client last saw
     /// it: a checkout replaced or switched since is refused as changed.
     case deleteWorktree(worktree: WorktreeRef, lineageID: String?, branch: String, force: Bool, deleteBranchIfMerged: Bool)
-    case archiveWorktree(worktree: WorktreeRef)
+    /// Like a delete, names the lineage and branch the client last saw.
+    case archiveWorktree(worktree: WorktreeRef, lineageID: String?, branch: String)
     case unarchiveWorktree(worktree: WorktreeRef)
     case listWorkspaceCheckouts
     case workspaceCheckout(id: UUID)
