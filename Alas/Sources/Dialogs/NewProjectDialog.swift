@@ -1757,7 +1757,10 @@ private struct SSHConnectionAssistant: View {
             content: {
                 Group {
                     if let surface {
+                        // Opaque even when terminal materials make Ghostty's
+                        // default background transparent.
                         GhosttyHost(surface: surface)
+                            .background(theme.color("bg-0"))
                     } else {
                         ProgressView()
                             .controlSize(.small)

@@ -36,14 +36,20 @@ extension AlasGhostty {
         /// Kept alive here so the pointer Ghostty holds remains valid.
         private let wakeupBox: AppWakeupBox
 
+        /// Whether the config draws the default background transparent, so
+        /// surfaces need a non-opaque layer for content behind them to show.
+        let transparentBackground: Bool
+
         // MARK: Init
 
         /// - Parameter configPath: Path to a Ghostty config file, or nil for defaults.
+        /// - Parameter transparentBackground: Must match the config's `background-opacity`.
         /// - Throws: `ConfigError` if config has diagnostics; `AppError` if app alloc fails.
-        init(configPath: String? = nil) throws {
+        init(configPath: String? = nil, transparentBackground: Bool = false) throws {
             AlasGhostty.ensureInitialized()
             let cfg = try Config(filePath: configPath)
             self.config = cfg
+            self.transparentBackground = transparentBackground
 
             // Create the box before self is fully initialised so we can pass its
             // pointer as `userdata`. The box will be filled with the weak `app` ref

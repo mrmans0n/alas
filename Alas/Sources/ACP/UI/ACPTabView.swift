@@ -2,6 +2,13 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
+extension EnvironmentValues {
+    /// True when the chat tab draws a material behind the transcript, so
+    /// chat surfaces must leave their background clear instead of painting
+    /// the opaque theme gradient.
+    @Entry var acpChatBackgroundIsMaterial = false
+}
+
 struct ACPTabView: View {
     let sessionId: ACPSession.ID
     let state: AppState
@@ -44,6 +51,8 @@ struct ACPTabView: View {
             }
         }
         .id(managerRebindingGeneration)
+        .background { chatMaterialBackground }
+        .environment(\.acpChatBackgroundIsMaterial, chatMaterial != .none)
         .task(id: agentAvailabilityTaskKey) {
             if let checkout = selectedWorkspaceCheckout {
                 await state.loadAgentAvailability(
@@ -53,6 +62,24 @@ struct ACPTabView: View {
             } else {
                 await state.loadAgentAvailability(for: worktree)
             }
+        }
+    }
+
+    private var chatMaterial: SidebarMaterialChoice {
+        state.config.agents.chatBackgroundMaterial
+    }
+
+    /// With `.none` the transcript and connecting placeholder paint their own
+    /// opaque gradient, exactly as before materials existed.
+    @ViewBuilder
+    private var chatMaterialBackground: some View {
+        if chatMaterial != .none {
+            SidebarMaterialBackground(
+                choice: chatMaterial,
+                backgroundOpacity: state.config
+                    .contentMaterialOverride(forThemeId: state.themeStore.current.id)
+                    .chatBackgroundOpacity
+            )
         }
     }
 

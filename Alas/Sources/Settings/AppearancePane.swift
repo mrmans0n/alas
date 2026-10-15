@@ -99,54 +99,34 @@ struct AppearancePane: View {
                     }
                     SettingsRow(name: "Sidebar material",
                                 desc: "Applied to the left and right sidebars.") {
-                        HStack(spacing: 8) {
-                            Button {
-                                cycleSidebarMaterial(by: -1)
-                            } label: {
-                                Image(systemName: "chevron.left")
-                                    .frame(width: 24, height: 24)
-                            }
-                            .buttonStyle(.borderless)
-                            .help("Previous material")
-
-                            Picker("", selection: Binding(
-                                get: { state.config.sidebarMaterial },
-                                set: {
-                                    state.config.sidebarMaterial = $0
-                                    state.saveConfig()
-                                }
-                            )) {
-                                ForEach(SidebarMaterialChoice.allCases, id: \.self) { material in
-                                    Text(material.displayName).tag(material)
-                                }
-                            }
-                            .labelsHidden()
-                            .settingsDropdownFrame()
-
-                            Button {
-                                cycleSidebarMaterial(by: 1)
-                            } label: {
-                                Image(systemName: "chevron.right")
-                                    .frame(width: 24, height: 24)
-                            }
-                            .buttonStyle(.borderless)
-                            .help("Next material")
-                        }
+                        materialPicker(\.sidebarMaterial, choices: SidebarMaterialChoice.allCases)
                     }
-                    SettingsRow(name: "Background opacity",
-                                desc: "How much theme color to layer over the material.") {
-                        AlasSlider(value: chromeBinding(\.backgroundOpacity), range: 0...1, step: 0.05)
-                    }
-                    .opacity(state.config.sidebarMaterial == .none ? 0.5 : 1.0)
-                    .disabled(state.config.sidebarMaterial == .none)
-                    .help(state.config.sidebarMaterial == .none
-                          ? "Applies only when a material is selected."
-                          : "")
+                    opacityRow(material: state.config.sidebarMaterial,
+                               desc: "How much theme color to layer over the material.",
+                               value: chromeBinding(\.backgroundOpacity))
 
                     SettingsRow(name: "Text contrast",
                                 desc: "Pulls sidebar text toward maximum contrast.") {
                         AlasSlider(value: chromeBinding(\.textContrast), range: 0...1, step: 0.05)
                     }
+                }
+                SettingsGroup(title: "Chat") {
+                    SettingsRow(name: "Chat material",
+                                desc: "Behind agent chat transcripts and the composer.") {
+                        materialPicker(\.agents.chatBackgroundMaterial, choices: SidebarMaterialChoice.centerPaneChoices)
+                    }
+                    opacityRow(material: state.config.agents.chatBackgroundMaterial,
+                               desc: "How much theme color to layer over the material.",
+                               value: contentBinding(\.chatBackgroundOpacity))
+                }
+                SettingsGroup(title: "Terminal") {
+                    SettingsRow(name: "Terminal material",
+                                desc: "Behind terminal panes. Applies to terminals opened after the change.") {
+                        materialPicker(\.terminal.backgroundMaterial, choices: SidebarMaterialChoice.centerPaneChoices)
+                    }
+                    opacityRow(material: state.config.terminal.backgroundMaterial,
+                               desc: "How much terminal background color to layer over the material.",
+                               value: contentBinding(\.terminalBackgroundOpacity))
                 }
                 SettingsGroup(title: "Markdown") {
                     SettingsRow(name: "Default view mode",
@@ -192,15 +172,70 @@ struct AppearancePane: View {
         )
     }
 
-    private func cycleSidebarMaterial(by delta: Int) {
-        let choices = SidebarMaterialChoice.allCases
-        guard let index = choices.firstIndex(of: state.config.sidebarMaterial) else {
-            state.config.sidebarMaterial = .appKitSidebar
-            state.saveConfig()
-            return
+    private func contentBinding(_ kp: WritableKeyPath<ContentMaterialOverride, Double>) -> Binding<Double> {
+        Binding(
+            get: {
+                state.config.contentMaterialOverride(forThemeId: state.themeStore.current.id)[keyPath: kp]
+            },
+            set: { newValue in
+                let themeId = state.themeStore.current.id
+                var current = state.config.contentMaterialOverride(forThemeId: themeId)
+                current[keyPath: kp] = newValue
+                state.config.contentMaterialOverrides[themeId] = current
+                state.saveConfig()
+            }
+        )
+    }
+
+    private func materialPicker(
+        _ kp: WritableKeyPath<AppConfig, SidebarMaterialChoice>,
+        choices: [SidebarMaterialChoice]
+    ) -> some View {
+        HStack(spacing: 8) {
+            Button {
+                cycleMaterial(kp, choices: choices, by: -1)
+            } label: {
+                Image(systemName: "chevron.left")
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.borderless)
+            .help("Previous material")
+
+            Picker("", selection: bind(kp)) {
+                ForEach(choices, id: \.self) { material in
+                    Text(material.displayName).tag(material)
+                }
+            }
+            .labelsHidden()
+            .settingsDropdownFrame()
+
+            Button {
+                cycleMaterial(kp, choices: choices, by: 1)
+            } label: {
+                Image(systemName: "chevron.right")
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.borderless)
+            .help("Next material")
         }
-        let next = (index + delta + choices.count) % choices.count
-        state.config.sidebarMaterial = choices[next]
+    }
+
+    private func opacityRow(material: SidebarMaterialChoice, desc: String, value: Binding<Double>) -> some View {
+        SettingsRow(name: "Background opacity", desc: desc) {
+            AlasSlider(value: value, range: 0...1, step: 0.05)
+        }
+        .opacity(material == .none ? 0.5 : 1.0)
+        .disabled(material == .none)
+        .help(material == .none ? "Applies only when a material is selected." : "")
+    }
+
+    private func cycleMaterial(
+        _ kp: WritableKeyPath<AppConfig, SidebarMaterialChoice>,
+        choices: [SidebarMaterialChoice],
+        by delta: Int
+    ) {
+        let index = choices.firstIndex(of: state.config[keyPath: kp]) ?? 0
+        state.config[keyPath: kp] = choices[(index + delta + choices.count) % choices.count]
         state.saveConfig()
     }
 }

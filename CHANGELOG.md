@@ -8,6 +8,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### ✨ Features
 
+- Add Chat material and Terminal material settings under Appearance, each with a per-theme background opacity. Choosing one of the AppKit materials shows it behind agent chat or terminal panes; terminal text and app-painted cells stay opaque. Both default to None, which keeps the current opaque look. A terminal material change applies to terminals opened after it.
 - Move the Changes tab's review scope entrypoint from the Commits header into the Prepare card: a split segment on "Review current changes" opens the ⇧⌘R palette, and a "Review…" button stands in when there are no uncommitted changes to review.
 
 ## [0.21.5] - 2026-10-15

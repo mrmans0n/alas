@@ -148,6 +148,9 @@ extension AlasGhostty {
 
             // Enable layer-backed rendering. We'll configure the layer in makeBackingLayer().
             wantsLayer = true
+            if app.transparentBackground {
+                layer?.isOpaque = false
+            }
             registerForDraggedTypes([.alasDropPayload])
 
             // The surface config passes `self` as userdata so C callbacks can recover us.
