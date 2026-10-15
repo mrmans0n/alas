@@ -185,4 +185,39 @@ struct ACPSessionManagerRetentionTests {
         await mgr.hydrateIfNeeded(id: id)
         #expect(reopened.promptSuggestions == suggestions)
     }
+
+    @Test("a tab shown before its session loads is seen and announced when the session arrives")
+    func visibleBeforeLoadAnnouncesOnArrival() throws {
+        let mgr = makeManager()
+        let id = mgr.createSession(agentId: "claude").id
+        mgr.retainSession(id: id)
+        mgr.releaseSession(id: id)
+        #expect(mgr.sessions[id] == nil)
+
+        var announced: [Bool] = []
+        var visibility: ChangeSubscription?
+        let arrivals = mgr.$sessions.signal.observe { sessions in
+            guard visibility == nil, let session = sessions[id] else { return }
+            visibility = session.nextPromptVisibilityChanged.observe { announced.append($0) }
+        }
+        defer { arrivals.cancel() }
+
+        mgr.markSessionVisible(id: id)
+        #expect(mgr.seenTracker.isSeen(id))
+        _ = try #require(mgr.placeholderSession(id: id))
+
+        #expect(announced == [true])
+    }
+
+    @Test("hiding a seen session persists its last-seen time")
+    func hidingPersistsLastSeen() async throws {
+        let mgr = makeManager()
+        let id = mgr.createSession(agentId: "claude").id
+        mgr.markSessionVisible(id: id)
+        mgr.unmarkSessionVisible(id: id)
+
+        await mgr.flushPersistence()
+
+        #expect(try await mgr.persistence.loadLastSeenAt(id: id) != nil)
+    }
 }
