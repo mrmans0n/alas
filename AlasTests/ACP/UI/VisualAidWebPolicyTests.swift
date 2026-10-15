@@ -64,33 +64,57 @@ struct VisualAidWebPolicyTests {
     func wheelRouting(deltaX: CGFloat, deltaY: CGFloat, up: Bool, down: Bool, owner: VisualAidScrollRouting.Owner) {
         var routing = VisualAidScrollRouting()
         let edges = VisualAidScrollRouting.Edges(canScrollUp: up, canScrollDown: down)
-        #expect(routing.owner(phase: [], momentumPhase: [], deltaX: deltaX, deltaY: deltaY, edges: edges) == owner)
+        #expect(routing.route(phase: [], momentumPhase: [], deltaX: deltaX, deltaY: deltaY, edges: edges)
+            == .deliver(owner, includingHeld: true))
     }
+
+    private static let midway = VisualAidScrollRouting.Edges(canScrollUp: true, canScrollDown: true)
+    private static let atBottom = VisualAidScrollRouting.Edges(canScrollUp: true, canScrollDown: false)
 
     @Test("a trackpad gesture waits for its first movement, then keeps its owner through momentum")
     func gestureRoutingLatches() {
         var routing = VisualAidScrollRouting()
-        let midway = VisualAidScrollRouting.Edges(canScrollUp: true, canScrollDown: true)
-        let atBottom = VisualAidScrollRouting.Edges(canScrollUp: true, canScrollDown: false)
-        #expect(routing.owner(phase: .mayBegin, momentumPhase: [], deltaX: 0, deltaY: 0, edges: midway) == nil)
-        #expect(routing.owner(phase: .began, momentumPhase: [], deltaX: 0, deltaY: -3, edges: midway) == .page)
+        #expect(routing.route(phase: .mayBegin, momentumPhase: [], deltaX: 0, deltaY: 0, edges: Self.midway) == .hold)
+        #expect(routing.route(phase: .began, momentumPhase: [], deltaX: 0, deltaY: -3, edges: Self.midway)
+            == .deliver(.page, includingHeld: true))
         // Reaching the bottom mid-gesture does not hand the rest of it to the transcript.
-        #expect(routing.owner(phase: .changed, momentumPhase: [], deltaX: 0, deltaY: -9, edges: atBottom) == .page)
-        #expect(routing.owner(phase: [], momentumPhase: .changed, deltaX: 0, deltaY: -4, edges: atBottom) == .page)
+        #expect(routing.route(phase: .changed, momentumPhase: [], deltaX: 0, deltaY: -9, edges: Self.atBottom)
+            == .deliver(.page, includingHeld: true))
+        #expect(routing.route(phase: .ended, momentumPhase: [], deltaX: 0, deltaY: 0, edges: Self.atBottom)
+            == .deliver(.page, includingHeld: true))
+        #expect(routing.route(phase: [], momentumPhase: .changed, deltaX: 0, deltaY: -4, edges: Self.atBottom)
+            == .deliver(.page, includingHeld: true))
         // The next gesture starts at the bottom, so the transcript scrolls.
-        #expect(routing.owner(phase: .began, momentumPhase: [], deltaX: 0, deltaY: -3, edges: atBottom) == .transcript)
-        #expect(routing.owner(phase: [], momentumPhase: .changed, deltaX: 0, deltaY: -4, edges: midway) == .transcript)
+        #expect(routing.route(phase: .began, momentumPhase: [], deltaX: 0, deltaY: -3, edges: Self.atBottom)
+            == .deliver(.transcript, includingHeld: true))
+        #expect(routing.route(phase: [], momentumPhase: .changed, deltaX: 0, deltaY: -4, edges: Self.midway)
+            == .deliver(.transcript, includingHeld: true))
     }
 
     @Test("a gesture that started over the transcript stays with it after sliding onto the card")
     func gestureArrivingMidwayStaysWithTheTranscript() {
         var routing = VisualAidScrollRouting()
-        let midway = VisualAidScrollRouting.Edges(canScrollUp: true, canScrollDown: true)
         // A previous gesture left the page as owner.
-        _ = routing.owner(phase: .began, momentumPhase: [], deltaX: 0, deltaY: -3, edges: midway)
-        _ = routing.owner(phase: .ended, momentumPhase: [], deltaX: 0, deltaY: 0, edges: midway)
-        #expect(routing.owner(phase: .changed, momentumPhase: [], deltaX: 0, deltaY: -5, edges: midway) == .transcript)
-        #expect(routing.owner(phase: [], momentumPhase: .changed, deltaX: 0, deltaY: -4, edges: midway) == .transcript)
+        _ = routing.route(phase: .began, momentumPhase: [], deltaX: 0, deltaY: -3, edges: Self.midway)
+        _ = routing.route(phase: .ended, momentumPhase: [], deltaX: 0, deltaY: 0, edges: Self.midway)
+        #expect(routing.route(phase: .changed, momentumPhase: [], deltaX: 0, deltaY: -5, edges: Self.midway)
+            == .deliver(.transcript, includingHeld: false))
+        #expect(routing.route(phase: [], momentumPhase: .changed, deltaX: 0, deltaY: -4, edges: Self.midway)
+            == .deliver(.transcript, includingHeld: true))
+    }
+
+    @Test("a touch that rested on the card and left is dropped when another gesture slides in")
+    func abandonedMayBeginIsDropped() {
+        var routing = VisualAidScrollRouting()
+        #expect(routing.route(phase: .mayBegin, momentumPhase: [], deltaX: 0, deltaY: 0, edges: Self.midway) == .hold)
+        #expect(routing.route(phase: .changed, momentumPhase: [], deltaX: 0, deltaY: -5, edges: Self.midway)
+            == .deliver(.transcript, includingHeld: false))
+        #expect(routing.route(phase: .ended, momentumPhase: [], deltaX: 0, deltaY: 0, edges: Self.midway)
+            == .deliver(.transcript, includingHeld: false))
+        // A touch that rests and lifts without moving still pairs with its cancel.
+        #expect(routing.route(phase: .mayBegin, momentumPhase: [], deltaX: 0, deltaY: 0, edges: Self.midway) == .hold)
+        #expect(routing.route(phase: .cancelled, momentumPhase: [], deltaX: 0, deltaY: 0, edges: Self.midway)
+            == .deliver(.transcript, includingHeld: true))
     }
 
     @Test("fragments go inside the template verbatim, placeholders included")

@@ -369,10 +369,10 @@ final class VisualAidWKWebView: WKWebView {
     /// The page scrolls only the gestures it can move; the rest go to the transcript, so a capped card
     /// never traps the transcript's scroll once its own content is at an edge.
     override func scrollWheel(with event: NSEvent) {
-        guard let owner = scrollRouting.owner(
+        let route = scrollRouting.route(
             phase: event.phase, momentumPhase: event.momentumPhase,
             deltaX: event.scrollingDeltaX, deltaY: event.scrollingDeltaY, edges: scrollEdges)
-        else {
+        guard case .deliver(let owner, let includingHeld) = route else {
             // `.began` legitimately follows its own `.mayBegin`; anything else held belongs to an abandoned gesture.
             let continuesMayBegin = event.phase.contains(.began)
                 && pendingScrollEvents.last?.phase.contains(.mayBegin) == true
@@ -381,7 +381,7 @@ final class VisualAidWKWebView: WKWebView {
             if pendingScrollEvents.count > 8 { pendingScrollEvents.removeFirst() }
             return
         }
-        let events = pendingScrollEvents + [event]
+        let events = (includingHeld ? pendingScrollEvents : []) + [event]
         pendingScrollEvents.removeAll()
         for pending in events {
             switch owner {
@@ -438,36 +438,54 @@ struct VisualAidScrollRouting: Equatable {
         var canScrollDown = false
     }
 
-    private var owner: Owner?
-    /// Whether this view saw the current gesture's `.began`/`.mayBegin`. A gesture that started over the
-    /// transcript and slid onto the card belongs to the transcript for the rest of its life.
-    private var sawGestureStart = false
+    enum Route: Equatable {
+        /// A phased gesture that has not moved yet: hold the event until the gesture is decided.
+        case hold
+        /// Deliver the event to `owner`, after the held ones unless they belong to an abandoned gesture.
+        case deliver(Owner, includingHeld: Bool)
+    }
 
-    /// The owner of this event, or nil while a phased gesture has not moved yet; the caller holds such
-    /// events and delivers them with the first decided one.
-    mutating func owner(
+    private var owner: Owner?
+    /// The start this view saw for the current gesture. A gesture that started over the transcript and slid
+    /// onto the card belongs to the transcript for the rest of its life.
+    private var seenStart: NSEvent.Phase?
+
+    mutating func route(
         phase: NSEvent.Phase, momentumPhase: NSEvent.Phase, deltaX: CGFloat, deltaY: CGFloat, edges: Edges
-    ) -> Owner? {
+    ) -> Route {
         let moved = deltaX != 0 || deltaY != 0
         guard !phase.isEmpty || !momentumPhase.isEmpty else {
-            return moved ? Self.decide(deltaX: deltaX, deltaY: deltaY, edges: edges) : .transcript
+            return .deliver(moved ? Self.decide(deltaX: deltaX, deltaY: deltaY, edges: edges) : .transcript, includingHeld: true)
         }
         let starts = phase.contains(.began) || phase.contains(.mayBegin)
+        let ends = phase.contains(.ended) || phase.contains(.cancelled)
         if starts {
             owner = nil
-            sawGestureStart = true
-        } else if !phase.isEmpty, !sawGestureStart {
-            owner = .transcript
+            seenStart = phase.contains(.began) ? .began : .mayBegin
+            return moved ? decided(deltaX: deltaX, deltaY: deltaY, edges: edges) : .hold
         }
-        if phase.contains(.ended) || phase.contains(.cancelled) { sawGestureStart = false }
-        if let owner { return owner }
-        if moved, !phase.isEmpty {
-            owner = Self.decide(deltaX: deltaX, deltaY: deltaY, edges: edges)
-        } else if !starts {
-            // Ended, cancelled or coasting without ever moving: let the transcript pair its begin and end.
-            owner = .transcript
+        if !phase.isEmpty {
+            // A `.mayBegin` is only followed by `.began` or `.cancelled` here; any other phase means the touch
+            // that sent it left the card and another gesture arrived mid-way.
+            let foreign = seenStart == nil || (seenStart == .mayBegin && !phase.contains(.cancelled))
+            if ends { seenStart = nil }
+            if foreign {
+                seenStart = nil
+                owner = .transcript
+                return .deliver(.transcript, includingHeld: false)
+            }
         }
-        return owner
+        if let owner { return .deliver(owner, includingHeld: true) }
+        if moved, !phase.isEmpty { return decided(deltaX: deltaX, deltaY: deltaY, edges: edges) }
+        // Ended, cancelled or coasting without ever moving: let the transcript pair its begin and end.
+        owner = .transcript
+        return .deliver(.transcript, includingHeld: true)
+    }
+
+    private mutating func decided(deltaX: CGFloat, deltaY: CGFloat, edges: Edges) -> Route {
+        let owner = Self.decide(deltaX: deltaX, deltaY: deltaY, edges: edges)
+        self.owner = owner
+        return .deliver(owner, includingHeld: true)
     }
 
     /// Sideways movement stays with the page; vertical goes to the page only while it can move that way.
