@@ -30,6 +30,10 @@ public final class RemoteSessionGateway {
     private var sessionListGeneration = 0
     private var worktreeListRefresh: Task<Void, Never>?
     private var worktreeListGeneration = 0
+    /// Set once the client asks for worktrees: only then are they pushed.
+    private var wantsWorktreeList = false
+    private var hostSubscription: HostSubscription?
+    private var providerListChanges: ChangeSubscription?
     private var projectListRefresh: Task<Void, Never>?
     private var projectListGeneration = 0
     private var branchListRefresh: Task<Void, Never>?
@@ -55,6 +59,8 @@ public final class RemoteSessionGateway {
         self.federation = federation
         self.consoleLink = consoleLink
         self.send = send
+        if let host = provider.eventHost { pushLists(from: host) }
+        providerListChanges = provider.sessionListChanges?.observe { [weak self] in self?.refreshSessionList() }
         guard let federation else { return }
         // A peer's cached list moving refreshes this client even if it has
         // never asked for the list, which matches what `renameSession`
@@ -77,6 +83,7 @@ public final class RemoteSessionGateway {
         case .listSessions:
             refreshSessionList()
         case .listWorktrees:
+            wantsWorktreeList = true
             refreshWorktreeList()
         case .listAgents:
             send(.agentList(agents: provider.remoteAgents()))
@@ -475,6 +482,41 @@ public final class RemoteSessionGateway {
         provider.session(for: id)?.transcript.changeLog.releaseTracking()
     }
 
+    /// The lists `events` make stale. Session rows carry their worktree and
+    /// project, so changes to those refresh the session list too.
+    nonisolated static func listsChanged(by events: [HostEvent]) -> (sessions: Bool, worktrees: Bool) {
+        var lists = (sessions: false, worktrees: false)
+        for event in events {
+            switch event {
+            case .sessionChanged, .sessionRemoved:
+                lists.sessions = true
+            case .projectChanged, .projectRemoved, .worktreeChanged, .worktreeRemoved, .resync:
+                return (true, true)
+            case .workspaceCheckoutChanged, .workspaceCheckoutRemoved, .runChanged, .runRemoved:
+                break
+            }
+        }
+        return lists
+    }
+
+    /// Lists are rebuilt at most this often; changes in between coalesce.
+    private static let listPushInterval: Duration = .milliseconds(500)
+
+    private func pushLists(from host: AlasHost) {
+        let subscription = host.subscribe()
+        hostSubscription = subscription
+        Task { @MainActor [weak self] in
+            while let events = await subscription.next() {
+                guard let self else { return }
+                let lists = Self.listsChanged(by: events)
+                if lists.sessions { refreshSessionList() }
+                if lists.worktrees, wantsWorktreeList { refreshWorktreeList() }
+                // ponytail: fixed rate limit; each list runs git per worktree.
+                try? await Task.sleep(for: Self.listPushInterval)
+            }
+        }
+    }
+
     private func refreshSessionList() {
         sessionListGeneration += 1
         let generation = sessionListGeneration
@@ -604,6 +646,9 @@ public final class RemoteSessionGateway {
         if let consoleLink { provider.peerConsoleHost?.close(consoleLink) }
         if let federation, let downstream { federation.detach(downstream) }
         self.downstream = nil
+        hostSubscription?.cancel()
+        hostSubscription = nil
+        providerListChanges = nil
         sessionListRefresh?.cancel()
         sessionListRefresh = nil
         worktreeListRefresh?.cancel()

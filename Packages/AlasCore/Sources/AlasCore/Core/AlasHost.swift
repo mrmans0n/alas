@@ -51,6 +51,14 @@ public final class AlasHost {
         events.log.subscribe(after: cursor)
     }
 
+    /// The changes from now on, for a subscriber that reads its state
+    /// fresh whenever they arrive rather than from a snapshot.
+    public func subscribe() -> HostSubscription {
+        let source = events
+        source.refreshInMemoryState()
+        return source.log.subscribe(after: source.log.cursor)
+    }
+
     private var events: HostEventSource {
         if let eventSource { return eventSource }
         let source = HostEventSource(core: core)

@@ -228,6 +228,11 @@ final class AppState {
     /// The core's public API. Paths move onto it from `core` as they are
     /// migrated.
     let host: AlasHost
+    /// Sent when what the Remote session list shows changes without a host
+    /// event: a session tab opening, closing or moving, or the Git status of
+    /// a worktree with sessions. Followed from its first read.
+    @ObservationIgnored private var remoteSessionListChanges: ChangeSignal<Void>?
+    @ObservationIgnored private var remoteSessionListInputs: [String: RemoteSessionListInputs] = [:]
     var projectsManager: ProjectsManager {
         get { core.projects }
         set { core.projects = newValue }
@@ -15118,7 +15123,51 @@ private extension WorkspaceCheckoutMember {
 // Lives in this file (not a separate one) so it can reach the private
 // `acpManagers` dictionary. Aggregates across every live per-worktree manager;
 // worktrees not opened this run simply don't appear (documented v1 behavior).
+/// What the Remote session list shows of a worktree beyond host events.
+private struct RemoteSessionListInputs: Equatable {
+    /// Each session tab by its position among all the worktree's tabs,
+    /// which is the `tabIndex` the list reports.
+    var sessionTabs: [Int: ACPSession.ID]
+    var status: WorktreeDirtyState
+    var diff: WorktreeDiffStats?
+}
+
 extension AppState: RemoteSessionsProvider {
+    var eventHost: AlasHost? { host }
+
+    var sessionListChanges: ChangeSignal<Void>? {
+        if let remoteSessionListChanges { return remoteSessionListChanges }
+        let signal = ChangeSignal<Void>()
+        remoteSessionListChanges = signal
+        followRemoteSessionListInputs()
+        return signal
+    }
+
+    /// Per worktree with sessions: where its session tabs are, and its Git status.
+    private func currentRemoteSessionListInputs() -> [String: RemoteSessionListInputs] {
+        let statuses = WorktreeStatusStore.shared
+        return Dictionary(acpManagers.values.map { manager in
+            (manager.worktreeId, RemoteSessionListInputs(
+                sessionTabs: tabs.tabs(forWorktree: manager.worktreeId).enumerated().reduce(into: [:]) { tabs, entry in
+                    if case .acpSession(let state) = entry.element { tabs[entry.offset] = state.sessionId }
+                },
+                status: statuses.status(forPath: manager.worktreePath),
+                diff: statuses.diffStats(forPath: manager.worktreePath)
+            ))
+        }, uniquingKeysWith: { first, _ in first })
+    }
+
+    private func followRemoteSessionListInputs() {
+        let inputs = withObservationTracking { currentRemoteSessionListInputs() } onChange: {
+            Task { @MainActor [weak self] in self?.followRemoteSessionListInputs() }
+        }
+        // Editor tabs and other worktrees change what is tracked too.
+        if inputs != remoteSessionListInputs {
+            remoteSessionListInputs = inputs
+            remoteSessionListChanges?.send()
+        }
+    }
+
     private func remoteWorktreeSummary(project: ProjectConfig, worktree: Worktree) async -> RemoteWorktreeSummary {
         // A folder has no git metrics to compute.
         if project.isFolder { return remoteWorktreeSummaryWithoutMetrics(project: project, worktree: worktree) }
