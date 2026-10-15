@@ -449,6 +449,11 @@ struct VisualAidScrollRouting: Equatable {
     /// The start this view saw for the current gesture. A gesture that started over the transcript and slid
     /// onto the card belongs to the transcript for the rest of its life.
     private var seenStart: NSEvent.Phase?
+    /// Who owned the gesture that just ended here; only the momentum that begins right after it inherits it.
+    private var endedOwner: Owner?
+    /// Who owns the momentum in flight. Momentum this view did not see begin (content scrolling the card
+    /// under a still pointer) belongs to the transcript.
+    private var momentumOwner: Owner?
 
     mutating func route(
         phase: NSEvent.Phase, momentumPhase: NSEvent.Phase, deltaX: CGFloat, deltaY: CGFloat, edges: Edges
@@ -457,27 +462,42 @@ struct VisualAidScrollRouting: Equatable {
         guard !phase.isEmpty || !momentumPhase.isEmpty else {
             return .deliver(moved ? Self.decide(deltaX: deltaX, deltaY: deltaY, edges: edges) : .transcript, includingHeld: true)
         }
-        let starts = phase.contains(.began) || phase.contains(.mayBegin)
-        let ends = phase.contains(.ended) || phase.contains(.cancelled)
-        if starts {
+        guard !phase.isEmpty else {
+            if momentumPhase.contains(.began) { momentumOwner = endedOwner }
+            endedOwner = nil
+            let owner = momentumOwner ?? .transcript
+            if momentumPhase.contains(.ended) || momentumPhase.contains(.cancelled) { momentumOwner = nil }
+            return .deliver(owner, includingHeld: true)
+        }
+        endedOwner = nil
+        momentumOwner = nil
+        let route = gestureRoute(phase: phase, moved: moved, deltaX: deltaX, deltaY: deltaY, edges: edges)
+        if phase.contains(.ended) || phase.contains(.cancelled), case .deliver(let owner, _) = route {
+            endedOwner = owner
+        }
+        return route
+    }
+
+    private mutating func gestureRoute(
+        phase: NSEvent.Phase, moved: Bool, deltaX: CGFloat, deltaY: CGFloat, edges: Edges
+    ) -> Route {
+        if phase.contains(.began) || phase.contains(.mayBegin) {
             owner = nil
             seenStart = phase.contains(.began) ? .began : .mayBegin
             return moved ? decided(deltaX: deltaX, deltaY: deltaY, edges: edges) : .hold
         }
-        if !phase.isEmpty {
-            // A `.mayBegin` is only followed by `.began` or `.cancelled` here; any other phase means the touch
-            // that sent it left the card and another gesture arrived mid-way.
-            let foreign = seenStart == nil || (seenStart == .mayBegin && !phase.contains(.cancelled))
-            if ends { seenStart = nil }
-            if foreign {
-                seenStart = nil
-                owner = .transcript
-                return .deliver(.transcript, includingHeld: false)
-            }
+        // A `.mayBegin` is only followed by `.began` or `.cancelled` here; any other phase means the touch
+        // that sent it left the card and another gesture arrived mid-way.
+        let foreign = seenStart == nil || (seenStart == .mayBegin && !phase.contains(.cancelled))
+        if phase.contains(.ended) || phase.contains(.cancelled) { seenStart = nil }
+        if foreign {
+            seenStart = nil
+            owner = .transcript
+            return .deliver(.transcript, includingHeld: false)
         }
         if let owner { return .deliver(owner, includingHeld: true) }
-        if moved, !phase.isEmpty { return decided(deltaX: deltaX, deltaY: deltaY, edges: edges) }
-        // Ended, cancelled or coasting without ever moving: let the transcript pair its begin and end.
+        if moved { return decided(deltaX: deltaX, deltaY: deltaY, edges: edges) }
+        // Ended or cancelled without ever moving: let the transcript pair its begin and end.
         owner = .transcript
         return .deliver(.transcript, includingHeld: true)
     }

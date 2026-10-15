@@ -82,12 +82,15 @@ struct VisualAidWebPolicyTests {
             == .deliver(.page, includingHeld: true))
         #expect(routing.route(phase: .ended, momentumPhase: [], deltaX: 0, deltaY: 0, edges: Self.atBottom)
             == .deliver(.page, includingHeld: true))
-        #expect(routing.route(phase: [], momentumPhase: .changed, deltaX: 0, deltaY: -4, edges: Self.atBottom)
+        #expect(routing.route(phase: [], momentumPhase: .began, deltaX: 0, deltaY: -4, edges: Self.atBottom)
             == .deliver(.page, includingHeld: true))
+        #expect(routing.route(phase: [], momentumPhase: .ended, deltaX: 0, deltaY: 0, edges: Self.atBottom)
+            == .deliver(.page, includingHeld: true))
+        // Momentum from a gesture that started elsewhere, scrolling the card under a still pointer.
+        #expect(routing.route(phase: [], momentumPhase: .changed, deltaX: 0, deltaY: -4, edges: Self.midway)
+            == .deliver(.transcript, includingHeld: true))
         // The next gesture starts at the bottom, so the transcript scrolls.
         #expect(routing.route(phase: .began, momentumPhase: [], deltaX: 0, deltaY: -3, edges: Self.atBottom)
-            == .deliver(.transcript, includingHeld: true))
-        #expect(routing.route(phase: [], momentumPhase: .changed, deltaX: 0, deltaY: -4, edges: Self.midway)
             == .deliver(.transcript, includingHeld: true))
     }
 
