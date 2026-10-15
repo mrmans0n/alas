@@ -222,7 +222,11 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
                 onRestoreCheckpoint: onRestoreCheckpoint,
                 messageMenuItems: messageMenuItems
             ) {
-                if let delegatedSource {
+                if let action = delegatedSource?.appAction {
+                    AppActionRow(
+                        action: action, text: text, typography: typography,
+                        initiallyExpanded: isExpanded, onExpandedChange: onExpandedChange)
+                } else if let delegatedSource {
                     DelegatedPromptRow(
                         text: text,
                         label: delegatedLabel

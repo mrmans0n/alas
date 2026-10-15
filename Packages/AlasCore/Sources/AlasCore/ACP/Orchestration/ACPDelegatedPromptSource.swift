@@ -1,12 +1,17 @@
 import Foundation
 
 public struct ACPDelegatedPromptSource: Codable, Equatable, Sendable {
+    public struct AppAction: Codable, Equatable, Sendable {
+        public let title: String
+        public let source: String
+    }
+
     public let sessionId: String
     public let messageId: String
     /// How the sender relates to the session the prompt was delivered to.
     /// `"child"` when a delegated child wrote to its parent, `"alas-shepherd"`
-    /// for a prompt from Alas's PR shepherd; nil for a parent→child prompt, a
-    /// mission prompt, and every source persisted before this field existed.
+    /// for a prompt from Alas's PR shepherd, `"alas-action"` for a UI action;
+    /// nil for a parent→child prompt, a mission prompt, and older sources.
     /// A plain string so an unknown future value still decodes (and falls
     /// back to the generic label).
     public var senderRelationship: String? = nil
@@ -18,6 +23,9 @@ public struct ACPDelegatedPromptSource: Codable, Equatable, Sendable {
     /// `ACPDelegatedOutcomeText.NoticeKind` raw value. A plain string so a
     /// value from a newer build still decodes.
     public var childNoticeKind: String? = nil
+
+    /// An action requested through Alas's UI, rather than words the user typed.
+    public var appAction: AppAction? = nil
 
     /// Individual inbox identities retained by a combined parent prompt.
     /// Nil for single deliveries and sources saved by older builds.
@@ -51,6 +59,16 @@ public struct ACPDelegatedPromptSource: Codable, Equatable, Sendable {
             messageId: messageID.uuidString,
             senderRelationship: shepherdRelationship
         )
+    }
+
+    public static func shipCreate(kind: CodeHostKind, messageID: UUID) -> ACPDelegatedPromptSource {
+        var source = ACPDelegatedPromptSource(
+            sessionId: "alas:ship", messageId: messageID.uuidString,
+            senderRelationship: "alas-action")
+        source.appAction = AppAction(
+            title: kind == .gitlab ? "Create merge request" : "Create pull request",
+            source: "Ship")
+        return source
     }
 
     /// The source for an inbox message delivered as a prompt. The sender is
@@ -100,6 +118,7 @@ public struct ACPDelegatedPromptSource: Codable, Equatable, Sendable {
         for source: ACPDelegatedPromptSource,
         agentDisplayName: (String) -> String
     ) -> String {
+        if let action = source.appAction { return "Alas · \(action.title)" }
         if let batch = source.batchedSources {
             let count = Set(batch.map(\.sessionId)).count
             return "Updates from \(count) child \(count == 1 ? "session" : "sessions")"

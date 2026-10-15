@@ -786,13 +786,15 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             return spec
         }
 
-        /// A tool call's or thought's expanded flag and its setter; nil for
+        /// A tool call's, thought's or app action's expanded flag and its setter; nil for
         /// rows that do not expand.
         private static func rowExpansion(
             of message: ACPMessage, stableId: String, store: ACPTranscriptRowExpansionStore
         ) -> (isExpanded: Bool, setExpanded: (Bool) -> Void)? {
             switch message {
             case .toolCall, .thought:
+                (store.expanded.contains(stableId), { store.setExpanded($0, stableID: stableId) })
+            case .user(_, _, _, _, let source, _) where source?.appAction != nil:
                 (store.expanded.contains(stableId), { store.setExpanded($0, stableID: stableId) })
             default:
                 nil

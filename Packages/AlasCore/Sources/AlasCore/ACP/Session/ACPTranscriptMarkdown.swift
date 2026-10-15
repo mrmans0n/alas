@@ -22,8 +22,9 @@ public enum ACPTranscriptMarkdown: Sendable {
         var sections: [String] = ["# \(headerTitle(title))"]
         for message in messages {
             switch message {
-            case .user(_, _, let text, _, _, _):
-                sections.append("## You\n\n\(serializedBody(text))")
+            case .user(_, _, let text, _, let source, _):
+                let heading = source.map { ACPDelegatedPromptSource.transcriptLabel(for: $0) { $0 } } ?? "You"
+                sections.append("## \(heading)\n\n\(serializedBody(text))")
             case .agent(_, _, let buffer):
                 sections.append("## \(agentHeading)\n\n\(serializedBody(buffer.value))")
             default:

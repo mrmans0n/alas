@@ -2827,9 +2827,10 @@ public final class ACPSession: ChangeTracking, Identifiable {
     public func enqueueScheduled(
         blocks: [ACPContentBlock],
         scheduledAt: Date,
-        draft: ACPComposerDraft? = nil
+        draft: ACPComposerDraft? = nil,
+        delegatedSource: ACPDelegatedPromptSource? = nil
     ) -> UUID {
-        let item = QueuedPrompt(blocks: blocks, scheduledAt: scheduledAt, draft: draft)
+        let item = QueuedPrompt(blocks: blocks, scheduledAt: scheduledAt, draft: draft, delegatedSource: delegatedSource)
         let insertAt = queue.firstIndex {
             $0.status == .pending && ($0.scheduledAt.map { $0 > scheduledAt } ?? false)
         } ?? queue.endIndex

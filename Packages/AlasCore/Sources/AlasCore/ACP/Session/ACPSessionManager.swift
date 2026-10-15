@@ -511,7 +511,8 @@ public final class ACPSessionManager: ChangeTracking {
     /// `isStillWanted` is asked once the lease is confirmed and before anything is
     /// submitted; when it says no, `onResult(false)` fires and nothing is sent.
     public func sendPrompt(
-        for id: ACPSession.ID, text: String, attachments: [ACPMessage.Attachment], normalUserTurn: Bool = true,
+        for id: ACPSession.ID, text: String, attachments: [ACPMessage.Attachment],
+        delegatedSource: ACPDelegatedPromptSource? = nil, normalUserTurn: Bool = true,
         isStillWanted: (@MainActor () -> Bool)? = nil, onResult: @escaping @MainActor (Bool) -> Void
     ) async {
         let suggestionSession = sessions[id]
@@ -526,7 +527,7 @@ public final class ACPSessionManager: ChangeTracking {
         }
         let accepted = submit(sessionId: id, text: text, attachments: attachments, intent: .auto,
                               draft: nil, waitForModelModeSelections: true,
-                              normalUserTurn: normalUserTurn,
+                              delegatedSource: delegatedSource, normalUserTurn: normalUserTurn,
                               onCompleted: { ok in onResult(ok) })
         if !accepted { onResult(false) }   // submit refused synchronously; onCompleted won't fire
     }
@@ -8711,6 +8712,7 @@ extension ACPSessionManager {
         attachments: [ACPMessage.Attachment],
         draft: ACPComposerDraft? = nil,
         scheduledAt: Date? = nil,
+        delegatedSource: ACPDelegatedPromptSource? = nil,
         normalUserTurn: Bool = false,
         into sessionId: ACPSession.ID,
         onQueuedPromptEnqueued: (@MainActor (UUID) -> Void)? = nil,
@@ -8723,11 +8725,11 @@ extension ACPSessionManager {
         let blocks = ACPSessionRunner.blocks(text: text, attachments: attachments)
         let scheduledId: UUID?
         if let scheduledAt {
-            scheduledId = session.enqueueScheduled(blocks: blocks, scheduledAt: scheduledAt, draft: draft)
+            scheduledId = session.enqueueScheduled(blocks: blocks, scheduledAt: scheduledAt, draft: draft, delegatedSource: delegatedSource)
             if normalUserTurn, let scheduledId { session.normalQueuedTurnIDs.insert(scheduledId) }
         } else {
             let queuedPromptId = UUID()
-            session.enqueue(id: queuedPromptId, blocks: blocks, draft: draft)
+            session.enqueue(id: queuedPromptId, blocks: blocks, draft: draft, delegatedSource: delegatedSource)
             if normalUserTurn { session.normalQueuedTurnIDs.insert(queuedPromptId) }
             onQueuedPromptEnqueued?(queuedPromptId)
             scheduledId = nil
@@ -9408,6 +9410,7 @@ extension ACPSessionManager {
         intent: ACPSubmitIntent,
         draft: ACPComposerDraft?,
         waitForModelModeSelections: Bool,
+        delegatedSource: ACPDelegatedPromptSource? = nil,
         normalUserTurn: Bool = true,
         onCompleted: @escaping @MainActor (Bool) -> Void,
         onDispatchRegistered: (@Sendable () -> Void)? = nil
@@ -9482,6 +9485,7 @@ extension ACPSessionManager {
                             intent: intent,
                             draft: draft,
                             waitForModelModeSelections: false,
+                            delegatedSource: delegatedSource,
                             normalUserTurn: normalUserTurn,
                             onCompleted: onCompleted,
                             onDispatchRegistered: { continuation.resume() }
@@ -9509,6 +9513,7 @@ extension ACPSessionManager {
                     attachments: attachments,
                     draft: draft,
                     scheduledAt: scheduledAt,
+                    delegatedSource: delegatedSource,
                     normalUserTurn: normalUserTurn,
                     into: sessionId,
                     onQueuedPromptEnqueued: onQueuedPromptEnqueued,
@@ -9528,6 +9533,7 @@ extension ACPSessionManager {
                 attachments: attachments,
                 intent: intent,
                 draft: draft,
+                delegatedSource: delegatedSource,
                 normalUserTurn: normalUserTurn,
                 onQueuedPromptEnqueued: onQueuedPromptEnqueued,
                 onDispatchRegistered: { onDispatchRegistered?() },
@@ -9543,6 +9549,7 @@ extension ACPSessionManager {
                 attachments: attachments,
                 draft: draft,
                 scheduledAt: scheduledAt,
+                delegatedSource: delegatedSource,
                 normalUserTurn: normalUserTurn,
                 into: sessionId,
                 onQueuedPromptEnqueued: onQueuedPromptEnqueued,
@@ -9565,6 +9572,7 @@ extension ACPSessionManager {
                 attachments: attachments,
                 draft: draft,
                 scheduledAt: scheduledAt,
+                delegatedSource: delegatedSource,
                 normalUserTurn: normalUserTurn,
                 into: sessionId,
                 onQueuedPromptEnqueued: onQueuedPromptEnqueued,
