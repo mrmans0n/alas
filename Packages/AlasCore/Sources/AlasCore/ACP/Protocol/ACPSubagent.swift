@@ -15,17 +15,24 @@ public struct ACPSubagentSpawn: Codable, Equatable, Sendable {
     public let name: String?
     public let task: String?
     public let capabilities: ACPSubagentCapabilities
+    /// The revised form's `subagent_update` carried `capabilities` (even
+    /// `null` or `{}`), so they replace the child's set — possibly revoking
+    /// Cancel. A repeated earlier-draft spawn only ever adds them. Never on
+    /// the wire.
+    public var replacesCapabilities = false
 
     public init(
         subagentSessionId: String,
         name: String? = nil,
         task: String? = nil,
-        capabilities: ACPSubagentCapabilities = .init()
+        capabilities: ACPSubagentCapabilities = .init(),
+        replacesCapabilities: Bool = false
     ) {
         self.subagentSessionId = subagentSessionId
         self.name = name
         self.task = task
         self.capabilities = capabilities
+        self.replacesCapabilities = replacesCapabilities
     }
 
     private enum CodingKeys: String, CodingKey {

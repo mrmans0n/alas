@@ -196,11 +196,15 @@ struct ACPSubagentProtocolTests {
         ])
     }
 
-    @Test("a revised session_message addressed to another session is not this transcript's turn")
-    func revisedMessageForAnotherSession() throws {
+    @Test("a revised session_message not addressed to this session is not its turn", arguments: [
+        #""senderSessionId":"agent_n","recipientSessionId":"root""#,
+        // Only the sender is known yet, and it is this session.
+        #""senderSessionId":"agent_n""#
+    ])
+    func revisedMessageForAnotherSession(participants: String) throws {
         let updates = try Self.frame("""
         {"sessionId":"agent_n","update":{"sessionUpdate":"session_message","messageId":"m1",\
-        "senderSessionId":"agent_n","recipientSessionId":"root","content":[{"type":"text","text":"done"}]}}
+        \(participants),"content":[{"type":"text","text":"done"}]}}
         """)
         #expect(updates.isEmpty)
     }

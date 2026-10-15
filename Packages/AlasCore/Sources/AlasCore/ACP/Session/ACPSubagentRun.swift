@@ -144,7 +144,7 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
         if let incoming = spawn.task, !incoming.isEmpty, incoming != task {
             task = incoming
         }
-        if spawn.capabilities != .init(), spawn.capabilities != capabilities {
+        if spawn.replacesCapabilities || spawn.capabilities != .init(), spawn.capabilities != capabilities {
             capabilities = spawn.capabilities
         }
     }

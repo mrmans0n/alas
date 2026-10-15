@@ -26,7 +26,8 @@ public enum ACPRevisedSubagentUpdate: Decodable, Equatable, Sendable {
         public let sessionId: String
         public let title: String?
         public let description: String?
-        /// Nil when absent. A concrete object replaces the whole set.
+        /// Nil when absent. Present — `null` and `{}` included — it
+        /// replaces the whole set, so an empty one revokes Cancel.
         public let capabilities: ACPSubagentCapabilities?
         /// Nil when absent or `null`: neither asserts any activity.
         public let state: WorkState?
@@ -98,8 +99,9 @@ public enum ACPRevisedSubagentUpdate: Decodable, Equatable, Sendable {
             let sessionId = try c.decode(String.self, forKey: .sessionId)
             let title: String? = (try? c.decodeIfPresent(String.self, forKey: .title)) ?? nil
             let description: String? = (try? c.decodeIfPresent(String.self, forKey: .description)) ?? nil
-            let capabilities: ACPSubagentCapabilities? =
-                (try? c.decodeIfPresent(ACPSubagentCapabilities.self, forKey: .capabilities)) ?? nil
+            let capabilities: ACPSubagentCapabilities? = c.contains(.capabilities)
+                ? ((try? c.decodeIfPresent(ACPSubagentCapabilities.self, forKey: .capabilities)) ?? nil) ?? .init()
+                : nil
             self = .subagentUpdate(.init(
                 sessionId: sessionId,
                 title: title,
@@ -159,7 +161,8 @@ public enum ACPRevisedSubagentUpdate: Decodable, Equatable, Sendable {
                     subagentSessionId: update.sessionId,
                     name: update.title,
                     task: update.description,
-                    capabilities: update.capabilities ?? .init())))]
+                    capabilities: update.capabilities ?? .init(),
+                    replacesCapabilities: update.capabilities != nil)))]
             if let state = update.state {
                 result.append(.init(
                     sessionId: sessionId,
@@ -177,8 +180,11 @@ public enum ACPRevisedSubagentUpdate: Decodable, Equatable, Sendable {
             // was handed — the same row the earlier draft's prompt makes.
             // Claude sends nothing else; the other view of a message (one
             // this session sent elsewhere) is not this transcript's to show.
-            guard message.recipientSessionId.map({ $0 == sessionId }) ?? true,
-                  let content = message.content else { return [] }
+            // With no recipient, a message is still known not to be INTO
+            // this session when this session sent it.
+            let addressedHere = message.recipientSessionId.map { $0 == sessionId }
+                ?? (message.senderSessionId != sessionId)
+            guard addressedHere, let content = message.content else { return [] }
             // An upsert replaces the message's content: the first block
             // carries that, the rest append to it. A clear has no block.
             let blocks = content.isEmpty && message.replacesContent ? [ACPContentBlock.text("")] : content

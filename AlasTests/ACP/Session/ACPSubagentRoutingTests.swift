@@ -997,6 +997,21 @@ struct ACPSubagentRoutingTests {
         #expect(run.messages.count == 2)
     }
 
+    @Test("a revised capabilities patch replaces the set, so an empty one revokes Cancel", arguments: [
+        (#""capabilities":null"#, false),
+        (#""capabilities":{}"#, false),
+        (#""capabilities":{"cancel":null}"#, false),
+        // Absent means unchanged.
+        (#""state":{"state":"running"}"#, true)
+    ])
+    func revisedCapabilitiesPatch(patch: String, stillCancellable: Bool) async throws {
+        let (runner, _, _) = try makeRunner()
+        feed(runner, #"{"sessionId":"remote-parent","update":{"sessionId":"agent_n","sessionUpdate":"subagent_update","capabilities":{"cancel":{}},"state":{"state":"running"}}}"#)
+        feed(runner, #"{"sessionId":"remote-parent","update":{"sessionId":"agent_n","sessionUpdate":"subagent_update",\#(patch)}}"#)
+
+        #expect(runner.session.subagentRun("agent_n")?.capabilities.supportsCancel == stillCancellable)
+    }
+
     @Test("a revised session_message on the root never becomes a user turn")
     func revisedSessionMessageOnRootIsIgnored() async throws {
         let (runner, _, _) = try makeRunner()
