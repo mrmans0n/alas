@@ -131,6 +131,11 @@ public final class HostProtocolConnection {
             return .workspaceCheckout(checkout: try await host.workspaces.checkout(id: id))
         case .startRun(let scriptKey, let ref):
             let worktree = try worktree(ref)
+            // Archiving stopped everything in it; nothing starts there again
+            // until it is unarchived.
+            guard !host.core.projects.isWorktreeHidden(projectId: ref.projectID, path: worktree.path) else {
+                return .runStart(start: .refused(title: "Worktree archived", message: "Unarchive the worktree to run scripts in it."))
+            }
             let projectHost = host.core.projects.projects.first { $0.id == ref.projectID }?.host
             let scripts = await RunScriptStore.scripts(worktreeRoot: worktree.path, remoteHost: projectHost)
             guard let script = scripts.first(where: { $0.key == scriptKey }) else {

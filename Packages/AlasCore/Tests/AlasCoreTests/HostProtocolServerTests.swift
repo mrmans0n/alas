@@ -140,6 +140,21 @@ struct HostProtocolServerTests {
         #expect(client.messages == [.response(id: message.id, result: .failure(error: error))])
     }
 
+    /// Archiving stopped everything in a worktree; a run does not start
+    /// there again.
+    @Test func runsDoNotStartInArchivedWorktrees() async throws {
+        let fixture = try Fixture()
+        fixture.projects.setWorktreeHidden(projectId: "p", path: fixture.worktree.path, hidden: true)
+        let client = Client()
+        let connection = fixture.server.connect(caller: .localUser(uid: 501), send: client.receive)
+        await connection.receive(HostClientMessage(id: 1, request: .startRun(
+            scriptKey: "repo:dev.sh", worktree: WorktreeRef(projectID: "p", path: fixture.worktree.path.path)
+        )))
+        #expect(client.messages == [.response(id: 1, result: .runStart(start: .refused(
+            title: "Worktree archived", message: "Unarchive the worktree to run scripts in it."
+        )))])
+    }
+
     @MainActor
     private struct Fixture {
         let projects: ProjectsManager
