@@ -4915,7 +4915,8 @@ final class AppState {
             destination: destination,
             runStartup: true,
             launchSurface: .none,
-            destinationAlreadyPrepared: true
+            destinationAlreadyPrepared: true,
+            caller: .cli
         )
         guard !id.isEmpty else {
             return .error("A worktree already exists at this path.")
