@@ -60,7 +60,9 @@ struct HostSocketServerTests {
             if case .worktreeChanged(let worktree) = event { worktree.worktree.id == created.id && worktree.isArchived } else { false }
         }
 
-        #expect(try await client.request(.deleteWorktree(worktree: ref, force: false, deleteBranchIfMerged: false)) == .done)
+        #expect(try await client.request(.deleteWorktree(
+            worktree: ref, lineageID: created.lineageID, branch: created.branch, force: false, deleteBranchIfMerged: false
+        )) == .done)
         try await client.waitForEvent { $0 == .worktreeRemoved(projectID: project.id, worktreeID: created.id) }
         #expect(!FileManager.default.fileExists(atPath: destination.path))
     }
@@ -121,7 +123,7 @@ private final class SocketClient {
     private func deliver(_ message: HostServerMessage) {
         switch message {
         case .response(let id, let result): responses[id] = result
-        case .events(let batch): events += batch
+        case .events(let batch, _): events += batch
         }
         waiters.forEach { $0.resume() }
         waiters.removeAll()
