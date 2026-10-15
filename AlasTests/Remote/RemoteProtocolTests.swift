@@ -68,7 +68,7 @@ struct RemoteProtocolTests {
             Issue.record("expected hello")
             return
         }
-        #expect(capabilities == [PeerConsoleCapability.v1, PeerConsoleCapability.terminateV1, PeerSessionTabsCapability.v1, PeerListPushCapability.v1])
+        #expect(capabilities == [PeerConsoleCapability.v1, PeerConsoleCapability.terminateV1, PeerSessionTabsCapability.v1])
     }
 
     @Test func sessionTabMessagesRoundTripAndKeepTheirSessionScope() throws {
