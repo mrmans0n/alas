@@ -479,9 +479,9 @@ struct RemoteAppStateAccessTests {
         #expect(tab.title == "Persisted Title")
     }
 
-    /// Session tabs are in the Remote session list but not in host events,
-    /// so opening and closing one announces a list change of its own.
-    @Test func sessionTabChangesAnnounceASessionListChange() async throws {
+    /// Session tabs and Git status are in the Remote session list but not in
+    /// host events, so their changes announce a list change of their own.
+    @Test func sessionTabAndStatusChangesAnnounceASessionListChange() async throws {
         let state = makeRemoteRenameState()
         let worktreeId = try #require(state.selectedWorktreeId)
         defer { cleanupRemoteRenameFiles(worktreeId: worktreeId) }
@@ -505,7 +505,16 @@ struct RemoteAppStateAccessTests {
         #expect(afterOpen > 0)
         #expect(await state.closeSessionTab(for: id) == .success)
         try await waitForChange(after: afterOpen)
-        #expect(changes > afterOpen)
+        let afterClose = changes
+        #expect(afterClose > afterOpen)
+
+        defer {
+            let store = WorktreeStatusStore.shared
+            store.prune(keepingPaths: Set(store.statuses.keys).subtracting([manager.worktreePath]))
+        }
+        WorktreeStatusStore.shared.apply([manager.worktreePath: .dirty(fileCount: 3, conflictCount: 0)])
+        try await waitForChange(after: afterClose)
+        #expect(changes > afterClose)
     }
 
     @Test func remoteSessionTabActionsOpenAndCloseAStoredSessionOnTheHost() async throws {

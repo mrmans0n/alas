@@ -228,11 +228,11 @@ final class AppState {
     /// The core's public API. Paths move onto it from `core` as they are
     /// migrated.
     let host: AlasHost
-    /// Sent when a session tab opens, closes or moves, which the Remote
-    /// session list shows and host events do not carry. Followed from its
-    /// first read.
-    @ObservationIgnored private var remoteSessionTabChanges: ChangeSignal<Void>?
-    @ObservationIgnored private var remoteSessionTabLayout: [String: [ACPSession.ID]] = [:]
+    /// Sent when what the Remote session list shows changes without a host
+    /// event: a session tab opening, closing or moving, or the Git status of
+    /// a worktree with sessions. Followed from its first read.
+    @ObservationIgnored private var remoteSessionListChanges: ChangeSignal<Void>?
+    @ObservationIgnored private var remoteSessionListInputs: [String: RemoteSessionListInputs] = [:]
     var projectsManager: ProjectsManager {
         get { core.projects }
         set { core.projects = newValue }
@@ -15123,35 +15123,47 @@ private extension WorkspaceCheckoutMember {
 // Lives in this file (not a separate one) so it can reach the private
 // `acpManagers` dictionary. Aggregates across every live per-worktree manager;
 // worktrees not opened this run simply don't appear (documented v1 behavior).
+/// What the Remote session list shows of a worktree beyond host events.
+private struct RemoteSessionListInputs: Equatable {
+    var sessionTabs: [ACPSession.ID]
+    var status: WorktreeDirtyState
+    var diff: WorktreeDiffStats?
+}
+
 extension AppState: RemoteSessionsProvider {
     var eventHost: AlasHost? { host }
 
     var sessionListChanges: ChangeSignal<Void>? {
-        if let remoteSessionTabChanges { return remoteSessionTabChanges }
+        if let remoteSessionListChanges { return remoteSessionListChanges }
         let signal = ChangeSignal<Void>()
-        remoteSessionTabChanges = signal
-        followRemoteSessionTabs()
+        remoteSessionListChanges = signal
+        followRemoteSessionListInputs()
         return signal
     }
 
-    /// The session tabs of each worktree with sessions, in tab order.
-    private func sessionTabLayout() -> [String: [ACPSession.ID]] {
-        Dictionary(acpManagers.values.map { manager in
-            (manager.worktreeId, tabs.tabs(forWorktree: manager.worktreeId).compactMap { tab -> ACPSession.ID? in
-                guard case .acpSession(let state) = tab else { return nil }
-                return state.sessionId
-            })
+    /// Per worktree with sessions: its session tabs in order, and its Git status.
+    private func currentRemoteSessionListInputs() -> [String: RemoteSessionListInputs] {
+        let statuses = WorktreeStatusStore.shared
+        return Dictionary(acpManagers.values.map { manager in
+            (manager.worktreeId, RemoteSessionListInputs(
+                sessionTabs: tabs.tabs(forWorktree: manager.worktreeId).compactMap { tab -> ACPSession.ID? in
+                    guard case .acpSession(let state) = tab else { return nil }
+                    return state.sessionId
+                },
+                status: statuses.status(forPath: manager.worktreePath),
+                diff: statuses.diffStats(forPath: manager.worktreePath)
+            ))
         }, uniquingKeysWith: { first, _ in first })
     }
 
-    private func followRemoteSessionTabs() {
-        let layout = withObservationTracking { sessionTabLayout() } onChange: {
-            Task { @MainActor [weak self] in self?.followRemoteSessionTabs() }
+    private func followRemoteSessionListInputs() {
+        let inputs = withObservationTracking { currentRemoteSessionListInputs() } onChange: {
+            Task { @MainActor [weak self] in self?.followRemoteSessionListInputs() }
         }
-        // Editor tabs change the tab list too; only session tabs matter.
-        if layout != remoteSessionTabLayout {
-            remoteSessionTabLayout = layout
-            remoteSessionTabChanges?.send()
+        // Editor tabs and other worktrees change what is tracked too.
+        if inputs != remoteSessionListInputs {
+            remoteSessionListInputs = inputs
+            remoteSessionListChanges?.send()
         }
     }
 
