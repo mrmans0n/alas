@@ -29,9 +29,6 @@ public final class HostProtocolConnection {
     private let caller: HostCaller
     private let send: @MainActor (HostServerMessage) async -> Void
     private var subscription: HostSubscription?
-    /// A subscription to start forwarding once its response is sent, so a
-    /// client hears it was subscribed before it hears an event.
-    private var pendingSubscription: HostSubscription?
 
     init(host: AlasHost, caller: HostCaller, send: @escaping @MainActor (HostServerMessage) async -> Void) {
         self.host = host
@@ -42,6 +39,10 @@ public final class HostProtocolConnection {
     /// Answers one message. Requests are independent: a client may send the
     /// next before this one is answered, and matches answers by id.
     public func receive(_ message: HostClientMessage) async {
+        if message.version == HostProtocolVersion.current, case .subscribe(let cursor) = message.request {
+            await subscribe(after: cursor, id: message.id)
+            return
+        }
         let result: HostResponse
         if message.version != HostProtocolVersion.current {
             result = .failure(error: .unsupportedVersion(supported: HostProtocolVersion.current))
@@ -53,10 +54,18 @@ public final class HostProtocolConnection {
             }
         }
         await send(.response(id: message.id, result: result))
-        if let pending = pendingSubscription {
-            pendingSubscription = nil
-            follow(pending)
-        }
+    }
+
+    /// Replaces the subscription, and forwards its events only once the
+    /// client has been told it subscribed, unless another request replaced
+    /// or ended it meanwhile.
+    private func subscribe(after cursor: HostCursor, id: Int) async {
+        close()
+        let next = host.subscribe(after: cursor)
+        subscription = next
+        await send(.response(id: id, result: .subscribed))
+        guard subscription === next else { return }
+        follow(next)
     }
 
     /// Ends the connection's subscription. The transport calls it when the
@@ -64,17 +73,14 @@ public final class HostProtocolConnection {
     public func close() {
         subscription?.cancel()
         subscription = nil
-        pendingSubscription?.cancel()
-        pendingSubscription = nil
     }
 
     private func respond(to request: HostRequest) async throws -> HostResponse {
         switch request {
         case .snapshot:
             return .snapshot(snapshot: try await host.snapshot())
-        case .subscribe(let cursor):
-            close()
-            pendingSubscription = host.subscribe(after: cursor)
+        case .subscribe:
+            // Handled before a response is built; see `subscribe(after:id:)`.
             return .subscribed
         case .unsubscribe:
             close()
@@ -107,6 +113,13 @@ public final class HostProtocolConnection {
             guard listed.lineageID == lineageID, listed.branch == branch else {
                 throw WorktreeArchiveRefusal.changed("The worktree changed since it was listed.")
             }
+            // The list can lag the disk. Checked in the same turn the host
+            // claims the worktree, so nothing starts in between.
+            guard !listed.path.isRemoteAlasPath else { throw WorktreeArchiveRefusal.remoteUnsupported }
+            guard let lineageID,
+                  WorktreeService.existingLocalLineageID(forWorktreeAt: listed.path) == lineageID,
+                  WorktreeService.localBranchName(forWorktreeAt: listed.path) == branch
+            else { throw WorktreeArchiveRefusal.changed("The checkout at this path changed.") }
             try await host.worktrees.archive(listed, caller: caller)
             return .done
         case .unarchiveWorktree(let ref):
@@ -132,7 +145,6 @@ public final class HostProtocolConnection {
 
     /// Forwards the subscription's batches until it ends or another replaces it.
     private func follow(_ next: HostSubscription) {
-        subscription = next
         Task { @MainActor [weak self] in
             while let events = await next.next() {
                 guard let self else { return }

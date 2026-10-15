@@ -64,6 +64,35 @@ struct HostProtocolServerTests {
         ])
     }
 
+    /// Requests overlap, and a transport may finish sends out of order:
+    /// events still wait for their subscribe response.
+    @Test func eventsWaitForTheirSubscribeResponse() async throws {
+        let fixture = try Fixture()
+        let client = Client()
+        let connection = fixture.server.connect(caller: .localUser(uid: 501), send: client.receive)
+        defer { connection.close() }
+        await connection.receive(HostClientMessage(id: 1, request: .snapshot))
+        guard case .response(1, .snapshot(let snapshot)) = client.messages.first else { return }
+
+        client.heldResponseID = 2
+        let subscribing = Task { await connection.receive(HostClientMessage(id: 2, request: .subscribe(after: snapshot.cursor))) }
+        try await client.waitFor { _ in client.isHolding }
+        await connection.receive(HostClientMessage(id: 3, request: .listSessions))
+        fixture.projects.setOperationState(for: fixture.worktree, state: .archiving(projectId: "p"))
+        try await client.waitFor { _ in fixture.host.worktrees.list().first?.operation == .archiving }
+        await Task.yield()
+        #expect(!client.messages.contains { if case .events = $0 { true } else { false } })
+
+        client.release()
+        await subscribing.value
+        try await client.waitFor { $0.count == 4 }
+        #expect(client.messages[2] == .response(id: 2, result: .subscribed))
+        guard case .events = client.messages[3] else {
+            Issue.record("expected events after the subscribe response, got \(client.messages)")
+            return
+        }
+    }
+
     @Test(arguments: [
         (HostClientMessage(version: 99, id: 1, request: .snapshot), HostError.unsupportedVersion(supported: HostProtocolVersion.current)),
         (
@@ -79,6 +108,14 @@ struct HostProtocolServerTests {
                 worktree: WorktreeRef(projectID: "p", path: "/srv/feature"), lineageID: "seen", branch: "feature"
             )),
             HostError.worktreeArchive(refusal: .changed("The worktree changed since it was listed."))
+        ),
+        // The list can lag the disk: what is listed matches, but the path
+        // holds no such checkout.
+        (
+            HostClientMessage(id: 6, request: .archiveWorktree(
+                worktree: WorktreeRef(projectID: "p", path: "/srv/feature"), lineageID: "listed", branch: "feature"
+            )),
+            HostError.worktreeArchive(refusal: .changed("The checkout at this path changed."))
         ),
         (
             HostClientMessage(id: 3, request: .deleteWorktree(
@@ -136,12 +173,20 @@ struct HostProtocolServerTests {
         var messages: [HostServerMessage] = []
         var holdsEvents = false
         private(set) var heldEvents: HostServerMessage?
+        /// The response to this request id waits for `release()`, while
+        /// later messages go through.
+        var heldResponseID: Int?
+        var isHolding: Bool { gate != nil }
         private var gate: CheckedContinuation<Void, Never>?
 
         func receive(_ message: HostServerMessage) async {
             if holdsEvents, case .events = message {
                 holdsEvents = false
                 heldEvents = message
+                await withCheckedContinuation { gate = $0 }
+            }
+            if let held = heldResponseID, case .response(held, _) = message {
+                heldResponseID = nil
                 await withCheckedContinuation { gate = $0 }
             }
             messages.append(message)

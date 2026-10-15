@@ -307,6 +307,9 @@ public enum WorktreeArchiveRefusal: Codable, LocalizedError, Equatable {
     case ownedByWorkspaceCheckout(String)
     /// The checkout was replaced or switched branch since the caller looked.
     case changed(String)
+    /// A remote checkout's identity cannot be checked, so only the app,
+    /// whose user sees it, archives one.
+    case remoteUnsupported
 
     private enum OwnedByWorkspaceCheckoutCodingKeys: String, CodingKey { case _0 = "reason" }
     private enum ChangedCodingKeys: String, CodingKey { case _0 = "reason" }
@@ -317,6 +320,7 @@ public enum WorktreeArchiveRefusal: Codable, LocalizedError, Equatable {
         case .operationInProgress: "Wait for the current worktree operation to finish."
         case .ownedByWorkspaceCheckout(let reason): "\(reason)."
         case .changed(let reason): reason
+        case .remoteUnsupported: "Remote worktrees can only be archived from the app."
         }
     }
 }
@@ -353,6 +357,7 @@ public enum WorktreeDeletionRefusal: Codable, LocalizedError, Equatable {
         case .operationInProgress: "Wait for the current worktree operation to finish."
         case .needsForce(let refusal): refusal
         case .changed(let reason): reason
+        case .remoteUnsupported: "Remote worktrees can only be archived from the app."
         case .checkpointRecoveryPending: WorktreeRemovalResult.checkpointRecoveryMessage
         case .failed(let message): message
         }
