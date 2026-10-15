@@ -16,6 +16,9 @@ private let hostSocketLogger = Logger(subsystem: "io.nlopez.alas", category: "Ho
 public final class HostSocketServer: @unchecked Sendable {
     public let path: String
     private let listenFD: Int32
+    /// An exclusive `flock` on `<path>.lock`, held while serving: whoever
+    /// holds it owns the path, and the kernel releases it if the process dies.
+    private let lockFD: Int32
     private let lock = NSLock()
     private var isStopped = false
     private let server: HostProtocolServer
@@ -28,7 +31,7 @@ public final class HostSocketServer: @unchecked Sendable {
     }
 
     /// Starts serving at `path`, or returns nil when it cannot: the directory
-    /// is not this user's own, or another live host already serves the path.
+    /// is not this user's own, or another live host holds the path.
     @MainActor
     public init?(path: String = HostSocketServer.defaultPath(), server: HostProtocolServer) {
         let directory = (path as NSString).deletingLastPathComponent
@@ -36,21 +39,26 @@ public final class HostSocketServer: @unchecked Sendable {
             hostSocketLogger.error("Host socket directory \(directory, privacy: .public) is not private to this user")
             return nil
         }
-        if Self.connect(to: path) {
+        let lock = open(path + ".lock", O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
+        guard lock >= 0, flock(lock, LOCK_EX | LOCK_NB) == 0 else {
+            if lock >= 0 { close(lock) }
             hostSocketLogger.info("Another host already serves \(path, privacy: .public)")
             return nil
         }
+        // Holding the lock, whatever is at the path is a dead host's.
         unlink(path)
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0, Self.withAddress(path, { bind(fd, $0, $1) }) == 0,
               chmod(path, 0o600) == 0, listen(fd, 16) == 0
         else {
             if fd >= 0 { close(fd) }
+            close(lock)
             hostSocketLogger.error("Could not listen on \(path, privacy: .public): \(String(cString: strerror(errno)), privacy: .public)")
             return nil
         }
         self.path = path
         self.listenFD = fd
+        self.lockFD = lock
         self.server = server
         Thread.detachNewThread { [self] in acceptLoop() }
     }
@@ -64,6 +72,7 @@ public final class HostSocketServer: @unchecked Sendable {
             unlink(path)
             shutdown(listenFD, SHUT_RDWR)
             close(listenFD)
+            close(lockFD)
         }
     }
 

@@ -29,9 +29,14 @@ struct HostSocketServerTests {
         )
         let project = try await core.addProject(path: repo, displayName: "repo", icon: .default())
         let path = root.appendingPathComponent("run/host.sock").path
+        let first = try #require(HostSocketServer(path: path, server: HostProtocolServer(host: AlasHost(core: core))))
+        // One host per socket, even when its socket file is gone for a moment
+        // or another host starts at the same time.
+        unlink(path)
+        #expect(HostSocketServer(path: path, server: HostProtocolServer(host: AlasHost(core: core))) == nil, "one host per socket")
+        first.stop()
         let socket = try #require(HostSocketServer(path: path, server: HostProtocolServer(host: AlasHost(core: core))))
         defer { socket.stop() }
-        #expect(HostSocketServer(path: path, server: HostProtocolServer(host: AlasHost(core: core))) == nil, "one host per socket")
         let client = try SocketClient(path: path)
         defer { client.close() }
 
