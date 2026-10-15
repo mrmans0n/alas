@@ -51,6 +51,7 @@ struct DiffReviewRail: View {
 
     @Environment(\.theme) private var theme
     @State private var filterQuery = ""
+    @State private var onScreenFiles = DiffReviewRailOnScreenFiles()
 
     init(
         session: DiffReviewSessionModel,
@@ -121,9 +122,7 @@ struct DiffReviewRail: View {
                     proxy.scrollTo(selectedFileID.rawValue, anchor: .center)
                 }
                 .onChange(of: selectedFileID) { _, id in
-                    withAnimation(.easeInOut(duration: 0.14)) {
-                        proxy.scrollTo(id.rawValue, anchor: .center)
-                    }
+                    scrollToSelection(id, using: proxy)
                 }
             }
             if threadCounts.openTotal > 0 || threadCounts.resolvedTotal > 0 {
@@ -173,6 +172,7 @@ struct DiffReviewRail: View {
                         ForEach(visibleFiles) { file in
                             collapsedMarker(for: file)
                                 .id(file.id.rawValue)
+                                .trackingRailVisibility(of: file.id, in: onScreenFiles)
                         }
                     }
                     .padding(.vertical, 4)
@@ -181,12 +181,19 @@ struct DiffReviewRail: View {
                     proxy.scrollTo(selectedFileID.rawValue, anchor: .center)
                 }
                 .onChange(of: selectedFileID) { _, id in
-                    withAnimation(.easeInOut(duration: 0.14)) {
-                        proxy.scrollTo(id.rawValue, anchor: .center)
-                    }
+                    scrollToSelection(id, using: proxy)
                 }
             }
         }
+    }
+
+    /// The scroll spy moves the selection each time the review crosses a
+    /// file boundary, so the rail only scrolls when the new row is out of
+    /// view, and never animates: a SwiftUI scroll animation here competes
+    /// with the review's own scrolling on the main thread.
+    private func scrollToSelection(_ id: DiffReviewFileID, using proxy: ScrollViewProxy) {
+        guard !onScreenFiles.contains(id) else { return }
+        proxy.scrollTo(id.rawValue, anchor: .center)
     }
 
     private var expandedHeader: some View {
@@ -316,6 +323,7 @@ struct DiffReviewRail: View {
             onSelectFile(file.id)
         }
         .equatable()
+        .trackingRailVisibility(of: file.id, in: onScreenFiles)
     }
 
     private func collapsedMarker(for file: DiffReviewFileSummary) -> some View {
@@ -378,6 +386,28 @@ struct DiffReviewRail: View {
         case .modified, .unknown:
             theme.color("fg-dim")
         }
+    }
+}
+
+/// Which rail rows are on screen. A reference type so that rows reporting
+/// their visibility while the rail scrolls don't re-render the rail.
+@MainActor
+private final class DiffReviewRailOnScreenFiles {
+    private var ids: Set<DiffReviewFileID> = []
+
+    func contains(_ id: DiffReviewFileID) -> Bool { ids.contains(id) }
+
+    func set(_ id: DiffReviewFileID, visible: Bool) {
+        if visible { ids.insert(id) } else { ids.remove(id) }
+    }
+}
+
+private extension View {
+    func trackingRailVisibility(of id: DiffReviewFileID, in onScreenFiles: DiffReviewRailOnScreenFiles) -> some View {
+        onScrollVisibilityChange(threshold: 0.9) { visible in
+            onScreenFiles.set(id, visible: visible)
+        }
+        .onDisappear { onScreenFiles.set(id, visible: false) }
     }
 }
 
