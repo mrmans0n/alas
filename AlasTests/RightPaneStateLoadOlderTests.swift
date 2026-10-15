@@ -279,17 +279,23 @@ struct RightPaneStateLoadOlderTests {
         #expect(state.hasMoreOlder == false)
     }
 
-    @Test func refreshClearsOlderState() async throws {
+    @Test func refreshKeepsOlderPagesUntilHistoryMoves() async throws {
         let repo = try await makeBranchAhead(base: 25, ahead: 2)
         defer { try? FileManager.default.removeItem(at: repo) }
         let state = RightPaneState(worktree: makeWorktree(at: repo, branch: "feature"), baseBranch: "main")
         await state.refresh()
         await state.loadOlder()
-        #expect(state.olderCommits.count == 20)
+        await state.loadOlder()
+        #expect(state.olderCommits.count == 25)
+
+        await state.refresh()
+        #expect(state.olderCommits.count == 25)
+
+        let committed = try await Process.git(["-c", "user.name=t", "-c", "user.email=t@e.com", "commit", "-q", "--allow-empty", "-m", "feat: ahead3"], cwd: repo)
+        try #require(committed.exitCode == 0, "git commit failed: \(committed.stderr)")
         await state.refresh()
         #expect(state.olderCommits.isEmpty)
         #expect(state.hasMoreOlder)
-        #expect(state.isLoadingOlder == false)
     }
 
     @Test func errorPathDisablesFurtherLoads() async throws {
