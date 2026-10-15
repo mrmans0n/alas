@@ -90,4 +90,25 @@ private let parseCases: [ShepherdRulesParseCase] = [
         #expect(parsed.instructions == c.instructions)
         #expect(parsed.requiredReviewers == c.reviewers)
     }
+
+    /// `.alas/shepherd.md` is a directory, so reading it fails.
+    @Test("an unreadable repo file fails the load unless the local file wins", arguments: [true, false])
+    func unreadableRepoFile(hasLocalFile: Bool) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent(ShepherdRulesResolver.repoFilePath), withIntermediateDirectories: true
+        )
+        if hasLocalFile {
+            try "Local rules".write(
+                to: root.appendingPathComponent(ShepherdRulesResolver.localFilePath), atomically: true, encoding: .utf8
+            )
+            let rules = try await ShepherdRulesResolver.load(worktreePath: root, projectSettings: sampleSettings)
+            #expect(rules.source == .localFile)
+        } else {
+            await #expect(throws: (any Error).self) {
+                try await ShepherdRulesResolver.load(worktreePath: root, projectSettings: sampleSettings)
+            }
+        }
+    }
 }

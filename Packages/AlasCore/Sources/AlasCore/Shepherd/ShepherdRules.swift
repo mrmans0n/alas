@@ -119,13 +119,16 @@ public enum ShepherdRulesResolver {
     /// worktree, then `resolve`. Only a missing file is nil: a read that
     /// fails throws, so a dropped connection can't pass for a repository
     /// without rules and let the shepherd merge past its required reviewers.
+    /// Reads in precedence order, so a source that `resolve` would ignore
+    /// can't fail the load.
     public static func load(worktreePath: URL, projectSettings: ProjectShepherdSettings?) async throws -> ShepherdRules {
         let host = RemoteHostRegistry.shared.host(forPath: worktreePath.path)
-        async let localFile = read(worktreePath.appendingPathComponent(localFilePath), host: host)
-        async let repoFile = read(worktreePath.appendingPathComponent(repoFilePath), host: host)
+        if let localFile = try await read(worktreePath.appendingPathComponent(localFilePath), host: host) {
+            return resolve(localFile: localFile, repoFile: nil, projectSettings: projectSettings)
+        }
         return try await resolve(
-            localFile: localFile,
-            repoFile: repoFile,
+            localFile: nil,
+            repoFile: read(worktreePath.appendingPathComponent(repoFilePath), host: host),
             projectSettings: projectSettings
         )
     }
