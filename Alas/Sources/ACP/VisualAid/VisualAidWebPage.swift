@@ -254,6 +254,10 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
         else { return }
         if let height = body["height"] as? Double {
             contentHeight = max(0, CGFloat(height))
+        } else if let edges = body["scrollEdges"] as? [String: Any] {
+            webView.scrollEdges = .init(
+                canScrollUp: edges["scrollUp"] as? Bool ?? false,
+                canScrollDown: edges["scrollDown"] as? Bool ?? false)
         } else if let choice = body["choice"] as? String {
             guard acceptsInput else { return }
             onChoice(choice)
@@ -356,6 +360,37 @@ final class VisualAidWKWebView: WKWebView {
         blocksInteraction ? nil : super.hitTest(point)
     }
 
+    /// Where the page can still scroll, as last reported by the bridge.
+    var scrollEdges = VisualAidScrollRouting.Edges()
+    private var scrollRouting = VisualAidScrollRouting()
+    /// Zero-delta phased events held while the gesture's owner is undecided.
+    private var pendingScrollEvents: [NSEvent] = []
+
+    /// The page scrolls only the gestures it can move; the rest go to the transcript, so a capped card
+    /// never traps the transcript's scroll once its own content is at an edge.
+    override func scrollWheel(with event: NSEvent) {
+        guard let owner = scrollRouting.owner(
+            phase: event.phase, momentumPhase: event.momentumPhase,
+            deltaX: event.scrollingDeltaX, deltaY: event.scrollingDeltaY, edges: scrollEdges)
+        else {
+            // `.began` legitimately follows its own `.mayBegin`; anything else held belongs to an abandoned gesture.
+            let continuesMayBegin = event.phase.contains(.began)
+                && pendingScrollEvents.last?.phase.contains(.mayBegin) == true
+            if !continuesMayBegin { pendingScrollEvents.removeAll() }
+            pendingScrollEvents.append(event)
+            if pendingScrollEvents.count > 8 { pendingScrollEvents.removeFirst() }
+            return
+        }
+        let events = pendingScrollEvents + [event]
+        pendingScrollEvents.removeAll()
+        for pending in events {
+            switch owner {
+            case .page: super.scrollWheel(with: pending)
+            case .transcript: nextResponder?.scrollWheel(with: pending)
+            }
+        }
+    }
+
     override func keyDown(with event: NSEvent) {
         if !blocksInteraction { super.keyDown(with: event) }
     }
@@ -389,6 +424,47 @@ final class VisualAidWKWebView: WKWebView {
               responder === self || responder.isDescendant(of: self)
         else { return }
         window.makeFirstResponder(nil)
+    }
+}
+
+/// Decides who scrolls a wheel gesture over a visual aid: the page or the transcript around it. A phased
+/// (trackpad) gesture is decided by its first non-zero delta and keeps that owner through momentum, so
+/// no gesture is split between the two; a phaseless mouse wheel decides per event.
+struct VisualAidScrollRouting: Equatable {
+    enum Owner: Equatable { case page, transcript }
+
+    struct Edges: Equatable {
+        var canScrollUp = false
+        var canScrollDown = false
+    }
+
+    private var owner: Owner?
+
+    /// The owner of this event, or nil while a phased gesture has not moved yet; the caller holds such
+    /// events and delivers them with the first decided one.
+    mutating func owner(
+        phase: NSEvent.Phase, momentumPhase: NSEvent.Phase, deltaX: CGFloat, deltaY: CGFloat, edges: Edges
+    ) -> Owner? {
+        let moved = deltaX != 0 || deltaY != 0
+        guard !phase.isEmpty || !momentumPhase.isEmpty else {
+            return moved ? Self.decide(deltaX: deltaX, deltaY: deltaY, edges: edges) : .transcript
+        }
+        if phase.contains(.began) || phase.contains(.mayBegin) { owner = nil }
+        if let owner { return owner }
+        if moved {
+            owner = Self.decide(deltaX: deltaX, deltaY: deltaY, edges: edges)
+        } else if !(phase.contains(.began) || phase.contains(.mayBegin)) {
+            // Ended, cancelled or coasting without ever moving: let the transcript pair its begin and end.
+            owner = .transcript
+        }
+        return owner
+    }
+
+    /// Sideways movement stays with the page; vertical goes to the page only while it can move that way.
+    /// A positive `deltaY` scrolls toward the top.
+    private static func decide(deltaX: CGFloat, deltaY: CGFloat, edges: Edges) -> Owner {
+        if abs(deltaX) > abs(deltaY) { return .page }
+        return (deltaY > 0 ? edges.canScrollUp : edges.canScrollDown) ? .page : .transcript
     }
 }
 

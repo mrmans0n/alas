@@ -135,11 +135,31 @@ public enum VisualAidWebPolicy: Sendable {
     public static let bridgeScript = """
     (() => {
       const post = (message) => window.webkit.messageHandlers.\(bridgeHandlerName).postMessage(message);
-      const reportHeight = () => post({ height: Math.ceil(document.documentElement.getBoundingClientRect().height) });
+      // Whether the document can still scroll up or down, so the app can hand a
+      // wheel gesture to the transcript once the page has nothing left to scroll.
+      let edgesFrame = 0;
+      let lastEdges = '';
+      const reportEdges = () => {
+        edgesFrame = 0;
+        const scroller = document.scrollingElement || document.documentElement;
+        const top = scroller.scrollTop;
+        const edges = { scrollUp: top > 1, scrollDown: top < scroller.scrollHeight - scroller.clientHeight - 1 };
+        const key = JSON.stringify(edges);
+        if (key === lastEdges) return;
+        lastEdges = key;
+        post({ scrollEdges: edges });
+      };
+      const scheduleEdges = () => { if (!edgesFrame) edgesFrame = requestAnimationFrame(reportEdges); };
+      const reportHeight = () => {
+        post({ height: Math.ceil(document.documentElement.getBoundingClientRect().height) });
+        scheduleEdges();
+      };
       const observer = new ResizeObserver(reportHeight);
       observer.observe(document.documentElement);
       if (document.body) observer.observe(document.body);
       addEventListener('load', reportHeight);
+      addEventListener('scroll', scheduleEdges, { passive: true });
+      addEventListener('resize', scheduleEdges);
       // Named so tests can drive it with a fake event.
       globalThis.alasVisualHandleClick = (event) => {
         if (!event.isTrusted || !(event.target instanceof Element)) return;

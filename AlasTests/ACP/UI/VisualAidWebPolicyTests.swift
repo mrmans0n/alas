@@ -54,6 +54,34 @@ struct VisualAidWebPolicyTests {
         #expect(VisualAidWebPolicy.isFullDocument(html) == full)
     }
 
+    @Test("a wheel event scrolls the page only while it can move that way", arguments: [
+        (CGFloat(0), CGFloat(-5), true, true, VisualAidScrollRouting.Owner.page),
+        (0, -5, true, false, .transcript),
+        (0, 5, true, true, .page),
+        (0, 5, false, true, .transcript),
+        (8, 2, false, false, .page),
+    ])
+    func wheelRouting(deltaX: CGFloat, deltaY: CGFloat, up: Bool, down: Bool, owner: VisualAidScrollRouting.Owner) {
+        var routing = VisualAidScrollRouting()
+        let edges = VisualAidScrollRouting.Edges(canScrollUp: up, canScrollDown: down)
+        #expect(routing.owner(phase: [], momentumPhase: [], deltaX: deltaX, deltaY: deltaY, edges: edges) == owner)
+    }
+
+    @Test("a trackpad gesture waits for its first movement, then keeps its owner through momentum")
+    func gestureRoutingLatches() {
+        var routing = VisualAidScrollRouting()
+        let midway = VisualAidScrollRouting.Edges(canScrollUp: true, canScrollDown: true)
+        let atBottom = VisualAidScrollRouting.Edges(canScrollUp: true, canScrollDown: false)
+        #expect(routing.owner(phase: .mayBegin, momentumPhase: [], deltaX: 0, deltaY: 0, edges: midway) == nil)
+        #expect(routing.owner(phase: .began, momentumPhase: [], deltaX: 0, deltaY: -3, edges: midway) == .page)
+        // Reaching the bottom mid-gesture does not hand the rest of it to the transcript.
+        #expect(routing.owner(phase: .changed, momentumPhase: [], deltaX: 0, deltaY: -9, edges: atBottom) == .page)
+        #expect(routing.owner(phase: [], momentumPhase: .changed, deltaX: 0, deltaY: -4, edges: atBottom) == .page)
+        // The next gesture starts at the bottom, so the transcript scrolls.
+        #expect(routing.owner(phase: .began, momentumPhase: [], deltaX: 0, deltaY: -3, edges: atBottom) == .transcript)
+        #expect(routing.owner(phase: [], momentumPhase: .changed, deltaX: 0, deltaY: -4, edges: midway) == .transcript)
+    }
+
     @Test("fragments go inside the template verbatim, placeholders included")
     func fragmentAssembly() {
         let html = "<p>{{CONTENT}} and {{HEAD}}</p>"
