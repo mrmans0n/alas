@@ -210,6 +210,8 @@ private struct ACPSessionView: View {
     @State private var sideQuestionSurface: CGRect = .zero
     /// Global pointer location while the `/btw` header is dragged.
     @State private var sideQuestionDrag: CGPoint?
+    /// The `/btw` card's draft and collapse state, shared by its three docks.
+    @State private var sideQuestionCardState = ACPSideQuestionCardState()
     @State private var updateState: AdapterUpdateState?
     @State private var dismissedLatest: String?
     /// Hides the install nudge for this view only. Never persisted: without
@@ -405,6 +407,7 @@ private struct ACPSessionView: View {
                 state.saveConfig()
             }
         )
+        .environment(\.acpSideQuestionCardState, sideQuestionCardState)
         // The side column sizes itself; the others follow the chat column.
         .frame(maxWidth: placement == .side ? nil : contentMaxWidth)
         .padding(.horizontal, placement == .side ? 0 : 20)
@@ -1624,12 +1627,16 @@ private struct ACPSideQuestionSlot: View {
     /// The size while a resize drag runs; committed on release.
     @State private var liveSize: CGFloat?
     @State private var dragStartSize: CGFloat?
+    @Environment(\.acpSideQuestionCardState) private var cardState
 
     var body: some View {
         if let entry = manager.sideQuestions[parentID], preferences.dock == placement {
             docked(sideQuestionCard(entry))
                 .environment(\.acpSideQuestionDockActions, dockActions)
                 .transition(.move(edge: transitionEdge).combined(with: .opacity))
+                // A new side question starts with an empty draft, expanded.
+                .onAppear { cardState?.adopt(entry.id) }
+                .onChange(of: entry.id) { _, id in cardState?.adopt(id) }
         }
     }
 

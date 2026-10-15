@@ -1,4 +1,5 @@
 import AppKit
+import Observation
 import SwiftUI
 
 /// How the `/btw` card is placed, read by its chrome.
@@ -24,9 +25,28 @@ struct ACPSideQuestionDockActions {
     var onHeaderDragCancel: () -> Void = {}
 }
 
+/// Card state that must survive moving the card to another dock, where a
+/// new view takes over. Reset when a new side question replaces the old one.
+@Observable
+@MainActor
+final class ACPSideQuestionCardState {
+    var questionID: UUID?
+    var followUp = ""
+    var isCollapsed = false
+
+    func adopt(_ id: UUID) {
+        guard questionID != id else { return }
+        questionID = id
+        followUp = ""
+        isCollapsed = false
+    }
+}
+
 extension EnvironmentValues {
     @Entry var acpSideQuestionCardLayout = ACPSideQuestionCardLayout()
     @Entry var acpSideQuestionDockActions = ACPSideQuestionDockActions()
+    /// Nil outside a session view; the card then keeps its own state.
+    @Entry var acpSideQuestionCardState: ACPSideQuestionCardState? = nil
 }
 
 extension ACPSideQuestionDock {

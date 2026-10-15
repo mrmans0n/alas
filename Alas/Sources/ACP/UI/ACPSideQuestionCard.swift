@@ -399,8 +399,9 @@ private struct ACPSideQuestionCardChrome<Content: View, Prompt: View>: View {
     @ViewBuilder let content: () -> Content
     @ViewBuilder let prompt: () -> Prompt
 
-    @State private var isCollapsed = false
-    @State private var followUp = ""
+    /// Fallbacks for when no host shares `ACPSideQuestionCardState`.
+    @State private var localCollapsed = false
+    @State private var localFollowUp = ""
     @State private var headerHeight: CGFloat = 0
     @State private var footerHeight: CGFloat = 0
     @State private var promptIdeal: CGFloat = 0
@@ -410,6 +411,26 @@ private struct ACPSideQuestionCardChrome<Content: View, Prompt: View>: View {
     @Environment(\.theme) private var theme
     @Environment(\.acpSideQuestionCardLayout) private var layout
     @Environment(\.acpSideQuestionDockActions) private var dockActions
+    @Environment(\.acpSideQuestionCardState) private var sharedState
+
+    /// Kept by the host when it shares state, so a dock switch keeps them.
+    private var isCollapsed: Bool {
+        get { sharedState?.isCollapsed ?? localCollapsed }
+        nonmutating set {
+            if let sharedState { sharedState.isCollapsed = newValue } else { localCollapsed = newValue }
+        }
+    }
+
+    private var followUp: String {
+        get { sharedState?.followUp ?? localFollowUp }
+        nonmutating set {
+            if let sharedState { sharedState.followUp = newValue } else { localFollowUp = newValue }
+        }
+    }
+
+    private var followUpBinding: Binding<String> {
+        Binding(get: { followUp }, set: { followUp = $0 })
+    }
 
     /// The side dock gives the card the column's full height.
     private var fillsColumn: Bool { layout.dock == .side }
@@ -601,7 +622,7 @@ private struct ACPSideQuestionCardChrome<Content: View, Prompt: View>: View {
                 blockedChip
             }
             HStack(spacing: 6) {
-                TextField(phase == .composing ? "Ask a side question…" : "Ask a follow-up…", text: $followUp)
+                TextField(phase == .composing ? "Ask a side question…" : "Ask a follow-up…", text: followUpBinding)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(size: 12))
                     .focused($fieldFocused)
