@@ -479,6 +479,53 @@ struct RemoteAppStateAccessTests {
         #expect(tab.title == "Persisted Title")
     }
 
+    /// Session tabs and Git status are in the Remote session list but not in
+    /// host events, so their changes announce a list change of their own.
+    @Test func sessionTabAndStatusChangesAnnounceASessionListChange() async throws {
+        let state = makeRemoteRenameState()
+        let worktreeId = try #require(state.selectedWorktreeId)
+        defer { cleanupRemoteRenameFiles(worktreeId: worktreeId) }
+        state.openNewACPSession(agentID: "test-agent")
+        let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
+        let id = "history-\(UUID().uuidString)"
+        try await seedStoredSession(id: id, title: "History", in: manager)
+        var changes = 0
+        let subscription = try #require(state.sessionListChanges).observe { changes += 1 }
+        defer { subscription.cancel() }
+
+        func waitForChange(after count: Int) async throws {
+            let deadline = ContinuousClock.now + .seconds(5)
+            while changes == count, ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+        }
+        #expect(await state.openSessionTab(for: id) == .success)
+        try await waitForChange(after: 0)
+        let afterOpen = changes
+        #expect(afterOpen > 0)
+        // Moving another kind of tab ahead of a session tab moves its index.
+        let commit = state.tabs.appendCommit(worktreeId: worktreeId, sha: "abc", title: "abc")
+        let sessionTab = try #require(state.tabs.tabs(forWorktree: worktreeId).first {
+            if case .acpSession(let tab) = $0 { tab.sessionId == id } else { false }
+        })
+        state.tabs.moveTab(worktreeId: worktreeId, fromId: commit.id, toId: sessionTab.id)
+        try await waitForChange(after: afterOpen)
+        let afterMove = changes
+        #expect(afterMove > afterOpen)
+        #expect(await state.closeSessionTab(for: id) == .success)
+        try await waitForChange(after: afterMove)
+        let afterClose = changes
+        #expect(afterClose > afterMove)
+
+        defer {
+            let store = WorktreeStatusStore.shared
+            store.prune(keepingPaths: Set(store.statuses.keys).subtracting([manager.worktreePath]))
+        }
+        WorktreeStatusStore.shared.apply([manager.worktreePath: .dirty(fileCount: 3, conflictCount: 0)])
+        try await waitForChange(after: afterClose)
+        #expect(changes > afterClose)
+    }
+
     @Test func remoteSessionTabActionsOpenAndCloseAStoredSessionOnTheHost() async throws {
         var cleanupWorktreeId: String?
         defer {

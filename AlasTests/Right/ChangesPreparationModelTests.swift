@@ -227,6 +227,8 @@ struct ChangesPreparationModelTests {
         let card = ChangesPreparationCard(
             model: model,
             onReviewChanges: {},
+            onChooseReviewScope: {},
+            reviewScopeShortcut: nil,
             onDraftCommit: {},
             onPublishCommit: {},
             onGGAction: { _ in },

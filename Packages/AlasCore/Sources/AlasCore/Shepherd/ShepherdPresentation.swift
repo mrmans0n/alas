@@ -119,3 +119,55 @@ public struct ShepherdPresentation: Equatable, Sendable {
         }
     }
 }
+
+/// The one action the Ship popover offers a session that doesn't shepherd a
+/// request yet, shared with the `/ship` composer command.
+public enum ShepherdShipAction: Equatable, Sendable {
+    /// This session already shepherds the request ("#7" or "!7").
+    case shepherding(number: String)
+    /// Bind this open request to the session, taking it over from another
+    /// session if one shepherds it.
+    case adopt(ReviewRequest)
+    /// Ask the session to open a request on this host.
+    case create(CodeHostKind)
+    /// Ship can't run now; the reason says why.
+    case unavailable(String)
+
+    /// `otherRecord` is a live record another session in the worktree owns;
+    /// `request` must be that record's request when there is one.
+    public static func resolve(
+        record: ShepherdRecord?,
+        otherRecord: ShepherdRecord?,
+        request: ReviewRequest?,
+        snapshot: ReviewLoopSnapshot?,
+        isBusy: Bool,
+        isLoading: Bool = false
+    ) -> ShepherdShipAction {
+        if let record {
+            return .shepherding(number: "\(record.id.providerKind.reviewRequestNumberPrefix)\(record.id.requestNumber)")
+        }
+        if otherRecord != nil {
+            guard let request else { return .unavailable("Waiting for the PR status") }
+            return .adopt(request)
+        }
+        if let request, request.state == .open { return .adopt(request) }
+        if let reason = createUnavailableReason(isBusy: isBusy, snapshot: snapshot, isLoading: isLoading) {
+            return .unavailable(reason)
+        }
+        // A nil remote has a reason above.
+        return snapshot?.remote.map { .create($0.kind) } ?? .unavailable("This branch has no GitHub or GitLab remote.")
+    }
+
+    /// Why Ship with agent is unavailable, or nil when it can run.
+    public static func createUnavailableReason(isBusy: Bool, snapshot: ReviewLoopSnapshot?, isLoading: Bool) -> String? {
+        if isBusy { return "Wait for the current turn to finish." }
+        guard let snapshot else {
+            return isLoading ? "Checking the code host…" : "Couldn't read this branch's code host."
+        }
+        guard let remote = snapshot.remote else { return "This branch has no GitHub or GitLab remote." }
+        let cli = remote.kind == .github ? "gh" : "glab"
+        if !snapshot.providerAvailable { return "\(cli) isn't installed. Install it with brew install \(cli)." }
+        if !snapshot.providerAuthenticated { return "\(cli) isn't signed in. Run \(cli) auth login." }
+        return nil
+    }
+}

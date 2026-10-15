@@ -472,7 +472,7 @@ private struct ShepherdPopover: View {
                     request: request
                 )
             } else {
-                createRow(kind: snapshot?.remote?.kind, reason: Self.createDisabledReason(
+                createRow(kind: snapshot?.remote?.kind, reason: ShepherdShipAction.createUnavailableReason(
                     isBusy: isBusy, snapshot: snapshot, isLoading: isLoading
                 ))
             }
@@ -515,19 +515,6 @@ private struct ShepherdPopover: View {
                 .foregroundStyle(theme.color(reason == nil ? "fg-muted" : "warn"))
                 .fixedSize(horizontal: false, vertical: true)
         }
-    }
-
-    /// Why Ship with agent is unavailable, or nil when it can be pressed.
-    private static func createDisabledReason(isBusy: Bool, snapshot: ReviewLoopSnapshot?, isLoading: Bool) -> String? {
-        if isBusy { return "Wait for the current turn to finish." }
-        guard let snapshot else {
-            return isLoading ? "Checking the code host…" : "Couldn't read this branch's code host."
-        }
-        guard let remote = snapshot.remote else { return "This branch has no GitHub or GitLab remote." }
-        let cli = remote.kind == .github ? "gh" : "glab"
-        if !snapshot.providerAvailable { return "\(cli) isn't installed. Install it with brew install \(cli)." }
-        if !snapshot.providerAuthenticated { return "\(cli) isn't signed in. Run \(cli) auth login." }
-        return nil
     }
 
     // MARK: Pieces

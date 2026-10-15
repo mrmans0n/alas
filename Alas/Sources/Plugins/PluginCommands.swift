@@ -90,7 +90,7 @@ struct PluginPromptItem: Equatable, Sendable {
     /// Prompts of the active plugins, in plugin order. A name already taken, by Alas's own commands or an earlier
     /// plugin, is skipped, so a typed command always reaches one plugin.
     static func items(_ plugins: [(manifest: PluginManifest, isActive: Bool)]) -> [PluginPromptItem] {
-        var taken = Set([ACPAlasSlashCommand.btwSuggestion.command])
+        var taken = Set([ACPAlasSlashCommand.btwSuggestion.command, ACPAlasSlashCommand.shipSuggestion.command])
         return plugins.filter(\.isActive).flatMap { plugin in
             plugin.manifest.prompts.map { PluginPromptItem(pluginID: plugin.manifest.id, prompt: $0) }
         }.filter { taken.insert($0.suggestion.command).inserted }
