@@ -32,7 +32,7 @@ struct HostProtocolTests {
     @Test(arguments: [
         HostServerMessage.response(id: 1, result: .snapshot(snapshot: HostSnapshot(
             cursor: HostCursor(sequence: 9),
-            projects: [ProjectConfig(id: "p", name: "p", path: "/srv/repo", color: "blue", addedAt: Date(timeIntervalSince1970: 0))],
+            projects: [ProjectSnapshot(ProjectConfig(id: "p", name: "p", path: "/srv/repo", color: "blue", addedAt: Date(timeIntervalSince1970: 0)))],
             worktrees: [WorktreeSnapshot(worktree: worktree, operation: .createFailed(message: "no space"), isArchived: true)],
             workspaceCheckouts: [],
             runs: [],

@@ -70,13 +70,38 @@ public final class AlasHost {
 /// The host's state, as `AlasHost.snapshot()` describes it.
 public struct HostSnapshot: Codable, Equatable, Sendable {
     public var cursor: HostCursor
-    public var projects: [ProjectConfig]
+    public var projects: [ProjectSnapshot]
     public var worktrees: [WorktreeSnapshot]
     /// Checkouts that are not archived, as of their load from the store.
-    public var workspaceCheckouts: [WorkspaceCheckout]
+    public var workspaceCheckouts: [WorkspaceCheckoutSnapshot]
     public var runs: [RunRecord]
     public var sessions: [HostSessionSummary]
 }
+
+/// A project as clients see it. Its configuration stays with the host: it
+/// holds scripts and MCP server settings, whose values can be credentials.
+public struct ProjectSnapshot: Codable, Equatable, Identifiable, Sendable {
+    public var id: String
+    public var name: String
+    public var path: String
+    /// The SSH host of a remote project; nil for a local one.
+    public var host: String?
+    public var kind: ProjectKind
+    public var addedAt: Date
+
+    public init(_ project: ProjectConfig) {
+        id = project.id
+        name = project.name
+        path = project.path
+        host = project.host
+        kind = project.kind
+        addedAt = project.addedAt
+    }
+}
+
+/// A Workspace checkout as clients see it: its members, operation and health,
+/// without the configuration it captured, which can hold credentials.
+public typealias WorkspaceCheckoutSnapshot = WorkspaceAutomationCheckoutSummary
 
 /// A worktree with what the host knows about it beyond Git.
 public struct WorktreeSnapshot: Codable, Equatable, Sendable {
@@ -117,8 +142,8 @@ public enum WorktreeOperation: Codable, Equatable, Sendable {
 public struct ProjectsAPI {
     let core: AlasCoreContext
 
-    public func list() -> [ProjectConfig] {
-        core.projects.projects
+    public func list() -> [ProjectSnapshot] {
+        core.projects.projects.map(ProjectSnapshot.init)
     }
 
     /// Registers the project at `path` (on `host` for a remote one) and
@@ -129,8 +154,8 @@ public struct ProjectsAPI {
         icon: ProjectIcon,
         host: String? = nil,
         kind: ProjectKind = .git
-    ) async throws -> ProjectConfig {
-        try await core.addProject(path: path, displayName: displayName, icon: icon, host: host, kind: kind)
+    ) async throws -> ProjectSnapshot {
+        ProjectSnapshot(try await core.addProject(path: path, displayName: displayName, icon: icon, host: host, kind: kind))
     }
 }
 
@@ -228,13 +253,13 @@ public struct WorkspacesAPI {
     let core: AlasCoreContext
 
     /// Checkouts that are not archived. Throws `WorkspaceAutomationError`.
-    public func list() async throws -> [WorkspaceCheckout] {
-        try await WorkspaceAutomationService(store: core.workspaceStore).checkouts()
+    public func list() async throws -> [WorkspaceCheckoutSnapshot] {
+        try await WorkspaceAutomationService(store: core.workspaceStore).checkouts().map(WorkspaceAutomationService.summary)
     }
 
     /// One checkout that is not archived. Throws `WorkspaceAutomationError`.
-    public func checkout(id: UUID) async throws -> WorkspaceCheckout {
-        try await WorkspaceAutomationService(store: core.workspaceStore).checkout(id: id)
+    public func checkout(id: UUID) async throws -> WorkspaceCheckoutSnapshot {
+        WorkspaceAutomationService.summary(try await WorkspaceAutomationService(store: core.workspaceStore).checkout(id: id))
     }
 }
 

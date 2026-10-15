@@ -26,11 +26,11 @@ public struct HostCursor: Hashable, Comparable, Codable, Sendable {
 
 /// One change to what the host holds. Each keyed kind has a removal event.
 public enum HostEvent: Codable, Equatable, Sendable {
-    case projectChanged(ProjectConfig)
+    case projectChanged(ProjectSnapshot)
     case projectRemoved(id: String)
     case worktreeChanged(WorktreeSnapshot)
     case worktreeRemoved(projectID: String, worktreeID: String)
-    case workspaceCheckoutChanged(WorkspaceCheckout)
+    case workspaceCheckoutChanged(WorkspaceCheckoutSnapshot)
     case workspaceCheckoutRemoved(id: UUID)
     case runChanged(RunRecord)
     case runRemoved(id: String)
@@ -201,7 +201,7 @@ private struct WeakSubscription {
 final class HostEventSource {
     let log = HostEventLog()
     private let core: AlasCoreContext
-    private var projects: [String: ProjectConfig] = [:]
+    private var projects: [String: ProjectSnapshot] = [:]
     private var worktrees: [HostEventKey: WorktreeSnapshot] = [:]
     private var runs: [String: RunRecord] = [:]
     private var sessions: [HostEventKey: HostSessionSummary] = [:]
@@ -209,8 +209,8 @@ final class HostEventSource {
     /// signals rather than Observation; renewed on every refresh.
     private var sessionSignals: Set<ChangeSubscription> = []
     /// Nil until the first load, which is the baseline rather than a change.
-    private var checkouts: [UUID: WorkspaceCheckout]?
-    private var checkoutList: [WorkspaceCheckout] = []
+    private var checkouts: [UUID: WorkspaceCheckoutSnapshot]?
+    private var checkoutList: [WorkspaceCheckoutSnapshot] = []
     private var checkoutLoads = 0
     /// The store's change stream, registered before any load reads the
     /// store, so no write can land between a load and the first event.
@@ -270,7 +270,7 @@ final class HostEventSource {
     /// Loads the Workspace checkouts and publishes what changed among them,
     /// returning the latest published list. A load that finishes after a
     /// later one is dropped, so it can never put back an older state.
-    func loadCheckouts() async throws -> [WorkspaceCheckout] {
+    func loadCheckouts() async throws -> [WorkspaceCheckoutSnapshot] {
         _ = await checkoutChanges?.value
         checkoutLoads += 1
         let load = checkoutLoads

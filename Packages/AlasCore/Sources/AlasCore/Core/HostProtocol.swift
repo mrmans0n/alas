@@ -63,12 +63,12 @@ public enum HostResponse: Codable, Equatable, Sendable {
     case subscribed
     case unsubscribed
     case sessions(sessions: [HostSessionSummary])
-    case project(project: ProjectConfig)
+    case project(project: ProjectSnapshot)
     case worktree(worktree: Worktree)
     /// The verb finished and has nothing to return.
     case done
-    case workspaceCheckouts(checkouts: [WorkspaceCheckout])
-    case workspaceCheckout(checkout: WorkspaceCheckout)
+    case workspaceCheckouts(checkouts: [WorkspaceCheckoutSnapshot])
+    case workspaceCheckout(checkout: WorkspaceCheckoutSnapshot)
     case runStart(start: RunStart)
     case failure(error: HostError)
 }

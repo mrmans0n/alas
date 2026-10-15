@@ -60,7 +60,7 @@ struct AlasHostTests {
             branch: "b", rootPath: "/srv/w", createdAt: .distantPast, members: []
         )
         try await store.mutate { $0.checkouts = [checkout] }
-        #expect(await Self.next(subscription) == [.workspaceCheckoutChanged(checkout)])
+        #expect(await Self.next(subscription) == [.workspaceCheckoutChanged(WorkspaceAutomationService.summary(checkout))])
         try await store.mutate { $0.checkouts = [] }
         #expect(await Self.next(subscription) == [.workspaceCheckoutRemoved(id: checkout.id)])
     }
