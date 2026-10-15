@@ -461,6 +461,58 @@ struct ACPConnectionTests {
         #expect((agyMeta["agy"] as? [String: Any])?["disabledTools"] as? [String] == ["start_subagent"])
     }
 
+    @Test("MCP startup wait applies only to codex-acp releases that honor it", arguments: [
+        ("@alas-ide/codex-acp", "2.2.2-alas.1", true),
+        ("@agentclientprotocol/codex-acp", "2.0.0", true),
+        ("@agentclientprotocol/codex-acp", "1.13.1", false),
+        ("@alas-ide/codex-acp", "unknown", false),
+        ("codex-acp", "2.2.2", false),
+        ("@alas-ide/claude-agent-acp", "2.2.2", false),
+    ])
+    func mcpStartupWaitPolicy(name: String, version: String, waits: Bool) {
+        #expect(ACPMCPStartupWaitPolicy.timeoutMilliseconds(for: .init(name: name, version: version))
+            == (waits ? 3000 : nil))
+    }
+
+    @Test("MCP startup wait rides on session/new, resume, and fork with requested servers, never on load")
+    func mcpStartupWaitOnSessionStartRequests() async throws {
+        let mock = ACPMockClient()
+        for method in ["session/new", "session/load", "session/resume", "session/fork"] {
+            mock.script(method: method) { _ in
+                try JSONEncoder().encode(ACPSessionNewResult(
+                    sessionId: "remote",
+                    availableModels: [],
+                    availableModes: [],
+                    currentModel: nil,
+                    currentMode: nil,
+                    promptSuggestions: []
+                ))
+            }
+        }
+        let delegation = ACPSessionMeta(claudeCode: .init(options: .init(disallowedTools: ["Agent"])))
+        let conn = ACPConnection(client: mock, sessionMeta: delegation)
+        conn.mcpStartupAwaitTimeoutMs = ACPMCPStartupWaitPolicy.timeoutMilliseconds
+        let servers: [ACPMCPServer] = [.stdio(name: "docs", command: "docs-mcp", args: [], env: [])]
+
+        _ = try await conn.newSession(cwd: "/tmp", mcpServers: servers)
+        _ = try await conn.loadSession(cwd: "/tmp", sessionId: "remote", mcpServers: servers)
+        _ = try await conn.resumeSession(cwd: "/tmp", sessionId: "remote", mcpServers: servers)
+        _ = try await conn.forkSession(cwd: "/tmp", sessionId: "remote", mcpServers: servers)
+        _ = try await conn.newSession(cwd: "/tmp", mcpServers: [])
+
+        var waiting = delegation
+        waiting.mcpStartupAwaitTimeoutMs = 3000
+        let metas = mock.sent.map { request in
+            (request.params as? ACPSessionNewParams)?.meta ?? (request.params as? ACPSessionLoadParams)?.meta
+        }
+        #expect(metas == [waiting, delegation, waiting, waiting, delegation])
+
+        let wire = try #require(JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(ACPSessionNewParams(cwd: "/tmp", mcpServers: servers, meta: waiting))
+        ) as? [String: Any])
+        #expect((wire["_meta"] as? [String: Any])?["mcpStartupAwaitTimeoutMs"] as? Int == 3000)
+    }
+
     @Test("loadSession sends session/load with cwd and remote session id")
     func loadSessionRPC() async throws {
         let mock = ACPMockClient()

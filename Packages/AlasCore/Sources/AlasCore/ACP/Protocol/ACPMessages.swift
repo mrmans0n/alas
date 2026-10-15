@@ -905,10 +905,13 @@ public struct ACPSessionMeta: Codable, Equatable, Sendable {
 
     public var claudeCode: ClaudeCode? = nil
     public var agy: Agy? = nil
+    /// Read by `codex-acp`. See `ACPMCPStartupWaitPolicy`.
+    public var mcpStartupAwaitTimeoutMs: Int? = nil
 
-    public init(claudeCode: ClaudeCode? = nil, agy: Agy? = nil) {
+    public init(claudeCode: ClaudeCode? = nil, agy: Agy? = nil, mcpStartupAwaitTimeoutMs: Int? = nil) {
         self.claudeCode = claudeCode
         self.agy = agy
+        self.mcpStartupAwaitTimeoutMs = mcpStartupAwaitTimeoutMs
     }
 }
 
