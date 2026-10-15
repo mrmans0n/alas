@@ -1287,6 +1287,7 @@ private struct RootBaseHandlers: ViewModifier {
                 // HarnessService, which is one of the candidates for the
                 // permission-prompt avalanche reported on quit.
                 state.harness.stop()
+                state.hostSocket?.stop()
                 // Terminate any `alas mcp --http` processes spawned for the
                 // HTTP transport so they don't outlive the app.
                 state.mcpHTTPSupervisor.shutdown()
