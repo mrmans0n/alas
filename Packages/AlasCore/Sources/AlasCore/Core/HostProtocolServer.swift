@@ -91,9 +91,15 @@ public final class HostProtocolConnection {
                 projectID: projectID, base: base, branch: branch, destination: URL(fileURLWithPath: destination)
             )
             return .worktree(worktree: try await host.worktrees.create(request, caller: caller))
-        case .deleteWorktree(let ref, let force, let deleteBranchIfMerged):
+        case .deleteWorktree(let ref, let lineageID, let branch, let force, let deleteBranchIfMerged):
+            let listed = try worktree(ref)
+            // What the client saw must still be what is listed; the host then
+            // checks what is listed against the checkout on disk.
+            guard listed.lineageID == lineageID, listed.branch == branch else {
+                throw WorktreeDeletionRefusal.changed("The worktree changed since it was listed.")
+            }
             try await host.worktrees.delete(
-                try worktree(ref), force: force, deleteBranchIfMerged: deleteBranchIfMerged, caller: caller
+                listed, force: force, deleteBranchIfMerged: deleteBranchIfMerged, caller: caller
             )
             return .done
         case .archiveWorktree(let ref):
@@ -126,7 +132,7 @@ public final class HostProtocolConnection {
         Task { @MainActor [weak self] in
             while let events = await next.next() {
                 guard let self else { return }
-                await send(.events(events: events))
+                await send(.events(events: events, cursor: next.cursor))
             }
         }
     }

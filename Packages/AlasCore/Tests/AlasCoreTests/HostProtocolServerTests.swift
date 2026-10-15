@@ -23,9 +23,14 @@ struct HostProtocolServerTests {
 
         try await client.waitFor { $0.count == 3 }
         #expect(client.messages[1] == .response(id: 2, result: .subscribed))
-        #expect(client.messages[2] == .events(events: [
+        guard case .events(let events, let cursor) = client.messages[2] else {
+            Issue.record("expected events, got \(client.messages[2])")
+            return
+        }
+        #expect(events == [
             .worktreeChanged(WorktreeSnapshot(worktree: fixture.worktree, operation: .archiving, isArchived: false)),
-        ]))
+        ])
+        #expect(cursor.generation == snapshot.cursor.generation && cursor > snapshot.cursor)
     }
 
     /// A client that reads slowly holds its events back, where they coalesce,
@@ -50,9 +55,13 @@ struct HostProtocolServerTests {
         client.release()
 
         try await client.waitFor { $0.count == 4 }
-        #expect(client.messages[3] == .events(events: [
+        guard case .events(let events, _) = client.messages[3] else {
+            Issue.record("expected events, got \(client.messages[3])")
+            return
+        }
+        #expect(events == [
             .worktreeChanged(WorktreeSnapshot(worktree: fixture.worktree, operation: .deleting, isArchived: false)),
-        ]))
+        ])
     }
 
     @Test(arguments: [
@@ -60,6 +69,22 @@ struct HostProtocolServerTests {
         (
             HostClientMessage(id: 2, request: .archiveWorktree(worktree: WorktreeRef(projectID: "p", path: "/srv/missing"))),
             HostError.notFound(what: "worktree /srv/missing in project p")
+        ),
+        // A delete names the checkout the client saw; one replaced or
+        // switched since is not deleted in its place.
+        (
+            HostClientMessage(id: 3, request: .deleteWorktree(
+                worktree: WorktreeRef(projectID: "p", path: "/srv/feature"),
+                lineageID: "seen", branch: "feature", force: true, deleteBranchIfMerged: false
+            )),
+            HostError.worktreeDeletion(refusal: .changed("The worktree changed since it was listed."))
+        ),
+        (
+            HostClientMessage(id: 4, request: .deleteWorktree(
+                worktree: WorktreeRef(projectID: "p", path: "/srv/feature"),
+                lineageID: "listed", branch: "old-branch", force: true, deleteBranchIfMerged: false
+            )),
+            HostError.worktreeDeletion(refusal: .changed("The worktree changed since it was listed."))
         ),
     ])
     func refusedRequestsAnswerWithTheirError(_ message: HostClientMessage, _ error: HostError) async throws {
@@ -83,7 +108,7 @@ struct HostProtocolServerTests {
             let path = URL(fileURLWithPath: "/srv/feature")
             worktree = Worktree(
                 id: Worktree.makeId(path: path), projectId: "p", name: "feature", branch: "feature",
-                path: path, status: .clean, lastActivity: .distantPast
+                path: path, status: .clean, lastActivity: .distantPast, lineageID: "listed"
             )
             projects.insertOptimisticWorktree(worktree)
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
