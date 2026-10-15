@@ -1640,6 +1640,12 @@ private struct ACPSideQuestionSlot: View {
                 // A new side question starts with an empty draft, expanded.
                 .onAppear { cardState?.adopt(entry.id) }
                 .onChange(of: entry.id) { _, id in cardState?.adopt(id) }
+                // The slot outlives its card. A resize cut short by the card
+                // going away never reaches `onEnded`, so drop its uncommitted size.
+                .onDisappear {
+                    dragStartSize = nil
+                    liveSize = nil
+                }
         }
     }
 
@@ -1755,7 +1761,10 @@ private struct ACPSideQuestionSlot: View {
     }
 
     private func commitResize() {
-        defer { dragStartSize = nil; liveSize = nil }
+        defer {
+            dragStartSize = nil
+            liveSize = nil
+        }
         guard let liveSize else { return }
         var next = preferences
         switch placement {
