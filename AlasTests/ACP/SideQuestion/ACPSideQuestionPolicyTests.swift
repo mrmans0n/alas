@@ -150,4 +150,87 @@ struct ACPSideQuestionPolicyTests {
         ACPConfigOption(id: "mode", name: "Mode", type: "select", category: "mode",
                         currentValue: .string(current), options: [])
     }
+
+    // MARK: Dock layout
+
+    static let dockSurface = CGSize(width: 1000, height: 800)
+
+    @Test(
+        "a dragged header drops onto the zone under the pointer, or nowhere",
+        arguments: [
+            (CGPoint(x: 500, y: 100), Optional(ACPSideQuestionDock.top)),
+            (CGPoint(x: 900, y: 100), .top),
+            (CGPoint(x: 900, y: 400), .side),
+            (CGPoint(x: 900, y: 750), .side),
+            (CGPoint(x: 300, y: 750), .composer),
+            (CGPoint(x: 300, y: 400), nil),
+            (CGPoint(x: -5, y: 100), nil),
+            (CGPoint(x: 500, y: 900), nil),
+        ] as [(CGPoint, ACPSideQuestionDock?)]
+    )
+    func dockDropZone(point: CGPoint, expected: ACPSideQuestionDock?) {
+        #expect(ACPSideQuestionDockLayout.dock(at: point, in: Self.dockSurface) == expected)
+    }
+
+    @Test(
+        "card height stays between 120pt and 70% of the surface, the minimum winning on tiny surfaces",
+        arguments: [
+            (CGFloat(50), CGFloat(800), CGFloat(120)),
+            (300, 800, 300),
+            (700, 800, 560),
+            (300, 100, 120),
+        ] as [(CGFloat, CGFloat, CGFloat)]
+    )
+    func dockHeightClamp(height: CGFloat, surfaceHeight: CGFloat, expected: CGFloat) {
+        #expect(ACPSideQuestionDockLayout.clampedHeight(height, surfaceHeight: surfaceHeight) == expected)
+    }
+
+    @Test(
+        "side width stays between 300pt and half the surface, the minimum winning on narrow surfaces",
+        arguments: [
+            (CGFloat(100), CGFloat(1000), CGFloat(300)),
+            (400, 1000, 400),
+            (900, 1000, 500),
+            (400, 400, 300),
+        ] as [(CGFloat, CGFloat, CGFloat)]
+    )
+    func dockSideWidthClamp(width: CGFloat, surfaceWidth: CGFloat, expected: CGFloat) {
+        #expect(ACPSideQuestionDockLayout.clampedSideWidth(width, surfaceWidth: surfaceWidth) == expected)
+    }
+
+    @Test(
+        "a pending prompt grows the card up to the limit, then shrinks the answer, then scrolls",
+        arguments: [
+            // cap, limit, chrome, promptIdeal -> answer, prompt
+            (CGFloat(260), CGFloat(560), CGFloat(80), CGFloat(0), CGFloat(180), CGFloat(0)),
+            (260, 560, 80, 200, 180, 200),
+            (260, 560, 80, 350, 130, 350),
+            (260, 560, 80, 450, 60, 420),
+            (100, 560, 80, 0, 60, 0),
+        ] as [(CGFloat, CGFloat, CGFloat, CGFloat, CGFloat, CGFloat)]
+    )
+    func dockBodyHeights(
+        cap: CGFloat, limit: CGFloat, chrome: CGFloat, promptIdeal: CGFloat,
+        answer: CGFloat, prompt: CGFloat
+    ) {
+        let heights = ACPSideQuestionDockLayout.bodyHeights(
+            cap: cap, limit: limit, chrome: chrome, promptIdeal: promptIdeal
+        )
+        #expect(heights == .init(answer: answer, prompt: prompt))
+    }
+
+    @Test(
+        "dock preferences keep what decodes and default the rest",
+        arguments: [
+            (#"{"dock":"side"}"#, ACPSideQuestionDock.side, 260.0, 380.0),
+            (#"{"dock":"floating","sideWidth":420}"#, .composer, 260.0, 420.0),
+            (#"{}"#, .composer, 260.0, 380.0),
+        ] as [(String, ACPSideQuestionDock, Double, Double)]
+    )
+    func dockPreferencesDecode(json: String, dock: ACPSideQuestionDock, composerHeight: Double, sideWidth: Double) throws {
+        let prefs = try JSONDecoder().decode(ACPSideQuestionDockPreferences.self, from: Data(json.utf8))
+        #expect(prefs.dock == dock)
+        #expect(prefs.composerHeight == composerHeight)
+        #expect(prefs.sideWidth == sideWidth)
+    }
 }
