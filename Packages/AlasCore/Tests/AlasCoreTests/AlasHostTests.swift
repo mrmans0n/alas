@@ -141,6 +141,39 @@ struct AlasHostTests {
         #expect(host.sessions.list().isEmpty)
     }
 
+    /// Archiving takes a while to stop everything in a worktree; a checkout
+    /// another process switches meanwhile is refused instead of hidden.
+    @Test func archivingRefusesACheckoutChangedWhileItStops() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-archive-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repo = root.appendingPathComponent("repo")
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        for args in [["init", "-q", "-b", "main"], ["config", "maintenance.auto", "false"], ["commit", "-q", "--allow-empty", "-m", "init"]] {
+            let result = try await Process.git(args, cwd: repo)
+            guard result.exitCode == 0 else { throw ProcessError.nonZeroExit(result.exitCode, result.stderr) }
+        }
+        let environment = SwitchingEnvironment()
+        let core = AlasCoreContext(
+            projects: ProjectsManager(persistedProjects: []),
+            projectsFile: root.appendingPathComponent("projects.json"),
+            runHistoryStore: nil,
+            workspaceStore: WorkspaceStore(url: root.appendingPathComponent("workspaces.json")),
+            environment: environment
+        )
+        let project = try await core.addProject(path: repo, displayName: "repo", icon: .default())
+        let worktree = try await core.createWorktree(
+            projectID: project.id, branch: "feature", base: "main", destination: root.appendingPathComponent("feature")
+        )
+        environment.onQuiesce = { worktree in
+            _ = try? await Process.git(["switch", "-q", "-c", "other"], cwd: worktree.path)
+        }
+
+        await #expect(throws: WorktreeArchiveRefusal.changed("The checkout is on another branch")) {
+            try await core.archiveWorktree(worktree, verifiesCheckout: true)
+        }
+        #expect(!core.projects.isWorktreeHidden(projectId: project.id, path: worktree.path))
+    }
+
     private static func worktree(_ name: String) -> Worktree {
         let path = URL(fileURLWithPath: "/srv/\(name)")
         return Worktree(
@@ -166,5 +199,15 @@ struct AlasHostTests {
             if matches(events) { return events }
         }
         return nil
+    }
+}
+
+/// Runs `onQuiesce` where the host stops everything in a worktree.
+@MainActor
+private final class SwitchingEnvironment: AlasHostEnvironment {
+    var onQuiesce: (Worktree) async -> Void = { _ in }
+
+    func quiesceWorktree(_ worktree: Worktree, in core: AlasCoreContext) async throws {
+        await onQuiesce(worktree)
     }
 }

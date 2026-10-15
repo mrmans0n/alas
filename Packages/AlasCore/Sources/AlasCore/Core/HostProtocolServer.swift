@@ -29,6 +29,11 @@ public final class HostProtocolConnection {
     private let caller: HostCaller
     private let send: @MainActor (HostServerMessage) async -> Void
     private var subscription: HostSubscription?
+    /// The last message handed to the transport. Every send waits for the
+    /// one before it, so messages leave in the order they were queued, and
+    /// an event batch whose subscription was replaced or ended by then is
+    /// dropped rather than sent after that.
+    private var sendTail: Task<Void, Never>?
 
     init(host: AlasHost, caller: HostCaller, send: @escaping @MainActor (HostServerMessage) async -> Void) {
         self.host = host
@@ -53,7 +58,19 @@ public final class HostProtocolConnection {
                 result = .failure(error: Self.hostError(error))
             }
         }
-        await send(.response(id: message.id, result: result))
+        await enqueue(.response(id: message.id, result: result))
+    }
+
+    private func enqueue(_ message: HostServerMessage, from source: HostSubscription? = nil) async {
+        let previous = sendTail
+        let sending = Task { @MainActor [weak self] in
+            await previous?.value
+            guard let self else { return }
+            if let source, subscription !== source { return }
+            await send(message)
+        }
+        sendTail = sending
+        await sending.value
     }
 
     /// Replaces the subscription, and forwards its events only once the
@@ -63,7 +80,7 @@ public final class HostProtocolConnection {
         close()
         let next = host.subscribe(after: cursor)
         subscription = next
-        await send(.response(id: id, result: .subscribed))
+        await enqueue(.response(id: id, result: .subscribed))
         guard subscription === next else { return }
         follow(next)
     }
@@ -113,14 +130,13 @@ public final class HostProtocolConnection {
             guard listed.lineageID == lineageID, listed.branch == branch else {
                 throw WorktreeArchiveRefusal.changed("The worktree changed since it was listed.")
             }
-            // The list can lag the disk. Checked in the same turn the host
-            // claims the worktree, so nothing starts in between.
+            // The list can lag the disk: checked now, so a replaced checkout
+            // is not stopped, and again by the host right before hiding it.
             guard !listed.path.isRemoteAlasPath else { throw WorktreeArchiveRefusal.remoteUnsupported }
-            guard let lineageID,
-                  WorktreeService.existingLocalLineageID(forWorktreeAt: listed.path) == lineageID,
-                  WorktreeService.localBranchName(forWorktreeAt: listed.path) == branch
-            else { throw WorktreeArchiveRefusal.changed("The checkout at this path changed.") }
-            try await host.worktrees.archive(listed, caller: caller)
+            guard let lineageID, AlasCoreContext.checkoutChange(listed, lineageID: lineageID) == nil else {
+                throw WorktreeArchiveRefusal.changed("The checkout at this path changed.")
+            }
+            try await host.worktrees.archive(listed, verifiesCheckout: true, caller: caller)
             return .done
         case .unarchiveWorktree(let ref):
             try host.worktrees.unarchive(path: URL(fileURLWithPath: ref.path), projectID: ref.projectID, caller: caller)
@@ -153,7 +169,7 @@ public final class HostProtocolConnection {
         Task { @MainActor [weak self] in
             while let events = await next.next() {
                 guard let self else { return }
-                await send(.events(events: events, cursor: next.cursor))
+                await enqueue(.events(events: events, cursor: next.cursor), from: next)
             }
         }
     }

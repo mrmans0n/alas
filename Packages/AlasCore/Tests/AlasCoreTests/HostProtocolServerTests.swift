@@ -64,9 +64,9 @@ struct HostProtocolServerTests {
         ])
     }
 
-    /// Requests overlap, and a transport may finish sends out of order:
-    /// events still wait for their subscribe response.
-    @Test func eventsWaitForTheirSubscribeResponse() async throws {
+    /// Requests overlap, but their messages leave in order: events never
+    /// pass their subscribe response, and nothing follows an unsubscribe.
+    @Test func messagesLeaveInTheOrderTheyAreQueued() async throws {
         let fixture = try Fixture()
         let client = Client()
         let connection = fixture.server.connect(caller: .localUser(uid: 501), send: client.receive)
@@ -77,20 +77,36 @@ struct HostProtocolServerTests {
         client.heldResponseID = 2
         let subscribing = Task { await connection.receive(HostClientMessage(id: 2, request: .subscribe(after: snapshot.cursor))) }
         try await client.waitFor { _ in client.isHolding }
-        await connection.receive(HostClientMessage(id: 3, request: .listSessions))
+        let listing = Task { await connection.receive(HostClientMessage(id: 3, request: .listSessions)) }
         fixture.projects.setOperationState(for: fixture.worktree, state: .archiving(projectId: "p"))
         try await client.waitFor { _ in fixture.host.worktrees.list().first?.operation == .archiving }
         await Task.yield()
-        #expect(!client.messages.contains { if case .events = $0 { true } else { false } })
-
+        #expect(client.messages.count == 1, "nothing passes the held subscribe response")
         client.release()
         await subscribing.value
+        await listing.value
         try await client.waitFor { $0.count == 4 }
-        #expect(client.messages[2] == .response(id: 2, result: .subscribed))
+        #expect(client.messages[1] == .response(id: 2, result: .subscribed))
+        #expect(client.messages[2] == .response(id: 3, result: .sessions(sessions: [])))
         guard case .events = client.messages[3] else {
-            Issue.record("expected events after the subscribe response, got \(client.messages)")
+            Issue.record("expected events last, got \(client.messages)")
             return
         }
+
+        // An unsubscribe while a batch is being written comes after it, and
+        // nothing comes after the unsubscribe.
+        client.holdsEvents = true
+        fixture.projects.setOperationState(for: fixture.worktree, state: .preparingDelete)
+        try await client.waitFor { _ in client.heldEvents != nil }
+        let unsubscribing = Task { await connection.receive(HostClientMessage(id: 4, request: .unsubscribe)) }
+        fixture.projects.setOperationState(for: fixture.worktree, state: .deleting(projectId: "p"))
+        try await client.waitFor { _ in fixture.host.worktrees.list().first?.operation == .deleting }
+        await Task.yield()
+        client.release()
+        await unsubscribing.value
+        try await client.waitFor { $0.last == .response(id: 4, result: .unsubscribed) }
+        await Task.yield()
+        #expect(client.messages.last == .response(id: 4, result: .unsubscribed))
     }
 
     @Test(arguments: [
