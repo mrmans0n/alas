@@ -30,8 +30,10 @@ public final class RemoteSessionGateway {
     private var sessionListGeneration = 0
     private var worktreeListRefresh: Task<Void, Never>?
     private var worktreeListGeneration = 0
-    /// Set once the client asks for worktrees: only then are they pushed.
+    /// Set once the client asks for worktrees or projects: only then are
+    /// they pushed.
     private var wantsWorktreeList = false
+    private var wantsProjectList = false
     private var hostSubscription: HostSubscription?
     private var providerListChanges: ChangeSubscription?
     private var projectListRefresh: Task<Void, Never>?
@@ -88,6 +90,7 @@ public final class RemoteSessionGateway {
         case .listAgents:
             send(.agentList(agents: provider.remoteAgents()))
         case .listProjects:
+            wantsProjectList = true
             refreshProjectList()
         case .listBranches(let projectId):
             refreshBranchList(projectId: projectId)
@@ -484,14 +487,17 @@ public final class RemoteSessionGateway {
 
     /// The lists `events` make stale. Session rows carry their worktree and
     /// project, so changes to those refresh the session list too.
-    nonisolated static func listsChanged(by events: [HostEvent]) -> (sessions: Bool, worktrees: Bool) {
-        var lists = (sessions: false, worktrees: false)
+    nonisolated static func listsChanged(by events: [HostEvent]) -> (sessions: Bool, worktrees: Bool, projects: Bool) {
+        var lists = (sessions: false, worktrees: false, projects: false)
         for event in events {
             switch event {
             case .sessionChanged, .sessionRemoved:
                 lists.sessions = true
-            case .projectChanged, .projectRemoved, .worktreeChanged, .worktreeRemoved, .resync:
-                return (true, true)
+            case .worktreeChanged, .worktreeRemoved:
+                lists.sessions = true
+                lists.worktrees = true
+            case .projectChanged, .projectRemoved, .resync:
+                return (true, true, true)
             case .workspaceCheckoutChanged, .workspaceCheckoutRemoved, .runChanged, .runRemoved:
                 break
             }
@@ -511,6 +517,7 @@ public final class RemoteSessionGateway {
                 let lists = Self.listsChanged(by: events)
                 if lists.sessions { refreshSessionList() }
                 if lists.worktrees, wantsWorktreeList { refreshWorktreeList() }
+                if lists.projects, wantsProjectList { refreshProjectList() }
                 // ponytail: fixed rate limit; each list runs git per worktree.
                 try? await Task.sleep(for: Self.listPushInterval)
             }

@@ -1384,8 +1384,19 @@ extension RemoteServerMessage {
             // Older peers refuse to link to a Mac that doesn't advertise this.
             federationEnabled: true,
             peers: identity.peers,
-            capabilities: [PeerConsoleCapability.v1, PeerConsoleCapability.terminateV1, PeerSessionTabsCapability.v1])
+            capabilities: [
+                PeerConsoleCapability.v1, PeerConsoleCapability.terminateV1, PeerSessionTabsCapability.v1,
+                PeerListPushCapability.v1,
+            ])
     }
+}
+
+/// Session lists pushed on change. Peers without it are still polled.
+public enum PeerListPushCapability: Sendable {
+    /// Advertised in `hello` by hosts whose gateway pushes `sessionList`
+    /// whenever a session, worktree or project changes, and `projectList`
+    /// to a client that has asked for it once.
+    public static let v1 = "peerListPush.v1"
 }
 
 /// Opening and closing host tabs from a peer. Older hosts drop unknown client
