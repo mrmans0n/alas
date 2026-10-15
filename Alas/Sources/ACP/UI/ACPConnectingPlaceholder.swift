@@ -11,6 +11,7 @@ struct ACPConnectingPlaceholder: View {
     let restartInProgress: Bool
     let onRestart: () -> Void
     @Environment(\.theme) private var theme
+    @Environment(\.acpChatBackgroundIsMaterial) private var backgroundIsMaterial
     @State private var pulse = false
 
     var body: some View {
@@ -32,12 +33,14 @@ struct ACPConnectingPlaceholder: View {
         .padding(.horizontal, 28)
         .padding(.top, 24)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .background(
-            LinearGradient(
-                colors: [theme.color("bg-1"), theme.color("bg-0")],
-                startPoint: .top, endPoint: .bottom
-            )
-        )
+        .background {
+            if !backgroundIsMaterial {
+                LinearGradient(
+                    colors: [theme.color("bg-1"), theme.color("bg-0")],
+                    startPoint: .top, endPoint: .bottom
+                )
+            }
+        }
         .onAppear {
             withAnimation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true)) {
                 pulse = true

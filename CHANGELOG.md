@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### ✨ Features
+
+- Add Chat material and Terminal material settings under Appearance, each with a per-theme background opacity. Choosing one of the AppKit materials shows it behind agent chat or terminal panes; terminal text and app-painted cells stay opaque. Both default to None, which keeps the current opaque look. A terminal material change applies to terminals opened after it.
+
 ## [0.21.5] - 2026-10-15
 
 ### ✨ Features

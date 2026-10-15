@@ -62,6 +62,11 @@ enum GhosttyConfigBuilder {
         default: break
         }
         lines.append("background = \(bg)")
+        if cfg.backgroundMaterial != .none {
+            // The material behind the pane supplies the tint (see
+            // TerminalTabView). Cells an app paints explicitly stay opaque.
+            lines.append("background-opacity = 0")
+        }
         lines.append("foreground = \(fg)")
         // Ghostty's default 16 colors assume a dark background.
         if !theme.darkMode {

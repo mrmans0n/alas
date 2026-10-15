@@ -17,6 +17,25 @@ public struct SidebarChromeOverride: Codable, Equatable, Sendable {
     }
 }
 
+/// Per-theme tint layered over the chat and terminal materials. A light and a
+/// dark theme need different amounts of theme color to stay readable.
+public struct ContentMaterialOverride: Codable, Equatable, Sendable {
+    public var chatBackgroundOpacity: Double      // 0...1
+    public var terminalBackgroundOpacity: Double  // 0...1
+
+    public static let bundledDefaults: [String: ContentMaterialOverride] = [
+        "cool-slate": ContentMaterialOverride(chatBackgroundOpacity: 0.2, terminalBackgroundOpacity: 0.5),
+        "light":      ContentMaterialOverride(chatBackgroundOpacity: 0.2, terminalBackgroundOpacity: 0.5),
+    ]
+
+    public static let zero = ContentMaterialOverride(chatBackgroundOpacity: 0, terminalBackgroundOpacity: 0)
+
+    public init(chatBackgroundOpacity: Double, terminalBackgroundOpacity: Double) {
+        self.chatBackgroundOpacity = chatBackgroundOpacity
+        self.terminalBackgroundOpacity = terminalBackgroundOpacity
+    }
+}
+
 /// How the built-in "alas" MCP server is delivered to local ACP sessions.
 /// stdio (default) is spawned by the agent harness; http is served by a
 /// supervised `alas mcp --http` process the app manages, for harnesses that
@@ -58,6 +77,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public var recentWorktreeRefs: [RepoSelectorRecents.RecentWorktreeRef] = []
     public var collapsedProjectIds: [String] = []
     public var sidebarChromeOverrides: [String: SidebarChromeOverride] = [:]
+    public var contentMaterialOverrides: [String: ContentMaterialOverride] = [:]
     public var shortcutOverrides: [String: ShortcutBinding?] = [:]
     public var repositoryCloneRootPath: String = ""
 
@@ -257,12 +277,16 @@ public struct AppConfig: Codable, Equatable, Sendable {
         /// so the shell (and any running agents) survives app quit/relaunch.
         /// When false, panes launch as plain shells and die with the app.
         public var keepSessionsAlive: Bool
+        /// Material behind terminal panes. `.none` keeps the opaque theme
+        /// background; any other choice makes Ghostty's default background
+        /// transparent so the material shows through.
+        public var backgroundMaterial: SidebarMaterialChoice
 
         public enum CodingKeys: String, CodingKey, Sendable {
             case shell, workingDirectory, startupScript, worktreeCreateScript,
                  inheritParentEnv, fontFamily, fontSize, cursorStyle, cursorBlink,
                  scrollbackLines, bell, syncTabTitleWithTerminalTitle,
-                 confirmCloseTabs, keepSessionsAlive
+                 confirmCloseTabs, keepSessionsAlive, backgroundMaterial
         }
 
         public init(
@@ -279,7 +303,8 @@ public struct AppConfig: Codable, Equatable, Sendable {
             bell: String,
             syncTabTitleWithTerminalTitle: Bool,
             confirmCloseTabs: Bool = false,
-            keepSessionsAlive: Bool = true
+            keepSessionsAlive: Bool = true,
+            backgroundMaterial: SidebarMaterialChoice = .none
         ) {
             self.shell = shell
             self.workingDirectory = workingDirectory
@@ -295,6 +320,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
             self.syncTabTitleWithTerminalTitle = syncTabTitleWithTerminalTitle
             self.confirmCloseTabs = confirmCloseTabs
             self.keepSessionsAlive = keepSessionsAlive
+            self.backgroundMaterial = backgroundMaterial
         }
 
         public init(from decoder: Decoder) throws {
@@ -313,6 +339,9 @@ public struct AppConfig: Codable, Equatable, Sendable {
             syncTabTitleWithTerminalTitle = (try? c.decode(Bool.self, forKey: .syncTabTitleWithTerminalTitle)) ?? true
             confirmCloseTabs = (try? c.decode(Bool.self, forKey: .confirmCloseTabs)) ?? false
             keepSessionsAlive = (try? c.decode(Bool.self, forKey: .keepSessionsAlive)) ?? true
+            backgroundMaterial = SidebarMaterialChoice.centerPaneMaterial(
+                try? c.decode(SidebarMaterialChoice.self, forKey: .backgroundMaterial)
+            )
         }
     }
 
@@ -573,13 +602,15 @@ public struct AppConfig: Codable, Equatable, Sendable {
         public var defaultLauncherMode: LauncherMode
         public var chatFontFamily: String
         public var chatFontSize: Int
+        /// Material behind agent chat. `.none` keeps the opaque theme gradient.
+        public var chatBackgroundMaterial: SidebarMaterialChoice
 
         public enum CodingKeys: String, CodingKey, Sendable {
             case builtinState, custom, registry, worktreeAutoLaunch, defaultLauncherMode,
-                 chatFontFamily, chatFontSize
+                 chatFontFamily, chatFontSize, chatBackgroundMaterial
         }
 
-        public init(builtinState: [String: BuiltinAgentState], custom: [AgentDefinition], registry: [ACPRegistryInstalledAgent] = [], worktreeAutoLaunch: WorktreeAutoLaunch, defaultLauncherMode: LauncherMode, chatFontFamily: String, chatFontSize: Int) {
+        public init(builtinState: [String: BuiltinAgentState], custom: [AgentDefinition], registry: [ACPRegistryInstalledAgent] = [], worktreeAutoLaunch: WorktreeAutoLaunch, defaultLauncherMode: LauncherMode, chatFontFamily: String, chatFontSize: Int, chatBackgroundMaterial: SidebarMaterialChoice = .none) {
             self.builtinState = builtinState
             self.custom = custom
             self.registry = registry
@@ -587,6 +618,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
             self.defaultLauncherMode = defaultLauncherMode
             self.chatFontFamily = chatFontFamily
             self.chatFontSize = chatFontSize
+            self.chatBackgroundMaterial = chatBackgroundMaterial
         }
     }
 
@@ -723,10 +755,11 @@ public struct AppConfig: Codable, Equatable, Sendable {
         recentWorktreeRefs: [],
         collapsedProjectIds: [],
         sidebarChromeOverrides: SidebarChromeOverride.bundledDefaults,
+        contentMaterialOverrides: ContentMaterialOverride.bundledDefaults,
         shortcutOverrides: [:]
     )
 
-    public init(themeId: String, accent: String, matchSystemTheme: Bool, sidebarMaterial: SidebarMaterialChoice, sidebarWidth: Double, rightPaneWidth: Double, rightPaneVisible: Bool, sidebarVisible: Bool, commitDetailSplitRatio: Double, general: General, worktrees: Worktrees, terminal: Terminal, harness: Harness, code: Code, markdown: Markdown, changes: Changes, agents: Agents, files: Files, remote: Remote = .init(), nextPromptSuggestionsEnabled: Bool = false, sessionSummariesEnabled: Bool = false, runFailureBriefsEnabled: Bool = true, localTextModelEnabled: Bool = false, issueWorktreeNameSuggestionsEnabled: Bool = true, pluginsEnabled: Bool = true, recentProjectIds: [String] = [], recentWorktreeIdsByProject: [String: [String]] = [:], recentWorktreeRefs: [RepoSelectorRecents.RecentWorktreeRef] = [], collapsedProjectIds: [String] = [], sidebarChromeOverrides: [String: SidebarChromeOverride] = [:], shortcutOverrides: [String: ShortcutBinding?] = [:], repositoryCloneRootPath: String = "") {
+    public init(themeId: String, accent: String, matchSystemTheme: Bool, sidebarMaterial: SidebarMaterialChoice, sidebarWidth: Double, rightPaneWidth: Double, rightPaneVisible: Bool, sidebarVisible: Bool, commitDetailSplitRatio: Double, general: General, worktrees: Worktrees, terminal: Terminal, harness: Harness, code: Code, markdown: Markdown, changes: Changes, agents: Agents, files: Files, remote: Remote = .init(), nextPromptSuggestionsEnabled: Bool = false, sessionSummariesEnabled: Bool = false, runFailureBriefsEnabled: Bool = true, localTextModelEnabled: Bool = false, issueWorktreeNameSuggestionsEnabled: Bool = true, pluginsEnabled: Bool = true, recentProjectIds: [String] = [], recentWorktreeIdsByProject: [String: [String]] = [:], recentWorktreeRefs: [RepoSelectorRecents.RecentWorktreeRef] = [], collapsedProjectIds: [String] = [], sidebarChromeOverrides: [String: SidebarChromeOverride] = [:], contentMaterialOverrides: [String: ContentMaterialOverride] = [:], shortcutOverrides: [String: ShortcutBinding?] = [:], repositoryCloneRootPath: String = "") {
         self.themeId = themeId
         self.accent = accent
         self.matchSystemTheme = matchSystemTheme
@@ -757,6 +790,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         self.recentWorktreeRefs = recentWorktreeRefs
         self.collapsedProjectIds = collapsedProjectIds
         self.sidebarChromeOverrides = sidebarChromeOverrides
+        self.contentMaterialOverrides = contentMaterialOverrides
         self.shortcutOverrides = shortcutOverrides
         self.repositoryCloneRootPath = repositoryCloneRootPath
     }
@@ -853,6 +887,7 @@ extension AppConfig {
              recentProjectIds, recentWorktreeIdsByProject, recentWorktreeRefs,
              collapsedProjectIds,
              sidebarChromeOverrides,
+             contentMaterialOverrides,
              shortcutOverrides,
              repositoryCloneRootPath
     }
@@ -891,6 +926,9 @@ extension AppConfig {
             let syncTabTitleWithTerminalTitle = (try? termContainer.decode(Bool.self, forKey: .syncTabTitleWithTerminalTitle)) ?? true
             let confirmCloseTabs = (try? termContainer.decode(Bool.self, forKey: .confirmCloseTabs)) ?? false
             let keepSessionsAlive = (try? termContainer.decode(Bool.self, forKey: .keepSessionsAlive)) ?? true
+            let backgroundMaterial = SidebarMaterialChoice.centerPaneMaterial(
+                try? termContainer.decode(SidebarMaterialChoice.self, forKey: .backgroundMaterial)
+            )
             terminal = Terminal(
                 shell: shell,
                 workingDirectory: workingDirectory,
@@ -905,7 +943,8 @@ extension AppConfig {
                 bell: bell,
                 syncTabTitleWithTerminalTitle: syncTabTitleWithTerminalTitle,
                 confirmCloseTabs: confirmCloseTabs,
-                keepSessionsAlive: keepSessionsAlive
+                keepSessionsAlive: keepSessionsAlive,
+                backgroundMaterial: backgroundMaterial
             )
         } else {
             terminal = Terminal(
@@ -1062,6 +1101,9 @@ extension AppConfig {
                 Int.self, forKey: .chatFontSize
             )) ?? 13
             let chatFontSize = max(8, min(64, rawChatFontSize))
+            let chatBackgroundMaterial = SidebarMaterialChoice.centerPaneMaterial(try? agentsContainer.decode(
+                SidebarMaterialChoice.self, forKey: .chatBackgroundMaterial
+            ))
             agents = Agents(
                 builtinState: state,
                 custom: custom,
@@ -1069,7 +1111,8 @@ extension AppConfig {
                 worktreeAutoLaunch: autoLaunch,
                 defaultLauncherMode: defaultMode,
                 chatFontFamily: chatFontFamily,
-                chatFontSize: chatFontSize
+                chatFontSize: chatFontSize,
+                chatBackgroundMaterial: chatBackgroundMaterial
             )
         } else {
             agents = Agents(
@@ -1116,6 +1159,8 @@ extension AppConfig {
             (try? c.decode([String].self, forKey: .collapsedProjectIds)) ?? []
         sidebarChromeOverrides =
             (try? c.decode([String: SidebarChromeOverride].self, forKey: .sidebarChromeOverrides)) ?? [:]
+        contentMaterialOverrides =
+            (try? c.decode([String: ContentMaterialOverride].self, forKey: .contentMaterialOverrides)) ?? [:]
         shortcutOverrides =
             (try? c.decode([String: ShortcutBinding?].self, forKey: .shortcutOverrides)) ?? [:]
         repositoryCloneRootPath =
@@ -1204,5 +1249,10 @@ extension AppConfig {
     public func sidebarChromeOverride(forThemeId themeId: String) -> SidebarChromeOverride {
         if let saved = sidebarChromeOverrides[themeId] { return saved }
         return SidebarChromeOverride.bundledDefaults[themeId] ?? .zero
+    }
+
+    public func contentMaterialOverride(forThemeId themeId: String) -> ContentMaterialOverride {
+        if let saved = contentMaterialOverrides[themeId] { return saved }
+        return ContentMaterialOverride.bundledDefaults[themeId] ?? .zero
     }
 }

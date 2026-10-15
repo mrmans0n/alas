@@ -21,9 +21,11 @@ struct NativePeerConsoleView: View {
                             ScrollView([.horizontal, .vertical]) {
                                 GhosttyHost(surface: surface)
                                     .frame(width: extent.width, height: extent.height)
+                                    .background(theme.color("bg-0"))
                             }
                         } else {
                             GhosttyHost(surface: surface)
+                                .background(theme.color("bg-0"))
                         }
                     }
                     .opacity(viewer.phase == .live ? 1 : 0.35)
