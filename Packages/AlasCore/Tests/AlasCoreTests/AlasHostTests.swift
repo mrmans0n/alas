@@ -65,13 +65,20 @@ struct AlasHostTests {
         #expect(await Self.next(subscription) == [.workspaceCheckoutRemoved(id: checkout.id)])
     }
 
-    /// Events a subscriber has not read yet coalesce per key, oldest key first.
+    /// Events a subscriber has not read yet coalesce per key, oldest key
+    /// first, and the batch's cursor is the last event it covers, so a
+    /// client that reconnects after it misses nothing and repeats nothing.
     @Test func unreadEventsCoalescePerKey() async {
         let log = HostEventLog()
         let subscription = log.subscribe(after: log.cursor)
         log.publish([.runRemoved(id: "a"), .projectRemoved(id: "p")])
         log.publish([.runRemoved(id: "b"), .projectRemoved(id: "p"), .runRemoved(id: "a")])
         #expect(await Self.next(subscription) == [.runRemoved(id: "a"), .projectRemoved(id: "p"), .runRemoved(id: "b")])
+        #expect(subscription.cursor == log.cursor)
+
+        subscription.cancel()
+        log.publish([.runRemoved(id: "c")])
+        #expect(await Self.next(log.subscribe(after: subscription.cursor)) == [.runRemoved(id: "c")])
     }
 
     /// A subscriber that falls too far behind, or asks for events the log no

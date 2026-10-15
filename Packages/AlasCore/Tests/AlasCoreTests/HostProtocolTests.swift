@@ -21,7 +21,7 @@ struct HostProtocolTests {
         HostClientMessage(id: 2, request: .subscribe(after: HostCursor(generation: UUID(uuidString: "6F9619FF-8B86-D011-B42D-00CF4FC964FF")!, sequence: 42))),
         HostClientMessage(id: 3, request: .addProject(path: "/srv/repo", displayName: "repo", host: "build", kind: .folder)),
         HostClientMessage(id: 4, request: .createWorktree(projectID: "p", base: "main", branch: "b", destination: "/srv/b")),
-        HostClientMessage(id: 5, request: .deleteWorktree(worktree: ref, force: true, deleteBranchIfMerged: false)),
+        HostClientMessage(id: 5, request: .deleteWorktree(worktree: ref, lineageID: "l", branch: "feature", force: true, deleteBranchIfMerged: false)),
         HostClientMessage(id: 6, request: .workspaceCheckout(id: UUID(uuidString: "6F9619FF-8B86-D011-B42D-00CF4FC964FF")!)),
         HostClientMessage(id: 7, request: .stopRun(scriptKey: "dev", worktree: ref)),
     ])
@@ -48,7 +48,7 @@ struct HostProtocolTests {
             .sessionRemoved(owner: .worktree(worktree.id), id: "s"),
             .runRemoved(id: "r"),
             .resync,
-        ]),
+        ], cursor: HostCursor(generation: UUID(uuidString: "6F9619FF-8B86-D011-B42D-00CF4FC964FF")!, sequence: 7)),
     ])
     func serverMessagesRoundTrip(_ message: HostServerMessage) throws {
         #expect(try JSONDecoder().decode(HostServerMessage.self, from: JSONEncoder().encode(message)) == message)
@@ -67,7 +67,8 @@ struct HostProtocolTests {
             .sessionRemoved(owner: .worktree("w"), id: "s"),
             .runRemoved(id: "r"),
             .resync,
-        ])) == #"{"events":{"events":[{"sessionRemoved":{"id":"s","owner":{"worktree":{"id":"w"}}}},{"runRemoved":{"id":"r"}},{"resync":{}}]}}"#)
+        ], cursor: HostCursor(generation: UUID(uuidString: "6F9619FF-8B86-D011-B42D-00CF4FC964FF")!, sequence: 3))) ==
+            #"{"events":{"cursor":{"generation":"6F9619FF-8B86-D011-B42D-00CF4FC964FF","sequence":3},"events":[{"sessionRemoved":{"id":"s","owner":{"worktree":{"id":"w"}}}},{"runRemoved":{"id":"r"}},{"resync":{}}]}}"#)
         #expect(try json(HostServerMessage.response(id: 2, result: .failure(error: .worktreeDeletion(refusal: .needsForce("dirty"))))) ==
             #"{"response":{"id":2,"result":{"failure":{"error":{"worktreeDeletion":{"refusal":{"needsForce":{"message":"dirty"}}}}}}}}"#)
     }

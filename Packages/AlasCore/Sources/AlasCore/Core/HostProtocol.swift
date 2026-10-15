@@ -43,7 +43,9 @@ public enum HostRequest: Codable, Equatable, Sendable {
     case listSessions
     case addProject(path: String, displayName: String, host: String?, kind: ProjectKind)
     case createWorktree(projectID: String, base: String, branch: String, destination: String)
-    case deleteWorktree(worktree: WorktreeRef, force: Bool, deleteBranchIfMerged: Bool)
+    /// `lineageID` and `branch` are the worktree's as the client last saw
+    /// it: a checkout replaced or switched since is refused as changed.
+    case deleteWorktree(worktree: WorktreeRef, lineageID: String?, branch: String, force: Bool, deleteBranchIfMerged: Bool)
     case archiveWorktree(worktree: WorktreeRef)
     case unarchiveWorktree(worktree: WorktreeRef)
     case listWorkspaceCheckouts
@@ -54,8 +56,9 @@ public enum HostRequest: Codable, Equatable, Sendable {
 
 public enum HostServerMessage: Codable, Equatable, Sendable {
     case response(id: Int, result: HostResponse)
-    /// The subscription's next events, coalesced per key.
-    case events(events: [HostEvent])
+    /// The subscription's next events, coalesced per key, and the cursor
+    /// they reach: a client that reconnects subscribes after it.
+    case events(events: [HostEvent], cursor: HostCursor)
 }
 
 public enum HostResponse: Codable, Equatable, Sendable {

@@ -80,8 +80,15 @@ public final class HostSubscription {
     private var isCancelled = false
     private let pendingLimit: Int
     private let onCancel: (HostSubscription) -> Void
+    /// The log position the pending events reach.
+    private var pendingThrough: HostCursor
+    /// The log position the events `next()` last returned reach: a client
+    /// that read them resumes after it.
+    public private(set) var cursor: HostCursor
 
-    init(pendingLimit: Int, onCancel: @escaping (HostSubscription) -> Void) {
+    init(after cursor: HostCursor, pendingLimit: Int, onCancel: @escaping (HostSubscription) -> Void) {
+        self.cursor = cursor
+        pendingThrough = cursor
         self.pendingLimit = pendingLimit
         self.onCancel = onCancel
     }
@@ -107,8 +114,9 @@ public final class HostSubscription {
         onCancel(self)
     }
 
-    func receive(_ events: [HostEvent]) {
+    func receive(_ events: [HostEvent], through position: HostCursor) {
         guard !isCancelled, !events.isEmpty else { return }
+        pendingThrough = position
         if pending[.resync] == nil {
             for event in events {
                 let key = event.key
@@ -128,6 +136,7 @@ public final class HostSubscription {
     }
 
     private func drain() -> [HostEvent] {
+        cursor = pendingThrough
         defer {
             pendingKeys.removeAll()
             pending.removeAll()
@@ -163,7 +172,7 @@ final class HostEventLog {
         }
         subscriptions = subscriptions.filter { $0.value.subscription != nil }
         for entry in subscriptions.values {
-            entry.subscription?.receive(events)
+            entry.subscription?.receive(events, through: cursor)
         }
     }
 
@@ -171,18 +180,18 @@ final class HostEventLog {
     /// retained first, or `.resync` when some have been dropped or the
     /// cursor is not one of this log's.
     func subscribe(after: HostCursor) -> HostSubscription {
-        let subscription = HostSubscription(pendingLimit: pendingLimit) { [weak self] in
+        let subscription = HostSubscription(after: after, pendingLimit: pendingLimit) { [weak self] in
             self?.subscriptions.removeValue(forKey: ObjectIdentifier($0))
         }
         subscriptions[ObjectIdentifier(subscription)] = WeakSubscription(subscription: subscription)
         if after.generation != cursor.generation || after.sequence > cursor.sequence {
-            subscription.receive([.resync])
+            subscription.receive([.resync], through: cursor)
         } else if after < cursor {
             let oldest = retained.first?.cursor.sequence ?? cursor.sequence + 1
             if after.sequence + 1 < oldest {
-                subscription.receive([.resync])
+                subscription.receive([.resync], through: cursor)
             } else {
-                subscription.receive(retained.filter { $0.cursor > after }.map(\.event))
+                subscription.receive(retained.filter { $0.cursor > after }.map(\.event), through: cursor)
             }
         }
         return subscription
