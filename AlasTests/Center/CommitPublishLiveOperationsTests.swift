@@ -449,11 +449,13 @@ struct CommitPublishLiveOperationsTests {
         }
         try GitService.assertSuccess(try await Process.git(
             ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "Initial"], cwd: repo), op: "Create test commit")
-        try GitService.assertSuccess(try await Process.git(["remote", "add", "fork", remote.path], cwd: repo), op: "Add test remote")
         let head = try await Process.git(["rev-parse", "HEAD"], cwd: repo)
         let sha = head.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Seeded before the remote is named: git 2.56 updates the tracking
+        // ref of a configured remote whose URL a push-by-URL matches.
         try GitService.assertSuccess(try await Process.git(["push", remote.path, "\(sha):refs/heads/feature"], cwd: repo),
             op: "Seed remote branch")
+        try GitService.assertSuccess(try await Process.git(["remote", "add", "fork", remote.path], cwd: repo), op: "Add test remote")
         let missingTracking = try await Process.git(["rev-parse", "--verify", "refs/remotes/fork/feature"], cwd: repo)
         #expect(missingTracking.exitCode != 0)
         var target = makeTarget()

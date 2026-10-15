@@ -89,23 +89,30 @@ later delivery. The differences:
   seconds later; whatever it leaves running when it exits on its own gets
   `SIGTERM`, then `SIGKILL` a second later. On the host the helper does it,
   and it keeps track of every process the command starts, including ones that
-  detach into their own session, so none is left behind. If Alas loses the
+  detach into their own session, so none is left behind (on a Linux host;
+  see below for macOS). If Alas loses the
   connection or quits, the helper still stops the run: Alas renews a lease on
   it while it runs, and the helper also enforces the 10 minutes, plus the
   grace, itself.
 - It counts towards the 2 processes and the 4 requests in flight, like a local
   run.
-- The host must be Linux 5.3 or later, with the Alas helper installed. These
-  answer `-32003` with the reason, after `could not start <id>: `:
+- The host must be Linux 5.3 or later, or macOS, with the Alas helper
+  installed. These answer `-32003` with the reason, after `could not start
+  <id>: `:
 
   ```
   the Alas helper is not installed on remote host devbox; plugins need it to run commands there
-  plugin commands can't run on macOS SSH hosts: macOS can't guarantee that everything a command starts is stopped
   this host's Linux kernel lacks pidfd_open and pidfd_send_signal (Linux 5.3 or later is required to stop everything a command starts)
+  plugin commands can't run on this host's operating system
   remote host devbox is unreachable
   ```
 
-  Remote `file/*` works on macOS hosts.
+  On a macOS host, stopping covers the command's process group, the
+  processes still descending from it, and any process still holding the
+  command's stdout or stderr. macOS has no way to keep track of everything
+  else, so a process that leaves the group and redirects its output before
+  the helper sees it can outlive the run, as it can for a command run on this
+  Mac.
 
 ## Remote `process/start`
 

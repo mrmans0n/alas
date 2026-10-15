@@ -1,6 +1,6 @@
 //! Lifecycle of plugin processes (`pproc/*`), driven through a real helper.
-//! Linux only: other hosts refuse plugin processes.
-#![cfg(target_os = "linux")]
+//! Linux and macOS: other hosts refuse plugin processes.
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 
 use base64::Engine;
 use serde_json::{Value, json};
@@ -41,6 +41,21 @@ impl Helper {
         let worktree = root.join("worktree");
         std::fs::create_dir_all(&home).unwrap();
         std::fs::create_dir_all(&worktree).unwrap();
+        #[cfg(target_os = "macos")]
+        {
+            // macOS has no setsid(1); the scripts get a stand-in on the login PATH.
+            let bin = home.join("bin");
+            std::fs::create_dir_all(&bin).unwrap();
+            std::fs::write(
+                bin.join("setsid"),
+                "#!/usr/bin/perl\nuse POSIX;\nif (!defined POSIX::setsid()) { exit 0 if fork; POSIX::setsid(); }\nexec @ARGV or die \"setsid: $ARGV[0]: $!\\n\";\n",
+            )
+            .unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(bin.join("setsid"), std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+            std::fs::write(home.join(".profile"), "export PATH=\"$HOME/bin:$PATH\"\n").unwrap();
+        }
         let mut child = Command::new(env!("CARGO_BIN_EXE_alas-helper"))
             .arg("serve")
             .env("HOME", &home)
@@ -181,6 +196,7 @@ fn wait_until(mut condition: impl FnMut() -> bool) {
 }
 
 /// Running, not a zombie.
+#[cfg(target_os = "linux")]
 fn alive(pid: i32) -> bool {
     std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
         !matches!(
@@ -188,6 +204,47 @@ fn alive(pid: i32) -> bool {
             Some('Z' | 'X')
         )
     })
+}
+
+#[cfg(target_os = "macos")]
+fn bsdinfo(pid: i32) -> Option<libc::proc_bsdinfo> {
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as i32;
+    let filled = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            (&mut info as *mut libc::proc_bsdinfo).cast(),
+            size,
+        )
+    };
+    (filled == size).then_some(info)
+}
+
+/// Running, not a zombie.
+#[cfg(target_os = "macos")]
+fn alive(pid: i32) -> bool {
+    bsdinfo(pid).is_some_and(|info| info.pbi_status != libc::SZOMB)
+}
+
+/// The start time the helper records with a pid.
+fn start_time(pid: u32) -> u64 {
+    #[cfg(target_os = "linux")]
+    {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+        stat[stat.rfind(')').unwrap() + 2..]
+            .split(' ')
+            .nth(19)
+            .unwrap()
+            .parse()
+            .unwrap()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let info = bsdinfo(pid as i32).unwrap();
+        info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec
+    }
 }
 
 fn output(result: &Value) -> String {
@@ -291,18 +348,8 @@ fn a_root_that_calls_setsid_and_its_setsid_child_are_stopped() {
     let child = helper.pid_file("child.pid");
     let anchor = helper.anchor("detach");
     // Both left the anchored group.
-    let pgrp = |pid: i32| {
-        std::fs::read_to_string(format!("/proc/{pid}/stat"))
-            .unwrap()
-            .split(") ")
-            .nth(1)
-            .unwrap()
-            .split(' ')
-            .nth(2)
-            .unwrap()
-            .parse::<i32>()
-            .unwrap()
-    };
+    // SAFETY: getpgid only reads.
+    let pgrp = |pid: i32| unsafe { libc::getpgid(pid) };
     assert!(pgrp(root) != anchor && pgrp(child) != anchor);
     helper.kill("detach");
     let result = helper.wait_exit("detach");
@@ -326,6 +373,24 @@ fn a_child_forked_during_the_term_grace_is_stopped_too() {
     let result = helper.wait_exit("late");
     assert_eq!(result["exit"], 137);
     assert!(!alive(root) && !alive(late));
+}
+
+#[test]
+fn a_process_that_detaches_when_terminated_is_still_killed() {
+    let mut helper = Helper::start();
+    // An orphan cleanup finds by its group and output, which on SIGTERM
+    // leaves both and keeps running: what cleanup already found stays found.
+    helper.spawn_script(
+        "detacher",
+        "(perl -MPOSIX -e '$SIG{TERM} = sub { POSIX::setsid(); open(STDOUT, \">\", \"/dev/null\"); open(STDERR, \">\", \"/dev/null\"); open(my $f, \">\", \"detached.pid\"); print $f \"$$\\n\"; close $f }; open(my $f, \">\", \"started.pid\"); print $f \"$$\\n\"; close $f; sleep 1 while 1' &)\nwhile [ ! -s started.pid ]; do sleep 0.01; done\nexec sleep 300\n",
+        json!({ "killGraceMs": 1000 }),
+    );
+    let detacher = helper.pid_file("started.pid");
+    helper.kill("detacher");
+    assert_eq!(helper.pid_file("detached.pid"), detacher);
+    let result = helper.wait_exit("detacher");
+    assert_eq!(result["exit"], 143);
+    assert!(!alive(detacher));
 }
 
 #[test]
@@ -355,6 +420,7 @@ fn the_anchor_ignores_the_groups_signals_and_is_removed_last() {
     assert!(!alive(anchor) && !alive(root));
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn once_the_anchor_dies_cleanup_goes_on_through_pidfds_alone() {
     let mut helper = Helper::start();
@@ -484,13 +550,7 @@ fn a_retry_never_reports_a_run_whose_supervisor_is_gone() {
     // another live process: the recorded start time no longer matches.
     let mut stranger = Command::new("sleep").arg("30").spawn().unwrap();
     let pid = stranger.id();
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
-    let start: u64 = stat[stat.rfind(')').unwrap() + 2..]
-        .split(' ')
-        .nth(19)
-        .unwrap()
-        .parse()
-        .unwrap();
+    let start = start_time(pid);
     let dir = helper.dir("orphan");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("owner"), LEASE).unwrap();
@@ -514,13 +574,7 @@ fn a_retry_never_reports_a_run_whose_supervisor_is_gone() {
 fn live_identity() -> (Child, String) {
     let child = Command::new("sleep").arg("30").spawn().unwrap();
     let pid = child.id();
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
-    let start: u64 = stat[stat.rfind(')').unwrap() + 2..]
-        .split(' ')
-        .nth(19)
-        .unwrap()
-        .parse()
-        .unwrap();
+    let start = start_time(pid);
     (child, format!("{pid} {start}"))
 }
 
@@ -617,4 +671,31 @@ fn a_slow_spawn_does_not_hold_up_other_requests() {
             break;
         }
     }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn the_anchor_exits_once_its_parent_is_gone() {
+    // The shell plays the supervisor: `$$` stays its pid through `exec`, so
+    // the anchor's parent is it until the kill.
+    let mut parent = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(format!(
+            "{} plugin-proc-anchor $$ & echo $!; exec sleep 30",
+            env!("CARGO_BIN_EXE_alas-helper")
+        ))
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut line = String::new();
+    BufReader::new(parent.stdout.take().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    let anchor: i32 = line.trim().parse().unwrap();
+    // Not a wait for an event: the anchor must still be there a while later.
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(alive(anchor), "the anchor left while its parent lived");
+    parent.kill().unwrap();
+    parent.wait().unwrap();
+    wait_until(|| !alive(anchor));
 }

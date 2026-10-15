@@ -1129,8 +1129,8 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         let chevron: NSRect?
     }
 
-    /// Pill and chevron rects for each expansion action on `row`, from the
-    /// same inputs `DiffPaneCodeTextView` feeds `expandPillRect`.
+    /// Pill and chevron rects follow the rendered glyphs, excluding the
+    /// paragraph's extra vertical padding.
     private func expansionPills(_ side: Side, row: Int) -> [ExpansionPill] {
         let sideLines = lines(side)
         guard sideLines.metadata.indices.contains(row), sideLines.code.indices.contains(row) else { return [] }
@@ -1142,8 +1142,9 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         let gutter = sideLines.gutterWidth
         let rowRect = NSRect(x: pane.minX + gutter, y: codeTop + tops[row], width: max(0, pane.width - gutter), height: tops[row + 1] - tops[row])
         let textX = rowRect.minX + Self.textInset + (sideLines.indents[row] ?? 0) - (wraps ? 0 : horizontalScroll.offset(side))
-        let textHeight = sideLines.customMetrics[row]?.lineHeight ?? lineHeight
         let line = sideLines.code[row]
+        let glyphBounds = CTLineGetBoundsWithOptions(line, .useGlyphPathBounds)
+        let textY = rowRect.minY + baseline(sideLines, row) - glyphBounds.maxY
         let label = sideLines.codeStrings[row] as NSString
         return actions.compactMap { action in
             let start = action.range.location - metadata.range.location
@@ -1152,7 +1153,7 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
             else { return nil }
             let minX = CTLineGetOffsetForStringIndex(line, start, nil)
             let maxX = CTLineGetOffsetForStringIndex(line, start + action.range.length, nil)
-            let textRect = NSRect(x: textX + minX, y: rowRect.minY, width: maxX - minX, height: textHeight)
+            let textRect = NSRect(x: textX + minX, y: textY, width: maxX - minX, height: glyphBounds.height)
             let chevronSize = chevronImage(for: action)?.size ?? .zero
             let pill = DiffPaneCodeTextView.expandPillRect(textRect: textRect, firstLineRect: textRect, rowRect: rowRect, chevronSize: chevronSize)
             let chevron = chevronSize == .zero ? nil : DiffPaneCodeTextView.expandChevronRect(
@@ -1825,16 +1826,16 @@ final class DiffSplitCoreTextRowView: NSView, AppKitDiffRowView {
         return metrics
     }
 
-    /// Height, baseline and indent for a line whose paragraph style sets its
-    /// own (the context-expansion rows), as TextKit lays it out; nil for
-    /// lines that use the code line metrics.
+    /// TextKit height and indent for context-expansion rows, with the visible
+    /// glyphs centered vertically alongside the chevrons.
     static func ownMetrics(of line: NSAttributedString, font: NSFont) -> (lineHeight: CGFloat, baselineOffset: CGFloat, indent: CGFloat)? {
         guard line.length > 0,
               let style = line.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle,
               style.minimumLineHeight > 0 || style.maximumLineHeight > 0 || style.firstLineHeadIndent > 0
         else { return nil }
         let metrics = textKitMetrics(for: line.attribute(.font, at: 0, effectiveRange: nil) as? NSFont ?? font, style: style)
-        return (metrics.lineHeight, metrics.baselineOffset, style.firstLineHeadIndent)
+        let glyphBounds = CTLineGetBoundsWithOptions(CTLineCreateWithAttributedString(line), .useGlyphPathBounds)
+        return (metrics.lineHeight, metrics.lineHeight / 2 + glyphBounds.midY, style.firstLineHeadIndent)
     }
 
     private static func lines(

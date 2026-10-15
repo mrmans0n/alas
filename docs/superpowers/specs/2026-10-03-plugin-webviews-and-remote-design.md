@@ -224,9 +224,23 @@ Same messages, limits and error codes as API 6. Differences:
   cgroups are not required. The helper probes `pidfd_open` and
   `pidfd_send_signal` (Linux 5.3 and later) before accepting remote
   `process.*`, and refuses older kernels with the reason rather than falling
-  back to numeric pids. macOS has no subreaper, so remote `process.*` is
-  refused on macOS SSH hosts until a race-free mechanism exists; remote
-  `file/*` still works there.
+  back to numeric pids. macOS hosts run plugin processes too, with the same
+  cleanup the local launcher gives them on this Mac, plus a catch for
+  orphans. macOS has no pidfds and no subreaper, so the helper tracks each
+  process by its pid and start time (`proc_pidinfo`) and checks both again
+  immediately before every signal; the anchor polls for its parent instead of
+  a parent-death signal. Orphans reparent to launchd at once, so cleanup also
+  signals any process started after the supervisor that is in
+  the anchor's group or still holds either end of the run's stdout or stderr
+  pipe (`PROC_PIDLISTFDS`, `PROC_PIDFDPIPEINFO`); the supervisor keeps its own
+  read ends open so the pipes' kernel handles can't be reused meanwhile. An
+  environment marker was tried and dropped: macOS no longer shows other
+  processes' environments, even the same user's. What can escape on macOS: a
+  descendant that leaves the group and redirects its output before a sample
+  sees it below the supervisor, and, in principle, a pid reused in the
+  microseconds between the check and the signal. An inherited tag descriptor
+  would survive output redirection, though not `closefrom`, if that ever
+  matters.
 - Processes see EOF. Today `proc/write` only appends to `stdin.log` and
   the child's stdin stays open until it exits, so `cat` or a formatter waits
   for the 10-minute limit. R3 adds a spawn mode that writes the `stdin`

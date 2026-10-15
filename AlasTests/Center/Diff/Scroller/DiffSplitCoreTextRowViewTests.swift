@@ -235,15 +235,18 @@ import Testing
         #expect(column.width == expected.width)
     }
 
-    @Test func expansionRowsTakeTheirOwnHeightAndIndent() throws {
-        let document = expandableSplit().oldCode
+    @Test(arguments: [CGFloat(13), 24], [DiffContextBoundary.above, .below])
+    func expansionRowsCenterLabelsWithChevrons(fontSize: CGFloat, boundary: DiffContextBoundary) throws {
+        let font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+        let document = expandableSplit(font: font, boundary: boundary).oldCode
         let line = { (index: Int) in
-            let range = document.lines[index].range
-            return document.attributedString.attributedSubstring(from: NSRange(location: range.location, length: max(0, range.length - 1)))
+            document.attributedString.attributedSubstring(from: document.lines[index].range)
         }
         let own = try #require(DiffSplitCoreTextRowView.ownMetrics(of: line(0), font: font))
         #expect(own.lineHeight == DiffPaneTextDocumentBuilder.expandableContextRowHeight(font: font))
         #expect(own.indent == DiffPaneTextDocumentBuilder.expandableContextHeadIndent(font: font))
+        let glyphBounds = CTLineGetBoundsWithOptions(CTLineCreateWithAttributedString(line(0)), .useGlyphPathBounds)
+        #expect(abs(own.baselineOffset - glyphBounds.midY - own.lineHeight / 2) < 0.5)
         #expect(DiffSplitCoreTextRowView.ownMetrics(of: line(1), font: font) == nil)
     }
 
@@ -525,14 +528,16 @@ import Testing
     private let expansionKey = DiffContextExpansionKey(groupID: "hunk-0", boundary: .above)
 
     /// A one-line change below a "20 unchanged lines above" expansion row.
-    private func expandableSplit() -> DiffPaneTextDocumentBuilder.SplitResult {
+    private func expandableSplit(font: NSFont? = nil, boundary: DiffContextBoundary = .above) -> DiffPaneTextDocumentBuilder.SplitResult {
         let diff = DiffParser.parse("@@ -21,1 +21,1 @@\n-a\n+b\n")
         var rows = DiffDisplayModelBuilder.build(diff: diff, filePath: "Sources/Example.swift").groups.flatMap(\.rows)
         rows.insert(DiffDisplayRow(
             id: "expand", kind: .expandableContext, old: nil, new: nil, collapsedLineCount: 20,
-            contextExpansion: DiffContextExpansionRow(key: expansionKey, boundary: .above, remainingLineCount: 20)
+            contextExpansion: DiffContextExpansionRow(
+                key: DiffContextExpansionKey(groupID: "hunk-0", boundary: boundary), boundary: boundary, remainingLineCount: 20
+            )
         ), at: 0)
-        return DiffPaneTextDocumentBuilder.buildSplit(rows: rows, fileExtension: "swift", font: font, showWhitespace: false, theme: theme)
+        return DiffPaneTextDocumentBuilder.buildSplit(rows: rows, fileExtension: "swift", font: font ?? self.font, showWhitespace: false, theme: theme)
     }
 
     @Test func scrollableWidthCoversAnExpansionRowsIndentAndPill() throws {
@@ -586,7 +591,7 @@ import Testing
         })
         // Split rows put the expansion label in the old column.
         let oldPane = DiffPaneSplitGeometry.frames(containerWidth: 800).oldPane
-        let rowY = DiffSplitCoreTextRowView.verticalInset + 4
+        let rowY = DiffSplitCoreTextRowView.verticalInset + DiffPaneTextDocumentBuilder.expandableContextRowHeight(font: font) / 2
         let point = inGutter
             ? NSPoint(x: oldPane.minX + 5, y: rowY)
             : try #require((Int(oldPane.minX)..<Int(oldPane.maxX)).lazy.map { NSPoint(x: CGFloat($0), y: rowY) }.first { view.expansionTarget(at: $0) != nil })

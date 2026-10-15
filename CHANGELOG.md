@@ -14,6 +14,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Plugins that declare `remote` run their commands on macOS SSH hosts too, not only Linux ones. The helper stops what a command started by its process group, its descendants, and any process still holding the command's output; this needs remote helper 0.9.0, which Alas installs on connect.
 - Show visual aids in ACP sessions of SSH projects. The remote helper relays the built-in `visual_show` tool, and only that tool, back to the Mac that owns the session, with no port forwarding or listening port; this needs remote helper 0.8.0, which Alas installs on connect (#1996).
 - Enable the Needs Attention inbox for everyone (#1985).
 - Add a resizable, settings-style project dialog and vendor logos in the default agent picker (#1991, #2005).
