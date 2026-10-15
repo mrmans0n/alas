@@ -1627,6 +1627,9 @@ private struct ACPSideQuestionSlot: View {
     /// The size while a resize drag runs; committed on release.
     @State private var liveSize: CGFloat?
     @State private var dragStartSize: CGFloat?
+    /// The card's height in the composer and top docks, which hugs content
+    /// shorter than `size`.
+    @State private var renderedHeight: CGFloat?
     @Environment(\.acpSideQuestionCardState) private var cardState
 
     var body: some View {
@@ -1735,11 +1738,19 @@ private struct ACPSideQuestionSlot: View {
 
     /// `sign` is +1 when dragging along the axis grows the card.
     private func resize(by translation: CGFloat, sign: CGFloat) {
-        let start = dragStartSize ?? size
+        let start = dragStartSize ?? dragStart
         if dragStartSize == nil { dragStartSize = start }
         liveSize = placement == .side
             ? ACPSideQuestionDockLayout.clampedSideWidth(start + sign * translation, surfaceWidth: surfaceSize.width)
             : ACPSideQuestionDockLayout.clampedHeight(start + sign * translation, surfaceHeight: surfaceSize.height)
+    }
+
+    /// A card hugging short content starts from the height it shows, so the
+    /// grip moves the edge right away. A collapsed card shows only its
+    /// header, so it starts from the chosen height.
+    private var dragStart: CGFloat {
+        guard placement != .side, cardState?.isCollapsed != true, let renderedHeight else { return size }
+        return min(size, renderedHeight)
     }
 
     private func commitResize() {
@@ -1764,6 +1775,7 @@ private struct ACPSideQuestionSlot: View {
                     cap: size,
                     limit: ACPSideQuestionDockLayout.maxHeight(surfaceHeight: surfaceSize.height)
                 ))
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { renderedHeight = $0 }
                 // Dragging up grows a card that sits above the composer.
                 .overlay(alignment: .top) {
                     ACPSideQuestionResizeGrip(
@@ -1779,6 +1791,7 @@ private struct ACPSideQuestionSlot: View {
                     cap: size,
                     limit: ACPSideQuestionDockLayout.maxHeight(surfaceHeight: surfaceSize.height)
                 ))
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { renderedHeight = $0 }
                 .overlay(alignment: .bottom) {
                     ACPSideQuestionResizeGrip(
                         onDragChanged: { resize(by: $0, sign: 1) },

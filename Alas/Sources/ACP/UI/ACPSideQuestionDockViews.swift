@@ -94,7 +94,8 @@ struct ACPSideQuestionResizeGrip: View {
                 }
             }
             .gesture(
-                DragGesture(coordinateSpace: .global)
+                // The default 10pt minimum would make the edge jump to catch up.
+                DragGesture(minimumDistance: 1, coordinateSpace: .global)
                     .onChanged { value in
                         dragging = true
                         onDragChanged(value.translation.height)
