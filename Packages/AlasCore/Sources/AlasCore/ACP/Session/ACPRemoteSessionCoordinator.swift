@@ -29,7 +29,11 @@ public final class ACPRemoteSessionCoordinator {
     }
     nonisolated public let owner: RemoteSessionOwner
     private let request: Request
-    private var authorities: [String: Authority] = [:]
+    private var authorities: [String: Authority] = [:] {
+        willSet { authorityWillChange.send() }
+    }
+    /// Sent before any session's authority changes.
+    public let authorityWillChange = ChangeSignal<Void>()
     private var epochs: [String: UUID] = [:]
     private var claims: [String: Task<RemoteSessionClaimResult, Error>] = [:]
     private var reads: [String: Task<Void, Error>] = [:]

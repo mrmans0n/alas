@@ -1577,7 +1577,17 @@ public final class ACPSessionManager: ChangeTracking {
     /// this narrower signal to back off when the ACP tab is not on screen.
     private var visibleSessionCounts: [ACPSession.ID: Int] = [:]
     public var remoteServerIdProvider: @MainActor () -> String? = { nil }
-    private var remoteCoordinator: ACPRemoteSessionCoordinator?
+    private var remoteCoordinator: ACPRemoteSessionCoordinator? {
+        didSet { observeRemoteAuthority() }
+    }
+    private var remoteAuthorityChanges: ChangeSubscription?
+
+    /// Remote authority is part of `isWriter`, so its changes are summary changes.
+    private func observeRemoteAuthority() {
+        remoteAuthorityChanges = remoteCoordinator?.authorityWillChange.observe { [weak self] in
+            self?.summaryWillChange.send()
+        }
+    }
 
     private func coordination() throws -> ACPRemoteSessionCoordinator? {
         guard let host = effectiveRemoteHost() else { return nil }
@@ -1979,6 +1989,7 @@ public final class ACPSessionManager: ChangeTracking {
         if store == nil {
             refreshRecent()
         }
+        observeRemoteAuthority()
     }
 
     @discardableResult
