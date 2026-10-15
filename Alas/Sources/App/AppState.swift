@@ -175,6 +175,11 @@ final class AppState {
     var sessionSummaryCoordinator: SessionSummaryCoordinator { core.sessionSummaries }
     @ObservationIgnored let localTextObservers = LocalTextObservers()
     @ObservationIgnored let sessionRecapRuntime = SessionRecapRuntime()
+    @ObservationIgnored lazy var sessionRecapPrecomputeScheduler = SessionRecapPrecomputeScheduler(
+        now: { Date() },
+        sleep: { try await Task.sleep(for: $0) },
+        run: { [weak self] sessionId in await self?.runRecapPrecompute(sessionId: sessionId) }
+    )
     @ObservationIgnored let qwenTitleRequests = ACPQwenTitleRequests()
     @ObservationIgnored private var worktreeExplainerStoreInstance: WorktreeExplainerStore?
     var worktreeExplainerStore: WorktreeExplainerStore {
@@ -198,7 +203,12 @@ final class AppState {
     var nextPromptRuntimeEnabled = false
     var nextPromptDisableSavePending = false
     var nextPromptSettingsError: String?
-    var sessionSummariesRuntimeEnabled = false
+    var sessionSummariesRuntimeEnabled = false {
+        didSet {
+            guard sessionSummariesRuntimeEnabled != oldValue else { return }
+            sessionSummariesRuntimeEnabledChanged()
+        }
+    }
     var sessionSummaryDisableSavePending = false
     var sessionSummarySettingsError: String?
     var localTextRemovalFailure: LocalTextModelFailure?
@@ -9540,6 +9550,7 @@ final class AppState {
     }
 
     private func cleanupACPSession(owner: SessionOwnerID, sessionId: String) {
+        dropRecapPrecompute(sessionId: sessionId)
         guard let manager = acpManagers[owner] else { return }
         Task { await manager.dismissSideQuestion(parentID: sessionId) }
         if retainedScheduledSessionStillNeedsRunner(manager: manager, sessionId: sessionId) {
