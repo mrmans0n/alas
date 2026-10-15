@@ -67,6 +67,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public var remote: Remote = .init()
     public var nextPromptSuggestionsEnabled: Bool = false
     public var sessionSummariesEnabled: Bool = false
+    public var sessionRecapThreshold: SessionRecapThreshold = .twoHours
     public var runFailureBriefsEnabled: Bool = true
     public var localTextModelEnabled: Bool = false
     public var issueWorktreeNameSuggestionsEnabled: Bool = true
@@ -747,6 +748,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         files: Files(showIgnored: true, bookmarksPaneHeight: nil),
         nextPromptSuggestionsEnabled: false,
         sessionSummariesEnabled: false,
+        sessionRecapThreshold: .twoHours,
         localTextModelEnabled: false,
         issueWorktreeNameSuggestionsEnabled: true,
         pluginsEnabled: true,
@@ -759,7 +761,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         shortcutOverrides: [:]
     )
 
-    public init(themeId: String, accent: String, matchSystemTheme: Bool, sidebarMaterial: SidebarMaterialChoice, sidebarWidth: Double, rightPaneWidth: Double, rightPaneVisible: Bool, sidebarVisible: Bool, commitDetailSplitRatio: Double, general: General, worktrees: Worktrees, terminal: Terminal, harness: Harness, code: Code, markdown: Markdown, changes: Changes, agents: Agents, files: Files, remote: Remote = .init(), nextPromptSuggestionsEnabled: Bool = false, sessionSummariesEnabled: Bool = false, runFailureBriefsEnabled: Bool = true, localTextModelEnabled: Bool = false, issueWorktreeNameSuggestionsEnabled: Bool = true, pluginsEnabled: Bool = true, recentProjectIds: [String] = [], recentWorktreeIdsByProject: [String: [String]] = [:], recentWorktreeRefs: [RepoSelectorRecents.RecentWorktreeRef] = [], collapsedProjectIds: [String] = [], sidebarChromeOverrides: [String: SidebarChromeOverride] = [:], contentMaterialOverrides: [String: ContentMaterialOverride] = [:], shortcutOverrides: [String: ShortcutBinding?] = [:], repositoryCloneRootPath: String = "") {
+    public init(themeId: String, accent: String, matchSystemTheme: Bool, sidebarMaterial: SidebarMaterialChoice, sidebarWidth: Double, rightPaneWidth: Double, rightPaneVisible: Bool, sidebarVisible: Bool, commitDetailSplitRatio: Double, general: General, worktrees: Worktrees, terminal: Terminal, harness: Harness, code: Code, markdown: Markdown, changes: Changes, agents: Agents, files: Files, remote: Remote = .init(), nextPromptSuggestionsEnabled: Bool = false, sessionSummariesEnabled: Bool = false, sessionRecapThreshold: SessionRecapThreshold = .twoHours, runFailureBriefsEnabled: Bool = true, localTextModelEnabled: Bool = false, issueWorktreeNameSuggestionsEnabled: Bool = true, pluginsEnabled: Bool = true, recentProjectIds: [String] = [], recentWorktreeIdsByProject: [String: [String]] = [:], recentWorktreeRefs: [RepoSelectorRecents.RecentWorktreeRef] = [], collapsedProjectIds: [String] = [], sidebarChromeOverrides: [String: SidebarChromeOverride] = [:], contentMaterialOverrides: [String: ContentMaterialOverride] = [:], shortcutOverrides: [String: ShortcutBinding?] = [:], repositoryCloneRootPath: String = "") {
         self.themeId = themeId
         self.accent = accent
         self.matchSystemTheme = matchSystemTheme
@@ -781,6 +783,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         self.remote = remote
         self.nextPromptSuggestionsEnabled = nextPromptSuggestionsEnabled
         self.sessionSummariesEnabled = sessionSummariesEnabled
+        self.sessionRecapThreshold = sessionRecapThreshold
         self.runFailureBriefsEnabled = runFailureBriefsEnabled
         self.localTextModelEnabled = localTextModelEnabled
         self.issueWorktreeNameSuggestionsEnabled = issueWorktreeNameSuggestionsEnabled
@@ -880,6 +883,7 @@ extension AppConfig {
              remote,
              nextPromptSuggestionsEnabled,
              sessionSummariesEnabled,
+             sessionRecapThreshold,
              runFailureBriefsEnabled,
              localTextModelEnabled,
              issueWorktreeNameSuggestionsEnabled,
@@ -1142,6 +1146,7 @@ extension AppConfig {
         remote = (try? c.decodeIfPresent(Remote.self, forKey: .remote)) ?? .init()
         nextPromptSuggestionsEnabled = (try? c.decode(Bool.self, forKey: .nextPromptSuggestionsEnabled)) ?? false
         sessionSummariesEnabled = (try? c.decode(Bool.self, forKey: .sessionSummariesEnabled)) ?? false
+        sessionRecapThreshold = (try? c.decode(SessionRecapThreshold.self, forKey: .sessionRecapThreshold)) ?? .twoHours
         runFailureBriefsEnabled = (try? c.decode(Bool.self, forKey: .runFailureBriefsEnabled)) ?? true
         let priorModelConsent = nextPromptSuggestionsEnabled || sessionSummariesEnabled
         localTextModelEnabled =
