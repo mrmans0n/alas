@@ -17,9 +17,9 @@ struct ACPSideQuestionDockActions {
     var onSelectDock: (ACPSideQuestionDock) -> Void = { _ in }
     /// The global pointer location while the header is dragged.
     var onHeaderDrag: (CGPoint) -> Void = { _ in }
-    /// The header was released: snap to the zone under the last location
-    /// (outside every zone the card stays put), then clear the drag.
-    var onHeaderDrop: () -> Void = {}
+    /// The header was released at this global location: snap to the zone
+    /// under it (outside every zone the card stays put), then clear the drag.
+    var onHeaderDrop: (CGPoint) -> Void = { _ in }
     /// The drag ended without a release (cancelled, or the card went away):
     /// clear it, never snap. A no-op when nothing is being dragged.
     var onHeaderDragCancel: () -> Void = {}

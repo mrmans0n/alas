@@ -526,10 +526,10 @@ private struct ACPSideQuestionCardChrome<Content: View, Prompt: View>: View {
             DragGesture(minimumDistance: 6, coordinateSpace: .global)
                 .updating($isDraggingHeader) { _, state, _ in state = true }
                 .onChanged { dockActions.onHeaderDrag($0.location) }
-                .onEnded { _ in dockActions.onHeaderDrop() }
+                .onEnded { dockActions.onHeaderDrop($0.location) }
         )
-        // The gesture state resets on release too, after `onEnded` has already
-        // cleared the drag; on a cancelled gesture this is the only signal.
+        // The gesture state also resets on release, where the drop clears the
+        // drag either way; on a cancelled gesture this is the only signal.
         .onChange(of: isDraggingHeader) { _, active in
             if !active { dockActions.onHeaderDragCancel() }
         }

@@ -361,10 +361,10 @@ private struct ACPSessionView: View {
         ACPSideQuestionDockActions(
             onSelectDock: { setSideQuestionDock($0) },
             onHeaderDrag: { sideQuestionDrag = $0 },
-            onHeaderDrop: {
-                // Snap to the zone under the last pointer location; outside
-                // every zone the card stays where it was.
-                if let last = sideQuestionDrag, let target = sideQuestionDropTarget(for: last) {
+            onHeaderDrop: { point in
+                // Snap to the zone under the release point; outside every
+                // zone the card stays where it was.
+                if let target = sideQuestionDropTarget(for: point) {
                     setSideQuestionDock(target)
                 }
                 sideQuestionDrag = nil
@@ -1738,18 +1738,19 @@ private struct ACPSideQuestionSlot: View {
 
     /// `sign` is +1 when dragging along the axis grows the card.
     private func resize(by translation: CGFloat, sign: CGFloat) {
-        let start = dragStartSize ?? dragStart
+        let start = dragStartSize ?? dragStart(shrinking: sign * translation < 0)
         if dragStartSize == nil { dragStartSize = start }
         liveSize = placement == .side
             ? ACPSideQuestionDockLayout.clampedSideWidth(start + sign * translation, surfaceWidth: surfaceSize.width)
             : ACPSideQuestionDockLayout.clampedHeight(start + sign * translation, surfaceHeight: surfaceSize.height)
     }
 
-    /// A card hugging short content starts from the height it shows, so the
-    /// grip moves the edge right away. A collapsed card shows only its
-    /// header, so it starts from the chosen height.
-    private var dragStart: CGFloat {
-        guard placement != .side, cardState?.isCollapsed != true, let renderedHeight else { return size }
+    /// Shrinking a card that hugs short content starts from the height it
+    /// shows, so the edge moves right away. Growing starts from the chosen
+    /// height, so it never lowers it. A collapsed card shows only its header,
+    /// so it always starts from the chosen height.
+    private func dragStart(shrinking: Bool) -> CGFloat {
+        guard shrinking, placement != .side, cardState?.isCollapsed != true, let renderedHeight else { return size }
         return min(size, renderedHeight)
     }
 
