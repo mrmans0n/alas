@@ -5,18 +5,13 @@ import Observation
 /// change since the snapshot that returned it. Each log has its own
 /// generation, so a cursor from before the host restarted is never taken for
 /// one of the current log's.
-public struct HostCursor: Hashable, Comparable, Codable, Sendable {
+public struct HostCursor: Hashable, Codable, Sendable {
     public let generation: UUID
     public let sequence: UInt64
 
     public init(generation: UUID, sequence: UInt64) {
         self.generation = generation
         self.sequence = sequence
-    }
-
-    /// Orders cursors of one generation.
-    public static func < (lhs: HostCursor, rhs: HostCursor) -> Bool {
-        lhs.sequence < rhs.sequence
     }
 }
 
@@ -186,12 +181,12 @@ final class HostEventLog {
         subscriptions[ObjectIdentifier(subscription)] = WeakSubscription(subscription: subscription)
         if after.generation != cursor.generation || after.sequence > cursor.sequence {
             subscription.receive([.resync], through: cursor)
-        } else if after < cursor {
+        } else if after.sequence < cursor.sequence {
             let oldest = retained.first?.cursor.sequence ?? cursor.sequence + 1
             if after.sequence + 1 < oldest {
                 subscription.receive([.resync], through: cursor)
             } else {
-                subscription.receive(retained.filter { $0.cursor > after }.map(\.event), through: cursor)
+                subscription.receive(retained.filter { $0.cursor.sequence > after.sequence }.map(\.event), through: cursor)
             }
         }
         return subscription
