@@ -71,6 +71,20 @@ struct HostSocketServerTests {
         try await client.waitForEvent { $0 == .worktreeRemoved(projectID: project.id, worktreeID: created.id) }
         #expect(!FileManager.default.fileExists(atPath: destination.path))
     }
+
+    /// The accept loop survives a failed accept unless its socket is gone:
+    /// otherwise the host would keep its path while serving nobody.
+    @Test(arguments: [
+        (ECONNABORTED, HostSocketServer.AcceptFailure.retry),
+        (EINTR, .retry),
+        (EMFILE, .backOff),
+        (ENFILE, .backOff),
+        (EBADF, .stop),
+        (EINVAL, .stop),
+    ])
+    func acceptFailuresEndTheLoopOnlyWhenTheSocketIsGone(_ code: Int32, _ outcome: HostSocketServer.AcceptFailure) {
+        #expect(HostSocketServer.afterAcceptFailure(errno: code) == outcome)
+    }
 }
 
 /// A host protocol client over a Unix socket: requests by id, and the events

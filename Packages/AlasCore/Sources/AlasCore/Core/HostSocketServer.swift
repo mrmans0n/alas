@@ -82,8 +82,12 @@ public final class HostSocketServer: @unchecked Sendable {
         while !stopped {
             let client = accept(listenFD, nil, nil)
             guard client >= 0 else {
-                if errno == EINTR { continue }
-                return
+                switch Self.afterAcceptFailure(errno: errno) {
+                case .retry: continue
+                case .backOff: Thread.sleep(forTimeInterval: 0.1)
+                case .stop: return
+                }
+                continue
             }
             var uid = uid_t(0)
             var gid = gid_t(0)
@@ -97,6 +101,26 @@ public final class HostSocketServer: @unchecked Sendable {
             Task { @MainActor [server] in
                 connection.serve(server.connect(caller: .localUser(uid: uid), send: connection.write))
             }
+        }
+    }
+
+    enum AcceptFailure: Equatable {
+        /// Try again at once.
+        case retry
+        /// Out of descriptors or memory: wait for some to free up.
+        case backOff
+        /// The listening socket is gone, as `stop()` leaves it.
+        case stop
+    }
+
+    /// What the accept loop does after `accept` fails with `errno`. Only a
+    /// listening socket that no longer exists ends it: anything else would
+    /// leave the host holding its path while serving nobody.
+    static func afterAcceptFailure(errno: Int32) -> AcceptFailure {
+        switch errno {
+        case EBADF, EINVAL, ENOTSOCK: .stop
+        case EMFILE, ENFILE, ENOBUFS, ENOMEM: .backOff
+        default: .retry
         }
     }
 
