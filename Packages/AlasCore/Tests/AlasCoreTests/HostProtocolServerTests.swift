@@ -128,6 +128,13 @@ struct HostProtocolServerTests {
         // The list can lag the disk: what is listed matches, but the path
         // holds no such checkout.
         (
+            HostClientMessage(id: 7, request: .deleteWorktree(
+                worktree: WorktreeRef(projectID: "p", path: "/srv/feature"),
+                lineageID: "listed", branch: "feature", force: true, deleteBranchIfMerged: false
+            )),
+            HostError.worktreeDeletion(refusal: .changed("The checkout at this path changed."))
+        ),
+        (
             HostClientMessage(id: 6, request: .archiveWorktree(
                 worktree: WorktreeRef(projectID: "p", path: "/srv/feature"), lineageID: "listed", branch: "feature"
             )),

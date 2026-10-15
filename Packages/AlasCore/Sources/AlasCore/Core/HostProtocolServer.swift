@@ -136,6 +136,12 @@ public final class HostProtocolConnection {
             guard listed.lineageID == lineageID, listed.branch == branch else {
                 throw WorktreeDeletionRefusal.changed("The worktree changed since it was listed.")
             }
+            // The list can lag the disk: checked before anything in the
+            // checkout is stopped, and again by the host right before removal.
+            if !listed.path.isRemoteAlasPath, let lineageID,
+               AlasCoreContext.checkoutChange(listed, lineageID: lineageID) != nil {
+                throw WorktreeDeletionRefusal.changed("The checkout at this path changed.")
+            }
             try await host.worktrees.delete(
                 listed, force: force, deleteBranchIfMerged: deleteBranchIfMerged, caller: caller
             )
