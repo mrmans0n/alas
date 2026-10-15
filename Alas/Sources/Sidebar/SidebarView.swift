@@ -343,9 +343,6 @@ struct SidebarView: View {
                         onClear: clearWorktreeFilter
                     )
                 }
-                // The filter is the window's first text field, so AppKit would
-                // otherwise hand it focus at launch.
-                .defaultFocus($worktreeFilterFocused, false)
                 .clipped()
                 if state.spacesManager.shouldShowSpaceAffordance {
                     SpacePagerIndicator(
@@ -722,6 +719,9 @@ private struct SidebarWorktreeFilterField: View {
                 .foregroundStyle(theme.color("fg"))
                 .autocorrectionDisabled(true)
                 .focused(focused)
+                // The filter is the window's first text field, so AppKit would
+                // otherwise make it first responder when the window opens.
+                .background(KeyViewRefusingTextField())
             if !text.isEmpty {
                 Button {
                     text = ""
@@ -741,5 +741,58 @@ private struct SidebarWorktreeFilterField: View {
             RoundedRectangle(cornerRadius: 6)
                 .strokeBorder(theme.color(focused.wrappedValue ? "accent" : "line"), lineWidth: 0.5)
         )
+    }
+}
+
+/// Sets `refusesFirstResponder` on the `NSTextField` backing the SwiftUI
+/// `TextField` it sits behind. AppKit then skips the field when it picks a
+/// window's initial first responder or walks the key view loop, while a click
+/// still focuses it.
+private struct KeyViewRefusingTextField: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { MarkerView() }
+    func updateNSView(_ nsView: NSView, context: Context) {
+        (nsView as? MarkerView)?.markTextField()
+    }
+
+    private final class MarkerView: NSView {
+        private weak var markedField: NSTextField?
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            markTextField()
+        }
+
+        // Frames are still zero when the view first joins the window.
+        override func layout() {
+            super.layout()
+            markTextField()
+        }
+
+        func markTextField() {
+            guard window != nil, markedField?.window != window else { return }
+            let center = convert(NSPoint(x: bounds.midX, y: bounds.midY), to: nil)
+            var ancestor = superview
+            while let view = ancestor {
+                if let field = Self.textField(in: view, containing: center) {
+                    field.refusesFirstResponder = true
+                    markedField = field
+                    return
+                }
+                ancestor = view.superview
+            }
+        }
+
+        private static func textField(in view: NSView, containing point: NSPoint) -> NSTextField? {
+            for subview in view.subviews {
+                if let field = subview as? NSTextField, field.isEditable,
+                   field.convert(field.bounds, to: nil).contains(point) {
+                    return field
+                }
+                if let field = textField(in: subview, containing: point) { return field }
+            }
+            return nil
+        }
     }
 }
