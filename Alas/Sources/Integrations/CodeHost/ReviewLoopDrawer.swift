@@ -55,6 +55,9 @@ struct ReviewLoopDrawer: View {
             Spacer(minLength: 6)
 
             HStack(spacing: 5) {
+                if let shepherd, shepherd.record != nil {
+                    ReviewShepherdChip(model: shepherd)
+                }
                 ForEach(model.chips) { chip in
                     chipView(chip)
                 }

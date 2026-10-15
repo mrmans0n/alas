@@ -56,7 +56,7 @@ struct ReviewShepherdBlock: View {
         .onAppear { model.refreshSessions() }
     }
 
-    /// The owner and Jump live in `ReviewShepherdBanner` above the drawer.
+    /// The owner and Jump live in `ReviewShepherdChip` in the collapsed row.
     @ViewBuilder
     private func bound(_ record: ShepherdRecord) -> some View {
         Text(model.presentation.phaseLine)
@@ -280,61 +280,90 @@ struct ReviewShepherdActionButton: View {
     }
 }
 
-/// Full-width strip above the review drawer naming the session that
-/// shepherds the drawer's PR, with Jump. Shown only while a record exists.
-struct ReviewShepherdBanner: View {
+/// The shepherd's chip in the review drawer's collapsed row, styled like the
+/// status chips beside it. Names the owning session and jumps to it; while the
+/// shepherd acts on the PR it shows the phase instead and runs the AI beam.
+/// Shown only while a record exists.
+struct ReviewShepherdChip: View {
     let model: ReviewShepherdDrawerModel
     @Environment(\.theme) private var theme
 
     var body: some View {
-        let accent = theme.color("accent")
-        HStack(spacing: 7) {
+        Group {
             if let ownerTitle = model.ownerTitle {
-                if let agent = model.ownerAgent {
-                    AgentLogoView(agent: agent, size: 14)
+                Button(action: model.jump) {
+                    chip(title: label(ownerTitle), color: theme.color("fg-faint"), textColor: theme.color("fg-dim")) {
+                        if let agent = model.ownerAgent {
+                            AgentLogoView(agent: agent, size: 11)
+                        } else {
+                            Image(systemName: "pawprint")
+                                .font(.system(size: 9, weight: .semibold))
+                        }
+                    }
                 }
-                Text(ownerLine(ownerTitle))
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(theme.color("fg"))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Spacer(minLength: 6)
-                ReviewShepherdActionButton(
-                    title: "Jump",
-                    systemImage: "arrow.up.forward.square",
-                    help: "Focus the session that owns this PR",
-                    action: { model.jump() }
-                )
+                .buttonStyle(.plain)
+                .focusEffectDisabled()
+                .help("\(ownerLine(ownerTitle)). Click to focus the session.")
+                .accessibilityLabel("PR shepherd \(ownerTitle)")
+                .accessibilityHint("Focus the session that owns this PR")
             } else {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: 10.5, weight: .semibold))
-                    .foregroundStyle(theme.color("warn"))
-                Text("Owner session archived or missing")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(theme.color("warn"))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                Spacer(minLength: 6)
-                if model.record?.phase.isTerminal == false {
-                    ReviewShepherdSessionMenu(model: model, title: "Shepherd with…", help: "Have a session fix and merge this PR")
+                Menu {
+                    if model.record?.phase.isTerminal == false {
+                        ForEach(model.candidates) { candidate in
+                            Button(candidate.menuTitle) { model.shepherdWith(candidate.id) }
+                        }
+                        if !model.candidates.isEmpty {
+                            Divider()
+                        }
+                        Button("New session") { model.shepherdWithNewSession() }
+                    }
+                } label: {
+                    chip(title: "Owner missing", color: theme.color("warn"), textColor: theme.color("warn")) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 9, weight: .semibold))
+                    }
                 }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .disabled(model.record?.phase.isTerminal != false)
+                .help("The session shepherding \(model.presentation.number ?? "this PR") was archived or no longer exists. Click to hand it to another session.")
+                .accessibilityLabel("PR shepherd owner archived or missing")
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 7)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(accent.opacity(0.10))
-        .overlay(alignment: .top) {
-            Rectangle()
-                .fill(accent.opacity(0.35))
-                .frame(height: 0.5)
-        }
-        .aiBeam(isActive: model.presentation.badge.isActive, cornerRadius: 0)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("PR shepherd")
+        .aiBeam(isActive: model.presentation.badge.isActive)
         .accessibilityValue(model.presentation.tooltip)
-        .help(model.presentation.tooltip)
         .onAppear { model.refreshSessions() }
+    }
+
+    private func chip<Leading: View>(
+        title: String,
+        color: Color,
+        textColor: Color,
+        @ViewBuilder leading: () -> Leading
+    ) -> some View {
+        HStack(spacing: 5) {
+            leading()
+                .foregroundStyle(textColor)
+            Text(title)
+                .font(.system(size: 10.5, weight: .medium))
+                .foregroundColor(textColor)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .padding(.horizontal, 7)
+        .frame(maxWidth: 160)
+        .frame(height: 22)
+        .background(RoundedRectangle(cornerRadius: 6).fill(color.opacity(0.07)))
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(color.opacity(0.2), lineWidth: 0.75))
+        .contentShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    /// The session name, or the phase while the shepherd is acting on the PR.
+    private func label(_ ownerTitle: String) -> String {
+        guard model.presentation.badge.isActive else { return ownerTitle }
+        let phase = model.presentation.phaseLine
+        return phase.prefix(1).uppercased() + phase.dropFirst()
     }
 
     private func ownerLine(_ ownerTitle: String) -> String {
