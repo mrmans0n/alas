@@ -28,6 +28,21 @@ struct ACPDelegatedPromptSourceTests {
             == "# Chat\n\n## Alas · \(title)\n\nOpen a PR.\n")
     }
 
+    @Test("queue editing cannot turn an app action into user-authored content", arguments: ["compose", "replace"])
+    @MainActor // Queue mutations belong to the main-actor session.
+    func editingKeepsAppActionAttribution(action: String) throws {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "wt", title: "Chat")
+        let source = ACPDelegatedPromptSource.shipCreate(kind: .github, messageID: UUID())
+        session.enqueue(blocks: [.text("Open a PR.")], delegatedSource: source)
+        let original = try #require(session.queue.first)
+        if action == "compose" {
+            #expect(session.takeForEditing(id: original.id) == nil)
+        } else {
+            session.editQueueItem(id: original.id, blocks: [.text("Rewritten instruction")])
+        }
+        #expect(session.queue == [original])
+    }
+
     @Test("replication preserves app actions without treating their origin as a session reference")
     @MainActor // The message codec uses the transcript model.
     func replicaPreservesAppActions() throws {
