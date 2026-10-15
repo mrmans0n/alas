@@ -82,7 +82,7 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     var remoteBranchRequests: [String] = []
     var remoteAgentsCallCount = 0
     var createRequests: [(worktreeId: String, agentId: String)] = []
-    var createWorktreeSessionRequests: [(projectId: String, base: String, branch: String, agentId: String)] = []
+    var createWorktreeSessionRequests: [(projectId: String, base: String, branch: String, agentId: String, caller: HostCaller)] = []
     var pauseSessionSummaries = false
     var pauseRemoteWorktrees = false
     var pauseRemoteProjects = false
@@ -165,9 +165,10 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
         branch: String,
         agentId: String,
         modelId: String?,
-        effortId: String?
+        effortId: String?,
+        caller: HostCaller
     ) async -> RemoteCreateWorktreeSessionResult {
-        createWorktreeSessionRequests.append((projectId, base, branch, agentId))
+        createWorktreeSessionRequests.append((projectId, base, branch, agentId, caller))
         return createWorktreeSessionResult
     }
     func resumeSessionSummaries() {
@@ -768,7 +769,7 @@ struct RemoteSessionGatewayTests {
             )
         ]
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(provider: provider, caller: .remotePeer(deviceID: "phone")) { sent.append($0) }
 
         await gw.handle(.createWorktreeSession(
             projectId: "project-1",
@@ -786,6 +787,7 @@ struct RemoteSessionGatewayTests {
         #expect(provider.createWorktreeSessionRequests.first?.base == "main")
         #expect(provider.createWorktreeSessionRequests.first?.branch == "feature/remote")
         #expect(provider.createWorktreeSessionRequests.first?.agentId == "claude")
+        #expect(provider.createWorktreeSessionRequests.first?.caller == .remotePeer(deviceID: "phone"))
         #expect(sent.first == .worktreeSessionCreated(session: summary))
         #expect(sent.contains(.sessionList(sessions: [summary])))
         #expect(sent.contains(.worktreeList(worktrees: provider.worktrees)))

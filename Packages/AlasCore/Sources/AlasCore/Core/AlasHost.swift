@@ -1,4 +1,7 @@
 import Foundation
+import os
+
+private let hostLogger = Logger(subsystem: "io.nlopez.alas", category: "AlasHost")
 
 /// The public entry point to the core: value snapshots and verbs for each
 /// domain. It is a thin facade over `AlasCoreContext`, which does the work;
@@ -64,6 +67,25 @@ public final class AlasHost {
         let source = HostEventSource(core: core)
         eventSource = source
         return source
+    }
+}
+
+/// Who asked the host to do something. Each transport builds it from what it
+/// authenticated, so it is never part of a wire message: a client can name
+/// a target, but never who it is. Used for authorization and attribution,
+/// never for presentation.
+public enum HostCaller: Equatable, Sendable {
+    /// The app's own interface, in process.
+    case app
+    /// A CLI or MCP command the app received on its command socket.
+    case cli
+    /// A client of the host socket, as the socket reported its peer.
+    case localUser(uid: UInt32)
+    /// A paired Remote peer, by the device id it authenticated as.
+    case remotePeer(deviceID: String)
+
+    func log(_ verb: StaticString, _ target: String) {
+        hostLogger.info("\(verb, privacy: .public) \(target, privacy: .private) by \(String(describing: self), privacy: .public)")
     }
 }
 
@@ -153,9 +175,11 @@ public struct ProjectsAPI {
         displayName: String,
         icon: ProjectIcon,
         host: String? = nil,
-        kind: ProjectKind = .git
+        kind: ProjectKind = .git,
+        caller: HostCaller
     ) async throws -> ProjectSnapshot {
-        ProjectSnapshot(try await core.addProject(path: path, displayName: displayName, icon: icon, host: host, kind: kind))
+        caller.log("projects.add", path.path)
+        return ProjectSnapshot(try await core.addProject(path: path, displayName: displayName, icon: icon, host: host, kind: kind))
     }
 }
 
@@ -183,14 +207,16 @@ public struct WorktreesAPI {
     }
 
     /// Creates a worktree and waits for it, scripts and refresh included.
-    public func create(_ request: WorktreeCreateRequest) async throws -> Worktree {
-        try await core.createWorktree(request)
+    public func create(_ request: WorktreeCreateRequest, caller: HostCaller) async throws -> Worktree {
+        caller.log("worktrees.create", request.destination.path)
+        return try await core.createWorktree(request)
     }
 
     /// Lists the new worktree at once, claimed while it is created, for
     /// callers that show it before `finishCreate` is done.
-    public func beginCreate(_ request: WorktreeCreateRequest) async throws -> PendingWorktreeCreation {
-        try await core.beginCreate(request)
+    public func beginCreate(_ request: WorktreeCreateRequest, caller: HostCaller) async throws -> PendingWorktreeCreation {
+        caller.log("worktrees.create", request.destination.path)
+        return try await core.beginCreate(request)
     }
 
     public func finishCreate(_ pending: PendingWorktreeCreation) async -> WorktreeCreationOutcome {
@@ -201,14 +227,16 @@ public struct WorktreesAPI {
     /// `WorktreeDeletionRefusal`) one whose checkout no longer matches it:
     /// another lineage or branch at the path, a remote or unidentified
     /// checkout, the main checkout, or one another operation holds.
-    public func delete(_ worktree: Worktree, force: Bool = false, deleteBranchIfMerged: Bool = false) async throws {
+    public func delete(_ worktree: Worktree, force: Bool = false, deleteBranchIfMerged: Bool = false, caller: HostCaller) async throws {
+        caller.log("worktrees.delete", worktree.path.path)
         try await core.deleteWorktree(worktree, force: force, deleteBranchIfMerged: deleteBranchIfMerged)
     }
 
     /// Claims a worktree for a deletion its caller confirms first; pass the
     /// claim to `delete(_:claim:options:)`, or release it.
-    public func beginDelete(_ worktree: Worktree) throws -> UUID {
-        try core.beginDelete(worktree)
+    public func beginDelete(_ worktree: Worktree, caller: HostCaller) throws -> UUID {
+        caller.log("worktrees.delete", worktree.path.path)
+        return try core.beginDelete(worktree)
     }
 
     /// Marks a claimed deletion as confirmed: the row reads as being deleted.
@@ -237,11 +265,15 @@ public struct WorktreesAPI {
         core.releaseWorktreeClaim(claim, for: worktree)
     }
 
-    public func archive(_ worktree: Worktree) async throws {
-        try await core.archiveWorktree(worktree)
+    /// With `verifiesCheckout`, refuses (`changed`) a checkout whose lineage
+    /// or branch on disk no longer matches `worktree`, as late as possible.
+    public func archive(_ worktree: Worktree, verifiesCheckout: Bool = false, caller: HostCaller) async throws {
+        caller.log("worktrees.archive", worktree.path.path)
+        try await core.archiveWorktree(worktree, verifiesCheckout: verifiesCheckout)
     }
 
-    public func unarchive(path: URL, projectID: String) throws {
+    public func unarchive(path: URL, projectID: String, caller: HostCaller) throws {
+        caller.log("worktrees.unarchive", path.path)
         try core.unarchiveWorktree(path: path, projectID: projectID)
     }
 }
@@ -277,22 +309,26 @@ public struct RunsAPI {
     }
 
     @discardableResult
-    public func start(_ script: RunScript, in worktree: Worktree, isHidden: Bool = false) -> RunStart {
-        core.startRun(script, in: worktree, isHidden: isHidden)
+    public func start(_ script: RunScript, in worktree: Worktree, isHidden: Bool = false, caller: HostCaller) -> RunStart {
+        caller.log("runs.start", script.key)
+        return core.startRun(script, in: worktree, isHidden: isHidden)
     }
 
     @discardableResult
-    public func restart(_ script: RunScript, in worktree: Worktree, isHidden: Bool = false) -> RunStart {
-        core.restartRun(script, in: worktree, isHidden: isHidden)
+    public func restart(_ script: RunScript, in worktree: Worktree, isHidden: Bool = false, caller: HostCaller) -> RunStart {
+        caller.log("runs.restart", script.key)
+        return core.restartRun(script, in: worktree, isHidden: isHidden)
     }
 
-    public func stop(scriptKey: String, in worktree: Worktree) {
+    public func stop(scriptKey: String, in worktree: Worktree, caller: HostCaller) {
+        caller.log("runs.stop", scriptKey)
         core.stopRun(scriptKey: scriptKey, in: worktree)
     }
 
     /// Runs the script and waits for how it ended.
-    public func run(_ script: RunScript, in worktree: Worktree) async throws -> RunOutcome {
-        try await core.runScript(script, in: worktree)
+    public func run(_ script: RunScript, in worktree: Worktree, caller: HostCaller) async throws -> RunOutcome {
+        caller.log("runs.run", script.key)
+        return try await core.runScript(script, in: worktree)
     }
 }
 

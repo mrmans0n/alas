@@ -65,6 +65,8 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public var agents: Agents
     public var files: Files
     public var remote: Remote = .init()
+    /// The `/btw` card's dock and per-dock size.
+    public var sideQuestionDock: ACPSideQuestionDockPreferences = .init()
     public var nextPromptSuggestionsEnabled: Bool = false
     public var sessionSummariesEnabled: Bool = false
     public var sessionRecapThreshold: SessionRecapThreshold = .twoHours
@@ -881,6 +883,7 @@ extension AppConfig {
              agents,
              files,
              remote,
+             sideQuestionDock,
              nextPromptSuggestionsEnabled,
              sessionSummariesEnabled,
              sessionRecapThreshold,
@@ -1144,6 +1147,8 @@ extension AppConfig {
         }
         // Older configs predate `remote`; default to disabled so they still load.
         remote = (try? c.decodeIfPresent(Remote.self, forKey: .remote)) ?? .init()
+        sideQuestionDock =
+            (try? c.decodeIfPresent(ACPSideQuestionDockPreferences.self, forKey: .sideQuestionDock)) ?? .init()
         nextPromptSuggestionsEnabled = (try? c.decode(Bool.self, forKey: .nextPromptSuggestionsEnabled)) ?? false
         sessionSummariesEnabled = (try? c.decode(Bool.self, forKey: .sessionSummariesEnabled)) ?? false
         sessionRecapThreshold = (try? c.decode(SessionRecapThreshold.self, forKey: .sessionRecapThreshold)) ?? .twoHours

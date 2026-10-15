@@ -280,9 +280,9 @@ final class RightPaneState: GGSplitCommitServicing {
     var commitsExpanded: Bool = true
 
     // Older-history paging — populated lazily by `loadOlder()`.
-    // Cleared (and `hasMoreOlder` reset to true) on any `refresh()`
-    // that re-fetches `commits`, because the divergence cursor may
-    // have moved.
+    // Cleared (and `hasMoreOlder` reset to true) when a refresh finds that
+    // HEAD, the comparison ref, or the ahead commits moved, because the
+    // divergence cursor may have moved with them.
     var olderCommits: [CommitInfo] = []
     var hasMoreOlder: Bool = true
     var isLoadingOlder: Bool = false
@@ -1500,12 +1500,6 @@ final class RightPaneState: GGSplitCommitServicing {
         defer { loading = false }
         invalidateFileTreeChildLoadsForRefresh()
         do {
-            // Any refresh re-anchors the older-history cursor; drop the
-            // accumulated pages so we don't accidentally splice an old
-            // page onto a new HEAD.
-            self.olderCommits = []
-            self.hasMoreOlder = true
-            self.isLoadingOlder = false
             let commitsResolution = GitService.BaseResolution.forCommits(
                 mode: comparisonMode, userOverrodeBaseBranch: userOverrodeBaseBranch
             )
@@ -1601,6 +1595,12 @@ final class RightPaneState: GGSplitCommitServicing {
             }
             if self.indexFingerprint != indexFingerprint { self.indexFingerprint = indexFingerprint }
             publishRefreshedFileTree(tree)
+            // Watcher-driven refreshes fire constantly, so keep the loaded
+            // older pages unless the history they hang off actually moved;
+            // otherwise an old page could be spliced onto a new HEAD.
+            if self.commits != commits || self.comparisonRef != ref || previousHeadSHA != headSHA {
+                invalidateOlderHistoryForDisplaySourceChange()
+            }
             if self.commits != commits { self.commits = commits }
             let nextGGStackSourceCommits = reviewLoopBaseResult?.commits ?? commits
             let ggStackSourceCommitsChanged = self.ggStackSourceCommits != nextGGStackSourceCommits
@@ -1881,7 +1881,8 @@ final class RightPaneState: GGSplitCommitServicing {
             if ggStack != stack { ggStack = stack }
             ggStackDisplayCommits = displayCommits
             let stackIsEmpty = stack.map { $0.totalCommits == 0 || $0.entries.isEmpty } ?? true
-            if !stackIsEmpty {
+            if !stackIsEmpty,
+               previousLoadState != .loaded || previousDisplayCommits != displayCommits {
                 invalidateOlderHistoryForDisplaySourceChange()
             }
             ggStackLoadState = stackIsEmpty ? .empty : .loaded

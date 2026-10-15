@@ -16,13 +16,15 @@ public protocol RemoteSessionsProvider: AnyObject {
     func remoteBranches(projectId: String) async -> RemoteBranchListResult
     func remoteAgents() -> [RemoteAgentOption]
     func createRemoteSession(worktreeId: String, agentId: String, modelId: String?, effortId: String?) async -> RemoteCreateSessionResult
+    /// `caller` is the device the connection authenticated.
     func createRemoteWorktreeSession(
         projectId: String,
         base: String,
         branch: String,
         agentId: String,
         modelId: String?,
-        effortId: String?
+        effortId: String?,
+        caller: HostCaller
     ) async -> RemoteCreateWorktreeSessionResult
     func session(for id: String) -> ACPSession?
     func permissionPolicy(for id: String) -> ACPPermissionPolicy?

@@ -291,7 +291,8 @@ public final class RemoteServer {
                     }
                 }
                 return RemoteSessionGateway(
-                    provider: provider, federation: federation, consoleLink: consoleLink, send: channel.send)
+                    provider: provider, federation: federation, consoleLink: consoleLink,
+                    caller: .remotePeer(deviceID: channel.deviceId), send: channel.send)
             },
             makeHello: { RemoteServerMessage.hello(identity()) },
             identityProof: proveIdentity,
