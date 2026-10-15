@@ -6,9 +6,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.21.5] - 2026-10-15
+
 ### ✨ Features
 
 - Shepherd pull and merge requests from the agent session that opened them: the new `pr_create` and `pr_status` MCP tools, background watching of CI, trusted review threads and merge conflicts on GitHub and GitLab, fix turns queued into the owning session, optional auto-merge through the existing merge gate, project shepherd rules from `.alas/shepherd.md`, and a PR status pill in the agent toolbar whose "Ship with agent" action has the session write, open and shepherd the PR. PRs created from the Changes tab's Draft PR and Commit & PR flows can go to a session through a "Shepherd with" picker.
+- Run remote plugin commands on macOS SSH hosts as well as Linux. Remote helper 0.9.0 is installed on connect; on macOS, cleanup tracks process groups, descendants, and processes still holding command output (#2012).
+
+### 🐛 Fixes
+
+- Align diff hunk context-expansion labels, chevrons, hover backgrounds, and click targets (#2013).
+
+### 🏗️ Internal
+
+- Introduce the `AlasHost` facade with value snapshots for projects, worktrees, Workspace checkouts, and runs; route CLI worktree and Workspace commands through it (#2011, #2014).
+- Make the remote-tracking-ref test fixture compatible with newer Git versions (#2015).
 
 ## [0.21.4] - 2026-10-14
 
