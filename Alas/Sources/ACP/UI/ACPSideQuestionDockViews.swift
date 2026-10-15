@@ -14,8 +14,14 @@ struct ACPSideQuestionCardLayout: Equatable {
 /// Lets the card's header move it to another dock.
 struct ACPSideQuestionDockActions {
     var onSelectDock: (ACPSideQuestionDock) -> Void = { _ in }
-    /// The global pointer location while the header is dragged; nil on release.
-    var onHeaderDrag: (CGPoint?) -> Void = { _ in }
+    /// The global pointer location while the header is dragged.
+    var onHeaderDrag: (CGPoint) -> Void = { _ in }
+    /// The header was released: snap to the zone under the last location
+    /// (outside every zone the card stays put), then clear the drag.
+    var onHeaderDrop: () -> Void = {}
+    /// The drag ended without a release (cancelled, or the card went away):
+    /// clear it, never snap. A no-op when nothing is being dragged.
+    var onHeaderDragCancel: () -> Void = {}
 }
 
 extension EnvironmentValues {

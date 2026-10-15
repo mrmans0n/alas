@@ -405,6 +405,7 @@ private struct ACPSideQuestionCardChrome<Content: View, Prompt: View>: View {
     @State private var footerHeight: CGFloat = 0
     @State private var promptIdeal: CGFloat = 0
     @State private var showsBlocked = false
+    @GestureState private var isDraggingHeader = false
     @FocusState private var fieldFocused: Bool
     @Environment(\.theme) private var theme
     @Environment(\.acpSideQuestionCardLayout) private var layout
@@ -457,6 +458,8 @@ private struct ACPSideQuestionCardChrome<Content: View, Prompt: View>: View {
                 .hidden()
         }
         .onAppear { fieldFocused = phase == .composing }
+        // A drag cut short by dismissal or a dock switch never reaches `onEnded`.
+        .onDisappear { dockActions.onHeaderDragCancel() }
         .onChange(of: needsAttention) { _, needed in
             if needed { isCollapsed = false }
         }
@@ -500,9 +503,15 @@ private struct ACPSideQuestionCardChrome<Content: View, Prompt: View>: View {
         // Dragging the header moves the card; the host shows the drop zones.
         .gesture(
             DragGesture(minimumDistance: 6, coordinateSpace: .global)
+                .updating($isDraggingHeader) { _, state, _ in state = true }
                 .onChanged { dockActions.onHeaderDrag($0.location) }
-                .onEnded { _ in dockActions.onHeaderDrag(nil) }
+                .onEnded { _ in dockActions.onHeaderDrop() }
         )
+        // The gesture state resets on release too, after `onEnded` has already
+        // cleared the drag; on a cancelled gesture this is the only signal.
+        .onChange(of: isDraggingHeader) { _, active in
+            if !active { dockActions.onHeaderDragCancel() }
+        }
     }
 
     private var dockMenu: some View {

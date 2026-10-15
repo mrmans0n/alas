@@ -358,16 +358,17 @@ private struct ACPSessionView: View {
     private var sideQuestionDockActions: ACPSideQuestionDockActions {
         ACPSideQuestionDockActions(
             onSelectDock: { setSideQuestionDock($0) },
-            onHeaderDrag: { point in
-                if let point {
-                    sideQuestionDrag = point
-                    return
-                }
-                // Released: snap to the zone under the last pointer location;
-                // outside every zone the card stays where it was.
+            onHeaderDrag: { sideQuestionDrag = $0 },
+            onHeaderDrop: {
+                // Snap to the zone under the last pointer location; outside
+                // every zone the card stays where it was.
                 if let last = sideQuestionDrag, let target = sideQuestionDropTarget(for: last) {
                     setSideQuestionDock(target)
                 }
+                sideQuestionDrag = nil
+            },
+            onHeaderDragCancel: {
+                guard sideQuestionDrag != nil else { return }
                 sideQuestionDrag = nil
             }
         )
