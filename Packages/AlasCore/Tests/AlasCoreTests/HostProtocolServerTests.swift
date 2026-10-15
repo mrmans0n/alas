@@ -241,12 +241,8 @@ struct HostProtocolServerTests {
             gate = nil
         }
 
-        func waitFor(_ condition: ([HostServerMessage]) -> Bool) async throws {
-            let deadline = ContinuousClock.now + .seconds(5)
-            while !condition(messages), ContinuousClock.now < deadline {
-                try await Task.sleep(for: .milliseconds(10))
-            }
-            #expect(condition(messages))
+        func waitFor(_ condition: @escaping @MainActor @Sendable ([HostServerMessage]) -> Bool) async throws {
+            try await eventually { await condition(self.messages) }
         }
     }
 }

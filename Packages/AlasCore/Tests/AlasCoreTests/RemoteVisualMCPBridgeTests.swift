@@ -114,20 +114,6 @@ private func response(for origin: RemoteMCPRelayOrigin, in completions: [FakeRel
     return try #require(try JSONSerialization.jsonObject(with: data) as? NSDictionary)
 }
 
-private func eventually(
-    within timeout: Duration = .seconds(10),
-    _ condition: @escaping @Sendable () async -> Bool
-) async throws {
-    let deadline = ContinuousClock.now + timeout
-    while !(await condition()) {
-        guard ContinuousClock.now < deadline else {
-            Issue.record("Timed out waiting for condition")
-            throw CancellationError()
-        }
-        try await Task.sleep(for: .milliseconds(5))
-    }
-}
-
 private final class BridgeHarness: Sendable {
     let route = RemoteMCPRouteHandle()
     let relay = FakeRelay()
