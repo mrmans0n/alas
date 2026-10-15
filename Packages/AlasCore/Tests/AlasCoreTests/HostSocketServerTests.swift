@@ -76,7 +76,6 @@ private final class SocketClient {
     private var nextID = 0
     private var responses: [Int: HostResponse] = [:]
     private var events: [HostEvent] = []
-    private var waiters: [CheckedContinuation<Void, Never>] = []
 
     init(path: String) throws {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
@@ -111,13 +110,12 @@ private final class SocketClient {
         var line = try JSONEncoder().encode(HostClientMessage(id: id, request: request))
         line.append(UInt8(ascii: "\n"))
         _ = line.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
-        try await wait { self.responses[id] != nil }
+        try await eventually(within: .seconds(30)) { await self.responses[id] != nil }
         return try #require(responses[id])
     }
 
-    func waitForEvent(_ matches: @escaping (HostEvent) -> Bool) async throws {
-        try await wait { self.events.contains(where: matches) }
-        #expect(events.contains(where: matches))
+    func waitForEvent(_ matches: @escaping @Sendable (HostEvent) -> Bool) async throws {
+        try await eventually(within: .seconds(30)) { await self.events.contains(where: matches) }
     }
 
     private func deliver(_ message: HostServerMessage) {
@@ -125,21 +123,6 @@ private final class SocketClient {
         case .response(let id, let result): responses[id] = result
         case .events(let batch, _): events += batch
         }
-        waiters.forEach { $0.resume() }
-        waiters.removeAll()
     }
 
-    /// Waits for `condition`, woken by each message, for up to 30 seconds.
-    private func wait(until condition: @escaping () -> Bool) async throws {
-        let deadline = ContinuousClock.now + .seconds(30)
-        while !condition(), ContinuousClock.now < deadline {
-            let timeout = Task { @MainActor [weak self] in
-                try await Task.sleep(for: .milliseconds(200))
-                self?.waiters.forEach { $0.resume() }
-                self?.waiters.removeAll()
-            }
-            await withCheckedContinuation { waiters.append($0) }
-            timeout.cancel()
-        }
-    }
 }
