@@ -265,9 +265,11 @@ public struct WorktreesAPI {
         core.releaseWorktreeClaim(claim, for: worktree)
     }
 
-    public func archive(_ worktree: Worktree, caller: HostCaller) async throws {
+    /// With `verifiesCheckout`, refuses (`changed`) a checkout whose lineage
+    /// or branch on disk no longer matches `worktree`, as late as possible.
+    public func archive(_ worktree: Worktree, verifiesCheckout: Bool = false, caller: HostCaller) async throws {
         caller.log("worktrees.archive", worktree.path.path)
-        try await core.archiveWorktree(worktree)
+        try await core.archiveWorktree(worktree, verifiesCheckout: verifiesCheckout)
     }
 
     public func unarchive(path: URL, projectID: String, caller: HostCaller) throws {
