@@ -363,7 +363,7 @@ final class VisualAidWKWebView: WKWebView {
     /// Where the page can still scroll, as last reported by the bridge.
     var scrollEdges = VisualAidScrollRouting.Edges()
     private var scrollRouting = VisualAidScrollRouting()
-    /// Zero-delta phased events held while the gesture's owner is undecided.
+    /// The undecided gesture's start (`.mayBegin`, `.began`), held until its owner is known.
     private var pendingScrollEvents: [NSEvent] = []
 
     /// The page scrolls only the gestures it can move; the rest go to the transcript, so a capped card
@@ -374,13 +374,15 @@ final class VisualAidWKWebView: WKWebView {
             deltaX: event.scrollingDeltaX, deltaY: event.scrollingDeltaY, edges: scrollEdges,
             timestamp: event.timestamp)
         guard case .deliver(let owner, let includingHeld) = route else {
-            // A new start drops whatever an abandoned gesture left held; `.began` legitimately follows its own
-            // `.mayBegin`, and stationary events continue the gesture being held.
-            let startsAnew = event.phase.contains(.mayBegin)
-                || (event.phase.contains(.began) && pendingScrollEvents.last?.phase.contains(.mayBegin) != true)
-            if startsAnew { pendingScrollEvents.removeAll() }
-            pendingScrollEvents.append(event)
-            if pendingScrollEvents.count > 8 { pendingScrollEvents.removeFirst() }
+            // Only the start is held, so the owner always receives it however long the touch stays still:
+            // zero-motion stationary events carry nothing. A new start drops whatever an abandoned gesture
+            // left held; `.began` legitimately follows its own `.mayBegin`.
+            if event.phase.contains(.mayBegin) {
+                pendingScrollEvents = [event]
+            } else if event.phase.contains(.began) {
+                if pendingScrollEvents.last?.phase.contains(.mayBegin) != true { pendingScrollEvents.removeAll() }
+                pendingScrollEvents.append(event)
+            }
             return
         }
         let events = (includingHeld ? pendingScrollEvents : []) + [event]
