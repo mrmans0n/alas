@@ -269,6 +269,18 @@ struct DiffPaneViewTests {
         #expect(states[1] == DiffPaneHunkFusionState(fusedWithPrevious: true, fusedWithNext: false))
     }
 
+    @Test(arguments: [
+        (false, false, true),
+        (false, true, true),
+        (true, false, false),
+        (true, true, true),
+    ])
+    func fusedHunkDropsItsHeaderUnlessItCarriesActions(fusedWithPrevious: Bool, hasActions: Bool, showsHeader: Bool) {
+        let fusion = DiffPaneHunkFusionState(fusedWithPrevious: fusedWithPrevious, fusedWithNext: false)
+
+        #expect(fusion.showsHeader(hasActions: hasActions) == showsHeader)
+    }
+
     @MainActor
     @Test func diffTabRenderContextCacheReusesMatchingKeyAndEvictsPastLimit() throws {
         let model = DiffDisplayModelBuilder.build(diff: parsedDiff(), filePath: "Sources/App.swift")

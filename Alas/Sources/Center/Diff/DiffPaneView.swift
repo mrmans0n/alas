@@ -211,8 +211,9 @@ enum DiffPaneStaticHeightEstimator {
                 showWhitespace: showWhitespace
             )
 
+            // Estimates can't see hunk actions; measuring corrects a fused hunk that keeps its header.
             return total
-                + hunkHeaderHeight
+                + (fusion.fusedWithPrevious ? 0 : hunkHeaderHeight)
                 + max(minimumHunkBodyHeight, rowsHeight + textVerticalInset)
                 + fusion.bottomPadding
         }
@@ -495,6 +496,12 @@ struct DiffPaneHunkFusionState: Equatable {
     var outerBottomPadding: CGFloat {
         fusedWithNext ? 0 : 10
     }
+
+    /// A hunk fused to the one above reads as one block, so it drops its `@@`
+    /// header unless the header carries actions with nowhere else to go.
+    func showsHeader(hasActions: Bool) -> Bool {
+        !fusedWithPrevious || hasActions
+    }
 }
 
 enum DiffPaneHunkFusionResolver {
@@ -548,6 +555,39 @@ struct DiffPaneHunkCardShape: Shape {
             style: .continuous
         )
         .path(in: rect)
+    }
+}
+
+/// The hunk card's border, leaving out the edges where it joins a fused
+/// neighbour: the next hunk's header draws that seam, and with no header the
+/// two hunks read as one card.
+struct DiffPaneHunkCardOutline: Shape {
+    let fusion: DiffPaneHunkFusionState
+    let showsHeader: Bool
+
+    func path(in rect: CGRect) -> Path {
+        let openTop = fusion.fusedWithPrevious && !showsHeader
+        let openBottom = fusion.fusedWithNext
+        guard openTop || openBottom else { return DiffPaneHunkCardShape(fusion: fusion).path(in: rect) }
+        // Open edges are square, so the sides run straight to them.
+        let radius: CGFloat = 7
+        var path = Path()
+        if openTop {
+            path.move(to: CGPoint(x: rect.maxX, y: rect.minY))
+        } else {
+            path.move(to: CGPoint(x: rect.minX, y: rect.minY + radius))
+            path.addArc(tangent1End: CGPoint(x: rect.minX, y: rect.minY), tangent2End: CGPoint(x: rect.maxX, y: rect.minY), radius: radius)
+            path.addArc(tangent1End: CGPoint(x: rect.maxX, y: rect.minY), tangent2End: CGPoint(x: rect.maxX, y: rect.maxY), radius: radius)
+        }
+        if openBottom {
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+            path.move(to: CGPoint(x: rect.minX, y: rect.maxY))
+        } else {
+            path.addArc(tangent1End: CGPoint(x: rect.maxX, y: rect.maxY), tangent2End: CGPoint(x: rect.minX, y: rect.maxY), radius: radius)
+            path.addArc(tangent1End: CGPoint(x: rect.minX, y: rect.maxY), tangent2End: CGPoint(x: rect.minX, y: rect.minY), radius: radius)
+        }
+        path.addLine(to: CGPoint(x: rect.minX, y: openTop ? rect.minY : rect.minY + radius))
+        return path
     }
 }
 

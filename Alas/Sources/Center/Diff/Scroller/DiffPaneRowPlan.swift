@@ -303,8 +303,12 @@ struct DiffPaneHunkRow: View {
             annotations: hunkAnnotations
         )
 
+        let showsHeader = fusion.showsHeader(hasActions: hasHeaderActions)
+
         VStack(alignment: .leading, spacing: 0) {
-            hunkHeader
+            if showsHeader {
+                hunkHeader
+            }
             ForEach(blocks) { block in
                 switch block {
                 case .rows(let segment):
@@ -358,8 +362,14 @@ struct DiffPaneHunkRow: View {
         }
         .background(input.theme.color("bg-1"))
         .clipShape(DiffPaneHunkCardShape(fusion: fusion))
-        .overlay(DiffPaneHunkCardShape(fusion: fusion).stroke(input.theme.color("line"), lineWidth: 0.75))
+        .overlay(DiffPaneHunkCardOutline(fusion: fusion, showsHeader: showsHeader).stroke(input.theme.color("line"), lineWidth: 0.75))
         .padding(.bottom, fusion.bottomPadding)
+    }
+
+    private var hasHeaderActions: Bool {
+        let actions = state.actionRelay.hunkActions(for: group.sourceHunk)
+        return !DiffCollapsedContextController.collapsedRowIDs(in: group).isEmpty
+            || actions.stage != nil || actions.discard != nil || actions.dropFromCommit != nil
     }
 
     private var hunkHeader: some View {
