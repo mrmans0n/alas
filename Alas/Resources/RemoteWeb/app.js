@@ -835,7 +835,9 @@ setInterval(() => {
 // changes on the host. A page the browser suspended may have missed pushes
 // while its socket was frozen, so it asks again when it becomes visible.
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") send({ type: "listSessions" });
+  if (document.visibilityState !== "visible") return;
+  send({ type: "listSessions" });
+  if (createState.open) requestCreateLists();
 });
 
 function plural(count, singular) {

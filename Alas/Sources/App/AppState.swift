@@ -228,6 +228,11 @@ final class AppState {
     /// The core's public API. Paths move onto it from `core` as they are
     /// migrated.
     let host: AlasHost
+    /// Sent when a session tab opens, closes or moves, which the Remote
+    /// session list shows and host events do not carry. Followed from its
+    /// first read.
+    @ObservationIgnored private var remoteSessionTabChanges: ChangeSignal<Void>?
+    @ObservationIgnored private var remoteSessionTabLayout: [String: [ACPSession.ID]] = [:]
     var projectsManager: ProjectsManager {
         get { core.projects }
         set { core.projects = newValue }
@@ -15120,6 +15125,35 @@ private extension WorkspaceCheckoutMember {
 // worktrees not opened this run simply don't appear (documented v1 behavior).
 extension AppState: RemoteSessionsProvider {
     var eventHost: AlasHost? { host }
+
+    var sessionListChanges: ChangeSignal<Void>? {
+        if let remoteSessionTabChanges { return remoteSessionTabChanges }
+        let signal = ChangeSignal<Void>()
+        remoteSessionTabChanges = signal
+        followRemoteSessionTabs()
+        return signal
+    }
+
+    /// The session tabs of each worktree with sessions, in tab order.
+    private func sessionTabLayout() -> [String: [ACPSession.ID]] {
+        Dictionary(acpManagers.values.map { manager in
+            (manager.worktreeId, tabs.tabs(forWorktree: manager.worktreeId).compactMap { tab -> ACPSession.ID? in
+                guard case .acpSession(let state) = tab else { return nil }
+                return state.sessionId
+            })
+        }, uniquingKeysWith: { first, _ in first })
+    }
+
+    private func followRemoteSessionTabs() {
+        let layout = withObservationTracking { sessionTabLayout() } onChange: {
+            Task { @MainActor [weak self] in self?.followRemoteSessionTabs() }
+        }
+        // Editor tabs change the tab list too; only session tabs matter.
+        if layout != remoteSessionTabLayout {
+            remoteSessionTabLayout = layout
+            remoteSessionTabChanges?.send()
+        }
+    }
 
     private func remoteWorktreeSummary(project: ProjectConfig, worktree: Worktree) async -> RemoteWorktreeSummary {
         // A folder has no git metrics to compute.

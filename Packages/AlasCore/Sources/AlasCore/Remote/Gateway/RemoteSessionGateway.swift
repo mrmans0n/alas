@@ -33,6 +33,7 @@ public final class RemoteSessionGateway {
     /// Set once the client asks for worktrees: only then are they pushed.
     private var wantsWorktreeList = false
     private var hostSubscription: HostSubscription?
+    private var providerListChanges: ChangeSubscription?
     private var projectListRefresh: Task<Void, Never>?
     private var projectListGeneration = 0
     private var branchListRefresh: Task<Void, Never>?
@@ -59,6 +60,7 @@ public final class RemoteSessionGateway {
         self.consoleLink = consoleLink
         self.send = send
         if let host = provider.eventHost { pushLists(from: host) }
+        providerListChanges = provider.sessionListChanges?.observe { [weak self] in self?.refreshSessionList() }
         guard let federation else { return }
         // A peer's cached list moving refreshes this client even if it has
         // never asked for the list, which matches what `renameSession`
@@ -646,6 +648,7 @@ public final class RemoteSessionGateway {
         self.downstream = nil
         hostSubscription?.cancel()
         hostSubscription = nil
+        providerListChanges = nil
         sessionListRefresh?.cancel()
         sessionListRefresh = nil
         worktreeListRefresh?.cancel()

@@ -479,6 +479,35 @@ struct RemoteAppStateAccessTests {
         #expect(tab.title == "Persisted Title")
     }
 
+    /// Session tabs are in the Remote session list but not in host events,
+    /// so opening and closing one announces a list change of its own.
+    @Test func sessionTabChangesAnnounceASessionListChange() async throws {
+        let state = makeRemoteRenameState()
+        let worktreeId = try #require(state.selectedWorktreeId)
+        defer { cleanupRemoteRenameFiles(worktreeId: worktreeId) }
+        state.openNewACPSession(agentID: "test-agent")
+        let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
+        let id = "history-\(UUID().uuidString)"
+        try await seedStoredSession(id: id, title: "History", in: manager)
+        var changes = 0
+        let subscription = try #require(state.sessionListChanges).observe { changes += 1 }
+        defer { subscription.cancel() }
+
+        func waitForChange(after count: Int) async throws {
+            let deadline = ContinuousClock.now + .seconds(5)
+            while changes == count, ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+        }
+        #expect(await state.openSessionTab(for: id) == .success)
+        try await waitForChange(after: 0)
+        let afterOpen = changes
+        #expect(afterOpen > 0)
+        #expect(await state.closeSessionTab(for: id) == .success)
+        try await waitForChange(after: afterOpen)
+        #expect(changes > afterOpen)
+    }
+
     @Test func remoteSessionTabActionsOpenAndCloseAStoredSessionOnTheHost() async throws {
         var cleanupWorktreeId: String?
         defer {
