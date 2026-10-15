@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### ✨ Features
+
+- Move the Changes tab's review scope entrypoint from the Commits header into the Prepare card: a split segment on "Review current changes" opens the ⇧⌘R palette, and a "Review…" button stands in when there are no uncommitted changes to review.
+
 ## [0.21.5] - 2026-10-15
 
 ### ✨ Features

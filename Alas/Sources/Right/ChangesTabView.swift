@@ -543,6 +543,10 @@ struct ChangesTabView: View {
                 ChangesPreparationCard(
                     model: preparation,
                     onReviewChanges: openReviewChangesTab,
+                    onChooseReviewScope: { [appState, rps] in
+                        appState.openReviewPaletteOverlay(prefill: rps.worktree)
+                    },
+                    reviewScopeShortcut: appState.binding(for: .openReviewPalette),
                     onDraftCommit: openDraftTab,
                     onPublishCommit: openPublishTab,
                     onGGAction: handleGGPreparationAction,
@@ -1160,9 +1164,6 @@ struct ChangesTabView: View {
                 appState.openReviewPaletteOverlay(prefill: rps.worktree, rangeAnchorSHA: commit.sha)
             },
             reviewRangeAnchorSHAs: Set(rps.commits.map(\.sha)),
-            onChooseReviewScope: { [appState, rps] in
-                appState.openReviewPaletteOverlay(prefill: rps.worktree)
-            },
             onLoadOlder: { Task { @MainActor in await rps.loadOlder() } },
             onSelectBaseBranch: { rps.selectBaseBranch($0) },
             onOpenBaseBranchSelector: { Task { @MainActor in await rps.fetchBranches() } },
