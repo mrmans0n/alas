@@ -58,10 +58,22 @@ public struct ACPSubagentCapabilities: Codable, Equatable, Sendable {
     public var supportsCancel: Bool { cancel != nil }
     public var supportsClose: Bool { close != nil }
 
+    private enum CodingKeys: String, CodingKey {
+        case cancel, close
+    }
+
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        cancel = try? c.decodeIfPresent(EmptyObject.self, forKey: .cancel)
-        close = try? c.decodeIfPresent(EmptyObject.self, forKey: .close)
+        cancel = Self.granted(c, .cancel)
+        close = Self.granted(c, .close)
+    }
+
+    /// The RFD grants a capability with an object (`{}` included); the AIR
+    /// draft spells it as a boolean. Anything else means "not supported".
+    private static func granted(_ c: KeyedDecodingContainer<CodingKeys>, _ key: CodingKeys) -> EmptyObject? {
+        if (try? c.decodeIfPresent(EmptyObject.self, forKey: key)) != nil { return .init() }
+        if (try? c.decodeIfPresent(Bool.self, forKey: key)) == true { return .init() }
+        return nil
     }
 }
 
@@ -94,13 +106,17 @@ public struct ACPSubagentStateUpdate: Codable, Equatable, Sendable {
 }
 
 /// Lifecycle of a child session. `running` is implicit on spawn; the agent
-/// only notifies about it explicitly in the OpenCode variant.
+/// notifies about it explicitly only in the OpenCode variant and the revised
+/// RFD form.
 ///
 /// An unrecognized state decodes to `.other` rather than failing the whole
 /// notification — a future terminal state must still stop the row's spinner,
 /// which `isTerminal` decides from the raw string.
 public enum ACPSubagentState: Codable, Equatable, Sendable {
     case running
+    /// Foreground work is blocked on the user: a permission or question the
+    /// child asked. Still live — not terminal, and still cancellable.
+    case requiresAction
     case completed
     case failed
     case cancelled
@@ -110,6 +126,7 @@ public enum ACPSubagentState: Codable, Equatable, Sendable {
     public init(rawValue: String) {
         switch rawValue {
         case "running", "created", "in_progress": self = .running
+        case "requires_action": self = .requiresAction
         case "completed", "success": self = .completed
         case "failed", "error": self = .failed
         case "cancelled", "canceled", "interrupted": self = .cancelled
@@ -121,6 +138,7 @@ public enum ACPSubagentState: Codable, Equatable, Sendable {
     public var rawValue: String {
         switch self {
         case .running: "running"
+        case .requiresAction: "requires_action"
         case .completed: "completed"
         case .failed: "failed"
         case .cancelled: "cancelled"
@@ -135,7 +153,7 @@ public enum ACPSubagentState: Codable, Equatable, Sendable {
     public var isTerminal: Bool {
         switch self {
         case .completed, .failed, .cancelled, .disconnected: true
-        case .running, .other: false
+        case .running, .requiresAction, .other: false
         }
     }
 

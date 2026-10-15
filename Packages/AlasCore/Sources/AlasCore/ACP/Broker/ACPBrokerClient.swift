@@ -909,20 +909,27 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, @unchecked Senda
     ) {
         switch method {
         case "session/update":
-            guard let decoded = try? JSONDecoder().decode(ACPSessionUpdateParams.self, from: params.data) else {
+            // See `ACPSessionUpdateFrame`: the revised subagent form can fan
+            // one frame out into several updates; the last one acks the cursor.
+            guard let frame = try? JSONDecoder().decode(ACPSessionUpdateFrame.self, from: params.data),
+                  !frame.updates.isEmpty else {
                 releaseUnconsumedDurableCursor(cursor)
                 return
             }
             stateLock.lock()
-            _yieldedUpdateCount += 1
+            _yieldedUpdateCount += frame.updates.count
             stateLock.unlock()
-            updatesCont.yield(.init(
-                sessionId: decoded.sessionId,
-                update: decoded.update,
-                durableConsumptionAcknowledgement: { [weak self] in
-                    self?.ackDurableEvent(cursor: cursor)
-                }
-            ))
+            let ack: ACPDurableConsumptionAcknowledgement = { [weak self] in
+                self?.ackDurableEvent(cursor: cursor)
+            }
+            for (offset, decoded) in frame.updates.enumerated() {
+                let isLast = offset == frame.updates.count - 1
+                updatesCont.yield(.init(
+                    sessionId: decoded.sessionId,
+                    update: decoded.update,
+                    durableConsumptionAcknowledgement: isLast ? ack : nil
+                ))
+            }
         case ACPOpenCodeChildUpdate.method:
             // Normalized into the standard shapes so downstream routing only
             // knows one wire format; the cursor is acked by the last of them.

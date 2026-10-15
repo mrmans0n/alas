@@ -128,6 +128,10 @@ public enum ACPSessionUpdate: Codable, Equatable, Sendable {
             self = .subagentStateUpdate(try ACPSubagentStateUpdate(from: decoder))
         case "async_task_spawned", "async_task_progress", "async_task_state_update":
             self = .asyncTask(try ACPAsyncTaskUpdate(from: decoder))
+        // `subagent_update` and `session_message(_chunk)` land here on
+        // purpose: one of them can stand for several updates, so transports
+        // decode `session/update` through `ACPSessionUpdateFrame`, which
+        // normalizes them into the cases above.
         default:
             self = .unknown(kind)
         }

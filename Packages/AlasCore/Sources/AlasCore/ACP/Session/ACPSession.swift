@@ -3256,8 +3256,12 @@ public final class ACPSession: ChangeTracking, Identifiable {
         var changed: [Int] = []
         let backgroundToolIds = Set(activeBackgroundTasks.compactMap(\.toolCallId))
         for i in transcript.messages.indices {
+            // A subagent row mirrors its child's own lifecycle, which the
+            // agent reports: a background child can outlive the parent's
+            // cancel, so stopping the parent must not claim it stopped.
             if case .toolCall(var tc) = transcript.messages[i],
                ACPBackgroundTask(toolCall: tc) == nil,
+               ACPSubagentRowDescriptor(toolCall: tc) == nil,
                !backgroundToolIds.contains(tc.toolCallId),
                tc.status == "in_progress" || tc.status == "pending" {
                 tc.status = "canceled"
