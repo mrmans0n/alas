@@ -55,7 +55,7 @@ struct HostSocketServerTests {
         }
 
         let ref = WorktreeRef(projectID: project.id, path: destination.path)
-        #expect(try await client.request(.archiveWorktree(worktree: ref)) == .done)
+        #expect(try await client.request(.archiveWorktree(worktree: ref, lineageID: created.lineageID, branch: created.branch)) == .done)
         try await client.waitForEvent { event in
             if case .worktreeChanged(let worktree) = event { worktree.worktree.id == created.id && worktree.isArchived } else { false }
         }
