@@ -745,9 +745,10 @@ private struct SidebarWorktreeFilterField: View {
 }
 
 /// Sets `refusesFirstResponder` on the `NSTextField` backing the SwiftUI
-/// `TextField` it sits behind. AppKit then skips the field when it picks a
-/// window's initial first responder or walks the key view loop, while a click
-/// still focuses it.
+/// `TextField` it sits behind, only while the window is first presented, so
+/// AppKit skips the field when it picks the initial first responder. The
+/// property is restored once the window is key, which keeps the field in the
+/// key view loop for keyboard navigation.
 private struct KeyViewRefusingTextField: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView { MarkerView() }
     func updateNSView(_ nsView: NSView, context: Context) {
@@ -778,9 +779,30 @@ private struct KeyViewRefusingTextField: NSViewRepresentable {
                 if let field = Self.textField(in: view, containing: center) {
                     field.refusesFirstResponder = true
                     markedField = field
+                    restoreAfterInitialFocus(of: field)
                     return
                 }
                 ancestor = view.superview
+            }
+        }
+
+        private func restoreAfterInitialFocus(of field: NSTextField) {
+            guard let window else { return }
+            let restore = { [weak field] in
+                // Initial responder selection runs during the key-window
+                // transition, so restore on the turn after it.
+                DispatchQueue.main.async { field?.refusesFirstResponder = false }
+            }
+            if window.isKeyWindow {
+                restore()
+                return
+            }
+            var token: NSObjectProtocol?
+            token = NotificationCenter.default.addObserver(
+                forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main
+            ) { _ in
+                token.map(NotificationCenter.default.removeObserver)
+                restore()
             }
         }
 
