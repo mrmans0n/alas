@@ -14007,8 +14007,7 @@ final class AppState {
     @discardableResult
     func openWorkspaceCheckoutACPSession(
         checkout: WorkspaceCheckout,
-        agentID: String,
-        initialPrompt: String? = nil
+        agentID: String
     ) async -> ACPSessionTabState? {
         guard let checkout = await authoritativeCheckoutForWorkspaceACPSessionCreation(checkout) else { return nil }
         guard await !checkpointACPAdmissionDisabledAfterDiscovery(owner: .workspaceCheckout(checkout.id, checkout.executionLocation), fallbackWorktree: nil) else { return nil }
@@ -14019,9 +14018,6 @@ final class AppState {
             return nil
         }
         let session = manager.createSession(agentId: agentID, autoRunDefault: config.harness.acpAutoRunByDefault)
-        if let initialPrompt, !initialPrompt.isEmpty {
-            manager.persistComposerDraft(.init(segments: [.text(initialPrompt)]), for: session)
-        }
         let state = ACPSessionTabState(sessionId: session.id, title: session.title)
         tabs.append(acpSession: state, to: owner)
         return state
@@ -15855,10 +15851,14 @@ extension AppState: RemoteSessionsProvider {
                          normalUserTurn: true, onResult: onResult)
     }
 
-    func sendPrompt(for id: String, text: String, attachments: [ACPMessage.Attachment], normalUserTurn: Bool, onResult: @escaping @MainActor (Bool) -> Void) async {
+    func sendPrompt(
+        for id: String, text: String, attachments: [ACPMessage.Attachment],
+        delegatedSource: ACPDelegatedPromptSource? = nil, normalUserTurn: Bool,
+        onResult: @escaping @MainActor (Bool) -> Void
+    ) async {
         for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
             await mgr.sendPrompt(for: id, text: text, attachments: attachments,
-                                 normalUserTurn: normalUserTurn, onResult: onResult)
+                                 delegatedSource: delegatedSource, normalUserTurn: normalUserTurn, onResult: onResult)
             return
         }
         onResult(false)

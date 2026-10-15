@@ -32,21 +32,32 @@ struct WorkspaceACPSessionTests {
         #expect(ReviewFeedbackAgentSender.production(appState: state, worktreeID: "unrelated").availableTargets().isEmpty)
         state.tabs.clearActiveTab(owner: owner)
 
-        sender.send("Review feedback", target) { _ in }
+        let card = ACPPromptCard(origin: .review, title: "Review")
+        sender.send(
+            ReviewFeedbackDelivery(text: "Review feedback", source: .reviewFeedback(card: card, commentCount: 1, messageID: UUID())),
+            target
+        ) { _ in }
 
         #expect(state.tabs.activeTabId(for: owner) == tab.id)
         #expect(state.selectedWorkspaceCheckout?.id == checkout.id)
 
-        let result = await withCheckedContinuation { continuation in
-            sender.send("New review feedback", .newChat(agentID: "claude", title: "New chat")) {
-                continuation.resume(returning: $0)
-            }
+        let delivery = ReviewFeedbackDelivery(
+            text: "New review feedback", source: .reviewFeedback(card: card, commentCount: 1, messageID: UUID()))
+        // Completion fires when the turn ends; the test agent never runs one.
+        sender.send(delivery, .newChat(agentID: "claude", title: "New chat")) { _ in }
+        try await eventually("the new chat to receive the review turn") {
+            guard let newSession = manager.sessions.values.first(where: { $0.id != session.id }) else { return false }
+            return newSession.queue.contains { $0.delegatedSource == delivery.source }
+                || newSession.transcript.messages.contains { message in
+                    guard case .user(_, _, _, _, let source, _) = message else { return false }
+                    return source == delivery.source
+                }
         }
-        try result.get()
         #expect(state.tabs.tabs(for: owner).count == 2)
         #expect(state.tabs.tabs(forWorktree: worktree.id).isEmpty)
         let newSession = try #require(manager.sessions.values.first { $0.id != session.id })
-        #expect(newSession.composerDraft == ACPComposerDraft(segments: [.text("New review feedback")]))
+        // The review goes out as a carded turn, not a composer draft.
+        #expect(newSession.composerDraft == .empty)
     }
 
     @MainActor

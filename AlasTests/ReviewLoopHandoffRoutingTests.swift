@@ -205,7 +205,7 @@ struct ReviewLoopHandoffRoutingTests {
             title: "Other Agent"
         )
 
-        sender.send("Review feedback", target) { _ in }
+        sender.send(reviewDelivery, target) { _ in }
 
         #expect(state.tabs.activeTabId(forWorktree: worktreeId) == second.id)
         #expect(sender.agent(target)?.id == "other-agent")
@@ -239,7 +239,7 @@ struct ReviewLoopHandoffRoutingTests {
         #expect(sender.agent(.newChat(agentID: "test-agent", title: "New chat")) == nil)
 
         let result = await withCheckedContinuation { continuation in
-            sender.send("Review feedback", .newChat(agentID: "test-agent", title: "New chat")) {
+            sender.send(reviewDelivery, .newChat(agentID: "test-agent", title: "New chat")) {
                 continuation.resume(returning: $0)
             }
         }
@@ -288,6 +288,13 @@ struct ReviewLoopHandoffRoutingTests {
         await restored.prepareACPSessionForPrompt(sessionId: tab.sessionId, owner: .worktree(worktreeId))
 
         #expect(restored.session(for: tab.sessionId) != nil)
+    }
+
+    private var reviewDelivery: ReviewFeedbackDelivery {
+        ReviewFeedbackDelivery(
+            text: "Review feedback",
+            source: .reviewFeedback(card: ACPPromptCard(origin: .review, title: "Review"), commentCount: 1, messageID: UUID())
+        )
     }
 
     private func makeState(installedAgentIDs: Set<String> = ["test-agent", "other-agent"]) -> AppState {
