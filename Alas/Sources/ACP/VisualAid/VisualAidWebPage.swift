@@ -374,10 +374,11 @@ final class VisualAidWKWebView: WKWebView {
             deltaX: event.scrollingDeltaX, deltaY: event.scrollingDeltaY, edges: scrollEdges,
             timestamp: event.timestamp)
         guard case .deliver(let owner, let includingHeld) = route else {
-            // `.began` legitimately follows its own `.mayBegin`; anything else held belongs to an abandoned gesture.
-            let continuesMayBegin = event.phase.contains(.began)
-                && pendingScrollEvents.last?.phase.contains(.mayBegin) == true
-            if !continuesMayBegin { pendingScrollEvents.removeAll() }
+            // A new start drops whatever an abandoned gesture left held; `.began` legitimately follows its own
+            // `.mayBegin`, and stationary events continue the gesture being held.
+            let startsAnew = event.phase.contains(.mayBegin)
+                || (event.phase.contains(.began) && pendingScrollEvents.last?.phase.contains(.mayBegin) != true)
+            if startsAnew { pendingScrollEvents.removeAll() }
             pendingScrollEvents.append(event)
             if pendingScrollEvents.count > 8 { pendingScrollEvents.removeFirst() }
             return
@@ -506,6 +507,8 @@ struct VisualAidScrollRouting: Equatable {
         }
         if let owner { return .deliver(owner, includingHeld: true) }
         if moved { return decided(deltaX: deltaX, deltaY: deltaY, edges: edges) }
+        // Stationary or changed without moving yet: keep waiting for the first movement.
+        guard phase.contains(.ended) || phase.contains(.cancelled) else { return .hold }
         // Ended or cancelled without ever moving: let the transcript pair its begin and end.
         owner = .transcript
         return .deliver(.transcript, includingHeld: true)

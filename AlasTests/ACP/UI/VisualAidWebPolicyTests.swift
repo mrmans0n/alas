@@ -75,7 +75,9 @@ struct VisualAidWebPolicyTests {
     func gestureRoutingLatches() {
         var routing = VisualAidScrollRouting()
         #expect(routing.route(phase: .mayBegin, momentumPhase: [], deltaX: 0, deltaY: 0, edges: Self.midway) == .hold)
-        #expect(routing.route(phase: .began, momentumPhase: [], deltaX: 0, deltaY: -3, edges: Self.midway)
+        #expect(routing.route(phase: .began, momentumPhase: [], deltaX: 0, deltaY: 0, edges: Self.midway) == .hold)
+        #expect(routing.route(phase: .stationary, momentumPhase: [], deltaX: 0, deltaY: 0, edges: Self.midway) == .hold)
+        #expect(routing.route(phase: .changed, momentumPhase: [], deltaX: 0, deltaY: -3, edges: Self.midway)
             == .deliver(.page, includingHeld: true))
         // Reaching the bottom mid-gesture does not hand the rest of it to the transcript.
         #expect(routing.route(phase: .changed, momentumPhase: [], deltaX: 0, deltaY: -9, edges: Self.atBottom)
