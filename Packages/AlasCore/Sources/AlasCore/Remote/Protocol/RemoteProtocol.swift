@@ -1394,7 +1394,8 @@ extension RemoteServerMessage {
 /// Session lists pushed on change. Peers without it are still polled.
 public enum PeerListPushCapability: Sendable {
     /// Advertised in `hello` by hosts whose gateway pushes `sessionList`
-    /// whenever a session, worktree or project changes.
+    /// whenever a session, worktree or project changes, and `projectList`
+    /// to a client that has asked for it once.
     public static let v1 = "peerListPush.v1"
 }
 

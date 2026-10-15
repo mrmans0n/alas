@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 @testable import Alas
+@_spi(Testing) import AlasCore
 
 @MainActor
 final class FakeSessionsProvider: RemoteSessionsProvider {
@@ -706,7 +707,7 @@ struct RemoteSessionGatewayTests {
     }
 
     /// A host change pushes the lists it makes stale, unasked: sessions
-    /// always, worktrees once the client has asked for them.
+    /// always, worktrees and projects once the client has asked for them.
     @Test func hostChangesPushTheListsTheClientFollows() async throws {
         let project = ProjectConfig(id: "p", name: "p", path: "/srv/repo", color: "blue", addedAt: .distantPast)
         let projects = ProjectsManager(persistedProjects: [project])
@@ -715,6 +716,7 @@ struct RemoteSessionGatewayTests {
         let gw = RemoteSessionGateway(provider: provider) { _ in }
         defer { gw.close() }
         await gw.handle(.listWorktrees)
+        await gw.handle(.listProjects)
         #expect(provider.sessionSummariesCallCount == 0)
 
         let path = URL(fileURLWithPath: "/srv/new")
@@ -728,6 +730,14 @@ struct RemoteSessionGatewayTests {
         }
         #expect(provider.sessionSummariesCallCount == 1)
         #expect(provider.remoteWorktreesCallCount == 2)
+        #expect(provider.remoteProjectsCallCount == 1)
+
+        // A project's own change refreshes the project list too.
+        projects.setWorktreeHidden(projectId: "p", path: path, hidden: true)
+        while provider.remoteProjectsCallCount < 2, ContinuousClock.now < deadline + .seconds(5) {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(provider.remoteProjectsCallCount == 2)
     }
 
     @Test func createWorktreeSessionEmitsCreatedSessionAndRefreshesLists() async {
