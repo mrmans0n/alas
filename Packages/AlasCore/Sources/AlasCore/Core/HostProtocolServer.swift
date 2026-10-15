@@ -5,10 +5,18 @@ import Foundation
 /// says who the client is; nothing a client sends can.
 @MainActor
 public final class HostProtocolServer {
-    let host: AlasHost
+    /// Finds the run scripts of a worktree, on its project's host if remote.
+    public typealias ScriptDiscovery = @Sendable (_ worktreeRoot: URL, _ remoteHost: String?) async -> [RunScript]
 
-    public init(host: AlasHost) {
+    let host: AlasHost
+    let discoverScripts: ScriptDiscovery
+
+    public init(
+        host: AlasHost,
+        discoverScripts: @escaping ScriptDiscovery = { await RunScriptStore.scripts(worktreeRoot: $0, remoteHost: $1) }
+    ) {
         self.host = host
+        self.discoverScripts = discoverScripts
     }
 
     /// A connection for a client the transport authenticated as `caller`.
@@ -19,7 +27,7 @@ public final class HostProtocolServer {
         caller: HostCaller,
         send: @escaping @MainActor (HostServerMessage) async -> Void
     ) -> HostProtocolConnection {
-        HostProtocolConnection(host: host, caller: caller, send: send)
+        HostProtocolConnection(host: host, caller: caller, discoverScripts: discoverScripts, send: send)
     }
 }
 
@@ -27,6 +35,7 @@ public final class HostProtocolServer {
 public final class HostProtocolConnection {
     private let host: AlasHost
     private let caller: HostCaller
+    private let discoverScripts: HostProtocolServer.ScriptDiscovery
     private let send: @MainActor (HostServerMessage) async -> Void
     private var subscription: HostSubscription?
     /// The last message handed to the transport. Every send waits for the
@@ -35,9 +44,15 @@ public final class HostProtocolConnection {
     /// dropped rather than sent after that.
     private var sendTail: Task<Void, Never>?
 
-    init(host: AlasHost, caller: HostCaller, send: @escaping @MainActor (HostServerMessage) async -> Void) {
+    init(
+        host: AlasHost,
+        caller: HostCaller,
+        discoverScripts: @escaping HostProtocolServer.ScriptDiscovery,
+        send: @escaping @MainActor (HostServerMessage) async -> Void
+    ) {
         self.host = host
         self.caller = caller
+        self.discoverScripts = discoverScripts
         self.send = send
     }
 
@@ -146,18 +161,16 @@ public final class HostProtocolConnection {
         case .workspaceCheckout(let id):
             return .workspaceCheckout(checkout: try await host.workspaces.checkout(id: id))
         case .startRun(let scriptKey, let ref):
-            let worktree = try worktree(ref)
-            // Archiving stopped everything in it; nothing starts there again
-            // until it is unarchived.
-            guard !host.core.projects.isWorktreeHidden(projectId: ref.projectID, path: worktree.path) else {
-                return .runStart(start: .refused(title: "Worktree archived", message: "Unarchive the worktree to run scripts in it."))
-            }
             let projectHost = host.core.projects.projects.first { $0.id == ref.projectID }?.host
-            let scripts = await RunScriptStore.scripts(worktreeRoot: worktree.path, remoteHost: projectHost)
+            if let refusal = try archivedRunRefusal(ref) { return refusal }
+            let scripts = await discoverScripts(try worktree(ref).path, projectHost)
             guard let script = scripts.first(where: { $0.key == scriptKey }) else {
                 throw HostError.notFound(what: "script \(scriptKey)")
             }
-            return .runStart(start: host.runs.start(script, in: worktree, caller: caller))
+            // Discovery can take a while on a remote host: the worktree may
+            // have been archived or removed meanwhile.
+            if let refusal = try archivedRunRefusal(ref) { return refusal }
+            return .runStart(start: host.runs.start(script, in: try worktree(ref), caller: caller))
         case .stopRun(let scriptKey, let ref):
             host.runs.stop(scriptKey: scriptKey, in: try worktree(ref), caller: caller)
             return .done
@@ -172,6 +185,14 @@ public final class HostProtocolConnection {
                 await enqueue(.events(events: events, cursor: next.cursor), from: next)
             }
         }
+    }
+
+    /// Archiving stopped everything in a worktree; nothing starts there
+    /// again until it is unarchived.
+    private func archivedRunRefusal(_ ref: WorktreeRef) throws -> HostResponse? {
+        let listed = try worktree(ref)
+        guard host.core.projects.isWorktreeHidden(projectId: ref.projectID, path: listed.path) else { return nil }
+        return .runStart(start: .refused(title: "Worktree archived", message: "Unarchive the worktree to run scripts in it."))
     }
 
     /// The listed, unarchived or archived, worktree a reference names.
