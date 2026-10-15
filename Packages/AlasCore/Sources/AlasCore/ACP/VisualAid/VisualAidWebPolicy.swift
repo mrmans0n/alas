@@ -135,11 +135,63 @@ public enum VisualAidWebPolicy: Sendable {
     public static let bridgeScript = """
     (() => {
       const post = (message) => window.webkit.messageHandlers.\(bridgeHandlerName).postMessage(message);
-      const reportHeight = () => post({ height: Math.ceil(document.documentElement.getBoundingClientRect().height) });
+      // Whether the page can still scroll up or down under the pointer, so the app can hand a wheel
+      // gesture to the transcript once nothing there has room left to scroll.
+      let edgesFrame = 0;
+      let lastEdges = '';
+      let pointer = null;
+      const blocksScrolling = (overflow) => overflow === 'hidden' || overflow === 'clip';
+      // Named so tests can call it with a point. Scroll chaining moves whichever box under the point still
+      // can, so the page has room when any scroll container there does, or the viewport itself. The
+      // viewport scrolls per the root's overflow, or the body's when the root leaves it visible.
+      globalThis.alasVisualScrollEdges = (x, y) => {
+        let scrollUp = false;
+        let scrollDown = false;
+        const add = (box) => {
+          scrollUp ||= box.scrollTop > 1;
+          scrollDown ||= box.scrollTop < box.scrollHeight - box.clientHeight - 1;
+        };
+        const root = document.documentElement;
+        const at = x === undefined ? (pointer && document.elementFromPoint(pointer[0], pointer[1])) : document.elementFromPoint(x, y);
+        for (let box = at; box && box !== root && box !== document.body; box = box.parentElement) {
+          const style = getComputedStyle(box);
+          if (style.overflowY !== 'auto' && style.overflowY !== 'scroll') continue;
+          add(box);
+          // WebKit does not chain a wheel past an overscroll barrier, so nothing beyond it can move.
+          if (style.overscrollBehaviorY === 'contain' || style.overscrollBehaviorY === 'none') {
+            return { scrollUp, scrollDown };
+          }
+        }
+        let overflow = getComputedStyle(root).overflowY;
+        if (overflow === 'visible' && document.body) overflow = getComputedStyle(document.body).overflowY;
+        if (!blocksScrolling(overflow)) add(document.scrollingElement || root);
+        return { scrollUp, scrollDown };
+      };
+      const reportEdges = () => {
+        edgesFrame = 0;
+        const edges = globalThis.alasVisualScrollEdges();
+        const key = JSON.stringify(edges);
+        if (key === lastEdges) return;
+        lastEdges = key;
+        post({ scrollEdges: edges });
+      };
+      const scheduleEdges = () => { if (!edgesFrame) edgesFrame = requestAnimationFrame(reportEdges); };
+      const reportHeight = () => {
+        post({ height: Math.ceil(document.documentElement.getBoundingClientRect().height) });
+        scheduleEdges();
+      };
       const observer = new ResizeObserver(reportHeight);
       observer.observe(document.documentElement);
       if (document.body) observer.observe(document.body);
       addEventListener('load', reportHeight);
+      // Captured so nested scroll containers, whose scroll events do not bubble, report too.
+      document.addEventListener('scroll', scheduleEdges, { passive: true, capture: true });
+      // The app also reports the pointer when the card moves under a still one, which fires no mousemove.
+      globalThis.alasVisualPointer = (x, y) => { pointer = [x, y]; scheduleEdges(); };
+      document.addEventListener('mousemove', (event) => globalThis.alasVisualPointer(event.clientX, event.clientY), { passive: true, capture: true });
+      addEventListener('resize', scheduleEdges);
+      // Content or style can change scrollability without resizing either observed box.
+      new MutationObserver(scheduleEdges).observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
       // Named so tests can drive it with a fake event.
       globalThis.alasVisualHandleClick = (event) => {
         if (!event.isTrusted || !(event.target instanceof Element)) return;

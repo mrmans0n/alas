@@ -94,6 +94,7 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
         controller.add(self, contentWorld: Self.bridgeWorld, name: VisualAidWebPolicy.bridgeHandlerName)
         webView.navigationDelegate = self
         webView.uiDelegate = self
+        webView.onPointerMoved = { [weak self] point in self?.reportPointer(point) }
         guard peerConnectionDisabled else {
             status = .sandboxFailed
             return
@@ -221,6 +222,13 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
             "alasVisualSelect(ids)", arguments: ["ids": ids], in: nil, in: Self.bridgeWorld, completionHandler: nil)
     }
 
+    private func reportPointer(_ point: CGPoint) {
+        guard !isClosed, status == .ready else { return }
+        webView.callAsyncJavaScript(
+            "alasVisualPointer(x, y)", arguments: ["x": point.x, "y": point.y],
+            in: nil, in: Self.bridgeWorld, completionHandler: nil)
+    }
+
     func applyTheme(_ theme: Theme) {
         themeVariables = PluginWebPolicy.cssVariables(theme)
         guard !isClosed, status == .ready else { return }
@@ -244,6 +252,7 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
         webView.stopLoading()
         webView.navigationDelegate = nil
         webView.uiDelegate = nil
+        webView.onPointerMoved = { _ in }
     }
 
     // MARK: Bridge
@@ -254,6 +263,10 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
         else { return }
         if let height = body["height"] as? Double {
             contentHeight = max(0, CGFloat(height))
+        } else if let edges = body["scrollEdges"] as? [String: Any] {
+            webView.scrollEdges = .init(
+                canScrollUp: edges["scrollUp"] as? Bool ?? false,
+                canScrollDown: edges["scrollDown"] as? Bool ?? false)
         } else if let choice = body["choice"] as? String {
             guard acceptsInput else { return }
             onChoice(choice)
@@ -292,6 +305,7 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
 
     private func markReady() {
         status = .ready
+        webView.reportPointer(force: true)
         // Fragments bake the theme into their frame; a full document is served unmodified, so it always gets
         // the theme pushed. Either way, replay any theme change made while it was loading or crashed.
         if themeVariables != documentThemeVariables {
@@ -356,6 +370,90 @@ final class VisualAidWKWebView: WKWebView {
         blocksInteraction ? nil : super.hitTest(point)
     }
 
+    /// Where the page can still scroll, as last reported by the bridge.
+    var scrollEdges = VisualAidScrollRouting.Edges()
+    /// The pointer in page coordinates, reported when the card moves under a still pointer (mounting, or the
+    /// transcript scrolling it), which fires no DOM `mousemove`; the page's scroll edges depend on what is under it.
+    var onPointerMoved: (CGPoint) -> Void = { _ in }
+    private var lastReportedPointer: CGPoint?
+    private var clipObservers: [any NSObjectProtocol] = []
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        observeEnclosingClipViews()
+        reportPointer(force: true)
+    }
+
+    /// Block-based observers: Combine's NotificationCenter publisher retains `object`, which would form a
+    /// web view -> clip view -> document view cycle.
+    private func observeEnclosingClipViews() {
+        removeClipObservers()
+        guard window != nil else { return }
+        var ancestor = superview
+        while let view = ancestor {
+            if let clipView = view as? NSClipView {
+                clipView.postsBoundsChangedNotifications = true
+                clipObservers.append(NotificationCenter.default.addObserver(
+                    forName: NSView.boundsDidChangeNotification, object: clipView, queue: .main
+                ) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.reportPointer() }
+                })
+            }
+            ancestor = view.superview
+        }
+    }
+
+    private func removeClipObservers() {
+        for observer in clipObservers { NotificationCenter.default.removeObserver(observer) }
+        clipObservers.removeAll()
+    }
+
+    isolated deinit {
+        removeClipObservers()
+    }
+
+    /// Reports where the pointer is over the page, when it is and has changed since the last report.
+    func reportPointer(force: Bool = false) {
+        guard let window else { return }
+        var point = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        if !isFlipped { point.y = bounds.height - point.y }
+        guard bounds.contains(point), force || point != lastReportedPointer else { return }
+        lastReportedPointer = point
+        onPointerMoved(point)
+    }
+    private var scrollRouting = VisualAidScrollRouting()
+    /// The undecided gesture's start (`.mayBegin`, `.began`), held until its owner is known.
+    private var pendingScrollEvents: [NSEvent] = []
+
+    /// The page scrolls only the gestures it can move; the rest go to the transcript, so a capped card
+    /// never traps the transcript's scroll once its own content is at an edge.
+    override func scrollWheel(with event: NSEvent) {
+        let route = scrollRouting.route(
+            phase: event.phase, momentumPhase: event.momentumPhase,
+            deltaX: event.scrollingDeltaX, deltaY: event.scrollingDeltaY, edges: scrollEdges,
+            timestamp: event.timestamp)
+        guard case .deliver(let owner, let includingHeld) = route else {
+            // Only the start is held, so the owner always receives it however long the touch stays still:
+            // zero-motion stationary events carry nothing. A new start drops whatever an abandoned gesture
+            // left held; `.began` legitimately follows its own `.mayBegin`.
+            if event.phase.contains(.mayBegin) {
+                pendingScrollEvents = [event]
+            } else if event.phase.contains(.began) {
+                if pendingScrollEvents.last?.phase.contains(.mayBegin) != true { pendingScrollEvents.removeAll() }
+                pendingScrollEvents.append(event)
+            }
+            return
+        }
+        let events = (includingHeld ? pendingScrollEvents : []) + [event]
+        pendingScrollEvents.removeAll()
+        for pending in events {
+            switch owner {
+            case .page: super.scrollWheel(with: pending)
+            case .transcript: nextResponder?.scrollWheel(with: pending)
+            }
+        }
+    }
+
     override func keyDown(with event: NSEvent) {
         if !blocksInteraction { super.keyDown(with: event) }
     }
@@ -389,6 +487,105 @@ final class VisualAidWKWebView: WKWebView {
               responder === self || responder.isDescendant(of: self)
         else { return }
         window.makeFirstResponder(nil)
+    }
+}
+
+/// Decides who scrolls a wheel gesture over a visual aid: the page or the transcript around it. A phased
+/// (trackpad) gesture is decided by its first non-zero delta and keeps that owner through momentum, so
+/// no gesture is split between the two; a phaseless mouse wheel decides per event.
+struct VisualAidScrollRouting: Equatable {
+    enum Owner: Equatable { case page, transcript }
+
+    struct Edges: Equatable {
+        var canScrollUp = false
+        var canScrollDown = false
+    }
+
+    enum Route: Equatable {
+        /// A phased gesture that has not moved yet: hold the event until the gesture is decided.
+        case hold
+        /// Deliver the event to `owner`, after the held ones unless they belong to an abandoned gesture.
+        case deliver(Owner, includingHeld: Bool)
+    }
+
+    private var owner: Owner?
+    /// The start this view saw for the current gesture. A gesture that started over the transcript and slid
+    /// onto the card belongs to the transcript for the rest of its life.
+    private var seenStart: NSEvent.Phase?
+    /// Who owned the gesture that just ended here, and when; only momentum that begins right after it inherits it.
+    private var endedOwner: Owner?
+    private var endedAt: TimeInterval = 0
+    /// A gesture's momentum begins right after its `.ended`; momentum that begins later is another gesture's.
+    static let momentumHandoff: TimeInterval = 0.1
+    /// Who owns the momentum in flight. Momentum this view did not see begin (content scrolling the card
+    /// under a still pointer) belongs to the transcript.
+    private var momentumOwner: Owner?
+
+    mutating func route(
+        phase: NSEvent.Phase, momentumPhase: NSEvent.Phase, deltaX: CGFloat, deltaY: CGFloat, edges: Edges,
+        timestamp: TimeInterval = 0
+    ) -> Route {
+        let moved = deltaX != 0 || deltaY != 0
+        guard !phase.isEmpty || !momentumPhase.isEmpty else {
+            endedOwner = nil
+            return .deliver(moved ? Self.decide(deltaX: deltaX, deltaY: deltaY, edges: edges) : .transcript, includingHeld: true)
+        }
+        guard !phase.isEmpty else {
+            if momentumPhase.contains(.began) {
+                momentumOwner = timestamp - endedAt <= Self.momentumHandoff ? endedOwner : nil
+            }
+            endedOwner = nil
+            let owner = momentumOwner ?? .transcript
+            if momentumPhase.contains(.ended) || momentumPhase.contains(.cancelled) { momentumOwner = nil }
+            return .deliver(owner, includingHeld: true)
+        }
+        endedOwner = nil
+        momentumOwner = nil
+        let route = gestureRoute(phase: phase, moved: moved, deltaX: deltaX, deltaY: deltaY, edges: edges)
+        if phase.contains(.ended) || phase.contains(.cancelled), case .deliver(let owner, _) = route {
+            endedOwner = owner
+            endedAt = timestamp
+        }
+        return route
+    }
+
+    private mutating func gestureRoute(
+        phase: NSEvent.Phase, moved: Bool, deltaX: CGFloat, deltaY: CGFloat, edges: Edges
+    ) -> Route {
+        if phase.contains(.began) || phase.contains(.mayBegin) {
+            owner = nil
+            seenStart = phase.contains(.began) ? .began : .mayBegin
+            return moved ? decided(deltaX: deltaX, deltaY: deltaY, edges: edges) : .hold
+        }
+        // A `.mayBegin` is only followed by `.began` or `.cancelled` here; any other phase means the touch
+        // that sent it left the card and another gesture arrived mid-way.
+        let foreign = seenStart == nil || (seenStart == .mayBegin && !phase.contains(.cancelled))
+        if phase.contains(.ended) || phase.contains(.cancelled) { seenStart = nil }
+        if foreign {
+            seenStart = nil
+            owner = .transcript
+            return .deliver(.transcript, includingHeld: false)
+        }
+        if let owner { return .deliver(owner, includingHeld: true) }
+        if moved { return decided(deltaX: deltaX, deltaY: deltaY, edges: edges) }
+        // Stationary or changed without moving yet: keep waiting for the first movement.
+        guard phase.contains(.ended) || phase.contains(.cancelled) else { return .hold }
+        // Ended or cancelled without ever moving: let the transcript pair its begin and end.
+        owner = .transcript
+        return .deliver(.transcript, includingHeld: true)
+    }
+
+    private mutating func decided(deltaX: CGFloat, deltaY: CGFloat, edges: Edges) -> Route {
+        let owner = Self.decide(deltaX: deltaX, deltaY: deltaY, edges: edges)
+        self.owner = owner
+        return .deliver(owner, includingHeld: true)
+    }
+
+    /// Sideways movement stays with the page; vertical goes to the page only while it can move that way.
+    /// A positive `deltaY` scrolls toward the top.
+    private static func decide(deltaX: CGFloat, deltaY: CGFloat, edges: Edges) -> Owner {
+        if abs(deltaX) > abs(deltaY) { return .page }
+        return (deltaY > 0 ? edges.canScrollUp : edges.canScrollDown) ? .page : .transcript
     }
 }
 
