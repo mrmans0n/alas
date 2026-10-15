@@ -233,4 +233,17 @@ struct ACPSideQuestionPolicyTests {
         #expect(prefs.composerHeight == composerHeight)
         #expect(prefs.sideWidth == sideWidth)
     }
+
+    @Test("blocked calls collapse to one entry per title, in first-seen order")
+    func blockedSummary() {
+        let summary = ACPSideQuestionBlockedSummary([
+            .init(title: "write a.swift", messageIndex: 3),
+            .init(title: "run make", messageIndex: 4),
+            .init(title: "write a.swift", messageIndex: 5),
+        ])
+        #expect(summary.entries == [.init(title: "write a.swift", count: 2), .init(title: "run make", count: 1)])
+        #expect(summary.label == "3 actions skipped · read-only")
+        #expect(ACPSideQuestionBlockedSummary([.init(title: "run make", messageIndex: 1)]).label
+            == "1 action skipped · read-only")
+    }
 }

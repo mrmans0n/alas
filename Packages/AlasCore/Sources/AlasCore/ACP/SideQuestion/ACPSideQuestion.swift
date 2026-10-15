@@ -18,8 +18,14 @@ public struct ACPSideQuestion: Equatable, Sendable {
     public static let guidance = """
     This is a quick side question asked while another task runs. Answer it \
     directly in text. You may read files to answer, but do not write a plan, \
-    edit files, or ask to leave plan mode.
+    edit files, or ask to leave plan mode. Any edit, write, or command will be \
+    rejected, so don't attempt them.
     """
+
+    /// The error a blocked write or command returns to the agent. Agents
+    /// read it, so it says what to do instead.
+    public static let readOnlyRejection =
+        "Rejected: this is a read-only side question. Do not retry or try another way to change files or run commands; answer in text."
 
     public init(question: String, sessionID: ACPSession.ID? = nil, error: String? = nil, isSubmitted: Bool = false, isPromoting: Bool = false) {
         self.question = question
@@ -27,6 +33,37 @@ public struct ACPSideQuestion: Equatable, Sendable {
         self.error = error
         self.isSubmitted = isSubmitted
         self.isPromoting = isPromoting
+    }
+}
+
+/// The calls Alas blocked in a side session, folded for the card's chip.
+public struct ACPSideQuestionBlockedSummary: Equatable, Sendable {
+    public struct Entry: Equatable, Sendable {
+        public let title: String
+        public let count: Int
+
+        public init(title: String, count: Int) {
+            self.title = title
+            self.count = count
+        }
+    }
+
+    public let entries: [Entry]
+    public let total: Int
+
+    public init(_ blocked: [ACPBlockedToolCall]) {
+        var order: [String] = []
+        var counts: [String: Int] = [:]
+        for call in blocked {
+            if counts[call.title] == nil { order.append(call.title) }
+            counts[call.title, default: 0] += 1
+        }
+        entries = order.map { Entry(title: $0, count: counts[$0] ?? 0) }
+        total = blocked.count
+    }
+
+    public var label: String {
+        "\(total) action\(total == 1 ? "" : "s") skipped · read-only"
     }
 }
 
