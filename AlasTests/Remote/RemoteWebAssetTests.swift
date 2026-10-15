@@ -1649,7 +1649,7 @@ struct RemoteWebAssetTests {
     // the active link is online and pushing sessionList updates. Without
     // clearing it on disconnect, a peer's Servers badge stayed frozen at its
     // last gateway-pushed value instead of falling back to that peer's own
-    // live idle-polled counts once the gateway dropped.
+    // live idle-link counts once the gateway dropped.
     @Test func gatewayCountsAreClearedWhenTheActiveLinkLeavesOnline() throws {
         let js = try asset("app.js")
         let body = try #require(js.range(of: "function handleLinkStateChange(link) {").map { js[$0.lowerBound...].prefix(500) })

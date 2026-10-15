@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 require("../../../Alas/Resources/RemoteWeb/hub-registry.js");
 require("../../../Alas/Resources/RemoteWeb/hub-links.js");
 
-const { createLinks, HANDSHAKE_TIMEOUT_MS, PROBE_TIMEOUT_MS, IDLE_POLL_MS, INITIAL_RECONNECT_MS, MAX_RECONNECT_MS } = globalThis.RemoteHubLinks;
+const { createLinks, HANDSHAKE_TIMEOUT_MS, PROBE_TIMEOUT_MS, INITIAL_RECONNECT_MS, MAX_RECONNECT_MS } = globalThis.RemoteHubLinks;
 
 function makeClock() {
   let now = 0;
@@ -124,7 +124,7 @@ const serverB = { id: "b", origins: ["http://10.0.0.2:8765"], lastOrigin: "http:
     assert.ok(events.some((e) => e[1] === "msg" && e[2] === "sessionList"), "the legacy first frame is still delivered");
   }
 
-  // --- idle polling and counts ----------------------------------------------
+  // --- idle lists and counts ------------------------------------------------
   {
     const { clock, sockets, events, links } = harness();
     links.add(serverA);
@@ -137,8 +137,8 @@ const serverB = { id: "b", origins: ["http://10.0.0.2:8765"], lastOrigin: "http:
     sockets[0].message({ type: "sessionList", sessions: [{ id: "1", status: "awaitingPermission" }, { id: "2", status: "streaming" }] });
     assert.deepEqual(links.get("b").counts, { attention: 1, running: 1 });
     assert.ok(!events.some((e) => e[0] === "b" && e[1] === "msg"), "idle links never forward messages to the app");
-    await clock.tick(IDLE_POLL_MS);
-    assert.equal(sockets[0].sent.length, 2, "polls again after IDLE_POLL_MS");
+    await clock.tick(60 * 1000);
+    assert.equal(sockets[0].sent.length, 1, "idle links do not poll; servers push their lists");
     sockets[0].message({ type: "sessionList", sessions: [{ id: "1", status: "awaitingPermission" }, { id: "2", status: "streaming" }] });
     assert.equal(events.filter((e) => e[0] === "b" && e[1] === "counts").length, 1, "unchanged counts do not re-notify");
   }
@@ -355,7 +355,7 @@ const serverB = { id: "b", origins: ["http://10.0.0.2:8765"], lastOrigin: "http:
     const b = links.setActive("b");
     assert.equal(b.role, "active");
     assert.equal(links.get("a").role, "idle");
-    assert.ok(sockets[0].sent.length >= 2, "the demoted link starts polling");
+    assert.equal(sockets[0].sent.length, 2, "the demoted link asks for its list once");
     links.sendActive({ type: "subscribe", sessionId: "s" });
     assert.deepEqual(sockets[1].sent[sockets[1].sent.length - 1], { type: "subscribe", sessionId: "s" });
     assert.equal(links.get("b").socket, sockets[1], "switching reuses the existing socket");

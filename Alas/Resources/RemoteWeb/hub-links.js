@@ -1,6 +1,6 @@
 // One WebSocket link per paired server. app.js drives the ACTIVE link through
 // sendActive()/onMessage exactly as it drove its single socket; idle links
-// only keep attention counts fresh. Sockets, timers, and fetch are injected so
+// only keep attention counts fresh, from the session lists servers push. Sockets, timers, and fetch are injected so
 // node tests can drive every transition deterministically.
 //
 // deps:  { createSocket(url, protocols), fetch(url, init), setTimeout(fn, ms), clearTimeout(id) }
@@ -13,7 +13,6 @@
 const HANDSHAKE_TIMEOUT_MS = 4000;
 const PAIR_TIMEOUT_MS = 4000;
 const PROBE_TIMEOUT_MS = 4000;
-const IDLE_POLL_MS = 30 * 1000;
 const INITIAL_RECONNECT_MS = 1500;
 const MAX_RECONNECT_MS = 30000;
 
@@ -48,7 +47,6 @@ function createLinks(deps, hooks) {
       attempt: 0,
       reconnectDelay: INITIAL_RECONNECT_MS,
       reconnectTimer: null,
-      pollTimer: null,
       awaitingHello: false,
       legacy: false,
       counts: { attention: 0, running: 0 },
@@ -63,7 +61,6 @@ function createLinks(deps, hooks) {
 
   function clearTimers(link) {
     if (link.reconnectTimer) { deps.clearTimeout(link.reconnectTimer); link.reconnectTimer = null; }
-    stopPolling(link);
   }
 
   // Closes both the adopted socket (`link.socket`) and, if a connection
@@ -122,14 +119,13 @@ function createLinks(deps, hooks) {
     const previous = activeLink();
     if (previous && previous.id !== id) {
       previous.role = "idle";
-      if (previous.state === "online") startPolling(previous);
+      if (previous.state === "online") requestList(previous);
       notify(previous);
     }
     activeId = id;
     const link = links.get(id);
     if (!link) return null;
     link.role = "active";
-    stopPolling(link);
     notify(link);
     return link;
   }
@@ -211,13 +207,12 @@ function createLinks(deps, hooks) {
     socket.onclose = () => {
       if (link.socket !== socket) return;
       link.socket = null;
-      stopPolling(link);
-      setState(link, "offline");
+        setState(link, "offline");
       scheduleReconnect(link);
     };
     socket.onerror = () => {};
     setState(link, "online");
-    if (link.role === "idle") startPolling(link);
+    if (link.role === "idle") requestList(link);
   }
 
   // The health probe (see probeAny below) needs a known-good identity to
@@ -336,18 +331,10 @@ function createLinks(deps, hooks) {
     });
   }
 
-  function startPolling(link) {
-    stopPolling(link);
+  // Asks an idle link for its list once; the server pushes changes after.
+  function requestList(link) {
     if (!visible || link.role !== "idle" || link.state !== "online") return;
     sendTo(link, { type: "listSessions" });
-    link.pollTimer = deps.setTimeout(() => {
-      link.pollTimer = null;
-      startPolling(link);
-    }, IDLE_POLL_MS);
-  }
-
-  function stopPolling(link) {
-    if (link.pollTimer) { deps.clearTimeout(link.pollTimer); link.pollTimer = null; }
   }
 
   function connectAll() {
@@ -367,7 +354,7 @@ function createLinks(deps, hooks) {
     visible = !!next;
     if (!visible) { suspendIdle(); return; }
     for (const link of links.values()) {
-      if (link.state === "online" && link.role === "idle") startPolling(link);
+      if (link.state === "online" && link.role === "idle") requestList(link);
       else connect(link.id);
     }
   }
@@ -502,7 +489,6 @@ globalThis.RemoteHubLinks = {
   HANDSHAKE_TIMEOUT_MS,
   PAIR_TIMEOUT_MS,
   PROBE_TIMEOUT_MS,
-  IDLE_POLL_MS,
   INITIAL_RECONNECT_MS,
   MAX_RECONNECT_MS,
 };
