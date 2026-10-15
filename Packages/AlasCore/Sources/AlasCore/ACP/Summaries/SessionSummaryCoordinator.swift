@@ -132,7 +132,7 @@ public final class SessionSummaryCoordinator: ChangeTracking {
         let generation = requestGeneration
         let previous = cache[session.incarnation]?.summary
         guard let context = SessionSummaryContext.snapshot(session: session),
-              context.revision.idleFacts.isIdle else {
+              context.revision?.idleFacts.isIdle == true else {
             _ = publishPhase(
                 .failed("There is not enough idle session context to summarize.", previous: previous),
                 generation: generation,
@@ -225,7 +225,9 @@ public final class SessionSummaryCoordinator: ChangeTracking {
             return
         }
 
-        storeCache(summary, revision: context.revision, for: session)
+        if let revision = context.revision {
+            storeCache(summary, revision: revision, for: session)
+        }
         guard publishPhase(
             .result(summary),
             generation: generation,
