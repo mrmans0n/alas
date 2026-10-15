@@ -50,6 +50,8 @@ public enum ACPSideQuestionError: LocalizedError, Equatable, Sendable {
 /// Slash commands Alas handles itself instead of sending to the agent.
 public enum ACPAlasSlashCommand: Equatable, Sendable {
     case btw(question: String)
+    /// The toolbar's Ship action. `arguments` is whatever followed the command.
+    case ship(arguments: String)
 
     public static let btwSuggestion = ACPPromptSuggestion(
         command: "/btw",
@@ -57,16 +59,27 @@ public enum ACPAlasSlashCommand: Equatable, Sendable {
         hint: "question"
     )
 
+    public static let shipSuggestion = ACPPromptSuggestion(
+        command: "/ship",
+        description: "Have this session open a PR for the branch, or shepherd the open one."
+    )
+
     public static func parse(_ text: String) -> ACPAlasSlashCommand? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.hasPrefix(btwSuggestion.command) else { return nil }
-        let rest = trimmed.dropFirst(btwSuggestion.command.count)
+        if let question = arguments(of: btwSuggestion, in: trimmed) { return .btw(question: question) }
+        if let arguments = arguments(of: shipSuggestion, in: trimmed) { return .ship(arguments: arguments) }
+        return nil
+    }
+
+    private static func arguments(of suggestion: ACPPromptSuggestion, in text: String) -> String? {
+        guard text.hasPrefix(suggestion.command) else { return nil }
+        let rest = text.dropFirst(suggestion.command.count)
         guard rest.first.map({ $0.isWhitespace }) ?? true else { return nil }
-        return .btw(question: rest.trimmingCharacters(in: .whitespacesAndNewlines))
+        return rest.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     public static func isAlasCommand(_ suggestion: ACPPromptSuggestion) -> Bool {
-        suggestion == btwSuggestion
+        suggestion == btwSuggestion || suggestion == shipSuggestion
     }
 
     /// Alas commands first; an agent command with the same name is hidden,

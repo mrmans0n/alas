@@ -47,7 +47,7 @@ struct ACPSideQuestionPolicyTests {
     }
 
     @Test(
-        "/btw is parsed only as its own command",
+        "Alas commands are parsed only as their own command",
         arguments: [
             ("/btw why SQLite?", Optional(ACPAlasSlashCommand.btw(question: "why SQLite?"))),
             ("  /btw   why?  ", .btw(question: "why?")),
@@ -56,6 +56,9 @@ struct ACPSideQuestionPolicyTests {
             ("/btwx", nil),
             ("/BTW why?", nil),
             ("please /btw", nil),
+            (" /ship ", .ship(arguments: "")),
+            ("/ship now", .ship(arguments: "now")),
+            ("/shipit", nil),
         ] as [(String, ACPAlasSlashCommand?)]
     )
     func parse(text: String, expected: ACPAlasSlashCommand?) {

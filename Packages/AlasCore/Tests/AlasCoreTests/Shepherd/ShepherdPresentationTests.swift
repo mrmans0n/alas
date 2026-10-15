@@ -74,4 +74,27 @@ private let presentationCases: [ShepherdPresentationCase] = [
         #expect(presentation.number == c.number)
         #expect(presentation.tooltip == c.tooltip)
     }
+
+    @Test(
+        "Ship runs the popover's one action for the session",
+        arguments: [
+            (F.record(), nil, F.request(), false, ShepherdShipAction.shepherding(number: "#7")),
+            (nil, F.record(), F.request(), true, .adopt(F.request())),
+            (nil, F.record(), nil, false, .unavailable("Waiting for the PR status")),
+            (nil, nil, F.request(), false, .adopt(F.request())),
+            (nil, nil, F.request(state: .merged), false, .create(.github)),
+            (nil, nil, nil, false, .create(.github)),
+            (nil, nil, nil, true, .unavailable("Wait for the current turn to finish.")),
+        ] as [(ShepherdRecord?, ShepherdRecord?, ReviewRequest?, Bool, ShepherdShipAction)]
+    )
+    func shipAction(
+        record: ShepherdRecord?, otherRecord: ShepherdRecord?, request: ReviewRequest?, isBusy: Bool,
+        expected: ShepherdShipAction
+    ) {
+        let action = ShepherdShipAction.resolve(
+            record: record, otherRecord: otherRecord, request: request,
+            snapshot: F.snapshot(request), isBusy: isBusy
+        )
+        #expect(action == expected)
+    }
 }

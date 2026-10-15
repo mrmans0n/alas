@@ -140,10 +140,8 @@ struct ACPToolbar: View {
         return false
     }
 
-    /// Same eligibility the shepherd service enforces (local git worktrees,
-    /// no folders or Workspace checkout members), plus checkout-owned sessions.
     private var showsShepherdButton: Bool {
-        !isWorkspaceCheckoutOwner && state.isShepherdEligible(worktree)
+        state.offersShip(in: worktree, isWorkspaceCheckoutOwner: isWorkspaceCheckoutOwner)
     }
 
     private func reconnectSession() {
