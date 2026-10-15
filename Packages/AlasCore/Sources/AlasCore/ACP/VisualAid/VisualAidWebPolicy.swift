@@ -169,6 +169,8 @@ public enum VisualAidWebPolicy: Sendable {
       addEventListener('load', reportHeight);
       addEventListener('scroll', scheduleEdges, { passive: true });
       addEventListener('resize', scheduleEdges);
+      // Content or style can change scrollability without resizing either observed box.
+      new MutationObserver(scheduleEdges).observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
       // Named so tests can drive it with a fake event.
       globalThis.alasVisualHandleClick = (event) => {
         if (!event.isTrusted || !(event.target instanceof Element)) return;
