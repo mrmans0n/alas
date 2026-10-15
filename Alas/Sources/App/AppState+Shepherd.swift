@@ -21,7 +21,7 @@ extension AppState {
                 ) ?? .failed
             },
             rules: { [weak self] worktreeID in
-                await self?.shepherdRules(worktreeID: worktreeID) ?? ShepherdRules.none
+                try await self?.shepherdRules(worktreeID: worktreeID) ?? ShepherdRules.none
             },
             notify: { [weak self] event in
                 self?.notifyShepherdEvent(event)
@@ -61,9 +61,9 @@ extension AppState {
         !isWorkspaceCheckoutOwner && isShepherdEligible(worktree)
     }
 
-    func shepherdRules(worktreeID: String) async -> ShepherdRules {
+    func shepherdRules(worktreeID: String) async throws -> ShepherdRules {
         guard let resolved = projectAndWorktree(withWorktreeId: worktreeID) else { return ShepherdRules.none }
-        return await ShepherdRulesResolver.load(
+        return try await ShepherdRulesResolver.load(
             worktreePath: resolved.worktree.path,
             projectSettings: resolved.project.shepherd
         )
@@ -252,6 +252,7 @@ extension AppState {
     /// prompt. A rebind keeps the record's toggles; a new binding starts from
     /// the Settings defaults.
     func shepherdWithSession(_ sessionID: String, worktree: Worktree, request: ReviewRequest) async {
+        guard let rules = await shepherdRulesForBinding(worktree: worktree) else { return }
         let toggles = shepherdToggles(worktree: worktree, request: request)
         await reviewShepherd.bind(
             sessionID: sessionID,
@@ -260,7 +261,7 @@ extension AppState {
             baseBranch: request.baseRefName,
             autoFix: toggles.autoFix,
             autoMerge: toggles.autoMerge,
-            sendContext: true
+            contextRules: rules
         )
     }
 
@@ -279,10 +280,11 @@ extension AppState {
             )
             return
         }
+        guard let rules = await shepherdRulesForBinding(worktree: worktree) else { return }
         let prompt = ShepherdPromptBuilder.bindPrompt(
             request: request,
             fix: ShepherdPolicy.problems(in: request, handled: []),
-            rules: await shepherdRules(worktreeID: worktree.id)
+            rules: rules
         )
         let prepared = PreparedWorktreeACPPrompt(sessionID: UUID().uuidString, promptID: UUID(), text: prompt)
         do {
@@ -326,11 +328,27 @@ extension AppState {
             baseBranch: request.baseRefName,
             autoFix: toggles.autoFix,
             autoMerge: toggles.autoMerge,
-            sendContext: false
+            contextRules: nil
         )
     }
 
     // MARK: - Effects
+
+    /// The rules a binding's context prompt carries, or nil after posting
+    /// why they could not be read: binding without them would hide the
+    /// repository's instructions from the session.
+    private func shepherdRulesForBinding(worktree: Worktree) async -> ShepherdRules? {
+        do {
+            return try await shepherdRules(worktreeID: worktree.id)
+        } catch {
+            inAppNotifications.post(
+                "Couldn't start shepherding: \(error.localizedDescription)",
+                severity: .error,
+                worktreeID: worktree.id
+            )
+            return nil
+        }
+    }
 
     private func shepherdToggles(worktree: Worktree, request: ReviewRequest) -> (autoFix: Bool, autoMerge: Bool) {
         let id = ShepherdRecordID(worktreeID: worktree.id, request: request)

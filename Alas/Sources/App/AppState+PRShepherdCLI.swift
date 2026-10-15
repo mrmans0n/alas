@@ -255,7 +255,7 @@ extension AppState {
             }
             snapshot = fresh
         }
-        let rules = await effects.rules(worktreeID)
+        let rules = try await effects.rules(worktreeID)
         var pullRequest: PRStatusWire.PullRequest?
         if let request = snapshot.reviewRequest {
             var headReviewers: Set<String>?
@@ -309,7 +309,7 @@ extension AppState {
             baseBranch: request.baseRefName,
             autoFix: current?.autoFix ?? defaults.autoFix,
             autoMerge: current?.autoMerge ?? defaults.autoMerge,
-            sendContext: false
+            contextRules: nil
         )
     }
 

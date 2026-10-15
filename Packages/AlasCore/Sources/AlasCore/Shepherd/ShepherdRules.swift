@@ -54,6 +54,19 @@ public struct ShepherdRules: Equatable, Sendable {
     }
 }
 
+/// A rules file on an SSH host that exists but could not be read, or a host
+/// that could not be reached.
+public struct ShepherdRulesReadError: LocalizedError, Equatable, Sendable {
+    public let file: String
+    public let host: String
+    public let detail: String
+
+    public var errorDescription: String? {
+        let detail = detail.trimmingCharacters(in: .whitespacesAndNewlines)
+        return "Could not read \(file) on \(host)" + (detail.isEmpty ? "." : ": \(detail)")
+    }
+}
+
 public enum ShepherdRulesResolver {
     public static let localFilePath = ".alas/shepherd.local.md"
     public static let repoFilePath = ".alas/shepherd.md"
@@ -102,23 +115,43 @@ public enum ShepherdRulesResolver {
         )
     }
 
-    /// Reads the two files under `worktreePath` (a missing or unreadable file
-    /// is nil), over ssh for a remote worktree, then `resolve`.
-    public static func load(worktreePath: URL, projectSettings: ProjectShepherdSettings?) async -> ShepherdRules {
+    /// Reads the two files under `worktreePath`, over ssh for a remote
+    /// worktree, then `resolve`. Only a missing file is nil: a read that
+    /// fails throws, so a dropped connection can't pass for a repository
+    /// without rules and let the shepherd merge past its required reviewers.
+    public static func load(worktreePath: URL, projectSettings: ProjectShepherdSettings?) async throws -> ShepherdRules {
         let host = RemoteHostRegistry.shared.host(forPath: worktreePath.path)
         async let localFile = read(worktreePath.appendingPathComponent(localFilePath), host: host)
         async let repoFile = read(worktreePath.appendingPathComponent(repoFilePath), host: host)
-        return await resolve(
+        return try await resolve(
             localFile: localFile,
             repoFile: repoFile,
             projectSettings: projectSettings
         )
     }
 
-    private static func read(_ url: URL, host: String?) async -> String? {
-        guard let host else { return try? String(contentsOf: url, encoding: .utf8) }
-        guard case .file(let data, _)? = try? await RemoteFileAccess.read(host: host, path: url.path) else { return nil }
-        return String(data: data, encoding: .utf8)
+    /// Follows symlinks on both sides, so a linked rules file reads the same
+    /// locally and over ssh.
+    private static func read(_ url: URL, host: String?) async throws -> String? {
+        guard let host else {
+            do {
+                return try String(contentsOf: url, encoding: .utf8)
+            } catch CocoaError.fileReadNoSuchFile, CocoaError.fileNoSuchFile {
+                return nil
+            }
+        }
+        let result = try await RemoteExec.runData(host: host, cwd: nil, command: remoteReadScript(path: url.path))
+        if result.exitCode == 4 { return nil }
+        guard result.exitCode == 0, let text = String(data: result.stdout, encoding: .utf8) else {
+            throw ShepherdRulesReadError(file: url.lastPathComponent, host: host, detail: result.stderr)
+        }
+        return text
+    }
+
+    /// Exit 4 when nothing (or a dangling link) is at `path`, like a local
+    /// read's no-such-file.
+    static func remoteReadScript(path: String) -> String {
+        "f=\(SSHCommand.shellQuote(path)); [ -e \"$f\" ] || exit 4; cat -- \"$f\""
     }
 
     static func normalizedReviewers(_ raw: [String]) -> [String] {

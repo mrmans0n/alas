@@ -1035,7 +1035,7 @@ private struct ProjectDialog: View {
         guard case .edit(let project) = mode, !project.isFolder else { return }
         let root = URL(fileURLWithPath: project.path, isDirectory: true)
         Task {
-            let rules = await ShepherdRulesResolver.load(worktreePath: root, projectSettings: nil)
+            guard let rules = try? await ShepherdRulesResolver.load(worktreePath: root, projectSettings: nil) else { return }
             shepherdRulesOverride = rules.source == .none ? nil : rules.sourceLabel
         }
     }
