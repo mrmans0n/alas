@@ -131,7 +131,7 @@ public final class ReviewShepherd {
             _ text: String,
             _ isStillWanted: @escaping @MainActor () -> Bool
         ) async -> Delivery
-        public var rules: @MainActor (_ worktreeID: String) -> ShepherdRules
+        public var rules: @MainActor (_ worktreeID: String) async throws -> ShepherdRules
         public var notify: @MainActor (Event) -> Void
         public var refreshPaneIfCached: @MainActor (_ worktreeID: String) -> Void
         /// Checks the archive-after-merge setting and the finished record's
@@ -153,7 +153,7 @@ public final class ReviewShepherd {
                 _ text: String,
                 _ isStillWanted: @escaping @MainActor () -> Bool
             ) async -> Delivery,
-            rules: @escaping @MainActor (_ worktreeID: String) -> ShepherdRules,
+            rules: @escaping @MainActor (_ worktreeID: String) async throws -> ShepherdRules,
             notify: @escaping @MainActor (Event) -> Void,
             refreshPaneIfCached: @escaping @MainActor (_ worktreeID: String) -> Void,
             archiveWorktreeIfAllowed: @escaping @MainActor (
@@ -287,6 +287,9 @@ public final class ReviewShepherd {
     /// it on the next idle poll. A session works on the branch its worktree
     /// has checked out, so it owns at most one live record: its others are
     /// deleted (their requests are untouched). No other session's record moves.
+    /// With `contextRules`, the session is also sent the context prompt built
+    /// with them; the caller reads them first, so an unreadable rules file
+    /// stops the bind before anything changes.
     @discardableResult
     public func bind(
         sessionID: String,
@@ -295,7 +298,7 @@ public final class ReviewShepherd {
         baseBranch: String,
         autoFix: Bool,
         autoMerge: Bool,
-        sendContext: Bool
+        contextRules: ShepherdRules?
     ) async -> ShepherdRecord {
         let id = ShepherdRecordID(worktreeID: worktreeID, request: request)
         let now = self.now()
@@ -334,11 +337,11 @@ public final class ReviewShepherd {
         deliveringFix[id] = nil
         failureCounts[id] = nil
         dueAt[id] = now
-        if sendContext, let effects {
+        if let contextRules, let effects {
             let prompt = ShepherdPromptBuilder.bindPrompt(
                 request: request,
                 fix: ShepherdPolicy.problems(in: request, handled: record.handledThreadRevisions ?? []),
-                rules: effects.rules(worktreeID)
+                rules: contextRules
             )
             let delivery = await effects.deliverPrompt(sessionID, worktreeID, prompt) { [weak self] in
                 self?.isCurrent(id, generation, before: "the bind delivery") ?? false
@@ -600,7 +603,14 @@ public final class ReviewShepherd {
         }
         endAuthPause(id)
         guard let observed = await snapshotCarryingRequest(id, from: snapshot, worktreePath: context.path) else { return }
-        let rules = effects.rules(id.worktreeID)
+        // Deciding without the rules could merge past required reviewers.
+        let rules: ShepherdRules
+        do {
+            rules = try await effects.rules(id.worktreeID)
+        } catch {
+            noteFailure(id, "Could not read the shepherd rules: \(error.localizedDescription)")
+            return
+        }
         let reviewers: Set<String>?
         if rules.requiredReviewers.isEmpty || observed.reviewRequest?.state != .open {
             reviewers = nil
@@ -854,7 +864,7 @@ public final class ReviewShepherd {
               let request = latest.reviewRequest,
               ShepherdRecordID(worktreeID: id.worktreeID, request: request) == id
         else { return .finished(nil) }
-        let rules = effects.rules(id.worktreeID)
+        guard let rules = try? await effects.rules(id.worktreeID) else { return .finished(nil) }
         let reviewers = rules.requiredReviewers.isEmpty || request.state != .open
             ? nil
             : await headReviewers(

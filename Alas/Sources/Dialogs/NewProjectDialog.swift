@@ -936,11 +936,11 @@ private struct ProjectDialog: View {
         }
     }
 
-    /// Per-project PR shepherd rules. Shown only when editing a local git
-    /// project: the shepherd does not run for folders or remote worktrees.
+    /// Per-project PR shepherd rules. Shown only when editing a git project:
+    /// the shepherd does not run for folders.
     @ViewBuilder
     private var shepherdSection: some View {
-        if case .edit(let project) = mode, !project.isFolder, project.host == nil {
+        if case .edit(let project) = mode, !project.isFolder {
             VStack(alignment: .leading, spacing: 12) {
                 Text("PR shepherd")
                     .font(.system(size: 12.5, weight: .semibold))
@@ -1032,12 +1032,10 @@ private struct ProjectDialog: View {
     /// Reads only the repo files (no project settings), so any non-`none`
     /// source means a file overrides this section.
     private func loadShepherdRulesOverride() {
-        guard case .edit(let project) = mode, !project.isFolder, project.host == nil else { return }
+        guard case .edit(let project) = mode, !project.isFolder else { return }
         let root = URL(fileURLWithPath: project.path, isDirectory: true)
         Task {
-            let rules = await Task.detached {
-                ShepherdRulesResolver.load(worktreePath: root, projectSettings: nil)
-            }.value
+            guard let rules = try? await ShepherdRulesResolver.load(worktreePath: root, projectSettings: nil) else { return }
             shepherdRulesOverride = rules.source == .none ? nil : rules.sourceLabel
         }
     }

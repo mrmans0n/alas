@@ -173,6 +173,9 @@ private struct ShepherdPopover: View {
     @State private var fetchedSnapshot: ReviewLoopSnapshot?
     @State private var isLoading = true
     @State private var rules: ShepherdRules = .none
+    /// The rules files could not be read: the popover keeps the shepherd's
+    /// own merge gate rather than judge it without them.
+    @State private var rulesUnreadable = false
     @State private var reviewerResult: ReviewerResult?
 
     private var isBusy: Bool { transcript.streamingState != .idle }
@@ -200,9 +203,13 @@ private struct ShepherdPopover: View {
     private func load() async {
         let settings = state.projectsManager.projects.first(where: { $0.id == worktree.projectId })?.shepherd
         let root = worktree.path
-        rules = await Task.detached {
-            ShepherdRulesResolver.load(worktreePath: root, projectSettings: settings)
-        }.value
+        do {
+            rules = try await ShepherdRulesResolver.load(worktreePath: root, projectSettings: settings)
+            rulesUnreadable = false
+        } catch {
+            rules = .none
+            rulesUnreadable = true
+        }
         let context = ShepherdSessionContext(sessionID: session.id, worktree: worktree, state: state)
         // Read-only fetches: the UI never runs the shepherd policy.
         if context.request == nil, let bound = context.record ?? context.otherRecord {
@@ -293,7 +300,7 @@ private struct ShepherdPopover: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             .accessibilityElement(children: .combine)
-            Text("Attempt \(record.fixAttempts) of \(ShepherdPolicy.maxFixAttempts) · Rules: \(rules.sourceLabel ?? "none")")
+            Text("Attempt \(record.fixAttempts) of \(ShepherdPolicy.maxFixAttempts) · Rules: \(rulesUnreadable ? "unreadable" : rules.sourceLabel ?? "none")")
                 .font(.system(size: 10.5))
                 .foregroundStyle(theme.color("fg-muted"))
             ShepherdSwitchRow(
@@ -325,7 +332,9 @@ private struct ShepherdPopover: View {
     /// current head arrive, `headReviewers` is nil and the gate fails closed
     /// when the rules require any.
     private func exactPresentation(record: ShepherdRecord, context: ShepherdSessionContext) -> ShepherdPresentation {
-        guard !isLoading, let snapshot = context.snapshot, context.request != nil else { return context.presentation }
+        guard !isLoading, !rulesUnreadable, let snapshot = context.snapshot, context.request != nil else {
+            return context.presentation
+        }
         let observation = ShepherdObservation(
             snapshot: snapshot,
             headReviewers: reviewers(for: context)?.logins,
