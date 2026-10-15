@@ -25,7 +25,7 @@ struct AlasHostTests {
         let host = AlasHost(core: AlasCoreContext(projects: projects, runHistoryStore: nil))
 
         #expect(host.worktrees.list() == [
-            WorktreeSnapshot(worktree: busy, operation: .deleting(projectId: "p"), isArchived: false),
+            WorktreeSnapshot(worktree: busy, operation: .deleting, isArchived: false),
         ])
         #expect(Set(host.worktrees.list(includingArchived: true).map(\.worktree.id)) == [busy.id, archived.id])
         #expect(host.worktrees.list(includingArchived: true).first { $0.worktree.id == archived.id }?.isArchived == true)
@@ -52,7 +52,7 @@ struct AlasHostTests {
         projects.removeOptimisticWorktree(id: removed.id, projectId: "p")
         let events = try #require(await Self.next(subscription))
         #expect(events.count == 2)
-        #expect(events.contains(.worktreeChanged(WorktreeSnapshot(worktree: shown, operation: .deleting(projectId: "p"), isArchived: false))))
+        #expect(events.contains(.worktreeChanged(WorktreeSnapshot(worktree: shown, operation: .deleting, isArchived: false))))
         #expect(events.contains(.worktreeRemoved(projectID: "p", worktreeID: removed.id)))
 
         let checkout = WorkspaceCheckout(
@@ -118,9 +118,9 @@ struct AlasHostTests {
         let manager = try core.sessionManager(for: shown)
         _ = manager.createSession(id: "s", agentId: "codex")
         let created = try #require(await Self.next(subscription) { events in
-            events.contains { if case .sessionChanged(let summary) = $0 { summary.row.id == "s" } else { false } }
+            events.contains { if case .sessionChanged(let summary) = $0 { summary.id == "s" } else { false } }
         })
-        #expect(host.sessions.list().map(\.row.id) == ["s"])
+        #expect(host.sessions.list().map(\.id) == ["s"])
         #expect(created.contains { if case .sessionChanged(let summary) = $0 { summary.owner == owner } else { false } })
 
         try await manager.deleteSession(id: "s")

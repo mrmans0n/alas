@@ -6,9 +6,15 @@ import Foundation
 /// tab, zmx, and ACP storage remains byte-for-byte compatible. Checkout
 /// owners include both their snapshot UUID and execution location because the
 /// same checkout path can exist on different hosts.
-public enum SessionOwnerID: Hashable, Sendable {
+public enum SessionOwnerID: Hashable, Codable, Sendable {
     case worktree(String)
     case workspaceCheckout(UUID, ExecutionLocation)
+
+    private enum WorktreeCodingKeys: String, CodingKey { case _0 = "id" }
+    private enum WorkspaceCheckoutCodingKeys: String, CodingKey {
+        case _0 = "id"
+        case _1 = "location"
+    }
 
     /// Repository-specific compatibility APIs may only derive a target from a
     /// real worktree owner. Checkout-owned shared sessions intentionally have

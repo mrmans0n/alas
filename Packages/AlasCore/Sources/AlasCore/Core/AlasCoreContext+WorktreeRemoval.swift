@@ -298,13 +298,15 @@ extension AlasCoreContext {
 }
 
 /// Why `AlasCoreContext.archiveWorktree` or `unarchiveWorktree` refused.
-public enum WorktreeArchiveRefusal: LocalizedError, Equatable {
+public enum WorktreeArchiveRefusal: Codable, LocalizedError, Equatable {
     /// The project's main checkout is never archived.
     case mainWorktree
     /// Another operation holds the worktree.
     case operationInProgress
     /// An active Workspace checkout manages this worktree.
     case ownedByWorkspaceCheckout(String)
+
+    private enum OwnedByWorkspaceCheckoutCodingKeys: String, CodingKey { case _0 = "reason" }
 
     public var errorDescription: String? {
         switch self {
@@ -316,7 +318,7 @@ public enum WorktreeArchiveRefusal: LocalizedError, Equatable {
 }
 
 /// Why `AlasCoreContext.deleteWorktree` did not delete.
-public enum WorktreeDeletionRefusal: LocalizedError, Equatable {
+public enum WorktreeDeletionRefusal: Codable, LocalizedError, Equatable {
     /// The project's main checkout is never deleted.
     case mainWorktree
     /// Remote checkouts carry no lineage marker to tell a replacement apart;
@@ -334,6 +336,10 @@ public enum WorktreeDeletionRefusal: LocalizedError, Equatable {
     /// An interrupted checkpoint restore must be recovered first.
     case checkpointRecoveryPending
     case failed(String)
+
+    private enum NeedsForceCodingKeys: String, CodingKey { case _0 = "message" }
+    private enum ChangedCodingKeys: String, CodingKey { case _0 = "message" }
+    private enum FailedCodingKeys: String, CodingKey { case _0 = "message" }
 
     public var errorDescription: String? {
         switch self {

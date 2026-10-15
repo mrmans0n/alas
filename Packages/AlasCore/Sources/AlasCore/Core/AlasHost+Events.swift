@@ -3,8 +3,21 @@ import Observation
 
 /// A position in the host's change log. Events after a cursor describe every
 /// change since the snapshot that returned it.
-public struct HostCursor: Hashable, Comparable, Sendable {
+public struct HostCursor: Hashable, Comparable, Codable, Sendable {
     public let sequence: UInt64
+
+    public init(sequence: UInt64) {
+        self.sequence = sequence
+    }
+
+    public init(from decoder: Decoder) throws {
+        sequence = try decoder.singleValueContainer().decode(UInt64.self)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(sequence)
+    }
 
     public static func < (lhs: HostCursor, rhs: HostCursor) -> Bool {
         lhs.sequence < rhs.sequence
@@ -12,7 +25,7 @@ public struct HostCursor: Hashable, Comparable, Sendable {
 }
 
 /// One change to what the host holds. Each keyed kind has a removal event.
-public enum HostEvent: Equatable, Sendable {
+public enum HostEvent: Codable, Equatable, Sendable {
     case projectChanged(ProjectConfig)
     case projectRemoved(id: String)
     case worktreeChanged(WorktreeSnapshot)
@@ -26,6 +39,13 @@ public enum HostEvent: Equatable, Sendable {
     /// Changes were missed: read a new snapshot and subscribe after its cursor.
     case resync
 
+    // The wire names each payload.
+    private enum ProjectChangedCodingKeys: String, CodingKey { case _0 = "project" }
+    private enum WorktreeChangedCodingKeys: String, CodingKey { case _0 = "worktree" }
+    private enum WorkspaceCheckoutChangedCodingKeys: String, CodingKey { case _0 = "checkout" }
+    private enum RunChangedCodingKeys: String, CodingKey { case _0 = "run" }
+    private enum SessionChangedCodingKeys: String, CodingKey { case _0 = "session" }
+
     var key: HostEventKey {
         switch self {
         case .projectChanged(let project): .project(project.id)
@@ -36,7 +56,7 @@ public enum HostEvent: Equatable, Sendable {
         case .workspaceCheckoutRemoved(let id): .workspaceCheckout(id)
         case .runChanged(let record): .run(record.id)
         case .runRemoved(let id): .run(id)
-        case .sessionChanged(let summary): .session(owner: summary.owner, id: summary.row.id)
+        case .sessionChanged(let summary): .session(owner: summary.owner, id: summary.id)
         case .sessionRemoved(let owner, let id): .session(owner: owner, id: id)
         case .resync: .resync
         }
@@ -315,7 +335,7 @@ final class HostEventSource {
 
     private static func keyed(_ summaries: [HostSessionSummary]) -> [HostEventKey: HostSessionSummary] {
         Dictionary(
-            summaries.map { (HostEventKey.session(owner: $0.owner, id: $0.row.id), $0) },
+            summaries.map { (HostEventKey.session(owner: $0.owner, id: $0.id), $0) },
             uniquingKeysWith: { _, last in last }
         )
     }
