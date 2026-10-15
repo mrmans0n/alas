@@ -119,7 +119,8 @@ public final class HostSubscription {
 final class HostEventLog {
     private(set) var cursor = HostCursor(sequence: 0)
     private var retained: [(cursor: HostCursor, event: HostEvent)] = []
-    private var subscriptions: [ObjectIdentifier: HostSubscription] = [:]
+    /// Held weakly: a subscription its owner drops goes away with it.
+    private var subscriptions: [ObjectIdentifier: WeakSubscription] = [:]
     private let retention: Int
     private let pendingLimit: Int
 
@@ -137,8 +138,9 @@ final class HostEventLog {
         if retained.count > retention {
             retained.removeFirst(retained.count - retention)
         }
-        for subscription in subscriptions.values {
-            subscription.receive(events)
+        subscriptions = subscriptions.filter { $0.value.subscription != nil }
+        for entry in subscriptions.values {
+            entry.subscription?.receive(events)
         }
     }
 
@@ -148,7 +150,7 @@ final class HostEventLog {
         let subscription = HostSubscription(pendingLimit: pendingLimit) { [weak self] in
             self?.subscriptions.removeValue(forKey: ObjectIdentifier($0))
         }
-        subscriptions[ObjectIdentifier(subscription)] = subscription
+        subscriptions[ObjectIdentifier(subscription)] = WeakSubscription(subscription: subscription)
         if after < cursor {
             let oldest = retained.first?.cursor.sequence ?? cursor.sequence + 1
             if after.sequence + 1 < oldest {
@@ -159,6 +161,10 @@ final class HostEventLog {
         }
         return subscription
     }
+}
+
+private struct WeakSubscription {
+    weak var subscription: HostSubscription?
 }
 
 /// Turns the core's state into the host's events: it watches the projects,
@@ -173,6 +179,12 @@ final class HostEventSource {
     private var runs: [String: RunRecord] = [:]
     /// Nil until the first load, which is the baseline rather than a change.
     private var checkouts: [UUID: WorkspaceCheckout]?
+    private var checkoutList: [WorkspaceCheckout] = []
+    private var checkoutLoads = 0
+    /// The store's change stream, registered before any load reads the
+    /// store, so no write can land between a load and the first event.
+    private var checkoutChanges: Task<AsyncStream<Void>, Never>?
+    private var publishedCheckoutLoad = 0
     private var refreshScheduled = false
 
     init(core: AlasCoreContext) {
@@ -183,12 +195,12 @@ final class HostEventSource {
         runs = Self.byID(RunsAPI(core: core).list())
         observeInMemoryState()
         let store = core.workspaceStore
+        let changes = Task { await store.changes() }
+        checkoutChanges = changes
         Task { [weak self] in
-            for await _ in await store.changes() {
+            for await _ in await changes.value {
                 guard let self else { return }
-                if let checkouts = try? await WorkspacesAPI(core: self.core).list() {
-                    publishCheckouts(checkouts)
-                }
+                _ = try? await loadCheckouts()
             }
         }
     }
@@ -214,13 +226,24 @@ final class HostEventSource {
         log.publish(events)
     }
 
-    /// Publishes what changed among the Workspace checkouts.
-    func publishCheckouts(_ list: [WorkspaceCheckout]) {
-        let current = Self.byID(list)
-        if let checkouts {
-            log.publish(Self.diff(old: checkouts, new: current, changed: HostEvent.workspaceCheckoutChanged, removed: { .workspaceCheckoutRemoved(id: $0) }))
+    /// Loads the Workspace checkouts and publishes what changed among them,
+    /// returning the latest published list. A load that finishes after a
+    /// later one is dropped, so it can never put back an older state.
+    func loadCheckouts() async throws -> [WorkspaceCheckout] {
+        _ = await checkoutChanges?.value
+        checkoutLoads += 1
+        let load = checkoutLoads
+        let list = try await WorkspacesAPI(core: core).list()
+        if load > publishedCheckoutLoad {
+            publishedCheckoutLoad = load
+            let current = Self.byID(list)
+            if let checkouts {
+                log.publish(Self.diff(old: checkouts, new: current, changed: HostEvent.workspaceCheckoutChanged, removed: { .workspaceCheckoutRemoved(id: $0) }))
+            }
+            checkouts = current
+            checkoutList = list
         }
-        checkouts = current
+        return checkoutList
     }
 
     private func observeInMemoryState() {

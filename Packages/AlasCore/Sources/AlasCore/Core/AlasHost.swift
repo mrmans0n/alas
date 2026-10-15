@@ -29,12 +29,11 @@ public final class AlasHost {
     public func snapshot() async throws -> HostSnapshot {
         // Loaded first: the in-memory state is read after it with no
         // suspension in between, so that part describes one moment.
-        let workspaceCheckouts = try await workspaces.list()
+        // Whatever changed since the source last looked is published before
+        // the cursor is read, so the cursor covers what this shows.
         let source = events
-        // Whatever changed since the source last looked is published now,
-        // before the cursor is read, so the cursor covers what this shows.
+        let workspaceCheckouts = try await source.loadCheckouts()
         source.refreshInMemoryState()
-        source.publishCheckouts(workspaceCheckouts)
         return HostSnapshot(
             cursor: source.log.cursor,
             projects: projects.list(),
