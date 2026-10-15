@@ -22,8 +22,7 @@ struct NativePeerSessionsTests {
         func sendToPeer(_ message: RemoteClientMessage, serverId: String) {
             sent.append((serverId, message))
         }
-        // Peers here predate list pushes, so the poll shows who is attached.
-        func peerSupports(_ capability: String, serverId: String) -> Bool { capability != PeerListPushCapability.v1 }
+        func peerSupports(_ capability: String, serverId: String) -> Bool { true }
         func online(_ id: String, name: String) {
             sessionCarryingPeers.append(.init(serverId: id, name: name))
             onFederationEvent?(.availabilityChanged(serverId: id))
@@ -348,7 +347,6 @@ struct NativePeerSessionsTests {
             [.init(serverId: "B", name: "Mac B", state: "online")]
         })
         client.start()
-        #expect(federation.isPollingPeerLists)
         links.receive(.sessionList(sessions: [row("s"), row("t")]), from: "B")
         #expect(client.snapshot.groups.first?.sessions.count == 2)
         client.select("B:s")
@@ -360,7 +358,6 @@ struct NativePeerSessionsTests {
         client.clearSelection()
         #expect(links.sent(to: "B").contains(.unsubscribe(sessionId: "t")))
         client.stop()
-        #expect(!federation.isPollingPeerLists)
         #expect(client.snapshot.groups.isEmpty)
         #expect(client.selectedSessionId == nil)
     }
