@@ -53,6 +53,12 @@ extension AppState {
         return project.host == nil && !project.isFolder && !isWorkspaceCheckoutMember(worktree)
     }
 
+    /// Whether a session tab offers Ship, as the toolbar pill and `/ship`:
+    /// the shepherd's eligibility plus no Workspace checkout-owned sessions.
+    func offersShip(in worktree: Worktree, isWorkspaceCheckoutOwner: Bool) -> Bool {
+        !isWorkspaceCheckoutOwner && isShepherdEligible(worktree)
+    }
+
     func shepherdRules(worktreeID: String) -> ShepherdRules {
         guard let resolved = projectAndWorktree(withWorktreeId: worktreeID) else { return ShepherdRules.none }
         return ShepherdRulesResolver.load(
@@ -203,6 +209,38 @@ extension AppState {
                     worktreeID: worktree.id
                 )
             }
+        }
+    }
+
+    /// `/ship`: runs what the Ship popover would offer this session, fetching
+    /// the branch's status first when nothing has it cached.
+    func shipFromCommand(session: ACPSession, worktree: Worktree) async {
+        var context = ShepherdSessionContext(sessionID: session.id, worktree: worktree, state: self)
+        if context.request == nil, let bound = context.record ?? context.otherRecord {
+            let fetched = await reviewShepherd.statusSnapshot(for: bound.id)
+            context = ShepherdSessionContext(sessionID: session.id, worktree: worktree, state: self, fetched: fetched)
+        } else if context.snapshot == nil {
+            let fetched = await reviewShepherd.fetchSnapshot(
+                worktreePath: worktree.path,
+                baseBranch: shepherdBaseBranch(for: worktree)
+            )
+            context = ShepherdSessionContext(sessionID: session.id, worktree: worktree, state: self, fetched: fetched)
+        }
+        switch ShepherdShipAction.resolve(
+            record: context.record,
+            otherRecord: context.otherRecord,
+            request: context.request,
+            snapshot: context.snapshot,
+            isBusy: session.transcript.streamingState != .idle
+        ) {
+        case .shepherding(let number):
+            session.lastError = "This session already shepherds \(number). Its status is in the toolbar's \(number) button."
+        case .adopt(let request):
+            await shepherdWithSession(session.id, worktree: worktree, request: request)
+        case .create:
+            requestShepherdCreatePR(sessionID: session.id, worktree: worktree)
+        case .unavailable(let reason):
+            session.lastError = reason
         }
     }
 

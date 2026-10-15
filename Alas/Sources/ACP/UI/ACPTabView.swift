@@ -384,6 +384,11 @@ private struct ACPSessionView: View {
     }
 
     private var isMirror: Bool { manager.isMirror(sessionId: sessionId) }
+    /// `/ship` is offered wherever the toolbar shows the Ship pill.
+    private var offersShipCommand: Bool {
+        !isMirror && !session.readOnlyRestricted
+            && state.offersShip(in: worktree, isWorkspaceCheckoutOwner: isWorkspaceCheckoutOwner)
+    }
 
     private var composerCanAcceptInput: Bool {
         guard !isMirror else { return false }
@@ -831,6 +836,7 @@ private struct ACPSessionView: View {
             dismissNextPromptOffer: dismissNextPromptOffer,
             onNextPromptStateChange: onNextPromptStateChange,
             nextPromptInputBlocked: { nextPromptInputBlocked() || pendingComposerDrops > 0 || !composerCanAcceptInput },
+            offersShip: offersShipCommand,
             pluginPrompts: pluginPrompts.map(\.suggestion),
             contextProviders: isWorkspaceCheckoutOwner ? [] : state.pluginContextProviders(projectID: worktree.projectId)
         ) { text, attachments, intent, draft, onPromptFinished -> Bool in
@@ -872,6 +878,25 @@ private struct ACPSessionView: View {
                         _ = try? await manager.startSideQuestion(parentID: sessionId, question: question)
                     }
                 }
+                return true
+            }
+            // `/ship` runs the toolbar's Ship action instead of reaching the agent.
+            if offersShipCommand, case .ship(let arguments)? = ACPAlasSlashCommand.parse(text) {
+                if !arguments.isEmpty {
+                    session.lastError = "/ship doesn't take arguments."
+                    return false
+                }
+                if !attachments.isEmpty {
+                    session.lastError = "/ship doesn't take attachments. Remove them to ship."
+                    return false
+                }
+                if case .schedule = intent {
+                    session.lastError = "/ship can't be scheduled. Send it now to ship."
+                    return false
+                }
+                // Completed like a sent prompt so `/ship` doesn't stay in the draft.
+                Task { @MainActor in onPromptFinished(true) }
+                Task { @MainActor in await state.shipFromCommand(session: session, worktree: worktree) }
                 return true
             }
             // A plugin's slash prompt is expanded by its plugin into the draft, so the user sees what would go out.
