@@ -196,4 +196,26 @@ struct SessionRecapPrecomputeSchedulerTests {
         #expect(scheduler.runningSessionId == "A")
         #expect(try await next(runner.starts) == "A")
     }
+
+    @Test(arguments: [
+        // (open hidden tab, idle, scheduled, went busy, allowed) -> action
+        (true, false, true, false, true, SessionRecapPrecomputeScheduler.ActivityAction.drop),
+        (true, true, false, true, true, .rearm),
+        (true, true, true, true, true, .none),
+        (true, true, false, false, true, .none),
+        (true, true, false, true, false, .none),
+        (false, true, false, true, true, .none),
+    ])
+    func activitySignalDropsBusyAndRearmsIdleHiddenSessions(
+        _ input: (Bool, Bool, Bool, Bool, Bool, SessionRecapPrecomputeScheduler.ActivityAction)
+    ) {
+        let action = SessionRecapPrecomputeScheduler.activityAction(
+            isOpenHiddenTab: input.0,
+            isIdle: input.1,
+            isScheduled: input.2,
+            wentBusy: input.3,
+            allowed: input.4
+        )
+        #expect(action == input.5)
+    }
 }

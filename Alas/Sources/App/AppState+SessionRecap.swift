@@ -18,8 +18,19 @@ final class SessionRecapRuntime {
     /// find its manager even when the session is not loaded.
     var precomputeOwners: [ACPSession.ID: SessionOwnerID] = [:]
     /// Activity observation for each scheduled session that was live when
-    /// it was scheduled, keyed to the session object it observes.
-    var precomputeActivity: [ACPSession.ID: (session: ObjectIdentifier, subscription: ChangeSubscription)] = [:]
+    /// it was scheduled, keyed to the session object it observes. It
+    /// outlives a busy drop so the session is re-armed when it goes idle.
+    var precomputeActivity: [ACPSession.ID: PrecomputeActivity] = [:]
+
+    struct PrecomputeActivity {
+        let session: ObjectIdentifier
+        let subscription: ChangeSubscription
+        /// Away origin of the latest schedule, reused on a re-arm.
+        var origin: Date
+        /// The session was busy at some point since the latest schedule, so
+        /// its next idle signal re-arms it.
+        var wentBusy: Bool
+    }
     /// Away origin of each offered return recap that has not settled yet.
     /// Leaving mid-load resets the seen tracker's clock, so this keeps the
     /// original origin until the card reaches a result, is dismissed, or a
@@ -429,34 +440,77 @@ extension AppState {
               hasOpenACPTab(sessionId: sessionId, owner: manager.owner),
               !manager.seenTracker.isSeen(sessionId) else { return }
         sessionRecapRuntime.precomputeOwners[sessionId] = manager.owner
-        if let session = manager.liveSession(for: sessionId),
-           sessionRecapRuntime.precomputeActivity[sessionId]?.session != ObjectIdentifier(session) {
-            sessionRecapRuntime.precomputeActivity[sessionId]?.subscription.cancel()
-            // A busy session is dropped and only rescheduled on its next
-            // `.becameUnseen`, so an open tab that goes busy and then idle
-            // while hidden is not precomputed until the user leaves it again.
-            // The signal fires before the change lands, so check on the next
-            // turn; activity that leaves the session idle keeps its entry.
-            let subscription = session.nextPromptActivity.observe { [weak self, weak session, weak manager] in
-                Task { @MainActor in
-                    guard let self, let session, let manager, manager.liveSession(for: sessionId) === session,
-                          !SessionSummaryIdleFacts.current(session: session, composer: session.composer).isIdle
-                    else { return }
-                    self.dropRecapPrecompute(sessionId: sessionId)
+        if let session = manager.liveSession(for: sessionId) {
+            // Left mid-turn: the job skips a busy session, so the turn's end
+            // must re-arm it even if no busy signal fires before then.
+            let isBusy = !SessionSummaryIdleFacts.current(session: session, composer: session.composer).isIdle
+            if sessionRecapRuntime.precomputeActivity[sessionId]?.session == ObjectIdentifier(session) {
+                sessionRecapRuntime.precomputeActivity[sessionId]?.origin = lastSeenAt
+                sessionRecapRuntime.precomputeActivity[sessionId]?.wentBusy = isBusy
+            } else {
+                sessionRecapRuntime.precomputeActivity[sessionId]?.subscription.cancel()
+                // The signal fires before the change lands, so decide on the
+                // next turn; that also absorbs reconnect and setup churn.
+                let subscription = session.nextPromptActivity.observe { [weak self, weak session, weak manager] in
+                    Task { @MainActor in
+                        guard let self, let session, let manager else { return }
+                        self.handleRecapPrecomputeActivity(sessionId: sessionId, session: session, manager: manager)
+                    }
                 }
+                sessionRecapRuntime.precomputeActivity[sessionId] = .init(
+                    session: ObjectIdentifier(session),
+                    subscription: subscription,
+                    origin: lastSeenAt,
+                    wentBusy: isBusy
+                )
             }
-            sessionRecapRuntime.precomputeActivity[sessionId] = (ObjectIdentifier(session), subscription)
         }
         sessionRecapPrecomputeScheduler.schedule(sessionId: sessionId, lastSeenAt: lastSeenAt, threshold: threshold)
     }
 
-    /// Seen, busy, or tab closed. Cancels the model work if its job is running.
-    func dropRecapPrecompute(sessionId: ACPSession.ID) {
+    /// A hidden session went busy: drop its entry but keep observing, so it
+    /// is re-armed once it goes idle again while still hidden.
+    private func handleRecapPrecomputeActivity(
+        sessionId: ACPSession.ID,
+        session: ACPSession,
+        manager: ACPSessionManager
+    ) {
+        guard manager.liveSession(for: sessionId) === session,
+              let activity = sessionRecapRuntime.precomputeActivity[sessionId],
+              activity.session == ObjectIdentifier(session) else { return }
+        let scheduler = sessionRecapPrecomputeScheduler
+        let action = SessionRecapPrecomputeScheduler.activityAction(
+            isOpenHiddenTab: acpManager(for: manager.owner) === manager
+                && hasOpenACPTab(sessionId: sessionId, owner: manager.owner)
+                && !manager.seenTracker.isSeen(sessionId),
+            isIdle: SessionSummaryIdleFacts.current(session: session, composer: session.composer).isIdle,
+            isScheduled: scheduler.pendingSessionIds.contains(sessionId) || scheduler.runningSessionId == sessionId,
+            wentBusy: activity.wentBusy,
+            allowed: recapPrecomputeAllowed
+        )
+        switch action {
+        case .none:
+            break
+        case .drop:
+            dropRecapPrecompute(sessionId: sessionId, keepingActivity: true)
+            sessionRecapRuntime.precomputeActivity[sessionId]?.wentBusy = true
+        case .rearm:
+            // The same origin `.becameUnseen` would use.
+            let origin = sessionRecapRuntime.pendingRecapAwayOrigin[sessionId] ?? activity.origin
+            scheduleRecapPrecompute(sessionId: sessionId, lastSeenAt: origin, manager: manager)
+        }
+    }
+
+    /// Seen, busy, or tab closed. Cancels the model work if its job is
+    /// running. A busy drop keeps the activity observation.
+    func dropRecapPrecompute(sessionId: ACPSession.ID, keepingActivity: Bool = false) {
         let scheduler = sessionRecapPrecomputeScheduler
         let wasRunning = scheduler.runningSessionId == sessionId
         scheduler.drop(sessionId: sessionId)
         sessionRecapRuntime.precomputeOwners[sessionId] = nil
-        sessionRecapRuntime.precomputeActivity.removeValue(forKey: sessionId)?.subscription.cancel()
+        if !keepingActivity {
+            sessionRecapRuntime.precomputeActivity.removeValue(forKey: sessionId)?.subscription.cancel()
+        }
         // The scheduler cancels the job's task; this stops a generation the
         // engine already started.
         if wasRunning {
@@ -489,14 +543,13 @@ extension AppState {
     /// it is loaded, otherwise from the store.
     func runRecapPrecompute(sessionId: ACPSession.ID) async -> SessionRecapPrecomputeOutcome {
         var outcome = SessionRecapPrecomputeOutcome.skipped
-        // Activity stays observed during the job, so going busy cancels it.
-        // Afterwards the bookkeeping goes unless the id was scheduled again
-        // or the scheduler will retry it after a preemption.
+        // Activity stays observed during and after the job, so going busy
+        // cancels it and going idle again re-arms it. The owner goes unless
+        // the id was scheduled again or will be retried after a preemption.
         defer {
             if outcome != .preempted,
                !sessionRecapPrecomputeScheduler.pendingSessionIds.contains(sessionId) {
                 sessionRecapRuntime.precomputeOwners[sessionId] = nil
-                sessionRecapRuntime.precomputeActivity.removeValue(forKey: sessionId)?.subscription.cancel()
             }
         }
         guard recapPrecomputeAllowed,

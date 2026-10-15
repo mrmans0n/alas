@@ -157,6 +157,32 @@ public final class SessionRecapPrecomputeScheduler {
         }
     }
 
+    /// What a hidden session's prompt-activity signal does to its entry.
+    public enum ActivityAction: Equatable, Sendable {
+        case none
+        /// The session went busy: drop the entry, keep observing.
+        case drop
+        /// The session went idle after being busy: schedule it again.
+        case rearm
+    }
+
+    /// Decides, one main-actor turn after a prompt-activity signal, whether
+    /// a precompute entry is dropped or scheduled again. Only an open,
+    /// hidden tab is acted on; a busy session is always dropped, and an idle
+    /// one is re-armed only if it `wentBusy` since its last schedule, nothing
+    /// is scheduled or running for it, and precompute is allowed.
+    public static func activityAction(
+        isOpenHiddenTab: Bool,
+        isIdle: Bool,
+        isScheduled: Bool,
+        wentBusy: Bool,
+        allowed: Bool
+    ) -> ActivityAction {
+        guard isOpenHiddenTab else { return .none }
+        guard isIdle else { return .drop }
+        return wentBusy && !isScheduled && allowed ? .rearm : .none
+    }
+
     private static func dueOrder(_ entries: [String: Date]) -> [String] {
         entries.sorted { lhs, rhs in
             lhs.value != rhs.value ? lhs.value > rhs.value : lhs.key < rhs.key
