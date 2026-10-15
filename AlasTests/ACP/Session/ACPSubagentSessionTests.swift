@@ -91,6 +91,18 @@ struct ACPSubagentSessionTests {
         #expect(session.subagentRun("child-1")?.lastError == "network error")
     }
 
+    @Test("a resumed child's next failure does not show the previous failure's reason")
+    func resumeClearsFailureDiagnostic() {
+        let session = makeSession()
+        session.apply(.subagentSpawned(.init(subagentSessionId: "child-1")))
+        session.apply(.subagentStateUpdate(.init(
+            subagentSessionId: "child-1", state: .failed, error: "network error")))
+        session.apply(.subagentStateUpdate(.init(subagentSessionId: "child-1", state: .running)))
+        session.apply(.subagentStateUpdate(.init(subagentSessionId: "child-1", state: .failed)))
+
+        #expect(session.subagentRun("child-1")?.lastError == nil)
+    }
+
     @Test("a state update for an unknown child changes nothing")
     func unknownChildStateIsIgnored() {
         let session = makeSession()
@@ -1287,7 +1299,7 @@ struct ACPSubagentRowPolicyTests {
         #expect(ACPSubagentRowPolicy.showsSpinner(state: .other("thinking")))
         // Waiting for input is still live, so it stays cancellable.
         #expect(ACPSubagentRowPolicy.showsCancel(state: .requiresAction, capabilities: .cancellable))
-        for state in [ACPSubagentState.requiresAction, .completed, .failed, .cancelled, .disconnected] {
+        for state in [ACPSubagentState.requiresAction, .unconfirmed, .completed, .failed, .cancelled, .disconnected] {
             #expect(ACPSubagentRowPolicy.showsSpinner(state: state) == false)
         }
     }

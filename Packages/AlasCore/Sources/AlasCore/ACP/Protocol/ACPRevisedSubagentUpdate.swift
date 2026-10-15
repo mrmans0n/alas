@@ -24,13 +24,26 @@ public enum ACPRevisedSubagentUpdate: Decodable, Equatable, Sendable {
     /// value, so a state-only update must not wipe the announced title.
     public struct SubagentUpdate: Equatable, Sendable {
         public let sessionId: String
-        public let title: String?
-        public let description: String?
-        /// Nil when absent. Present — `null` and `{}` included — it
-        /// replaces the whole set, so an empty one revokes Cancel.
-        public let capabilities: ACPSubagentCapabilities?
-        /// Nil when absent or `null`: neither asserts any activity.
-        public let state: WorkState?
+        public let title: Patch<String>
+        public let description: Patch<String>
+        /// Present — `null` and `{}` included — it replaces the whole set,
+        /// so an empty one revokes Cancel.
+        public let capabilities: Patch<ACPSubagentCapabilities>
+        /// `null` clears the snapshot: no activity is asserted any more.
+        public let state: Patch<WorkState>
+    }
+
+    /// A nullable patch member: omitted keeps the previous value, `null`
+    /// clears it.
+    public enum Patch<Value: Equatable & Sendable>: Equatable, Sendable {
+        case absent
+        case cleared
+        case value(Value)
+
+        public var value: Value? {
+            if case .value(let value) = self { return value }
+            return nil
+        }
     }
 
     /// The RFD's whole-object state snapshot.
@@ -97,17 +110,16 @@ public enum ACPRevisedSubagentUpdate: Decodable, Equatable, Sendable {
         switch kind {
         case "subagent_update":
             let sessionId = try c.decode(String.self, forKey: .sessionId)
-            let title: String? = (try? c.decodeIfPresent(String.self, forKey: .title)) ?? nil
-            let description: String? = (try? c.decodeIfPresent(String.self, forKey: .description)) ?? nil
-            let capabilities: ACPSubagentCapabilities? = c.contains(.capabilities)
-                ? ((try? c.decodeIfPresent(ACPSubagentCapabilities.self, forKey: .capabilities)) ?? nil) ?? .init()
-                : nil
+            // Per the schema, an invalid member decodes as if it were `null`.
+            let capabilities: Patch<ACPSubagentCapabilities> = Self.patch(c, .capabilities) {
+                try $0.decode(ACPSubagentCapabilities.self, forKey: .capabilities)
+            }
             self = .subagentUpdate(.init(
                 sessionId: sessionId,
-                title: title,
-                description: description,
+                title: Self.patch(c, .title) { try $0.decode(String.self, forKey: .title) },
+                description: Self.patch(c, .description) { try $0.decode(String.self, forKey: .description) },
                 capabilities: capabilities,
-                state: Self.workState(c)))
+                state: Self.patch(c, .state) { try Self.workState($0) }))
         case "session_message", "session_message_chunk":
             let isChunk = kind == "session_message_chunk"
             let content: [ACPContentBlock]?
@@ -134,10 +146,19 @@ public enum ACPRevisedSubagentUpdate: Decodable, Equatable, Sendable {
         }
     }
 
-    private static func workState(_ c: KeyedDecodingContainer<Keys>) -> WorkState? {
-        guard let s = try? c.nestedContainer(keyedBy: StateKeys.self, forKey: .state),
-              let state = try? s.decode(String.self, forKey: .state)
-        else { return nil }
+    private static func patch<Value>(
+        _ c: KeyedDecodingContainer<Keys>,
+        _ key: Keys,
+        _ decode: (KeyedDecodingContainer<Keys>) throws -> Value
+    ) -> Patch<Value> {
+        guard c.contains(key) else { return .absent }
+        guard let value = try? decode(c) else { return .cleared }
+        return .value(value)
+    }
+
+    private static func workState(_ c: KeyedDecodingContainer<Keys>) throws -> WorkState {
+        let s = try c.nestedContainer(keyedBy: StateKeys.self, forKey: .state)
+        let state = try s.decode(String.self, forKey: .state)
         let error = try? s.nestedContainer(keyedBy: ErrorKeys.self, forKey: .error)
         return .init(
             state: state,
@@ -149,9 +170,10 @@ public enum ACPRevisedSubagentUpdate: Decodable, Equatable, Sendable {
     /// applied. `sessionId` is the enclosing session of the wire frame.
     ///
     /// Every `subagent_update` yields a spawn: the first announces the child,
-    /// later ones are idempotent merges (the RFD resends metadata, and the
-    /// adapter re-announces children after a restart). A concrete state
-    /// follows it as a state update on the same parent.
+    /// later ones are patch merges (the RFD resends metadata, and the adapter
+    /// re-announces children after a restart). A child announced without a
+    /// state starts unconfirmed. A present state — `null` clears it to
+    /// unconfirmed — follows as a state update on the same parent.
     public func normalized(sessionId: String) -> [ACPSessionUpdateParams] {
         switch self {
         case .subagentUpdate(let update):
@@ -159,17 +181,20 @@ public enum ACPRevisedSubagentUpdate: Decodable, Equatable, Sendable {
                 sessionId: sessionId,
                 update: .subagentSpawned(.init(
                     subagentSessionId: update.sessionId,
-                    name: update.title,
-                    task: update.description,
-                    capabilities: update.capabilities ?? .init(),
-                    replacesCapabilities: update.capabilities != nil)))]
-            if let state = update.state {
+                    name: update.title.value,
+                    task: update.description.value,
+                    capabilities: update.capabilities.value ?? .init(),
+                    replacesCapabilities: update.capabilities != .absent,
+                    clearsName: update.title == .cleared,
+                    clearsTask: update.description == .cleared,
+                    initialState: update.state.value?.normalized ?? .unconfirmed)))]
+            if update.state != .absent {
                 result.append(.init(
                     sessionId: sessionId,
                     update: .subagentStateUpdate(.init(
                         subagentSessionId: update.sessionId,
-                        state: state.normalized,
-                        error: state.errorMessage))))
+                        state: update.state.value?.normalized ?? .unconfirmed,
+                        error: update.state.value?.errorMessage))))
             }
             return result
         case .sessionMessage(let message):

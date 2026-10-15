@@ -2423,6 +2423,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
             subagentSessionId: id,
             name: spawn.name,
             task: spawn.task,
+            state: spawn.initialState,
             capabilities: spawn.capabilities,
             startedAt: timestamp)
         subagents[id] = run

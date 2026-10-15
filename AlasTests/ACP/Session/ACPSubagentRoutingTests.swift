@@ -1012,6 +1012,18 @@ struct ACPSubagentRoutingTests {
         #expect(runner.session.subagentRun("agent_n")?.capabilities.supportsCancel == stillCancellable)
     }
 
+    @Test("a revised null title or description removes it, and omission keeps it")
+    func revisedLabelPatches() async throws {
+        let (runner, _, _) = try makeRunner()
+        feed(runner, #"{"sessionId":"remote-parent","update":{"sessionId":"agent_n","sessionUpdate":"subagent_update","title":"Explore","description":"Find the router","state":{"state":"running"}}}"#)
+        feed(runner, #"{"sessionId":"remote-parent","update":{"sessionId":"agent_n","sessionUpdate":"subagent_update","title":null}}"#)
+
+        let run = try #require(runner.session.subagentRun("agent_n"))
+        #expect(run.name == nil)
+        #expect(run.task == "Find the router")
+        #expect(run.state == .running)
+    }
+
     @Test("a revised session_message on the root never becomes a user turn")
     func revisedSessionMessageOnRootIsIgnored() async throws {
         let (runner, _, _) = try makeRunner()

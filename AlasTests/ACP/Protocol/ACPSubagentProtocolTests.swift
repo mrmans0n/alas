@@ -216,7 +216,9 @@ struct ACPSubagentProtocolTests {
         (#"{"state":"idle","stopReason":"cancelled"}"#, .cancelled, nil),
         (#"{"state":"idle","stopReason":"error","error":{"code":-32603,"message":"boom"}}"#, .failed, "boom"),
         // Not terminal: the work may still be live, and a later snapshot replaces it.
-        (#"{"state":"unknown"}"#, .other("unknown"), nil)
+        (#"{"state":"unknown"}"#, .other("unknown"), nil),
+        // `null` clears the snapshot: no activity is asserted any more.
+        ("null", .unconfirmed, nil)
     ])
     func revisedStatesNormalize(state json: String, expected: ACPSubagentState, error: String?) throws {
         let updates = try Self.frame("""
@@ -233,7 +235,7 @@ struct ACPSubagentProtocolTests {
     @Test("a revised metadata-only update asserts no state")
     func revisedUpdateWithoutState() throws {
         let updates = try Self.frame("""
-        {"sessionId":"root","update":{"sessionId":"agent_n","sessionUpdate":"subagent_update","title":"Explore","state":null}}
+        {"sessionId":"root","update":{"sessionId":"agent_n","sessionUpdate":"subagent_update","title":"Explore"}}
         """)
         #expect(updates.count == 1)
         guard case .subagentSpawned(let spawn) = updates.first?.update else {
@@ -241,6 +243,8 @@ struct ACPSubagentProtocolTests {
             return
         }
         #expect(spawn.name == "Explore")
+        // A child first announced this way is not claimed to be running.
+        #expect(spawn.initialState == .unconfirmed)
     }
 
     private static func frame(_ json: String) throws -> [ACPSessionUpdateParams] {

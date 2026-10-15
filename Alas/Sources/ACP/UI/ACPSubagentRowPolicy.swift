@@ -7,6 +7,7 @@ enum ACPSubagentRowPolicy {
         switch state {
         case .running: "Working"
         case .requiresAction: "Waiting for input"
+        case .unconfirmed: "Not active"
         case .completed: "Done"
         case .failed: "Failed"
         case .cancelled: "Cancelled"

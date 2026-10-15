@@ -72,7 +72,7 @@ public struct ACPSubagentRowDescriptor: Equatable, Sendable {
     public var toolCallStatus: String {
         switch state {
         case .running, .requiresAction, .other: "in_progress"
-        case .completed: "completed"
+        case .completed, .unconfirmed: "completed"
         case .failed, .disconnected: "failed"
         case .cancelled: "cancelled"
         }
