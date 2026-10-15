@@ -67,11 +67,19 @@ struct HostProtocolServerTests {
     @Test(arguments: [
         (HostClientMessage(version: 99, id: 1, request: .snapshot), HostError.unsupportedVersion(supported: HostProtocolVersion.current)),
         (
-            HostClientMessage(id: 2, request: .archiveWorktree(worktree: WorktreeRef(projectID: "p", path: "/srv/missing"))),
+            HostClientMessage(id: 2, request: .archiveWorktree(
+                worktree: WorktreeRef(projectID: "p", path: "/srv/missing"), lineageID: nil, branch: "missing"
+            )),
             HostError.notFound(what: "worktree /srv/missing in project p")
         ),
-        // A delete names the checkout the client saw; one replaced or
-        // switched since is not deleted in its place.
+        // A delete or archive names the checkout the client saw; one
+        // replaced or switched since is not removed in its place.
+        (
+            HostClientMessage(id: 5, request: .archiveWorktree(
+                worktree: WorktreeRef(projectID: "p", path: "/srv/feature"), lineageID: "seen", branch: "feature"
+            )),
+            HostError.worktreeArchive(refusal: .changed("The worktree changed since it was listed."))
+        ),
         (
             HostClientMessage(id: 3, request: .deleteWorktree(
                 worktree: WorktreeRef(projectID: "p", path: "/srv/feature"),

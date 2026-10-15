@@ -102,8 +102,12 @@ public final class HostProtocolConnection {
                 listed, force: force, deleteBranchIfMerged: deleteBranchIfMerged, caller: caller
             )
             return .done
-        case .archiveWorktree(let ref):
-            try await host.worktrees.archive(try worktree(ref), caller: caller)
+        case .archiveWorktree(let ref, let lineageID, let branch):
+            let listed = try worktree(ref)
+            guard listed.lineageID == lineageID, listed.branch == branch else {
+                throw WorktreeArchiveRefusal.changed("The worktree changed since it was listed.")
+            }
+            try await host.worktrees.archive(listed, caller: caller)
             return .done
         case .unarchiveWorktree(let ref):
             try host.worktrees.unarchive(path: URL(fileURLWithPath: ref.path), projectID: ref.projectID, caller: caller)
