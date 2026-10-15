@@ -1,0 +1,130 @@
+import Foundation
+import Testing
+@_spi(Testing) @testable import AlasCore
+
+@MainActor
+struct HostProtocolServerTests {
+    /// A client that takes a snapshot and subscribes after its cursor hears
+    /// it subscribed, then each change after the snapshot.
+    @Test func subscribersHearTheirResponseThenTheChanges() async throws {
+        let fixture = try Fixture()
+        let client = Client()
+        let connection = fixture.server.connect(caller: .localUser(uid: 501), send: client.receive)
+        defer { connection.close() }
+
+        await connection.receive(HostClientMessage(id: 1, request: .snapshot))
+        guard case .response(1, .snapshot(let snapshot)) = client.messages.first else {
+            Issue.record("expected a snapshot, got \(client.messages)")
+            return
+        }
+        #expect(snapshot.worktrees.map(\.worktree) == [fixture.worktree])
+        await connection.receive(HostClientMessage(id: 2, request: .subscribe(after: snapshot.cursor)))
+        fixture.projects.setOperationState(for: fixture.worktree, state: .archiving(projectId: "p"))
+
+        try await client.waitFor { $0.count == 3 }
+        #expect(client.messages[1] == .response(id: 2, result: .subscribed))
+        #expect(client.messages[2] == .events(events: [
+            .worktreeChanged(WorktreeSnapshot(worktree: fixture.worktree, operation: .archiving, isArchived: false)),
+        ]))
+    }
+
+    /// A client that reads slowly holds its events back, where they coalesce,
+    /// instead of being sent each intermediate state.
+    @Test func aSlowClientGetsTheLatestState() async throws {
+        let fixture = try Fixture()
+        let client = Client()
+        let connection = fixture.server.connect(caller: .localUser(uid: 501), send: client.receive)
+        defer { connection.close() }
+        await connection.receive(HostClientMessage(id: 1, request: .snapshot))
+        guard case .response(1, .snapshot(let snapshot)) = client.messages.first else { return }
+        await connection.receive(HostClientMessage(id: 2, request: .subscribe(after: snapshot.cursor)))
+
+        client.holdsEvents = true
+        fixture.projects.setOperationState(for: fixture.worktree, state: .archiving(projectId: "p"))
+        try await client.waitFor { _ in client.heldEvents != nil }
+        fixture.projects.setOperationState(for: fixture.worktree, state: .preparingDelete)
+        fixture.projects.setOperationState(for: fixture.worktree, state: .deleting(projectId: "p"))
+        // Let the host publish both changes while the client is still busy.
+        try await client.waitFor { _ in fixture.host.worktrees.list().first?.operation == .deleting }
+        await Task.yield()
+        client.release()
+
+        try await client.waitFor { $0.count == 4 }
+        #expect(client.messages[3] == .events(events: [
+            .worktreeChanged(WorktreeSnapshot(worktree: fixture.worktree, operation: .deleting, isArchived: false)),
+        ]))
+    }
+
+    @Test(arguments: [
+        (HostClientMessage(version: 99, id: 1, request: .snapshot), HostError.unsupportedVersion(supported: HostProtocolVersion.current)),
+        (
+            HostClientMessage(id: 2, request: .archiveWorktree(worktree: WorktreeRef(projectID: "p", path: "/srv/missing"))),
+            HostError.notFound(what: "worktree /srv/missing in project p")
+        ),
+    ])
+    func refusedRequestsAnswerWithTheirError(_ message: HostClientMessage, _ error: HostError) async throws {
+        let fixture = try Fixture()
+        let client = Client()
+        let connection = fixture.server.connect(caller: .localUser(uid: 501), send: client.receive)
+        await connection.receive(message)
+        #expect(client.messages == [.response(id: message.id, result: .failure(error: error))])
+    }
+
+    @MainActor
+    private struct Fixture {
+        let projects: ProjectsManager
+        let host: AlasHost
+        let server: HostProtocolServer
+        let worktree: Worktree
+
+        init() throws {
+            let project = ProjectConfig(id: "p", name: "p", path: "/srv/repo", color: "blue", addedAt: .distantPast)
+            projects = ProjectsManager(persistedProjects: [project])
+            let path = URL(fileURLWithPath: "/srv/feature")
+            worktree = Worktree(
+                id: Worktree.makeId(path: path), projectId: "p", name: "feature", branch: "feature",
+                path: path, status: .clean, lastActivity: .distantPast
+            )
+            projects.insertOptimisticWorktree(worktree)
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            host = AlasHost(core: AlasCoreContext(
+                projects: projects,
+                runHistoryStore: nil,
+                workspaceStore: WorkspaceStore(url: directory.appendingPathComponent("workspaces.json"))
+            ))
+            server = HostProtocolServer(host: host)
+        }
+    }
+
+    /// What a transport would write, in order. Can hold the first event batch
+    /// to play a client that reads slowly.
+    @MainActor
+    private final class Client {
+        var messages: [HostServerMessage] = []
+        var holdsEvents = false
+        private(set) var heldEvents: HostServerMessage?
+        private var gate: CheckedContinuation<Void, Never>?
+
+        func receive(_ message: HostServerMessage) async {
+            if holdsEvents, case .events = message {
+                holdsEvents = false
+                heldEvents = message
+                await withCheckedContinuation { gate = $0 }
+            }
+            messages.append(message)
+        }
+
+        func release() {
+            gate?.resume()
+            gate = nil
+        }
+
+        func waitFor(_ condition: ([HostServerMessage]) -> Bool) async throws {
+            let deadline = ContinuousClock.now + .seconds(5)
+            while !condition(messages), ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            #expect(condition(messages))
+        }
+    }
+}

@@ -1,0 +1,156 @@
+import Foundation
+
+/// Serves the host protocol to any transport: each connection hands it the
+/// messages it decoded and gets back the messages to send. The transport
+/// says who the client is; nothing a client sends can.
+@MainActor
+public final class HostProtocolServer {
+    let host: AlasHost
+
+    public init(host: AlasHost) {
+        self.host = host
+    }
+
+    /// A connection for a client the transport authenticated as `caller`.
+    /// `send` returns once the message is on its way, so a client that reads
+    /// slowly holds its events back, where they coalesce, rather than
+    /// queueing without bound.
+    public func connect(
+        caller: HostCaller,
+        send: @escaping @MainActor (HostServerMessage) async -> Void
+    ) -> HostProtocolConnection {
+        HostProtocolConnection(host: host, caller: caller, send: send)
+    }
+}
+
+@MainActor
+public final class HostProtocolConnection {
+    private let host: AlasHost
+    private let caller: HostCaller
+    private let send: @MainActor (HostServerMessage) async -> Void
+    private var subscription: HostSubscription?
+    /// A subscription to start forwarding once its response is sent, so a
+    /// client hears it was subscribed before it hears an event.
+    private var pendingSubscription: HostSubscription?
+
+    init(host: AlasHost, caller: HostCaller, send: @escaping @MainActor (HostServerMessage) async -> Void) {
+        self.host = host
+        self.caller = caller
+        self.send = send
+    }
+
+    /// Answers one message. Requests are independent: a client may send the
+    /// next before this one is answered, and matches answers by id.
+    public func receive(_ message: HostClientMessage) async {
+        let result: HostResponse
+        if message.version != HostProtocolVersion.current {
+            result = .failure(error: .unsupportedVersion(supported: HostProtocolVersion.current))
+        } else {
+            do {
+                result = try await respond(to: message.request)
+            } catch {
+                result = .failure(error: Self.hostError(error))
+            }
+        }
+        await send(.response(id: message.id, result: result))
+        if let pending = pendingSubscription {
+            pendingSubscription = nil
+            follow(pending)
+        }
+    }
+
+    /// Ends the connection's subscription. The transport calls it when the
+    /// client goes away.
+    public func close() {
+        subscription?.cancel()
+        subscription = nil
+        pendingSubscription?.cancel()
+        pendingSubscription = nil
+    }
+
+    private func respond(to request: HostRequest) async throws -> HostResponse {
+        switch request {
+        case .snapshot:
+            return .snapshot(snapshot: try await host.snapshot())
+        case .subscribe(let cursor):
+            close()
+            pendingSubscription = host.subscribe(after: cursor)
+            return .subscribed
+        case .unsubscribe:
+            close()
+            return .unsubscribed
+        case .listSessions:
+            return .sessions(sessions: host.sessions.list())
+        case .addProject(let path, let displayName, let projectHost, let kind):
+            return .project(project: try await host.projects.add(
+                path: URL(fileURLWithPath: path), displayName: displayName, icon: .default(),
+                host: projectHost, kind: kind, caller: caller
+            ))
+        case .createWorktree(let projectID, let base, let branch, let destination):
+            let request = WorktreeCreateRequest(
+                projectID: projectID, base: base, branch: branch, destination: URL(fileURLWithPath: destination)
+            )
+            return .worktree(worktree: try await host.worktrees.create(request, caller: caller))
+        case .deleteWorktree(let ref, let force, let deleteBranchIfMerged):
+            try await host.worktrees.delete(
+                try worktree(ref), force: force, deleteBranchIfMerged: deleteBranchIfMerged, caller: caller
+            )
+            return .done
+        case .archiveWorktree(let ref):
+            try await host.worktrees.archive(try worktree(ref), caller: caller)
+            return .done
+        case .unarchiveWorktree(let ref):
+            try host.worktrees.unarchive(path: URL(fileURLWithPath: ref.path), projectID: ref.projectID, caller: caller)
+            return .done
+        case .listWorkspaceCheckouts:
+            return .workspaceCheckouts(checkouts: try await host.workspaces.list())
+        case .workspaceCheckout(let id):
+            return .workspaceCheckout(checkout: try await host.workspaces.checkout(id: id))
+        case .startRun(let scriptKey, let ref):
+            let worktree = try worktree(ref)
+            let projectHost = host.core.projects.projects.first { $0.id == ref.projectID }?.host
+            let scripts = await RunScriptStore.scripts(worktreeRoot: worktree.path, remoteHost: projectHost)
+            guard let script = scripts.first(where: { $0.key == scriptKey }) else {
+                throw HostError.notFound(what: "script \(scriptKey)")
+            }
+            return .runStart(start: host.runs.start(script, in: worktree, caller: caller))
+        case .stopRun(let scriptKey, let ref):
+            host.runs.stop(scriptKey: scriptKey, in: try worktree(ref), caller: caller)
+            return .done
+        }
+    }
+
+    /// Forwards the subscription's batches until it ends or another replaces it.
+    private func follow(_ next: HostSubscription) {
+        subscription = next
+        Task { @MainActor [weak self] in
+            while let events = await next.next() {
+                guard let self else { return }
+                await send(.events(events: events))
+            }
+        }
+    }
+
+    /// The listed, unarchived or archived, worktree a reference names.
+    private func worktree(_ ref: WorktreeRef) throws -> Worktree {
+        let path = URL(fileURLWithPath: ref.path).standardizedFileURL.path
+        guard let worktree = host.core.projects.worktrees(projectId: ref.projectID)
+            .first(where: { $0.path.standardizedFileURL.path == path })
+        else { throw HostError.notFound(what: "worktree \(ref.path) in project \(ref.projectID)") }
+        return worktree
+    }
+
+    static func hostError(_ error: any Error) -> HostError {
+        switch error {
+        case let error as HostError: error
+        case let refusal as WorktreeDeletionRefusal: .worktreeDeletion(refusal: refusal)
+        case let refusal as WorktreeArchiveRefusal: .worktreeArchive(refusal: refusal)
+        case let refusal as WorktreeCreationRefusal: .worktreeCreation(refusal: refusal)
+        case let failure as WorktreeCreationError: .worktreeCreationFailed(message: failure.message)
+        case let error as ProjectCreationError: .project(error: error)
+        case let error as WorkspaceAutomationError: .workspace(error: error)
+        case is AlasCoreContext.WorktreeOperationInProgress: .operationInProgress
+        default: .failed(message: error.localizedDescription)
+        }
+    }
+}
