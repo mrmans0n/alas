@@ -14064,7 +14064,8 @@ final class AppState {
         sessionID: ACPSession.ID,
         agentID: String,
         promptID: UUID,
-        prompt: String?
+        prompt: String?,
+        promptCard: ACPPromptCard? = nil
     ) async throws -> ACPSession.ID {
         guard await !checkpointACPAdmissionDisabledAfterDiscovery(worktreeId: worktree.id) else {
             throw ACPWorktreeSessionBootstrapError(message: Self.checkpointRecoveryBlocksACPMessage)
@@ -14104,7 +14105,7 @@ final class AppState {
             enqueuePrompt: { _, id, promptID, text in
                 // Queuing into an attached session would start its turn.
                 guard self.projectsManager.admitsNewWork(in: worktree) else { return false }
-                return await manager.enqueuePrompt(id: promptID, text: text, into: id)
+                return await manager.enqueuePrompt(id: promptID, text: text, card: promptCard, into: id)
             },
             attach: { _, id, freshlyCreated in
                 guard await !self.checkpointACPAdmissionDisabledAfterDiscovery(worktreeId: worktree.id) else {
@@ -14188,7 +14189,8 @@ final class AppState {
                 sessionID: preparedPrompt.sessionID,
                 agentID: agentID,
                 promptID: preparedPrompt.promptID,
-                prompt: queuedPrompt
+                prompt: queuedPrompt,
+                promptCard: preparedPrompt.card
             )
         } catch {
             manager.liveSession(for: preparedPrompt.sessionID)?.lastError = error.localizedDescription

@@ -15,9 +15,9 @@ extension AppState {
             sessionState: { [weak self] sessionID, worktreeID in
                 await self?.shepherdSessionState(sessionID: sessionID, worktreeID: worktreeID) ?? .missing
             },
-            deliverPrompt: { [weak self] sessionID, worktreeID, text, isStillWanted in
+            deliverPrompt: { [weak self] sessionID, worktreeID, prompt, isStillWanted in
                 await self?.deliverShepherdPrompt(
-                    sessionID: sessionID, worktreeID: worktreeID, text: text, isStillWanted: isStillWanted
+                    sessionID: sessionID, worktreeID: worktreeID, prompt: prompt, isStillWanted: isStillWanted
                 ) ?? .failed
             },
             rules: { [weak self] worktreeID in
@@ -115,8 +115,8 @@ extension AppState {
         await shepherdWithSession(sessionID, worktree: worktree, request: request)
     }
 
-    /// Queues `text` on the session as a shepherd prompt, captioned "Alas PR
-    /// shepherd". Hydrates a session with no open tab, like the orchestration
+    /// Queues `prompt` on the session as a shepherd prompt, shown as its
+    /// card. Hydrates a session with no open tab, like the orchestration
     /// coordinator's delivery, then brings its agent up the way the composer
     /// does, which claims the writer lease, so the prompt runs after any turn
     /// in progress. `.failed` when the session is missing or archived, when
@@ -126,7 +126,7 @@ extension AppState {
     func deliverShepherdPrompt(
         sessionID: String,
         worktreeID: String,
-        text: String,
+        prompt: ShepherdPrompt,
         isStillWanted: @MainActor () -> Bool
     ) async -> ReviewShepherd.Delivery {
         guard let worktree = worktree(withId: worktreeID),
@@ -149,8 +149,8 @@ extension AppState {
         // queue is left alone.
         guard isStillWanted() else { return .superseded }
         let recordKey = reviewShepherd.record(forSession: sessionID)?.id.storageKey ?? worktreeID
-        let source = ACPDelegatedPromptSource.shepherd(recordKey: recordKey, messageID: UUID())
-        let queued = await manager.enqueueDelegatedPrompt(text: text, source: source, into: sessionID, requiringWriter: true)
+        let source = ACPDelegatedPromptSource.shepherd(recordKey: recordKey, messageID: UUID(), card: prompt.card)
+        let queued = await manager.enqueueDelegatedPrompt(text: prompt.text, source: source, into: sessionID, requiringWriter: true)
         return queued ? .delivered : .failed
     }
 
@@ -244,7 +244,8 @@ extension AppState {
             fix: ShepherdPolicy.problems(in: request, handled: []),
             rules: shepherdRules(worktreeID: worktree.id)
         )
-        let prepared = PreparedWorktreeACPPrompt(sessionID: UUID().uuidString, promptID: UUID(), text: prompt)
+        let prepared = PreparedWorktreeACPPrompt(
+            sessionID: UUID().uuidString, promptID: UUID(), text: prompt.text, card: prompt.card)
         do {
             try await launchWorktreeSurface(
                 .acp(agentId: agentID, preparedPrompt: prepared),

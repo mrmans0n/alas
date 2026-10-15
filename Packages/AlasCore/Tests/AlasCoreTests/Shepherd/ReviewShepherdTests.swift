@@ -78,13 +78,13 @@ struct ReviewShepherdTests {
                 )
             },
             sessionState: { _, _ in .idle },
-            deliverPrompt: { _, _, text, isStillWanted in
+            deliverPrompt: { _, _, prompt, isStillWanted in
                 await withCheckedContinuation { continuation in
                     gate.release = continuation
                     enteredContinuation.yield()
                 }
                 guard isStillWanted() else { return .superseded }
-                gate.delivered.append(text)
+                gate.delivered.append(prompt.text)
                 return .delivered
             },
             rules: { _ in .none },
