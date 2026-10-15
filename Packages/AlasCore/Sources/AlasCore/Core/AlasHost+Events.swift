@@ -66,10 +66,12 @@ public final class HostSubscription {
     }
 
     /// The events since the last call, coalesced, waiting for one if none
-    /// are pending. Nil once cancelled.
+    /// are pending. Nil once cancelled. A subscription has one reader:
+    /// calling this while another call is waiting is a programming error.
     public func next() async -> [HostEvent]? {
         if isCancelled { return nil }
         if !pendingKeys.isEmpty { return drain() }
+        precondition(waiter == nil, "HostSubscription.next() has one reader at a time")
         return await withCheckedContinuation { waiter = $0 }
     }
 
