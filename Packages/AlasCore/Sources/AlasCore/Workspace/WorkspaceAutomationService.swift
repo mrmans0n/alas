@@ -1,6 +1,6 @@
 import Foundation
 
-public enum WorkspaceAutomationError: Error, Equatable, Sendable {
+public enum WorkspaceAutomationError: Codable, Error, Equatable, Sendable {
     case recoveryRequired
     case checkoutNotFound
     case memberNotFound

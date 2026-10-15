@@ -684,7 +684,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
         case ready
         case failed(String)
     }
-    public enum StreamingState: Equatable, Sendable { case idle, sending, streaming, awaitingPermission, awaitingInput }
+    public enum StreamingState: String, Codable, Equatable, Sendable { case idle, sending, streaming, awaitingPermission, awaitingInput }
     public enum SetupState: Equatable, Sendable {
         case checking
         case ready

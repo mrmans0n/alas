@@ -7614,11 +7614,11 @@ final class AppState {
             switch command {
             case .list:
                 return try jsonLine(WorkspaceAutomationListResponse(
-                    checkouts: try await host.workspaces.list().map(WorkspaceAutomationService.summary)
+                    checkouts: try await host.workspaces.list()
                 ))
             case .show(let checkoutID):
                 return try jsonLine(WorkspaceAutomationShowResponse(
-                    checkout: WorkspaceAutomationService.summary(try await host.workspaces.checkout(id: checkoutID))
+                    checkout: try await host.workspaces.checkout(id: checkoutID)
                 ))
             case .switch(let checkoutID):
                 try await service.selectCheckout(id: checkoutID)

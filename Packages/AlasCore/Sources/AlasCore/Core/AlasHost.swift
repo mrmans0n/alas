@@ -68,23 +68,72 @@ public final class AlasHost {
 }
 
 /// The host's state, as `AlasHost.snapshot()` describes it.
-public struct HostSnapshot: Equatable, Sendable {
+public struct HostSnapshot: Codable, Equatable, Sendable {
     public var cursor: HostCursor
-    public var projects: [ProjectConfig]
+    public var projects: [ProjectSnapshot]
     public var worktrees: [WorktreeSnapshot]
     /// Checkouts that are not archived, as of their load from the store.
-    public var workspaceCheckouts: [WorkspaceCheckout]
+    public var workspaceCheckouts: [WorkspaceCheckoutSnapshot]
     public var runs: [RunRecord]
     public var sessions: [HostSessionSummary]
 }
 
+/// A project as clients see it. Its configuration stays with the host: it
+/// holds scripts and MCP server settings, whose values can be credentials.
+public struct ProjectSnapshot: Codable, Equatable, Identifiable, Sendable {
+    public var id: String
+    public var name: String
+    public var path: String
+    /// The SSH host of a remote project; nil for a local one.
+    public var host: String?
+    public var kind: ProjectKind
+    public var addedAt: Date
+
+    public init(_ project: ProjectConfig) {
+        id = project.id
+        name = project.name
+        path = project.path
+        host = project.host
+        kind = project.kind
+        addedAt = project.addedAt
+    }
+}
+
+/// A Workspace checkout as clients see it: its members, operation and health,
+/// without the configuration it captured, which can hold credentials.
+public typealias WorkspaceCheckoutSnapshot = WorkspaceAutomationCheckoutSummary
+
 /// A worktree with what the host knows about it beyond Git.
-public struct WorktreeSnapshot: Equatable, Sendable {
+public struct WorktreeSnapshot: Codable, Equatable, Sendable {
     public var worktree: Worktree
-    /// The operation holding the worktree (being created, deleted, archived,
-    /// or failed), if any.
-    public var operation: WorktreeOperationState?
+    /// The operation holding the worktree, if any.
+    public var operation: WorktreeOperation?
     public var isArchived: Bool
+}
+
+/// What holds a worktree, as clients see it: the kind of operation, and the
+/// message of one that failed. Retry details stay with the host.
+public enum WorktreeOperation: Codable, Equatable, Sendable {
+    case creating
+    /// A deletion waiting for its caller to confirm it.
+    case preparingDelete
+    case deleting
+    case archiving
+    case createFailed(message: String)
+    case launchFailed(message: String)
+    case deleteFailed(message: String)
+
+    init(_ state: WorktreeOperationState) {
+        switch state {
+        case .creating: self = .creating
+        case .preparingDelete: self = .preparingDelete
+        case .deleting: self = .deleting
+        case .archiving: self = .archiving
+        case .createFailed(_, let message, _, _, _, _, _): self = .createFailed(message: message)
+        case .launchFailed(_, let message, _): self = .launchFailed(message: message)
+        case .deleteFailed(let message): self = .deleteFailed(message: message)
+        }
+    }
 }
 
 // MARK: - Projects
@@ -93,8 +142,8 @@ public struct WorktreeSnapshot: Equatable, Sendable {
 public struct ProjectsAPI {
     let core: AlasCoreContext
 
-    public func list() -> [ProjectConfig] {
-        core.projects.projects
+    public func list() -> [ProjectSnapshot] {
+        core.projects.projects.map(ProjectSnapshot.init)
     }
 
     /// Registers the project at `path` (on `host` for a remote one) and
@@ -105,8 +154,8 @@ public struct ProjectsAPI {
         icon: ProjectIcon,
         host: String? = nil,
         kind: ProjectKind = .git
-    ) async throws -> ProjectConfig {
-        try await core.addProject(path: path, displayName: displayName, icon: icon, host: host, kind: kind)
+    ) async throws -> ProjectSnapshot {
+        ProjectSnapshot(try await core.addProject(path: path, displayName: displayName, icon: icon, host: host, kind: kind))
     }
 }
 
@@ -124,7 +173,11 @@ public struct WorktreesAPI {
             projects.worktrees(projectId: id).compactMap { worktree in
                 let archived = projects.isWorktreeHidden(projectId: id, path: worktree.path)
                 guard includingArchived || !archived else { return nil }
-                return WorktreeSnapshot(worktree: worktree, operation: projects.operationState(for: worktree), isArchived: archived)
+                return WorktreeSnapshot(
+                    worktree: worktree,
+                    operation: projects.operationState(for: worktree).map(WorktreeOperation.init),
+                    isArchived: archived
+                )
             }
         }
     }
@@ -200,13 +253,13 @@ public struct WorkspacesAPI {
     let core: AlasCoreContext
 
     /// Checkouts that are not archived. Throws `WorkspaceAutomationError`.
-    public func list() async throws -> [WorkspaceCheckout] {
-        try await WorkspaceAutomationService(store: core.workspaceStore).checkouts()
+    public func list() async throws -> [WorkspaceCheckoutSnapshot] {
+        try await WorkspaceAutomationService(store: core.workspaceStore).checkouts().map(WorkspaceAutomationService.summary)
     }
 
     /// One checkout that is not archived. Throws `WorkspaceAutomationError`.
-    public func checkout(id: UUID) async throws -> WorkspaceCheckout {
-        try await WorkspaceAutomationService(store: core.workspaceStore).checkout(id: id)
+    public func checkout(id: UUID) async throws -> WorkspaceCheckoutSnapshot {
+        WorkspaceAutomationService.summary(try await WorkspaceAutomationService(store: core.workspaceStore).checkout(id: id))
     }
 }
 
@@ -246,11 +299,18 @@ public struct RunsAPI {
 // MARK: - Sessions
 
 /// A session as lists show it: read-only, without its transcript.
-public struct HostSessionSummary: Equatable, Sendable {
+public struct HostSessionSummary: Codable, Equatable, Sendable {
     /// The worktree or Workspace checkout the session belongs to.
     public var owner: SessionOwnerID
-    /// The stored row, carrying the live session's agent-side id once it has one.
-    public var row: ACPSessionRow
+    public var id: String
+    public var agentId: String
+    public var title: String
+    /// The agent's own id for the session, once it has one.
+    public var remoteSessionId: String?
+    /// Seconds since 1970, as the session store keeps them.
+    public var createdAt: Int64
+    public var updatedAt: Int64
+    public var lastOpenedAt: Int64
     /// Nil while no agent process runs the session.
     public var streamingState: ACPSession.StreamingState?
     /// Whether this instance holds the session's writer lease.
@@ -266,14 +326,16 @@ public struct SessionsAPI {
         core.sessionManagers.values.flatMap { manager in
             manager.sessionRows.compactMap { row -> HostSessionSummary? in
                 guard !row.archived else { return nil }
-                var row = row
-                if let remoteID = manager.liveSession(for: row.id)?.remoteSessionId?.trimmingCharacters(in: .whitespacesAndNewlines),
-                   !remoteID.isEmpty {
-                    row.remoteSessionId = remoteID
-                }
+                let liveRemoteID = manager.liveSession(for: row.id)?.remoteSessionId?.trimmingCharacters(in: .whitespacesAndNewlines)
                 return HostSessionSummary(
                     owner: manager.owner,
-                    row: row,
+                    id: row.id,
+                    agentId: row.agentId,
+                    title: row.title,
+                    remoteSessionId: liveRemoteID?.isEmpty == false ? liveRemoteID : row.remoteSessionId,
+                    createdAt: row.createdAt,
+                    updatedAt: row.updatedAt,
+                    lastOpenedAt: row.lastOpenedAt,
                     streamingState: manager.runners[row.id]?.session.transcript.streamingState,
                     isWriter: manager.isWriter(for: row.id)
                 )

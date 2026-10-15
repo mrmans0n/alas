@@ -54,7 +54,7 @@ public enum WorktreeCreationOutcome: Equatable, Sendable {
 }
 
 /// Why `AlasCoreContext.beginCreate` did not start.
-public enum WorktreeCreationRefusal: LocalizedError, Equatable {
+public enum WorktreeCreationRefusal: Codable, LocalizedError, Equatable {
     case folderProject
     /// A worktree is already listed at the destination, and it is not a
     /// failed creation being retried.
@@ -254,7 +254,7 @@ extension AlasCoreContext {
 }
 
 /// A headless creation that failed; its row keeps the failure for retry.
-public struct WorktreeCreationError: LocalizedError, Equatable {
+public struct WorktreeCreationError: Codable, LocalizedError, Equatable {
     public let message: String
     public var errorDescription: String? { message }
 }

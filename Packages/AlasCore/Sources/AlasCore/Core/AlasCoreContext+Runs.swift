@@ -1,7 +1,7 @@
 import Foundation
 
 /// What `AlasCoreContext.startRun` did with a request.
-public enum RunStart: Equatable, Sendable {
+public enum RunStart: Codable, Equatable, Sendable {
     /// A run slot was claimed under this run ID; the command is starting.
     case started(runID: String)
     /// A launch for the same (worktree, script) is already in flight.
