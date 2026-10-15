@@ -21,11 +21,12 @@ struct HostSocketServerTests {
             let result = try await Process.git(args, cwd: repo)
             guard result.exitCode == 0 else { throw ProcessError.nonZeroExit(result.exitCode, result.stderr) }
         }
-        let core = try AlasCoreContext(
-            loadingFrom: PersistenceStore(),
+        let core = AlasCoreContext(
+            projects: ProjectsManager(persistedProjects: []),
             projectsFile: root.appendingPathComponent("projects.json"),
             runHistoryStore: nil,
-            workspaceStore: WorkspaceStore(url: root.appendingPathComponent("workspaces.json"))
+            workspaceStore: WorkspaceStore(url: root.appendingPathComponent("workspaces.json")),
+            environment: NoCheckpointsEnvironment()
         )
         let project = try await core.addProject(path: repo, displayName: "repo", icon: .default())
         let path = root.appendingPathComponent("run/host.sock").path
@@ -87,6 +88,13 @@ struct HostSocketServerTests {
     func acceptFailuresEndTheLoopOnlyWhenTheSocketIsGone(_ code: Int32, _ outcome: HostSocketServer.AcceptFailure) {
         #expect(HostSocketServer.afterAcceptFailure(errno: code) == outcome)
     }
+}
+
+/// A host whose checkpoint store has nothing to recover, so a removal does
+/// not depend on the checkpoints this machine's profile holds.
+@MainActor
+private final class NoCheckpointsEnvironment: AlasHostEnvironment {
+    func checkpointRecoveryBlocksRemoval(_ worktree: Worktree) async -> Bool { false }
 }
 
 /// A host protocol client over a Unix socket: requests by id, and the events
