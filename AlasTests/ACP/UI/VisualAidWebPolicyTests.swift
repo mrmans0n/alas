@@ -82,6 +82,17 @@ struct VisualAidWebPolicyTests {
         #expect(routing.owner(phase: [], momentumPhase: .changed, deltaX: 0, deltaY: -4, edges: midway) == .transcript)
     }
 
+    @Test("a gesture that started over the transcript stays with it after sliding onto the card")
+    func gestureArrivingMidwayStaysWithTheTranscript() {
+        var routing = VisualAidScrollRouting()
+        let midway = VisualAidScrollRouting.Edges(canScrollUp: true, canScrollDown: true)
+        // A previous gesture left the page as owner.
+        _ = routing.owner(phase: .began, momentumPhase: [], deltaX: 0, deltaY: -3, edges: midway)
+        _ = routing.owner(phase: .ended, momentumPhase: [], deltaX: 0, deltaY: 0, edges: midway)
+        #expect(routing.owner(phase: .changed, momentumPhase: [], deltaX: 0, deltaY: -5, edges: midway) == .transcript)
+        #expect(routing.owner(phase: [], momentumPhase: .changed, deltaX: 0, deltaY: -4, edges: midway) == .transcript)
+    }
+
     @Test("fragments go inside the template verbatim, placeholders included")
     func fragmentAssembly() {
         let html = "<p>{{CONTENT}} and {{HEAD}}</p>"

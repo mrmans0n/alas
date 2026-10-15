@@ -439,6 +439,9 @@ struct VisualAidScrollRouting: Equatable {
     }
 
     private var owner: Owner?
+    /// Whether this view saw the current gesture's `.began`/`.mayBegin`. A gesture that started over the
+    /// transcript and slid onto the card belongs to the transcript for the rest of its life.
+    private var sawGestureStart = false
 
     /// The owner of this event, or nil while a phased gesture has not moved yet; the caller holds such
     /// events and delivers them with the first decided one.
@@ -449,11 +452,18 @@ struct VisualAidScrollRouting: Equatable {
         guard !phase.isEmpty || !momentumPhase.isEmpty else {
             return moved ? Self.decide(deltaX: deltaX, deltaY: deltaY, edges: edges) : .transcript
         }
-        if phase.contains(.began) || phase.contains(.mayBegin) { owner = nil }
+        let starts = phase.contains(.began) || phase.contains(.mayBegin)
+        if starts {
+            owner = nil
+            sawGestureStart = true
+        } else if !phase.isEmpty, !sawGestureStart {
+            owner = .transcript
+        }
+        if phase.contains(.ended) || phase.contains(.cancelled) { sawGestureStart = false }
         if let owner { return owner }
-        if moved {
+        if moved, !phase.isEmpty {
             owner = Self.decide(deltaX: deltaX, deltaY: deltaY, edges: edges)
-        } else if !(phase.contains(.began) || phase.contains(.mayBegin)) {
+        } else if !starts {
             // Ended, cancelled or coasting without ever moving: let the transcript pair its begin and end.
             owner = .transcript
         }
