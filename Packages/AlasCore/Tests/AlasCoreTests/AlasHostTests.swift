@@ -75,7 +75,7 @@ struct AlasHostTests {
     }
 
     /// A subscriber that falls too far behind, or asks for events the log no
-    /// longer keeps, is told to resync instead.
+    /// longer keeps or never issued, is told to resync instead.
     @Test func laggingSubscribersResync() async {
         let log = HostEventLog(retention: 2, pendingLimit: 2)
         let slow = log.subscribe(after: log.cursor)
@@ -87,6 +87,12 @@ struct AlasHostTests {
         let caughtUp = log.cursor
         log.publish([.runRemoved(id: "d")])
         #expect(await Self.next(log.subscribe(after: caughtUp)) == [.runRemoved(id: "d")])
+
+        // A cursor from another log, such as the host's before a restart,
+        // is never taken for one of this log's.
+        let restarted = HostEventLog()
+        restarted.publish([.runRemoved(id: "e")])
+        #expect(await Self.next(restarted.subscribe(after: start)) == [.resync])
     }
 
     /// Sessions join the host's list and events, keyed by their owner.

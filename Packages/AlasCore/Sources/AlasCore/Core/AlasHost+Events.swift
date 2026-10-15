@@ -2,23 +2,19 @@ import Foundation
 import Observation
 
 /// A position in the host's change log. Events after a cursor describe every
-/// change since the snapshot that returned it.
+/// change since the snapshot that returned it. Each log has its own
+/// generation, so a cursor from before the host restarted is never taken for
+/// one of the current log's.
 public struct HostCursor: Hashable, Comparable, Codable, Sendable {
+    public let generation: UUID
     public let sequence: UInt64
 
-    public init(sequence: UInt64) {
+    public init(generation: UUID, sequence: UInt64) {
+        self.generation = generation
         self.sequence = sequence
     }
 
-    public init(from decoder: Decoder) throws {
-        sequence = try decoder.singleValueContainer().decode(UInt64.self)
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.singleValueContainer()
-        try container.encode(sequence)
-    }
-
+    /// Orders cursors of one generation.
     public static func < (lhs: HostCursor, rhs: HostCursor) -> Bool {
         lhs.sequence < rhs.sequence
     }
@@ -144,7 +140,7 @@ public final class HostSubscription {
 /// kept for subscribers catching up, and the live subscriptions.
 @MainActor
 final class HostEventLog {
-    private(set) var cursor = HostCursor(sequence: 0)
+    private(set) var cursor = HostCursor(generation: UUID(), sequence: 0)
     private var retained: [(cursor: HostCursor, event: HostEvent)] = []
     /// Held weakly: a subscription its owner drops goes away with it.
     private var subscriptions: [ObjectIdentifier: WeakSubscription] = [:]
@@ -159,7 +155,7 @@ final class HostEventLog {
     func publish(_ events: [HostEvent]) {
         guard !events.isEmpty else { return }
         for event in events {
-            cursor = HostCursor(sequence: cursor.sequence + 1)
+            cursor = HostCursor(generation: cursor.generation, sequence: cursor.sequence + 1)
             retained.append((cursor, event))
         }
         if retained.count > retention {
@@ -172,13 +168,16 @@ final class HostEventLog {
     }
 
     /// A subscription delivering the events after `after`: those still
-    /// retained first, or `.resync` when some have been dropped.
+    /// retained first, or `.resync` when some have been dropped or the
+    /// cursor is not one of this log's.
     func subscribe(after: HostCursor) -> HostSubscription {
         let subscription = HostSubscription(pendingLimit: pendingLimit) { [weak self] in
             self?.subscriptions.removeValue(forKey: ObjectIdentifier($0))
         }
         subscriptions[ObjectIdentifier(subscription)] = WeakSubscription(subscription: subscription)
-        if after < cursor {
+        if after.generation != cursor.generation || after.sequence > cursor.sequence {
+            subscription.receive([.resync])
+        } else if after < cursor {
             let oldest = retained.first?.cursor.sequence ?? cursor.sequence + 1
             if after.sequence + 1 < oldest {
                 subscription.receive([.resync])

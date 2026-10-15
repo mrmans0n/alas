@@ -18,7 +18,7 @@ struct HostProtocolTests {
     /// Every kind of message survives the wire unchanged.
     @Test(arguments: [
         HostClientMessage(id: 1, request: .snapshot),
-        HostClientMessage(id: 2, request: .subscribe(after: HostCursor(sequence: 42))),
+        HostClientMessage(id: 2, request: .subscribe(after: HostCursor(generation: UUID(uuidString: "6F9619FF-8B86-D011-B42D-00CF4FC964FF")!, sequence: 42))),
         HostClientMessage(id: 3, request: .addProject(path: "/srv/repo", displayName: "repo", host: "build", kind: .folder)),
         HostClientMessage(id: 4, request: .createWorktree(projectID: "p", base: "main", branch: "b", destination: "/srv/b")),
         HostClientMessage(id: 5, request: .deleteWorktree(worktree: ref, force: true, deleteBranchIfMerged: false)),
@@ -31,7 +31,7 @@ struct HostProtocolTests {
 
     @Test(arguments: [
         HostServerMessage.response(id: 1, result: .snapshot(snapshot: HostSnapshot(
-            cursor: HostCursor(sequence: 9),
+            cursor: HostCursor(generation: UUID(uuidString: "6F9619FF-8B86-D011-B42D-00CF4FC964FF")!, sequence: 9),
             projects: [ProjectSnapshot(ProjectConfig(id: "p", name: "p", path: "/srv/repo", color: "blue", addedAt: Date(timeIntervalSince1970: 0)))],
             worktrees: [WorktreeSnapshot(worktree: worktree, operation: .createFailed(message: "no space"), isArchived: true)],
             workspaceCheckouts: [],
