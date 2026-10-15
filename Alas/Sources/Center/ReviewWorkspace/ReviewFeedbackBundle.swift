@@ -110,7 +110,8 @@ struct ReviewFeedbackBundle: Equatable, Sendable {
 
     private static func cardItem(_ comment: ReviewDraftComment) -> ACPPromptCard.Item {
         let range = comment.normalizedLineRange
-        let body = comment.bodyMarkdown.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Inner whitespace kept: a leading indent can make an indented code block.
+        let body = comment.bodyMarkdown.trimmingCharacters(in: .newlines)
         let language = (comment.path as NSString).pathExtension.lowercased()
         return ACPPromptCard.Item(
             location: .init(
@@ -118,7 +119,7 @@ struct ReviewFeedbackBundle: Equatable, Sendable {
                 startLine: range?.lowerBound,
                 endLine: range?.upperBound,
                 side: comment.side == .unknown ? nil : comment.side.rawValue),
-            bodyMarkdown: body.isEmpty ? nil : body,
+            bodyMarkdown: body.trimmingCharacters(in: .whitespaces).isEmpty ? nil : body,
             excerpt: displayedSelectedText(comment).map {
                 .init(text: $0, style: .code, language: language.isEmpty ? nil : language)
             },

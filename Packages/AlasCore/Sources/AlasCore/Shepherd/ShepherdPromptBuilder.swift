@@ -255,14 +255,15 @@ public enum ShepherdPromptBuilder {
             url: thread.url)
     }
 
-    /// The first comment as is, then each reply with its author.
+    /// The first comment as is, then each reply under its author. Bodies keep
+    /// their inner whitespace so fences and indented code stay blocks.
     private static func threadBody(_ comments: [ReviewComment]) -> String? {
         guard let first = comments.first else { return nil }
-        let trimmed = { (comment: ReviewComment) in comment.body.trimmingCharacters(in: .whitespacesAndNewlines) }
+        let body = { (comment: ReviewComment) in comment.body.trimmingCharacters(in: .newlines) }
         let replies = comments.dropFirst().map {
-            "**@\($0.author ?? "unknown")** (\($0.authorTrust.rawValue)): \(trimmed($0))"
+            "**@\($0.author ?? "unknown")** (\($0.authorTrust.rawValue)):\n\n\(body($0))"
         }
-        return ([trimmed(first)] + replies).joined(separator: "\n\n")
+        return ([body(first)] + replies).joined(separator: "\n\n")
     }
 
     // MARK: - Labels

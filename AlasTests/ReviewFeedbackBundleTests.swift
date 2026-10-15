@@ -225,7 +225,7 @@ struct ReviewFeedbackBundleTests {
         )
         let bundle = ReviewFeedbackBundle(target: target, comments: [
             comment(id: "b", session: session, path: "B.swift", line: 9, endLine: 11,
-                    selectedText: "let x = 1\n", body: "Rename this."),
+                    selectedText: "let x = 1\n", body: "    let renamed = 1\n    use(renamed)"),
             comment(id: "a", session: session, path: "A.swift", line: 2, body: "Extract helper."),
             comment(id: "r", session: session, path: "A.swift", line: 5, body: "Resolved.", state: .resolved),
             wholeFile,
@@ -247,6 +247,7 @@ struct ReviewFeedbackBundleTests {
         let ranged = card.sections[1].items[0]
         #expect(ranged.location == .init(path: "B.swift", startLine: 9, endLine: 11, side: "new"))
         #expect(ranged.excerpt == .init(text: "let x = 1", style: .code, language: "swift"))
+        #expect(ranged.bodyMarkdown == "    let renamed = 1\n    use(renamed)")
         #expect(card.action == .reviewChanges(worktreeID: "wt"))
     }
 

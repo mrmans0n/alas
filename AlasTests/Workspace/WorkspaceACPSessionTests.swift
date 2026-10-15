@@ -43,16 +43,22 @@ struct WorkspaceACPSessionTests {
 
         let delivery = ReviewFeedbackDelivery(
             text: "New review feedback", source: .reviewFeedback(card: card, commentCount: 1, messageID: UUID()))
-        // Completion fires when the turn ends; the test agent never runs one.
-        sender.send(delivery, .newChat(agentID: "claude", title: "New chat")) { _ in }
-        try await eventually("the new chat to receive the review turn") {
-            guard let newSession = manager.sessions.values.first(where: { $0.id != session.id }) else { return false }
-            return newSession.queue.contains { $0.delegatedSource == delivery.source }
-                || newSession.transcript.messages.contains { message in
-                    guard case .user(_, _, _, _, let source, _) = message else { return false }
-                    return source == delivery.source
-                }
+        // The test agent never ends a turn, so success has to come from the
+        // session taking the prompt: the handoff is recorded from it.
+        final class Outcome { var result: Result<Void, Error>? }
+        let outcome = Outcome()
+        sender.send(delivery, .newChat(agentID: "claude", title: "New chat")) { outcome.result = $0 }
+        try await eventually("the new chat to take the review turn") { outcome.result != nil }
+        try #require(outcome.result).get()
+        let delivered = manager.sessions.values.contains { candidate in
+            candidate.id != session.id && (
+                candidate.queue.contains { $0.delegatedSource == delivery.source }
+                    || candidate.transcript.messages.contains { message in
+                        guard case .user(_, _, _, _, let source, _) = message else { return false }
+                        return source == delivery.source
+                    })
         }
+        #expect(delivered)
         #expect(state.tabs.tabs(for: owner).count == 2)
         #expect(state.tabs.tabs(forWorktree: worktree.id).isEmpty)
         let newSession = try #require(manager.sessions.values.first { $0.id != session.id })

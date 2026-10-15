@@ -118,6 +118,9 @@ struct ReviewFeedbackAgentSender {
         return (tab.sessionId, owner)
     }
 
+    /// Reports success once the session takes the prompt, not when the turn
+    /// ends: the agent resolves comments during that turn, so the handoff
+    /// has to be on record first.
     private static func deliver(
         _ delivery: ReviewFeedbackDelivery,
         appState: AppState,
@@ -125,12 +128,30 @@ struct ReviewFeedbackAgentSender {
         owner: SessionOwnerID,
         completion: @escaping @MainActor (Result<Void, Error>) -> Void
     ) async {
+        let report = ReportOnce(completion)
         await appState.prepareACPSessionForPrompt(sessionId: sessionID, owner: owner)
         await appState.sendPrompt(
             for: sessionID, text: delivery.text, attachments: [],
-            delegatedSource: delivery.source, normalUserTurn: false
-        ) { accepted in
-            completion(accepted ? .success(()) : .failure(ReviewFeedbackAgentSendError.rejected))
+            delegatedSource: delivery.source, normalUserTurn: false,
+            onAccepted: { report(.success(())) }
+        ) { ended in
+            report(ended ? .success(()) : .failure(ReviewFeedbackAgentSendError.rejected))
+        }
+    }
+
+    /// Hands the first result to `completion` and drops the rest.
+    @MainActor
+    private final class ReportOnce {
+        private var completion: (@MainActor (Result<Void, Error>) -> Void)?
+
+        init(_ completion: @escaping @MainActor (Result<Void, Error>) -> Void) {
+            self.completion = completion
+        }
+
+        func callAsFunction(_ result: Result<Void, Error>) {
+            let completion = completion
+            self.completion = nil
+            completion?(result)
         }
     }
 

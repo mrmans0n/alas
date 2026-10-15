@@ -15854,11 +15854,13 @@ extension AppState: RemoteSessionsProvider {
     func sendPrompt(
         for id: String, text: String, attachments: [ACPMessage.Attachment],
         delegatedSource: ACPDelegatedPromptSource? = nil, normalUserTurn: Bool,
+        onAccepted: (@MainActor () -> Void)? = nil,
         onResult: @escaping @MainActor (Bool) -> Void
     ) async {
         for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
             await mgr.sendPrompt(for: id, text: text, attachments: attachments,
-                                 delegatedSource: delegatedSource, normalUserTurn: normalUserTurn, onResult: onResult)
+                                 delegatedSource: delegatedSource, normalUserTurn: normalUserTurn,
+                                 onAccepted: onAccepted, onResult: onResult)
             return
         }
         onResult(false)

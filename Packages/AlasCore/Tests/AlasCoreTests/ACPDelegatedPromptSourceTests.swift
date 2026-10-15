@@ -43,9 +43,10 @@ struct ACPDelegatedPromptSourceTests {
         #expect(session.queue == [original])
     }
 
-    @Test("replication preserves app actions without treating their origin as a session reference")
+    @Test("replication preserves app actions and carded Alas turns without treating their origin as a session reference",
+          arguments: ["ship", "shepherd"])
     @MainActor // The message codec uses the transcript model.
-    func replicaPreservesAppActions() throws {
+    func replicaPreservesAppActions(kind: String) throws {
         let writer = try ACPSessionStore(path: ":memory:")
         let reader = try ACPSessionStore(path: ":memory:")
         try writer.upsertSession(.init(id: "writer", agentId: "codex", title: "Chat", autoRun: false,
@@ -53,7 +54,11 @@ struct ACPDelegatedPromptSourceTests {
         try reader.upsertSession(.init(id: "reader", agentId: "codex", title: "Chat", autoRun: false,
                                        createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
         try writer.enableReplicaExport(sessionId: "writer", recordId: "record")
-        let source = ACPDelegatedPromptSource.shipCreate(kind: .github, branch: "feature", messageID: UUID())
+        let source = kind == "ship"
+            ? ACPDelegatedPromptSource.shipCreate(kind: .github, branch: "feature", messageID: UUID())
+            : ACPDelegatedPromptSource.shepherd(
+                recordKey: "wt-1", messageID: UUID(),
+                card: ACPPromptCard(origin: .shepherd, title: "GitHub #7 · Fix login"))
         let message = ACPMessage.user(
             id: UUID(), messageId: nil, text: "Open a PR.", attachments: [], delegatedSource: source)
         try writer.appendMessage(sessionId: "writer", id: "request", kind: message.kind, seq: 0,

@@ -156,6 +156,16 @@ private typealias F = ShepherdFixtures
         #expect(thread.author == "@maintainer · trusted")
         #expect(thread.bodyMarkdown == "Please fix PRRT_1.")
         #expect(thread.url == URL(string: "https://github.com/acme/app/pull/7#PRRT_1"))
+
+        let chain = F.thread("PRRT_2", comments: [
+            F.comment("c1", author: "maintainer", body: "    let retries = 3\n    run(retries)", trust: .trusted),
+            F.comment("c2", author: "dev", body: "```swift\nrun()\n```", trust: .untrusted),
+        ])
+        let chained = F.request(threads: [chain])
+        let chainItem = ShepherdPromptBuilder.fixPrompt(
+            request: chained, fix: ShepherdPolicy.problems(in: chained, handled: []), logs: [], rules: .none
+        ).card.sections[0].items[0]
+        #expect(chainItem.bodyMarkdown == "    let retries = 3\n    run(retries)\n\n**@dev** (untrusted):\n\n```swift\nrun()\n```")
     }
 
     @Test("bind card lists current problems without details, and nothing when clean")

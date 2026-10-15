@@ -515,10 +515,14 @@ public final class ACPSessionManager: ChangeTracking {
     ///
     /// `isStillWanted` is asked once the lease is confirmed and before anything is
     /// submitted; when it says no, `onResult(false)` fires and nothing is sent.
+    ///
+    /// `onAccepted` fires when `submit` takes the prompt (sent, queued, or
+    /// waiting on a model switch); `onResult` still reports how it ended.
     public func sendPrompt(
         for id: ACPSession.ID, text: String, attachments: [ACPMessage.Attachment],
         delegatedSource: ACPDelegatedPromptSource? = nil, normalUserTurn: Bool = true,
-        isStillWanted: (@MainActor () -> Bool)? = nil, onResult: @escaping @MainActor (Bool) -> Void
+        isStillWanted: (@MainActor () -> Bool)? = nil, onAccepted: (@MainActor () -> Void)? = nil,
+        onResult: @escaping @MainActor (Bool) -> Void
     ) async {
         let suggestionSession = sessions[id]
         suggestionSession?.nextPromptWorkCount += 1
@@ -534,7 +538,11 @@ public final class ACPSessionManager: ChangeTracking {
                               draft: nil, waitForModelModeSelections: true,
                               delegatedSource: delegatedSource, normalUserTurn: normalUserTurn,
                               onCompleted: { ok in onResult(ok) })
-        if !accepted { onResult(false) }   // submit refused synchronously; onCompleted won't fire
+        if accepted {
+            onAccepted?()
+        } else {
+            onResult(false)   // submit refused synchronously; onCompleted won't fire
+        }
     }
 
     /// Interrupt the in-flight turn (same as the composer Stop / Esc). Guarded
@@ -9360,7 +9368,8 @@ extension ACPSessionManager {
         }) else { return true }
         guard !session.transcript.messages.contains(where: { message in
             guard case .user(_, _, _, _, let recordedSource, _) = message else { return false }
-            return recordedSource == source
+            // By delivery: the card is presentation and may differ on a retry.
+            return recordedSource?.isSameDelivery(as: source) == true
         }) else { return true }
 
         session.enqueue(
