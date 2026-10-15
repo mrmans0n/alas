@@ -15119,6 +15119,8 @@ private extension WorkspaceCheckoutMember {
 // `acpManagers` dictionary. Aggregates across every live per-worktree manager;
 // worktrees not opened this run simply don't appear (documented v1 behavior).
 extension AppState: RemoteSessionsProvider {
+    var eventHost: AlasHost? { host }
+
     private func remoteWorktreeSummary(project: ProjectConfig, worktree: Worktree) async -> RemoteWorktreeSummary {
         // A folder has no git metrics to compute.
         if project.isFolder { return remoteWorktreeSummaryWithoutMetrics(project: project, worktree: worktree) }

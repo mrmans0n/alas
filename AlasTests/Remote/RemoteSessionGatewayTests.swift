@@ -68,6 +68,7 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     /// guard logic (e.g. refusing an item with a mention/image) through the
     /// gateway rather than a canned stub.
     var manager: ACPSessionManager?
+    var eventHost: AlasHost?
     var steerPromptAccepts = true
     var fullToolCallContents: [String: String] = [:]
     var fullToolCallContentCallCount = 0
@@ -702,6 +703,31 @@ struct RemoteSessionGatewayTests {
 
         #expect(provider.remoteBranchesCallCount == 1)
         #expect(sent.isEmpty)
+    }
+
+    /// A host change pushes the lists it makes stale, unasked: sessions
+    /// always, worktrees once the client has asked for them.
+    @Test func hostChangesPushTheListsTheClientFollows() async throws {
+        let project = ProjectConfig(id: "p", name: "p", path: "/srv/repo", color: "blue", addedAt: .distantPast)
+        let projects = ProjectsManager(persistedProjects: [project])
+        let provider = FakeSessionsProvider()
+        provider.eventHost = AlasHost(core: AlasCoreContext(projects: projects, runHistoryStore: nil))
+        let gw = RemoteSessionGateway(provider: provider) { _ in }
+        defer { gw.close() }
+        await gw.handle(.listWorktrees)
+        #expect(provider.sessionSummariesCallCount == 0)
+
+        let path = URL(fileURLWithPath: "/srv/new")
+        projects.insertOptimisticWorktree(Worktree(
+            id: Worktree.makeId(path: path), projectId: "p", name: "new", branch: "new",
+            path: path, status: .clean, lastActivity: .distantPast
+        ))
+        let deadline = ContinuousClock.now + .seconds(5)
+        while provider.sessionSummariesCallCount == 0 || provider.remoteWorktreesCallCount < 2, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(provider.sessionSummariesCallCount == 1)
+        #expect(provider.remoteWorktreesCallCount == 2)
     }
 
     @Test func createWorktreeSessionEmitsCreatedSessionAndRefreshesLists() async {
