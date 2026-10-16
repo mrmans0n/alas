@@ -738,6 +738,38 @@ struct ACPSessionDiscoveryTests {
     }
 
     @MainActor
+    @Test("a live change that the pending filter page predates is replayed after the page commits")
+    func liveChangeDuringFilterLoad() async throws {
+        let store = try temporaryStore()
+        let client = indexClient()
+        let gate = AsyncStream<Void>.makeStream()
+        let archivedStarted = AsyncStream<Void>.makeStream()
+        client.scriptAsync(method: "session/list") { request in
+            let list = try #require((request.params as? ACPSessionListParams)?.meta?.sessionIndex.list)
+            guard list.archived == .archived else {
+                return try JSONEncoder().encode(ACPSessionListResult(
+                    sessions: [.init(sessionId: "x", cwd: "/tmp/wt", index: .init(archived: false))]))
+            }
+            // The archived page was read before "x" was archived.
+            archivedStarted.continuation.yield()
+            for await _ in gate.stream { break }
+            return try JSONEncoder().encode(ACPSessionListResult(sessions: []))
+        }
+        let model = ACPSessionDiscoveryModel()
+        await model.start(manager: manager(store: store, client: client), agentId: "claude")
+        let change = Task { try await model.setFilter(.init(showArchived: true)) }
+        for await _ in archivedStarted.stream { break }
+        client.emitSessionListChanges(.init(subscriptionId: "sub-1", sessions: [
+            .init(sessionId: "x", cwd: "/tmp/wt", index: .init(archived: true)),
+        ], removed: []))
+        #expect(await awaitCondition { model.sessions.isEmpty })
+        gate.continuation.yield()
+        try await change.value
+        #expect(model.sessions.map(\.remoteSessionId) == ["x"])
+        await model.stop()
+    }
+
+    @MainActor
     @Test("a Load more answering after a filter change neither shows its rows nor moves the cursor")
     func loadMoreAfterFilterChange() async throws {
         let store = try temporaryStore()
