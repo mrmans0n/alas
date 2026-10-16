@@ -174,6 +174,15 @@ struct HostSessionsTests {
         try late.follow(id, from: lastSeen)
         try await eventually { await lateEvents.deltas(of: id).first?.reset == true }
         late.cancel()
+
+        // A follower keeps an idle session loaded after its last tab closes.
+        manager.retainSession(id: other.id)
+        let idle = fixture.host.subscribe()
+        try idle.follow(other.id)
+        manager.releaseSession(id: other.id)
+        #expect(manager.liveSession(for: other.id) != nil)
+        idle.unfollow(other.id)
+        #expect(manager.liveSession(for: other.id) == nil)
     }
 
     @Test func answersWithNoAgentToReceiveThemAreRefused() async throws {

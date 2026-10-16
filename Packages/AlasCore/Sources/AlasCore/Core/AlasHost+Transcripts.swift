@@ -64,7 +64,8 @@ public enum HostPendingRequestID: Codable, Hashable, Sendable {
 }
 
 /// A session a subscription follows, and what it has sent of it. Following
-/// retains the transcript's change log; `release()` lets it go.
+/// keeps the session loaded, as an open tab does, and retains its
+/// transcript's change log; `release()` lets both go.
 @MainActor
 final class FollowedSession {
     let owner: SessionOwnerID
@@ -85,6 +86,7 @@ final class FollowedSession {
         self.session = session
         self.manager = manager
         sent = revision
+        manager.retainSession(id: id)
         transcript.changeLog.retainTracking()
         let mark: () -> Void = { [weak self] in
             self?.isDirty = true
@@ -97,6 +99,7 @@ final class FollowedSession {
         signals.forEach { $0.cancel() }
         signals.removeAll()
         transcript.changeLog.releaseTracking()
+        manager?.releaseSession(id: id)
     }
 
     /// The transcript delta and request changes since the last call.
