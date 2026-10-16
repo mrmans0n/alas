@@ -35,6 +35,9 @@ public protocol AlasHostEnvironment: AnyObject {
     /// Whether new sessions may use `agentID`, in a project on `remoteHost`
     /// when it is set.
     func admitsAgent(_ agentID: String, remoteHost: String?) -> Bool
+    /// Whether an interrupted checkpoint restore keeps new agent sessions out
+    /// of `owner` now.
+    func checkpointRecoveryBlocksSessions(owner: SessionOwnerID, in core: AlasCoreContext) async -> Bool
     /// The session manager for a Workspace checkout, created on first use.
     /// Throws a `SessionRefusal` when the checkout cannot host sessions now.
     func sessionManager(forCheckout checkout: WorkspaceCheckout, in core: AlasCoreContext) async throws -> ACPSessionManager
@@ -68,6 +71,15 @@ extension AlasHostEnvironment {
     public func resolveWorkspaceRepoHook(_ request: WorkspaceRepoHookRequest) async throws -> String? { nil }
 
     public var runLauncher: any RunLauncher { HeadlessRunLauncher.shared }
+
+    /// A worktree's own restore journals decide; a checkout has none of its own.
+    public func checkpointRecoveryBlocksSessions(owner: SessionOwnerID, in core: AlasCoreContext) async -> Bool {
+        guard case .worktree(let worktreeID) = owner else { return false }
+        guard let worktree = core.projects.worktreesByProject.values.lazy.flatMap({ $0 }).first(where: { $0.id == worktreeID }) else {
+            return true
+        }
+        return await AlasCoreContext.hasPendingCheckpointRecovery(worktree)
+    }
 
     public func admitsAgent(_ agentID: String, remoteHost: String?) -> Bool {
         ACPLaunchCatalog.specs.contains { $0.agentID == agentID }

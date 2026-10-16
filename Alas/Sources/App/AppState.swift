@@ -16836,6 +16836,11 @@ class AppHostEnvironment: AlasHostEnvironment {
         try await app?.preparedWorkspaceRepoHook(request)
     }
 
+    /// The app's own recovery checks, which also cover Workspace checkouts.
+    func checkpointRecoveryBlocksSessions(owner: SessionOwnerID, in core: AlasCoreContext) async -> Bool {
+        await app?.checkpointACPAdmissionDisabledAfterDiscovery(owner: owner, fallbackWorktree: nil) ?? true
+    }
+
     /// The agents the app offers for new sessions: enabled ACP agents, and on
     /// a remote project only those that can run there.
     func admitsAgent(_ agentID: String, remoteHost: String?) -> Bool {

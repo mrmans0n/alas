@@ -3236,6 +3236,23 @@ public final class ACPSessionManager: ChangeTracking {
         visibleSessionCounts.removeValue(forKey: id)
     }
 
+    /// Stops and archives a session no other live instance drives, reading
+    /// its lease from the store rather than this instance's last view of it.
+    /// Returns false, archiving nothing, while another instance holds it.
+    public func archiveUnlessDrivenElsewhere(id: ACPSession.ID) async throws -> Bool {
+        if let lease = try await persistence.loadLease(sessionId: id),
+           lease.ownerInstance != instanceId,
+           ACPProcessLiveness.pidAlive(lease.pid),
+           lease.heartbeatAt >= Int64(Date().timeIntervalSince1970) - Self.leaseStaleAfter {
+            return false
+        }
+        if sessions[id] != nil {
+            try await disposeSession(id: id)
+        }
+        setArchived(id: id, archived: true)
+        return true
+    }
+
     public func setArchived(id: ACPSession.ID, archived: Bool) {
         if var row = persistedRows[id] {
             row.archived = archived

@@ -52,9 +52,21 @@ extension SessionsAPI {
                 throw SessionRefusal.ownerUnavailable(reason: "Another operation holds the worktree.")
             }
         case .workspaceCheckout(let id):
-            let checkout = try await WorkspaceAutomationService(store: core.workspaceStore).checkout(id: id)
-            guard core.environment.admitsAgent(agentID, remoteHost: nil) else { throw SessionRefusal.agentUnavailable }
+            let checkout = try await idleCheckout(id)
+            guard core.environment.admitsAgent(agentID, remoteHost: checkout.executionLocation.sshHost) else {
+                throw SessionRefusal.agentUnavailable
+            }
+            guard await !core.environment.checkpointRecoveryBlocksSessions(owner: .workspaceCheckout(checkout.id, checkout.executionLocation), in: core) else {
+                throw SessionRefusal.ownerUnavailable(reason: Self.checkpointRecoveryReason)
+            }
             manager = try await core.environment.sessionManager(forCheckout: checkout, in: core)
+            // The lookup can suspend: whatever happened to the checkout meanwhile
+            // decides, not what it was before.
+            _ = try await idleCheckout(id)
+        }
+        // A checkpoint restore being recovered keeps agents out of the owner.
+        guard await !core.environment.checkpointRecoveryBlocksSessions(owner: manager.owner, in: core) else {
+            throw SessionRefusal.ownerUnavailable(reason: Self.checkpointRecoveryReason)
         }
         let session = manager.createSession(agentId: agentID, autoRunDefault: autoRun)
         // Picked up by `attach`, so the first turn already runs on it.
@@ -97,15 +109,11 @@ extension SessionsAPI {
     }
 
     /// Stops the session, closing it with the agent, and hides it from the
-    /// list. A session another instance drives is refused.
+    /// list. A session another live instance drives is refused.
     public func archive(_ sessionID: String, caller: HostCaller) async throws {
         caller.log("sessions.archive", sessionID)
         guard let manager = rowManager(for: sessionID) else { throw SessionRefusal.notFound }
-        if manager.liveSession(for: sessionID) != nil {
-            guard manager.isWriter(for: sessionID) || manager.runners[sessionID] == nil else { throw SessionRefusal.notWriter }
-            try await manager.disposeSession(id: sessionID)
-        }
-        manager.setArchived(id: sessionID, archived: true)
+        guard try await manager.archiveUnlessDrivenElsewhere(id: sessionID) else { throw SessionRefusal.notWriter }
     }
 
     public func setModel(_ sessionID: String, modelID: String, caller: HostCaller) async throws {
@@ -180,6 +188,18 @@ extension SessionsAPI {
         else { throw SessionRefusal.notPending }
         guard let action = ACPRequestAnswers.userInput(pending, answer: answer) else { throw SessionRefusal.invalidAnswer }
         manager.respondToUserInput(for: sessionID, token: requestID, action: action)
+    }
+
+    static let checkpointRecoveryReason = "An interrupted checkpoint restore must be recovered first."
+
+    /// The Workspace checkout `id`, when it is not archived and nothing is
+    /// changing it.
+    private func idleCheckout(_ id: UUID) async throws -> WorkspaceCheckout {
+        let checkout = try await WorkspaceAutomationService(store: core.workspaceStore).checkout(id: id)
+        guard checkout.operation == .idle, checkout.archivedAt == nil else {
+            throw SessionRefusal.ownerUnavailable(reason: "The Workspace checkout is busy.")
+        }
+        return checkout
     }
 
     /// The manager whose live session is `sessionID`.
