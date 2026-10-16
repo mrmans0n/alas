@@ -209,6 +209,8 @@ struct HostSessionsTests {
         case ownerClaimedAsCreationEnds
         /// The agent is disabled while creation waits.
         case agentDisabledMeanwhile
+        /// No such Workspace checkout, or an archived one.
+        case missingCheckout
     }
 
     /// A session is not created where it could not safely run.
@@ -248,6 +250,9 @@ struct HostSessionsTests {
             }
             target = .workspaceCheckout(id: try await fixture.addCheckout(operation: .idle, location: .local))
             refusal = .ownerUnavailable(reason: SessionsAPI.checkpointRecoveryReason)
+        case .missingCheckout:
+            target = .workspaceCheckout(id: UUID())
+            refusal = .ownerUnavailable(reason: WorkspaceAutomationError.checkoutNotFound.message)
         case .agentDisabledMeanwhile:
             environment.duringRecoveryCheck = { environment.agentsEnabled = false }
             target = .worktree(fixture.ref)

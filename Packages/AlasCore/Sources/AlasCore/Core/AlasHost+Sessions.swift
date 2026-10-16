@@ -232,7 +232,12 @@ extension SessionsAPI {
     /// The Workspace checkout `id`, when it is not archived and nothing is
     /// changing it.
     private func idleCheckout(_ id: UUID) async throws -> WorkspaceCheckout {
-        let checkout = try await WorkspaceAutomationService(store: core.workspaceStore).checkout(id: id)
+        let checkout: WorkspaceCheckout
+        do {
+            checkout = try await WorkspaceAutomationService(store: core.workspaceStore).checkout(id: id)
+        } catch let error as WorkspaceAutomationError {
+            throw SessionRefusal.ownerUnavailable(reason: error.message)
+        }
         guard checkout.operation == .idle, checkout.archivedAt == nil else {
             throw SessionRefusal.ownerUnavailable(reason: "The Workspace checkout is busy.")
         }
