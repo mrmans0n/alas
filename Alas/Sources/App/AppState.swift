@@ -15919,13 +15919,6 @@ extension AppState: RemoteSessionsProvider {
         return false
     }
 
-    func takeOver(for id: String) async {
-        for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
-            await mgr.takeOver(sessionId: id)
-            return
-        }
-    }
-
     func openSessionTab(for id: String) async -> RemoteSessionTabActionResult {
         await serializedSessionTabAction(for: id) { await self.openSessionTabNow(for: id) }
     }
@@ -16029,13 +16022,6 @@ extension AppState: RemoteSessionsProvider {
         return .failed("This session is no longer available.")
     }
 
-    /// `onResult` fires once (false when no manager owns the id, the manager
-    /// refuses, or delivery later fails) so the gateway can restore the text.
-    func sendPrompt(for id: String, text: String, attachments: [ACPMessage.Attachment], onResult: @escaping @MainActor (Bool) -> Void) async {
-        await sendPrompt(for: id, text: text, attachments: attachments,
-                         normalUserTurn: true, onResult: onResult)
-    }
-
     func sendPrompt(
         for id: String, text: String, attachments: [ACPMessage.Attachment],
         delegatedSource: ACPDelegatedPromptSource? = nil, normalUserTurn: Bool,
@@ -16049,11 +16035,6 @@ extension AppState: RemoteSessionsProvider {
             return
         }
         onResult(false)
-    }
-
-    func answerVisualAid(for id: String, visualId: UUID, answer: ACPVisualAid.Answer) async -> Bool {
-        guard let manager = acpManager(forSession: id) else { return false }
-        return await manager.answerVisualAid(id: visualId, answer: answer, in: id)
     }
 
     func sendPrompt(
@@ -16071,129 +16052,17 @@ extension AppState: RemoteSessionsProvider {
         await manager.sendPrompt(for: id, text: text, attachments: attachments, onResult: onResult)
     }
 
-    func writeAttachment(_ data: Data, mimeType: String, name: String?, for id: String) -> URL? {
-        guard let mgr = acpManagers.values.first(where: { $0.liveSession(for: id) != nil }),
-              let session = mgr.liveSession(for: id) else { return nil }
-        let dir = Paths.acpAttachmentsDir(forWorktreeId: session.worktreeId)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let ext = mimeType == "image/png" ? "png" : (mimeType == "image/jpeg" ? "jpg" : "img")
-        let url = dir.appendingPathComponent("\(UUID().uuidString).\(ext)")
-        do { try data.write(to: url) } catch { return nil }
-        return url
-    }
-
-    func stop(for id: String) async {
-        for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
-            await mgr.interruptBypassingLease(for: id)
-            return
-        }
-    }
-
     func stop(for id: String, worktreeID: String) async {
         guard let manager = acpManager(forWorktreeId: worktreeID) else { return }
         await manager.interrupt(for: id)
     }
 
-    func queueForceSend(for id: String, itemId: UUID) async {
-        for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
-            await mgr.queueForceSend(for: id, itemId: itemId)
+    func sessionRenamed(_ id: String, title: String) {
+        for mgr in acpManagers.values
+        where mgr.liveSession(for: id) != nil || mgr.sessionRows.contains(where: { $0.id == id }) {
+            tabs.renameACPSessionTabs(worktreeId: mgr.worktreeId, sessionId: id, title: title)
             return
         }
-    }
-
-    func queueRemove(for id: String, itemId: UUID) async {
-        for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
-            await mgr.queueRemove(for: id, itemId: itemId)
-            return
-        }
-    }
-
-    func queueRetry(for id: String, itemId: UUID) async {
-        for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
-            await mgr.queueRetry(for: id, itemId: itemId)
-            return
-        }
-    }
-
-    func queueEdit(for id: String, itemId: UUID) async -> String? {
-        for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
-            return await mgr.queueEdit(for: id, itemId: itemId)
-        }
-        return nil
-    }
-
-    func queueClear(for id: String) async {
-        for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
-            await mgr.queueClear(for: id)
-            return
-        }
-    }
-
-    func queueMove(for id: String, itemId: UUID, targetItemId: UUID) async {
-        for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
-            await mgr.queueMove(for: id, itemId: itemId, targetItemId: targetItemId)
-            return
-        }
-    }
-
-    func queuePromote(for id: String, itemId: UUID) async {
-        for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
-            await mgr.queuePromote(for: id, itemId: itemId)
-            return
-        }
-    }
-
-    func steerPrompt(for id: String, text: String, attachments: [ACPMessage.Attachment], onResult: @escaping @MainActor (Bool) -> Void) async {
-        for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
-            await mgr.steerPrompt(for: id, text: text, attachments: attachments, onResult: onResult)
-            return
-        }
-        onResult(false)
-    }
-
-    func setModel(for id: String, modelId: String) async {
-        for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
-            await mgr.setModel(for: id, modelId: modelId)
-            return
-        }
-    }
-
-    func setMode(for id: String, modeId: String) async {
-        for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
-            await mgr.setMode(for: id, modeId: modeId)
-            return
-        }
-    }
-
-    func setAutoRun(for id: String, enabled: Bool) async {
-        for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
-            await mgr.setAutoRun(for: id, enabled: enabled)
-            return
-        }
-    }
-
-    func setConfigOption(for id: String, configId: String, value: ACPConfigValue) async {
-        for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
-            await mgr.setConfigOption(for: id, configId: configId, value: value)?.value
-            return
-        }
-    }
-
-    func renameSession(for id: String, title: String) -> Bool {
-        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return false }
-
-        for mgr in acpManagers.values {
-            guard mgr.liveSession(for: id) != nil
-                    || mgr.sessionRows.contains(where: { $0.id == id && !$0.archived }) else { continue }
-            guard let session = mgr.liveSession(for: id) ?? mgr.placeholderSession(id: id) else { return false }
-            guard mgr.renameSessionCosmetic(id: session.id, title: trimmed, source: .manual) else { return false }
-
-            _ = tabs.renameACPSessionTabs(worktreeId: mgr.worktreeId, sessionId: session.id, title: trimmed)
-            return true
-        }
-
-        return false
     }
 
     func sessionConfig(for id: String) -> RemoteSessionConfig? {

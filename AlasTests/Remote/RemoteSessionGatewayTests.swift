@@ -22,16 +22,7 @@ final class FakeSessionsProvider: RemoteSessionsProvider, RemoteSessionPresenter
     var lastPlanResponse: (id: String, requestId: JSONRPCID, response: ACPCursorPlanResponse)?
     var lastUserInputResponse: (id: String, token: UUID, action: ACPUserInputAction)?
     var writers: Set<String> = []
-    var tookOver: [String] = []
-    var prompts: [(id: String, text: String)] = []
-    var lastAttachments: [ACPMessage.Attachment] = []
-    var sendPromptAccepts = true   // simulate the manager refusing a submit (e.g. needs auth)
-    var stopped: [String] = []
-    var models: [(id: String, model: String)] = []
-    var modes: [(id: String, mode: String)] = []
-    var autoRuns: [(id: String, enabled: Bool)] = []
     var renamed: [(id: String, title: String)] = []
-    var renameSucceeds = true
     var tabActions: [String] = []
     var tabActionResult: RemoteSessionTabActionResult = .success
     var configs: [String: RemoteSessionConfig] = [:]
@@ -55,22 +46,7 @@ final class FakeSessionsProvider: RemoteSessionsProvider, RemoteSessionPresenter
         comparisonMode: AppConfig.Changes.ChangesComparisonMode?
     )] = []
     var fileContentsRequests: [(sessionId: String, path: String)] = []
-    var queueForceSends: [(id: String, itemId: UUID)] = []
-    var queueRemoves: [(id: String, itemId: UUID)] = []
-    var queueRetries: [(id: String, itemId: UUID)] = []
-    var queueEdits: [(id: String, itemId: UUID)] = []
-    var queueClears: [String] = []
-    var queueMoves: [(id: String, itemId: UUID, targetItemId: UUID)] = []
-    var queuePromotes: [(id: String, itemId: UUID)] = []
-    var steerPrompts: [(id: String, text: String)] = []
-    var queueEditText: String?            // what queueEdit hands back
-    /// When set, `queueEdit` delegates to this real manager instead of
-    /// returning `queueEditText`, so a test can exercise the manager's own
-    /// guard logic (e.g. refusing an item with a mention/image) through the
-    /// gateway rather than a canned stub.
-    var manager: ACPSessionManager?
     var eventHost: AlasHost?
-    var steerPromptAccepts = true
     var fullToolCallContents: [String: String] = [:]
     var fullToolCallContentCallCount = 0
     var sessionSummariesCallCount = 0
@@ -267,43 +243,8 @@ final class FakeSessionsProvider: RemoteSessionsProvider, RemoteSessionPresenter
         tabActions.append("close \(id)")
         return tabActionResult
     }
-    var pauseTakeOver = false   // suspends INSIDE the gateway's own await, unlike pauseSessionSummaries's detached fetch
-    var takeOverCallCount = 0
-    private var takeOverContinuation: CheckedContinuation<Void, Never>?
-    func takeOver(for id: String) async {
-        takeOverCallCount += 1
-        tookOver.append(id)
-        writers.insert(id)
-        if pauseTakeOver {
-            await withCheckedContinuation { continuation in
-                takeOverContinuation = continuation
-            }
-        }
-    }
-    func resumeTakeOver() {
-        takeOverContinuation?.resume()
-        takeOverContinuation = nil
-    }
-
-    var answeredVisuals: [(id: String, visualId: UUID, answer: ACPVisualAid.Answer)] = []
-    var answerVisualAidResult = true
-    func answerVisualAid(for id: String, visualId: UUID, answer: ACPVisualAid.Answer) async -> Bool {
-        answeredVisuals.append((id, visualId, answer))
-        return answerVisualAidResult
-    }
-
-    var sendPromptResultIsAsync = false   // deliver onResult on a later tick (models a late delivery failure)
-    func sendPrompt(for id: String, text: String, attachments: [ACPMessage.Attachment], onResult: @escaping @MainActor (Bool) -> Void) {
-        let accepted = writers.contains(id) && sendPromptAccepts
-        if accepted {
-            prompts.append((id, text))
-            lastAttachments = attachments
-        }
-        if sendPromptResultIsAsync {
-            Task { @MainActor in onResult(accepted) }
-        } else {
-            onResult(accepted)
-        }
+    func sessionRenamed(_ id: String, title: String) {
+        renamed.append((id, title))
     }
 
     var mentionCandidates: [RemoteMention] = []
@@ -315,25 +256,6 @@ final class FakeSessionsProvider: RemoteSessionsProvider, RemoteSessionPresenter
         mentions.isEmpty ? [] : mentionAttachments
     }
 
-    var writtenAttachmentURLs: [URL] = []
-    func writeAttachment(_ data: Data, mimeType: String, name: String?, for id: String) -> URL? {
-        let ext = mimeType == "image/png" ? "png" : (mimeType == "image/jpeg" ? "jpg" : "img")
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID()).\(ext)")
-        do { try data.write(to: url) } catch { return nil }
-        writtenAttachmentURLs.append(url)
-        return url
-    }
-
-    func stop(for id: String) { stopped.append(id) }
-    func setModel(for id: String, modelId: String) { models.append((id, modelId)) }
-    func setMode(for id: String, modeId: String) { modes.append((id, modeId)) }
-    func setAutoRun(for id: String, enabled: Bool) { autoRuns.append((id, enabled)) }
-    var configOptions: [(id: String, configId: String, value: ACPConfigValue)] = []
-    func setConfigOption(for id: String, configId: String, value: ACPConfigValue) { configOptions.append((id, configId, value)) }
-    func renameSession(for id: String, title: String) -> Bool {
-        renamed.append((id, title))
-        return renameSucceeds
-    }
     func sessionConfig(for id: String) -> RemoteSessionConfig? { configs[id] }
 
     func remoteChangeList(
@@ -372,25 +294,6 @@ final class FakeSessionsProvider: RemoteSessionsProvider, RemoteSessionPresenter
     func remoteFileContents(sessionId: String, path: String) async -> RemoteFileContentsResult {
         fileContentsRequests.append((sessionId, path))
         return fileContentsResult
-    }
-
-    func queueForceSend(for id: String, itemId: UUID) { queueForceSends.append((id, itemId)) }
-    func queueRemove(for id: String, itemId: UUID) { queueRemoves.append((id, itemId)) }
-    func queueRetry(for id: String, itemId: UUID) { queueRetries.append((id, itemId)) }
-    func queueEdit(for id: String, itemId: UUID) async -> String? {
-        queueEdits.append((id, itemId))
-        if let manager { return await manager.queueEdit(for: id, itemId: itemId) }
-        return queueEditText
-    }
-    func queueClear(for id: String) { queueClears.append(id) }
-    func queueMove(for id: String, itemId: UUID, targetItemId: UUID) {
-        queueMoves.append((id, itemId, targetItemId))
-    }
-    func queuePromote(for id: String, itemId: UUID) { queuePromotes.append((id, itemId)) }
-    func steerPrompt(for id: String, text: String, attachments: [ACPMessage.Attachment], onResult: @escaping @MainActor (Bool) -> Void) {
-        let accepted = writers.contains(id) && steerPromptAccepts
-        if accepted { steerPrompts.append((id, text)) }
-        onResult(accepted)
     }
 }
 
@@ -561,37 +464,139 @@ enum InvalidAttachmentBatch: String, CaseIterable, Sendable {
     }
 }
 
-enum QueueVerb: String, CaseIterable, Sendable {
-    case forceSend, remove, retry, edit, clear, move, promote
-
-    func message(sessionId: String, itemId: UUID) -> RemoteClientMessage {
-        switch self {
-        case .move: .queueMove(sessionId: sessionId, itemId: itemId.uuidString, targetItemId: UUID().uuidString)
-        case .promote: .queuePromote(sessionId: sessionId, itemId: itemId.uuidString)
-        case .forceSend: .queueForceSend(sessionId: sessionId, itemId: itemId.uuidString)
-        case .remove: .queueRemove(sessionId: sessionId, itemId: itemId.uuidString)
-        case .retry: .queueRetry(sessionId: sessionId, itemId: itemId.uuidString)
-        case .edit: .queueEdit(sessionId: sessionId, itemId: itemId.uuidString)
-        case .clear: .queueClear(sessionId: sessionId)
-        }
-    }
-
-    @MainActor
-    func recordedCalls(in provider: FakeSessionsProvider) -> Int {
-        switch self {
-        case .forceSend: provider.queueForceSends.count
-        case .remove: provider.queueRemoves.count
-        case .retry: provider.queueRetries.count
-        case .edit: provider.queueEdits.count
-        case .clear: provider.queueClears.count
-        case .move: provider.queueMoves.count
-        case .promote: provider.queuePromotes.count
-        }
-    }
-}
-
 @MainActor
 struct RemoteSessionGatewayTests {
+    /// A client drives a session through the host: prompts are trimmed and
+    /// blank ones refused, a session this Mac does not drive refuses them,
+    /// and rename, auto-run, takeover and stop reach it.
+    @Test func aClientDrivesASessionThroughTheHost() async throws {
+        let fixture = try GatewayHostFixture()
+        defer { fixture.tearDown() }
+        let id = try await fixture.drivenSession()
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: fixture.provider) { sent.append($0) }
+        gw.presenter = fixture.provider
+        defer { gw.close() }
+
+        await gw.handle(.sendPrompt(sessionId: "elsewhere", text: "hi", attachments: [], intent: "auto"))
+        #expect(sent == [.promptRejected(sessionId: "elsewhere")])
+        await gw.handle(.sendPrompt(sessionId: id, text: "   \n  ", attachments: [], intent: "auto"))
+        #expect(sent.last == .promptRejected(sessionId: id))
+        sent.removeAll()
+        await gw.handle(.sendPrompt(sessionId: id, text: "  hi  ", attachments: [], intent: "auto"))
+        try await fixture.until { fixture.prompts.last?.hasSuffix("hi") == true }
+        await gw.handle(.sendPrompt(sessionId: id, text: "redirect", attachments: [], intent: "steer"))
+        try await fixture.until { fixture.prompts.last?.hasSuffix("redirect") == true }
+        #expect(fixture.prompts.count == 2)
+        #expect(!sent.contains(.promptRejected(sessionId: id)))
+
+        await gw.handle(.renameSession(sessionId: id, title: "  Renamed  "))
+        #expect(sent.contains(.sessionRenamed(sessionId: id, title: "Renamed")))
+        #expect(fixture.provider.renamed.map(\.title) == ["Renamed"])
+        #expect(fixture.host.sessions.list().first { $0.id == id }?.title == "Renamed")
+        await gw.handle(.renameSession(sessionId: "missing", title: "Name"))
+        #expect(sent.contains(.error(message: "Could not rename session.", sessionId: "missing")))
+
+        await gw.handle(.setAutoRun(sessionId: id, enabled: true))
+        #expect(fixture.manager?.liveSession(for: id)?.autoRunEnabled == true)
+
+        // Takeover pushes a snapshot, so the client learns it can drive.
+        sent.removeAll()
+        await gw.handle(.takeOver(sessionId: id))
+        #expect(sent.contains { if case .transcriptSnapshot(id, _, true, _, _, _, _, _, _) = $0 { true } else { false } })
+
+        // Stop is acknowledged before the agent is told.
+        sent.removeAll()
+        await gw.handle(.stop(sessionId: id))
+        #expect(sent.first == .stopPending(sessionId: id))
+    }
+
+    /// Editing a queued prompt hands its text back to the client, unless
+    /// the item carries a mention the plain-text composer cannot hold: then
+    /// it stays queued.
+    @Test func queueEditRestoresPlainTextAndKeepsMentionsQueued() async throws {
+        let fixture = try GatewayHostFixture()
+        defer { fixture.tearDown() }
+        let id = try await fixture.drivenSession()
+        let session = try #require(fixture.manager?.liveSession(for: id))
+        session.enqueue(blocks: [.text("plain")], draft: ACPComposerDraft(segments: [.text("plain")]))
+        session.enqueue(
+            blocks: [.text("see "), .resourceLink(uri: "file:///App.swift", name: "App.swift")],
+            draft: ACPComposerDraft(segments: [.text("see "), .mention(displayName: "App.swift", uri: "file:///App.swift")])
+        )
+        let plain = session.queue[0].id
+        let mentioning = session.queue[1].id
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: fixture.provider) { sent.append($0) }
+        defer { gw.close() }
+
+        await gw.handle(.queueEdit(sessionId: id, itemId: plain.uuidString))
+        #expect(sent.contains(.queueEditRestored(sessionId: id, itemId: plain.uuidString, text: "plain")))
+        sent.removeAll()
+        await gw.handle(.queueEdit(sessionId: id, itemId: mentioning.uuidString))
+        #expect(!sent.contains { if case .queueEditRestored = $0 { true } else { false } })
+        #expect(session.queue.map(\.id) == [mentioning])
+    }
+
+    /// Image files written for a prompt are deleted when the prompt is
+    /// refused before the session records it, and kept when delivery fails
+    /// later, because the recorded message refers to them.
+    @Test(arguments: [true, false])
+    func refusedPromptsLeaveNoImageFiles(refusedAtOnce: Bool) async throws {
+        let fixture = try GatewayHostFixture()
+        defer { fixture.tearDown() }
+        let id = try await fixture.drivenSession()
+        if refusedAtOnce {
+            try await fixture.loseLease(id)
+        } else {
+            fixture.agent.script(method: "session/prompt") { _ in throw ACPClientError.notRunning }
+        }
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: fixture.provider) { sent.append($0) }
+        defer { gw.close() }
+        let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+
+        await gw.handle(.sendPrompt(sessionId: id, text: "look", attachments: [
+            RemoteAttachment(name: "a.png", mimeType: "image/png", dataBase64: png),
+        ], intent: "auto"))
+        try await fixture.until { sent.contains(.promptRejected(sessionId: id)) }
+        let files = (try? FileManager.default.contentsOfDirectory(atPath: Paths.acpAttachmentsDir(forWorktreeId: fixture.worktree.id).path)) ?? []
+        #expect(files.isEmpty == refusedAtOnce)
+    }
+
+    /// Mentions resolve before any image is written, and go after the images.
+    @Test func promptMentionsResolveBeforeImagesAreWritten() async throws {
+        let fixture = try GatewayHostFixture()
+        defer { fixture.tearDown() }
+        let id = try await fixture.drivenSession()
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: fixture.provider) { sent.append($0) }
+        defer { gw.close() }
+        let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+        let image = RemoteAttachment(name: "a.png", mimeType: "image/png", dataBase64: png)
+        let mention = RemoteMention(kind: RemoteMention.file, value: "App.swift", name: "App.swift")
+        let attachments = Paths.acpAttachmentsDir(forWorktreeId: fixture.worktree.id).path
+
+        fixture.provider.mentionAttachments = nil
+        await gw.handle(.sendPrompt(sessionId: id, text: "@App.swift", attachments: [image], intent: "auto", mentions: [mention]))
+        #expect(sent.contains(.promptRejected(sessionId: id)))
+        #expect(((try? FileManager.default.contentsOfDirectory(atPath: attachments)) ?? []).isEmpty)
+
+        let linked = ACPMessage.Attachment(uri: "file:///w/App.swift", name: "App.swift", mimeType: nil)
+        fixture.provider.mentionAttachments = [linked]
+        await gw.handle(.sendPrompt(sessionId: id, text: "@App.swift", attachments: [image], intent: "auto", mentions: [mention]))
+        let session = try #require(fixture.manager?.liveSession(for: id))
+        try await fixture.until {
+            session.transcript.messages.contains { if case .user = $0 { true } else { false } }
+        }
+        guard case .user(_, _, _, let recorded, _, _)? = session.transcript.messages.last(where: { if case .user = $0 { true } else { false } }) else {
+            Issue.record("expected the user message")
+            return
+        }
+        #expect(recorded.map(\.mimeType) == ["image/png", nil])
+        #expect(recorded.last == linked)
+    }
+
     private func makeManager() throws -> ACPSessionManager {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("remote-gw-\(UUID()).sqlite")
@@ -991,7 +996,7 @@ struct RemoteSessionGatewayTests {
         #expect(sent.isEmpty)
 
         await gw.handle(.stop(sessionId: "s1"))
-        #expect(provider.stopped == ["s1"])
+        #expect(sent == [.stopPending(sessionId: "s1")])
 
         provider.resumeRemoteWorktrees()
         await listTask.value
@@ -1152,31 +1157,6 @@ struct RemoteSessionGatewayTests {
         } else {
             Issue.record("expected local tool call")
         }
-    }
-
-    @Test func takeOverPushesSnapshotWithCanDrive() async throws {
-        // Regression: takeover seizes the writer lease synchronously but mutates
-        // lease/agent state rather than the transcript, so the objectWillChange
-        // delta may never fire on an idle session. The gateway must push a
-        // snapshot itself so the client learns canDrive=true and unlocks the
-        // composer instead of waiting for an unrelated transcript mutation.
-        let provider = FakeSessionsProvider()
-        let s = try makeSessionWithAgentText("hi")
-        provider.sessions["s1"] = s
-        var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-        await gw.handle(.takeOver(sessionId: "s1"))
-        #expect(provider.tookOver == ["s1"])
-        let snap = sent.last { msg in
-            if case .transcriptSnapshot = msg { return true }
-            return false
-        }
-        guard case .transcriptSnapshot(let id, _, let canDrive, _, _, _, _, _, _)? = snap else {
-            Issue.record("expected a snapshot after takeOver, got \(sent)")
-            return
-        }
-        #expect(id == "s1")
-        #expect(canDrive == true)
     }
 
     @Test func permissionDecisionCallsPolicyWhenRequestMatches() async throws {
@@ -1554,40 +1534,6 @@ struct RemoteSessionGatewayTests {
         #expect(sent.isEmpty)
     }
 
-    @Test func sendPromptTrimsAndIgnoresBlankEvenWhenWriter() async {
-        let provider = FakeSessionsProvider()
-        provider.writers.insert("s1")
-        let gw = RemoteSessionGateway(provider: provider) { _ in }
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "   \n  ", attachments: [], intent: "auto")) // blank → ignored
-        #expect(provider.prompts.isEmpty)
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "  hi  ", attachments: [], intent: "auto")) // trimmed before forwarding
-        #expect(provider.prompts.map(\.text) == ["hi"])
-    }
-
-    @Test func sendPromptSendsResolvedMentionsAfterImagesAndRefusesUnresolvedOnesBeforeWriting() async throws {
-        let provider = FakeSessionsProvider()
-        provider.writers.insert("s1")
-        var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-        let png = try #require(Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="))
-        let image = RemoteAttachment(name: "a.png", mimeType: "image/png", dataBase64: png.base64EncodedString())
-        let mention = RemoteMention(kind: RemoteMention.file, value: "App.swift", name: "App.swift")
-
-        provider.mentionAttachments = nil
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "@App.swift", attachments: [image], intent: "auto",
-                                    mentions: [mention]))
-        #expect(sent.contains(.promptRejected(sessionId: "s1")))
-        #expect(provider.prompts.isEmpty)
-        #expect(provider.writtenAttachmentURLs.isEmpty)
-
-        let linked = ACPMessage.Attachment(uri: "file:///w/App.swift", name: "App.swift", mimeType: nil)
-        provider.mentionAttachments = [linked]
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "@App.swift", attachments: [image], intent: "auto",
-                                    mentions: [mention]))
-        #expect(provider.lastAttachments.map(\.mimeType) == ["image/png", nil])
-        #expect(provider.lastAttachments.last == linked)
-    }
-
     @Test func overlongMentionQueriesGetNoRows() async {
         let provider = FakeSessionsProvider()
         provider.mentionCandidates = [RemoteMention(kind: RemoteMention.file, value: "a", name: "a")]
@@ -1598,59 +1544,6 @@ struct RemoteSessionGatewayTests {
         await gw.handle(.searchMentions(sessionId: "s1", query: "a"))
         #expect(sent == [.mentionCandidates(sessionId: "s1", query: long, candidates: []),
                          .mentionCandidates(sessionId: "s1", query: "a", candidates: provider.mentionCandidates)])
-    }
-
-    @Test func droppedSendPromptEmitsRejection() async {
-        // A non-writer sendPrompt must tell the client it was dropped so the
-        // composer can restore the text instead of silently losing the message.
-        let provider = FakeSessionsProvider()
-        var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "hi", attachments: [], intent: "auto")) // not writer
-        #expect(provider.prompts.isEmpty)
-        #expect(sent.contains(.promptRejected(sessionId: "s1")))
-        // When we ARE the writer and the manager accepts, the prompt routes
-        // and no rejection is sent.
-        sent.removeAll()
-        provider.writers.insert("s1")
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "hi", attachments: [], intent: "auto"))
-        #expect(provider.prompts.map(\.text) == ["hi"])
-        #expect(!sent.contains { if case .promptRejected = $0 { return true } else { return false } })
-        // Writer, but the manager refuses the submit (e.g. needs auth) — the
-        // client must still be told so it can restore the text.
-        sent.removeAll()
-        provider.sendPromptAccepts = false
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "later", attachments: [], intent: "auto"))
-        #expect(sent.contains(.promptRejected(sessionId: "s1")))
-    }
-
-    @Test func stopWorksWithoutWriterLeaseAndAcksImmediately() async throws {
-        let provider = FakeSessionsProvider()
-        provider.sessions["s1"] = try makeSessionWithAgentText("hi")
-        // NOTE: provider.writers is intentionally empty — not the writer.
-        var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-        await gw.handle(.stop(sessionId: "s1"))
-        #expect(provider.stopped == ["s1"])
-        #expect(sent.first == .stopPending(sessionId: "s1"))
-    }
-
-    @Test func configVerbsRouteOnlyWhenWriter() async {
-        let provider = FakeSessionsProvider()
-        let gw = RemoteSessionGateway(provider: provider) { _ in }
-        await gw.handle(.setModel(sessionId: "s1", modelId: "opus"))   // not writer
-        await gw.handle(.setAutoRun(sessionId: "s1", enabled: true))
-        await gw.handle(.setConfigOption(sessionId: "s1", configId: "effort", value: .string("high")))
-        #expect(provider.models.isEmpty && provider.autoRuns.isEmpty && provider.configOptions.isEmpty)
-        provider.writers.insert("s1")
-        await gw.handle(.setModel(sessionId: "s1", modelId: "opus"))
-        await gw.handle(.setMode(sessionId: "s1", modeId: "ask"))
-        await gw.handle(.setAutoRun(sessionId: "s1", enabled: true))
-        await gw.handle(.setConfigOption(sessionId: "s1", configId: "effort", value: .string("high")))
-        #expect(provider.configOptions.map(\.configId) == ["effort"])
-        #expect(provider.models.map(\.model) == ["opus"])
-        #expect(provider.modes.map(\.mode) == ["ask"])
-        #expect(provider.autoRuns.map(\.enabled) == [true])
     }
 
     @Test(arguments: [true, false])
@@ -1665,22 +1558,6 @@ struct RemoteSessionGatewayTests {
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
         await gw.handle(.setModel(sessionId: "s1", modelId: "opus"))
         #expect(sent == [.sessionConfig(cfg)])
-    }
-
-    @Test func renameSessionTrimsTitleDoesNotRequireWriterAndRefreshesList() async {
-        let provider = FakeSessionsProvider()
-        provider.summaries = [RemoteSessionSummary(id: "s1", title: "Renamed", agentId: "claude", status: "idle", canDrive: false)]
-        var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-
-        await gw.handle(.renameSession(sessionId: "s1", title: "  Renamed  "))
-        await Task.yield()
-
-        #expect(provider.renamed.map(\.id) == ["s1"])
-        #expect(provider.renamed.map(\.title) == ["Renamed"])
-        #expect(sent.contains(.sessionRenamed(sessionId: "s1", title: "Renamed")))
-        #expect(sent.contains(.sessionList(sessions: provider.summaries)))
-        #expect(provider.sessionSummariesCallCount == 1)
     }
 
     @Test func sessionTabActionsRefreshTheListOnSuccessAndReportFailure() async {
@@ -1713,25 +1590,6 @@ struct RemoteSessionGatewayTests {
 
         #expect(provider.renamed.isEmpty)
         #expect(sent.isEmpty)
-    }
-
-    @Test func renameSessionFailureEmitsError() async {
-        let provider = FakeSessionsProvider()
-        provider.renameSucceeds = false
-        var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-
-        await gw.handle(.renameSession(sessionId: "missing", title: "Name"))
-        await Task.yield()
-
-        #expect(provider.renamed.map(\.id) == ["missing"])
-        #expect(provider.renamed.map(\.title) == ["Name"])
-        #expect(sent.contains {
-            if case .error(let message, let sessionId) = $0 {
-                return message.contains("rename") && sessionId == "missing"
-            }
-            return false
-        })
     }
 
     @Test func sessionConfigChangeEmitsUpdate() async throws {
@@ -1978,38 +1836,14 @@ struct RemoteSessionGatewayTests {
         return nil
     }
 
-    @Test func visualAnswerRoutesToTheProviderInQuestionOrder() async throws {
-        let provider = FakeSessionsProvider()
-        let (s, visual) = try makeVisualSession(allowMultiple: true)
-        provider.sessions["s1"] = s
-        provider.writers.insert("s1")
-        var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-        await gw.handle(.visualAidResponse(sessionId: "s1", visualId: visual.id.uuidString, action: "answer",
-                                           selectedOptionIds: ["b", "a"], note: "  keep it  "))
-        let call = try #require(provider.answeredVisuals.first)
-        #expect(call.visualId == visual.id)
-        guard case .answered(let ids, let note, _) = call.answer else {
-            Issue.record("expected answered")
-            return
-        }
-        #expect(ids == ["a", "b"])
-        #expect(note == "keep it")
-        #expect(visualRejection(sent) == nil)
-    }
-
-    @Test func visualDismissRoutesWithoutChoices() async throws {
-        let provider = FakeSessionsProvider()
-        let (s, visual) = try makeVisualSession(allowMultiple: false)
-        provider.sessions["s1"] = s
-        provider.writers.insert("s1")
-        let gw = RemoteSessionGateway(provider: provider) { _ in }
-        await gw.handle(.visualAidResponse(sessionId: "s1", visualId: visual.id.uuidString, action: "dismiss",
-                                           selectedOptionIds: [], note: nil))
-        guard case .dismissed = try #require(provider.answeredVisuals.first).answer else {
-            Issue.record("expected dismissed")
-            return
-        }
+    @Test func visualAnswersKeepQuestionOrderAndTrimTheNote() throws {
+        let question = try #require(makeVisual(allowMultiple: true).question)
+        #expect(RemoteSessionGateway.visualAidAnswer(
+            to: question, action: "answer", selectedOptionIds: ["b", "a"], note: "  keep it  ", at: .distantPast
+        ) == .answered(selectedOptionIds: ["a", "b"], note: "keep it", at: .distantPast))
+        #expect(RemoteSessionGateway.visualAidAnswer(
+            to: question, action: "dismiss", selectedOptionIds: [], note: nil, at: .distantPast
+        ) == .dismissed(at: .distantPast))
     }
 
     @Test(arguments: [
@@ -2038,7 +1872,6 @@ struct RemoteSessionGatewayTests {
                                            selectedOptionIds: ids, note: note, requestId: "req-1"))
         #expect(visualRejection(sent) == reason)
         #expect(visualRejectionRequestId(sent) == "req-1")
-        #expect(provider.answeredVisuals.isEmpty)
     }
 
     @Test(arguments: [(64, true), (65, false), (1_000_000, false)])
@@ -2082,17 +1915,10 @@ struct RemoteSessionGatewayTests {
     }
 
     @Test(arguments: [(2000, true), (2001, false)])
-    func aNoteIsLimitedByGraphemesNotBytes(count: Int, accepted: Bool) async throws {
-        let provider = FakeSessionsProvider()
-        let (s, visual) = try makeVisualSession(allowMultiple: false)
-        provider.sessions["s1"] = s
-        provider.writers.insert("s1")
-        var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-        await gw.handle(.visualAidResponse(sessionId: "s1", visualId: visual.id.uuidString, action: "answer",
-                                           selectedOptionIds: ["a"], note: String(repeating: "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466}", count: count)))
-        #expect(provider.answeredVisuals.count == (accepted ? 1 : 0))
-        #expect(visualRejection(sent) == (accepted ? nil : "invalid"))
+    func aNoteIsLimitedByGraphemesNotBytes(count: Int, accepted: Bool) throws {
+        let question = try #require(makeVisual().question)
+        let note = String(repeating: "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466}", count: count)
+        #expect((RemoteSessionGateway.visualAidAnswer(to: question, action: "answer", selectedOptionIds: ["a"], note: note) != nil) == accepted)
     }
 
     /// The same vectors run in scripts/tests/remote-web-visual-aid/test-visual-aid.js against `trimNote`: the phone
@@ -2101,23 +1927,16 @@ struct RemoteSessionGatewayTests {
         (0x85, true), (0x200B, true), (0xA0, true), (0x2028, true), (0x3000, true), (0x1680, true),
         (0x202F, true), (0xFEFF, false),
     ] as [(UInt32, Bool)])
-    func noteEdgesTrimLikeThePhone(scalar: UInt32, trimmed: Bool) async throws {
+    func noteEdgesTrimLikeThePhone(scalar: UInt32, trimmed: Bool) throws {
+        let question = try #require(makeVisual().question)
         let edge = String(Unicode.Scalar(scalar)!)
         let body = String(repeating: "x", count: 2000)
         for (note, expectedNote) in [(edge + body, trimmed ? body : nil), (edge + body + edge, trimmed ? body : nil), (edge, trimmed ? "" : edge)] {
-            let provider = FakeSessionsProvider()
-            let (s, visual) = try makeVisualSession(allowMultiple: false)
-            provider.sessions["s1"] = s
-            provider.writers.insert("s1")
-            var sent: [RemoteServerMessage] = []
-            let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-            await gw.handle(.visualAidResponse(sessionId: "s1", visualId: visual.id.uuidString, action: "answer",
-                                               selectedOptionIds: ["a"], note: note))
+            let answer = RemoteSessionGateway.visualAidAnswer(to: question, action: "answer", selectedOptionIds: ["a"], note: note)
             // Kept edge characters push the 2000-character body over the limit; the edge-only note stays valid.
             let accepted = trimmed || note == edge
-            #expect(provider.answeredVisuals.count == (accepted ? 1 : 0), "U+\(String(scalar, radix: 16)) \(note.count)")
-            #expect(visualRejection(sent) == (accepted ? nil : "invalid"))
-            if accepted, case .answered(_, let stored, _) = try #require(provider.answeredVisuals.first).answer {
+            #expect((answer != nil) == accepted, "U+\(String(scalar, radix: 16)) \(note.count)")
+            if accepted, case .answered(_, let stored, _) = answer {
                 #expect(stored == (expectedNote?.isEmpty == true ? nil : expectedNote))
             }
         }
@@ -2138,12 +1957,12 @@ struct RemoteSessionGatewayTests {
         s.transcript.replaceMessage(at: s.transcript.messages.count - 1, with: .visualAid(answered))
         await gw.handle(.visualAidResponse(sessionId: "s1", visualId: visual.id.uuidString, action: "dismiss", selectedOptionIds: [], note: nil))
         #expect(visualRejection(sent) == "alreadyAnswered")
-        #expect(provider.answeredVisuals.isEmpty)
     }
 
+    /// A valid answer the host cannot deliver, here for want of a host, is
+    /// reported as failed.
     @Test func aManagerFailureIsReportedAsFailed() async throws {
         let provider = FakeSessionsProvider()
-        provider.answerVisualAidResult = false
         let (s, visual) = try makeVisualSession(allowMultiple: false)
         provider.sessions["s1"] = s
         provider.writers.insert("s1")
@@ -2224,53 +2043,18 @@ struct RemoteSessionGatewayTests {
     }
 
     @Test(arguments: InvalidAttachmentBatch.allCases)
-    func invalidAttachmentBatchIsRejectedBeforeAnyWrite(_ batch: InvalidAttachmentBatch) async {
-        let provider = FakeSessionsProvider()
-        provider.writers.insert("s1")
+    func invalidAttachmentBatchIsRejectedBeforeAnyWrite(_ batch: InvalidAttachmentBatch) async throws {
+        let fixture = try GatewayHostFixture()
+        defer { fixture.tearDown() }
+        let id = try await fixture.drivenSession()
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "x", attachments: batch.attachments, intent: "auto"))
-        #expect(sent.contains(.promptRejected(sessionId: "s1")))
-        #expect(provider.lastAttachments.isEmpty)
-        #expect(provider.writtenAttachmentURLs.isEmpty)   // rejected before any write
-    }
-
-    @Test func refusedSendDiscardsAttachmentFiles() async {
-        // Writer at gateway time, but the manager refuses the submit (e.g. a
-        // takeover landed mid-flight / needs auth). The files we wrote during
-        // materialize must be cleaned up rather than orphaned on disk.
-        let provider = FakeSessionsProvider()
-        provider.writers.insert("s1")
-        provider.sendPromptAccepts = false
-        var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "look", attachments: [.init(name: "a.png", mimeType: "image/png", dataBase64: "iVBORw0KGgo=")], intent: "auto"))
-        #expect(sent.contains(.promptRejected(sessionId: "s1")))
-        #expect(!provider.writtenAttachmentURLs.isEmpty)
-        for url in provider.writtenAttachmentURLs {
-            #expect(!FileManager.default.fileExists(atPath: url.path))
-        }
-    }
-
-    @Test func lateFailureKeepsAttachmentFiles() async throws {
-        // A LATE (async) delivery failure means sendNow already recorded the
-        // user message referencing these file URIs — the gateway must NOT
-        // delete them (only synchronous refusals, never recorded, are cleaned).
-        let provider = FakeSessionsProvider()
-        provider.writers.insert("s1")
-        provider.sendPromptAccepts = false
-        provider.sendPromptResultIsAsync = true
-        var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "look", attachments: [.init(name: "a.png", mimeType: "image/png", dataBase64: "iVBORw0KGgo=")], intent: "auto"))
-        try await Task.sleep(nanoseconds: 30_000_000)   // let the async onResult land
-        #expect(sent.contains(.promptRejected(sessionId: "s1")))
-        #expect(!provider.writtenAttachmentURLs.isEmpty)
-        for url in provider.writtenAttachmentURLs {
-            #expect(FileManager.default.fileExists(atPath: url.path))   // kept
-        }
-        // cleanup
-        for url in provider.writtenAttachmentURLs { try? FileManager.default.removeItem(at: url) }
+        let gw = RemoteSessionGateway(provider: fixture.provider) { sent.append($0) }
+        defer { gw.close() }
+        await gw.handle(.sendPrompt(sessionId: id, text: "x", attachments: batch.attachments, intent: "auto"))
+        #expect(sent.contains(.promptRejected(sessionId: id)))
+        #expect(fixture.prompts.isEmpty)
+        let written = (try? FileManager.default.contentsOfDirectory(atPath: Paths.acpAttachmentsDir(forWorktreeId: fixture.worktree.id).path)) ?? []
+        #expect(written.isEmpty)   // rejected before any write
     }
 
     private func makeSessionWithUserMessages(_ count: Int) throws -> ACPSession {
@@ -3151,21 +2935,6 @@ struct RemoteSessionGatewayTests {
         #expect(provider.fullToolCallContentCallCount == 1)
     }
 
-    @Test(arguments: QueueVerb.allCases)
-    func queueVerbsReachTheProviderOnlyForWriters(_ verb: QueueVerb) async {
-        let provider = FakeSessionsProvider()
-        let id = "s1"
-        let gateway = RemoteSessionGateway(provider: provider) { _ in }
-        let itemId = UUID()
-
-        await gateway.handle(verb.message(sessionId: id, itemId: itemId))
-        #expect(verb.recordedCalls(in: provider) == 0)
-
-        provider.writers.insert(id)
-        await gateway.handle(verb.message(sessionId: id, itemId: itemId))
-        #expect(verb.recordedCalls(in: provider) == 1)
-    }
-
     @Test func resubscribeStillEmitsQueueStateWhenUnchanged() async throws {
         let provider = FakeSessionsProvider()
         let id = "s1"
@@ -3239,77 +3008,6 @@ struct RemoteSessionGatewayTests {
         try await Task.sleep(nanoseconds: 50_000_000)
         let countAfterReassign = sent.filter { if case .queueState = $0 { return true } else { return false } }.count
         #expect(countAfterReassign == countAfterMutation)   // dedupe swallowed the no-op reassignment
-    }
-
-    @Test func malformedItemIdIsIgnored() async {
-        let provider = FakeSessionsProvider()
-        let id = "s1"
-        provider.writers.insert(id)
-        let gateway = RemoteSessionGateway(provider: provider) { _ in }
-
-        await gateway.handle(.queueRemove(sessionId: id, itemId: "not-a-uuid"))
-
-        #expect(provider.queueRemoves.isEmpty)
-    }
-
-    @Test func queueEditRepliesWithRestoredText() async {
-        let provider = FakeSessionsProvider()
-        let id = "s1"
-        provider.writers.insert(id)
-        provider.queueEditText = "restore me"
-        let itemId = UUID()
-        var sent: [RemoteServerMessage] = []
-        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
-
-        await gateway.handle(.queueEdit(sessionId: id, itemId: itemId.uuidString))
-
-        #expect(sent.contains(.queueEditRestored(sessionId: id, itemId: itemId.uuidString, text: "restore me")))
-    }
-
-    // Regression (codex review, PR #964): a queued item whose draft carries a
-    // mention (file reference) is just as unrepresentable in the plain-text
-    // web composer as one carrying an image. The web already hides Edit for
-    // these, but the manager must refuse the edit too, so a client that
-    // doesn't know the rule (or a hand-rolled one) can't cause the queued
-    // item's file context to be silently dropped. Routed through the real
-    // manager (not the plain stub) so this exercises the actual guard in
-    // `ACPSessionManager.queueEdit`, not a test double's approximation of it.
-    @Test func queueEditRefusesItemWithMentionAndLeavesItQueued() async throws {
-        let provider = FakeSessionsProvider()
-        let mgr = try makeManager()
-        provider.manager = mgr
-        let session = mgr.createSession(agentId: "claude")
-        provider.sessions[session.id] = session
-        provider.writers.insert(session.id)
-        #expect(await mgr.acquireWriterLease(sessionId: session.id) == true)
-
-        let draft = ACPComposerDraft(segments: [
-            .text("see "),
-            .mention(displayName: "App.swift", uri: "file:///App.swift"),
-        ])
-        session.enqueue(
-            blocks: [.text("see "), .resourceLink(uri: "file:///App.swift", name: "App.swift")],
-            draft: draft)
-        let itemId = session.queue[0].id
-
-        var sent: [RemoteServerMessage] = []
-        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
-        await gateway.handle(.queueEdit(sessionId: session.id, itemId: itemId.uuidString))
-
-        #expect(!sent.contains { if case .queueEditRestored = $0 { return true } else { return false } })
-        #expect(session.queue.map(\.id) == [itemId], "the item must remain queued, not be removed then discarded")
-    }
-
-    @Test func steerIntentRoutesToSteerPromptNotSendPrompt() async {
-        let provider = FakeSessionsProvider()
-        let id = "s1"
-        provider.writers.insert(id)
-        let gateway = RemoteSessionGateway(provider: provider) { _ in }
-
-        await gateway.handle(.sendPrompt(sessionId: id, text: "redirect", attachments: [], intent: "steer"))
-
-        #expect(provider.steerPrompts.map(\.text) == ["redirect"])
-        #expect(provider.prompts.isEmpty)
     }
 
     @Test func listChangesSendsChangeListFromTheProvider() async {

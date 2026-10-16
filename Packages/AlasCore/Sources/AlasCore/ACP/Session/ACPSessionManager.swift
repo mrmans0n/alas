@@ -3966,8 +3966,19 @@ public final class ACPSessionManager: ChangeTracking {
         await previousManagerDisposal?.value
         let persistence = persistence
         do {
-            let listedBefore = Set(recent.map(\.id))
-            let rows = try await persistence.recentSessions()
+            // Read once every write this manager queued has landed, again if
+            // it queued more meanwhile: a list read before a write, such as a
+            // rename, would otherwise bring back what it changed.
+            var listedBefore: Set<ACPSession.ID>
+            var rows: [ACPSessionRow]
+            var settled: Bool
+            repeat {
+                let tail = persistenceTail
+                await tail?.value
+                listedBefore = Set(recent.map(\.id))
+                rows = try await persistence.recentSessions()
+                settled = persistenceTail == tail
+            } while !settled
             // A live session missing from the store's list stays listed while
             // the store holds it unarchived, or while its first save here has
             // not landed. One another instance archived or deleted goes.

@@ -28,6 +28,15 @@ struct RemoteServerIntegrationTests {
         return (server, try #require(server.port))
     }
 
+    /// Records every frame the client receives, as it arrives.
+    private func collect(_ task: URLSessionWebSocketTask) -> ReceivedMessages {
+        let received = ReceivedMessages()
+        Task { @MainActor in
+            while let message = try? await receiveServerMessage(task) { received.all.append(message) }
+        }
+        return received
+    }
+
     private func receiveServerMessage(_ task: URLSessionWebSocketTask) async throws -> RemoteServerMessage {
         let received = try await task.receive()
         let payload: Data
@@ -370,14 +379,15 @@ struct RemoteServerIntegrationTests {
         let wsURL = URL(string: "ws://127.0.0.1:\(port)/ws")!
         let task = URLSession.shared.webSocketTask(with: wsURL, protocols: [token])
         task.resume()
+        let received = collect(task)
 
         try await task.send(.data(JSONEncoder().encode(RemoteClientMessage.listSessions)))   // parks the chain
         try await task.send(.data(JSONEncoder().encode(RemoteClientMessage.stop(sessionId: s.id))))
         // stop must land while listSessions is still parked on its continuation.
-        for _ in 0..<100 where provider.stopped.isEmpty {
+        for _ in 0..<100 where !received.stopped(s.id) {
             try await Task.sleep(nanoseconds: 20_000_000)
         }
-        #expect(provider.stopped == [s.id])
+        #expect(received.stopped(s.id))
 
         provider.resumeSessionSummaries()
         task.cancel(with: .goingAway, reason: nil)
@@ -393,8 +403,16 @@ struct RemoteServerIntegrationTests {
         let provider = FakeSessionsProvider()
         let mgr = try makeManager()
         let s = mgr.createSession(agentId: "claude")
+        // The snapshot a takeover pushes fetches this tool call's full
+        // content, which suspends inside the gateway's own await chain.
+        var toolCall = ACPMessage.ToolCall(
+            toolCallId: "old", title: "read", status: "completed",
+            content: String(repeating: "abcdef0123456789", count: 400), preview: "abcdef")
+        toolCall.truncateForOffWindow()
+        s.transcript.messages = [.toolCall(toolCall)]
         provider.sessions[s.id] = s
-        provider.pauseTakeOver = true   // suspends inside the gateway's own await chain
+        provider.fullToolCallContents["\(s.id)|old"] = "full content"
+        provider.pauseFullToolCallContentOnCall = 1
         let pairing = RemotePairingService(store: InMemoryDeviceStore())
         let (server, port) = try await startServer(pairing: pairing, provider: provider)
 
@@ -409,22 +427,23 @@ struct RemoteServerIntegrationTests {
         let wsURL = URL(string: "ws://127.0.0.1:\(port)/ws")!
         let task = URLSession.shared.webSocketTask(with: wsURL, protocols: [token])
         task.resume()
+        let received = collect(task)
 
         try await task.send(.data(JSONEncoder().encode(RemoteClientMessage.takeOver(sessionId: s.id))))
-        for _ in 0..<100 where provider.takeOverCallCount == 0 {
+        for _ in 0..<100 where provider.fullToolCallContentCallCount == 0 {
             try await Task.sleep(nanoseconds: 20_000_000)
         }
         try await task.send(.data(JSONEncoder().encode(RemoteClientMessage.stop(sessionId: s.id))))
 
         // Stop must NOT run while the preceding takeOver is still suspended.
         try await Task.sleep(nanoseconds: 200_000_000)
-        #expect(provider.stopped.isEmpty, "stop must wait for the preceding takeOver to land first")
+        #expect(!received.stopped(s.id), "stop must wait for the preceding takeOver to land first")
 
-        provider.resumeTakeOver()
-        for _ in 0..<100 where provider.stopped.isEmpty {
+        provider.resumeFullToolCallContent("full content")
+        for _ in 0..<100 where !received.stopped(s.id) {
             try await Task.sleep(nanoseconds: 20_000_000)
         }
-        #expect(provider.stopped == [s.id])
+        #expect(received.stopped(s.id))
 
         task.cancel(with: .goingAway, reason: nil)
         server.stop()
@@ -466,6 +485,7 @@ struct RemoteServerIntegrationTests {
         let wsURL = URL(string: "ws://127.0.0.1:\(port)/ws")!
         let task = URLSession.shared.webSocketTask(with: wsURL, protocols: [token])
         task.resume()
+        let received = collect(task)
 
         try await task.send(.data(JSONEncoder().encode(RemoteClientMessage.subscribe(sessionId: s.id))))
         try await task.send(.data(JSONEncoder().encode(
@@ -476,10 +496,10 @@ struct RemoteServerIntegrationTests {
         try await task.send(.data(JSONEncoder().encode(RemoteClientMessage.stop(sessionId: s.id))))
 
         // stop must land while fetchOlder is still parked on its continuation.
-        for _ in 0..<100 where provider.stopped.isEmpty {
+        for _ in 0..<100 where !received.stopped(s.id) {
             try await Task.sleep(nanoseconds: 20_000_000)
         }
-        #expect(provider.stopped == [s.id])
+        #expect(received.stopped(s.id))
 
         provider.resumeFullToolCallContent("full content")
         task.cancel(with: .goingAway, reason: nil)
@@ -522,6 +542,7 @@ struct RemoteServerIntegrationTests {
         let wsURL = URL(string: "ws://127.0.0.1:\(port)/ws")!
         let task = URLSession.shared.webSocketTask(with: wsURL, protocols: [token])
         task.resume()
+        let received = collect(task)
 
         try await task.send(.data(JSONEncoder().encode(RemoteClientMessage.subscribe(sessionId: s.id))))
         try await task.send(.data(JSONEncoder().encode(
@@ -535,13 +556,14 @@ struct RemoteServerIntegrationTests {
 
         // Stop must land within the bounded wait even though fetchOlder (and
         // thus the queued takeOver behind it) never completes.
-        for _ in 0..<150 where provider.stopped.isEmpty {
+        for _ in 0..<150 where !received.stopped(s.id) {
             try await Task.sleep(nanoseconds: 20_000_000)
         }
-        #expect(provider.stopped == [s.id])
+        #expect(received.stopped(s.id))
         // The queued takeOver never got to run — proves stop didn't wait
         // for the full chain to actually resolve.
-        #expect(provider.takeOverCallCount == 0)
+        // Only the subscribe snapshot: a takeover would have pushed another.
+        #expect(received.snapshotCount == 1)
 
         provider.resumeFullToolCallContent("full content")   // avoid a leaked continuation
         task.cancel(with: .goingAway, reason: nil)
@@ -583,6 +605,7 @@ struct RemoteServerIntegrationTests {
         let wsURL = URL(string: "ws://127.0.0.1:\(port)/ws")!
         let task = URLSession.shared.webSocketTask(with: wsURL, protocols: [token])
         task.resume()
+        let received = collect(task)
 
         try await task.send(.data(JSONEncoder().encode(RemoteClientMessage.subscribe(sessionId: s.id))))
         try await task.send(.data(JSONEncoder().encode(
@@ -594,11 +617,12 @@ struct RemoteServerIntegrationTests {
         try await task.send(.data(JSONEncoder().encode(RemoteClientMessage.stop(sessionId: s.id))))
 
         // Wait past stop's bounded wait so it takes the timeout path.
-        for _ in 0..<150 where provider.stopped.isEmpty {
+        for _ in 0..<150 where !received.stopped(s.id) {
             try await Task.sleep(nanoseconds: 20_000_000)
         }
-        #expect(provider.stopped == [s.id])
-        #expect(provider.takeOverCallCount == 0)
+        #expect(received.stopped(s.id))
+        // Only the subscribe snapshot: a takeover would have pushed another.
+        #expect(received.snapshotCount == 1)
 
         // Now unblock the stuck predecessor — the queued takeOver's own
         // `await previous?.value` can finally resolve. With the fix it must
@@ -606,7 +630,7 @@ struct RemoteServerIntegrationTests {
         // takeOverCallCount stays 0 even after everything settles.
         provider.resumeFullToolCallContent("full content")
         try await Task.sleep(nanoseconds: 200_000_000)
-        #expect(provider.takeOverCallCount == 0, "a timed-out stop must cancel the queued drive action, not just outrace it")
+        #expect(received.snapshotCount == 1, "a timed-out stop must cancel the queued drive action, not just outrace it")
 
         task.cancel(with: .goingAway, reason: nil)
         server.stop()
@@ -1498,4 +1522,13 @@ private actor CancellableTaskGate {
         cancellationContinuation?.resume(returning: value)
         cancellationContinuation = nil
     }
+}
+
+@MainActor
+private final class ReceivedMessages {
+    var all: [RemoteServerMessage] = []
+
+    func stopped(_ id: String) -> Bool { all.contains(.stopPending(sessionId: id)) }
+
+    var snapshotCount: Int { all.filter { if case .transcriptSnapshot = $0 { true } else { false } }.count }
 }

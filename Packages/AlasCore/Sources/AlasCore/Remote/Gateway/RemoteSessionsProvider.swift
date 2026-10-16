@@ -34,42 +34,6 @@ public protocol RemoteSessionsProvider: AnyObject {
     func respondToUserInput(for id: String, token: UUID, action: ACPUserInputAction)
     func fullToolCallContent(sessionId: String, toolCallId: String) async -> String?
     func isWriter(for id: String) -> Bool
-    func takeOver(for id: String) async
-    /// `onResult` fires once with the final outcome (false = refused now or
-    /// failed delivery later); the gateway emits `promptRejected` on false so
-    /// the client can restore the text instead of losing it.
-    func sendPrompt(for id: String, text: String, attachments: [ACPMessage.Attachment], onResult: @escaping @MainActor (Bool) -> Void) async
-    /// Stores `answer` on the visual and starts sending it to the agent. False
-    /// when no live session owns `id` or the manager could not store it.
-    func answerVisualAid(for id: String, visualId: UUID, answer: ACPVisualAid.Answer) async -> Bool
-    /// Decode a base64 image to a file under the session's acp-attachments dir.
-    /// Returns the file URL on success, nil on any write error.
-    func writeAttachment(_ data: Data, mimeType: String, name: String?, for id: String) -> URL?
-    func stop(for id: String) async
-    func setModel(for id: String, modelId: String) async
-    func setMode(for id: String, modeId: String) async
-    func setAutoRun(for id: String, enabled: Bool) async
-    func setConfigOption(for id: String, configId: String, value: ACPConfigValue) async
-    func renameSession(for id: String, title: String) -> Bool
-    /// Queue mutation. All of these are writer-gated inside the manager (the
-    /// gateway also pre-checks, mirroring `sendPrompt`) and delegate to the
-    /// same native call sites the ACP pane uses, so the `.sending`-head,
-    /// persistence, and flush invariants are not duplicated for the remote path.
-    func queueForceSend(for id: String, itemId: UUID) async
-    func queueRemove(for id: String, itemId: UUID) async
-    func queueRetry(for id: String, itemId: UUID) async
-    /// Removes the item and returns its text for the web composer, or nil if
-    /// the item is gone or already `.sending` (mid-RPC, must not be duplicated).
-    func queueEdit(for id: String, itemId: UUID) async -> String?
-    func queueClear(for id: String) async
-    /// Moves `itemId` into `targetItemId`'s slot, the "Up next" row's move
-    /// and drop. A move the local queue would refuse is a no-op.
-    func queueMove(for id: String, itemId: UUID, targetItemId: UUID) async
-    /// Moves `itemId` to the front without interrupting a running turn.
-    func queuePromote(for id: String, itemId: UUID) async
-    /// Cancel the in-flight turn, send this prompt instead, without
-    /// disturbing pending queued items.
-    func steerPrompt(for id: String, text: String, attachments: [ACPMessage.Attachment], onResult: @escaping @MainActor (Bool) -> Void) async
     /// Projection of the session's config for the `sessionConfig` wire message,
     /// or nil if the session isn't live.
     func sessionConfig(for id: String) -> RemoteSessionConfig?

@@ -193,7 +193,7 @@ public final class RemoteSessionGateway {
                 content: content
             )
         case .takeOver(let id):
-            await provider.takeOver(for: id)
+            try? await sessions?.takeOver(id, caller: hostCaller)
             // Takeover seizes the writer lease synchronously but mostly mutates
             // lease/agent state, not the transcript — so the objectWillChange
             // delta that normally carries `canDrive` may never fire on an idle
@@ -216,7 +216,7 @@ public final class RemoteSessionGateway {
             // so this is an early-out, not the authoritative gate. Auto-takeover
             // still works: the client sends `takeOver` (synchronous lease seize)
             // before `sendPrompt`, so isWriter is already true here.
-            guard provider.isWriter(for: id) else {
+            guard let sessions, sessions.isWriter(id) else {
                 send(.promptRejected(sessionId: id))
                 return
             }
@@ -239,64 +239,56 @@ public final class RemoteSessionGateway {
                 return
             }
             let materialized = images + mentioned
-            // The manager owns the writer/lease re-check and the eventual
-            // delivery result. Emit promptRejected on any failure — refused
-            // now (not writer / needs auth) OR a session/prompt RPC that fails
-            // later — so the client restores the user's text instead of losing
-            // it.
-            // True only while the call below is still on the stack. A refusal
-            // observed in that window is SYNCHRONOUS — the manager refused
-            // before recording the user message (no live session / needs auth),
-            // so its attachment files are orphans to delete. A refusal that
-            // arrives LATER means `sendNow` already recorded the message with
-            // these file URIs (the transcript bubble references them), so we
-            // must keep the files.
-            let refusalIsSynchronous = RemoteRefusalWindowBox()
-            let onResult: @MainActor (Bool) -> Void = { [weak self] accepted in
-                guard let self else { return }
-                if !accepted {
-                    self.send(.promptRejected(sessionId: id))
-                    // Only the image files we wrote: mentioned files are the
-                    // user's own.
-                    if refusalIsSynchronous.value { self.discardAttachmentFiles(images) }
-                }
-            }
+            // The host re-checks the lease and reports delivery when the turn
+            // ends. Any failure — refused now (not writer, needs auth) or a
+            // session/prompt RPC that fails later — emits promptRejected, so
+            // the client restores the user's text instead of losing it.
             // "steer" cancels the running turn and sends immediately while
             // preserving the queue; "auto" (the default, and everything an
             // older client sends) takes the ordinary enqueue-or-send route.
-            if intent == "steer" {
-                await provider.steerPrompt(for: id, text: trimmed, attachments: materialized, onResult: onResult)
-            } else {
-                await provider.sendPrompt(for: id, text: trimmed, attachments: materialized, onResult: onResult)
+            let delivery: Task<Bool, Never>
+            do {
+                delivery = try await sessions.submit(
+                    id, prompt: trimmed, attachments: materialized, steer: intent == "steer", caller: hostCaller
+                )
+            } catch {
+                // Refused before the session recorded the message, so the
+                // image files we wrote are orphans. Mentioned files are the
+                // user's own.
+                send(.promptRejected(sessionId: id))
+                discardAttachmentFiles(images)
+                return
             }
-            refusalIsSynchronous.value = false
+            // A later failure keeps the files: the recorded message refers to them.
+            Task { @MainActor [weak self] in
+                if await !delivery.value { self?.send(.promptRejected(sessionId: id)) }
+            }
         case .stop(let id):
             // Emergency brake: any authenticated subscriber may cancel the
             // running turn; no writer lease required. Ack immediately so the
             // client flips to "stopping" before the ACP round-trip completes.
             send(.stopPending(sessionId: id))
-            await provider.stop(for: id)
+            try? await sessions?.stop(id, caller: hostCaller)
         case .setModel(let id, let modelId):
-            if provider.isWriter(for: id) { await provider.setModel(for: id, modelId: modelId) }
+            try? await sessions?.setModel(id, modelID: modelId, caller: hostCaller)
             resendConfig(id: id)
         case .setMode(let id, let modeId):
-            if provider.isWriter(for: id) { await provider.setMode(for: id, modeId: modeId) }
+            try? await sessions?.setMode(id, modeID: modeId, caller: hostCaller)
             resendConfig(id: id)
         case .setAutoRun(let id, let enabled):
-            if provider.isWriter(for: id) { await provider.setAutoRun(for: id, enabled: enabled) }
+            try? await sessions?.setAutoRun(id, enabled: enabled, caller: hostCaller)
             resendConfig(id: id)
         case .setConfigOption(let id, let configId, let value):
-            if provider.isWriter(for: id) {
-                await provider.setConfigOption(for: id, configId: configId, value: value)
-            }
+            try? await sessions?.setConfigOption(id, configID: configId, value: value, caller: hostCaller)
             resendConfig(id: id)
         case .renameSession(let id, let title):
             let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return }
-            guard provider.renameSession(for: id, title: trimmed) else {
+            guard (try? sessions?.rename(id, title: trimmed, caller: hostCaller)) != nil else {
                 send(.error(message: "Could not rename session.", sessionId: id))
                 return
             }
+            presenter?.sessionRenamed(id, title: trimmed)
             send(.sessionRenamed(sessionId: id, title: trimmed))
             refreshSessionList()
         case .fetchOlder(let id, let beforeIndex, let limit):
@@ -343,35 +335,34 @@ public final class RemoteSessionGateway {
             }
         case .queueForceSend(let id, let itemId):
             await withQueueItem(id: id, itemId: itemId) { uuid in
-                await self.provider.queueForceSend(for: id, itemId: uuid)
+                await self.editQueue(id, .forceSend(uuid))
             }
         case .queueRemove(let id, let itemId):
             await withQueueItem(id: id, itemId: itemId) { uuid in
-                await self.provider.queueRemove(for: id, itemId: uuid)
+                await self.editQueue(id, .remove(uuid))
             }
         case .queueRetry(let id, let itemId):
             await withQueueItem(id: id, itemId: itemId) { uuid in
-                await self.provider.queueRetry(for: id, itemId: uuid)
+                await self.editQueue(id, .retry(uuid))
             }
         case .queueEdit(let id, let itemId):
             await withQueueItem(id: id, itemId: itemId) { uuid in
                 // No reply when the item is gone or already `.sending` —
                 // `takeForEditing` refuses in-flight items so an edit can
                 // never duplicate a prompt that is already on the wire.
-                guard let text = await self.provider.queueEdit(for: id, itemId: uuid) else { return }
+                guard let text = await self.editQueue(id, .edit(uuid)) else { return }
                 self.send(.queueEditRestored(sessionId: id, itemId: itemId, text: text))
             }
         case .queueClear(let id):
-            guard provider.isWriter(for: id) else { return }
-            await provider.queueClear(for: id)
+            await editQueue(id, .clear)
         case .queueMove(let id, let itemId, let targetItemId):
             guard let target = UUID(uuidString: targetItemId) else { return }
             await withQueueItem(id: id, itemId: itemId) { uuid in
-                await self.provider.queueMove(for: id, itemId: uuid, targetItemId: target)
+                await self.editQueue(id, .move(uuid, target: target))
             }
         case .queuePromote(let id, let itemId):
             await withQueueItem(id: id, itemId: itemId) { uuid in
-                await self.provider.queuePromote(for: id, itemId: uuid)
+                await self.editQueue(id, .promote(uuid))
             }
         case .listChanges(let id, let comparisonMode):
             let key = if let comparisonMode {
@@ -636,7 +627,7 @@ public final class RemoteSessionGateway {
         var written: [URL] = []
         var out: [ACPMessage.Attachment] = []
         for d in decoded {
-            guard let url = provider.writeAttachment(d.data, mimeType: d.mimeType, name: d.name, for: sessionId) else {
+            guard let url = try? sessions?.storeImage(d.data, mimeType: d.mimeType, for: sessionId) else {
                 written.forEach { try? FileManager.default.removeItem(at: $0) }
                 return nil
             }
@@ -979,10 +970,22 @@ public final class RemoteSessionGateway {
     /// next `queueState` re-asserts server truth, so there is nothing for the
     /// client to reconcile.
     private func withQueueItem(id: String, itemId: String, _ body: (UUID) async -> Void) async {
-        guard provider.isWriter(for: id) else { return }
         guard let uuid = UUID(uuidString: itemId) else { return }
         await body(uuid)
     }
+
+    /// The host refuses a non-writer's edit; the next `queueState` re-asserts
+    /// the queue, so there is nothing to report.
+    @discardableResult
+    private func editQueue(_ id: String, _ edit: SessionQueueEdit) async -> String? {
+        (try? await sessions?.editQueue(id, edit, caller: hostCaller)) ?? nil
+    }
+
+    /// The host's session verbs; nil without a host, which refuses them all.
+    private var sessions: SessionsAPI? { provider.eventHost?.sessions }
+
+    /// Who the host verbs act for: the authenticated device, or this app.
+    private var hostCaller: HostCaller { caller ?? .app }
 
     /// Build the newest contiguous suffix that fits. Older rows remain
     /// reachable through fetchOlder instead of disappearing from history.
@@ -1262,28 +1265,41 @@ public final class RemoteSessionGateway {
 
         guard !RemoteVisualAidLimits.exceedsBounds(ids: selectedOptionIds, note: note) else { return reject("invalid") }
 
-        let answer: ACPVisualAid.Answer
+        guard let answer = Self.visualAidAnswer(to: question, action: action, selectedOptionIds: selectedOptionIds, note: note) else {
+            return reject("invalid")
+        }
+        guard (try? await sessions?.answerVisualAid(sessionId, visualID: id, answer: answer, caller: hostCaller)) != nil else {
+            return reject("failed")
+        }
+    }
+
+    /// The answer a viewer's response to a visual aid's question stands for,
+    /// or nil when it does not fit the question: choices in question order,
+    /// the note trimmed like the phone trims it.
+    public nonisolated static func visualAidAnswer(
+        to question: ACPVisualAid.Question,
+        action: String,
+        selectedOptionIds: [String],
+        note: String?,
+        at date: Date = Date()
+    ) -> ACPVisualAid.Answer? {
         switch action {
         case "dismiss":
-            answer = .dismissed(at: Date())
+            return .dismissed(at: date)
         case "answer":
             let known = Set(question.options.map(\.id))
             let picked = Set(selectedOptionIds)
             guard picked.count == selectedOptionIds.count, !picked.isEmpty, picked.isSubset(of: known),
                   question.allowMultiple || picked.count == 1
-            else { return reject("invalid") }
+            else { return nil }
             let trimmed = note?.trimmingCharacters(in: .whitespacesAndNewlines)
-            if let trimmed, trimmed.count > ACPVisualAidQuestionForm.noteMaxLength { return reject("invalid") }
+            if let trimmed, trimmed.count > ACPVisualAidQuestionForm.noteMaxLength { return nil }
             // Question order, like a native answer.
             let ordered = question.options.map(\.id).filter(picked.contains)
-            answer = .answered(
-                selectedOptionIds: ordered,
-                note: (trimmed?.isEmpty ?? true) ? nil : trimmed,
-                at: Date())
+            return .answered(selectedOptionIds: ordered, note: (trimmed?.isEmpty ?? true) ? nil : trimmed, at: date)
         default:
-            return reject("invalid")
+            return nil
         }
-        guard await provider.answerVisualAid(for: sessionId, visualId: id, answer: answer) else { return reject("failed") }
     }
 
     private func applyQuestionAnswer(sessionId: String, requestId: Int, answers: [RemoteQuestionAnswer]) {
@@ -1511,17 +1527,6 @@ public final class RemoteSessionGateway {
         guard let data = try? JSONEncoder().encode(value) else { return nil }
         return String(data: data, encoding: .utf8)
     }
-}
-
-/// The refusal window is flipped *after* the prompt call returns, and the
-/// `@MainActor` result closure is meant to observe that change, so it cannot be
-/// a captured `let`. Gateway and closure are both main-actor, so plain
-/// main-actor isolation is enough — no lock needed.
-@MainActor
-private final class RemoteRefusalWindowBox {
-    var value = true
-
-    public init() {}
 }
 
 /// Cheap size bounds for a `visualAidResponse`, checked before the handler builds a `Set` or trims the

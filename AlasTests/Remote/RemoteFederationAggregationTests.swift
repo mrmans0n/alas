@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 @testable import Alas
+@_spi(AppHost) import AlasCore
 
 /// Gateway aggregation over real loopback servers: a phone paired with A sees
 /// and drives B's sessions through A, and nothing echoes around a chain.
@@ -25,7 +26,7 @@ struct RemoteFederationAggregationTests {
         let signer: RemoteIdentityKeyProvider
         let pairing = RemotePairingService(store: InMemoryDeviceStore())
         let peerStore = InMemoryPeerStore()
-        let provider = FakeSessionsProvider()
+        let provider: FakeSessionsProvider
         let server: RemoteServer
         private(set) var peers: RemotePeerManager!
         private(set) var federation: FederatedSessionsProvider!
@@ -33,9 +34,10 @@ struct RemoteFederationAggregationTests {
 
         var origin: String { "http://127.0.0.1:\(port)" }
 
-        init(serverId: String, name: String, key: RemoteIdentityKeyProvider? = nil) {
+        init(serverId: String, name: String, key: RemoteIdentityKeyProvider? = nil, provider: FakeSessionsProvider = FakeSessionsProvider()) {
             self.serverId = serverId
             self.name = name
+            self.provider = provider
             self.signer = key ?? RemoteIdentityKeyProvider(store: RemoteInMemorySecretStore())
             let signer = self.signer
             self.server = RemoteServer(
@@ -46,6 +48,7 @@ struct RemoteFederationAggregationTests {
                     RemoteServerIdentity(serverId: serverId, name: name)
                 },
                 signer: signer)
+            server.presenter = provider
         }
 
         func start() async throws {
@@ -249,16 +252,18 @@ struct RemoteFederationAggregationTests {
     }
 
     @Test func driveVerbsLandOnTheHomeMacAndRefusalsComeBack() async throws {
+        let home = try GatewayHostFixture()
+        defer { home.tearDown() }
         let a = Mac(serverId: "srv-a", name: "Mac A")
-        let b = Mac(serverId: "srv-b", name: "Mac B")
+        let b = Mac(serverId: "srv-b", name: "Mac B", provider: home.provider)
         try await a.start()
         try await b.start()
         defer {
             a.stop()
             b.stop()
         }
-        let manager = try makeManager()
-        let bSession = b.plantSession(text: "x", manager: manager)
+        let bSession = try await home.drivenSession()
+        b.provider.summaries.append(RemoteSessionSummary(id: bSession, title: "On Mac B", agentId: "gemini", status: "idle", canDrive: true))
         try await pair(a, b)
         let phone = try await Phone(of: a)
         defer { phone.close() }
@@ -269,8 +274,7 @@ struct RemoteFederationAggregationTests {
         }
 
         try await phone.send(.sendPrompt(sessionId: "srv-b:\(bSession)", text: "do it", attachments: [], intent: "auto"))
-        try await waitUntil { b.provider.prompts.contains { $0.id == bSession && $0.text == "do it" } }
-        #expect(a.provider.prompts.isEmpty)
+        try await waitUntil { home.prompts.contains { $0.hasSuffix("do it") } }
 
         try await phone.send(.renameSession(sessionId: "srv-b:\(bSession)", title: "Renamed"))
         try await waitUntil { b.provider.renamed.contains { $0.id == bSession && $0.title == "Renamed" } }
@@ -282,14 +286,14 @@ struct RemoteFederationAggregationTests {
 
         // B decides who may drive. Take the lease away and the forwarded
         // prompt is refused by B, and the refusal reaches the phone.
-        b.provider.writers.remove(bSession)
+        try await home.loseLease(bSession)
         try await phone.send(.sendPrompt(sessionId: "srv-b:\(bSession)", text: "again", attachments: [], intent: "auto"))
         let rejected = try await phone.receive { message -> Bool? in
             if case .promptRejected("srv-b:\(bSession)") = message { return true }
             return nil
         }
         #expect(rejected)
-        #expect(!b.provider.prompts.contains { $0.text == "again" })
+        #expect(!home.prompts.contains { $0.hasSuffix("again") })
     }
 
     @Test func aChainDoesNotEchoSessionsPastOneHop() async throws {

@@ -7,6 +7,22 @@ public enum SessionTarget: Codable, Hashable, Sendable {
 }
 
 /// Why the host did not act on a session.
+/// A change to a session's prompt queue, naming items by id.
+public enum SessionQueueEdit: Codable, Equatable, Sendable {
+    /// Sends the item now, interrupting the running turn.
+    case forceSend(UUID)
+    case remove(UUID)
+    /// Sends a failed item again.
+    case retry(UUID)
+    /// Takes the item out to edit its text.
+    case edit(UUID)
+    case clear
+    /// Moves the item into `target`'s slot.
+    case move(UUID, target: UUID)
+    /// Moves the item to the front without interrupting the running turn.
+    case promote(UUID)
+}
+
 public enum SessionRefusal: Error, Codable, Equatable, Sendable {
     /// No loaded session has this id.
     case notFound
@@ -97,17 +113,101 @@ extension SessionsAPI {
         return Self.summary(of: row, in: manager)
     }
 
-    /// Sends a prompt as the session's next user turn. Only the session's
-    /// writer can.
-    public func send(_ sessionID: String, prompt: String, caller: HostCaller) async throws {
-        caller.log("sessions.send", sessionID)
-        let manager = try writerManager(for: sessionID)
-        let accepted = await withCheckedContinuation { continuation in
-            Task { @MainActor in
-                await manager.sendPrompt(for: sessionID, text: prompt, attachments: []) { continuation.resume(returning: $0) }
-            }
+    /// Sends a prompt as the session's next user turn and waits for that
+    /// turn to end. Only the session's writer can.
+    public func send(_ sessionID: String, prompt: String, attachments: [ACPMessage.Attachment] = [], caller: HostCaller) async throws {
+        guard try await submit(sessionID, prompt: prompt, attachments: attachments, caller: caller).value else {
+            throw SessionRefusal.promptRejected
         }
-        guard accepted else { throw SessionRefusal.promptRejected }
+    }
+
+    /// Sends a prompt, or queues it behind the running turn, and returns once
+    /// it is: the task reports whether it was delivered, when its turn ends.
+    /// Refused with `promptRejected` before the prompt is recorded, so its
+    /// attachments are the caller's to clean up. `steer` stops the running
+    /// turn and sends this prompt at once, keeping the queue.
+    public func submit(
+        _ sessionID: String,
+        prompt: String,
+        attachments: [ACPMessage.Attachment] = [],
+        steer: Bool = false,
+        caller: HostCaller
+    ) async throws -> Task<Bool, Never> {
+        caller.log(steer ? "sessions.steer" : "sessions.send", sessionID)
+        let manager = try writerManager(for: sessionID)
+        let (outcome, report) = AsyncStream<Bool>.makeStream()
+        let submission = PromptSubmission()
+        let onResult: @MainActor (Bool) -> Void = { delivered in
+            if !delivered, submission.isSubmitting { submission.refusedAtOnce = true }
+            report.yield(delivered)
+            report.finish()
+        }
+        if steer {
+            await manager.steerPrompt(for: sessionID, text: prompt, attachments: attachments, onResult: onResult)
+        } else {
+            await manager.sendPrompt(for: sessionID, text: prompt, attachments: attachments, onResult: onResult)
+        }
+        submission.isSubmitting = false
+        if submission.refusedAtOnce { throw SessionRefusal.promptRejected }
+        return Task {
+            for await delivered in outcome { return delivered }
+            return false
+        }
+    }
+
+    /// Whether this instance drives the loaded session `sessionID`.
+    public func isWriter(_ sessionID: String) -> Bool {
+        (try? writerManager(for: sessionID)) != nil
+    }
+
+    /// Takes the session over from the instance that drives it.
+    public func takeOver(_ sessionID: String, caller: HostCaller) async throws {
+        caller.log("sessions.takeOver", sessionID)
+        guard try await liveManager(for: sessionID).takeOver(sessionId: sessionID) else { throw SessionRefusal.notWriter }
+    }
+
+    public func setAutoRun(_ sessionID: String, enabled: Bool, caller: HostCaller) async throws {
+        caller.log("sessions.setAutoRun", sessionID)
+        let manager = try writerManager(for: sessionID)
+        await manager.setAutoRun(for: sessionID, enabled: enabled)
+        try confirmStillWriter(manager, sessionID)
+    }
+
+    /// Changes the session's prompt queue. Editing an item takes it out of
+    /// the queue and returns its text; nil when the item is gone or already
+    /// being sent.
+    @discardableResult
+    public func editQueue(_ sessionID: String, _ edit: SessionQueueEdit, caller: HostCaller) async throws -> String? {
+        caller.log("sessions.editQueue", sessionID)
+        let manager = try writerManager(for: sessionID)
+        switch edit {
+        case .forceSend(let item): await manager.queueForceSend(for: sessionID, itemId: item)
+        case .remove(let item): await manager.queueRemove(for: sessionID, itemId: item)
+        case .retry(let item): await manager.queueRetry(for: sessionID, itemId: item)
+        case .edit(let item): return await manager.queueEdit(for: sessionID, itemId: item)
+        case .clear: await manager.queueClear(for: sessionID)
+        case .move(let item, let target): await manager.queueMove(for: sessionID, itemId: item, targetItemId: target)
+        case .promote(let item): await manager.queuePromote(for: sessionID, itemId: item)
+        }
+        return nil
+    }
+
+    /// Answers the question a visual aid asks, sending the answer to the agent.
+    public func answerVisualAid(_ sessionID: String, visualID: UUID, answer: ACPVisualAid.Answer, caller: HostCaller) async throws {
+        caller.log("sessions.answerVisualAid", sessionID)
+        let manager = try writerManager(for: sessionID)
+        guard await manager.answerVisualAid(id: visualID, answer: answer, in: sessionID) else { throw SessionRefusal.notPending }
+    }
+
+    /// Stores an image for a prompt to the session, returning where.
+    public func storeImage(_ data: Data, mimeType: String, for sessionID: String) throws -> URL {
+        guard let session = try liveManager(for: sessionID).liveSession(for: sessionID) else { throw SessionRefusal.notFound }
+        let directory = Paths.acpAttachmentsDir(forWorktreeId: session.worktreeId)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let ext = mimeType == "image/png" ? "png" : (mimeType == "image/jpeg" ? "jpg" : "img")
+        let url = directory.appendingPathComponent("\(UUID().uuidString).\(ext)")
+        try data.write(to: url)
+        return url
     }
 
     /// Stops the session's running turn. Like the app's stop button, any
@@ -287,4 +387,12 @@ extension SessionsAPI {
             manager.liveSession(for: sessionID) != nil || manager.sessionRows.contains { $0.id == sessionID }
         }
     }
+}
+
+/// Whether a prompt was refused while it was being submitted, before the
+/// session recorded it.
+@MainActor
+private final class PromptSubmission {
+    var isSubmitting = true
+    var refusedAtOnce = false
 }
