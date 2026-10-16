@@ -225,7 +225,11 @@ public final class HostProtocolConnection {
         Task { @MainActor [weak self] in
             while let events = await next.next() {
                 guard let self else { return }
-                await enqueue(.events(events: events, cursor: next.cursor), from: next)
+                // Session state serves in-process followers; clients of the
+                // released protocol cannot decode it, and none reads it yet.
+                let sent = events.filter { if case .sessionState = $0 { false } else { true } }
+                guard !sent.isEmpty else { continue }
+                await enqueue(.events(events: sent, cursor: next.cursor), from: next)
             }
         }
     }

@@ -286,6 +286,9 @@ struct HostSessionsTests {
         try await client.waitForEvent { if case .transcript(_, id, let delta) = $0 { delta.streamingState == .idle } else { false } }
         #expect(fixture.agent.sent.contains { $0.method == "session/cancel" })
         #expect(try await prompted == .done)
+        // Session state is for in-process followers: a client of a released
+        // host protocol cannot decode it.
+        #expect(await !client.events.contains { if case .sessionState = $0 { true } else { false } })
     }
 
     @Test func answersWithNoAgentToReceiveThemAreRefused() async throws {
