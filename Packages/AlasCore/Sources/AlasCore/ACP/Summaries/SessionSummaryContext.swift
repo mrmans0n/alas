@@ -1,10 +1,11 @@
+import CryptoKit
 import Foundation
 
 public struct SessionSummaryContext: Equatable, Sendable {
     public static let sourceLimit = 128 * 1024
     public static let tokenLimit = 8_192
 
-    public let revision: SessionSummarySourceRevision
+    public let revision: SessionSummarySourceRevision?
     public let goal: ACPGoalState?
     public let plan: [ACPMessage.PlanItem]
     public let turns: [SessionSummaryTurn]
@@ -13,25 +14,43 @@ public struct SessionSummaryContext: Equatable, Sendable {
     /// Cheap gate for showing the summarize control: stops at the first complete turn.
     @MainActor
     public static func hasCompleteTurn(session: ACPSession) -> Bool {
-        !completeTurns(in: session.transcript.messages, limit: 1).isEmpty
+        completeTurnCount(session: session, limit: 1) > 0
+    }
+
+    /// Complete turns over the whole transcript, counting no further than `limit`.
+    @MainActor
+    public static func completeTurnCount(session: ACPSession, limit: Int) -> Int {
+        SessionSummarySource.turns(in: session.transcript.messages, limit: limit).count
     }
 
     @MainActor
     public static func snapshot(session: ACPSession) -> SessionSummaryContext? {
         let revision = SessionSummarySourceRevision.current(session: session, composer: session.composer)
-        let allTurns = completeTurns(in: session.transcript.messages)
-        guard !allTurns.isEmpty else { return nil }
+        let allTurns = SessionSummarySource.turns(in: session.transcript.messages)
+        return make(
+            source: .init(goal: revision.goal, plan: revision.plan ?? [], turns: allTurns),
+            revision: revision
+        )
+    }
 
-        let goal = revision.goal
-        let currentPlan = revision.plan
-        let plan = currentPlan ?? []
+    /// Build from a store-loaded source (no live session); `revision` is nil.
+    public static func snapshot(source: SessionSummarySource) -> SessionSummaryContext? {
+        make(source: source, revision: nil)
+    }
+
+    private static func make(
+        source: SessionSummarySource,
+        revision: SessionSummarySourceRevision?
+    ) -> SessionSummaryContext? {
+        let allTurns = source.turns
+        guard !allTurns.isEmpty else { return nil }
         var lowerBound = 0
         var upperBound = allTurns.count
         while lowerBound < upperBound {
             let candidate = lowerBound + (upperBound - lowerBound) / 2
-            let fits = renderedInput(
-                goal: goal,
-                plan: plan,
+            let fits = SessionSummarySource.renderedInput(
+                goal: source.goal,
+                plan: source.plan,
                 turns: Array(allTurns[candidate...])
             ).utf8.count <= sourceLimit
             if fits {
@@ -45,8 +64,8 @@ public struct SessionSummaryContext: Equatable, Sendable {
 
         return .init(
             revision: revision,
-            goal: goal,
-            plan: plan,
+            goal: source.goal,
+            plan: source.plan,
             turns: Array(allTurns[firstTurn...]),
             omittedOlderTurns: firstTurn > 0
         )
@@ -59,7 +78,7 @@ public struct SessionSummaryContext: Equatable, Sendable {
             let first = turns.count - retainedTurnCount
             candidates.append([
                 .init(role: .system, content: SessionSummaryPolicy.systemPrompt),
-                .init(role: .user, content: Self.renderedInput(
+                .init(role: .user, content: SessionSummarySource.renderedInput(
                     goal: goal,
                     plan: plan,
                     turns: Array(turns[first...])
@@ -71,80 +90,15 @@ public struct SessionSummaryContext: Equatable, Sendable {
         return candidates
     }
 
-    @MainActor
-    private static func completeTurns(in messages: [ACPMessage], limit: Int = .max) -> [SessionSummaryTurn] {
-        var turns: [SessionSummaryTurn] = []
-        var user: String?
-        var assistant: [String] = []
-
-        func appendCompleteTurn() {
-            guard let user, !assistant.isEmpty else { return }
-            turns.append(.init(user: user, assistant: assistant.joined(separator: "\n")))
-        }
-
-        for message in messages {
-            switch message {
-            case .user(_, _, let text, let attachments, let delegatedSource, _):
-                appendCompleteTurn()
-                if turns.count >= limit { return turns }
-                assistant.removeAll(keepingCapacity: true)
-                if delegatedSource == nil, attachments.isEmpty,
-                   !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    user = text
-                } else {
-                    user = nil
-                }
-            case .agent(_, _, let text):
-                guard user != nil,
-                      !text.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
-                assistant.append(text.value)
-            default:
-                continue
-            }
-        }
-        appendCompleteTurn()
-        return turns
+    /// SHA-256 hex over systemPrompt + NUL + renderedInput(all retained turns) + NUL + modelID.
+    public func inputHash(modelID: String) -> String {
+        let payload = SessionSummaryPolicy.systemPrompt
+            + "\u{0}" + SessionSummarySource.renderedInput(goal: goal, plan: plan, turns: turns)
+            + "\u{0}" + modelID
+        return SHA256.hash(data: Data(payload.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
-    private static func renderedInput(
-        goal: ACPGoalState?,
-        plan: [ACPMessage.PlanItem],
-        turns: [SessionSummaryTurn]
-    ) -> String {
-        struct Input: Encodable {
-            struct Goal: Encodable {
-                let objective: String
-                let status: String?
-                let tokenBudget: Int?
-            }
-            struct PlanItem: Encodable {
-                let content: String
-                let status: String
-            }
-            struct Entry: Encodable {
-                let role: String
-                let content: String
-            }
-
-            let goal: Goal?
-            let plan: [PlanItem]
-            let conversation: [Entry]
-        }
-
-        let input = Input(
-            goal: goal.map { .init(objective: $0.objective, status: $0.status, tokenBudget: $0.tokenBudget) },
-            plan: plan.map { .init(content: $0.content, status: $0.status) },
-            conversation: turns.flatMap {
-                [Input.Entry(role: "user", content: $0.user),
-                 Input.Entry(role: "assistant", content: $0.assistant)]
-            }
-        )
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        return String(decoding: try! encoder.encode(input), as: UTF8.self)
-    }
-
-    public init(revision: SessionSummarySourceRevision, goal: ACPGoalState?, plan: [ACPMessage.PlanItem], turns: [SessionSummaryTurn], omittedOlderTurns: Bool) {
+    public init(revision: SessionSummarySourceRevision?, goal: ACPGoalState?, plan: [ACPMessage.PlanItem], turns: [SessionSummaryTurn], omittedOlderTurns: Bool) {
         self.revision = revision
         self.goal = goal
         self.plan = plan

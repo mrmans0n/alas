@@ -552,4 +552,106 @@ struct ACPSessionStoreSchemaTests {
         try store.setUsageLimit(sessionId: "s", limit: nil)
         #expect(try store.loadSession(id: "s")?.usageLimit == nil)
     }
+
+    private func seedSession(_ store: ACPSessionStore, id: String = "s") throws {
+        try store.upsertSession(.init(id: id, agentId: "codex", title: id,
+            autoRun: false, createdAt: 0, updatedAt: 7, lastOpenedAt: 0, archived: false))
+    }
+
+    private func sampleStoredSummary(hash: String = "hash", model: String = "model") -> StoredSessionSummary {
+        .init(inputHash: hash, modelID: model, summary: .init(
+            goal: "Ship it", completed: ["a", "b"], blockers: ["c"], nextAction: "Merge", isPartial: true),
+            createdAt: 42)
+    }
+
+    @Test("a saved summary loads only under the same input hash and model")
+    func sessionSummaryRoundTrip() throws {
+        let store = try tmpStore()
+        try seedSession(store)
+        let stored = sampleStoredSummary()
+        try store.saveSessionSummary(sessionId: "s", stored)
+        #expect(try store.loadSessionSummary(sessionId: "s", inputHash: "hash", modelID: "model") == stored.summary)
+    }
+
+    @Test("a summary is not returned for a different input hash or model", arguments: [("other", "model"), ("hash", "other")])
+    func sessionSummaryKeyMismatch(hash: String, model: String) throws {
+        let store = try tmpStore()
+        try seedSession(store)
+        try store.saveSessionSummary(sessionId: "s", sampleStoredSummary())
+        #expect(try store.loadSessionSummary(sessionId: "s", inputHash: hash, modelID: model) == nil)
+    }
+
+    @Test("deleting a session cascades to its summary")
+    func sessionSummaryCascadesOnDelete() throws {
+        let store = try tmpStore()
+        try seedSession(store)
+        try store.saveSessionSummary(sessionId: "s", sampleStoredSummary())
+        try store.deleteSession(id: "s")
+        try seedSession(store)
+        #expect(try store.loadSessionSummary(sessionId: "s", inputHash: "hash", modelID: "model") == nil)
+        let rows = try store.db.query("SELECT COUNT(*) AS n FROM session_summaries")
+        #expect(rows.first?["n"] as? Int64 == 0)
+    }
+
+    @Test("deleteAllSessionSummaries clears every stored summary")
+    func deleteAllSessionSummaries() throws {
+        let store = try tmpStore()
+        try seedSession(store, id: "a")
+        try seedSession(store, id: "b")
+        try store.saveSessionSummary(sessionId: "a", sampleStoredSummary())
+        try store.saveSessionSummary(sessionId: "b", sampleStoredSummary())
+        try store.deleteAllSessionSummaries()
+        #expect(try store.loadSessionSummary(sessionId: "a", inputHash: "hash", modelID: "model") == nil)
+        #expect(try store.loadSessionSummary(sessionId: "b", inputHash: "hash", modelID: "model") == nil)
+    }
+
+    @Test("clearing summaries by path needs no open store and skips databases without them")
+    func deleteAllSessionSummariesAtPath() throws {
+        let store = try tmpStore()
+        try seedSession(store)
+        try store.saveSessionSummary(sessionId: "s", sampleStoredSummary())
+        try ACPSessionStore.deleteAllSessionSummaries(path: store.path)
+        #expect(try store.loadSessionSummary(sessionId: "s", inputHash: "hash", modelID: "model") == nil)
+
+        let directory = FileManager.default.temporaryDirectory
+        let missing = directory.appendingPathComponent("acp-missing-\(UUID()).sqlite").path
+        try ACPSessionStore.deleteAllSessionSummaries(path: missing)
+        #expect(!FileManager.default.fileExists(atPath: missing))
+        let bare = directory.appendingPathComponent("acp-bare-\(UUID()).sqlite").path
+        _ = try SQLiteDatabase(path: bare)
+        try ACPSessionStore.deleteAllSessionSummaries(path: bare)
+    }
+
+    @Test("the summary source snapshot reports turns and idleness from stored rows")
+    func summarySourceSnapshot() throws {
+        let store = try tmpStore()
+        try seedSession(store)
+        try store.appendMessage(sessionId: "s", id: "m0", kind: "user", seq: 0,
+            payload: Data(#"{"text":"Do the thing","attachments":[]}"#.utf8), createdAt: 1)
+        try store.appendMessage(sessionId: "s", id: "m1", kind: "agent", seq: 1,
+            payload: Data(#"{"text":"Done"}"#.utf8), createdAt: 2)
+        try store.appendMessage(sessionId: "s", id: "m2", kind: "agent", seq: 2,
+            payload: Data("not json".utf8), createdAt: 3)
+        let idle = try #require(try store.loadSummarySourceSnapshot(sessionId: "s"))
+        #expect(idle.source.turns == [.init(user: "Do the thing", assistant: "Done")])
+        #expect(idle.source.goal == nil)
+        #expect(idle.isIdle)
+        #expect(idle.updatedAt == 7)
+        try store.setDirectTurnInFlight(sessionId: "s", inFlight: true)
+        #expect(try store.loadSummarySourceSnapshot(sessionId: "s")?.isIdle == false)
+        #expect(try store.loadSummarySourceSnapshot(sessionId: "missing") == nil)
+    }
+
+    @Test("last_seen_at is nil until stamped and survives session upserts")
+    func lastSeenAt() throws {
+        let store = try tmpStore()
+        try seedSession(store)
+        #expect(try store.loadLastSeenAt(id: "s") == nil)
+        try store.setLastSeenAt(id: "s", at: 99)
+        var row = try #require(try store.loadSession(id: "s"))
+        row.title = "Renamed"
+        try store.upsertSession(row)
+        #expect(try store.loadLastSeenAt(id: "s") == 99)
+        #expect(try store.loadSummarySourceSnapshot(sessionId: "s")?.lastSeenAt == 99)
+    }
 }

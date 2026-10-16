@@ -152,9 +152,10 @@ import Testing
             #expect(rendered.contains("newest"))
             #expect(rendered.contains("newest answer"))
         }
-        #expect(context.revision.goal == context.goal)
-        #expect(context.revision.plan == context.plan)
-        #expect(context.revision.transcriptGeneration == session.transcript.messagesGeneration)
+        let revision = try #require(context.revision)
+        #expect(revision.goal == context.goal)
+        #expect(revision.plan == context.plan)
+        #expect(revision.transcriptGeneration == session.transcript.messagesGeneration)
     }
 
     @Test func boundsRenderedCandidateCountForLongSessions() throws {
@@ -224,6 +225,60 @@ import Testing
         session.autoRunEnabled = true
 
         #expect(SessionSummaryIdleFacts.current(session: session, composer: session.composer).isIdle)
+    }
+
+    @Test func storedSourceHashesIdenticallyToLiveSession() throws {
+        let attachment = ACPMessage.Attachment(uri: "file:///tmp/a", name: "a")
+        let delegated = ACPDelegatedPromptSource(sessionId: "parent", messageId: "prompt")
+        let planItems = [ACPMessage.PlanItem(content: "Verify parity", status: "in_progress")]
+        let session = makeSession(messages: [
+            .user(id: UUID(), messageId: nil, text: "   ", attachments: []),
+            .agent(id: UUID(), messageId: nil, StreamingText("orphan reply")),
+            .user(id: UUID(), messageId: nil, text: "First request", attachments: []),
+            .thought(id: UUID(), messageId: nil, StreamingText("private reasoning")),
+            .toolCall(.init(toolCallId: "tool", title: "Read", status: "completed", content: "tool secret")),
+            .agent(id: UUID(), messageId: nil, StreamingText("Part one.")),
+            .agent(id: UUID(), messageId: nil, StreamingText("  ")),
+            .agent(id: UUID(), messageId: nil, StreamingText("Part two.")),
+            .user(id: UUID(), messageId: nil, text: "delegated", attachments: [], delegatedSource: delegated),
+            .agent(id: UUID(), messageId: nil, StreamingText("delegated reply")),
+            .user(id: UUID(), messageId: nil, text: "attached", attachments: [attachment]),
+            .agent(id: UUID(), messageId: nil, StreamingText("attachment reply")),
+            .user(id: UUID(), messageId: nil, text: "Second request", attachments: []),
+            .agent(id: UUID(), messageId: nil, StreamingText("Second answer")),
+            .plan(id: UUID(), planItems)
+        ])
+        let wires: [ACPMessageWire] = [
+            .user(messageId: nil, text: "   ", attachments: [], delegatedSource: nil),
+            .agent(messageId: nil, text: "orphan reply", phase: nil, metadata: nil),
+            .user(messageId: nil, text: "First request", attachments: [], delegatedSource: nil),
+            .thought(messageId: nil, text: "private reasoning", phase: nil, metadata: nil),
+            .toolCall(.init(toolCallId: "tool", title: "Read", status: "completed", content: "tool secret")),
+            .agent(messageId: nil, text: "Part one.", phase: nil, metadata: nil),
+            .agent(messageId: nil, text: "  ", phase: nil, metadata: nil),
+            .agent(messageId: nil, text: "Part two.", phase: nil, metadata: nil),
+            .user(messageId: nil, text: "delegated", attachments: [], delegatedSource: delegated),
+            .agent(messageId: nil, text: "delegated reply", phase: nil, metadata: nil),
+            .user(messageId: nil, text: "attached", attachments: [attachment], delegatedSource: nil),
+            .agent(messageId: nil, text: "attachment reply", phase: nil, metadata: nil),
+            .user(messageId: nil, text: "Second request", attachments: [], delegatedSource: nil),
+            .agent(messageId: nil, text: "Second answer", phase: nil, metadata: nil),
+            .plan(planItems)
+        ]
+
+        let live = try #require(SessionSummaryContext.snapshot(session: session))
+        let stored = try #require(SessionSummaryContext.snapshot(source: .init(
+            goal: nil,
+            plan: SessionSummarySource.currentPlan(in: wires),
+            turns: SessionSummarySource.turns(in: wires))))
+
+        #expect(live.turns == [
+            .init(user: "First request", assistant: "Part one.\nPart two."),
+            .init(user: "Second request", assistant: "Second answer")
+        ])
+        #expect(stored.revision == nil)
+        #expect(live.inputHash(modelID: "m") == stored.inputHash(modelID: "m"))
+        #expect(live.inputHash(modelID: "m") != live.inputHash(modelID: "other"))
     }
 
     private func makeSession(messages: [ACPMessage]) -> ACPSession {

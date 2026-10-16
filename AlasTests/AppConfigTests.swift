@@ -399,6 +399,7 @@ struct AppConfigTests {
         """
         let cfg = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
         #expect(cfg.sidebarVisible == true)
+        #expect(cfg.sessionRecapThreshold == .twoHours)
     }
 
     @Test func repoSelectorRecentsRoundTrip() throws {

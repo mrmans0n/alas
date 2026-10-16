@@ -174,6 +174,12 @@ final class AppState {
     }
     var sessionSummaryCoordinator: SessionSummaryCoordinator { core.sessionSummaries }
     @ObservationIgnored let localTextObservers = LocalTextObservers()
+    @ObservationIgnored let sessionRecapRuntime = SessionRecapRuntime()
+    @ObservationIgnored lazy var sessionRecapPrecomputeScheduler = SessionRecapPrecomputeScheduler(
+        now: { Date() },
+        sleep: { try await Task.sleep(for: $0) },
+        run: { [weak self] sessionId in await self?.runRecapPrecompute(sessionId: sessionId) ?? .skipped }
+    )
     @ObservationIgnored let qwenTitleRequests = ACPQwenTitleRequests()
     @ObservationIgnored private var worktreeExplainerStoreInstance: WorktreeExplainerStore?
     var worktreeExplainerStore: WorktreeExplainerStore {
@@ -197,7 +203,12 @@ final class AppState {
     var nextPromptRuntimeEnabled = false
     var nextPromptDisableSavePending = false
     var nextPromptSettingsError: String?
-    var sessionSummariesRuntimeEnabled = false
+    var sessionSummariesRuntimeEnabled = false {
+        didSet {
+            guard sessionSummariesRuntimeEnabled != oldValue else { return }
+            sessionSummariesRuntimeEnabledChanged()
+        }
+    }
     var sessionSummaryDisableSavePending = false
     var sessionSummarySettingsError: String?
     var localTextRemovalFailure: LocalTextModelFailure?
@@ -209,6 +220,7 @@ final class AppState {
     var nextPromptOffer: String?
     @ObservationIgnored var nextPromptSettingsGeneration: UInt64 = 0
     @ObservationIgnored var sessionSummarySettingsGeneration: UInt64 = 0
+    @ObservationIgnored var sessionSummaryCleanupTask: Task<Void, Never>?
     @ObservationIgnored var localTextModelGeneration: UInt64 = 0
     @ObservationIgnored var localTextSettingsInspected = false
     @ObservationIgnored var localTextRuntimeStarted = false
@@ -1731,6 +1743,7 @@ final class AppState {
         }
         installRunScheduleRunner()
         installReviewShepherdEffects()
+        installSessionRecap()
         startLocalTextObservers()
         AlasTerminationCoordinator.shared.flush = { [weak self] in
             await self?.shutdownLocalTextFeatures()
@@ -1742,6 +1755,7 @@ final class AppState {
             await self?.flushRunHistoryPersistence()
             await self?.flushAllACPComposerDrafts()
             await PluginStorage.flushAll()
+            await self?.awaitSessionSummaryCleanup()
         }
         Task.detached {
             RunScriptCompletionMonitor.cleanupStaleLocalFiles()
@@ -9548,6 +9562,7 @@ final class AppState {
     }
 
     private func cleanupACPSession(owner: SessionOwnerID, sessionId: String) {
+        dropRecapPrecompute(sessionId: sessionId)
         guard let manager = acpManagers[owner] else { return }
         Task { await manager.dismissSideQuestion(parentID: sessionId) }
         if retainedScheduledSessionStillNeedsRunner(manager: manager, sessionId: sessionId) {
@@ -13464,6 +13479,7 @@ final class AppState {
         acpManagers[owner] = mgr
         acpManagerProjectIds[owner] = worktree.projectId
         observeNextPromptSessions(mgr, owner: owner)
+        installSessionRecapHandler(on: mgr)
         acpHarnessBridge.attach(manager: mgr)
         Task {
             await previousManagerDisposal?.value
@@ -13802,6 +13818,7 @@ final class AppState {
         }
         acpManagers[owner] = manager
         observeNextPromptSessions(manager, owner: owner)
+        installSessionRecapHandler(on: manager)
         acpHarnessBridge.attach(manager: manager)
         Task { await manager.purgeOrphanedEphemeralSessions() }
         #if DEBUG

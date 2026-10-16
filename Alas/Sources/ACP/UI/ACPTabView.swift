@@ -153,8 +153,10 @@ private struct ACPManagedTabView: View {
             .onAppear {
                 manager.retainSession(id: sessionId)
                 manager.markSessionVisible(id: sessionId)
+                manager.markChatVisible(id: sessionId)
             }
             .onDisappear {
+                manager.unmarkChatVisible(id: sessionId)
                 manager.unmarkSessionVisible(id: sessionId)
                 manager.releaseSession(id: sessionId)
             }
@@ -614,6 +616,12 @@ private struct ACPSessionView: View {
 
                 VStack(spacing: 8) {
                     sideQuestionSlot(.composer, contentMaxWidth: contentMaxWidth)
+                    // Renders only for the session the coordinator is bound to.
+                    ACPSessionRecapCard(
+                        coordinator: state.sessionSummaryCoordinator,
+                        session: session,
+                        maxWidth: contentMaxWidth
+                    )
                     composerView(
                         placement: composerPlacement,
                         contentMaxWidth: contentMaxWidth,
