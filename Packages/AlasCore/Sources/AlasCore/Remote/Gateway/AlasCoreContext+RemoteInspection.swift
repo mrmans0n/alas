@@ -668,7 +668,7 @@ extension AlasCoreContext {
         return nil
     }
 
-    private func isFolderWorktree(_ worktree: Worktree) -> Bool {
+    func isFolderWorktree(_ worktree: Worktree) -> Bool {
         projects.projects.first { $0.id == worktree.projectId }?.isFolder == true
     }
 }

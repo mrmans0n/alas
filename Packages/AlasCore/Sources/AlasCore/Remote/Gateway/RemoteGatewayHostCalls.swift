@@ -12,6 +12,12 @@ import Foundation
     public var createWorktreeSession: @MainActor (_ request: RemoteWorktreeSessionCreation, _ caller: HostCaller) async -> RemoteCreateWorktreeSessionResult
     /// Reads of a session's worktree: changes, diffs, files and commits.
     public var inspection: any RemoteWorktreeInspecting
+    /// What `@` offers for a query, given the sessions the last search listed.
+    public var mentionCandidates: @MainActor (_ sessionID: String, _ query: String, _ cachedSessions: [ACPSessionMentionCandidate]?) async
+        -> (mentions: [RemoteMention], sessions: [ACPSessionMentionCandidate])
+    /// The prompt attachments for a client's mentions, or nil when one does
+    /// not resolve inside the session's project.
+    public var mentionAttachments: @MainActor (_ mentions: [RemoteMention], _ sessionID: String) async -> [ACPMessage.Attachment]?
 
     public init(
         worktrees: @escaping @MainActor () async -> [RemoteWorktreeOption],
@@ -24,7 +30,12 @@ import Foundation
         createWorktreeSession: @escaping @MainActor (_ request: RemoteWorktreeSessionCreation, _ caller: HostCaller) async -> RemoteCreateWorktreeSessionResult = { _, _ in
             .failure(stage: .worktree, message: "Could not create worktree.", worktreeId: nil)
         },
-        inspection: any RemoteWorktreeInspecting
+        inspection: any RemoteWorktreeInspecting,
+        mentionCandidates: @escaping @MainActor (_ sessionID: String, _ query: String, _ cachedSessions: [ACPSessionMentionCandidate]?) async
+            -> (mentions: [RemoteMention], sessions: [ACPSessionMentionCandidate]) = { _, _, _ in ([], []) },
+        mentionAttachments: @escaping @MainActor (_ mentions: [RemoteMention], _ sessionID: String) async -> [ACPMessage.Attachment]? = { mentions, _ in
+            mentions.isEmpty ? [] : nil
+        }
     ) {
         self.worktrees = worktrees
         self.projects = projects
@@ -33,6 +44,8 @@ import Foundation
         self.createSession = createSession
         self.createWorktreeSession = createWorktreeSession
         self.inspection = inspection
+        self.mentionCandidates = mentionCandidates
+        self.mentionAttachments = mentionAttachments
     }
 
     /// The host's lists and creations; empty and refused without a host.
@@ -59,7 +72,13 @@ import Foundation
                 await host?.remoteCreateWorktreeSession(request, caller: caller)
                     ?? .failure(stage: .worktree, message: "Could not create worktree.", worktreeId: nil)
             },
-            inspection: core
+            inspection: core,
+            mentionCandidates: { [weak core] sessionID, query, cached in
+                await core?.remoteMentionCandidates(sessionId: sessionID, query: query, cachedSessions: cached) ?? ([], [])
+            },
+            mentionAttachments: { [weak core] mentions, sessionID in
+                await core?.remoteMentionAttachments(mentions, sessionId: sessionID) ?? (mentions.isEmpty ? [] : nil)
+            }
         )
     }
 }

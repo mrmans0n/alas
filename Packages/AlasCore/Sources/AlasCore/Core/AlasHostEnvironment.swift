@@ -54,6 +54,10 @@ public protocol AlasHostEnvironment: AnyObject {
     func enabledAgents() -> [AgentDefinition]
     /// The models and thinking levels agents advertised, when the host keeps them.
     var modelCatalog: ACPAgentModelCatalog? { get }
+    /// The index of each worktree's files, shared with the app's own pickers.
+    var fileIndex: FileIndex { get }
+    /// The configured agent `id`, enabled or not.
+    func agent(id: String) -> AgentDefinition?
 }
 
 extension AlasHostEnvironment {
@@ -88,6 +92,13 @@ extension AlasHostEnvironment {
     }
 
     public var modelCatalog: ACPAgentModelCatalog? { nil }
+
+    /// A fresh index; a host that keeps one shares it instead.
+    public var fileIndex: FileIndex { FileIndex() }
+
+    public func agent(id: String) -> AgentDefinition? {
+        AgentConfiguredCatalog.all(builtinState: AppConfig.defaults.agents.builtinState, customs: []).first { $0.id == id }
+    }
 
     /// Ends the checkout's agent sessions, as a removal ends a worktree's.
     public func stopWorkspaceCheckoutSessions(_ checkout: WorkspaceCheckout, in core: AlasCoreContext) async throws {
@@ -131,5 +142,7 @@ extension AlasHostEnvironment {
 
 /// A host without a UI: every requirement keeps its default.
 public final class HeadlessHostEnvironment: AlasHostEnvironment {
+    public let fileIndex = FileIndex()
+
     public init() {}
 }
