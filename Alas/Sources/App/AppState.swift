@@ -14651,7 +14651,11 @@ final class AppState {
     /// straight to the worktree's session store.
     func renameLocalACPSession(worktreeId: String, sessionId: ACPSession.ID, title: String) async {
         guard let worktree = worktree(withId: worktreeId), let manager = acpManager(for: worktree) else { return }
-        guard !manager.renameSessionCosmetic(id: sessionId, title: title, source: .manual) else { return }
+        if manager.renameSessionCosmetic(id: sessionId, title: title, source: .manual) {
+            // Stored before returning: the browser reads it for the next row.
+            await manager.flushAllPersistence()
+            return
+        }
         _ = try? await manager.persistence.renameSession(
             id: sessionId, title: title, titleSource: .manual, updatedAt: Int64(Date().timeIntervalSince1970)
         )

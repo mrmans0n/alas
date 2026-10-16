@@ -872,9 +872,12 @@ struct AgentLauncherDialog: View {
     private var browserFilterBar: some View {
         let filter = discoveryModel?.filter ?? .init()
         return HStack(spacing: 4) {
-            filterChip("This worktree", isOn: !filter.includeLinkedWorktrees) { $0.includeLinkedWorktrees = false }
-            filterChip("All worktrees", isOn: filter.includeLinkedWorktrees) { $0.includeLinkedWorktrees = true }
-            Divider().frame(height: 12).padding(.horizontal, 6)
+            // A workspace checkout's browser lists its own directory only.
+            if discoveryModel?.canListLinkedWorktrees == true {
+                filterChip("This worktree", isOn: !filter.includeLinkedWorktrees) { $0.includeLinkedWorktrees = false }
+                filterChip("All worktrees", isOn: filter.includeLinkedWorktrees) { $0.includeLinkedWorktrees = true }
+                Divider().frame(height: 12).padding(.horizontal, 6)
+            }
             filterChip("Active", isOn: !filter.showArchived) { $0.showArchived = false }
             filterChip("Archived", isOn: filter.showArchived) { $0.showArchived = true }
             Spacer()

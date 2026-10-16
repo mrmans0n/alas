@@ -549,7 +549,7 @@ struct ACPSessionDiscoveryTests {
             }
         }
         let model = ACPSessionDiscoveryModel()
-        await model.start(manager: manager(store: store, client: client), agentId: "claude")
+        await model.start(manager: manager(store: store, client: client), agentId: "claude", worktreeResolver: Self.projectResolver)
         #expect(model.sessions.map(\.remoteSessionId) == ["initial"])
 
         let stale = Task { try await model.setFilter(.init(includeLinkedWorktrees: true)) }
@@ -619,6 +619,11 @@ struct ACPSessionDiscoveryTests {
         await model.start(manager: manager(store: store, client: client), agentId: "claude")
         let subscribe = try #require(client.sent.first { $0.method == "_session/list/subscribe" })
         #expect(subscribe.params as? ACPSessionListSubscribeParams == .init(cwd: "/tmp/wt"))
+        // Without a project resolver (a workspace checkout) there is no linked scope.
+        #expect(!model.canListLinkedWorktrees)
+        let lists = client.sent.filter { $0.method == "session/list" }.count
+        try await model.setFilter(.init(includeLinkedWorktrees: true))
+        #expect(client.sent.filter { $0.method == "session/list" }.count == lists)
 
         let newer = ACPAgentSessionInfo(sessionId: "c", cwd: "/tmp/wt", title: "C", updatedAt: "2026-10-16T11:00:00Z", index: .init(archived: false))
         client.emitSessionListChanges(.init(subscriptionId: "other-subscription", sessions: [newer], removed: ["a"]))
@@ -644,6 +649,7 @@ struct ACPSessionDiscoveryTests {
     func renameAndArchive() async throws {
         let store = try temporaryStore()
         try store.upsertSession(row(id: "local-1", remoteSessionId: "remote-1", title: "Local", origin: .agentImported))
+        try store.upsertSession(row(id: "local-2", remoteSessionId: "remote-2", title: "Other", origin: .agentImported))
         let client = indexClient()
         client.script(method: "session/list") { _ in
             try JSONEncoder().encode(ACPSessionListResult(sessions: [
@@ -651,7 +657,12 @@ struct ACPSessionDiscoveryTests {
                 .init(sessionId: "remote-2", cwd: "/tmp/wt", title: "Other", index: .init(archived: false)),
             ]))
         }
-        client.script(method: "_session/rename") { _ in Data("{}".utf8) }
+        var localTitles: [String] = []
+        client.script(method: "_session/rename") { request in
+            localTitles.append("rpc")
+            guard (request.params as? ACPSessionRenameParams)?.sessionId == "remote-1" else { throw TestError.failed }
+            return Data("{}".utf8)
+        }
         client.script(method: "_session/archive") { request in
             guard (request.params as? ACPSessionArchiveParams)?.sessionId == "remote-1" else { throw TestError.failed }
             return Data("{}".utf8)
@@ -661,11 +672,25 @@ struct ACPSessionDiscoveryTests {
         let first = try #require(model.sessions.first)
 
         var renamedLocally: [String: String] = [:]
-        try await model.rename(first, to: "  Renamed  ") { renamedLocally[$0] = $1 }
+        try await model.rename(first, to: "  Renamed  ") { id, title in
+            renamedLocally[id] = title
+            localTitles.append(title)
+        }
+        // The Alas copy is renamed before the agent, so a notification the
+        // rename triggers already reads the new Alas title.
+        #expect(localTitles == ["Renamed", "rpc"])
         #expect(client.sent.first { $0.method == "_session/rename" }?.params as? ACPSessionRenameParams
             == .init(sessionId: "remote-1", title: "Renamed"))
         #expect(model.sessions.first?.title == "Renamed")
         #expect(renamedLocally == ["local-1": "Renamed"])
+
+        // A failed rename puts the Alas title back.
+        localTitles = []
+        await #expect(throws: TestError.failed) {
+            try await model.rename(try #require(model.sessions.last), to: "Nope") { _, title in localTitles.append(title) }
+        }
+        #expect(localTitles == ["Nope", "rpc", "Other"])
+        #expect(model.sessions.last?.title == "Other")
 
         try await model.setArchived(true, for: try #require(model.sessions.first))
         #expect(model.sessions.map(\.remoteSessionId) == ["remote-2"])
@@ -852,7 +877,7 @@ struct ACPSessionDiscoveryTests {
                 nextCursor: "page-2"))
         }
         let model = ACPSessionDiscoveryModel()
-        await model.start(manager: manager(store: store, client: client), agentId: "claude")
+        await model.start(manager: manager(store: store, client: client), agentId: "claude", worktreeResolver: Self.projectResolver)
         let loadMore = Task { try await model.loadMore() }
         for await _ in pageTwoStarted.stream { break }
         try await model.setFilter(.init(includeLinkedWorktrees: true))
@@ -1024,6 +1049,13 @@ struct ACPSessionDiscoveryTests {
             return Data("{}".utf8)
         }
         return client
+    }
+
+    /// A project with only the browsing worktree at /tmp/wt: enables the
+    /// linked-worktree scope, and anything else is outside Alas.
+    @MainActor
+    private static func projectResolver(_ cwd: String) -> ACPSessionBrowserTarget? {
+        ACPSessionBrowserPaths.key(cwd) == ACPSessionBrowserPaths.key("/tmp/wt") ? .init(worktreeId: "wt", persistence: nil) : nil
     }
 
     /// An agent with the client-neutral session index and a list subscription.

@@ -266,6 +266,9 @@ public final class ACPSessionDiscoveryHandle {
     /// Maps a row's cwd to the Alas worktree whose path it is, and that
     /// worktree's session store (each worktree has its own).
     private let worktreeResolver: @MainActor (String) -> ACPSessionBrowserTarget?
+    /// Only a browser given a project resolver lists linked worktrees; a
+    /// workspace checkout's browser stays on its own directory.
+    nonisolated public let canListLinkedWorktrees: Bool
     private let onClosed: (@MainActor @Sendable () -> Void)?
     private var nextCursor: String?
     private var hasLoadedPage = false
@@ -296,6 +299,7 @@ public final class ACPSessionDiscoveryHandle {
         self.capabilities = capabilities
         self.sessionIndex = sessionIndex
         let ownCWD = ACPSessionBrowserPaths.key(cwd)
+        canListLinkedWorktrees = sessionIndex != nil && worktreeResolver != nil
         let own = ACPSessionBrowserTarget(worktreeId: worktreeId, persistence: persistence)
         self.worktreeResolver = worktreeResolver ?? { ACPSessionBrowserPaths.key($0) == ownCWD ? own : nil }
         self.onClosed = onClosed
@@ -366,7 +370,7 @@ public final class ACPSessionDiscoveryHandle {
     /// cwd is listed, as before the session index.
     private func discoveredSession(_ info: ACPAgentSessionInfo, filter: ACPSessionBrowserFilter) async -> ACPDiscoveredSession? {
         let target = worktreeResolver(info.cwd)
-        let includeLinked = sessionIndex != nil && filter.includeLinkedWorktrees
+        let includeLinked = canListLinkedWorktrees && filter.includeLinkedWorktrees
         guard includeLinked || target?.worktreeId == worktreeId else { return nil }
         let local = try? await target?.persistence?.loadSession(agentId: agentId, remoteSessionId: info.sessionId)
         let remoteTitle = info.title?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -632,11 +636,16 @@ public final class ACPSessionDiscoveryModel {
         }
     }
 
+    /// Whether the scope chips may offer every linked worktree.
+    public var canListLinkedWorktrees: Bool { handle?.canListLinkedWorktrees == true }
+
     /// Switches scope or archive filter and shows its first page. When
     /// changes overlap, only the latest one's page is shown; a failed change
     /// restores the previous filter and keeps its rows.
     public func setFilter(_ newFilter: ACPSessionBrowserFilter) async throws {
-        guard let handle, sessionIndex != nil, newFilter != filter else { return }
+        guard let handle, sessionIndex != nil, newFilter != filter,
+              !newFilter.includeLinkedWorktrees || handle.canListLinkedWorktrees
+        else { return }
         let previous = appliedFilter
         filter = newFilter
         filterGeneration += 1
@@ -694,9 +703,11 @@ public final class ACPSessionDiscoveryModel {
         firstPageIds = Set(page.rows.map(\.remoteSessionId))
     }
 
-    /// Renames the agent's session; on success `renameLocal` gets the Alas
-    /// session id and new title so the Alas copy, in whichever worktree it
-    /// lives, shows the same title.
+    /// Renames the agent's session and its Alas copy, in whichever worktree
+    /// it lives, through `renameLocal` (which returns once the title is
+    /// stored). The Alas copy is renamed first: a row is listed with its Alas
+    /// title, so a change notification the rename triggers must already read
+    /// the new one. A failed rename puts the Alas title back.
     public func rename(
         _ session: ACPDiscoveredSession,
         to title: String,
@@ -706,16 +717,23 @@ public final class ACPSessionDiscoveryModel {
         guard let handle, !trimmed.isEmpty else { return }
         guard updatingSessionIds.insert(session.remoteSessionId).inserted else { return }
         defer { updatingSessionIds.remove(session.remoteSessionId) }
-        try await handle.renameSession(remoteSessionId: session.remoteSessionId, title: trimmed)
+        if let localSessionId = session.localSessionId {
+            await renameLocal(localSessionId, trimmed)
+        }
+        do {
+            try await handle.renameSession(remoteSessionId: session.remoteSessionId, title: trimmed)
+        } catch {
+            if let localSessionId = session.localSessionId {
+                await renameLocal(localSessionId, session.title)
+            }
+            throw error
+        }
         localActionGeneration += 1
         // Patched on the row as it is now, and replayed after any pending
         // list read so an older page cannot bring the old title back.
         if var updated = sessions.first(where: { $0.remoteSessionId == session.remoteSessionId }) {
             updated.title = trimmed
             applyLiveChanges(changed: [updated], removed: [])
-        }
-        if let localSessionId = session.localSessionId {
-            await renameLocal(localSessionId, trimmed)
         }
     }
 
