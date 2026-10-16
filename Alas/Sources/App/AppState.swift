@@ -604,7 +604,12 @@ final class AppState {
     @ObservationIgnored
     var harnessAttentionPreAcknowledgedSessions: [String: String] = [:]
     let mcpRegistrationRegistry = MCPRegistrationRegistry()
-    let mcpHTTPSupervisor = AlasMCPHTTPSupervisor()
+    let mcpHTTPSupervisor = AlasMCPHTTPSupervisor(
+        state: BuiltInMCPSessionState(directory: Paths.builtInMCPSessionStateDir)
+    )
+    /// Shared by the HTTP supervisor and every session manager: the
+    /// supervisor's remembered endpoints are what adopted agents connect to.
+    var builtInMCPSessionState: BuiltInMCPSessionState { mcpHTTPSupervisor.state }
     let acpAdapterUpdateStore = ACPAdapterUpdateStore()
     let acpAdapterInstallCoordinator = ACPAdapterInstallCoordinator()
 
@@ -13331,6 +13336,7 @@ final class AppState {
             onSessionEnded: { [weak self] sessionId in
                 self?.mcpHTTPSupervisor.end(sessionId: sessionId)
             },
+            builtInMCPSessionState: builtInMCPSessionState,
             onChipsObserved: { [weak self] agentId, host, chips in
                 self?.recordObservedChips(agentId: agentId, host: host, chips: chips)
             },
@@ -13740,6 +13746,7 @@ final class AppState {
             clearMCPRegistration: { [weak self] sessionId in
                 self?.mcpRegistrationRegistry.clear(sessionId: sessionId)
             },
+            builtInMCPSessionState: builtInMCPSessionState,
             onChipsObserved: { [weak self] agentId, host, chips in
                 self?.recordObservedChips(agentId: agentId, host: host, chips: chips)
             }

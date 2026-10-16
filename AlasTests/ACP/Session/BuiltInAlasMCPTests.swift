@@ -186,4 +186,34 @@ struct BuiltInAlasMCPTests {
             socketPath: "/tmp/alas-501/pid-42"
         ) == false)
     }
+
+    @Test("an HTTP agent fingerprint changes with the address or token the agent was given")
+    func httpAgentFingerprintFollowsAddress() {
+        func fingerprint(_ url: String, _ token: String) -> String {
+            BuiltInAlasMCP.agentFingerprint(of: .http(
+                name: "alas", url: url, headers: [.init(name: "Authorization", value: "Bearer \(token)")]
+            ))
+        }
+        let original = fingerprint("http://localhost:5100/mcp", "a")
+        #expect(fingerprint("http://localhost:5100/mcp", "a") == original)
+        #expect(fingerprint("http://localhost:5101/mcp", "a") != original)
+        #expect(fingerprint("http://localhost:5100/mcp", "b") != original)
+    }
+
+    @Test("a stdio agent fingerprint ignores scoping env but not the app socket")
+    func stdioAgentFingerprintIgnoresScopingEnv() throws {
+        let workspace = BuiltInAlasMCP.WorkspaceContext(
+            checkoutID: UUID(), rootPath: "/repos/checkout",
+            members: [.init(id: UUID(), availability: .available)]
+        )
+        let plain = try #require(make()?.server)
+        let scoped = try #require(BuiltInAlasMCP.injection(
+            enabled: true, configuredServers: [], binaryPath: "/support/bin/alas",
+            socketPath: "/tmp/alas-501/pid-42", worktreePath: "/repos/checkout", sessionId: "acp-1",
+            workspaceContext: workspace
+        )?.server)
+        let otherSocket = try #require(make(socketPath: "/tmp/alas-501/pid-43")?.server)
+        #expect(BuiltInAlasMCP.agentFingerprint(of: scoped) == BuiltInAlasMCP.agentFingerprint(of: plain))
+        #expect(BuiltInAlasMCP.agentFingerprint(of: otherSocket) != BuiltInAlasMCP.agentFingerprint(of: plain))
+    }
 }

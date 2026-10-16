@@ -205,6 +205,15 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, @unchecked Senda
         return _adoptedRunningAgent
     }
 
+    /// True when the broker already holds the remote session, so
+    /// `session/new|load|resume` are answered from its snapshot and never
+    /// reach the adapter — nor does the MCP configuration they carry.
+    public var servesRemoteSessionFromSnapshot: Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return remoteSessionResult != nil
+    }
+
     public init(
         service: ACPBrokerServicing,
         brokerId: ACPBrokerID,

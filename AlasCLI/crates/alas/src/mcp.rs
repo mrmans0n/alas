@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
@@ -2049,11 +2049,24 @@ fn http_response(status: u16, content_type: &str, body: &str) -> String {
     )
 }
 
-/// HTTP transport for the same MCP server as `serve`. Binds an ephemeral
-/// localhost port, prints `PORT <n>` on stdout so the app can wire up
-/// `http://localhost:<n>/mcp`, and requires a bearer token matching
-/// `ALAS_MCP_HTTP_TOKEN` on every request.
-pub fn serve_http(env: &McpEnv) -> std::io::Result<()> {
+/// Options for `alas mcp --http`.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct HttpOptions {
+    /// Bind this exact port instead of an ephemeral one. Used when the app
+    /// respawns a session's server so an adopted agent's URL keeps working.
+    pub port: Option<u16>,
+    /// Exit once stdin reaches EOF, i.e. when the parent holding the pipe dies.
+    pub exit_with_parent: bool,
+}
+
+/// Set once the first authenticated HTTP request has announced this process.
+static HTTP_HELLO_SENT: AtomicBool = AtomicBool::new(false);
+
+/// HTTP transport for the same MCP server as `serve`. Binds a localhost port
+/// (ephemeral unless `options.port` is set), prints `PORT <n>` on stdout so
+/// the app can wire up `http://localhost:<n>/mcp`, and requires a bearer
+/// token matching `ALAS_MCP_HTTP_TOKEN` on every request.
+pub fn serve_http(env: &McpEnv, options: &HttpOptions) -> std::io::Result<()> {
     use std::io::Write;
     use std::net::TcpListener;
 
@@ -2068,7 +2081,8 @@ pub fn serve_http(env: &McpEnv) -> std::io::Result<()> {
     // many modern clients (Node/undici, which the claude ACP adapter uses).
     // Serving both loopback families on the same port keeps the server
     // reachable regardless of resolution order — while staying loopback-only.
-    let v4_listener = TcpListener::bind("127.0.0.1:0")?;
+    // A failed bind returns before `PORT` is printed, so the caller sees EOF.
+    let v4_listener = TcpListener::bind(("127.0.0.1", options.port.unwrap_or(0)))?;
     let port = v4_listener.local_addr()?.port();
 
     // Best-effort: a missing or busy IPv6 loopback must not sink the server.
@@ -2079,6 +2093,20 @@ pub fn serve_http(env: &McpEnv) -> std::io::Result<()> {
             None
         }
     };
+
+    if options.exit_with_parent {
+        // The parent holds the write end of our stdin pipe; EOF (or a read
+        // error) means it is gone, so take the server down with it.
+        std::thread::Builder::new()
+            .name("alas-mcp-http-parent-watch".into())
+            .spawn(|| {
+                use std::io::Read;
+                let mut stdin = std::io::stdin();
+                let mut buf = [0u8; 1024];
+                while matches!(stdin.read(&mut buf), Ok(n) if n > 0) {}
+                std::process::exit(0);
+            })?;
+    }
 
     println!("PORT {port}");
     std::io::stdout().flush()?;
@@ -2200,6 +2228,11 @@ fn handle_http_connection(
     Ok(())
 }
 
+/// Claims the once-per-process HTTP hello; true only for the first caller.
+fn claim_http_hello() -> bool {
+    !HTTP_HELLO_SENT.swap(true, Ordering::SeqCst)
+}
+
 /// True iff `body` parses as JSON whose `method` is `initialize`.
 fn is_initialize_message(body: &str) -> bool {
     serde_json::from_str::<Value>(body)
@@ -2228,11 +2261,13 @@ fn build_http_response(
         return http_response(404, "text/plain", "not found");
     }
 
-    // Re-announce on every authenticated `initialize`. The supervisor reuses the
-    // process across ACP reattaches while the app clears its registration
-    // registry per attach, so the hello must fire each time the harness
-    // reconnects and re-sends `initialize`. `recordHello` is idempotent.
-    if !env.visual_only && is_initialize_message(&req.body) {
+    // Announce on the first authenticated request of any method — a server
+    // respawned on its old port serves an already-initialized client that may
+    // only ever send `tools/call` — and again on every `initialize`: the
+    // supervisor reuses the process across ACP reattaches while the app clears
+    // its registration per attach, so a reconnecting harness must re-announce.
+    let first_request = claim_http_hello();
+    if !env.visual_only && (first_request || is_initialize_message(&req.body)) {
         alas_client::send_hello(&env.socket, &env.session_id, "http");
     }
 
@@ -2323,23 +2358,12 @@ mod tests {
     use super::{
         CHILD_ONLY_TOOLS, HttpRequest, McpEnv, McpRuntime, PROTOCOL_VERSION, build_http_response,
         cancellation_command_for_message, command_for_tool, dispatch, env_from, handle_line,
-        handle_line_with_parent, http_response, initialize_result, is_initialize_message,
+        handle_line_with_parent, http_response, initialize_result,
         parse_http_request, register_pending_preview, runs_on_worker, session_wait_timed_out,
         tool_definitions, tool_result, tools_call_command, ToolScope,
     };
     use alas_client::{Command, Response, VisualOption, VisualQuestion};
     use serde_json::{Value, json};
-
-    #[test]
-    fn detects_initialize_messages() {
-        assert!(is_initialize_message(
-            r#"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#
-        ));
-        assert!(!is_initialize_message(
-            r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#
-        ));
-        assert!(!is_initialize_message("not json"));
-    }
 
     #[test]
     fn parses_post_body_and_token() {

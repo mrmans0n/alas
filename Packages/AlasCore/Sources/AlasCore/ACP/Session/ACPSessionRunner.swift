@@ -163,6 +163,10 @@ public final class ACPSessionRunner {
     /// Whether a new turn may start now. The manager installs its worktree
     /// operation gate here when it registers the runner.
     public var admitsNewTurns: () -> Bool = { true }
+    /// Set by the manager when this runner's agent, adopted from its broker,
+    /// runs an outdated built-in MCP server. The next idle point calls it
+    /// once, before the queue drains (see `flushQueueIfIdle`).
+    public var restartAgentWhenIdle: (() -> Void)?
     private let onAuthRequired: ((ACPSessionRunner, String) async -> Void)?
     private let onPersist: (() -> Void)?
     /// Fires only when a message row was actually written (a normal
@@ -3314,6 +3318,19 @@ extension ACPSessionRunner {
         // being deleted; retry once the claim is released or this runner stops.
         guard admitsNewTurns() else {
             if !session.queue.isEmpty { scheduleQueueWake(at: Date().addingTimeInterval(2)) }
+            return
+        }
+        // The agent runs an outdated built-in MCP server: once no turn is
+        // running, restart it instead of draining the queue into it.
+        if let restart = restartAgentWhenIdle,
+           !steerInProgress,
+           !detachedSteeringTurn,
+           session.agentState == .ready,
+           activePromptID == nil,
+           session.transcript.streamingState == .idle,
+           session.transcript.pendingUserInputs.isEmpty {
+            restartAgentWhenIdle = nil
+            restart()
             return
         }
         guard !backgroundCancellationInProgress,

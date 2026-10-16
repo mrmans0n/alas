@@ -524,3 +524,65 @@ fn stdio_visual_only_forwards_html_bytes_and_returns_the_visual_id_without_hello
     assert_eq!(request["params"]["html"].as_str(), Some(html));
     assert_eq!(request["params"]["question"]["prompt"], json!("Which one?"));
 }
+
+fn hello_count(fake: &FakeAlas) -> usize {
+    fake.requests
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|request| request["kind"] == json!("mcp_hello"))
+        .count()
+}
+
+#[test]
+fn http_requested_port_bind_failure_exits_without_port_line() {
+    let occupied = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = occupied.local_addr().unwrap().port();
+    let output = Command::new(env!("CARGO_BIN_EXE_alas"))
+        .args(["mcp", "--http", "--port", &port.to_string()])
+        .env("ALAS_SOCKET_PATH", "/tmp/alas-mcp-unused.sock")
+        .env("ALAS_WORKTREE_DIR", "/tmp")
+        .env("ALAS_SESSION_ID", "session-1")
+        .env("ALAS_MCP_HTTP_TOKEN", "tok")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success(), "{output:?}");
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("PORT"), "{output:?}");
+    assert!(!output.stderr.is_empty(), "{output:?}");
+}
+
+fn wait_for_hellos(fake: &FakeAlas, expected: usize) -> usize {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while hello_count(fake) < expected && std::time::Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(10));
+    }
+    hello_count(fake)
+}
+
+#[test]
+fn http_hello_fires_on_first_authenticated_request_and_every_initialize() {
+    let fake = start_fake_alas("http-hello");
+    let token = "hello-token";
+    let mcp = start_mcp_http(&fake.socket, token);
+    let list = |id: &str| json!({ "jsonrpc": "2.0", "id": id, "method": "tools/list" });
+
+    let rejected = http_post(mcp.port, "wrong-token", list("unauthenticated"));
+    assert!(rejected.starts_with("HTTP/1.1 401"), "{rejected}");
+
+    // A server respawned on its old port serves an already-initialized
+    // client: its first request of any method announces the process.
+    for id in ["first", "second"] {
+        let response = http_post(mcp.port, token, list(id));
+        assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+    }
+    assert_eq!(wait_for_hellos(&fake, 1), 1);
+
+    // A reconnecting harness re-initializes against the reused process and
+    // must announce again: the app clears its registration per attach.
+    let initialize = json!({ "jsonrpc": "2.0", "id": "init", "method": "initialize", "params": {} });
+    let response = http_post(mcp.port, token, initialize);
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+    assert_eq!(wait_for_hellos(&fake, 2), 2);
+}

@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// Which built-in tools an attachment exposes. SSH sessions only get
@@ -91,18 +92,34 @@ public enum BuiltInAlasMCP: Sendable {
         public let server: ACPMCPServer
         public let status: MCPAttachmentServerStatus
         public let isDelegated: Bool
-        /// The HTTP server is the process an earlier attach in this app run
-        /// already got, not a fresh spawn. See `MCPRegistrationDecision`.
-        public let reusesRunningServer: Bool
         public let toolScope: BuiltInMCPToolScope
 
-        public init(server: ACPMCPServer, status: MCPAttachmentServerStatus, isDelegated: Bool, reusesRunningServer: Bool, toolScope: BuiltInMCPToolScope = .full) {
+        public init(server: ACPMCPServer, status: MCPAttachmentServerStatus, isDelegated: Bool, toolScope: BuiltInMCPToolScope = .full) {
             self.server = server
             self.status = status
             self.isDelegated = isDelegated
-            self.reusesRunningServer = reusesRunningServer
             self.toolScope = toolScope
         }
+    }
+
+    /// Identifies how an agent reaches the built-in server, so an attach that
+    /// adopts a surviving agent can tell whether it still reaches the server
+    /// this attach configures. HTTP: the URL and credentials the agent
+    /// connects to. stdio: the agent runs the server itself, so only the
+    /// command and the app socket it reports to matter; the scoping env
+    /// (worktree, workspace members) cannot strand it.
+    public static func agentFingerprint(of server: ACPMCPServer) -> String {
+        let identity: [String]
+        switch server {
+        case let .http(_, url, headers), let .sse(_, url, headers):
+            let kind = if case .http = server { "http" } else { "sse" }
+            identity = [kind, url] + headers.flatMap { [$0.name, $0.value] }
+        case let .stdio(_, command, args, env):
+            identity = ["stdio", command] + args
+                + env.filter { $0.name == "ALAS_SOCKET_PATH" }.map(\.value)
+        }
+        return SHA256.hash(data: Data(identity.joined(separator: "\u{0}").utf8))
+            .map { String(format: "%02x", $0) }.joined()
     }
 
     /// The status row for a built-in server that was requested but cannot be
@@ -121,7 +138,6 @@ public enum BuiltInAlasMCP: Sendable {
             server: .stdio(name: serverName, command: descriptor.proxyCommand, args: descriptor.proxyArgs, env: []),
             status: .init(id: statusId, name: serverName, transport: .stdio, disposition: .requested),
             isDelegated: false,
-            reusesRunningServer: false,
             toolScope: .visualOnly
         )
     }
@@ -132,14 +148,10 @@ public enum BuiltInAlasMCP: Sendable {
     public struct HTTPEndpoint: Equatable, Sendable {
         public let url: String
         public let token: String
-        /// The supervisor handed back its running process rather than
-        /// spawning one.
-        public var reused = false
 
-        public init(url: String, token: String, reused: Bool = false) {
+        public init(url: String, token: String) {
             self.url = url
             self.token = token
-            self.reused = reused
         }
     }
 
@@ -258,8 +270,7 @@ public enum BuiltInAlasMCP: Sendable {
                 transport: transport,
                 disposition: .requested
             ),
-            isDelegated: parentSessionId != nil,
-            reusesRunningServer: httpEndpoint?.reused == true
+            isDelegated: parentSessionId != nil
         )
     }
 }

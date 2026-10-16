@@ -45,49 +45,60 @@ struct MCPRegistrationDecisionTests {
         ) == c.expected)
     }
 
-    struct ReattachCase: CustomTestStringConvertible, Sendable {
-        let builtIn: MCPTransportKind
-        let adopted: Bool
-        let recordedHello: MCPTransportKind?
-        var reusedHTTP = false
-        var previouslyNotRegistered = false
-        let expected: Bool
-        var testDescription: String {
-            "\(builtIn), \(adopted ? "adopted" : "spawned"), hello \(recordedHello.map { "\($0)" } ?? "none")"
-                + (reusedHTTP ? ", reused HTTP server" : "")
-                + (previouslyNotRegistered ? ", previously not registered" : "")
-        }
+    struct AdoptionCase: CustomTestStringConvertible, Sendable {
+        let label: String
+        let servedFromSnapshot: Bool
+        var generation: UInt64? = 7
+        var fingerprint: String? = "current"
+        let record: BuiltInMCPSessionState.AgentRecord?
+        let expected: MCPRegistrationDecision.AdoptedAgentServer
+        var testDescription: String { label }
     }
 
     @Test(arguments: [
-        // A surviving stdio server: no hello yet in this app run, or its own.
-        ReattachCase(builtIn: .stdio, adopted: true, recordedHello: nil, expected: true),
-        ReattachCase(builtIn: .stdio, adopted: true, recordedHello: .stdio, expected: true),
-        // The previous attach used HTTP, so this stdio server is new.
-        ReattachCase(builtIn: .stdio, adopted: true, recordedHello: .http, expected: false),
-        // A reconnect after this app run already warned: nothing survived.
-        ReattachCase(builtIn: .stdio, adopted: true, recordedHello: nil, previouslyNotRegistered: true, expected: false),
-        // A freshly spawned agent.
-        ReattachCase(builtIn: .stdio, adopted: false, recordedHello: nil, expected: false),
-        ReattachCase(builtIn: .http, adopted: false, recordedHello: .http, reusedHTTP: true, expected: false),
-        // The supervisor reused the HTTP process that said hello: the adapter
-        // keeps its connection and sends no new `initialize`, so no new hello.
-        ReattachCase(builtIn: .http, adopted: true, recordedHello: .http, reusedHTTP: true, expected: true),
-        // A respawned HTTP process (e.g. after a failed attach ended the old
-        // one) must say hello itself; the old process's hello proves nothing.
-        ReattachCase(builtIn: .http, adopted: true, recordedHello: .http, expected: false),
-        // No HTTP hello in this app run (restarted, or switched from stdio).
-        ReattachCase(builtIn: .http, adopted: true, recordedHello: nil, reusedHTTP: true, expected: false),
-        ReattachCase(builtIn: .http, adopted: true, recordedHello: .stdio, reusedHTTP: true, expected: false),
+        AdoptionCase(label: "live startup configures the agent", servedFromSnapshot: false,
+                     record: nil, expected: .configuredNow),
+        AdoptionCase(label: "adopted agent started with this server", servedFromSnapshot: true,
+                     record: .init(brokerGeneration: .init(rawValue: 7), fingerprint: "current"), expected: .kept),
+        // An app restart that could not bring the HTTP server back at the
+        // agent's address, or a transport switch: the agent calls a dead server.
+        AdoptionCase(label: "adopted agent started with another server", servedFromSnapshot: true,
+                     record: .init(brokerGeneration: .init(rawValue: 7), fingerprint: "previous"), expected: .outdated),
+        AdoptionCase(label: "record from an earlier broker generation", servedFromSnapshot: true,
+                     record: .init(brokerGeneration: .init(rawValue: 6), fingerprint: "current"), expected: .outdated),
+        AdoptionCase(label: "no record of the adopted agent", servedFromSnapshot: true,
+                     record: nil, expected: .outdated),
+        AdoptionCase(label: "no built-in server requested", servedFromSnapshot: true, fingerprint: nil,
+                     record: nil, expected: .configuredNow),
     ])
-    func reattachesRunningServer(_ c: ReattachCase) {
-        #expect(MCPRegistrationDecision.reattachesRunningServer(
-            builtInTransport: c.builtIn,
-            adoptedRunningAgent: c.adopted,
-            recordedHelloTransport: c.recordedHello,
-            reusedHTTPServer: c.reusedHTTP,
-            previousAttachFoundNoServer: c.previouslyNotRegistered
+    func adoptedAgentServer(_ c: AdoptionCase) {
+        #expect(MCPRegistrationDecision.adoptedAgentServer(
+            servedFromSnapshot: c.servedFromSnapshot,
+            brokerGeneration: c.generation.map(ACPBrokerGeneration.init(rawValue:)),
+            fingerprint: c.fingerprint,
+            record: c.record
         ) == c.expected)
+    }
+
+    @Test(arguments: [
+        (MCPRegistrationDecision.AdoptedAgentServer.kept, MCPTransportKind.http, false, true),
+        (.kept, .stdio, false, true),
+        // A reconnect after this app run already warned: nothing survived.
+        (.kept, .stdio, true, false),
+        (.outdated, .http, false, false),
+        (.configuredNow, .stdio, false, false),
+    ])
+    func reattachesRunningServer(
+        agentServer: MCPRegistrationDecision.AdoptedAgentServer,
+        transport: MCPTransportKind,
+        previouslyNotRegistered: Bool,
+        expected: Bool
+    ) {
+        #expect(MCPRegistrationDecision.reattachesRunningServer(
+            builtInTransport: transport,
+            adoptedAgentServer: agentServer,
+            previousAttachFoundNoServer: previouslyNotRegistered
+        ) == expected)
     }
 
     @Test(arguments: [

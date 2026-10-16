@@ -78,21 +78,40 @@ fn describe(err: &DispatchError) -> (String, u8) {
 #[derive(Debug, PartialEq)]
 enum McpMode {
     Stdio,
-    Http,
+    Http(mcp::HttpOptions),
     VisualOnly,
 }
 
-/// `alas mcp` runs the stdio MCP server; `alas mcp --http` runs the same
-/// server over localhost HTTP; `alas mcp --visual-only` runs the stdio server
-/// exposing only `visual_show`. Anything else falls through to the normal
-/// parser, which rejects it with usage text.
+/// `alas mcp` runs the stdio MCP server; `alas mcp --http [--port <n>]
+/// [--exit-with-parent]` runs the same server over localhost HTTP;
+/// `alas mcp --visual-only` runs the stdio server exposing only
+/// `visual_show`. Anything else falls through to the normal parser, which
+/// rejects it with usage text.
 fn mcp_mode(args: &[String]) -> Option<McpMode> {
     match args {
         [only] if only == "mcp" => Some(McpMode::Stdio),
-        [first, second] if first == "mcp" && second == "--http" => Some(McpMode::Http),
         [first, second] if first == "mcp" && second == "--visual-only" => Some(McpMode::VisualOnly),
+        [first, second, rest @ ..] if first == "mcp" && second == "--http" => {
+            http_options(rest).map(McpMode::Http)
+        }
         _ => None,
     }
+}
+
+/// Parses the flags after `mcp --http`; each may appear at most once.
+fn http_options(args: &[String]) -> Option<mcp::HttpOptions> {
+    let mut options = mcp::HttpOptions::default();
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--port" if options.port.is_none() => {
+                options.port = Some(iter.next()?.parse().ok().filter(|&port: &u16| port != 0)?);
+            }
+            "--exit-with-parent" if !options.exit_with_parent => options.exit_with_parent = true,
+            _ => return None,
+        }
+    }
+    Some(options)
 }
 
 fn run_mcp(mode: McpMode) -> ExitCode {
@@ -104,13 +123,13 @@ fn run_mcp(mode: McpMode) -> ExitCode {
         }
     };
     match mode {
-        McpMode::Http => env.transport = "http",
+        McpMode::Http(_) => env.transport = "http",
         McpMode::VisualOnly => env.visual_only = true,
         McpMode::Stdio => {}
     }
     let result = match mode {
         McpMode::Stdio | McpMode::VisualOnly => mcp::serve(&env),
-        McpMode::Http => mcp::serve_http(&env),
+        McpMode::Http(options) => mcp::serve_http(&env, &options),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -168,7 +187,23 @@ mod tests {
     #[test]
     fn mcp_mode_detection() {
         assert_eq!(mcp_mode(&["mcp".into()]), Some(McpMode::Stdio));
-        assert_eq!(mcp_mode(&["mcp".into(), "--http".into()]), Some(McpMode::Http));
+        assert_eq!(
+            mcp_mode(&["mcp".into(), "--http".into()]),
+            Some(McpMode::Http(mcp::HttpOptions::default()))
+        );
+        assert_eq!(
+            mcp_mode(&[
+                "mcp".into(),
+                "--http".into(),
+                "--port".into(),
+                "41234".into(),
+                "--exit-with-parent".into(),
+            ]),
+            Some(McpMode::Http(mcp::HttpOptions {
+                port: Some(41234),
+                exit_with_parent: true,
+            }))
+        );
         assert_eq!(
             mcp_mode(&["mcp".into(), "--visual-only".into()]),
             Some(McpMode::VisualOnly)
@@ -185,9 +220,16 @@ mod tests {
             mcp_mode(&["mcp".into(), "--http".into(), "extra".into()]),
             None
         );
-        assert_eq!(
-            mcp_mode(&["mcp".into(), "--http".into(), "--visual-only".into()]),
-            None
-        );
+        for rest in [
+            vec!["--visual-only"],
+            vec!["--port"],
+            vec!["--port", "0"],
+            vec!["--port", "nope"],
+            vec!["--port", "1", "--port", "2"],
+        ] {
+            let mut args: Vec<String> = vec!["mcp".into(), "--http".into()];
+            args.extend(rest.iter().map(|arg| arg.to_string()));
+            assert_eq!(mcp_mode(&args), None, "{rest:?}");
+        }
     }
 }

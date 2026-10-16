@@ -208,6 +208,12 @@ extension Paths {
     public static var acpOrchestrationDB: URL {
         appSupportRoot.appendingPathComponent("acp-orchestration.sqlite")
     }
+
+    /// Per-session built-in Alas MCP state that outlives an app run
+    /// (`BuiltInMCPSessionState`).
+    public static var builtInMCPSessionStateDir: URL {
+        appSupportRoot.appendingPathComponent("acp-mcp-state", isDirectory: true)
+    }
 }
 
 extension Paths {

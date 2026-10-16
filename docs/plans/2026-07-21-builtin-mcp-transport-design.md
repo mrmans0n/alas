@@ -135,10 +135,15 @@ notification — detection only decorates the status control.
 - **Bad auth / unknown session:** uniform empty-body `401` — unknown-session
   is indistinguishable from bad-token to local port scanners. Request bodies
   capped (1 MB); idle connections closed.
-- **App relaunch:** port changes; injection is recomputed per attach, so
-  reattached sessions get the fresh URL. Query processes orphaned from a
-  previous app instance hold stale URLs and fail — the same situation stdio
-  has today with stale socket paths, healed the same way on reattach.
+- **App relaunch:** an agent kept alive in its broker outlives the app and
+  never receives a new MCP configuration (the broker answers the startup RPC
+  from its snapshot). So the supervisor remembers each session's port and
+  token (`BuiltInMCPSessionState`) and respawns the server at that address;
+  the server is stateless, so the already-initialized client keeps working
+  and its first request announces the new process. Servers run with
+  `--exit-with-parent` and die with the app. An adopted agent whose recorded
+  built-in server differs from the one this attach configures (port taken,
+  transport switched, no record) is restarted once idle, like Reconnect.
 - **Detection false positives:** `notRegistered` heals to `registered` on any
   late hello; nothing gates on the warning.
 
