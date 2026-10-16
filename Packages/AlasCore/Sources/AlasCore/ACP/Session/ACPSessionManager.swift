@@ -3254,6 +3254,9 @@ public final class ACPSessionManager: ChangeTracking {
     public func archiveUnlessDrivenElsewhere(id: ACPSession.ID) async throws -> Bool {
         // A session created a moment ago may not have its row yet.
         await flushAllPersistence()
+        // On a remote host the local lease is half of authority; the other half
+        // is the host's, which only a writer here holds.
+        if effectiveRemoteHost() != nil, !isWriter(for: id) { return false }
         let fence: ACPSessionLeaseFence
         var claimedToken: String?
         if let owned = leaseFence(sessionId: id) {

@@ -189,6 +189,8 @@ struct HostSessionsTests {
         case remoteWorktree
         /// A checkpoint recovery starts while a checkout session is created.
         case recoveryStartsMeanwhile
+        /// The host's own view says the owner is being changed as creation ends.
+        case ownerClaimedAsCreationEnds
     }
 
     /// A session is not created where it could not safely run.
@@ -228,6 +230,10 @@ struct HostSessionsTests {
             }
             target = .workspaceCheckout(id: try await fixture.addCheckout(operation: .idle, location: .local))
             refusal = .ownerUnavailable(reason: SessionsAPI.checkpointRecoveryReason)
+        case .ownerClaimedAsCreationEnds:
+            environment.admitsCreation = false
+            target = .workspaceCheckout(id: try await fixture.addCheckout(operation: .idle, location: .local))
+            refusal = .ownerUnavailable(reason: "The session's owner was closed or claimed meanwhile.")
         }
 
         await #expect(throws: refusal) {
@@ -303,6 +309,7 @@ struct HostSessionsTests {
 private final class RefusingEnvironment: AlasHostEnvironment {
     var recovering = false
     var localOnlyAgents = false
+    var admitsCreation = true
     /// Runs while creation waits on the recovery check.
     var duringRecoveryCheck: () -> Void = {}
 
@@ -312,4 +319,6 @@ private final class RefusingEnvironment: AlasHostEnvironment {
     }
 
     func admitsAgent(_ agentID: String, remoteHost: String?) -> Bool { !localOnlyAgents || remoteHost == nil }
+
+    func admitsSessionCreation(owner: SessionOwnerID, in core: AlasCoreContext) -> Bool { admitsCreation }
 }

@@ -16847,6 +16847,20 @@ class AppHostEnvironment: AlasHostEnvironment {
         try await app?.preparedWorkspaceRepoHook(request)
     }
 
+    /// The app's own view of its checkouts and worktrees, kept on the main
+    /// actor, so a lifecycle operation that started meanwhile refuses.
+    func admitsSessionCreation(owner: SessionOwnerID, in core: AlasCoreContext) -> Bool {
+        guard let app else { return false }
+        switch owner {
+        case .worktree(let worktreeID):
+            return app.projectsManager.admitsNewWork(worktreeId: worktreeID)
+        case .workspaceCheckout(let id, let location):
+            guard let checkout = app.workspacesManager.checkout(id: id) else { return false }
+            return checkout.executionLocation.normalized == location.normalized
+                && checkout.operation == .idle && checkout.archivedAt == nil
+        }
+    }
+
     /// The app's own recovery checks, which also cover Workspace checkouts.
     func checkpointRecoveryBlocksSessions(owner: SessionOwnerID, in core: AlasCoreContext) async -> Bool {
         await app?.checkpointACPAdmissionDisabledAfterDiscovery(owner: owner, fallbackWorktree: nil) ?? true

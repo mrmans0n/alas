@@ -79,9 +79,9 @@ extension SessionsAPI {
                   !core.projects.isWorktreeHidden(projectId: worktreeOwner.projectId, path: worktreeOwner.path)
             else { throw SessionRefusal.ownerUnavailable(reason: "Another operation holds the worktree.") }
         }
-        guard core.sessionManagers[manager.owner] === manager else {
-            throw SessionRefusal.ownerUnavailable(reason: "The session's owner was closed meanwhile.")
-        }
+        guard core.sessionManagers[manager.owner] === manager,
+              core.environment.admitsSessionCreation(owner: manager.owner, in: core)
+        else { throw SessionRefusal.ownerUnavailable(reason: "The session's owner was closed or claimed meanwhile.") }
         let session = manager.createSession(agentId: agentID, autoRunDefault: autoRun)
         // Picked up by `attach`, so the first turn already runs on it.
         if let modelID { manager.pendingModel[session.id] = modelID }

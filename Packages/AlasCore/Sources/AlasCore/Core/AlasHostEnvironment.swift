@@ -38,6 +38,10 @@ public protocol AlasHostEnvironment: AnyObject {
     /// Whether an interrupted checkpoint restore keeps new agent sessions out
     /// of `owner` now.
     func checkpointRecoveryBlocksSessions(owner: SessionOwnerID, in core: AlasCoreContext) async -> Bool
+    /// Whether `owner` takes a new session right now, read synchronously after
+    /// the last suspension of a creation: the app's own view of a checkout
+    /// or worktree being archived, deleted or changed.
+    func admitsSessionCreation(owner: SessionOwnerID, in core: AlasCoreContext) -> Bool
     /// The session manager for a worktree, created on first use. Throws while
     /// another operation holds the worktree.
     func sessionManager(for worktree: Worktree, in core: AlasCoreContext) throws -> ACPSessionManager
@@ -90,6 +94,10 @@ extension AlasHostEnvironment {
     public func admitsAgent(_ agentID: String, remoteHost: String?) -> Bool {
         ACPLaunchCatalog.specs.contains { $0.agentID == agentID }
     }
+
+    /// A headless host's teardown removes the owner's manager at once, which
+    /// creation checks on its own.
+    public func admitsSessionCreation(owner: SessionOwnerID, in core: AlasCoreContext) -> Bool { true }
 
     /// Local worktrees only: a remote project's agent runs on its host,
     /// which only the app reaches.
