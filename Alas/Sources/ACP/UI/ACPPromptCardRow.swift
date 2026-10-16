@@ -261,7 +261,11 @@ struct PromptCardRow: View {
 
     // MARK: Decisions
 
-    private struct OriginStyle { let symbol: String; let label: String; let tint: String }
+    private struct OriginStyle {
+        let symbol: String
+        let label: String
+        let tint: String
+    }
 
     private static func style(for origin: ACPPromptCard.Origin) -> OriginStyle {
         switch origin {
