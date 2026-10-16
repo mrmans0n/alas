@@ -165,14 +165,6 @@ public final class ACPPermissionPolicy {
         pendingContinuation = nil
         session.transcript.pendingPermission = nil
         session.transcript.streamingState = .streaming
-        if let scope = persistScope {
-            try? await log.record(
-                sessionId: session.id,
-                scopeKey: scopeKey,
-                decision: decision,
-                scope: scope
-            )
-        }
         if let stillAuthorized, await !stillAuthorized() {
             cont?.resume(returning: .init(outcome: .cancelled))
             return false
@@ -184,6 +176,16 @@ public final class ACPPermissionPolicy {
             return false
         }
         cont?.resume(returning: .init(outcome: .selected(optionId: optionId)))
+        // Recorded once delivered, so an answer that never reached the agent
+        // is never remembered for the next request; still before returning.
+        if let scope = persistScope {
+            try? await log.record(
+                sessionId: session.id,
+                scopeKey: scopeKey,
+                decision: decision,
+                scope: scope
+            )
+        }
         return wasPending
     }
 

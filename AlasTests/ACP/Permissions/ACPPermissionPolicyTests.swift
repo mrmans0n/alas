@@ -170,7 +170,8 @@ struct ACPPermissionPolicyTests {
     func withheldAnswerCancelsTheRequest() async throws {
         let store = try makeStore()
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
-        let policy = ACPPermissionPolicy(session: session, log: .init(store: store))
+        let log = ACPPermissionDecisionLog(store: store)
+        let policy = ACPPermissionPolicy(session: session, log: log)
         let opts: [ACPPermissionOption] = [.init(optionId: "allow", name: "Allow", kind: "allow_once")]
         async let decision = policy.evaluate(
             scopeKey: "tool:bash", options: opts, params: stubParams(), requestID: .number(7))
@@ -185,6 +186,7 @@ struct ACPPermissionPolicyTests {
         )
         #expect(!answered)
         #expect(await decision.outcome == .cancelled)
+        #expect(try await log.lookup(sessionId: "s", scopeKey: "tool:bash") == nil)
     }
 
     @Test("a request the agent withdraws while its answer is being recorded stays cancelled")
