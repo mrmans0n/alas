@@ -775,8 +775,8 @@ struct ACPSessionDiscoveryTests {
     }
 
     @MainActor
-    @Test("a live removal during a reconcile is not undone by the older page")
-    func liveChangeDuringReconcile() async throws {
+    @Test("a removal or archive during a reconcile is not undone by the older page", arguments: [false, true])
+    func liveChangeDuringReconcile(archiveLocally: Bool) async throws {
         let store = try temporaryStore()
         let client = indexClient()
         let gate = AsyncStream<Void>.makeStream()
@@ -795,11 +795,16 @@ struct ACPSessionDiscoveryTests {
                 .init(sessionId: "deleted", cwd: "/tmp/wt", index: .init(archived: false)),
             ]))
         }
+        client.script(method: "_session/archive") { _ in Data("{}".utf8) }
         let model = ACPSessionDiscoveryModel()
         await model.start(manager: manager(store: store, client: client), agentId: "claude")
         let reconcile = Task { await model.reconcile() }
         for await _ in reconcileStarted.stream { break }
-        client.emitSessionListChanges(.init(subscriptionId: "sub-1", sessions: [], removed: ["deleted"]))
+        if archiveLocally {
+            try await model.setArchived(true, for: try #require(model.sessions.last))
+        } else {
+            client.emitSessionListChanges(.init(subscriptionId: "sub-1", sessions: [], removed: ["deleted"]))
+        }
         #expect(await awaitCondition { model.sessions.map(\.remoteSessionId) == ["kept"] })
         gate.continuation.yield()
         await reconcile.value

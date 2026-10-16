@@ -707,9 +707,9 @@ public final class ACPSessionDiscoveryModel {
         try await handle.setArchived(archived, remoteSessionId: session.remoteSessionId)
         var updated = session
         updated.index = (session.index ?? .init()).with(archived: archived)
-        sessions = ACPSessionBrowserReducer.applying(
-            changed: [updated], removed: [], to: sessions, filter: appliedFilter, browsingWorktreeId: handle.browsingWorktreeId
-        )
+        // Like a pushed change: a list page read before the archive must not
+        // bring the row back.
+        applyLiveChanges(changed: [updated], removed: [])
     }
 
     private func applyLiveChanges(changed: [ACPDiscoveredSession], removed: [String]) {
