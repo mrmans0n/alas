@@ -23,6 +23,8 @@ public enum SessionRefusal: Error, Codable, Equatable, Sendable {
     case invalidAnswer
     /// The session did not take the prompt (it needs sign-in, or is shutting down).
     case promptRejected
+    /// The session offers no such setting, or the value does not fit it.
+    case invalidSetting
 }
 
 extension SessionsAPI {
@@ -37,6 +39,7 @@ extension SessionsAPI {
     ) async throws -> HostSessionSummary {
         caller.log("sessions.create", agentID)
         let manager: ACPSessionManager
+        var worktreeOwner: Worktree?
         switch target {
         case .worktree(let ref):
             let listed = core.projects.worktrees(projectId: ref.projectID)
@@ -46,6 +49,7 @@ extension SessionsAPI {
             else { throw SessionRefusal.ownerUnavailable(reason: "The worktree is not listed, or is archived.") }
             let remoteHost = core.projects.projects.first { $0.id == ref.projectID }?.host
             guard core.environment.admitsAgent(agentID, remoteHost: remoteHost) else { throw SessionRefusal.agentUnavailable }
+            worktreeOwner = worktree
             do {
                 manager = try core.environment.sessionManager(for: worktree, in: core)
             } catch is AlasCoreContext.WorktreeOperationInProgress {
@@ -68,6 +72,11 @@ extension SessionsAPI {
         // Everything above can suspend: what the owner is now decides. This is
         // the last suspension before the session exists.
         if case .workspaceCheckout(let id) = target { _ = try await idleCheckout(id) }
+        if let worktreeOwner {
+            guard core.projects.admitsNewWork(in: worktreeOwner),
+                  !core.projects.isWorktreeHidden(projectId: worktreeOwner.projectId, path: worktreeOwner.path)
+            else { throw SessionRefusal.ownerUnavailable(reason: "Another operation holds the worktree.") }
+        }
         guard core.sessionManagers[manager.owner] === manager else {
             throw SessionRefusal.ownerUnavailable(reason: "The session's owner was closed meanwhile.")
         }
@@ -131,7 +140,11 @@ extension SessionsAPI {
 
     public func setConfigOption(_ sessionID: String, configID: String, value: ACPConfigValue, caller: HostCaller) async throws {
         caller.log("sessions.setConfigOption", sessionID)
-        try await writerManager(for: sessionID).setConfigOption(for: sessionID, configId: configID, value: value)?.value
+        // Nil when the session offers no such option or the value does not fit it.
+        guard let applying = try writerManager(for: sessionID).setConfigOption(for: sessionID, configId: configID, value: value) else {
+            throw SessionRefusal.invalidSetting
+        }
+        await applying.value
     }
 
     /// Answers the session's pending permission request `requestID`.

@@ -22,6 +22,9 @@ struct HostSessionsTests {
 
         try await sessions.send(id, prompt: "hello", caller: .app)
         try await eventually { fixture.agent.sent.contains { $0.method == "session/prompt" } }
+        await #expect(throws: SessionRefusal.invalidSetting) {
+            try await sessions.setConfigOption(id, configID: "no-such-option", value: .string("x"), caller: .app)
+        }
 
         let requestID = JSONRPCID.number(7)
         fixture.agent.emitPermission(id: requestID, params: ACPPermissionRequestParams(
@@ -106,6 +109,8 @@ struct HostSessionsTests {
         case busyCheckout
         /// The agent cannot run on the checkout's SSH host.
         case agentNotOnRemoteHost
+        /// An archive or delete claims the worktree while creation waits.
+        case worktreeClaimedMeanwhile
     }
 
     /// A session is not created where it could not safely run.
@@ -128,6 +133,12 @@ struct HostSessionsTests {
             environment.localOnlyAgents = true
             target = .workspaceCheckout(id: try await fixture.addCheckout(operation: .idle, location: .ssh("build")))
             refusal = .agentUnavailable
+        case .worktreeClaimedMeanwhile:
+            let projects = fixture.core.projects
+            let worktree = fixture.worktree
+            environment.duringRecoveryCheck = { projects.setOperationState(for: worktree, state: .archiving(projectId: "p")) }
+            target = .worktree(fixture.ref)
+            refusal = .ownerUnavailable(reason: "Another operation holds the worktree.")
         }
 
         await #expect(throws: refusal) {
@@ -202,8 +213,13 @@ struct HostSessionsTests {
 private final class RefusingEnvironment: AlasHostEnvironment {
     var recovering = false
     var localOnlyAgents = false
+    /// Runs while creation waits on the recovery check.
+    var duringRecoveryCheck: () -> Void = {}
 
-    func checkpointRecoveryBlocksSessions(owner: SessionOwnerID, in core: AlasCoreContext) async -> Bool { recovering }
+    func checkpointRecoveryBlocksSessions(owner: SessionOwnerID, in core: AlasCoreContext) async -> Bool {
+        duringRecoveryCheck()
+        return recovering
+    }
 
     func admitsAgent(_ agentID: String, remoteHost: String?) -> Bool { !localOnlyAgents || remoteHost == nil }
 }
