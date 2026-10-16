@@ -65,23 +65,25 @@ struct ACPSessionStoreSchemaTests {
         #expect(try store.loadSession(id: "configured")?.configOptionValues == values)
     }
 
-    @Test("native subagent policy is captured once and survives later upserts")
-    func nativeSubagentsPolicyIsWriteOnce() throws {
+    @Test("native subagent policy and session instructions are captured once and survive later upserts")
+    func capturedSessionPoliciesAreWriteOnce() throws {
         let store = try tmpStore()
-        func row(_ policy: Bool?) -> ACPSessionRow {
+        func row(_ policy: Bool?, _ instructions: String?) -> ACPSessionRow {
             .init(
                 id: "policy", agentId: "claude", title: "Policy",
                 currentModel: nil, currentMode: nil,
                 nativeSubagentsDisabled: policy,
+                sessionInstructions: instructions,
                 autoRun: false, createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false
             )
         }
-        try store.upsertSession(row(true))
+        try store.upsertSession(row(true, "Review migrations."))
         // Rows rebuilt without the field, or with a different value, never
         // change the policy the session started with.
-        try store.upsertSession(row(nil))
-        try store.upsertSession(row(false))
+        try store.upsertSession(row(nil, nil))
+        try store.upsertSession(row(false, "Edited default."))
         #expect(try store.loadSession(id: "policy")?.nativeSubagentsDisabled == true)
+        #expect(try store.loadSession(id: "policy")?.sessionInstructions == "Review migrations.")
 
         try store.upsertSession(.init(
             id: "legacy", agentId: "codex", title: "Legacy",
@@ -89,6 +91,7 @@ struct ACPSessionStoreSchemaTests {
             autoRun: false, createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false
         ))
         #expect(try store.loadSession(id: "legacy")?.nativeSubagentsDisabled == nil)
+        #expect(try store.loadSession(id: "legacy")?.sessionInstructions == nil)
     }
 
     @Test("agent prompt suggestions round-trip and a nil rewrite keeps the stored list")

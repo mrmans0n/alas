@@ -13399,6 +13399,9 @@ final class AppState {
         mgr.nativeSubagentsPreferenceProvider = { [weak self] agentId in
             self?.config.agents.nativeSubagentsDisabled(for: agentId) ?? false
         }
+        mgr.sessionInstructionsProvider = { [weak self] agentId in
+            self?.config.agents.sessionInstructions(for: agentId)
+        }
         mgr.delegatedChildProvider = { [weak self] sessionId in
             await self?.delegatedParentSessionID(for: sessionId) != nil
         }
@@ -13743,6 +13746,9 @@ final class AppState {
         }
         manager.nativeSubagentsPreferenceProvider = { [weak self] agentId in
             self?.config.agents.nativeSubagentsDisabled(for: agentId) ?? false
+        }
+        manager.sessionInstructionsProvider = { [weak self] agentId in
+            self?.config.agents.sessionInstructions(for: agentId)
         }
         manager.externalMCPStatusProvider = { [weak self] worktreePath -> (
             adapterState: PiMCPAdapterInspector.State,

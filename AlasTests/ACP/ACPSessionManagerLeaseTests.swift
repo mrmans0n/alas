@@ -239,11 +239,12 @@ import Foundation
         #expect(acquired.fence != nil)
     }
 
-    @Test("SSH takeover preserves queued or already-sent delegation guidance", arguments: [false, true])
+    @Test("SSH takeover preserves delegation guidance and the captured session instructions", arguments: [false, true])
     func remoteTakeoverPreservesOneTimePreamble(sent: Bool) async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }
-        let (writer, source, store, publisher, _, endpoint) = try await remoteWriter(in: folder, nativeSubagentsDisabled: true)
+        let (writer, source, store, publisher, _, endpoint) = try await remoteWriter(
+            in: folder, nativeSubagentsDisabled: true, sessionInstructions: "Review migrations.")
         defer {
             writer.shutdownBackgroundTasks()
             publisher.shutdown()
@@ -286,6 +287,8 @@ import Foundation
         _ = try #require(reader.runners[session.id], "Attach state: \(session.agentState)")
         #expect(session.mcpPreambleSent == sent)
         #expect(session.pendingMCPPreamble == pending)
+        let load = try #require(client.sent.first { $0.method == "session/load" }?.params as? ACPSessionLoadParams)
+        #expect(load.meta?.systemPrompt == .init(append: "Review migrations."))
     }
 
     @Test("remote agent-history deletion stays busy through the deletion RPC")
@@ -323,12 +326,18 @@ import Foundation
         #expect(await awaitCondition { readiness == true })
     }
 
-    private func remoteWriter(in folder: URL, nativeSubagentsDisabled: Bool? = nil, client injectedClient: ACPMockClient? = nil) async throws -> (
+    private func remoteWriter(
+        in folder: URL,
+        nativeSubagentsDisabled: Bool? = nil,
+        sessionInstructions: String? = nil,
+        client injectedClient: ACPMockClient? = nil
+    ) async throws -> (
         ACPSessionManager, ACPSession, ACPSessionStore, ACPRemoteSessionCoordinator, ACPSessionRunner, ReplicaEndpoint
     ) {
         let store = try ACPSessionStore(path: folder.appendingPathComponent("writer.sqlite").path)
         try store.upsertSession(.init(id: "session", agentId: "claude", title: "Session",
-            remoteSessionId: "conversation", currentModel: nil, currentMode: nil, nativeSubagentsDisabled: nativeSubagentsDisabled, autoRun: false,
+            remoteSessionId: "conversation", currentModel: nil, currentMode: nil, nativeSubagentsDisabled: nativeSubagentsDisabled,
+            sessionInstructions: sessionInstructions, autoRun: false,
             createdAt: 1, updatedAt: 1, lastOpenedAt: 1, archived: false))
         let endpoint = ReplicaEndpoint()
         let coordinator = ACPRemoteSessionCoordinator(owner: .init(serverId: "mac-a", instanceId: "A")) {
