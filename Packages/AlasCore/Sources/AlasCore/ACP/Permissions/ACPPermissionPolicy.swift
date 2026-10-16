@@ -148,14 +148,17 @@ public final class ACPPermissionPolicy {
     /// for Allow-once. Decision recorded if non-nil.
     /// Records the decision and answers the pending request with it. The
     /// request is taken before anything is awaited, so a caller that checks
-    /// for it first never races another for the same one. Returns whether a
-    /// request was pending.
+    /// for it first never races another for the same one. `stillAuthorized`,
+    /// asked right before the agent resumes, can withhold the answer: the
+    /// request is then cancelled. Returns whether a request was pending and
+    /// the answer reached it.
     @discardableResult
     public func userDecided(
         scopeKey: String,
         optionId: String,
         decision: ACPPermissionDecision,
-        persistScope: ACPPermissionScopeKind?
+        persistScope: ACPPermissionScopeKind?,
+        stillAuthorized: (@MainActor () async -> Bool)? = nil
     ) async -> Bool {
         let wasPending = pendingContinuation != nil || session.transcript.pendingPermission != nil
         let cont = pendingContinuation
@@ -169,6 +172,10 @@ public final class ACPPermissionPolicy {
                 decision: decision,
                 scope: scope
             )
+        }
+        if let stillAuthorized, await !stillAuthorized() {
+            cont?.resume(returning: .init(outcome: .cancelled))
+            return false
         }
         cont?.resume(returning: .init(outcome: .selected(optionId: optionId)))
         return wasPending

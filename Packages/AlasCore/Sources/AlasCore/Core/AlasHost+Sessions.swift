@@ -184,9 +184,13 @@ extension SessionsAPI {
         guard let answer = ACPRequestAnswers.permission(pending, optionId: optionID, scope: scope) else {
             throw SessionRefusal.invalidAnswer
         }
+        // The request was checked above with nothing awaited since, so a
+        // refusal here is the lease, confirmed again right before the agent
+        // resumes: recording the decision awaits.
         guard await policy.userDecided(
-            scopeKey: answer.scopeKey, optionId: answer.optionId, decision: answer.decision, persistScope: answer.persistScope
-        ) else { throw SessionRefusal.notPending }
+            scopeKey: answer.scopeKey, optionId: answer.optionId, decision: answer.decision, persistScope: answer.persistScope,
+            stillAuthorized: { await manager.confirmsWriterLease(for: sessionID) }
+        ) else { throw SessionRefusal.notWriter }
     }
 
     /// Answers the session's pending question `requestID`.

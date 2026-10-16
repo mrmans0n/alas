@@ -166,6 +166,27 @@ struct ACPPermissionPolicyTests {
         #expect(resp.outcome == .selected(optionId: "allow"))
     }
 
+    @Test("an answer the caller may no longer give cancels the request instead")
+    func withheldAnswerCancelsTheRequest() async throws {
+        let store = try makeStore()
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        let policy = ACPPermissionPolicy(session: session, log: .init(store: store))
+        let opts: [ACPPermissionOption] = [.init(optionId: "allow", name: "Allow", kind: "allow_once")]
+        async let decision = policy.evaluate(
+            scopeKey: "tool:bash", options: opts, params: stubParams(), requestID: .number(7))
+        let deadline = ContinuousClock.now + .seconds(5)
+        while session.transcript.pendingPermission == nil, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+
+        let answered = await policy.userDecided(
+            scopeKey: "tool:bash", optionId: "allow", decision: .allow, persistScope: .session,
+            stillAuthorized: { false }
+        )
+        #expect(!answered)
+        #expect(await decision.outcome == .cancelled)
+    }
+
     @Test("persisted user decisions commit before userDecided returns")
     func persistedUserDecisionIsAwaited() async throws {
         let store = try makeStore()

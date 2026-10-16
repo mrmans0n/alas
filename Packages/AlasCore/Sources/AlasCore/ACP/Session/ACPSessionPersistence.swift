@@ -856,18 +856,24 @@ public actor ACPSessionPersistence {
         leaseToken: String
     ) throws -> ACPSessionLease {
         let store = try openedStore()
-        try store.seizeLease(
+        guard try store.seizeLease(
             sessionId: sessionId,
             instanceId: instanceId,
             pid: pid,
             now: now,
             leaseToken: leaseToken
-        )
+        ) else { throw ACPSessionLeaseRefusal.archived }
         guard let lease = try store.loadLease(sessionId: sessionId) else {
             throw SQLiteError.stepFailed(code: SQLITE_ERROR, message: "Lease seizure did not persist", sql: "session_leases")
         }
         return lease
     }
+}
+
+/// Why a lease was not taken.
+public enum ACPSessionLeaseRefusal: Error, Equatable, Sendable {
+    /// The session is archived; nobody drives it again.
+    case archived
 }
 
 extension ACPSessionPersistence {

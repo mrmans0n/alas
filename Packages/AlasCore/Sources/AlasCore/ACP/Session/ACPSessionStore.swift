@@ -1637,23 +1637,27 @@ extension ACPSessionStore {
 
     /// Forcibly seize the lease (explicit user takeover) regardless of
     /// the current owner's liveness.
+    /// Takes the lease whoever holds it, unless the session is archived:
+    /// archiving stopped it for good. Returns whether the lease was taken.
+    @discardableResult
     public func seizeLease(
         sessionId: String,
         instanceId: String,
         pid: Int64,
         now: Int64,
         leaseToken: String = UUID().uuidString
-    ) throws {
-        try db.exec("""
+    ) throws -> Bool {
+        try db.execChanges("""
         INSERT INTO session_leases (session_id, owner_instance, pid, heartbeat_at, status, lease_token)
-        VALUES (?,?,?,?,'idle',?)
+        SELECT ?,?,?,?,'idle',?
+        WHERE NOT EXISTS (SELECT 1 FROM sessions WHERE id = ? AND archived = 1)
         ON CONFLICT(session_id) DO UPDATE SET
             owner_instance = excluded.owner_instance,
             pid = excluded.pid,
             heartbeat_at = excluded.heartbeat_at,
             status = 'idle',
             lease_token = excluded.lease_token
-        """, bindings: [sessionId, instanceId, pid, now, leaseToken])
+        """, bindings: [sessionId, instanceId, pid, now, leaseToken, sessionId]) > 0
     }
 
     public func withLeaseFence<T>(_ fence: ACPSessionLeaseFence, _ operation: () throws -> T) throws -> T? {

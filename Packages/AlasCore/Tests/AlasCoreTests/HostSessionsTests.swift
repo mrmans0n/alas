@@ -77,11 +77,19 @@ struct HostSessionsTests {
         #expect(sessions.list().first { $0.id == id }?.title == "Renamed")
         try await sessions.archive(id, caller: .app)
         #expect(!sessions.list().contains { $0.id == id })
-        // Nobody drives an archived session again, even with a stale view of it.
-        #expect(try await ACPSessionPersistence(path: fixture.sessionsDatabase.path).claimLease(
+        // Nobody drives an archived session again, even with a stale view of
+        // it: neither a claim nor a takeover's seizure takes its lease.
+        let store = ACPSessionPersistence(path: fixture.sessionsDatabase.path)
+        #expect(try await store.claimLease(
             sessionId: id, instanceId: "elsewhere", pid: Int64(getpid()),
             now: Int64(Date().timeIntervalSince1970), staleAfter: 60, leaseToken: "stale"
         ) == nil)
+        await #expect(throws: ACPSessionLeaseRefusal.archived) {
+            try await store.seizeLease(
+                sessionId: id, instanceId: "elsewhere", pid: Int64(getpid()),
+                now: Int64(Date().timeIntervalSince1970), leaseToken: "seized"
+            )
+        }
         await #expect(throws: SessionRefusal.notFound) { try await sessions.send(id, prompt: "again", caller: .app) }
     }
 
