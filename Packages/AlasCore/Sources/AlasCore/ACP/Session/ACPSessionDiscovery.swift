@@ -527,6 +527,9 @@ public final class ACPSessionDiscoveryModel {
                 try await handle.deleteSession(remoteSessionId: session.remoteSessionId)
             }
             remotelyDeletedSessionIds.insert(session.remoteSessionId)
+            // The relist below shows the deletion; a list page read before it
+            // must not bring the row back once that read finishes.
+            if listReadsInFlight > 0 { pendingChanges.append(([], [session.remoteSessionId])) }
         }
 
         try await refreshAfterDeletion()
@@ -690,8 +693,11 @@ public final class ACPSessionDiscoveryModel {
         guard updatingSessionIds.insert(session.remoteSessionId).inserted else { return }
         defer { updatingSessionIds.remove(session.remoteSessionId) }
         try await handle.renameSession(remoteSessionId: session.remoteSessionId, title: trimmed)
-        if let index = sessions.firstIndex(where: { $0.remoteSessionId == session.remoteSessionId }) {
-            sessions[index].title = trimmed
+        // Patched on the row as it is now, and replayed after any pending
+        // list read so an older page cannot bring the old title back.
+        if var updated = sessions.first(where: { $0.remoteSessionId == session.remoteSessionId }) {
+            updated.title = trimmed
+            applyLiveChanges(changed: [updated], removed: [])
         }
         if let localSessionId = session.localSessionId {
             await renameLocal(localSessionId, trimmed)

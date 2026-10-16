@@ -775,13 +775,14 @@ struct ACPSessionDiscoveryTests {
     }
 
     @MainActor
-    @Test("a removal or archive during a reconcile is not undone by the older page", arguments: [false, true])
-    func liveChangeDuringReconcile(archiveLocally: Bool) async throws {
+    @Test("a change made during a reconcile is not undone by the older page", arguments: ["push", "archive", "delete", "rename"])
+    func liveChangeDuringReconcile(action: String) async throws {
         let store = try temporaryStore()
         let client = indexClient()
         let gate = AsyncStream<Void>.makeStream()
         let reconcileStarted = AsyncStream<Void>.makeStream()
         var lists = 0
+        var deleted = false
         client.scriptAsync(method: "session/list") { _ in
             lists += 1
             // The first page at start and after subscribing; the third read is
@@ -792,23 +793,33 @@ struct ACPSessionDiscoveryTests {
             }
             return try JSONEncoder().encode(ACPSessionListResult(sessions: [
                 .init(sessionId: "kept", cwd: "/tmp/wt", index: .init(archived: false)),
-                .init(sessionId: "deleted", cwd: "/tmp/wt", index: .init(archived: false)),
-            ]))
+                .init(sessionId: "deleted", cwd: "/tmp/wt", title: "Old", index: .init(archived: false)),
+            ].filter { !(deleted && $0.sessionId == "deleted") }))
         }
         client.script(method: "_session/archive") { _ in Data("{}".utf8) }
+        client.script(method: "_session/rename") { _ in Data("{}".utf8) }
+        client.script(method: "session/delete") { _ in
+            deleted = true
+            return Data("{}".utf8)
+        }
+        let manager = manager(store: store, client: client)
         let model = ACPSessionDiscoveryModel()
-        await model.start(manager: manager(store: store, client: client), agentId: "claude")
+        await model.start(manager: manager, agentId: "claude")
         let reconcile = Task { await model.reconcile() }
         for await _ in reconcileStarted.stream { break }
-        if archiveLocally {
-            try await model.setArchived(true, for: try #require(model.sessions.last))
-        } else {
-            client.emitSessionListChanges(.init(subscriptionId: "sub-1", sessions: [], removed: ["deleted"]))
+        let target = try #require(model.sessions.last)
+        switch action {
+        case "archive": try await model.setArchived(true, for: target)
+        case "delete": try await model.deleteAgentHistory(for: target, removeLocalHistory: false, manager: manager)
+        case "rename": try await model.rename(target, to: "Renamed") { _, _ in }
+        default: client.emitSessionListChanges(.init(subscriptionId: "sub-1", sessions: [], removed: ["deleted"]))
         }
-        #expect(await awaitCondition { model.sessions.map(\.remoteSessionId) == ["kept"] })
+        let expected = action == "rename" ? ["kept", "deleted"] : ["kept"]
+        #expect(await awaitCondition { model.sessions.map(\.remoteSessionId) == expected })
         gate.continuation.yield()
         await reconcile.value
-        #expect(model.sessions.map(\.remoteSessionId) == ["kept"])
+        #expect(model.sessions.map(\.remoteSessionId) == expected)
+        if action == "rename" { #expect(model.sessions.last?.title == "Renamed") }
         await model.stop()
     }
 
@@ -1016,7 +1027,7 @@ struct ACPSessionDiscoveryTests {
         let client = ACPMockClient()
         client.script(method: "initialize") { _ in
             Data(#"""
-            {"protocolVersion":1,"agentCapabilities":{"loadSession":true,"sessionCapabilities":{"list":{},"resume":{}}},
+            {"protocolVersion":1,"agentCapabilities":{"loadSession":true,"sessionCapabilities":{"list":{},"resume":{},"delete":{}}},
              "_meta":{"sessionIndex":{"version":1,"capabilities":["sessionArchive","sessionRename","sessionListSubscribe","sessionWorktrees"]}}}
             """#.utf8)
         }
