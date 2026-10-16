@@ -205,19 +205,19 @@ public enum ACPSessionBrowserReducer {
         return (changed.filter { current($0.remoteSessionId) }, removed.filter(current))
     }
 
-    /// Previous first-page rows a new first page lacks whose last activity
-    /// equals the page's oldest: the order cannot tell whether they are gone
-    /// or on the next page, so the pages after the boundary are read.
+    /// Previous first-page rows a new first page lacks whose position the
+    /// order cannot tell: last activity equal to the page's oldest, or none
+    /// at all. The pages after the boundary are read to settle them.
     public static func tiedCandidates(
         firstPage: [ACPDiscoveredSession],
         previousFirstPage: Set<String>,
         rows: [ACPDiscoveredSession]
     ) -> Set<String> {
         let present = Set(firstPage.map(\.remoteSessionId))
-        guard let oldest = firstPage.compactMap(\.lastActivity).min() else { return [] }
+        let oldest = firstPage.compactMap(\.lastActivity).min()
         return Set(rows.filter {
             previousFirstPage.contains($0.remoteSessionId) && !present.contains($0.remoteSessionId)
-                && $0.lastActivity == oldest
+                && ($0.lastActivity == nil || $0.lastActivity == oldest)
         }.map(\.remoteSessionId))
     }
 
@@ -867,14 +867,19 @@ public final class ACPSessionDiscoveryModel {
         let tied = ACPSessionBrowserReducer.tiedCandidates(
             firstPage: page.rows, previousFirstPage: firstPageIds, rows: sessions
         )
-        if !tied.isEmpty, var cursor = page.cursor, let tie = page.rows.compactMap(\.lastActivity).min() {
+        if !tied.isEmpty, var cursor = page.cursor {
+            let tie = page.rows.compactMap(\.lastActivity).min()
+            // An undated candidate can be anywhere: only the list's end, or
+            // finding it, settles it. Dated ties settle at an older row.
+            let undated = sessions.contains { tied.contains($0.remoteSessionId) && $0.lastActivity == nil }
             var seen: Set<String> = []
-            // Until the tie ends or the list does; the bound only guards
-            // against an adapter that never ends its pages.
+            // Until settled or the list ends; the bound only guards against an
+            // adapter that never ends its pages.
             for _ in 0 ..< 50 {
                 guard let next = try? await handle.page(after: cursor, filter: listedFilter) else { break }
                 seen.formUnion(next.rows.map(\.remoteSessionId))
-                if next.cursor == nil || next.rows.contains(where: { ($0.lastActivity ?? .distantPast) < tie }) {
+                let pastTie = tie.map { tie in next.rows.contains { ($0.lastActivity ?? .distantFuture) < tie } } ?? false
+                if tied.isSubset(of: seen) || next.cursor == nil || (!undated && pastTie) {
                     confirmedGone = tied.subtracting(seen)
                     break
                 }

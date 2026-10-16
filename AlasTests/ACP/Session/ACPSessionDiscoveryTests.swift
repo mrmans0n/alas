@@ -1164,8 +1164,10 @@ struct ACPSessionDiscoveryTests {
     }
 
     @MainActor
-    @Test("a reconcile with a tied page boundary reads on to settle the missing tied row", arguments: [false, true])
-    func reconcileReadsPastTiedBoundary(movedToNextPage: Bool) async throws {
+    @Test("a reconcile reads past the page boundary to settle a missing tied or undated row", arguments: [
+        (false, false), (true, false), (false, true), (true, true),
+    ])
+    func reconcileReadsPastTiedBoundary(movedToNextPage: Bool, undated: Bool) async throws {
         let store = try temporaryStore()
         let client = indexClient()
         var reconciled = false
@@ -1175,7 +1177,8 @@ struct ACPSessionDiscoveryTests {
             if cursor == "page-2" {
                 // Past the tie: an older row, and "t2" only if it merely moved.
                 return try JSONEncoder().encode(ACPSessionListResult(
-                    sessions: (movedToNextPage ? [row("t2", "2026-10-16T09:00:00Z")] : []) + [row("old", "2026-10-16T08:00:00Z")]))
+                    sessions: (movedToNextPage ? [row("t2", undated ? nil : "2026-10-16T09:00:00Z")] : [])
+                        + [row("old", "2026-10-16T08:00:00Z")]))
             }
             defer { reconciled = true }
             // The first page is full of sessions sharing one whole second.
@@ -1184,7 +1187,8 @@ struct ACPSessionDiscoveryTests {
                 sessions: [
                     row("a", "2026-10-16T10:00:00Z"),
                     row(tied[0], "2026-10-16T09:00:00Z"),
-                    row(tied[1], "2026-10-16T09:00:00Z"),
+                    // An undated "t2" has no known position at all.
+                    row(tied[1], undated && tied[1] == "t2" ? nil : "2026-10-16T09:00:00Z"),
                 ],
                 nextCursor: "page-2"))
         }
@@ -1482,7 +1486,7 @@ struct ACPSessionDiscoveryTests {
 
     /// A listed session at `time` in /tmp/wt; usable from mock handlers,
     /// which run off the main actor.
-    private nonisolated static func listedRow(_ id: String, _ time: String) -> ACPAgentSessionInfo {
+    private nonisolated static func listedRow(_ id: String, _ time: String?) -> ACPAgentSessionInfo {
         .init(sessionId: id, cwd: "/tmp/wt", updatedAt: time, index: .init(archived: false))
     }
 
