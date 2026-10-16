@@ -705,8 +705,10 @@ public final class ACPSessionDiscoveryModel {
         guard updatingSessionIds.insert(session.remoteSessionId).inserted else { return }
         defer { updatingSessionIds.remove(session.remoteSessionId) }
         try await handle.setArchived(archived, remoteSessionId: session.remoteSessionId)
-        var updated = session
-        updated.index = (session.index ?? .init()).with(archived: archived)
+        // Patch the row as it is now: a live update may have changed its
+        // title or state while the request ran.
+        var updated = sessions.first { $0.remoteSessionId == session.remoteSessionId } ?? session
+        updated.index = (updated.index ?? .init()).with(archived: archived)
         // Like a pushed change: a list page read before the archive must not
         // bring the row back.
         applyLiveChanges(changed: [updated], removed: [])

@@ -1164,7 +1164,9 @@ struct AgentLauncherDialog: View {
         guard let discoveryModel,
               let capabilities = discoveryModel.capabilities,
               let owner = discoveryOwner,
-              openingSessionId == nil
+              openingSessionId == nil,
+              // ↵ reaches here without the row's enabled state.
+              ACPSessionBrowserRowPolicy.canOpen(session, capabilities: capabilities)
         else { return }
         openingSessionId = session.remoteSessionId
         openingError = nil
