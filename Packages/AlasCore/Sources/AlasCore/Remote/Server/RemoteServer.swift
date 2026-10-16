@@ -25,6 +25,7 @@ public final class RemoteServer {
     nonisolated public let pairing: RemotePairingService
     private let assets: RemoteWebAssets
     private let provider: RemoteSessionsProvider
+    private weak var presenter: RemoteSessionPresenter?
     private var accessPolicy: RemoteAccessPolicy
     private var originPolicy: RemoteOriginPolicy
     private let identityProvider: @MainActor () -> RemoteServerIdentity
@@ -82,6 +83,7 @@ public final class RemoteServer {
         pairing: RemotePairingService,
         assets: RemoteWebAssets,
         provider: RemoteSessionsProvider,
+        presenter: RemoteSessionPresenter? = nil,
         accessPolicy: RemoteAccessPolicy = .loopback,
         originPolicy: RemoteOriginPolicy = .loopback,
         diagnostics: @escaping @MainActor (UInt16?) -> RemoteDiagnosticsSnapshot = { port in
@@ -101,6 +103,7 @@ public final class RemoteServer {
         self.pairing = pairing
         self.assets = assets
         self.provider = provider
+        self.presenter = presenter
         self.accessPolicy = accessPolicy
         self.originPolicy = originPolicy
         self.diagnosticsProvider = diagnostics
@@ -291,7 +294,7 @@ public final class RemoteServer {
                     }
                 }
                 return RemoteSessionGateway(
-                    provider: provider, federation: federation, consoleLink: consoleLink,
+                    provider: provider, presenter: self?.presenter, federation: federation, consoleLink: consoleLink,
                     caller: .remotePeer(deviceID: channel.deviceId), sendTracked: channel.sendTracked,
                     send: channel.send)
             },

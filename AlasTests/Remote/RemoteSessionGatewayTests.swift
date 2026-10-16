@@ -4,7 +4,7 @@ import Foundation
 @_spi(Testing) import AlasCore
 
 @MainActor
-final class FakeSessionsProvider: RemoteSessionsProvider {
+final class FakeSessionsProvider: RemoteSessionsProvider, RemoteSessionPresenter {
     var summaries: [RemoteSessionSummary] = []
     var worktrees: [RemoteWorktreeOption] = []
     var projects: [RemoteProjectOption] = []
@@ -1687,7 +1687,7 @@ struct RemoteSessionGatewayTests {
         let provider = FakeSessionsProvider()
         provider.summaries = [RemoteSessionSummary(id: "s1", title: "S", agentId: "claude", status: "idle", canDrive: false)]
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(provider: provider, presenter: provider) { sent.append($0) }
 
         await gw.handle(.openSessionTab(sessionId: "s1"))
         await Task.yield()

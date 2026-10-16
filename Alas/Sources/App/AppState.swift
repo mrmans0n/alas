@@ -851,6 +851,7 @@ final class AppState {
                 pairing: remotePairing,
                 assets: assets,
                 provider: self,
+                presenter: self,
                 accessPolicy: makeRemoteAccessPolicy(),
                 originPolicy: makeRemoteOriginPolicy(),
                 diagnostics: { [weak self] port in
@@ -15162,6 +15163,9 @@ private struct RemoteSessionListInputs: Equatable {
     var status: WorktreeDirtyState
     var diff: WorktreeDiffStats?
 }
+
+/// Remote tab requests open and close tabs in this window, as the tab bar does.
+extension AppState: RemoteSessionPresenter {}
 
 extension AppState: RemoteSessionsProvider {
     var eventHost: AlasHost? { host }

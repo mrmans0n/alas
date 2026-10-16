@@ -14,6 +14,8 @@ import Foundation
 @MainActor
 public final class RemoteSessionGateway {
     private let provider: RemoteSessionsProvider
+    /// The app's windows, for the tab requests; nil where there are none.
+    private let presenter: RemoteSessionPresenter?
     private let federation: FederatedSessionsProvider?
     /// This gateway's registration with `federation`; nil without one.
     private var downstream: FederatedDownstream?
@@ -64,12 +66,14 @@ public final class RemoteSessionGateway {
     /// fails never reports the write, so closing releases them.
     private var pendingWrites: [UUID: CheckedContinuation<Void, Never>] = [:]
 
-    public init(provider: RemoteSessionsProvider, federation: FederatedSessionsProvider? = nil,
+    public init(provider: RemoteSessionsProvider, presenter: RemoteSessionPresenter? = nil,
+         federation: FederatedSessionsProvider? = nil,
          consoleLink: PeerConsoleLink? = nil,
          caller: HostCaller? = nil,
          sendTracked: (@Sendable (RemoteServerMessage, _ onWritten: @escaping @Sendable () -> Void) -> Void)? = nil,
          send: @escaping (RemoteServerMessage) -> Void) {
         self.provider = provider
+        self.presenter = presenter
         self.caller = caller
         self.sendTracked = sendTracked
         self.federation = federation
@@ -203,9 +207,9 @@ public final class RemoteSessionGateway {
                 await sendSnapshot(id: id, session: session)
             }
         case .openSessionTab(let id):
-            reportTabAction(await provider.openSessionTab(for: id), sessionId: id)
+            reportTabAction(await presenter?.openSessionTab(for: id) ?? .failure("Opening session tabs is unavailable."), sessionId: id)
         case .closeSessionTab(let id):
-            reportTabAction(await provider.closeSessionTab(for: id), sessionId: id)
+            reportTabAction(await presenter?.closeSessionTab(for: id) ?? .failure("Closing session tabs is unavailable."), sessionId: id)
         case .sendPrompt(let id, let text, let attachments, let intent, let mentions):
             // Pre-check the lease BEFORE materializing — `materialize` writes the
             // decoded images to disk, and a non-writer must be rejected without
