@@ -33,6 +33,8 @@ public enum HostEvent: Codable, Equatable, Sendable {
     case pendingRequest(owner: SessionOwnerID, id: String, request: HostPendingRequest)
     /// A followed session's request was answered or withdrawn.
     case pendingRequestResolved(owner: SessionOwnerID, id: String, requestID: HostPendingRequestID)
+    /// A followed session's state besides its transcript changed.
+    case sessionState(owner: SessionOwnerID, id: String, state: HostSessionState)
     /// Changes were missed: read a new snapshot and subscribe after its cursor.
     case resync
 
@@ -58,6 +60,7 @@ public enum HostEvent: Codable, Equatable, Sendable {
         case .transcript(let owner, let id, _): .transcript(owner: owner, id: id)
         case .pendingRequest(let owner, let id, let request): .pendingRequest(owner: owner, id: id, request.id)
         case .pendingRequestResolved(let owner, let id, let requestID): .pendingRequest(owner: owner, id: id, requestID)
+        case .sessionState(let owner, let id, _): .sessionState(owner: owner, id: id)
         case .resync: .resync
         }
     }
@@ -72,6 +75,7 @@ enum HostEventKey: Hashable {
     case session(owner: SessionOwnerID, id: String)
     case transcript(owner: SessionOwnerID, id: String)
     case pendingRequest(owner: SessionOwnerID, id: String, HostPendingRequestID)
+    case sessionState(owner: SessionOwnerID, id: String)
     case resync
 }
 

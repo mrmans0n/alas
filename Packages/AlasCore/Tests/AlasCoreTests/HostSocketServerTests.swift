@@ -104,7 +104,7 @@ final class SocketClient {
     private let fd: Int32
     private var nextID = 0
     private var responses: [Int: HostResponse] = [:]
-    private var events: [HostEvent] = []
+    private(set) var events: [HostEvent] = []
 
     init(path: String) throws {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)

@@ -23,6 +23,46 @@ public struct HostTranscriptMessage: Codable, Equatable, Sendable {
     public var kind: String
     /// The store's JSON payload for `kind`.
     public var payload: String
+    /// For a tool call, whether the payload holds only the start of its
+    /// output, which the store keeps whole: nil when it holds all of it.
+    public var truncated: Bool?
+
+    public init(index: Int, stableID: String, kind: String, payload: String, truncated: Bool? = nil) {
+        self.index = index
+        self.stableID = stableID
+        self.kind = kind
+        self.payload = payload
+        self.truncated = truncated
+    }
+}
+
+extension HostTranscriptMessage {
+    /// `message` at `index`, in the session store's encoding.
+    @MainActor init?(_ message: ACPMessage, at index: Int) {
+        guard let payload = try? ACPMessageCodec.encode(message) else { return nil }
+        let truncated: Bool? = if case .toolCall(let call) = message, call.isContentTruncated { true } else { nil }
+        self.init(
+            index: index, stableID: message.stableId, kind: message.kind,
+            payload: String(decoding: payload, as: UTF8.self), truncated: truncated
+        )
+    }
+}
+
+/// Older messages of a transcript, read at `revision`.
+public struct HostTranscriptPage: Codable, Equatable, Sendable {
+    public var revision: TranscriptRevision
+    public var messages: [HostTranscriptMessage]
+    public var messageCount: Int
+}
+
+/// A followed session's state besides its transcript: who drives it, what
+/// it is set to, and what is queued.
+public struct HostSessionState: Codable, Equatable, Sendable {
+    public var isWriter: Bool
+    /// Background work or a subagent the session can be asked to stop.
+    public var hasCancellableBackgroundWork: Bool
+    public var config: RemoteSessionConfig
+    public var queue: [RemoteQueuedPrompt]
 }
 
 /// What changed in a followed transcript since the last delta.
@@ -77,6 +117,7 @@ final class FollowedSession {
     private var sent: TranscriptRevision?
     private var sentState: ACPSession.StreamingState?
     private var sentRequests: [HostPendingRequestID: HostPendingRequest] = [:]
+    private var sentSessionState: HostSessionState?
     private(set) var isDirty = true
 
     init(owner: SessionOwnerID, session: ACPSession, manager: ACPSessionManager, from revision: TranscriptRevision?, changed: @escaping () -> Void) {
@@ -92,7 +133,10 @@ final class FollowedSession {
             self?.isDirty = true
             changed()
         }
-        signals = [transcript.willChange.observe(mark), transcript.streamingTicks.observe(mark)]
+        signals = [
+            transcript.willChange.observe(mark), transcript.streamingTicks.observe(mark),
+            session.willChange.observe(mark), manager.summaryWillChange.observe(mark),
+        ]
     }
 
     func release() {
@@ -139,7 +183,22 @@ final class FollowedSession {
             events.append(.pendingRequestResolved(owner: owner, id: id, requestID: key))
         }
         sentRequests = requests
+
+        if let session, let current = sessionState(of: session), current != sentSessionState {
+            events.append(.sessionState(owner: owner, id: id, state: current))
+            sentSessionState = current
+        }
         return events
+    }
+
+    private func sessionState(of session: ACPSession) -> HostSessionState? {
+        guard let manager else { return nil }
+        return HostSessionState(
+            isWriter: manager.isWriter(for: id),
+            hasCancellableBackgroundWork: session.hasCancellableBackgroundWork,
+            config: RemoteSessionConfigProjection.config(sessionId: id, session: session),
+            queue: RemoteQueueProjection.project(session.queue)
+        )
     }
 
     /// The requests a person can answer now, under the ids the verbs take.
@@ -162,7 +221,6 @@ final class FollowedSession {
     }
 
     private static func message(_ message: ACPMessage, at index: Int) -> HostTranscriptMessage? {
-        guard let payload = try? ACPMessageCodec.encode(message) else { return nil }
-        return HostTranscriptMessage(index: index, stableID: message.stableId, kind: message.kind, payload: String(decoding: payload, as: UTF8.self))
+        HostTranscriptMessage(message, at: index)
     }
 }
