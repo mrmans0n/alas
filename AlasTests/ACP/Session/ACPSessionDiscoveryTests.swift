@@ -858,6 +858,60 @@ struct ACPSessionDiscoveryTests {
     }
 
     @MainActor
+    @Test("deleting during a filter load that fails keeps the other rows; a failed local cleanup keeps its retry row")
+    func deletionDuringPendingReads() async throws {
+        let store = try temporaryStore()
+        try store.upsertSession(row(id: "local-b", remoteSessionId: "b", title: "B", origin: .agentImported))
+        let client = indexClient()
+        let gate = AsyncStream<Void>.makeStream()
+        let pending = AsyncStream<Void>.makeStream()
+        var gated = false
+        var deleted: Set<String> = []
+        client.scriptAsync(method: "session/list") { request in
+            let list = try #require((request.params as? ACPSessionListParams)?.meta?.sessionIndex.list)
+            if gated {
+                gated = false
+                pending.continuation.yield()
+                for await _ in gate.stream { break }
+                if list.archived == .archived { throw TestError.failed }
+            }
+            return try JSONEncoder().encode(ACPSessionListResult(sessions: ["a", "b", "c"]
+                .filter { !deleted.contains($0) }
+                .map { .init(sessionId: $0, cwd: "/tmp/wt", index: .init(archived: false)) }))
+        }
+        client.script(method: "session/delete") { request in
+            deleted.insert((request.params as? ACPSessionDeleteParams)?.sessionId ?? "")
+            return Data("{}".utf8)
+        }
+        let manager = manager(store: store, client: client)
+        let model = ACPSessionDiscoveryModel()
+        await model.start(manager: manager, agentId: "claude")
+        #expect(model.sessions.map(\.remoteSessionId) == ["a", "b", "c"])
+
+        // A filter change whose page fails while "a" is deleted.
+        gated = true
+        let change = Task { try await model.setFilter(.init(showArchived: true)) }
+        for await _ in pending.stream { break }
+        try await model.deleteAgentHistory(for: model.sessions[0], removeLocalHistory: false, manager: manager)
+        gate.continuation.yield()
+        await #expect(throws: TestError.failed) { try await change.value }
+        #expect(model.sessions.map(\.remoteSessionId) == ["b", "c"])
+
+        // Agent-side delete of "b" succeeds, its local cleanup fails, during a reconcile.
+        try store.db.exec("CREATE TRIGGER fail_delete BEFORE DELETE ON sessions BEGIN SELECT RAISE(ABORT, 'no'); END")
+        gated = true
+        let reconcile = Task { await model.reconcile() }
+        for await _ in pending.stream { break }
+        await #expect(throws: (any Error).self) {
+            try await model.deleteAgentHistory(for: model.sessions[0], removeLocalHistory: true, manager: manager)
+        }
+        gate.continuation.yield()
+        await reconcile.value
+        #expect(model.sessions.contains { $0.remoteSessionId == "b" })
+        await model.stop()
+    }
+
+    @MainActor
     @Test("a Load more answering after a filter change neither shows its rows nor moves the cursor")
     func loadMoreAfterFilterChange() async throws {
         let store = try temporaryStore()

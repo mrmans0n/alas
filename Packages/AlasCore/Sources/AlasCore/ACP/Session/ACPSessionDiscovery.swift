@@ -546,6 +546,9 @@ public final class ACPSessionDiscoveryModel {
             do {
                 try await manager.deletePersistedSession(id: localSessionId)
             } catch {
+                // Keep the row for a local-cleanup retry: drop the queued
+                // removal so a pending read's replay does not hide it again.
+                pendingChanges.removeAll { $0.changed.isEmpty && $0.removed == [session.remoteSessionId] }
                 if !sessions.contains(where: { $0.remoteSessionId == session.remoteSessionId }) {
                     sessions.append(session)
                 }
@@ -567,7 +570,10 @@ public final class ACPSessionDiscoveryModel {
     }
 
     private func refreshAfterDeletion() async throws {
-        guard let handle else { return }
+        // A pending filter load replaces the rows itself: it reads again after
+        // this local action, and its replay drops a deleted row. Clearing the
+        // rows here would leave them empty if that load then fails.
+        guard let handle, filterLoadsInFlight == 0 else { return }
         let previous = sessions
         handle.refresh()
         replaceSessionsOnNextLoad = true
@@ -726,6 +732,13 @@ public final class ACPSessionDiscoveryModel {
             try await handle.renameSession(remoteSessionId: session.remoteSessionId, title: trimmed)
         } catch {
             await restoreLocal?()
+            // A page read meanwhile may show the stored, now undone title:
+            // drop such pages and show the original title again.
+            localActionGeneration += 1
+            if var current = sessions.first(where: { $0.remoteSessionId == session.remoteSessionId }) {
+                current.title = session.title
+                applyLiveChanges(changed: [current], removed: [])
+            }
             throw error
         }
         localActionGeneration += 1
