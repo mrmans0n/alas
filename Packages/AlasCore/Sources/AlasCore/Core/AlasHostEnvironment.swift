@@ -48,6 +48,12 @@ public protocol AlasHostEnvironment: AnyObject {
     /// The session manager for a Workspace checkout, created on first use.
     /// Throws a `SessionRefusal` when the checkout cannot host sessions now.
     func sessionManager(forCheckout checkout: WorkspaceCheckout, in core: AlasCoreContext) async throws -> ACPSessionManager
+    /// The app's settings, such as the base branch worktrees compare with.
+    func configuration() -> AppConfig
+    /// The agents new sessions may use, installed and not turned off.
+    func enabledAgents() -> [AgentDefinition]
+    /// The models and thinking levels agents advertised, when the host keeps them.
+    var modelCatalog: ACPAgentModelCatalog? { get }
 }
 
 extension AlasHostEnvironment {
@@ -72,6 +78,16 @@ extension AlasHostEnvironment {
     public var repoHookPrompter: RepoHookPrompter { .skipping }
 
     public func globalTerminalConfig() -> AppConfig.Terminal { AppConfig.defaults.terminal }
+
+    public func configuration() -> AppConfig { AppConfig.defaults }
+
+    /// The built-in agents in their default state; a headless host does not
+    /// detect what is installed.
+    public func enabledAgents() -> [AgentDefinition] {
+        AgentConfiguredCatalog.enabled(builtinState: AppConfig.defaults.agents.builtinState, customs: [])
+    }
+
+    public var modelCatalog: ACPAgentModelCatalog? { nil }
 
     /// Ends the checkout's agent sessions, as a removal ends a worktree's.
     public func stopWorkspaceCheckoutSessions(_ checkout: WorkspaceCheckout, in core: AlasCoreContext) async throws {

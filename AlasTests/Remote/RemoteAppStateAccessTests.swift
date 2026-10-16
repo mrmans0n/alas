@@ -850,7 +850,7 @@ struct RemoteAppStateAccessTests {
         let state = makeRemoteRenameState()
         let worktreeId = try #require(state.selectedWorktreeId)
 
-        let worktrees = await state.remoteWorktrees()
+        let worktrees = await RemoteGatewayReads.host(state.host).worktrees()
 
         #expect(worktrees.contains { $0.id == worktreeId })
         #expect(worktrees.first { $0.id == worktreeId }?.projectName == "test")
@@ -885,7 +885,7 @@ struct RemoteAppStateAccessTests {
         )
         state.projectsManager.setOperationState(forWorktreeId: deleteFailed.id, projectId: deleteFailed.projectId, state: .deleteFailed(message: "failed"))
 
-        let ids = Set(await state.remoteWorktrees().map(\.id))
+        let ids = Set(await RemoteGatewayReads.host(state.host).worktrees().map(\.id))
 
         #expect(!ids.contains(creating.id))
         #expect(!ids.contains(deleting.id))
@@ -917,7 +917,7 @@ struct RemoteAppStateAccessTests {
         )
         let claudeName = try #require(state.agentRegistry.enabled().first { $0.id == "claude" }?.displayName)
 
-        let agents = state.remoteAgents()
+        let agents = RemoteGatewayReads.host(state.host).agents()
 
         #expect(agents == [RemoteAgentOption(id: "claude", name: claudeName, isDefault: true)])
     }
@@ -932,7 +932,7 @@ struct RemoteAppStateAccessTests {
             installedIds: ["codex", "gemini"]
         )
 
-        let agents = state.remoteAgents()
+        let agents = RemoteGatewayReads.host(state.host).agents()
 
         #expect(agents.map(\.id) == ["gemini", "codex"])
         #expect(agents.map(\.isDefault) == [true, false])
@@ -953,7 +953,7 @@ struct RemoteAppStateAccessTests {
             options: [.init(id: "high", name: "High", description: nil)],
             currentId: nil))
 
-        let agents = state.remoteAgents()
+        let agents = RemoteGatewayReads.host(state.host).agents()
 
         #expect(agents.first { $0.id == "codex" }?.models == [RemoteModelOption(id: "gpt-5", name: "GPT-5")])
         #expect(agents.first { $0.id == "gemini" }?.models == nil)
@@ -1227,7 +1227,7 @@ struct RemoteAppStateAccessTests {
             projectsFile: ProjectsFile(projects: [firstProject, folder, secondProject])
         ))
 
-        let projects = await state.remoteProjects()
+        let projects = await RemoteGatewayReads.host(state.host).projects()
 
         #expect(projects == [
             RemoteProjectOption(id: "project-first", name: "First Project"),
@@ -1249,7 +1249,7 @@ struct RemoteAppStateAccessTests {
             projectsFile: ProjectsFile(projects: [project])
         ))
 
-        let result = await state.remoteBranches(projectId: project.id)
+        let result = await RemoteGatewayReads.host(state.host).branches(project.id)
 
         guard case let .success(branches, preferredBase) = result else {
             Issue.record("expected branch list success, got \(result)")
@@ -1263,7 +1263,7 @@ struct RemoteAppStateAccessTests {
     @Test func remoteBranchesRejectsMissingProject() async {
         let state = AppState(store: ProjectMemoryStore(projectsFile: ProjectsFile(projects: [])))
 
-        let result = await state.remoteBranches(projectId: "missing-project")
+        let result = await RemoteGatewayReads.host(state.host).branches("missing-project")
 
         #expect(result == .failure("Repository is no longer available."))
     }

@@ -15300,64 +15300,6 @@ extension AppState: RemoteSessionsProvider {
         }
     }
 
-    private func remoteWorktreeSummary(project: ProjectConfig, worktree: Worktree) async -> RemoteWorktreeSummary {
-        // A folder has no git metrics to compute.
-        if project.isFolder { return remoteWorktreeSummaryWithoutMetrics(project: project, worktree: worktree) }
-        let git = GitService()
-        do {
-            async let status = git.status(worktreePath: worktree.path)
-            async let commits = git.commitsAhead(
-                at: worktree.path,
-                baseBranch: config.worktrees.baseBranch,
-                resolution: GitService.BaseResolution.forCommits(
-                    mode: config.changes.comparisonMode, userOverrodeBaseBranch: false
-                )
-            )
-            let (changes, commitResult) = try await (status, commits)
-            return RemoteWorktreeSummaryBuilder.make(
-                projectName: project.name,
-                worktree: worktree,
-                isMain: projectsManager.isMain(worktree, in: project),
-                metrics: .available(
-                    comparisonRef: commitResult.comparisonRef,
-                    commitCount: commitResult.commits.count,
-                    changes: changes
-                )
-            )
-        } catch {
-            return remoteWorktreeSummaryWithoutMetrics(project: project, worktree: worktree)
-        }
-    }
-
-    private func remoteWorktreeSummaryWithoutMetrics(project: ProjectConfig, worktree: Worktree) -> RemoteWorktreeSummary {
-        RemoteWorktreeSummaryBuilder.make(
-            projectName: project.name,
-            worktree: worktree,
-            isMain: projectsManager.isMain(worktree, in: project),
-            isFolder: project.isFolder,
-            metrics: .unavailable
-        )
-    }
-
-    private func remoteWorktreeOption(project: ProjectConfig, worktree: Worktree) async -> RemoteWorktreeOption {
-        let summary = await remoteWorktreeSummary(project: project, worktree: worktree)
-        return RemoteWorktreeOption(
-            id: worktree.id,
-            projectName: summary.projectName,
-            worktreeName: summary.worktreeName,
-            branch: summary.branch,
-            path: summary.path,
-            metricsAvailable: summary.metricsAvailable,
-            comparisonRef: summary.comparisonRef,
-            commitCount: summary.commitCount,
-            changedFileCount: summary.changedFileCount,
-            addedLines: summary.addedLines,
-            deletedLines: summary.deletedLines,
-            conflictCount: summary.conflictCount,
-            projectId: project.id
-        )
-    }
-
     private func remoteSessionSummary(
         session: ACPSession,
         manager: ACPSessionManager,
@@ -15389,7 +15331,7 @@ extension AppState: RemoteSessionsProvider {
             if let resolved = projectAndWorktree(withWorktreeId: mgr.worktreeId) {
                 projectId = resolved.project.id
                 worktreeId = mgr.worktreeId
-                worktreeSummary = await remoteWorktreeSummary(project: resolved.project, worktree: resolved.worktree)
+                worktreeSummary = await core.remoteWorktreeSummary(project: resolved.project, worktree: resolved.worktree)
             } else {
                 projectId = nil
                 worktreeId = nil
@@ -15540,45 +15482,6 @@ extension AppState: RemoteSessionsProvider {
         }
     }
 
-    func remoteWorktrees() async -> [RemoteWorktreeOption] {
-        var out: [RemoteWorktreeOption] = []
-        for project in projects {
-            for worktree in projectsManager.visibleWorktrees(projectId: project.id) {
-                switch projectsManager.operationState(forWorktreeId: worktree.id, projectId: project.id) {
-                case .creating, .preparingDelete, .deleting, .archiving, .createFailed:
-                    continue
-                case nil, .launchFailed, .deleteFailed:
-                    out.append(await remoteWorktreeOption(project: project, worktree: worktree))
-                }
-            }
-        }
-        return out
-    }
-
-    func remoteProjects() async -> [RemoteProjectOption] {
-        // This list drives worktree creation, which folder projects cannot do.
-        projects.filter { !$0.isFolder }.map { RemoteProjectOption(id: $0.id, name: $0.name) }
-    }
-
-    func remoteBranches(projectId: String) async -> RemoteBranchListResult {
-        guard let project = projects.first(where: { $0.id == projectId }) else {
-            return .failure("Repository is no longer available.")
-        }
-        guard !project.isFolder else { return .failure(Self.folderWorktreeCreationMessage) }
-
-        do {
-            let branches = try await GitService().branches(at: URL(fileURLWithPath: project.path))
-            let preferredBase = NewWorktreeDialog.preferredBaseBranch(
-                availableBranches: branches,
-                configuredDefault: config.worktrees.baseBranch
-            )
-            return .success(branches: branches, preferredBase: preferredBase)
-        } catch {
-            Self.logger.error("Could not load remote branches for project \(project.id, privacy: .private): \(String(describing: error), privacy: .private)")
-            return .failure("Could not load branches.")
-        }
-    }
-
     private func recordObservedChips(agentId: String, host: String?, chips: ACPChipState) {
         acpModelCatalog.record(
             agentID: agentId,
@@ -15586,25 +15489,6 @@ extension AppState: RemoteSessionsProvider {
             host: host
         )
         acpModelCatalog.recordEffort(agentID: agentId, thinking: chips.thinking)
-    }
-
-    func remoteAgents() -> [RemoteAgentOption] {
-        let enabledById = Dictionary(uniqueKeysWithValues: agentRegistry.enabled().map { ($0.id, $0) })
-        let ordered = ACPLaunchCatalog.specs.compactMap { enabledById[$0.agentID] }
-        let sshProjectIds = projects.filter { $0.host != nil }.map(\.id)
-        return ordered.enumerated().map { index, agent in
-            let models = acpModelCatalog.models(for: agent.id)
-            let efforts = acpModelCatalog.efforts(for: agent.id)?.levels ?? []
-            let unavailable = agent.canRunOnRemoteHost ? [] : sshProjectIds
-            return RemoteAgentOption(
-                id: agent.id,
-                name: agent.displayName,
-                isDefault: index == 0,
-                models: models.isEmpty ? nil : models.map { RemoteModelOption(id: $0.id, name: $0.name) },
-                efforts: efforts.isEmpty ? nil : efforts.map { RemoteEffortOption(id: $0.id, name: $0.name) },
-                unavailableProjectIds: unavailable.isEmpty ? nil : unavailable
-            )
-        }
     }
 
     func createRemoteSession(
@@ -15666,7 +15550,7 @@ extension AppState: RemoteSessionsProvider {
             }
         }
 
-        let worktreeSummary = remoteWorktreeSummaryWithoutMetrics(project: resolved.project, worktree: resolved.worktree)
+        let worktreeSummary = core.remoteWorktreeSummaryWithoutMetrics(project: resolved.project, worktree: resolved.worktree)
         return .success(remoteSessionSummary(session: session, manager: manager, worktreeSummary: worktreeSummary))
     }
 
@@ -16797,6 +16681,11 @@ class AppHostEnvironment: AlasHostEnvironment {
     }
     let appRunLauncher = AppRunLauncher()
     var runLauncher: any RunLauncher { appRunLauncher }
+    var modelCatalog: ACPAgentModelCatalog? { app?.acpModelCatalog }
+
+    func configuration() -> AppConfig { app?.config ?? AppConfig.defaults }
+
+    func enabledAgents() -> [AgentDefinition] { app?.agentRegistry.enabled() ?? [] }
     var repoHookLoader = RepoHookLoader()
     var repoHookPrompter: RepoHookPrompter = .skipping
     var worktreeCleanupLauncher: AppState.WorktreeCleanupLauncher = { try WorktreeTrashCleaner.launch($0) }

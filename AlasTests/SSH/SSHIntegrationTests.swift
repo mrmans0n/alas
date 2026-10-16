@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Alas
+@_spi(Testing) import AlasCore
 
 /// Enable with ALAS_SSH_INTEGRATION=1 and key-authenticated ssh localhost.
 @Suite(.disabled(if: ProcessInfo.processInfo.environment["ALAS_SSH_INTEGRATION"] != "1"))
@@ -52,7 +53,7 @@ struct SSHIntegrationTests {
         )
         let state = AppState(store: TestPersistenceStore(ProjectsFile(projects: [project]), AppConfig.defaults))
 
-        let result = await state.remoteBranches(projectId: project.id)
+        let result = await RemoteGatewayReads.host(state.host).branches(project.id)
 
         guard case let .success(branches, preferredBase) = result else {
             Issue.record("expected branch list success, got \(result)")
