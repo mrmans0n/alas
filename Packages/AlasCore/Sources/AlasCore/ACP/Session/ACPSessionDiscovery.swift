@@ -855,6 +855,8 @@ public final class ACPSessionDiscoveryModel {
         let changes = pendingChanges
         pendingChanges = []
         for change in changes {
+            // The page applied before the replay cached older rows.
+            for row in change.changed { latestLiveRows[row.remoteSessionId] = row }
             sessions = ACPSessionBrowserReducer.applying(
                 changed: change.changed, removed: change.removed, to: sessions, filter: appliedFilter,
                 browsingWorktreeId: handle.browsingWorktreeId
