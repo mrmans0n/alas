@@ -71,7 +71,11 @@ public final class ACPPermissionPolicy {
         if session.autoRunEnabled, let allow = options.first(where: { $0.kind.hasPrefix("allow") }) {
             return .init(outcome: .selected(optionId: allow.optionId))
         }
-        if let logged = try? await log.lookup(sessionId: session.id, scopeKey: scopeKey) {
+        var logged = deliveredDecisions[scopeKey]
+        if logged == nil {
+            logged = try? await log.lookup(sessionId: session.id, scopeKey: scopeKey)
+        }
+        if let logged {
             if cancelledBeforeParked { return .init(outcome: .cancelled) }
             switch logged {
             case .allow:
@@ -92,6 +96,9 @@ public final class ACPPermissionPolicy {
     private var pendingContinuation: CheckedContinuation<ACPPermissionResponse, Never>?
     private var pendingRequestID: JSONRPCID?
     private var cancelledBeforeParked = false
+    /// Remembered answers this policy delivered, so the agent's next request
+    /// gets them at once rather than only after their record lands.
+    private var deliveredDecisions: [String: ACPPermissionDecision] = [:]
 
     /// The real JSON-RPC id of the permission currently parked for a human,
     /// or nil when nothing is parked. `session.transcript.pendingPermission`
@@ -146,12 +153,41 @@ public final class ACPPermissionPolicy {
     /// Called by the UI when the user clicks a button. `persistScope` is
     /// .session for Allow/Deny, .project for "Always for this tool", and nil
     /// for Allow-once. Decision recorded if non-nil.
+    /// Records the decision and answers the pending request with it. The
+    /// request is taken before anything is awaited, so a caller that checks
+    /// for it first never races another for the same one. `stillAuthorized`,
+    /// asked right before the agent resumes, can withhold the answer: the
+    /// request is then cancelled. Returns whether a request was pending and
+    /// the answer reached it.
+    @discardableResult
     public func userDecided(
         scopeKey: String,
         optionId: String,
         decision: ACPPermissionDecision,
-        persistScope: ACPPermissionScopeKind?
-    ) async {
+        persistScope: ACPPermissionScopeKind?,
+        stillAuthorized: (@MainActor () async -> Bool)? = nil
+    ) async -> Bool {
+        let wasPending = pendingContinuation != nil || session.transcript.pendingPermission != nil
+        let cont = pendingContinuation
+        pendingContinuation = nil
+        session.transcript.pendingPermission = nil
+        session.transcript.streamingState = .streaming
+        if let stillAuthorized, await !stillAuthorized() {
+            cont?.resume(returning: .init(outcome: .cancelled))
+            return false
+        }
+        // The agent may have withdrawn the request while this awaited: with
+        // the continuation taken, `cancelRequest` only records that.
+        if cont != nil, cancelledBeforeParked {
+            cont?.resume(returning: .init(outcome: .cancelled))
+            return false
+        }
+        if persistScope != nil {
+            deliveredDecisions[scopeKey] = decision
+        }
+        cont?.resume(returning: .init(outcome: .selected(optionId: optionId)))
+        // Recorded once delivered, so an answer that never reached the agent
+        // is never remembered for the next request; still before returning.
         if let scope = persistScope {
             try? await log.record(
                 sessionId: session.id,
@@ -160,11 +196,7 @@ public final class ACPPermissionPolicy {
                 scope: scope
             )
         }
-        session.transcript.pendingPermission = nil
-        session.transcript.streamingState = .streaming
-        let cont = pendingContinuation
-        pendingContinuation = nil
-        cont?.resume(returning: .init(outcome: .selected(optionId: optionId)))
+        return wasPending
     }
 
     public func userCancelled() {

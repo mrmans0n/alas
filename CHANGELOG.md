@@ -6,10 +6,37 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.21.6] - 2026-10-16
+
 ### ✨ Features
 
 - Add Chat material and Terminal material settings under Appearance, each with a per-theme background opacity. Choosing one of the AppKit materials shows it behind agent chat or terminal panes; terminal text and app-painted cells stay opaque. Both default to None, which keeps the current opaque look. A terminal material change applies to terminals opened after it.
 - Move the Changes tab's review scope entrypoint from the Commits header into the Prepare card: a split segment on "Review current changes" opens the ⇧⌘R palette, and a "Review…" button stands in when there are no uncommitted changes to review.
+- Automatically show a persistent, on-device "Where you left off" recap when returning to an idle session after a configurable interval, with background precomputation for hidden tabs (#2048).
+- Add captured, persistent session instructions for Claude and compatible Codex adapters, preserved across reconnects, restores, and same-agent forks (#2051).
+- Make `/btw` cards dockable and resizable, pin pending prompts outside the answer scroll view, and group read-only refusals into a quieter summary (#2045).
+- Add `/ship` and offer Ship and PR shepherding in SSH projects; show the shepherd as a chip in the Changes review drawer (#2022, #2037, #2019).
+- Serve the authenticated host protocol over a private local Unix socket and paired-device Remote connections (#2038, #2049).
+- Briefly wait for requested MCP servers when starting compatible Codex sessions, improving tool availability for the first prompt (#2046).
+
+### 🐛 Fixes
+
+- Support Claude's revised native subagent protocol, preserving child identity on resume, mapping waiting states, and cancelling children independently (#2047).
+- Record Ship-generated instructions as Alas actions rather than user messages across queues, retries, persistence, and export (#2021).
+- Hand wheel scrolling over visual aids back to the transcript when the page cannot scroll further (#2024).
+- Fuse fully expanded diff hunks into one card and avoid review-rail animations at file boundaries (#2020, #2036).
+- Preserve loaded older commit pages across watcher refreshes unless the displayed history changes (#2032).
+- Allow project-dialog contents to grow when resizing horizontally (#2033).
+- Prevent the sidebar worktree filter from becoming the initial first responder on cold launch (#2018).
+
+### ⚡ Performance
+
+- Push session and worktree list changes from host events instead of periodically polling web clients and federation peers (#2023, #2025, #2026).
+
+### 🏗️ Internal
+
+- Add cursor-based host event streams and session summaries, typed wire messages, authenticated caller attribution, and a transport-independent host protocol server with stale-identity checks (#2016, #2017, #2028, #2031, #2034).
+- Update the Rust toolchain to 1.99.1 (#2035).
 
 ## [0.21.5] - 2026-10-15
 

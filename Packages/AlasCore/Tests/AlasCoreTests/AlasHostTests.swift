@@ -130,6 +130,9 @@ struct AlasHostTests {
 
         let manager = try core.sessionManager(for: shown)
         _ = manager.createSession(id: "s", agentId: "codex")
+        // The manager's first read of its store may land after the session
+        // exists and before its row is saved; the session stays listed.
+        await manager.refreshRecentNow()
         let created = try #require(await Self.next(subscription) { events in
             events.contains { if case .sessionChanged(let summary) = $0 { summary.id == "s" } else { false } }
         })

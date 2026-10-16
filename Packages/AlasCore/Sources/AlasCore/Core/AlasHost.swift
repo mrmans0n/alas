@@ -360,22 +360,23 @@ public struct SessionsAPI {
     /// The sessions that are not archived, in each owner's recent order.
     public func list() -> [HostSessionSummary] {
         core.sessionManagers.values.flatMap { manager in
-            manager.sessionRows.compactMap { row -> HostSessionSummary? in
-                guard !row.archived else { return nil }
-                let liveRemoteID = manager.liveSession(for: row.id)?.remoteSessionId?.trimmingCharacters(in: .whitespacesAndNewlines)
-                return HostSessionSummary(
-                    owner: manager.owner,
-                    id: row.id,
-                    agentId: row.agentId,
-                    title: row.title,
-                    remoteSessionId: liveRemoteID?.isEmpty == false ? liveRemoteID : row.remoteSessionId,
-                    createdAt: row.createdAt,
-                    updatedAt: row.updatedAt,
-                    lastOpenedAt: row.lastOpenedAt,
-                    streamingState: manager.runners[row.id]?.session.transcript.streamingState,
-                    isWriter: manager.isWriter(for: row.id)
-                )
-            }
+            manager.sessionRows.compactMap { row in row.archived ? nil : Self.summary(of: row, in: manager) }
         }
+    }
+
+    static func summary(of row: ACPSessionRow, in manager: ACPSessionManager) -> HostSessionSummary {
+        let liveRemoteID = manager.liveSession(for: row.id)?.remoteSessionId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return HostSessionSummary(
+            owner: manager.owner,
+            id: row.id,
+            agentId: row.agentId,
+            title: row.title,
+            remoteSessionId: liveRemoteID?.isEmpty == false ? liveRemoteID : row.remoteSessionId,
+            createdAt: row.createdAt,
+            updatedAt: row.updatedAt,
+            lastOpenedAt: row.lastOpenedAt,
+            streamingState: manager.runners[row.id]?.session.transcript.streamingState,
+            isWriter: manager.isWriter(for: row.id)
+        )
     }
 }
