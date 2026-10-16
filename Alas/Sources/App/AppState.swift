@@ -14646,18 +14646,38 @@ final class AppState {
         }
     }
 
-    /// Shows an agent-side rename on the Alas copy of the session. A manager
-    /// created just now has not cached its rows yet, so the title then goes
-    /// straight to the worktree's session store.
-    func renameLocalACPSession(worktreeId: String, sessionId: ACPSession.ID, title: String) async {
-        guard let worktree = worktree(withId: worktreeId), let manager = acpManager(for: worktree) else { return }
-        if manager.renameSessionCosmetic(id: sessionId, title: title, source: .manual) {
-            // Stored before returning: the browser reads it for the next row.
+    /// Shows an agent-side rename on the Alas copy of the session, and
+    /// returns a closure that puts back its previous title and title source
+    /// (a failed agent rename must not leave a provider title marked manual).
+    func renameLocalACPSession(
+        worktreeId: String,
+        sessionId: ACPSession.ID,
+        title: String
+    ) async -> (@MainActor () async -> Void)? {
+        guard let worktree = worktree(withId: worktreeId), let manager = acpManager(for: worktree) else { return nil }
+        let previous = await manager.persistedSessionRow(id: sessionId)
+        await Self.storeACPSessionTitle(title, source: .manual, sessionId: sessionId, manager: manager)
+        guard let previous else { return nil }
+        return {
+            await Self.storeACPSessionTitle(previous.title, source: previous.titleSource, sessionId: sessionId, manager: manager)
+        }
+    }
+
+    /// Stored before returning: the session browser reads it for the next
+    /// row. A manager created just now has not cached its rows yet, so the
+    /// title then goes straight to the worktree's session store.
+    private static func storeACPSessionTitle(
+        _ title: String,
+        source: ACPSessionTitleSource,
+        sessionId: ACPSession.ID,
+        manager: ACPSessionManager
+    ) async {
+        if manager.renameSessionCosmetic(id: sessionId, title: title, source: source) {
             await manager.flushAllPersistence()
             return
         }
         _ = try? await manager.persistence.renameSession(
-            id: sessionId, title: title, titleSource: .manual, updatedAt: Int64(Date().timeIntervalSince1970)
+            id: sessionId, title: title, titleSource: source, updatedAt: Int64(Date().timeIntervalSince1970)
         )
     }
 

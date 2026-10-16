@@ -675,6 +675,7 @@ struct ACPSessionDiscoveryTests {
         try await model.rename(first, to: "  Renamed  ") { id, title in
             renamedLocally[id] = title
             localTitles.append(title)
+            return { localTitles.append("restored") }
         }
         // The Alas copy is renamed before the agent, so a notification the
         // rename triggers already reads the new Alas title.
@@ -687,9 +688,13 @@ struct ACPSessionDiscoveryTests {
         // A failed rename puts the Alas title back.
         localTitles = []
         await #expect(throws: TestError.failed) {
-            try await model.rename(try #require(model.sessions.last), to: "Nope") { _, title in localTitles.append(title) }
+            try await model.rename(try #require(model.sessions.last), to: "Nope") { _, title in
+                localTitles.append(title)
+                return { localTitles.append("restored") }
+            }
         }
-        #expect(localTitles == ["Nope", "rpc", "Other"])
+        // The restore puts back the previous title and its source.
+        #expect(localTitles == ["Nope", "rpc", "restored"])
         #expect(model.sessions.last?.title == "Other")
 
         try await model.setArchived(true, for: try #require(model.sessions.first))
@@ -837,7 +842,7 @@ struct ACPSessionDiscoveryTests {
         switch action {
         case "archive": try await model.setArchived(true, for: target)
         case "delete": try await model.deleteAgentHistory(for: target, removeLocalHistory: false, manager: manager)
-        case "rename": try await model.rename(target, to: "Renamed") { _, _ in }
+        case "rename": try await model.rename(target, to: "Renamed") { _, _ in nil }
         case "removeLocal": try await model.removeLocalHistory(for: target, manager: manager)
         default: client.emitSessionListChanges(.init(subscriptionId: "sub-1", sessions: [], removed: ["deleted"]))
         }

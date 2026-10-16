@@ -704,28 +704,28 @@ public final class ACPSessionDiscoveryModel {
     }
 
     /// Renames the agent's session and its Alas copy, in whichever worktree
-    /// it lives, through `renameLocal` (which returns once the title is
-    /// stored). The Alas copy is renamed first: a row is listed with its Alas
+    /// it lives, through `renameLocal`, which returns once the title is
+    /// stored, with a closure that restores the previous title and its
+    /// source. The Alas copy is renamed first: a row is listed with its Alas
     /// title, so a change notification the rename triggers must already read
-    /// the new one. A failed rename puts the Alas title back.
+    /// the new one. A failed rename runs the restore.
     public func rename(
         _ session: ACPDiscoveredSession,
         to title: String,
-        renameLocal: @MainActor (_ localSessionId: String, _ title: String) async -> Void
+        renameLocal: @MainActor (_ localSessionId: String, _ title: String) async -> (@MainActor () async -> Void)?
     ) async throws {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let handle, !trimmed.isEmpty else { return }
         guard updatingSessionIds.insert(session.remoteSessionId).inserted else { return }
         defer { updatingSessionIds.remove(session.remoteSessionId) }
+        var restoreLocal: (@MainActor () async -> Void)?
         if let localSessionId = session.localSessionId {
-            await renameLocal(localSessionId, trimmed)
+            restoreLocal = await renameLocal(localSessionId, trimmed)
         }
         do {
             try await handle.renameSession(remoteSessionId: session.remoteSessionId, title: trimmed)
         } catch {
-            if let localSessionId = session.localSessionId {
-                await renameLocal(localSessionId, session.title)
-            }
+            await restoreLocal?()
             throw error
         }
         localActionGeneration += 1
