@@ -248,6 +248,9 @@ struct HostSessionsTests {
         try await ACPSessionPersistence(path: fixture.sessionsDatabase.path).setArchived(id: session.id, archived: true)
         await manager.refreshRecentNow()
         #expect(!fixture.host.sessions.list().contains { $0.id == session.id })
+        // Nor does renaming it bring it back.
+        #expect(!manager.renameSessionCosmetic(id: session.id, title: "Renamed", source: .local))
+        #expect(!fixture.host.sessions.list().contains { $0.id == session.id })
     }
 
     enum Unavailable: CaseIterable {
