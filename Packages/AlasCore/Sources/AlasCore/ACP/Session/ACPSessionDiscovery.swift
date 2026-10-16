@@ -895,6 +895,7 @@ public final class ACPSessionDiscoveryModel {
             guard generation == filterGeneration, listedFilter == appliedFilter, actions == localActionGeneration else { return }
         }
         notePageRows(page.rows, read: read)
+        let listedBefore = Set(sessions.map(\.remoteSessionId))
         sessions = ACPSessionBrowserReducer.reconciling(
             firstPage: page.rows,
             hasMorePages: page.cursor != nil,
@@ -904,6 +905,11 @@ public final class ACPSessionDiscoveryModel {
             browsingWorktreeId: handle.browsingWorktreeId,
             confirmedGone: confirmedGone
         )
+        // This read proved those sessions gone: an older notification about
+        // them is superseded like one about a row the page showed.
+        for id in listedBefore.subtracting(sessions.map(\.remoteSessionId)) {
+            pageReadIndex[id] = max(pageReadIndex[id] ?? 0, read)
+        }
         firstPageIds = ACPSessionBrowserReducer.nextFirstPageIds(previous: firstPageIds, page: page.rows, listed: sessions)
     }
 
