@@ -55,15 +55,23 @@ public final class RemoteSessionGateway {
     private static let coalesceNanos: UInt64 = 80_000_000  // ~80ms
 
     /// The paired device this connection authenticated. Nil for a gateway
-    /// built without one, whose requests act as the app's.
+    /// built without one: its Remote requests act as the app's, and it
+    /// serves no host protocol.
     private let caller: HostCaller?
+    private let sendTracked: (@Sendable (RemoteServerMessage, _ onWritten: @escaping @Sendable () -> Void) -> Void)?
+    private var hostConnection: HostProtocolConnection?
+    /// Host messages waiting for their frame to be written. A connection that
+    /// fails never reports the write, so closing releases them.
+    private var pendingWrites: [UUID: CheckedContinuation<Void, Never>] = [:]
 
     public init(provider: RemoteSessionsProvider, federation: FederatedSessionsProvider? = nil,
          consoleLink: PeerConsoleLink? = nil,
          caller: HostCaller? = nil,
+         sendTracked: (@Sendable (RemoteServerMessage, _ onWritten: @escaping @Sendable () -> Void) -> Void)? = nil,
          send: @escaping (RemoteServerMessage) -> Void) {
         self.provider = provider
         self.caller = caller
+        self.sendTracked = sendTracked
         self.federation = federation
         self.consoleLink = consoleLink
         self.send = send
@@ -86,6 +94,8 @@ public final class RemoteSessionGateway {
         case .helloAck:
             // Version acknowledgement from an Alas peer; nothing to do server-side.
             break
+        case .host(let request):
+            serveHost(request)
         case .console(let request):
             handleConsole(request)
         case .listSessions:
@@ -655,8 +665,47 @@ public final class RemoteSessionGateway {
         }
     }
 
+    /// Hands a host protocol message to this connection's host connection,
+    /// opened on first use for the caller the transport authenticated.
+    private func serveHost(_ request: HostClientMessage) {
+        if hostConnection == nil, let host = provider.eventHost, let caller {
+            hostConnection = HostProtocolServer(host: host).connect(caller: caller) { [weak self] reply in
+                await self?.sendWritten(.host(reply))
+            }
+        }
+        guard let hostConnection else {
+            send(.host(.response(id: request.id, result: .failure(error: .invalidRequest(
+                reason: "This connection does not serve the host protocol."
+            )))))
+            return
+        }
+        // Answers are matched by id, so a slow verb need not hold the
+        // connection's ordered work.
+        Task { await hostConnection.receive(request) }
+    }
+
+    /// Returns once the frame is written, so a slow peer holds back its own
+    /// host events, where they coalesce.
+    private func sendWritten(_ message: RemoteServerMessage) async {
+        guard let sendTracked else {
+            send(message)
+            return
+        }
+        let id = UUID()
+        await withCheckedContinuation { continuation in
+            pendingWrites[id] = continuation
+            sendTracked(message) {
+                Task { @MainActor [weak self] in self?.pendingWrites.removeValue(forKey: id)?.resume() }
+            }
+        }
+    }
+
     /// Tear down all observation (called when the connection closes).
     public func close() {
+        hostConnection?.close()
+        hostConnection = nil
+        for continuation in pendingWrites.values { continuation.resume() }
+        pendingWrites.removeAll()
         if let consoleLink { provider.peerConsoleHost?.close(consoleLink) }
         if let federation, let downstream { federation.detach(downstream) }
         self.downstream = nil

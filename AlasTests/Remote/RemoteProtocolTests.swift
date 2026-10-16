@@ -44,6 +44,13 @@ struct RemoteProtocolTests {
             #expect(try roundTrip(message) == message)
             #expect(message.sessionId == nil)
         }
+        // Host protocol messages ride the same frames, outside any session.
+        let hostRequest = RemoteClientMessage.host(HostClientMessage(id: 1, request: .listSessions))
+        #expect(try roundTrip(hostRequest) == hostRequest)
+        #expect(hostRequest.sessionId == nil)
+        let hostReply = RemoteServerMessage.host(.response(id: 1, result: .sessions(sessions: [])))
+        #expect(try roundTrip(hostReply) == hostReply)
+        #expect(hostReply.sessionId == nil)
         let worktree = RemoteWorktreeSummary(
             projectName: "alas", worktreeName: "feat", branch: "feat", path: "~/alas/feat",
             metricsAvailable: false, comparisonRef: nil, commitCount: 0, changedFileCount: 0,
@@ -68,7 +75,7 @@ struct RemoteProtocolTests {
             Issue.record("expected hello")
             return
         }
-        #expect(capabilities == [PeerConsoleCapability.v1, PeerConsoleCapability.terminateV1, PeerSessionTabsCapability.v1])
+        #expect(capabilities == [PeerConsoleCapability.v1, PeerConsoleCapability.terminateV1, PeerSessionTabsCapability.v1, HostProtocolCapability.v1])
     }
 
     @Test func sessionTabMessagesRoundTripAndKeepTheirSessionScope() throws {
