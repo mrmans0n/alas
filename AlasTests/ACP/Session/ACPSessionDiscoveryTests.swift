@@ -1038,6 +1038,48 @@ struct ACPSessionDiscoveryTests {
         await model.stop()
     }
 
+    @Test("live rows read before a session's local action finished are left out", arguments: [
+        (nil, 3, true),
+        (3, 3, true),
+        (4, 3, false),
+    ] as [(Int?, Int, Bool)])
+    func liveRowsPredatingLocalActions(lastAction: Int?, stamp: Int, kept: Bool) {
+        let row = Self.reducerRow("s", 1)
+        let actions = lastAction.map { ["s": $0] } ?? [:]
+        #expect(ACPSessionBrowserReducer.droppingRows([row], predating: stamp, lastLocalAction: actions).isEmpty == !kept)
+    }
+
+    @MainActor
+    @Test("a failed rename of a session without an Alas copy keeps a title the agent reported meanwhile")
+    func failedRemoteOnlyRename() async throws {
+        let store = try temporaryStore()
+        let client = indexClient()
+        let gate = AsyncStream<Void>.makeStream()
+        let started = AsyncStream<Void>.makeStream()
+        client.script(method: "session/list") { _ in
+            try JSONEncoder().encode(ACPSessionListResult(sessions: [
+                .init(sessionId: "s", cwd: "/tmp/wt", title: "Original", index: .init(archived: false)),
+            ]))
+        }
+        client.scriptAsync(method: "_session/rename") { _ in
+            started.continuation.yield()
+            for await _ in gate.stream { break }
+            throw TestError.failed
+        }
+        let model = ACPSessionDiscoveryModel()
+        await model.start(manager: manager(store: store, client: client), agentId: "claude")
+        let rename = Task { try await model.rename(try #require(model.sessions.first), to: "Mine") { _, _ in nil } }
+        for await _ in started.stream { break }
+        client.emitSessionListChanges(.init(subscriptionId: "sub-1", sessions: [
+            .init(sessionId: "s", cwd: "/tmp/wt", title: "External", index: .init(archived: false)),
+        ], removed: []))
+        #expect(await awaitCondition { model.sessions.first?.title == "External" })
+        gate.continuation.yield()
+        await #expect(throws: TestError.failed) { try await rename.value }
+        #expect(model.sessions.first?.title == "External")
+        await model.stop()
+    }
+
     @MainActor
     @Test("a Load more answering after a filter change neither shows its rows nor moves the cursor")
     func loadMoreAfterFilterChange() async throws {

@@ -160,6 +160,17 @@ public enum ACPSessionBrowserReducer {
         return result
     }
 
+    /// Live rows whose session had a local action complete after the rows
+    /// started being read (`stamp`) may predate that action: they are left
+    /// out, and the next relist brings the agent's current state.
+    public static func droppingRows(
+        _ rows: [ACPDiscoveredSession],
+        predating stamp: Int,
+        lastLocalAction: [String: Int]
+    ) -> [ACPDiscoveredSession] {
+        rows.filter { (lastLocalAction[$0.remoteSessionId] ?? Int.min) <= stamp }
+    }
+
     /// Merges a freshly read first page. A row the previous first page held
     /// that the new one lacks is gone (a missed removal) when the new page is
     /// the whole list, or when it is newer than the new page's oldest row;
@@ -426,7 +437,12 @@ public final class ACPSessionDiscoveryHandle {
     /// and yields them as browser rows in the current scope. The stream ends
     /// when the handle closes or its connection goes away. Nil when the agent
     /// has no list subscription.
-    public func subscribe() async throws -> AsyncStream<(changed: [ACPDiscoveredSession], removed: [String])>? {
+    /// `stamp` is read when a notification starts being turned into rows
+    /// (which reads the session store) and yielded with them, so the caller
+    /// can tell which local actions completed meanwhile.
+    public func subscribe(
+        stamp: @escaping @MainActor () -> Int = { 0 }
+    ) async throws -> AsyncStream<(changed: [ACPDiscoveredSession], removed: [String], stamp: Int)>? {
         guard !closed, sessionIndex?.listSubscribe == true, subscriptionId == nil else { return nil }
         // Subscribe before relisting: changes are tracked from the answer on.
         let id = try await connection.subscribeSessionList(cwd: cwd)
@@ -436,6 +452,7 @@ public final class ACPSessionDiscoveryHandle {
             let task = Task { @MainActor [weak self] in
                 for await changes in incoming where changes.subscriptionId == id {
                     guard let self, !self.closed else { break }
+                    let started = stamp()
                     var rows: [ACPDiscoveredSession] = []
                     for info in changes.sessions {
                         // Mapped with the linked scope: the model scopes rows by
@@ -444,7 +461,7 @@ public final class ACPSessionDiscoveryHandle {
                             rows.append(row)
                         }
                     }
-                    continuation.yield((rows, changes.removed))
+                    continuation.yield((rows, changes.removed, started))
                 }
                 continuation.finish()
             }
@@ -501,6 +518,8 @@ public final class ACPSessionDiscoveryModel {
     /// The newest version of each row seen in a live change, also after it
     /// left the current filter, so a local patch starts from the newest data.
     private var latestLiveRows: [String: ACPDiscoveredSession] = [:]
+    /// The `localActionGeneration` each session's last local action ended at.
+    private var lastLocalAction: [String: Int] = [:]
     /// Live changes that arrived while a list read was in flight. They are
     /// applied at once and again when the last read finishes, so a page read
     /// before a change cannot undo it.
@@ -549,6 +568,7 @@ public final class ACPSessionDiscoveryModel {
             }
             remotelyDeletedSessionIds.insert(session.remoteSessionId)
             localActionGeneration += 1
+            lastLocalAction[session.remoteSessionId] = localActionGeneration
             // The relist below shows the deletion; a list page read before it
             // must not bring the row back once that read finishes.
             if listReadsInFlight > 0 { pendingChanges.append(([], [session.remoteSessionId])) }
@@ -579,6 +599,7 @@ public final class ACPSessionDiscoveryModel {
         defer { finishDeletion(session.remoteSessionId) }
         try await manager.deletePersistedSession(id: localSessionId)
         localActionGeneration += 1
+        lastLocalAction[session.remoteSessionId] = localActionGeneration
         handle?.forgetLocalCopy(localSessionId, of: session.remoteSessionId)
         // Replayed after any pending read, like the other local actions, so
         // an older page cannot bring the Alas copy back.
@@ -753,17 +774,22 @@ public final class ACPSessionDiscoveryModel {
         do {
             try await handle.renameSession(remoteSessionId: session.remoteSessionId, title: trimmed)
         } catch {
-            await restoreLocal?()
-            // A page read meanwhile may show the stored, now undone title:
-            // drop such pages and show the original title again.
-            localActionGeneration += 1
-            if var current = sessions.first(where: { $0.remoteSessionId == session.remoteSessionId }) {
-                current.title = session.title
-                applyLiveChanges(changed: [current], removed: [])
+            // Only an Alas copy was changed before the request; a row without
+            // one shows whatever the agent last reported.
+            if let restoreLocal {
+                await restoreLocal()
+                // A page read meanwhile may show the stored, now undone title:
+                // drop such pages and show the original title again.
+                localActionGeneration += 1
+                if var current = sessions.first(where: { $0.remoteSessionId == session.remoteSessionId }) {
+                    current.title = session.title
+                    applyLiveChanges(changed: [current], removed: [])
+                }
             }
             throw error
         }
         localActionGeneration += 1
+        lastLocalAction[session.remoteSessionId] = localActionGeneration
         // Patched on the row as it is now, and replayed after any pending
         // list read so an older page cannot bring the old title back.
         if var updated = sessions.first(where: { $0.remoteSessionId == session.remoteSessionId }) {
@@ -780,6 +806,7 @@ public final class ACPSessionDiscoveryModel {
         defer { updatingSessionIds.remove(session.remoteSessionId) }
         try await handle.setArchived(archived, remoteSessionId: session.remoteSessionId)
         localActionGeneration += 1
+        lastLocalAction[session.remoteSessionId] = localActionGeneration
         // Patch the newest version of the row: a live update (often the
         // archive notification itself) may have changed or moved it while
         // the request ran.
@@ -826,12 +853,15 @@ public final class ACPSessionDiscoveryModel {
 
     private func startSubscription() async {
         guard let handle, !stopped,
-              let stream = try? await handle.subscribe()
+              let stream = try? await handle.subscribe(stamp: { [weak self] in self?.localActionGeneration ?? 0 })
         else { return }
         subscriptionTask = Task { @MainActor [weak self] in
-            for await (changed, removed) in stream {
+            for await (changed, removed, stamp) in stream {
                 guard let self, !self.stopped else { break }
-                self.applyLiveChanges(changed: changed, removed: removed)
+                let current = ACPSessionBrowserReducer.droppingRows(
+                    changed, predating: stamp, lastLocalAction: self.lastLocalAction
+                )
+                self.applyLiveChanges(changed: current, removed: removed)
             }
         }
         // Rows that changed between the first page and the subscription.
