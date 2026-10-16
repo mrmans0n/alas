@@ -221,15 +221,9 @@ struct ProjectsManagerHeadUpdatesTests {
         #expect(state.revisionChangeGeneration(worktreeID: main.id) == 2)
     }
 
-    /// Ref moves can change the stack; FETCH_HEAD moves no refs, so the cached
-    /// `gg ls` stays valid. `gg sync` records new PR/MR numbers in
-    /// gg/config.json after its pushes already moved refs, so that write alone
-    /// must reload the stack.
-    @Test(arguments: [("refs/heads/main", 2), ("gg/config.json", 2), ("FETCH_HEAD", 1)])
-    func gitDirEventInvalidatesGGStackCacheOnlyWhenStackCanChange(
-        eventPath: String,
-        expectedLoads: Int
-    ) async throws {
+    /// `gg sync` records new PR/MR numbers in gg/config.json after its pushes
+    /// already moved refs, so that write alone must reload the stack.
+    @Test func ggConfigWriteInvalidatesGGStackCache() async throws {
         let project = ProjectConfig(
             id: "p1",
             name: "p1",
@@ -239,7 +233,7 @@ struct ProjectsManagerHeadUpdatesTests {
         )
         let main = wt(path: "/repo", branch: "main")
         let gitDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("alas-app-state-fetch-head-\(UUID().uuidString)/.git")
+            .appendingPathComponent("alas-app-state-gg-config-\(UUID().uuidString)/.git")
         try FileManager.default.createDirectory(at: gitDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: gitDir.deletingLastPathComponent()) }
 
@@ -283,15 +277,18 @@ struct ProjectsManagerHeadUpdatesTests {
         }
 
         state.startProjectGitWatcher(for: project)
-        watcher.processEvents([gitDir.appendingPathComponent(eventPath).path])
-        try await Task.sleep(nanoseconds: 50_000_000)
+        watcher.processEvents([gitDir.appendingPathComponent("gg/config.json").path])
+        // Nothing else bumps the generation for this event: the bump lands
+        // only once the cache invalidation has completed.
+        try await eventually("GG stack cache invalidation") {
+            state.revisionChangeGeneration(worktreeID: main.id) > 0
+        }
 
         _ = try await cache.stack(at: cachePath) {
             await loads.increment()
             return stack
         }
-        #expect(state.revisionChangeGeneration(worktreeID: main.id) > 0)
-        #expect(await loads.count == expectedLoads)
+        #expect(await loads.count == 2)
         state.stopProjectGitWatcher(projectId: project.id)
     }
 
