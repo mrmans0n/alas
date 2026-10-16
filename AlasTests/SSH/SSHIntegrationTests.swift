@@ -104,6 +104,10 @@ struct SSHIntegrationTests {
         let result = await RemoteGatewayHostCalls.host(state.host).createWorktreeSession(
             RemoteWorktreeSessionCreation(projectID: project.id, base: "main", branch: "feature/ssh", agentID: "claude"), .app
         )
+        // As the gateway does: the app opens what the host created.
+        if case .success(let created) = result, let worktreeID = created.worktreeId {
+            state.sessionCreated(created.id, worktreeID: worktreeID)
+        }
 
         guard case let .success(summary) = result else {
             Issue.record("expected remote worktree session creation, got \(result)")
