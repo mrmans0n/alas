@@ -199,6 +199,28 @@ struct HostSessionsTests {
         #expect(!fixture.host.sessions.list().contains { $0.id == id })
     }
 
+    /// A recovery that rotates the lease of a session archived meanwhile
+    /// gets no lease, rather than one the store never took.
+    @Test func recoveryCannotRotateTheLeaseOfAnArchivedSession() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let manager = try fixture.core.sessionManager(for: fixture.worktree)
+        let session = manager.createSession(agentId: "gemini")
+        await manager.flushAllPersistence()
+        let store = ACPSessionPersistence(path: fixture.sessionsDatabase.path)
+        let now = Int64(Date().timeIntervalSince1970)
+        _ = try await store.claimLease(
+            sessionId: session.id, instanceId: "recovering", pid: Int64(getpid()), now: now, staleAfter: 60, leaseToken: "old"
+        )
+        try await store.setArchived(id: session.id, archived: true)
+
+        let rotated = try await store.rotateRemoteRecoveryLease(
+            fence: ACPSessionLeaseFence(sessionId: session.id, ownerInstance: "recovering", token: "old"),
+            pid: Int64(getpid()), now: now, token: "new"
+        )
+        #expect(rotated == nil)
+    }
+
     enum Unavailable: CaseIterable {
         /// An interrupted checkpoint restore is being recovered.
         case recoveringCheckpoint
