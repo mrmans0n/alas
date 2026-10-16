@@ -813,7 +813,7 @@ struct ACPSessionDiscoveryTests {
     }
 
     @MainActor
-    @Test("a change made during a reconcile is not undone by the older page", arguments: ["push", "archive", "delete", "rename", "removeLocal"])
+    @Test("a change made during a reconcile is not undone by the older page", arguments: ["push", "archive", "delete", "rename", "removeLocal", "pushThenRemoveLocal"])
     func liveChangeDuringReconcile(action: String) async throws {
         let store = try temporaryStore()
         try store.upsertSession(row(id: "local-1", remoteSessionId: "deleted", title: "Old", origin: .agentImported))
@@ -852,6 +852,12 @@ struct ACPSessionDiscoveryTests {
         case "delete": try await model.deleteAgentHistory(for: target, removeLocalHistory: false, manager: manager)
         case "rename": try await model.rename(target, to: "Renamed") { _, _ in nil }
         case "removeLocal": try await model.removeLocalHistory(for: target, manager: manager)
+        case "pushThenRemoveLocal":
+            // The agent deleted it elsewhere, then Alas drops its copy.
+            client.emitSessionListChanges(.init(subscriptionId: "sub-1", sessions: [], removed: ["deleted"]))
+            #expect(await awaitCondition { !model.sessions.contains { $0.remoteSessionId == "deleted" } })
+            deleted = true
+            try await model.removeLocalHistory(for: target, manager: manager)
         default: client.emitSessionListChanges(.init(subscriptionId: "sub-1", sessions: [], removed: ["deleted"]))
         }
         let expected = ["rename", "removeLocal"].contains(action) ? ["kept", "deleted"] : ["kept"]

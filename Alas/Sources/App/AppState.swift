@@ -14665,21 +14665,21 @@ final class AppState {
     }
 
     /// Stored before returning: the session browser reads it for the next
-    /// row. A manager created just now has not cached its rows yet, so the
-    /// title then goes straight to the worktree's session store.
+    /// row.
     private static func storeACPSessionTitle(
         _ title: String,
         source: ACPSessionTitleSource,
         sessionId: ACPSession.ID,
         manager: ACPSessionManager
     ) async throws {
-        if manager.renameSessionCosmetic(id: sessionId, title: title, source: source) {
-            await manager.flushAllPersistence()
-            return
-        }
+        // Written and awaited first, so a store error stops the agent rename;
+        // then the manager's cached row and live session follow.
         _ = try await manager.persistence.renameSession(
             id: sessionId, title: title, titleSource: source, updatedAt: Int64(Date().timeIntervalSince1970)
         )
+        if manager.renameSessionCosmetic(id: sessionId, title: title, source: source) {
+            await manager.flushAllPersistence()
+        }
     }
 
     @discardableResult

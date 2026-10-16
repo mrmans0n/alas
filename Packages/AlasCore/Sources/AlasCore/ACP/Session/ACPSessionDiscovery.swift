@@ -1010,6 +1010,8 @@ public final class ACPSessionDiscoveryModel {
         // pending reads in case a page that predates the change lands later.
         if listReadsInFlight > 0 { pendingChanges.append(.live(changed: changed, removed: removed, stamp: stamp)) }
         for row in changed { latestLiveRows[row.remoteSessionId] = row }
+        // A removed session must not come back through a later local patch.
+        for id in removed { latestLiveRows[id] = nil }
         sessions = ACPSessionBrowserReducer.applying(
             changed: changed, removed: removed, to: sessions, filter: appliedFilter,
             browsingWorktreeId: handle.browsingWorktreeId
@@ -1098,6 +1100,7 @@ public final class ACPSessionDiscoveryModel {
                 )
             } ?? (changedRows, removedIds)
             removed.removeAll { cleanupRetryIds.contains($0) }
+            for id in removed { latestLiveRows[id] = nil }
             // The page applied before the replay cached older rows.
             for row in changed { latestLiveRows[row.remoteSessionId] = row }
             sessions = ACPSessionBrowserReducer.applying(
