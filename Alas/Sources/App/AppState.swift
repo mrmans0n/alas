@@ -14647,10 +14647,15 @@ final class AppState {
         }
     }
 
-    /// Shows an agent-side rename on the Alas copy of the session.
-    func renameLocalACPSession(worktreeId: String, sessionId: ACPSession.ID, title: String) {
+    /// Shows an agent-side rename on the Alas copy of the session. A manager
+    /// created just now has not cached its rows yet, so the title then goes
+    /// straight to the worktree's session store.
+    func renameLocalACPSession(worktreeId: String, sessionId: ACPSession.ID, title: String) async {
         guard let worktree = worktree(withId: worktreeId), let manager = acpManager(for: worktree) else { return }
-        manager.renameSessionCosmetic(id: sessionId, title: title, source: .manual)
+        guard !manager.renameSessionCosmetic(id: sessionId, title: title, source: .manual) else { return }
+        _ = try? await manager.persistence.renameSession(
+            id: sessionId, title: title, titleSource: .manual, updatedAt: Int64(Date().timeIntervalSince1970)
+        )
     }
 
     @discardableResult

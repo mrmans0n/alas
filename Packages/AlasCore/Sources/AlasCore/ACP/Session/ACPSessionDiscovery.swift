@@ -464,7 +464,13 @@ public final class ACPSessionDiscoveryModel {
     public private(set) var remotelyDeletedSessionIds: Set<String> = []
     /// The client-neutral session index of the agent, once started.
     public private(set) var sessionIndex: ACPSessionIndexSupport?
+    /// The filter the user picked; the chips show it.
     public private(set) var filter = ACPSessionBrowserFilter()
+    /// The filter `sessions` was listed with. It becomes `filter` only when
+    /// that filter's first page arrives, so updates meanwhile, and a failed
+    /// change, keep the rows consistent with what was listed.
+    private var appliedFilter = ACPSessionBrowserFilter()
+    private var filterLoadsInFlight = 0
     /// Rows with a rename or archive request in flight.
     public private(set) var updatingSessionIds: Set<String> = []
     private var handle: ACPSessionDiscoveryHandle?
@@ -485,7 +491,7 @@ public final class ACPSessionDiscoveryModel {
     private var deletionQueue: [CheckedContinuation<Void, Never>] = []
     private var deletionWaiters: [CheckedContinuation<Void, Never>] = []
 
-    public var canLoadMore: Bool { handle?.canLoadMore == true }
+    public var canLoadMore: Bool { filterLoadsInFlight == 0 && handle?.canLoadMore == true }
 
     public func deleteAgentHistory(
         for session: ACPDiscoveredSession,
@@ -582,7 +588,9 @@ public final class ACPSessionDiscoveryModel {
     }
 
     public func loadMore() async throws {
-        guard let handle else { return }
+        // The handle still holds the previous filter's cursor until the
+        // pending filter page commits.
+        guard let handle, filterLoadsInFlight == 0 else { return }
         let generation = filterGeneration
         do {
             let page = try await handle.loadNextPage { generation == self.filterGeneration }
@@ -607,14 +615,17 @@ public final class ACPSessionDiscoveryModel {
     /// restores the previous filter and keeps its rows.
     public func setFilter(_ newFilter: ACPSessionBrowserFilter) async throws {
         guard let handle, sessionIndex != nil, newFilter != filter else { return }
-        let previous = handle.filter
+        let previous = appliedFilter
         filter = newFilter
         filterGeneration += 1
         let generation = filterGeneration
+        filterLoadsInFlight += 1
+        defer { filterLoadsInFlight -= 1 }
         do {
             let page = try await handle.firstPage(filter: newFilter)
             guard generation == filterGeneration, !stopped else { return }
             handle.commit(filter: newFilter, cursor: page.cursor)
+            appliedFilter = newFilter
             sessions = page.rows
             firstPageIds = Set(page.rows.map(\.remoteSessionId))
             replaceSessionsOnNextLoad = false
@@ -631,13 +642,13 @@ public final class ACPSessionDiscoveryModel {
     public func reconcile() async {
         guard let handle, !stopped else { return }
         let generation = filterGeneration
-        guard let page = try? await handle.firstPage(filter: filter), generation == filterGeneration else { return }
+        guard let page = try? await handle.firstPage(filter: appliedFilter), generation == filterGeneration else { return }
         sessions = ACPSessionBrowserReducer.reconciling(
             firstPage: page.rows,
             hasMorePages: page.cursor != nil,
             previousFirstPage: firstPageIds,
             rows: sessions,
-            filter: filter,
+            filter: appliedFilter,
             browsingWorktreeId: handle.browsingWorktreeId
         )
         firstPageIds = Set(page.rows.map(\.remoteSessionId))
@@ -649,7 +660,7 @@ public final class ACPSessionDiscoveryModel {
     public func rename(
         _ session: ACPDiscoveredSession,
         to title: String,
-        renameLocal: @MainActor (_ localSessionId: String, _ title: String) -> Void
+        renameLocal: @MainActor (_ localSessionId: String, _ title: String) async -> Void
     ) async throws {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let handle, !trimmed.isEmpty else { return }
@@ -660,7 +671,7 @@ public final class ACPSessionDiscoveryModel {
             sessions[index].title = trimmed
         }
         if let localSessionId = session.localSessionId {
-            renameLocal(localSessionId, trimmed)
+            await renameLocal(localSessionId, trimmed)
         }
     }
 
@@ -674,7 +685,7 @@ public final class ACPSessionDiscoveryModel {
         var updated = session
         updated.index = (session.index ?? .init()).with(archived: archived)
         sessions = ACPSessionBrowserReducer.applying(
-            changed: [updated], removed: [], to: sessions, filter: filter, browsingWorktreeId: handle.browsingWorktreeId
+            changed: [updated], removed: [], to: sessions, filter: appliedFilter, browsingWorktreeId: handle.browsingWorktreeId
         )
     }
 
@@ -686,7 +697,7 @@ public final class ACPSessionDiscoveryModel {
             for await (changed, removed) in stream {
                 guard let self, !self.stopped else { break }
                 self.sessions = ACPSessionBrowserReducer.applying(
-                    changed: changed, removed: removed, to: self.sessions, filter: self.filter,
+                    changed: changed, removed: removed, to: self.sessions, filter: self.appliedFilter,
                     browsingWorktreeId: handle.browsingWorktreeId
                 )
             }

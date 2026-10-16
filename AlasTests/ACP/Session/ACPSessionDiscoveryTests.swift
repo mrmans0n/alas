@@ -518,12 +518,14 @@ struct ACPSessionDiscoveryTests {
     }
 
     @MainActor
-    @Test("overlapping filter changes show only the latest; a failed change restores the previous filter")
+    @Test("overlapping filter changes show only the latest; a pending change blocks Load more; a failed one keeps the listed filter")
     func overlappingFilterChanges() async throws {
         let store = try temporaryStore()
         let client = indexClient()
         let gate = AsyncStream<Void>.makeStream()
         let staleStarted = AsyncStream<Void>.makeStream()
+        let failGate = AsyncStream<Void>.makeStream()
+        let failStarted = AsyncStream<Void>.makeStream()
         client.scriptAsync(method: "session/list") { request in
             let list = try #require((request.params as? ACPSessionListParams)?.meta?.sessionIndex.list)
             switch (list.includeWorktrees, list.archived) {
@@ -538,6 +540,8 @@ struct ACPSessionDiscoveryTests {
                 return try JSONEncoder().encode(ACPSessionListResult(
                     sessions: [.init(sessionId: "latest", cwd: "/tmp/wt", index: .init(archived: true))]))
             case (false, .archived):
+                failStarted.continuation.yield()
+                for await _ in failGate.stream { break }
                 throw TestError.failed
             default:
                 return try JSONEncoder().encode(ACPSessionListResult(
@@ -558,11 +562,18 @@ struct ACPSessionDiscoveryTests {
         #expect(model.sessions.map(\.remoteSessionId) == ["latest"])
         #expect(!model.canLoadMore)
 
-        await #expect(throws: TestError.failed) {
-            try await model.setFilter(.init(showArchived: true))
-        }
+        let failing = Task { try await model.setFilter(.init(showArchived: true)) }
+        for await _ in failStarted.stream { break }
+        #expect(!model.canLoadMore)
+        // Reduced with the listed (linked) filter, not the pending one.
+        client.emitSessionListChanges(.init(subscriptionId: "sub-1", sessions: [
+            .init(sessionId: "linked-archived", cwd: "/tmp/elsewhere", index: .init(archived: true)),
+        ], removed: []))
+        #expect(await awaitCondition { model.sessions.map(\.remoteSessionId) == ["linked-archived", "latest"] })
+        failGate.continuation.yield()
+        await #expect(throws: TestError.failed) { try await failing.value }
         #expect(model.filter == latest)
-        #expect(model.sessions.map(\.remoteSessionId) == ["latest"])
+        #expect(model.sessions.map(\.remoteSessionId) == ["linked-archived", "latest"])
         await model.stop()
     }
 
