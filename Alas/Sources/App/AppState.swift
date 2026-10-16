@@ -1753,6 +1753,7 @@ final class AppState {
             await self?.flushRunHistoryPersistence()
             await self?.flushAllACPComposerDrafts()
             await PluginStorage.flushAll()
+            await self?.awaitSessionSummaryCleanup()
         }
         Task.detached {
             RunScriptCompletionMonitor.cleanupStaleLocalFiles()

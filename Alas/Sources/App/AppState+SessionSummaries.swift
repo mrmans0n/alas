@@ -64,7 +64,7 @@ extension AppState {
 
     /// Waits for the cleanup of every earlier disable, including ones started
     /// while waiting.
-    private func awaitSessionSummaryCleanup() async {
+    func awaitSessionSummaryCleanup() async {
         while let cleanup = sessionSummaryCleanupTask {
             await cleanup.value
             if sessionSummaryCleanupTask == cleanup { sessionSummaryCleanupTask = nil }
