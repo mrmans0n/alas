@@ -123,9 +123,11 @@ struct ACPContextUsageButton: View {
         .padding(14)
         // A fixed width, not `minWidth`: the popover proposes its current
         // width, and `minWidth` would accept the narrow loading width and clip
-        // the breakdown instead of growing the popover.
+        // the breakdown instead of growing the popover. For the same reason the
+        // minimum only applies without a breakdown: a `minWidth` frame clamps
+        // its child to the proposed width, which would undo the fixed one.
         .frame(width: breakdown == nil ? nil : ACPContextBreakdownView.width + 28, alignment: .leading)
-        .frame(minWidth: 220, alignment: .leading)
+        .frame(minWidth: breakdown == nil ? 220 : nil, alignment: .leading)
     }
 
     @ViewBuilder
