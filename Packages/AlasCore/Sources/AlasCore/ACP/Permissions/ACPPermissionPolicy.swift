@@ -177,6 +177,12 @@ public final class ACPPermissionPolicy {
             cont?.resume(returning: .init(outcome: .cancelled))
             return false
         }
+        // The agent may have withdrawn the request while this awaited: with
+        // the continuation taken, `cancelRequest` only records that.
+        if cont != nil, cancelledBeforeParked {
+            cont?.resume(returning: .init(outcome: .cancelled))
+            return false
+        }
         cont?.resume(returning: .init(outcome: .selected(optionId: optionId)))
         return wasPending
     }

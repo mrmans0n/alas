@@ -187,6 +187,31 @@ struct ACPPermissionPolicyTests {
         #expect(await decision.outcome == .cancelled)
     }
 
+    @Test("a request the agent withdraws while its answer is being recorded stays cancelled")
+    func requestWithdrawnWhileAnsweringStaysCancelled() async throws {
+        let store = try makeStore()
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        let policy = ACPPermissionPolicy(session: session, log: .init(store: store))
+        let opts: [ACPPermissionOption] = [.init(optionId: "allow", name: "Allow", kind: "allow_once")]
+        async let decision = policy.evaluate(
+            scopeKey: "tool:bash", options: opts, params: stubParams(), requestID: .number(7))
+        let deadline = ContinuousClock.now + .seconds(5)
+        while session.transcript.pendingPermission == nil, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+
+        // `$/cancel_request` lands while the answer is still on its way.
+        let answered = await policy.userDecided(
+            scopeKey: "tool:bash", optionId: "allow", decision: .allow, persistScope: .session,
+            stillAuthorized: {
+                _ = policy.cancelRequest(id: .number(7))
+                return true
+            }
+        )
+        #expect(!answered)
+        #expect(await decision.outcome == .cancelled)
+    }
+
     @Test("persisted user decisions commit before userDecided returns")
     func persistedUserDecisionIsAwaited() async throws {
         let store = try makeStore()
