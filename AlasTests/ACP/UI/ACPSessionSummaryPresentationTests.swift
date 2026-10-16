@@ -106,6 +106,28 @@ struct ACPSessionSummaryPresentationTests {
         #expect(ACPSessionSummaryPresentation.cardContent(cardMode: mode, phase: phase) == expected)
     }
 
+    private static let nextActionSections: ACPSessionSummaryPresentation.CardContent = .sections([
+        .init(kind: .goal, items: ["Ship search"]),
+        .init(kind: .nextAction, items: ["Run focused tests"]),
+    ], recentContext: false)
+
+    @Test(arguments: [
+        (nextActionSections, nil, "Run focused tests"),
+        // Accepted or dismissed: the model's suggestion gets the slot back.
+        (nextActionSections, "Run focused tests", nil),
+        // A refreshed recap with a different next action offers again.
+        (nextActionSections, "Fix the build", "Run focused tests"),
+        (.sections([.init(kind: .goal, items: ["Ship search"])], recentContext: false), nil, nil),
+        (.loading, nil, nil),
+    ] as [(ACPSessionSummaryPresentation.CardContent, String?, String?)])
+    func ghostOfferIsTheUnusedNextAction(
+        _ content: ACPSessionSummaryPresentation.CardContent,
+        _ dismissed: String?,
+        _ expected: String?
+    ) {
+        #expect(ACPSessionSummaryPresentation.ghostOffer(content: content, dismissed: dismissed) == expected)
+    }
+
     @Test(arguments: [
         (false, .loading, .cancel),
         (true, .loading, .cancel),

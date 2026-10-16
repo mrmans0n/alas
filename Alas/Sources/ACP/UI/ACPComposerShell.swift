@@ -202,6 +202,8 @@ struct ACPComposer: View {
     let pluginPrompts: [ACPPromptSuggestion]
     /// Plugins that add context to every prompt; named in a chip so the context is never invisible.
     let contextProviders: [String]
+    /// Renders the session recap strip at the top of the pill.
+    let recapCoordinator: SessionSummaryCoordinator?
 
     @Environment(\.theme) private var theme
     @State private var inputFocused = false
@@ -235,6 +237,7 @@ struct ACPComposer: View {
         offersShip: Bool = false,
         pluginPrompts: [ACPPromptSuggestion] = [],
         contextProviders: [String] = [],
+        recapCoordinator: SessionSummaryCoordinator? = nil,
         onSubmit: @escaping ACPComposerSubmitHandler
     ) {
         self._session = ObservedObject(wrappedValue: session)
@@ -262,6 +265,7 @@ struct ACPComposer: View {
         self.offersShip = offersShip
         self.pluginPrompts = pluginPrompts
         self.contextProviders = contextProviders
+        self.recapCoordinator = recapCoordinator
     }
 
     var body: some View {
@@ -383,6 +387,9 @@ struct ACPComposer: View {
 
     private var pill: some View {
         VStack(spacing: 6) {
+            if let recapCoordinator {
+                ACPSessionRecapStrip(coordinator: recapCoordinator, session: session)
+            }
             if let composerNotice {
                 Text(composerNotice)
                     .font(.system(size: 11, weight: .medium))

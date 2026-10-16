@@ -55,7 +55,7 @@ struct ACPSessionSummaryControl: View {
 
     private func control(presentation: ACPSessionSummaryPresentation) -> some View {
         Button {
-            // The inline recap card above the composer shows the result.
+            // The recap strip in the composer shows the result.
             switch ACPSessionSummaryPresentation.controlAction(cardShown: cardIsShown, phase: coordinator.phase) {
             case .cancel:
                 coordinator.cancelPresentation()

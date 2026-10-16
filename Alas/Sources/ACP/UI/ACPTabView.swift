@@ -139,6 +139,7 @@ private struct ACPManagedTabView: View {
                 session: session,
                 onStartupRecoveryReady: onStartupRecoveryReady,
                 transcript: session.transcript,
+                summaryCoordinator: state.sessionSummaryCoordinator,
                 nextPromptOffer: nextPromptOffer,
                 takeNextPromptOffer: takeNextPromptOffer,
                 dismissNextPromptOffer: dismissNextPromptOffer,
@@ -201,11 +202,15 @@ private struct ACPSessionView: View {
     /// `""` scope and persisted allow/reject_always decisions land under the
     /// wrong key.
     @ObservedObject var transcript: ACPTranscript
+    /// Observed so the recap's next action reaches the composer's ghost prompt.
+    @ObservedObject var summaryCoordinator: SessionSummaryCoordinator
     var nextPromptOffer: String? = nil
     var takeNextPromptOffer: () -> String? = { nil }
     var dismissNextPromptOffer: () -> Void = {}
     var onNextPromptStateChange: (NextPromptEligibilitySnapshot.Environment) -> Void = { _ in }
     var nextPromptInputBlocked: () -> Bool = { false }
+    /// The recap next action the user accepted or dismissed as a ghost prompt.
+    @State private var dismissedRecapNextAction: String?
     @State private var pendingComposerDrops = 0
     /// Global frame of the chat area, side column included; drop zones and
     /// dock sizes are measured against it.
@@ -462,6 +467,19 @@ private struct ACPSessionView: View {
     }
 
     private var isMirror: Bool { manager.isMirror(sessionId: sessionId) }
+    /// The recap's next action, offered as the ghost prompt while this tab's
+    /// recap strip shows it.
+    private var recapGhostOffer: String? {
+        guard !isMirror, summaryCoordinator.boundSessionIncarnation == session.incarnation else { return nil }
+        return ACPSessionSummaryPresentation.ghostOffer(
+            content: ACPSessionSummaryPresentation.cardContent(
+                cardMode: summaryCoordinator.cardMode,
+                phase: summaryCoordinator.phase
+            ),
+            dismissed: dismissedRecapNextAction
+        )
+    }
+
     /// `/ship` is offered wherever the toolbar shows the Ship pill.
     private var offersShipCommand: Bool {
         !isMirror && !session.readOnlyRestricted
@@ -616,12 +634,6 @@ private struct ACPSessionView: View {
 
                 VStack(spacing: 8) {
                     sideQuestionSlot(.composer, contentMaxWidth: contentMaxWidth)
-                    // Renders only for the session the coordinator is bound to.
-                    ACPSessionRecapCard(
-                        coordinator: state.sessionSummaryCoordinator,
-                        session: session,
-                        maxWidth: contentMaxWidth
-                    )
                     composerView(
                         placement: composerPlacement,
                         contentMaxWidth: contentMaxWidth,
@@ -941,14 +953,32 @@ private struct ACPSessionView: View {
             // A checkout's runner resolves symbol paths against the checkout
             // root, but `worktree` is the focused member repo.
             symbolMentions: isWorkspaceCheckoutOwner ? nil : symbolMentions,
-            nextPromptOffer: nextPromptOffer,
-            takeNextPromptOffer: takeNextPromptOffer,
-            dismissNextPromptOffer: dismissNextPromptOffer,
-            onNextPromptStateChange: onNextPromptStateChange,
-            nextPromptInputBlocked: { nextPromptInputBlocked() || pendingComposerDrops > 0 || !composerCanAcceptInput },
+            nextPromptOffer: recapGhostOffer ?? nextPromptOffer,
+            takeNextPromptOffer: {
+                if let recap = recapGhostOffer {
+                    dismissedRecapNextAction = recap
+                    return recap
+                }
+                return takeNextPromptOffer()
+            },
+            dismissNextPromptOffer: {
+                if let recap = recapGhostOffer { dismissedRecapNextAction = recap }
+                dismissNextPromptOffer()
+            },
+            onNextPromptStateChange: { environment in
+                // The text view skips the model's gates while it shows the
+                // recap's next action; the model's presentation still needs them.
+                var environment = environment
+                environment.isInputBlocked = environment.isInputBlocked || nextPromptInputBlocked()
+                onNextPromptStateChange(environment)
+            },
+            nextPromptInputBlocked: {
+                (recapGhostOffer == nil && nextPromptInputBlocked()) || pendingComposerDrops > 0 || !composerCanAcceptInput
+            },
             offersShip: offersShipCommand,
             pluginPrompts: pluginPrompts.map(\.suggestion),
-            contextProviders: isWorkspaceCheckoutOwner ? [] : state.pluginContextProviders(projectID: worktree.projectId)
+            contextProviders: isWorkspaceCheckoutOwner ? [] : state.pluginContextProviders(projectID: worktree.projectId),
+            recapCoordinator: summaryCoordinator
         ) { text, attachments, intent, draft, onPromptFinished -> Bool in
             // `intent` is already resolved by the composer for keyboard
             // submits; the toolbar send button bypasses the keyboard
