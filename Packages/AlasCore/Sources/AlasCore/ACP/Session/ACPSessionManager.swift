@@ -8401,7 +8401,13 @@ extension ACPSessionManager {
                     )
                 }
             }
-            if !shouldHoldQueueForRecovery || !sendTranscriptAsContext(sessionId: sessionId, agentName: nil) {
+            if runner.restartAgentWhenIdle != nil {
+                // Transcript recovery and force-sent prompts are left to the
+                // replacement attach: sent here, they would reach the agent
+                // about to be replaced and clear recovery state it never kept.
+                // The flush restarts now if idle, else at the next idle point.
+                runner.flushQueueIfIdle()
+            } else if !shouldHoldQueueForRecovery || !sendTranscriptAsContext(sessionId: sessionId, agentName: nil) {
                 if !sendPendingQueueForceSend(sessionId: sessionId) {
                     runner.flushQueueIfIdle()
                 }

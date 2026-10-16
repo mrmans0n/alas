@@ -1959,8 +1959,11 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(row.acpBrokerAcknowledgedCursor == 4)
     }
 
-    @Test("an agent adopted with an outdated built-in MCP address is restarted with the current one")
-    func adoptedAgentWithOutdatedBuiltInMCPIsRestarted() async throws {
+    @Test(
+        "an agent adopted with an outdated built-in MCP address is restarted before anything reaches it",
+        arguments: [false, true]
+    )
+    func adoptedAgentWithOutdatedBuiltInMCPIsRestarted(contextRecoveryPending: Bool) async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
         try store.upsertSession(.init(
             id: "local-session-1",
@@ -1968,6 +1971,7 @@ struct ACPSessionManagerAttachRestoreTests {
             title: "Stored session",
             titleSource: .placeholder,
             remoteSessionId: "remote-old",
+            contextRecoveryPending: contextRecoveryPending,
             currentModel: nil,
             currentMode: nil,
             autoRun: false,
@@ -1979,6 +1983,10 @@ struct ACPSessionManagerAttachRestoreTests {
             lastOpenedAt: 0,
             archived: false
         ))
+        // A conversation the agent may have lost: transcript recovery is due.
+        let earlier: ACPMessage = .user(id: UUID(), text: "kick off", attachments: [])
+        try store.appendMessage(sessionId: "local-session-1", id: "m0", kind: earlier.kind,
+                                seq: 0, payload: try ACPMessageCodec.encode(earlier), createdAt: 0)
         // The broker kept the agent and its remote session across an app
         // restart, so `session/load` is answered from its snapshot.
         let broker = ManagerBrokerService()
@@ -2025,12 +2033,14 @@ struct ACPSessionManagerAttachRestoreTests {
         await manager.hydrateIfNeeded(id: session.id)
         await manager.attach(to: session.id, freshlyCreated: false)
 
-        // Restarting closes the adopted broker and attaches again.
+        // Restarting closes the adopted broker and attaches again; the
+        // replacement, not the outdated agent, gets any transcript recovery.
         try await waitUntilAsync {
             let closed = await broker.closed.count
             let opened = await broker.opened.count
             return closed == 1 && opened == 2
         }
+        #expect(await broker.methodsSentBeforeFirstClose?.contains("session/prompt") == false)
     }
 
     @Test("reopened session uses session/load, adopts its remote id, and does not reset the MCP preamble")
@@ -6789,6 +6799,8 @@ private actor ManagerBrokerService: ACPBrokerServicing {
     var acks: [ACPBrokerAckParams] = []
     var detached: [ACPBrokerDetachParams] = []
     var closed: [ACPBrokerCloseParams] = []
+    /// What the first closed generation's agent received, in order.
+    var methodsSentBeforeFirstClose: [String]?
     var snapshotInitializeResult: ACPBrokerJSONValue?
     var snapshotRemoteSessionResult: ACPBrokerJSONValue?
 
@@ -6891,6 +6903,7 @@ private actor ManagerBrokerService: ACPBrokerServicing {
     }
 
     func close(_ params: ACPBrokerCloseParams) async throws -> ACPBrokerSimpleOK {
+        if closed.isEmpty { methodsSentBeforeFirstClose = sent.map(\.method) }
         closed.append(params)
         return ACPBrokerSimpleOK(ok: true)
     }
