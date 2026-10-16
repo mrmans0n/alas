@@ -56,6 +56,10 @@ public final class SessionSummaryCoordinator: ChangeTracking {
     private var currentIncarnation: UUID?
     private weak var boundSession: ACPSession?
     private var observations: Set<ChangeSubscription> = []
+    /// Bumped when summaries are turned off; work started under an older
+    /// epoch must not write to a store.
+    private var persistenceEpoch: UInt64 = 0
+    private var pendingSaves: [UUID: Task<Void, Error>] = [:]
 
     public init(engine: any LocalTextGenerating, modelID: String) {
         self.engine = engine
@@ -145,8 +149,20 @@ public final class SessionSummaryCoordinator: ChangeTracking {
         presentationGeneration &+= 1
     }
 
+    /// Fences every summary produced by work already running: its save is
+    /// skipped. Call before `clearPersistedSummaries(in:)` when turning
+    /// summaries off.
+    public func invalidatePersistence() {
+        persistenceEpoch &+= 1
+    }
+
     /// Deletes every persisted summary. Only for turning summaries off.
+    /// Saves that passed the epoch check finish first, so none lands after
+    /// the delete.
     public func clearPersistedSummaries(in stores: [any SessionSummaryStoring]) async {
+        for save in Array(pendingSaves.values) {
+            _ = try? await save.value
+        }
         for store in stores {
             do {
                 try await store.deleteAllSessionSummaries()
@@ -163,6 +179,7 @@ public final class SessionSummaryCoordinator: ChangeTracking {
         store: any SessionSummaryStoring
     ) async -> SessionRecapPrecomputeOutcome {
         let inputHash = context.inputHash(modelID: modelID)
+        let epoch = persistenceEpoch
         do {
             if try await store.loadSessionSummary(sessionId: sessionId, inputHash: inputHash, modelID: modelID) != nil {
                 return .stored
@@ -172,13 +189,10 @@ public final class SessionSummaryCoordinator: ChangeTracking {
                 caller: .sessionRecapPrecompute(sessionId),
                 priority: .background
             )
-            guard let summary = Self.parse(raw, context: context) else { return .skipped }
-            try await store.saveSessionSummary(sessionId: sessionId, .init(
-                inputHash: inputHash,
-                modelID: modelID,
-                summary: summary,
-                createdAt: Int64(Date().timeIntervalSince1970)
-            ))
+            guard let summary = Self.parse(raw, context: context),
+                  let save = persist(summary, inputHash: inputHash, sessionId: sessionId, store: store, epoch: epoch)
+            else { return .skipped }
+            try await save.value
             return .stored
         } catch LocalTextInferenceFailure.preempted {
             return .preempted
@@ -186,6 +200,38 @@ public final class SessionSummaryCoordinator: ChangeTracking {
             sessionSummaryLogger.debug("recap precompute ended without a summary: \(String(describing: error))")
             return .skipped
         }
+    }
+
+    /// Starts a tracked save, or returns nil when `epoch` was invalidated.
+    /// Runs on the main actor, so the check and the enqueue cannot interleave
+    /// with `invalidatePersistence()`.
+    @discardableResult
+    private func persist(
+        _ summary: SessionSummary,
+        inputHash: String,
+        sessionId: String,
+        store: any SessionSummaryStoring,
+        epoch: UInt64
+    ) -> Task<Void, Error>? {
+        guard epoch == persistenceEpoch else { return nil }
+        let stored = StoredSessionSummary(
+            inputHash: inputHash,
+            modelID: modelID,
+            summary: summary,
+            createdAt: Int64(Date().timeIntervalSince1970)
+        )
+        let id = UUID()
+        let save = Task { [weak self] in
+            defer { self?.pendingSaves[id] = nil }
+            do {
+                try await store.saveSessionSummary(sessionId: sessionId, stored)
+            } catch {
+                sessionSummaryLogger.error("saving a session summary failed: \(String(describing: error))")
+                throw error
+            }
+        }
+        pendingSaves[id] = save
+        return save
     }
 
     public func cancelPrecompute(sessionId: String) async {
@@ -229,6 +275,7 @@ public final class SessionSummaryCoordinator: ChangeTracking {
         let modelID = modelID
         let request = Self.request(for: context)
         let store = storeProvider?(session)
+        let epoch = persistenceEpoch
         let barrier = cancellationBarrier
         let engine = engine
         currentIncarnation = incarnation
@@ -282,6 +329,7 @@ public final class SessionSummaryCoordinator: ChangeTracking {
                     context: context,
                     inputHash: inputHash,
                     store: store,
+                    epoch: epoch,
                     previous: previous,
                     mode: mode,
                     session: session,
@@ -344,7 +392,7 @@ public final class SessionSummaryCoordinator: ChangeTracking {
             finishStaleRequest(generation, mode: mode)
             return
         }
-        publishResult(summary, inputHash: inputHash, store: nil, session: session, generation: generation)
+        publishResult(summary, inputHash: inputHash, store: nil, epoch: persistenceEpoch, session: session, generation: generation)
     }
 
     private func publish(
@@ -352,6 +400,7 @@ public final class SessionSummaryCoordinator: ChangeTracking {
         context: SessionSummaryContext,
         inputHash: String,
         store: (any SessionSummaryStoring)?,
+        epoch: UInt64,
         previous: SessionSummary?,
         mode: SessionSummaryRequestMode,
         session: ACPSession,
@@ -372,32 +421,20 @@ public final class SessionSummaryCoordinator: ChangeTracking {
             )
             return
         }
-        publishResult(summary, inputHash: inputHash, store: store, session: session, generation: generation)
+        publishResult(summary, inputHash: inputHash, store: store, epoch: epoch, session: session, generation: generation)
     }
 
     private func publishResult(
         _ summary: SessionSummary,
         inputHash: String,
         store: (any SessionSummaryStoring)?,
+        epoch: UInt64,
         session: ACPSession,
         generation: UInt64
     ) {
         storeCache(summary, inputHash: inputHash, for: session)
         if let store {
-            let sessionId = session.id
-            let stored = StoredSessionSummary(
-                inputHash: inputHash,
-                modelID: modelID,
-                summary: summary,
-                createdAt: Int64(Date().timeIntervalSince1970)
-            )
-            Task {
-                do {
-                    try await store.saveSessionSummary(sessionId: sessionId, stored)
-                } catch {
-                    sessionSummaryLogger.error("saving a session summary failed: \(String(describing: error))")
-                }
-            }
+            persist(summary, inputHash: inputHash, sessionId: session.id, store: store, epoch: epoch)
         }
         guard publishPhase(
             .result(summary),

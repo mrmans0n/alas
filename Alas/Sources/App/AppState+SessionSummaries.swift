@@ -5,6 +5,7 @@ private let sessionSummariesLogger = Logger(subsystem: "io.nlopez.alas", categor
 
 extension AppState {
     func enableSessionSummaries() async {
+        await awaitSessionSummaryCleanup()
         guard localTextSupported, !nextPromptShuttingDown, !sessionSummaryDisableSavePending,
               !localTextRemovalInProgress else { return }
         let previous = config.sessionSummariesEnabled
@@ -26,7 +27,9 @@ extension AppState {
             await disableSessionSummaries()
             return
         }
-        guard config.sessionSummariesEnabled, localTextSupported, !nextPromptShuttingDown else { return }
+        await awaitSessionSummaryCleanup()
+        guard config.sessionSummariesEnabled, localTextSupported, !nextPromptShuttingDown,
+              !localTextRemovalInProgress, !sessionSummaryDisableSavePending else { return }
         beginSessionSummarySettingsChange()
         let generation = sessionSummarySettingsGeneration
         await trackLocalTextReadiness { await self.prepareSessionSummaries(generation: generation) }
@@ -40,15 +43,31 @@ extension AppState {
             sessionSummaryDisableSavePending = false
             sessionSummarySettingsError = nil
             dropAllRecapPrecompute()
+            let coordinator = sessionSummaryCoordinator
+            coordinator.invalidatePersistence()
             let stores = core.sessionManagers.values.map(\.persistence)
-            Task { await sessionSummaryCoordinator.clearPersistedSummaries(in: stores) }
-            // Session databases are per worktree, and most are not loaded.
-            Task.detached(priority: .utility) { Self.clearSessionSummariesOnDisk() }
+            let previousCleanup = sessionSummaryCleanupTask
+            // Re-enabling awaits this, so the sweep cannot delete new summaries.
+            sessionSummaryCleanupTask = Task {
+                await previousCleanup?.value
+                await coordinator.clearPersistedSummaries(in: stores)
+                // Session databases are per worktree, and most are not loaded.
+                await Task.detached(priority: .utility) { Self.clearSessionSummariesOnDisk() }.value
+            }
         } else {
             config.sessionSummariesEnabled = previous
             sessionSummaryDisableSavePending = true
             sessionSummarySettingsError =
                 "Could not save disabling. Retry before quitting or summaries may turn on again after relaunch."
+        }
+    }
+
+    /// Waits for the cleanup of every earlier disable, including ones started
+    /// while waiting.
+    private func awaitSessionSummaryCleanup() async {
+        while let cleanup = sessionSummaryCleanupTask {
+            await cleanup.value
+            if sessionSummaryCleanupTask == cleanup { sessionSummaryCleanupTask = nil }
         }
     }
 

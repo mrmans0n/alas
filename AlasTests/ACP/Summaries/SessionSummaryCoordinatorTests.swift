@@ -310,6 +310,33 @@ struct SessionSummaryCoordinatorTests {
         #expect(await fixture.engine.requestCount == 1)
     }
 
+    /// Disabling summaries invalidates persistence; only work started after
+    /// that (a re-enable) may write again.
+    @Test(arguments: [true, false])
+    func persistenceInvalidationFencesSavesStartedBeforeIt(invalidatedInFlight: Bool) async throws {
+        let fixture = SummaryCoordinatorFixture()
+        let context = try #require(SessionSummaryContext.snapshot(session: fixture.session))
+        if !invalidatedInFlight { fixture.coordinator.invalidatePersistence() }
+        let precompute = Task {
+            await fixture.coordinator.precompute(sessionId: fixture.session.id, context: context, store: fixture.store)
+        }
+        await fixture.engine.waitUntilRequested()
+        if invalidatedInFlight {
+            fixture.coordinator.invalidatePersistence()
+            await fixture.coordinator.clearPersistedSummaries(in: [fixture.store])
+        }
+
+        await fixture.engine.complete(with: fixture.result)
+        _ = await precompute.value
+
+        let stored = await fixture.store.loadSessionSummary(
+            sessionId: fixture.session.id,
+            inputHash: context.inputHash(modelID: fixture.modelID),
+            modelID: fixture.modelID
+        )
+        #expect((stored != nil) == !invalidatedInFlight)
+    }
+
     @Test func missingContextFailsLocallyWithoutCallingEngine() async {
         let engine = SessionSummaryEngine()
         let coordinator = SessionSummaryCoordinator(engine: engine, modelID: "test-model")

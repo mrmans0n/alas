@@ -220,6 +220,7 @@ final class AppState {
     var nextPromptOffer: String?
     @ObservationIgnored var nextPromptSettingsGeneration: UInt64 = 0
     @ObservationIgnored var sessionSummarySettingsGeneration: UInt64 = 0
+    @ObservationIgnored var sessionSummaryCleanupTask: Task<Void, Never>?
     @ObservationIgnored var localTextModelGeneration: UInt64 = 0
     @ObservationIgnored var localTextSettingsInspected = false
     @ObservationIgnored var localTextRuntimeStarted = false
