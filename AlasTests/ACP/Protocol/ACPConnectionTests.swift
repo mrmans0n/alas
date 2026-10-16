@@ -14,7 +14,9 @@ struct ACPConnectionTests {
             let meta = try #require(capabilities["_meta"] as? [String: Any])
             #expect((meta["goal"] as? [String: Any])?.isEmpty == true)
             #expect(meta["async-tasks"] as? Bool == true)
-            #expect(Set(meta.keys) == ["goal", "async-tasks", "terminal-auth", "parameterizedModelPicker", "opencode/child-session-updates", "contextUsage"])
+            #expect(Set(meta.keys) == ["goal", "async-tasks", "terminal-auth", "parameterizedModelPicker", "opencode/child-session-updates", "contextUsage", "sessionIndex"])
+            // The client-neutral session index opt-in, never the AIR declaration.
+            #expect(meta["sessionIndex"] as? [String: Int] == ["version": 1])
             #expect(meta["jetbrains"] == nil)
             #expect(meta["terminal_output_delta"] == nil)
             #expect(meta["terminal-auth"] as? Bool == true)
@@ -86,6 +88,49 @@ struct ACPConnectionTests {
             advertisesAppend: initialized.supportsSystemPromptAppend,
             maxBytes: initialized.systemPromptAppendMaxBytes
         ) == sent)
+    }
+
+    @Test("the session index needs a known version and reports only the advertised operations", arguments: [
+        (#"{"sessionIndex":{"version":1,"capabilities":["sessionArchive","sessionRename","sessionListSubscribe"]}}"#,
+         ACPSessionIndexSupport(archive: true, rename: true, listSubscribe: true)),
+        (#"{"sessionIndex":{"version":1}}"#, ACPSessionIndexSupport()),
+        (#"{"sessionIndex":{"capabilities":["sessionArchive"]}}"#, nil),
+        (#"{"sessionIndex":{"version":0,"capabilities":["sessionArchive"]}}"#, nil),
+        // A newer version may change the request shapes: fall back.
+        (#"{"sessionIndex":{"version":2,"capabilities":["sessionArchive"]}}"#, nil),
+        (#"{"sessionIndex":true}"#, nil),
+        (#"{"jetbrains":{"air":{"version":1,"capabilities":["sessionIndex","sessionArchive"]}}}"#, nil),
+    ] as [(String, ACPSessionIndexSupport?)])
+    func sessionIndexNegotiation(metadata: String, expected: ACPSessionIndexSupport?) async throws {
+        let mock = ACPMockClient()
+        mock.script(method: "initialize") { _ in
+            Data("{\"protocolVersion\":1,\"_meta\":\(metadata)}".utf8)
+        }
+        #expect(try await ACPConnection(client: mock).initialize().sessionIndex == expected)
+    }
+
+    @Test("only a session index adapter's unknown-session error counts as deleted", arguments: [
+        (-32002, true, true),
+        (-32603, true, false),
+        (-32002, false, false),
+    ])
+    func deleteUnknownSession(code: Int, sessionIndex: Bool, deleted: Bool) async throws {
+        let mock = ACPMockClient()
+        mock.script(method: "initialize") { _ in
+            Data((sessionIndex
+                ? #"{"protocolVersion":1,"_meta":{"sessionIndex":{"version":1,"capabilities":[]}}}"#
+                : #"{"protocolVersion":1}"#).utf8)
+        }
+        mock.script(method: "session/delete") { _ in
+            throw ACPClientError.jsonrpc(.init(code: code, message: "error", data: nil))
+        }
+        let connection = ACPConnection(client: mock)
+        _ = try await connection.initialize()
+        if deleted {
+            try await connection.deleteSession(sessionId: "gone")
+        } else {
+            await #expect(throws: (any Error).self) { try await connection.deleteSession(sessionId: "gone") }
+        }
     }
 
     @Test("top-level goal negotiation preserves valid sibling capabilities", arguments: [false, true])

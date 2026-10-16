@@ -14635,18 +14635,102 @@ final class AppState {
         await openExistingACPSession(sessionId: summary.sessionId)
     }
 
+    /// Maps the cwd of a session the agent lists to the worktree of
+    /// `worktree`'s project whose path it is, with that worktree's session
+    /// store. A session store is opened only when its file exists, so
+    /// browsing never creates one.
+    func acpSessionBrowserResolver(for worktree: Worktree) -> @MainActor (String) -> ACPSessionBrowserTarget? {
+        let context = worktree.path.path
+        func key(_ path: String) -> String { ACPSessionBrowserPaths.key(path, context: context) }
+        var byPath: [String: String] = [:]
+        for candidate in projectsManager.worktrees(projectId: worktree.projectId) where byPath[key(candidate.path.path)] == nil {
+            byPath[key(candidate.path.path)] = candidate.id
+        }
+        var stores: [String: ACPSessionPersistence?] = [:]
+        return { [weak self] cwd in
+            guard let id = byPath[key(cwd)] else { return nil }
+            if let cached = stores[id] { return .init(worktreeId: id, persistence: cached) }
+            let store: ACPSessionPersistence?
+            if let manager = self?.acpManagers[.worktree(id)] {
+                store = manager.persistence
+            } else {
+                let url = Paths.acpSessionsDB(forWorktreeId: id)
+                store = FileManager.default.fileExists(atPath: url.path) ? ACPSessionPersistence(path: url.path) : nil
+            }
+            stores[id] = store
+            return .init(worktreeId: id, persistence: store)
+        }
+    }
+
+    /// Shows an agent-side rename on the Alas copy of the session, and
+    /// returns a closure that puts back its previous title and title source
+    /// (a failed agent rename must not leave a provider title marked manual).
+    func renameLocalACPSession(
+        worktreeId: String,
+        sessionId: ACPSession.ID,
+        title: String
+    ) async throws -> (@MainActor () async throws -> String)? {
+        guard let worktree = worktree(withId: worktreeId), let manager = acpManager(for: worktree) else { return nil }
+        // Read so a failure stops here: without the old title there would be
+        // no way back if the agent rename then fails.
+        let previous = try await manager.persistence.loadSession(id: sessionId)
+        try await Self.storeACPSessionTitle(title, source: .manual, sessionId: sessionId, manager: manager)
+        guard let previous else { return nil }
+        // Returns the title stored afterwards. Only while the stored title
+        // is still this rename's, in one conditional update: a newer rename
+        // from elsewhere is not undone.
+        return {
+            let restored = try await manager.persistence.renameSession(
+                id: sessionId, title: previous.title, titleSource: previous.titleSource,
+                updatedAt: Int64(Date().timeIntervalSince1970), ifStillTitled: title, source: .manual
+            )
+            guard restored else {
+                return try await manager.persistence.loadSession(id: sessionId)?.title ?? title
+            }
+            if manager.renameSessionCosmetic(id: sessionId, title: previous.title, source: previous.titleSource) {
+                await manager.flushAllPersistence()
+            }
+            return previous.title
+        }
+    }
+
+    /// Stored before returning: the session browser reads it for the next
+    /// row.
+    private static func storeACPSessionTitle(
+        _ title: String,
+        source: ACPSessionTitleSource,
+        sessionId: ACPSession.ID,
+        manager: ACPSessionManager
+    ) async throws {
+        // Written and awaited first, so a store error stops the agent rename;
+        // then the manager's cached row and live session follow. An archived
+        // Alas row is not updated, which counts as a failure too.
+        guard try await manager.persistence.renameSession(
+            id: sessionId, title: title, titleSource: source, updatedAt: Int64(Date().timeIntervalSince1970)
+        ) else { throw ACPSessionTitleNotStored() }
+        if manager.renameSessionCosmetic(id: sessionId, title: title, source: source) {
+            await manager.flushAllPersistence()
+        }
+    }
+
+    struct ACPSessionTitleNotStored: LocalizedError {
+        var errorDescription: String? { "The Alas copy of this session could not be renamed." }
+    }
+
     @discardableResult
     func openDiscoveredACPSession(
         _ discovered: ACPDiscoveredSession,
         capabilities: ACPSessionDiscoveryCapabilities
     ) async -> Bool {
-        guard let resolved = projectAndWorktree(withWorktreeId: discovered.worktreeId),
+        guard let worktreeId = discovered.worktreeId,
+              let resolved = projectAndWorktree(withWorktreeId: worktreeId),
               let manager = acpManager(for: resolved.worktree)
         else { return false }
 
         focusGlobalWorktree(id: resolved.worktree.id, projectId: resolved.project.id)
+        // Open in the session's own worktree, whatever the selection says by now.
         if let localSessionId = discovered.localSessionId {
-            await openExistingACPSession(sessionId: localSessionId)
+            await openExistingACPSession(sessionId: localSessionId, worktree: resolved.worktree)
             return true
         }
         guard capabilities.canOpenRemoteSession,
@@ -14656,7 +14740,7 @@ final class AppState {
               )
         else { return false }
 
-        await openExistingACPSession(sessionId: row.id)
+        await openExistingACPSession(sessionId: row.id, worktree: resolved.worktree)
         return true
     }
 
@@ -14666,6 +14750,11 @@ final class AppState {
         owner: SessionOwnerID,
         capabilities: ACPSessionDiscoveryCapabilities
     ) async -> Bool {
+        // A session of a linked worktree opens in that worktree, never in
+        // the directory the browser was opened from.
+        if let target = discovered.worktreeId, owner.worktreeID != nil, target != owner.worktreeID {
+            return await openDiscoveredACPSession(discovered, capabilities: capabilities)
+        }
         guard let manager = acpManager(for: owner) else { return false }
 
         if let localSessionId = discovered.localSessionId {

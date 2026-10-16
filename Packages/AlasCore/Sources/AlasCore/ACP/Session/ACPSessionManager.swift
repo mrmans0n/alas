@@ -4153,7 +4153,12 @@ public final class ACPSessionManager: ChangeTracking {
         recent.insert(row, at: insertionIndex)
     }
 
-    public func makeSessionDiscoveryHandle(agentId: String) async throws -> ACPSessionDiscoveryHandle {
+    /// `worktreeResolver` maps a listed session's cwd to the Alas worktree
+    /// whose path it is, for the linked-worktree scope of the session index.
+    public func makeSessionDiscoveryHandle(
+        agentId: String,
+        worktreeResolver: (@MainActor (String) -> ACPSessionBrowserTarget?)? = nil
+    ) async throws -> ACPSessionDiscoveryHandle {
         guard !isDisposed else { throw CancellationError() }
         let activityID = UUID()
         activeDiscoveryHandles.insert(activityID)
@@ -4191,6 +4196,8 @@ public final class ACPSessionManager: ChangeTracking {
                     canFork: initialized.sessionCapabilities.supportsFork,
                     canDelete: initialized.sessionCapabilities.supportsDelete
                 ),
+                sessionIndex: initialized.sessionIndex,
+                worktreeResolver: worktreeResolver,
                 onClosed: { [weak self] in self?.activeDiscoveryHandles.remove(activityID) }
             )
         } catch {
@@ -4281,8 +4288,8 @@ public final class ACPSessionManager: ChangeTracking {
         defer { activeDiscoveryImportCount -= 1 }
         await previousManagerDisposal?.value
         guard !isDisposed else { return nil }
-        let discoveredCWD = URL(fileURLWithPath: discovered.cwd).standardizedFileURL.path
-        let managerCWD = URL(fileURLWithPath: worktreePath).standardizedFileURL.path
+        let discoveredCWD = ACPSessionBrowserPaths.key(discovered.cwd, context: worktreePath)
+        let managerCWD = ACPSessionBrowserPaths.key(worktreePath, context: worktreePath)
         guard discovered.worktreeId == worktreeId, discoveredCWD == managerCWD else { return nil }
         if let existing = try? await persistence.loadSession(
             agentId: discovered.agentId,

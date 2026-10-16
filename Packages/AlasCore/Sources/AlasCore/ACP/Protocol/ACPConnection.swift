@@ -63,6 +63,8 @@ public struct ACPInitializeOutcome: Equatable, Sendable {
     public let supportsSystemPromptAppend: Bool
     /// The advertised append limit in UTF-8 bytes, if any.
     public let systemPromptAppendMaxBytes: Int?
+    /// The client-neutral session index, when the agent advertised it.
+    public let sessionIndex: ACPSessionIndexSupport?
     /// The adapter's self-reported name/version, when it sent `agentInfo`.
     public let agentInfo: ACPImplementationInfo?
 
@@ -81,7 +83,8 @@ public struct ACPInitializeOutcome: Equatable, Sendable {
         supportsAsyncTasks: Bool = false,
         supportsContextBreakdown: Bool = false,
         supportsSystemPromptAppend: Bool = false,
-        systemPromptAppendMaxBytes: Int? = nil
+        systemPromptAppendMaxBytes: Int? = nil,
+        sessionIndex: ACPSessionIndexSupport? = nil
     ) {
         self.promptCapabilities = promptCapabilities
         self.authMethods = authMethods
@@ -98,6 +101,7 @@ public struct ACPInitializeOutcome: Equatable, Sendable {
         self.supportsContextBreakdown = supportsContextBreakdown
         self.supportsSystemPromptAppend = supportsSystemPromptAppend
         self.systemPromptAppendMaxBytes = systemPromptAppendMaxBytes
+        self.sessionIndex = sessionIndex
     }
 }
 
@@ -156,6 +160,8 @@ public final class ACPConnection: @unchecked Sendable {
     /// session/new, session/resume, and session/fork when Alas requests MCP
     /// servers; never on session/load, which ignores it.
     public var mcpStartupAwaitTimeoutMs: Int?
+    /// The session index the agent advertised on `initialize`, if any.
+    public private(set) var negotiatedSessionIndex: ACPSessionIndexSupport?
     /// Set after `initialize` from `ACPSessionInstructionsPolicy`. Sent as
     /// `_meta.systemPrompt.append` on session/new, load, resume, and fork.
     public var sessionInstructions: String?
@@ -194,6 +200,7 @@ public final class ACPConnection: @unchecked Sendable {
         defer { resp.acknowledgeDurableConsumption() }
         let result = try JSONDecoder().decode(ACPInitializeResult.self, from: resp.body)
         let capabilities = result.agentCapabilities
+        negotiatedSessionIndex = result.meta?.sessionIndex?.support
         return ACPInitializeOutcome(
             promptCapabilities: capabilities?.promptCapabilities ?? .init(),
             authMethods: result.authMethods,
@@ -210,7 +217,8 @@ public final class ACPConnection: @unchecked Sendable {
             supportsAsyncTasks: result.meta?.asyncTasks?.supportsStop == true,
             supportsContextBreakdown: result.supportsContextBreakdown,
             supportsSystemPromptAppend: result.supportsSystemPromptAppend,
-            systemPromptAppendMaxBytes: result.systemPromptAppendMaxBytes
+            systemPromptAppendMaxBytes: result.systemPromptAppendMaxBytes,
+            sessionIndex: result.meta?.sessionIndex?.support
         )
     }
 
@@ -274,14 +282,55 @@ public final class ACPConnection: @unchecked Sendable {
         return result.sessionId.isEmpty ? result.withSessionId(sessionId) : result
     }
 
-    public func listSessions(cwd: String?, cursor: String? = nil) async throws -> ACPSessionListResult {
+    /// `index` asks for the session index page; send it only to an agent
+    /// that advertised `_meta.sessionIndex`.
+    public func listSessions(
+        cwd: String?,
+        cursor: String? = nil,
+        index: ACPSessionIndexListOptions? = nil
+    ) async throws -> ACPSessionListResult {
         let req = ACPRequest(
             method: "session/list",
-            params: ACPSessionListParams(cwd: cwd, cursor: cursor)
+            params: ACPSessionListParams(cwd: cwd, cursor: cursor, index: index)
         )
         let resp = try await client.send(req)
         defer { resp.acknowledgeDurableConsumption() }
         return try JSONDecoder().decode(ACPSessionListResult.self, from: resp.body)
+    }
+
+    public func renameSession(sessionId: String, title: String) async throws {
+        try await sendIgnoringResult(method: "_session/rename", params: ACPSessionRenameParams(sessionId: sessionId, title: title))
+    }
+
+    public func archiveSession(sessionId: String) async throws {
+        try await sendIgnoringResult(method: "_session/archive", params: ACPSessionArchiveParams(sessionId: sessionId))
+    }
+
+    public func unarchiveSession(sessionId: String) async throws {
+        try await sendIgnoringResult(method: "_session/unarchive", params: ACPSessionArchiveParams(sessionId: sessionId))
+    }
+
+    /// Returns the subscription id; changes arrive on
+    /// `client.sessionListChanges`.
+    public func subscribeSessionList(cwd: String) async throws -> String {
+        let resp = try await client.send(ACPRequest(
+            method: "_session/list/subscribe",
+            params: ACPSessionListSubscribeParams(cwd: cwd)
+        ))
+        defer { resp.acknowledgeDurableConsumption() }
+        return try JSONDecoder().decode(ACPSessionListSubscribeResult.self, from: resp.body).subscriptionId
+    }
+
+    public func unsubscribeSessionList(subscriptionId: String) async throws {
+        try await sendIgnoringResult(
+            method: "_session/list/unsubscribe",
+            params: ACPSessionListUnsubscribeParams(subscriptionId: subscriptionId)
+        )
+    }
+
+    private func sendIgnoringResult(method: String, params: some Encodable & Sendable) async throws {
+        let resp = try await client.send(ACPRequest(method: method, params: params))
+        resp.acknowledgeDurableConsumption()
     }
 
     public func forkSession(
@@ -315,11 +364,20 @@ public final class ACPConnection: @unchecked Sendable {
         response.acknowledgeDurableConsumption()
     }
 
+    /// For an agent with the session index (our adapter forks), an unknown
+    /// session (`-32002`) counts as deleted: they answer that for a session
+    /// that is already gone. ACP gives `-32002` no such meaning, so for any
+    /// other agent it stays an error.
     public func deleteSession(sessionId: String) async throws {
-        let response = try await client.send(ACPRequest(
-            method: "session/delete",
-            params: ACPSessionDeleteParams(sessionId: sessionId)
-        ))
+        let response: ACPResponse
+        do {
+            response = try await client.send(ACPRequest(
+                method: "session/delete",
+                params: ACPSessionDeleteParams(sessionId: sessionId)
+            ))
+        } catch ACPClientError.jsonrpc(let error) where error.code == -32002 && negotiatedSessionIndex != nil {
+            return
+        }
         defer { response.acknowledgeDurableConsumption() }
         _ = try JSONDecoder().decode(EmptyObject.self, from: response.body)
     }

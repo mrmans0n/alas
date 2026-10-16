@@ -102,6 +102,10 @@ public protocol ACPClient: AnyObject {
     /// simply never yield anything on this stream.
     var authStatusUpdates: AsyncStream<ACPAuthStatusEvent> { get }
 
+    /// `_session/list/changes` notifications of the client-neutral session
+    /// index. Agents without a list subscription never yield anything.
+    var sessionListChanges: AsyncStream<ACPSessionListChanges> { get }
+
     /// Filesystem requests (`fs/read_text_file`, `fs/write_text_file`).
     var fileRequests: AsyncStream<ACPFileRequest> { get }
 
@@ -157,6 +161,10 @@ extension ACPClient {
     }
 
     public var authStatusUpdates: AsyncStream<ACPAuthStatusEvent> {
+        AsyncStream { $0.finish() }
+    }
+
+    public var sessionListChanges: AsyncStream<ACPSessionListChanges> {
         AsyncStream { $0.finish() }
     }
 

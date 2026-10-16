@@ -307,6 +307,9 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
     public let asyncTasks: Bool
     /// Asks our Claude adapter fork to serve `_alas/context_usage`.
     public let contextUsage: Bool
+    /// Asks our Claude and Codex adapter forks for the client-neutral session
+    /// index (see `ACPSessionIndex.swift`).
+    public let sessionIndex: ACPSessionIndexDeclaration
 
     public init(
         terminalAuth: Bool,
@@ -314,7 +317,8 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
         openCodeChildSessionUpdates: Bool = false,
         goal: EmptyObject = .init(),
         asyncTasks: Bool = false,
-        contextUsage: Bool = false
+        contextUsage: Bool = false,
+        sessionIndex: ACPSessionIndexDeclaration = .init()
     ) {
         self.terminalAuth = terminalAuth
         self.parameterizedModelPicker = parameterizedModelPicker
@@ -322,10 +326,11 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
         self.goal = goal
         self.asyncTasks = asyncTasks
         self.contextUsage = contextUsage
+        self.sessionIndex = sessionIndex
     }
 
     public enum CodingKeys: String, CodingKey, Sendable {
-        case contextUsage
+        case contextUsage, sessionIndex
         case terminalAuth = "terminal-auth"
         case parameterizedModelPicker
         case openCodeChildSessionUpdates = "opencode/child-session-updates"
@@ -342,6 +347,7 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
         goal = try c.decodeIfPresent(EmptyObject.self, forKey: .goal) ?? .init()
         asyncTasks = try c.decodeIfPresent(Bool.self, forKey: .asyncTasks) ?? false
         contextUsage = try c.decodeIfPresent(Bool.self, forKey: .contextUsage) ?? false
+        sessionIndex = (try? c.decodeIfPresent(ACPSessionIndexDeclaration.self, forKey: .sessionIndex)) ?? .init()
     }
 }
 
@@ -420,9 +426,11 @@ public struct ACPInitializeResult: Codable, Equatable, Sendable {
         /// `_meta.systemPrompt` session instruction append (our Codex
         /// adapter fork, upstream codex-acp PR #585).
         public let systemPrompt: SystemPromptCapability?
+        /// Client-neutral session index (our Claude and Codex adapter forks).
+        public let sessionIndex: ACPSessionIndexCapability?
 
         public enum CodingKeys: String, CodingKey, Sendable {
-            case goal, steering, contextUsage, systemPrompt
+            case goal, steering, contextUsage, systemPrompt, sessionIndex
             case asyncTasks = "async-tasks"
         }
 
@@ -433,6 +441,7 @@ public struct ACPInitializeResult: Codable, Equatable, Sendable {
             steering = try? c.decodeIfPresent(Steering.self, forKey: .steering)
             contextUsage = try? c.decodeIfPresent(Steering.self, forKey: .contextUsage)
             systemPrompt = try? c.decodeIfPresent(SystemPromptCapability.self, forKey: .systemPrompt)
+            sessionIndex = try? c.decodeIfPresent(ACPSessionIndexCapability.self, forKey: .sessionIndex)
         }
 
         public struct SystemPromptCapability: Codable, Equatable, Sendable {
@@ -1196,10 +1205,26 @@ public struct ACPSessionLoadParams: Codable, Equatable, Sendable {
 public struct ACPSessionListParams: Codable, Equatable, Sendable {
     public let cwd: String?
     public let cursor: String?
+    /// `_meta.sessionIndex.list`; only for an agent that advertised the index.
+    public let meta: Meta?
 
-    public init(cwd: String?, cursor: String?) {
+    public struct Meta: Codable, Equatable, Sendable {
+        public let sessionIndex: SessionIndex
+
+        public struct SessionIndex: Codable, Equatable, Sendable {
+            public let list: ACPSessionIndexListOptions
+        }
+    }
+
+    public enum CodingKeys: String, CodingKey, Sendable {
+        case cwd, cursor
+        case meta = "_meta"
+    }
+
+    public init(cwd: String?, cursor: String?, index: ACPSessionIndexListOptions? = nil) {
         self.cwd = cwd
         self.cursor = cursor
+        self.meta = index.map { .init(sessionIndex: .init(list: $0)) }
     }
 }
 
@@ -1221,19 +1246,41 @@ public struct ACPAgentSessionInfo: Codable, Equatable, Identifiable, Sendable {
     public let title: String?
     public let updatedAt: String?
     public let additionalDirectories: [String]?
+    /// Row `_meta`; Alas reads only the session index fields.
+    public let meta: ACPSessionIndexRowEnvelope?
+
+    /// The session index fields of the row, when the agent sent them.
+    public var index: ACPSessionIndexRowMeta? { meta?.sessionIndex }
+
+    public enum CodingKeys: String, CodingKey, Sendable {
+        case sessionId, cwd, title, updatedAt, additionalDirectories
+        case meta = "_meta"
+    }
 
     public init(
         sessionId: String,
         cwd: String,
         title: String? = nil,
         updatedAt: String? = nil,
-        additionalDirectories: [String]? = nil
+        additionalDirectories: [String]? = nil,
+        index: ACPSessionIndexRowMeta? = nil
     ) {
         self.sessionId = sessionId
         self.cwd = cwd
         self.title = title
         self.updatedAt = updatedAt
         self.additionalDirectories = additionalDirectories
+        self.meta = index.map { .init(sessionIndex: $0) }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        sessionId = try c.decode(String.self, forKey: .sessionId)
+        cwd = try c.decode(String.self, forKey: .cwd)
+        title = try c.decodeIfPresent(String.self, forKey: .title)
+        updatedAt = try c.decodeIfPresent(String.self, forKey: .updatedAt)
+        additionalDirectories = try c.decodeIfPresent([String].self, forKey: .additionalDirectories)
+        meta = try? c.decodeIfPresent(ACPSessionIndexRowEnvelope.self, forKey: .meta)
     }
 }
 
