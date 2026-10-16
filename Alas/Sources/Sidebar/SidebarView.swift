@@ -88,7 +88,10 @@ struct SidebarView: View {
                                             }
                                         ),
                                         alsoInNotes: state.projectsManager.alsoInNotes(projectId: project.id),
-                                        selectedWorktreeId: state.selectedWorktreeId,
+                                        // A peer worktree takes the highlight
+                                        // while it covers the center pane.
+                                        selectedWorktreeId: state.nativePeerSessions?.coversCenterPane == true
+                                            ? nil : state.selectedWorktreeId,
                                         isMain: { wt in state.projectsManager.isMain(wt, in: project) },
                                         upstreamStatus: { wt in state.worktreeUpstreamStatusStore.status(for: wt.id) },
                                         onPullUpstream: { wt in state.pullWorktreeFromSidebar(id: wt.id) },

@@ -333,9 +333,7 @@ struct RootView: View {
             projectsManager: state.projectsManager,
             allowedWorktreeIDs: state.checkoutScopedWorktreeIDs,
             checkoutFocusedWorktreeScope: state.checkoutFocusedWorktreeScope,
-            peerSelected: state.nativePeerSessions.map {
-                $0.selectedSessionId != nil || $0.selectedWorktree != nil || $0.consoles?.viewer != nil
-            } ?? false,
+            peerSelected: state.nativePeerSessions?.coversCenterPane == true,
             peerWorktree: state.nativePeerSessions.flatMap {
                 $0.selectedWorktreeGroup?.worktree == nil ? nil : $0.selectedWorktree
             }
@@ -352,7 +350,7 @@ struct RootView: View {
         hasRightPaneRail: Bool,
         rightPaneStartupSuppressed: Bool
     ) -> some View {
-        if let client = state.nativePeerSessions, client.selectedWorktree != nil || client.selectedTab != nil {
+        if let client = state.nativePeerSessions, client.coversCenterPane {
             VStack(spacing: 0) {
                 if let selection = client.selectedWorktree {
                     NativePeerTabBar(
@@ -1145,7 +1143,7 @@ private struct RootBaseHandlers: ViewModifier {
             .onReceive(NotificationCenter.default.publisher(for: .alasCloseTab)) { _ in
                 // A peer worktree covers the center pane while the local
                 // selection stays set underneath; never close a hidden tab.
-                if let client = state.nativePeerSessions, client.selectedWorktree != nil || client.selectedTab != nil {
+                if let client = state.nativePeerSessions, client.coversCenterPane {
                     switch client.selectedTab {
                     case .session(let id):
                         state.requestClosePeerSessionTab(id)
