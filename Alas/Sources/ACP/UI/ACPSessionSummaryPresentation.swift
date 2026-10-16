@@ -112,6 +112,29 @@ struct ACPSessionSummaryPresentation: Equatable {
         }
     }
 
+    /// The collapsed recap strip's single line: the next action when there is
+    /// one, else the goal. Nil when the recap has neither.
+    static func headline(_ sections: [SectionDescriptor]) -> (label: String, text: String)? {
+        if let next = items(.nextAction, in: sections).first { return ("Next", next) }
+        if let goal = items(.goal, in: sections).first { return ("Goal", goal) }
+        return nil
+    }
+
+    static func items(_ kind: SectionDescriptor.Kind, in sections: [SectionDescriptor]) -> [String] {
+        sections.first { $0.kind == kind }?.items ?? []
+    }
+
+    /// The recap's next action, offered as the composer's ghost prompt. It
+    /// takes precedence over the on-device next-prompt suggestion until the
+    /// user accepts or dismisses that exact text; a refreshed recap with a
+    /// different next action offers again.
+    static func ghostOffer(content: CardContent, dismissed: String?) -> String? {
+        guard case .sections(let sections, _) = content,
+              let next = items(.nextAction, in: sections).first,
+              next != dismissed else { return nil }
+        return next
+    }
+
     private static func sections(for summary: SessionSummary) -> [SectionDescriptor] {
         var sections: [SectionDescriptor] = []
         append(.goal, [summary.goal].compactMap(trimmed), to: &sections)
