@@ -40,6 +40,8 @@ extension SessionsAPI {
         caller.log("sessions.create", agentID)
         let manager: ACPSessionManager
         var worktreeOwner: Worktree?
+        // Where the agent runs, for admitting it again once nothing suspends.
+        var agentHost: String?
         switch target {
         case .worktree(let ref):
             let listed = core.projects.worktrees(projectId: ref.projectID)
@@ -48,6 +50,7 @@ extension SessionsAPI {
                   !core.projects.isWorktreeHidden(projectId: ref.projectID, path: worktree.path)
             else { throw SessionRefusal.ownerUnavailable(reason: "The worktree is not listed, or is archived.") }
             let remoteHost = core.projects.projects.first { $0.id == ref.projectID }?.host
+            agentHost = remoteHost
             guard core.environment.admitsAgent(agentID, remoteHost: remoteHost) else { throw SessionRefusal.agentUnavailable }
             worktreeOwner = worktree
             do {
@@ -57,6 +60,7 @@ extension SessionsAPI {
             }
         case .workspaceCheckout(let id):
             let checkout = try await idleCheckout(id)
+            agentHost = checkout.executionLocation.sshHost
             guard core.environment.admitsAgent(agentID, remoteHost: checkout.executionLocation.sshHost) else {
                 throw SessionRefusal.agentUnavailable
             }
@@ -82,6 +86,7 @@ extension SessionsAPI {
         guard core.sessionManagers[manager.owner] === manager,
               core.environment.admitsSessionCreation(owner: manager.owner, in: core)
         else { throw SessionRefusal.ownerUnavailable(reason: "The session's owner was closed or claimed meanwhile.") }
+        guard core.environment.admitsAgent(agentID, remoteHost: agentHost) else { throw SessionRefusal.agentUnavailable }
         let session = manager.createSession(agentId: agentID, autoRunDefault: autoRun)
         // Picked up by `attach`, so the first turn already runs on it.
         if let modelID { manager.pendingModel[session.id] = modelID }

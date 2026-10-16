@@ -3848,7 +3848,11 @@ public final class ACPSessionManager: ChangeTracking {
         let persistence = persistence
         do {
             let rows = try await persistence.recentSessions()
-            recent = rows
+            // A live session created since the read started may not be
+            // saved yet; it stays listed rather than vanishing until it is.
+            let loaded = Set(rows.map(\.id))
+            let unsaved = recent.filter { !loaded.contains($0.id) && sessions[$0.id] != nil && !$0.archived }
+            recent = unsaved + rows
             for row in rows {
                 persistedRows[row.id] = row
             }

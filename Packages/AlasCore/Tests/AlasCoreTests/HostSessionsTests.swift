@@ -191,6 +191,8 @@ struct HostSessionsTests {
         case recoveryStartsMeanwhile
         /// The host's own view says the owner is being changed as creation ends.
         case ownerClaimedAsCreationEnds
+        /// The agent is disabled while creation waits.
+        case agentDisabledMeanwhile
     }
 
     /// A session is not created where it could not safely run.
@@ -230,6 +232,10 @@ struct HostSessionsTests {
             }
             target = .workspaceCheckout(id: try await fixture.addCheckout(operation: .idle, location: .local))
             refusal = .ownerUnavailable(reason: SessionsAPI.checkpointRecoveryReason)
+        case .agentDisabledMeanwhile:
+            environment.duringRecoveryCheck = { environment.agentsEnabled = false }
+            target = .worktree(fixture.ref)
+            refusal = .agentUnavailable
         case .ownerClaimedAsCreationEnds:
             environment.admitsCreation = false
             target = .workspaceCheckout(id: try await fixture.addCheckout(operation: .idle, location: .local))
@@ -310,6 +316,7 @@ private final class RefusingEnvironment: AlasHostEnvironment {
     var recovering = false
     var localOnlyAgents = false
     var admitsCreation = true
+    var agentsEnabled = true
     /// Runs while creation waits on the recovery check.
     var duringRecoveryCheck: () -> Void = {}
 
@@ -318,7 +325,7 @@ private final class RefusingEnvironment: AlasHostEnvironment {
         return recovering
     }
 
-    func admitsAgent(_ agentID: String, remoteHost: String?) -> Bool { !localOnlyAgents || remoteHost == nil }
+    func admitsAgent(_ agentID: String, remoteHost: String?) -> Bool { agentsEnabled && (!localOnlyAgents || remoteHost == nil) }
 
     func admitsSessionCreation(owner: SessionOwnerID, in core: AlasCoreContext) -> Bool { admitsCreation }
 }

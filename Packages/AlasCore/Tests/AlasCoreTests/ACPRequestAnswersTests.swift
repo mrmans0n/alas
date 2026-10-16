@@ -9,6 +9,7 @@ struct ACPRequestAnswersTests {
         (["a", "b"], false, false),
         (["a", "b"], true, true),
         (["z"], true, false),
+        (["a", "z"], true, false),
         ([], true, false),
     ])
     func questionAnswersFitTheirQuestion(_ selected: [String], _ allowMultiple: Bool, _ accepted: Bool) {

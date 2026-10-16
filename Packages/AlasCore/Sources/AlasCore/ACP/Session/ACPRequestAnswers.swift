@@ -84,8 +84,8 @@ public enum ACPRequestAnswers {
     }
 
     /// The response `answers` give, each question's selection in its option
-    /// order, or nil unless every question has a selection of real options,
-    /// and only one where the question allows one.
+    /// order, or nil unless every question has a selection of its own options
+    /// only, and only one where the question allows one.
     public static func question(_ pending: ACPSession.PendingQuestion, answers: [ACPQuestionAnswer]) -> ACPQuestionResponse? {
         let selectionByQuestion = Dictionary(
             answers.map { ($0.questionId, Set($0.selectedOptionIds)) },
@@ -94,8 +94,11 @@ public enum ACPRequestAnswers {
         var resolved: [ACPQuestionAnswer] = []
         for question in pending.params.questions {
             let selected = selectionByQuestion[question.id] ?? []
-            let ordered = question.options.map(\.id).filter { selected.contains($0) }
-            guard !ordered.isEmpty, question.allowMultiple == true || ordered.count == 1 else { return nil }
+            let offered = question.options.map(\.id)
+            guard !selected.isEmpty, selected.isSubset(of: offered),
+                  question.allowMultiple == true || selected.count == 1
+            else { return nil }
+            let ordered = offered.filter { selected.contains($0) }
             resolved.append(ACPQuestionAnswer(questionId: question.id, selectedOptionIds: ordered))
         }
         return .init(outcome: .answered(answers: resolved))
