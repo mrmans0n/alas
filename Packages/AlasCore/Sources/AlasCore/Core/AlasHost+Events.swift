@@ -27,6 +27,12 @@ public enum HostEvent: Codable, Equatable, Sendable {
     case runRemoved(id: String)
     case sessionChanged(HostSessionSummary)
     case sessionRemoved(owner: SessionOwnerID, id: String)
+    /// What changed in a followed session's transcript.
+    case transcript(owner: SessionOwnerID, id: String, delta: HostTranscriptDelta)
+    /// A followed session's agent waits on `request`.
+    case pendingRequest(owner: SessionOwnerID, id: String, request: HostPendingRequest)
+    /// A followed session's request was answered or withdrawn.
+    case pendingRequestResolved(owner: SessionOwnerID, id: String, requestID: HostPendingRequestID)
     /// Changes were missed: read a new snapshot and subscribe after its cursor.
     case resync
 
@@ -49,6 +55,9 @@ public enum HostEvent: Codable, Equatable, Sendable {
         case .runRemoved(let id): .run(id)
         case .sessionChanged(let summary): .session(owner: summary.owner, id: summary.id)
         case .sessionRemoved(let owner, let id): .session(owner: owner, id: id)
+        case .transcript(let owner, let id, _): .transcript(owner: owner, id: id)
+        case .pendingRequest(let owner, let id, let request): .pendingRequest(owner: owner, id: id, request.id)
+        case .pendingRequestResolved(let owner, let id, let requestID): .pendingRequest(owner: owner, id: id, requestID)
         case .resync: .resync
         }
     }
@@ -61,30 +70,45 @@ enum HostEventKey: Hashable {
     case workspaceCheckout(UUID)
     case run(String)
     case session(owner: SessionOwnerID, id: String)
+    case transcript(owner: SessionOwnerID, id: String)
+    case pendingRequest(owner: SessionOwnerID, id: String, HostPendingRequestID)
     case resync
 }
 
 /// One subscriber's view of the change log. Events not yet read coalesce
 /// per key, so a slow reader gets each thing's latest state; past
 /// `pendingLimit` distinct keys it gets a single `.resync` instead.
+///
+/// Transcript and pending-request events come only for the sessions it
+/// follows. They are worked out when read, from each transcript's change
+/// log, so a slow reader gets one delta per session rather than a backlog.
 @MainActor
 public final class HostSubscription {
     private var pendingKeys: [HostEventKey] = []
     private var pending: [HostEventKey: HostEvent] = [:]
-    private var waiter: CheckedContinuation<[HostEvent]?, Never>?
+    private var waiter: CheckedContinuation<Void, Never>?
     private var isCancelled = false
     private let pendingLimit: Int
     private let onCancel: (HostSubscription) -> Void
+    private let liveSession: (String) -> (SessionOwnerID, ACPSession, ACPSessionManager)?
+    private var followed: [String: FollowedSession] = [:]
+    private var wakeScheduled = false
     /// The log position the pending events reach.
     private var pendingThrough: HostCursor
     /// The log position the events `next()` last returned reach: a client
     /// that read them resumes after it.
     public private(set) var cursor: HostCursor
 
-    init(after cursor: HostCursor, pendingLimit: Int, onCancel: @escaping (HostSubscription) -> Void) {
+    init(
+        after cursor: HostCursor,
+        pendingLimit: Int,
+        liveSession: @escaping (String) -> (SessionOwnerID, ACPSession, ACPSessionManager)? = { _ in nil },
+        onCancel: @escaping (HostSubscription) -> Void
+    ) {
         self.cursor = cursor
         pendingThrough = cursor
         self.pendingLimit = pendingLimit
+        self.liveSession = liveSession
         self.onCancel = onCancel
     }
 
@@ -92,21 +116,68 @@ public final class HostSubscription {
     /// are pending. Nil once cancelled. A subscription has one reader:
     /// calling this while another call is waiting is a programming error.
     public func next() async -> [HostEvent]? {
-        if isCancelled { return nil }
-        if !pendingKeys.isEmpty { return drain() }
-        precondition(waiter == nil, "HostSubscription.next() has one reader at a time")
-        return await withCheckedContinuation { waiter = $0 }
+        while !isCancelled {
+            let events = drain()
+            if !events.isEmpty { return events }
+            precondition(waiter == nil, "HostSubscription.next() has one reader at a time")
+            await withCheckedContinuation { waiter = $0 }
+        }
+        return nil
     }
 
-    /// Stops the subscription; a pending `next()` returns nil.
+    /// Streams the loaded session `sessionID`'s transcript and pending
+    /// requests. The first delta continues from `revision` when the
+    /// transcript can still be served from it, and otherwise resets to its
+    /// newest messages. Following again starts over from `revision`.
+    public func follow(_ sessionID: String, from revision: TranscriptRevision? = nil) throws {
+        guard !isCancelled else { return }
+        guard let (owner, session, manager) = liveSession(sessionID) else { throw SessionRefusal.notFound }
+        // Retained before the old follow lets go, so the log keeps its epoch.
+        let previous = followed[sessionID]
+        followed[sessionID] = FollowedSession(owner: owner, session: session, manager: manager, from: revision) { [weak self] in
+            self?.scheduleWake()
+        }
+        previous?.release()
+        scheduleWake()
+    }
+
+    /// Stops streaming `sessionID`'s transcript and pending requests.
+    public func unfollow(_ sessionID: String) {
+        followed.removeValue(forKey: sessionID)?.release()
+    }
+
+    /// Stops the subscription and releases every followed session; a
+    /// pending `next()` returns nil.
     public func cancel() {
         guard !isCancelled else { return }
         isCancelled = true
         pending.removeAll()
         pendingKeys.removeAll()
-        waiter?.resume(returning: nil)
-        waiter = nil
+        followed.values.forEach { $0.release() }
+        followed.removeAll()
+        wake()
         onCancel(self)
+    }
+
+    isolated deinit {
+        followed.values.forEach { $0.release() }
+    }
+
+    /// Transcript signals fire before the change is stored, so the reader
+    /// wakes on the next turn, when it can read it.
+    private func scheduleWake() {
+        guard !wakeScheduled else { return }
+        wakeScheduled = true
+        Task { @MainActor [weak self] in
+            self?.wakeScheduled = false
+            self?.wake()
+        }
+    }
+
+    private func wake() {
+        let waiter = waiter
+        self.waiter = nil
+        waiter?.resume()
     }
 
     func receive(_ events: [HostEvent], through position: HostCursor) {
@@ -124,19 +195,18 @@ public final class HostSubscription {
                 pending = [.resync: .resync]
             }
         }
-        if let waiter {
-            self.waiter = nil
-            waiter.resume(returning: drain())
-        }
+        wake()
     }
 
     private func drain() -> [HostEvent] {
         cursor = pendingThrough
-        defer {
-            pendingKeys.removeAll()
-            pending.removeAll()
+        var events = pendingKeys.compactMap { pending[$0] }
+        pendingKeys.removeAll()
+        pending.removeAll()
+        for session in followed.values where session.isDirty {
+            events += session.events()
         }
-        return pendingKeys.compactMap { pending[$0] }
+        return events
     }
 }
 
@@ -150,6 +220,8 @@ final class HostEventLog {
     private var subscriptions: [ObjectIdentifier: WeakSubscription] = [:]
     private let retention: Int
     private let pendingLimit: Int
+    /// Finds a loaded session for subscriptions to follow.
+    var liveSession: (String) -> (SessionOwnerID, ACPSession, ACPSessionManager)? = { _ in nil }
 
     init(retention: Int = 1024, pendingLimit: Int = 512) {
         self.retention = retention
@@ -175,7 +247,7 @@ final class HostEventLog {
     /// retained first, or `.resync` when some have been dropped or the
     /// cursor is not one of this log's.
     func subscribe(after: HostCursor) -> HostSubscription {
-        let subscription = HostSubscription(after: after, pendingLimit: pendingLimit) { [weak self] in
+        let subscription = HostSubscription(after: after, pendingLimit: pendingLimit, liveSession: liveSession) { [weak self] in
             self?.subscriptions.removeValue(forKey: ObjectIdentifier($0))
         }
         subscriptions[ObjectIdentifier(subscription)] = WeakSubscription(subscription: subscription)
@@ -228,6 +300,13 @@ final class HostEventSource {
         worktrees = Self.keyed(WorktreesAPI(core: core).list(includingArchived: true))
         runs = Self.byID(RunsAPI(core: core).list())
         sessions = Self.keyed(SessionsAPI(core: core).list())
+        log.liveSession = { [weak core] id in
+            guard let core else { return nil }
+            for (owner, manager) in core.sessionManagers {
+                if let session = manager.liveSession(for: id) { return (owner, session, manager) }
+            }
+            return nil
+        }
         observeInMemoryState()
         renewSessionSignals()
         let store = core.workspaceStore

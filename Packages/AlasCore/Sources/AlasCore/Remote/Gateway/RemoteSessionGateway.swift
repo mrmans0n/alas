@@ -515,7 +515,8 @@ public final class RemoteSessionGateway {
                 lists.worktrees = true
             case .projectChanged, .projectRemoved, .resync:
                 return (true, true, true)
-            case .workspaceCheckoutChanged, .workspaceCheckoutRemoved, .runChanged, .runRemoved:
+            case .workspaceCheckoutChanged, .workspaceCheckoutRemoved, .runChanged, .runRemoved,
+                 .transcript, .pendingRequest, .pendingRequestResolved:
                 break
             }
         }

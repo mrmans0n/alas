@@ -39,6 +39,9 @@ public final class ACPTranscriptChangeLog {
     public func releaseTracking() {
         trackingRefCount = max(0, trackingRefCount - 1)
         if trackingRefCount == 0 {
+            // Untracked changes move no version, so a revision from before
+            // this point would look current; a new epoch makes it stale.
+            epoch += 1
             entries.removeAll()
             prunedThrough = latestVersion
         }
