@@ -185,6 +185,22 @@ struct HostSessionsTests {
         #expect(page.messageCount == count)
     }
 
+    /// A listed session whose stored transcript cannot be read back, here
+    /// because another instance deleted it, is not loaded.
+    @Test func aSessionThatCannotBeReadBackIsNotLoaded() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let manager = try fixture.core.sessionManager(for: fixture.worktree)
+        let session = manager.createSession(agentId: "gemini")
+        await manager.flushAllPersistence()
+        manager.retainSession(id: session.id)
+        manager.releaseSession(id: session.id)
+        #expect(manager.liveSession(for: session.id) == nil)
+        try await manager.persistence.deleteSession(id: session.id)
+
+        await #expect(throws: SessionRefusal.notFound) { try await fixture.host.sessions.load(session.id) }
+    }
+
     /// A follower hears what the session is set to besides its transcript,
     /// and again when that changes.
     @Test func followingStreamsTheSessionState() async throws {

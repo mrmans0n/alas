@@ -167,13 +167,18 @@ extension SessionsAPI {
     }
 
     /// Loads a listed session so it can be followed: a stored one is read
-    /// back from its store, the latest messages first. Loading takes no
-    /// lease; following or driving it is a separate step.
+    /// back from its store, the latest messages first, and refused when that
+    /// read fails. Loading takes no lease; following or driving it is a
+    /// separate step.
     public func load(_ sessionID: String) async throws {
         guard let manager = rowManager(for: sessionID) else { throw SessionRefusal.notFound }
         _ = manager.placeholderSession(id: sessionID)
         await manager.hydrateIfNeeded(id: sessionID)
-        guard manager.liveSession(for: sessionID) != nil else { throw SessionRefusal.notFound }
+        // A transcript that could not be read back is not loaded, whatever
+        // placeholder stands in for it.
+        guard let session = manager.liveSession(for: sessionID), session.hydrationState == .ready else {
+            throw SessionRefusal.notFound
+        }
     }
 
     /// A tool call's full output, which a loaded transcript keeps only for
