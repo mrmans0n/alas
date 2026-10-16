@@ -962,8 +962,13 @@ private struct ACPSessionView: View {
                 return takeNextPromptOffer()
             },
             dismissNextPromptOffer: {
-                if let recap = recapGhostOffer { dismissedRecapNextAction = recap }
-                dismissNextPromptOffer()
+                // Dismissing the recap's next action leaves the model's
+                // suggestion intact so it can take the ghost slot back.
+                if let recap = recapGhostOffer {
+                    dismissedRecapNextAction = recap
+                } else {
+                    dismissNextPromptOffer()
+                }
             },
             onNextPromptStateChange: { environment in
                 // The text view skips the model's gates while it shows the
