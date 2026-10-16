@@ -201,8 +201,9 @@ struct HostSessionsTests {
             Issue.record("expected a snapshot")
             return
         }
-        #expect(try await client.request(.followSession(sessionID: "s", from: nil))
-            == .failure(error: .invalidRequest(reason: "Subscribe before following a session.")))
+        for request in [HostRequest.followSession(sessionID: "s", from: nil), .unfollowSession(sessionID: "s")] {
+            #expect(try await client.request(request) == .failure(error: .invalidRequest(reason: "Subscribe before following a session.")))
+        }
         #expect(try await client.request(.subscribe(after: snapshot.cursor)) == .subscribed)
         guard case .session(let created) = try await client.request(.createSession(
             target: .worktree(fixture.ref), agentID: "gemini", modelID: nil, autoRun: false

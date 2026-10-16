@@ -205,15 +205,20 @@ public final class HostProtocolConnection {
         case .respondToUserInput(let id, let requestID, let answer):
             try await sessions.respondToUserInput(id, requestID: requestID, answer: answer, caller: caller)
         case .followSession(let id, let revision):
-            guard let subscription else { throw HostError.invalidRequest(reason: "Subscribe before following a session.") }
-            try subscription.follow(id, from: revision)
+            try subscribed().follow(id, from: revision)
         case .unfollowSession(let id):
-            subscription?.unfollow(id)
+            try subscribed().unfollow(id)
         }
         return .done
     }
 
     private var sessions: SessionsAPI { host.sessions }
+
+    /// Following acts on the connection's subscription, so it needs one.
+    private func subscribed() throws -> HostSubscription {
+        guard let subscription else { throw HostError.invalidRequest(reason: "Subscribe before following a session.") }
+        return subscription
+    }
 
     /// Forwards the subscription's batches until it ends or another replaces it.
     private func follow(_ next: HostSubscription) {
