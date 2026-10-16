@@ -1360,7 +1360,10 @@ struct ACPSessionDiscoveryTests {
             }
             let b = ACPAgentSessionInfo(sessionId: "b", cwd: "/tmp/wt", index: .init(archived: false))
             let a = ACPAgentSessionInfo(sessionId: "a", cwd: "/tmp/wt", index: .init(archived: false))
-            return try JSONEncoder().encode(ACPSessionListResult(sessions: deleted ? [b] : [a, b]))
+            if (request.params as? ACPSessionListParams)?.cursor == "page-2" {
+                return try JSONEncoder().encode(ACPSessionListResult(sessions: []))
+            }
+            return try JSONEncoder().encode(ACPSessionListResult(sessions: deleted ? [b] : [a, b], nextCursor: "page-2"))
         }
         client.script(method: "session/delete") { _ in
             deleted = true
@@ -1385,6 +1388,12 @@ struct ACPSessionDiscoveryTests {
         #expect(model.sessions.contains { $0.remoteSessionId == "a" })
         // Switching away and back: the agent's pages never list "a" again.
         try await model.setFilter(.init())
+        #expect(model.sessions.contains { $0.remoteSessionId == "a" })
+        // A reconcile does not scan the whole history for a row the agent
+        // deleted: only the first page is read.
+        let sent = client.sent.count
+        await model.reconcile()
+        #expect(!client.sent.dropFirst(sent).contains { ($0.params as? ACPSessionListParams)?.cursor == "page-2" })
         #expect(model.sessions.contains { $0.remoteSessionId == "a" })
         await model.stop()
     }

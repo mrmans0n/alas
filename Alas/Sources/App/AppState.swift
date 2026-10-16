@@ -14656,7 +14656,9 @@ final class AppState {
         title: String
     ) async throws -> (@MainActor () async throws -> Void)? {
         guard let worktree = worktree(withId: worktreeId), let manager = acpManager(for: worktree) else { return nil }
-        let previous = await manager.persistedSessionRow(id: sessionId)
+        // Read so a failure stops here: without the old title there would be
+        // no way back if the agent rename then fails.
+        let previous = try await manager.persistence.loadSession(id: sessionId)
         try await Self.storeACPSessionTitle(title, source: .manual, sessionId: sessionId, manager: manager)
         guard let previous else { return nil }
         return {

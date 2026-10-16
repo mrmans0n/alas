@@ -853,8 +853,9 @@ public final class ACPSessionDiscoveryModel {
         var confirmedGone: Set<String> = []
         var found: [ACPDiscoveredSession] = []
         // Every listed row, also ones loaded with Load more: a missed removal
-        // beyond the first page is settled the same way.
-        let listedIds = Set(sessions.map(\.remoteSessionId))
+        // beyond the first page is settled the same way. Cleanup-retry rows
+        // are left out: the agent deleted them and never lists them again.
+        let listedIds = Set(sessions.map(\.remoteSessionId)).subtracting(cleanupRetryIds)
         let candidates = ACPSessionBrowserReducer.unsettledCandidates(
             firstPage: page.rows, listedBefore: listedIds, rows: sessions
         )
