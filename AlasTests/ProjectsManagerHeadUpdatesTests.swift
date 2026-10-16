@@ -221,7 +221,9 @@ struct ProjectsManagerHeadUpdatesTests {
         #expect(state.revisionChangeGeneration(worktreeID: main.id) == 2)
     }
 
-    @Test func revisionWatcherInvalidatesGGStackCache() async throws {
+    /// `gg sync` records new PR/MR numbers in gg/config.json after its pushes
+    /// already moved refs, so that write alone must reload the stack.
+    @Test func ggConfigWriteInvalidatesGGStackCache() async throws {
         let project = ProjectConfig(
             id: "p1",
             name: "p1",
@@ -231,7 +233,7 @@ struct ProjectsManagerHeadUpdatesTests {
         )
         let main = wt(path: "/repo", branch: "main")
         let gitDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("alas-app-state-watcher-\(UUID().uuidString)/.git")
+            .appendingPathComponent("alas-app-state-gg-config-\(UUID().uuidString)/.git")
         try FileManager.default.createDirectory(at: gitDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: gitDir.deletingLastPathComponent()) }
 
@@ -275,80 +277,18 @@ struct ProjectsManagerHeadUpdatesTests {
         }
 
         state.startProjectGitWatcher(for: project)
-        watcher.processEvents([gitDir.appendingPathComponent("refs/heads/main").path])
-        try await Task.sleep(nanoseconds: 50_000_000)
+        watcher.processEvents([gitDir.appendingPathComponent("gg/config.json").path])
+        // Nothing else bumps the generation for this event: the bump lands
+        // only once the cache invalidation has completed.
+        try await eventually("GG stack cache invalidation") {
+            state.revisionChangeGeneration(worktreeID: main.id) > 0
+        }
 
         _ = try await cache.stack(at: cachePath) {
             await loads.increment()
             return stack
         }
         #expect(await loads.count == 2)
-        state.stopProjectGitWatcher(projectId: project.id)
-    }
-
-    @Test func fetchHeadRevisionDoesNotInvalidateGGStackCache() async throws {
-        let project = ProjectConfig(
-            id: "p1",
-            name: "p1",
-            path: "/repo",
-            color: "blue",
-            addedAt: Date()
-        )
-        let main = wt(path: "/repo", branch: "main")
-        let gitDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("alas-app-state-fetch-head-\(UUID().uuidString)/.git")
-        try FileManager.default.createDirectory(at: gitDir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: gitDir.deletingLastPathComponent()) }
-
-        let watcher = ProjectGitWatcher(
-            repoPath: URL(fileURLWithPath: project.path),
-            resolvedGitDir: gitDir,
-            resolvedWorktreeRoot: main.path,
-            headDebounceInterval: 0.05,
-            headDebounceMaxWait: 0.2,
-            topologyDebounceInterval: 0.05,
-            topologyDebounceMaxWait: 0.2,
-            startStreamOverride: { _, _ in }
-        )
-        let cache = GGStackCache()
-        let state = AppState(
-            store: TestPersistenceStore(ProjectsFile(projects: [project]), AppConfig.defaults),
-            projectGitWatcherFactory: { _ in watcher },
-            ggStackCache: cache
-        )
-        seed(state.projectsManager, projectId: project.id, [main])
-
-        actor LoadCounter {
-            var count = 0
-            func increment() { count += 1 }
-        }
-        let loads = LoadCounter()
-        let cachePath = gitDir.appendingPathComponent("worktree")
-        let stack = GGStack(
-            name: "stack",
-            base: "main",
-            totalCommits: 1,
-            syncedCommits: 0,
-            currentPosition: 1,
-            behindBase: 0,
-            entries: []
-        )
-
-        _ = try await cache.stack(at: cachePath) {
-            await loads.increment()
-            return stack
-        }
-
-        state.startProjectGitWatcher(for: project)
-        watcher.processEvents([gitDir.appendingPathComponent("FETCH_HEAD").path])
-        try await Task.sleep(nanoseconds: 50_000_000)
-
-        _ = try await cache.stack(at: cachePath) {
-            await loads.increment()
-            return stack
-        }
-        #expect(state.revisionChangeGeneration(worktreeID: main.id) > 0)
-        #expect(await loads.count == 1)
         state.stopProjectGitWatcher(projectId: project.id)
     }
 

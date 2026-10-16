@@ -149,6 +149,34 @@ struct ProjectGitWatcherTests {
         #expect(topologyFires == 1)
     }
 
+    /// Stack reloads hang off `onStackRevisionChanged`. FETCH_HEAD moves no
+    /// refs, so it must not reload the stack; `gg sync` records new PR/MR
+    /// numbers in gg/config.json after its pushes moved refs, so it must.
+    @Test(arguments: [
+        ("refs/remotes/origin/main", 1, 1),
+        ("FETCH_HEAD", 1, 0),
+        ("gg/config.json", 0, 1),
+    ])
+    func revisionAndStackCallbacksFollowTheEventKind(
+        eventPath: String,
+        expectedRevisionFires: Int,
+        expectedStackFires: Int
+    ) throws {
+        let (gitDir, _) = try setupRepo()
+        defer { try? FileManager.default.removeItem(at: gitDir.deletingLastPathComponent().deletingLastPathComponent()) }
+
+        let watcher = makeWatcher(gitDir: gitDir)
+        var revisionFires = 0
+        var stackFires = 0
+        watcher.onRevisionChanged = { revisionFires += 1 }
+        watcher.onStackRevisionChanged = { stackFires += 1 }
+
+        watcher.processEvents([gitDir.appendingPathComponent(eventPath).path])
+
+        #expect(revisionFires == expectedRevisionFires)
+        #expect(stackFires == expectedStackFires)
+    }
+
     @Test func mixedBatchClearsHeadInFavorOfTopology() async throws {
         let (gitDir, _) = try setupRepo()
         defer { try? FileManager.default.removeItem(at: gitDir.deletingLastPathComponent().deletingLastPathComponent()) }

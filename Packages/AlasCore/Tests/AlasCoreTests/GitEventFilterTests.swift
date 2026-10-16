@@ -66,6 +66,8 @@ struct GitEventFilterTests {
         let cases = [
             "/repo/.git/objects/pack/pack-abc.pack",
             "/repo/.git/worktrees/feat/locked",
+            "/repo/.git/gg/config.tmp",
+            "/repo/.git/gg/operations/op_0000000000001_abc.json",
         ]
         for path in cases {
             let cat = GitEventFilter.classify(eventPath: path, gitDir: gitDir, worktreeRoot: worktreeRoot)
@@ -105,6 +107,14 @@ struct GitEventFilterTests {
             gitDir: gitDir,
             worktreeRoot: worktreeRoot
         ) == .revisionChange)
+    }
+
+    @Test func ggConfigUpdateIsStackMetadataChange() {
+        #expect(GitEventFilter.classify(
+            eventPath: "/repo/.git/gg/config.json",
+            gitDir: gitDir,
+            worktreeRoot: worktreeRoot
+        ) == .stackMetadataChange)
     }
 
     @Test func shallowBoundaryUpdateIsRevisionChange() {
