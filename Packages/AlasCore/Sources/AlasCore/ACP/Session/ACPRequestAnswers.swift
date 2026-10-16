@@ -90,7 +90,9 @@ public enum ACPRequestAnswers {
         // One answer per question asked, and none for a question it did not ask.
         let answered = answers.map(\.questionId)
         guard answered.count == Set(answered).count,
-              Set(answered) == Set(pending.params.questions.map(\.id))
+              Set(answered) == Set(pending.params.questions.map(\.id)),
+              // An option picked twice is a malformed answer, not one pick.
+              answers.allSatisfy({ $0.selectedOptionIds.count == Set($0.selectedOptionIds).count })
         else { return nil }
         let selectionByQuestion = Dictionary(
             answers.map { ($0.questionId, Set($0.selectedOptionIds)) },
