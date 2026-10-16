@@ -6,10 +6,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.21.7] - 2026-10-16
+
+### ✨ Features
+
+- Browse live Claude and Codex sessions across linked worktrees, filter active and archived sessions, and rename, archive, or unarchive sessions when supported by the adapter (#2052).
+- Render review feedback, Ship requests, and shepherd turns as structured prompt cards with live comment status and navigation actions (#2054).
+- Move session recaps into a compact composer strip and offer the next action as an insertable ghost prompt (#2062).
+- Normalize and validate shared Workspace branch names before advancing to checkout review (#2057).
+- Expose exact run, script, worktree, and project identity to native and headless scripts through plugin API 16 (#2055).
+
 ### 🐛 Fixes
 
 - Keep the built-in Alas MCP connected to agents that survive an Alas restart. With the HTTP transport, the server now comes back at the address the running agent already uses; an agent left with an outdated Alas MCP is restarted once idle instead of silently losing its Alas tools. HTTP servers now exit with the app, and ones leaked by earlier versions are cleaned up.
 - Show pull/merge requests created by a terminal or agent `gg sync` in the stacked-diffs Changes tab right away, instead of only after a later ref or branch change reloads the stack.
+- Finish a goal-popover update when the agent publishes the requested objective, rather than waiting for its whole turn to end (#2053).
+- Preserve renamed session titles when an older session-list refresh completes (#2061).
+
+### 🏗️ Internal
+
+- Add session creation, control, request answers, transcript following, and pending-request events to `AlasHost` and the host protocol (#2050, #2056, #2058).
+- Route Remote session tabs through a presenter and move session operations, creation, lists, and worktree inspection from app wrappers into the host and core (#2060, #2061, #2064, #2065, #2066).
 
 ## [0.21.6] - 2026-10-16
 
