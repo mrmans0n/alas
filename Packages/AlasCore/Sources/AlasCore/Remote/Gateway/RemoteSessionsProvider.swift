@@ -11,17 +11,6 @@ public protocol RemoteSessionsProvider: AnyObject {
     /// such as a session tab opening or closing.
     var sessionListChanges: ChangeSignal<Void>? { get }
     func sessionSummaries() async -> [RemoteSessionSummary]
-    func session(for id: String) -> ACPSession?
-    func permissionPolicy(for id: String) -> ACPPermissionPolicy?
-    func hydrateIfNeeded(id: String) async
-    func answerQuestion(for id: String, requestId: JSONRPCID, _ response: ACPQuestionResponse)
-    func respondToPlan(for id: String, requestId: JSONRPCID, _ response: ACPCursorPlanResponse)
-    func respondToUserInput(for id: String, token: UUID, action: ACPUserInputAction)
-    func fullToolCallContent(sessionId: String, toolCallId: String) async -> String?
-    func isWriter(for id: String) -> Bool
-    /// Projection of the session's config for the `sessionConfig` wire message,
-    /// or nil if the session isn't live.
-    func sessionConfig(for id: String) -> RemoteSessionConfig?
     /// Serves peer console traffic; nil when this app does not.
     var peerConsoleHost: PeerConsoleHost? { get }
 }
@@ -30,7 +19,4 @@ extension RemoteSessionsProvider {
     public var peerConsoleHost: PeerConsoleHost? { nil }
     public var eventHost: AlasHost? { nil }
     public var sessionListChanges: ChangeSignal<Void>? { nil }
-
-    public func respondToUserInput(for id: String, token: UUID, action: ACPUserInputAction) {}
-    public func respondToPlan(for id: String, requestId: JSONRPCID, _ response: ACPCursorPlanResponse) {}
 }

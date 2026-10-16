@@ -27,12 +27,6 @@ public final class RemoteSessionGateway {
     private let send: (RemoteServerMessage) -> Void
     /// Console channel of an authenticated Alas peer; nil for browsers.
     private let consoleLink: PeerConsoleLink?
-    private var subscriptions: [String: [ChangeSubscription]] = [:]
-    private var configSubscriptions: [String: ChangeSubscription] = [:]
-    private var configCoalesce: [String: Task<Void, Never>] = [:]
-    private var lastConfig: [String: RemoteSessionConfig] = [:]
-    private var lastQueue: [String: [RemoteQueuedPrompt]] = [:]
-    private var coalesce: [String: Task<Void, Never>] = [:]
     private var sessionListRefresh: Task<Void, Never>?
     private var sessionListGeneration = 0
     private var worktreeListRefresh: Task<Void, Never>?
@@ -42,13 +36,14 @@ public final class RemoteSessionGateway {
     private var wantsWorktreeList = false
     private var wantsProjectList = false
     private var hostSubscription: HostSubscription?
+    /// Where the client's subscribed sessions are followed.
+    private var follows: HostSubscription?
     private var providerListChanges: ChangeSubscription?
     private var projectListRefresh: Task<Void, Never>?
     private var projectListGeneration = 0
     private var branchListRefresh: Task<Void, Never>?
     private var branchListGeneration = 0
     private var syncStates: [String: RemoteTranscriptSync] = [:]
-    private var trackedSessions: Set<String> = []
     // Per-session request id of the permission/question prompt we last surfaced,
     // so we can tell the client to dismiss it if it gets resolved elsewhere.
     private var lastPermissionReq: [String: Int] = [:]
@@ -150,45 +145,40 @@ public final class RemoteSessionGateway {
                 send(.createSessionFailed(message: message))
             }
         case .subscribe(let id):
-            await provider.hydrateIfNeeded(id: id)
-            guard let session = provider.session(for: id) else {
+            // A listed session the Mac has not opened is read back from its
+            // store first, as opening it there does.
+            guard let sessions, (try? await sessions.load(id)) != nil, let follows = followSubscription() else {
                 send(.sessionClosed(sessionId: id))
                 return
             }
-            beginTracking(id: id, session: session)
-            await sendSnapshot(id: id, session: session)
-            if let cfg = provider.sessionConfig(for: id) {
-                send(.sessionConfig(cfg))
+            // A new follow resets: the client gets a snapshot, its pending
+            // requests, config and queue.
+            syncStates[id] = RemoteTranscriptSync()
+            do {
+                try follows.follow(id)
+            } catch {
+                syncStates[id] = nil
+                send(.sessionClosed(sessionId: id))
             }
-            sendQueueState(id: id, session: session, force: true)
-            observe(id: id, session: session)
         case .unsubscribe(let id):
-            subscriptions[id] = nil
-            configSubscriptions[id] = nil
-            configCoalesce[id]?.cancel()
-            configCoalesce[id] = nil
-            lastConfig[id] = nil
-            lastQueue[id] = nil
-            coalesce[id]?.cancel()
-            coalesce[id] = nil
+            follows?.unfollow(id)
             lastPermissionReq[id] = nil
             lastQuestionReq[id] = nil
             lastElicitationReq[id] = nil
             lastPlanReq[id] = nil
-            endTracking(id: id)
             syncStates[id] = nil
         case .permissionDecision(let id, let requestId, let optionId, let persistScope):
             await applyDecision(sessionId: id, requestId: requestId, optionId: optionId, persistScope: persistScope)
         case .questionAnswer(let id, let requestId, let answers):
-            applyQuestionAnswer(sessionId: id, requestId: requestId, answers: answers)
+            await applyQuestionAnswer(sessionId: id, requestId: requestId, answers: answers)
         case .visualAidResponse(let sessionId, let visualId, let action, let selectedOptionIds, let note, let requestId):
             await handleVisualAidResponse(
                 sessionId: sessionId, visualId: visualId, action: action,
                 selectedOptionIds: selectedOptionIds, note: note, requestId: requestId)
         case .planResponse(let id, let requestId, let action, let reason):
-            applyPlanResponse(sessionId: id, requestId: requestId, action: action, reason: reason)
+            await applyPlanResponse(sessionId: id, requestId: requestId, action: action, reason: reason)
         case .elicitationResponse(let id, let requestId, let action, let content):
-            applyElicitationResponse(
+            await applyElicitationResponse(
                 sessionId: id,
                 requestId: requestId,
                 action: action,
@@ -196,15 +186,12 @@ public final class RemoteSessionGateway {
             )
         case .takeOver(let id):
             try? await sessions?.takeOver(id, caller: hostCaller)
-            // Takeover seizes the writer lease synchronously but mostly mutates
-            // lease/agent state, not the transcript — so the objectWillChange
-            // delta that normally carries `canDrive` may never fire on an idle
-            // session. Push a snapshot now so the client learns canDrive=true
-            // immediately and the composer unlocks (otherwise the take-over
-            // button stays up and sendPrompt stays blocked until some unrelated
-            // transcript mutation happens to occur).
-            if let session = provider.session(for: id) {
-                await sendSnapshot(id: id, session: session)
+            // Takeover mostly changes the lease, not the transcript: following
+            // again resets, so the client gets a snapshot that says it can
+            // drive and its composer unlocks at once.
+            if syncStates[id] != nil, let follows {
+                syncStates[id] = RemoteTranscriptSync()
+                try? follows.follow(id)
             }
         case .openSessionTab(let id):
             reportTabAction(await presenter?.openSessionTab(for: id) ?? .failure("Opening session tabs is unavailable."), sessionId: id)
@@ -295,42 +282,32 @@ public final class RemoteSessionGateway {
             refreshSessionList()
         case .fetchOlder(let id, let beforeIndex, let limit):
             // Ignore pages requested before a snapshot established sync state.
-            guard let session = provider.session(for: id), let state = syncStates[id] else { return }
+            guard let sessions, let state = syncStates[id], state.snapshotSent else { return }
             let clamped = min(max(limit, RemoteTranscriptSync.pageLimitRange.lowerBound),
                               RemoteTranscriptSync.pageLimitRange.upperBound)
-            // A concurrent send (snapshot OR ordinary same-epoch delta) can
-            // supersede this page mid-serialize the same way it supersedes a
-            // dirty delta — see the capturedGeneration comment below. Unlike
-            // a dropped delta/snapshot, though, the client has no fallback
-            // recovery for a silently-dropped page: only a snapshot resets
-            // its "loading earlier messages" state, and an ordinary delta
-            // (the common case here) does not, so simply returning would
-            // leave the client stuck showing a spinner forever. Retry
-            // instead — bounded so pathological continuous churn can't spin
-            // forever either; a truncated tool call's content fetched by an
-            // earlier attempt stays cached, so a retry is cheap.
+            // A snapshot or delta can supersede this page while a truncated
+            // tool call's content is fetched. The client has no other way out
+            // of its "loading earlier messages" state, so retry, bounded, rather
+            // than drop it; content an earlier attempt fetched stays cached.
             var attempt = 0
             while true {
-                let count = session.transcript.messages.count
-                let hi = min(max(beforeIndex, 0), count)
-                let lo = max(0, hi - clamped)
-                // Capture the generation BEFORE the async serialize below —
-                // not just the epoch, since a same-epoch concurrent
-                // snapshot (e.g. takeOver, or a client resubscribe with no
-                // structural change) also supersedes this page without
-                // moving the epoch. If a snapshot lands on this same
-                // session while a truncated tool call's full content is
-                // being fetched, stamping the page with state read AFTER
-                // the await would make it look current and be wrongly
-                // accepted instead of dropped.
+                guard let page = try? sessions.transcriptPage(id, before: beforeIndex, limit: clamped) else { return }
+                // A page from another epoch is labelled with it, so the client
+                // drops it; the follow's reset follows.
+                if page.revision.epoch == state.epoch {
+                    for message in page.messages {
+                        if let decoded = Self.decode(message) { state.messages[message.index] = decoded }
+                    }
+                }
+                let hi = min(max(beforeIndex, 0), page.messageCount)
                 let capturedGeneration = state.generation
-                let wire = await wireTail(id: id, session: session, indices: lo..<hi)
+                let wire = await wireTail(id: id, state: state, indices: page.messages.map(\.index))
                 attempt += 1
                 guard state.generation == capturedGeneration || attempt > Self.maxFetchOlderAttempts else {
                     continue
                 }
                 send(.transcriptPage(sessionId: id,
-                                     epoch: state.epoch,
+                                     epoch: page.revision.epoch,
                                      firstIndex: wire.first?.index ?? hi,
                                      messages: wire))
                 break
@@ -489,17 +466,6 @@ public final class RemoteSessionGateway {
     /// whatever was last computed anyway — the client must always get a
     /// response, never an unbounded wait.
     private static let maxFetchOlderAttempts = 5
-
-    private func beginTracking(id: String, session: ACPSession) {
-        guard !trackedSessions.contains(id) else { return }
-        trackedSessions.insert(id)
-        session.transcript.changeLog.retainTracking()
-    }
-
-    private func endTracking(id: String) {
-        guard trackedSessions.remove(id) != nil else { return }
-        provider.session(for: id)?.transcript.changeLog.releaseTracking()
-    }
 
     /// The lists `events` make stale. Session rows carry their worktree and
     /// project, so changes to those refresh the session list too.
@@ -720,90 +686,117 @@ public final class RemoteSessionGateway {
         projectListRefresh = nil
         branchListRefresh?.cancel()
         branchListRefresh = nil
-        subscriptions.removeAll()
-        configSubscriptions.removeAll()
-        configCoalesce.values.forEach { $0.cancel() }
-        configCoalesce.removeAll()
-        lastConfig.removeAll()
-        lastQueue.removeAll()
-        coalesce.values.forEach { $0.cancel() }
-        coalesce.removeAll()
+        // Ends every follow, releasing the transcripts it held.
+        follows?.cancel()
+        follows = nil
         lastPermissionReq.removeAll()
         lastQuestionReq.removeAll()
         lastElicitationReq.removeAll()
-        for id in trackedSessions {
-            provider.session(for: id)?.transcript.changeLog.releaseTracking()
-        }
-        trackedSessions.removeAll()
+        lastPlanReq.removeAll()
         syncStates.removeAll()
     }
 
-    // MARK: snapshot / delta
+    // MARK: following
 
-    private func sendSnapshot(id: String, session: ACPSession) async {
-        let state = syncState(for: id)
-        let log = session.transcript.changeLog
-        let count = session.transcript.messages.count
-        let first = max(0, count - RemoteTranscriptSync.tailWindow)
-        // Capture epoch/version BEFORE the async serialize, but do NOT yet
-        // commit sentVersion to `state` — see below. Bumping `generation`
-        // here — even when `epoch` itself is unchanged (e.g. a same-epoch
-        // takeOver or client resubscribe) — lets a concurrently-suspended
-        // delta/page detect that THIS snapshot already superseded it.
-        state.epoch = log.epoch
-        // Defer committing sentVersion, matching the dirty-delta fix above:
-        // writing it now would make the change log treat everything dirty
-        // up to this point as "already sent" even if this snapshot ends up
-        // discarded below (superseded by a same-epoch dirty delta that
-        // raced in during the await) — the pre-snapshot dirty indices would
-        // then be silently absent from both sends, never re-offered, since
-        // sentVersion already covers them. Only commit once we know this
-        // snapshot is actually going out.
-        let newSentVersion = log.latestVersion
-        // Also defer resetting revision — the same hazard as sentVersion,
-        // but on the send side instead of the change-log side. A `.none`
-        // content-free delta doesn't participate in the generation ticket
-        // (it has no reason to — no message content raced it), so it can
-        // still complete and send WHILE this snapshot is suspended, bumping
-        // `state.revision` past 0. If we'd already reset it to 0 here, and
-        // this snapshot then wins (generation unaffected by a `.none`
-        // send), its wire payload hardcodes `revision: 0` while
-        // `state.revision` is left at whatever the intervening delta bumped
-        // it to — the server's internal counter desyncs from what it
-        // actually told the client, and every subsequent delta fails the
-        // client's `revision === transcriptMeta.revision + 1` check until
-        // another full resync happens. Reset it atomically with the send.
+    /// The host subscription this gateway follows its client's sessions on,
+    /// apart from the list one, which rate-limits its reads.
+    private func followSubscription() -> HostSubscription? {
+        if let follows { return follows }
+        guard let host = provider.eventHost else { return nil }
+        let subscription = host.subscribe()
+        follows = subscription
+        Task { @MainActor [weak self] in
+            while let events = await subscription.next() {
+                guard let self else { return }
+                await receiveFollowed(events)
+                // Streaming chunks that land meanwhile coalesce into one delta.
+                try? await Task.sleep(nanoseconds: Self.coalesceNanos)
+            }
+        }
+        return subscription
+    }
+
+    /// Sends what the follow reports, in the order a client expects: the
+    /// transcript, the requests waiting on it, then config and queue.
+    private func receiveFollowed(_ events: [HostEvent]) async {
+        var previousStates: [String: HostSessionState?] = [:]
+        for case .sessionState(_, let id, let state) in events {
+            guard let sync = syncStates[id] else { continue }
+            if previousStates[id] == nil { previousStates[id] = .some(sync.sessionState) }
+            sync.sessionState = state
+        }
+        var transcriptSent: Set<String> = []
+        for case .transcript(_, let id, let delta) in events {
+            guard syncStates[id] != nil else { continue }
+            await applyTranscript(delta, id: id)
+            transcriptSent.insert(id)
+        }
+        for event in events {
+            switch event {
+            case .pendingRequest(_, let id, let request): surfaceRequest(request, sessionId: id)
+            case .pendingRequestResolved(_, let id, let requestID): resolveRequest(requestID, sessionId: id)
+            default: break
+            }
+        }
+        for (id, previous) in previousStates {
+            guard let sync = syncStates[id], let state = sync.sessionState else { continue }
+            if previous?.config != state.config { send(.sessionConfig(state.config)) }
+            if previous?.queue != state.queue { send(.queueState(sessionId: id, items: state.queue)) }
+            // Who drives the session, or what it can stop, changed without
+            // the transcript: a content-free delta carries it.
+            if let previous, sync.snapshotSent, !transcriptSent.contains(id),
+               previous.isWriter != state.isWriter
+                || previous.hasCancellableBackgroundWork != state.hasCancellableBackgroundWork {
+                sendStateDelta(id: id, state: sync)
+            }
+        }
+    }
+
+    private func applyTranscript(_ delta: HostTranscriptDelta, id: String) async {
+        guard let state = syncStates[id] else { return }
+        if delta.reset { state.messages.removeAll() }
+        for message in delta.messages {
+            if let decoded = Self.decode(message) { state.messages[message.index] = decoded }
+        }
+        state.messages = state.messages.filter { $0.key < delta.messageCount }
+        state.messageCount = delta.messageCount
+        state.streamingState = delta.streamingState
+        if delta.reset {
+            await sendSnapshot(id: id, state: state, epoch: delta.revision.epoch)
+        } else {
+            await sendDelta(id: id, state: state, changed: delta.messages.map(\.index))
+        }
+    }
+
+    private func canDrive(_ state: RemoteTranscriptSync, id: String) -> Bool {
+        state.sessionState?.isWriter ?? sessions?.isWriter(id) ?? false
+    }
+
+    private func sendSnapshot(id: String, state: RemoteTranscriptSync, epoch: Int) async {
+        state.epoch = epoch
+        // Claimed before the wire is built: a delta or snapshot that claims a
+        // later generation meanwhile read fresher state, so this one is dropped.
         state.generation += 1
         let capturedGeneration = state.generation
-        let superseded = Self.supersededBackgroundRows(in: session.transcript.messages)
-        let wire = await wireTail(id: id, session: session, indices: first..<count, superseded: superseded)
-        // If another send (a concurrent snapshot or dirty delta) claimed a
-        // later generation while this one was suspended fetching truncated
-        // tool-call content, THIS snapshot's payload is now stale relative
-        // to what the client already has or is about to receive. Sending it
-        // anyway would roll the client back — snapshots are applied
-        // unconditionally client-side (no epoch/revision ordering check),
-        // unlike deltas/pages. Discard; whatever claimed the later
-        // generation read fresher state and is authoritative.
-        if state.generation == capturedGeneration {
-            state.sentVersion = newSentVersion
-            state.revision = 0
-            state.sentBackgroundWorkCancellable = session.hasCancellableBackgroundWork
-            state.sentSupersededBackgroundRows = superseded
-            send(.transcriptSnapshot(sessionId: id,
-                                     streamingState: Self.stateString(session.transcript.streamingState),
-                                     canDrive: provider.isWriter(for: id),
-                                     messages: wire,
-                                     firstIndex: wire.first?.index ?? count,
-                                     totalCount: count,
-                                     epoch: state.epoch,
-                                     revision: 0,
-                                     hasCancellableBackgroundWork: session.hasCancellableBackgroundWork))
-        }
-        emitPendingPermissionIfAny(id: id, session: session)
-        emitPendingQuestionIfAny(id: id, session: session)
-        emitPendingPlanIfAny(id: id, session: session)
-        emitPendingElicitationIfAny(id: id, session: session)
+        let superseded = Self.supersededBackgroundRows(in: state.messages)
+        let wire = await wireTail(id: id, state: state, indices: state.messages.keys.sorted(), superseded: superseded)
+        // A resubscribe or takeover that followed again meanwhile replaced
+        // this state, and its own snapshot is the current one.
+        guard state.generation == capturedGeneration, syncStates[id] === state else { return }
+        let cancellable = state.sessionState?.hasCancellableBackgroundWork ?? false
+        state.revision = 0
+        state.snapshotSent = true
+        state.sentBackgroundWorkCancellable = cancellable
+        state.sentSupersededBackgroundRows = superseded
+        send(.transcriptSnapshot(sessionId: id,
+                                 streamingState: Self.stateString(state.streamingState),
+                                 canDrive: canDrive(state, id: id),
+                                 messages: wire,
+                                 firstIndex: wire.first?.index ?? state.messageCount,
+                                 totalCount: state.messageCount,
+                                 epoch: state.epoch,
+                                 revision: 0,
+                                 hasCancellableBackgroundWork: cancellable))
     }
 
     private func syncState(for id: String) -> RemoteTranscriptSync {
@@ -813,162 +806,70 @@ public final class RemoteSessionGateway {
         return s
     }
 
-    private func observe(id: String, session: ACPSession) {
-        // Replace any existing subscription / pending coalesce for this id so a
-        // re-subscribe can't leave an orphaned timer firing one stray delta.
-        subscriptions[id]?.forEach { $0.cancel() }
-        coalesce[id]?.cancel()
-        // The transcript's `willChange` fires on any `@Tracked` mutation (new
-        // message, pending permission). Streaming chunks that grow an existing
-        // row send only `streamingTicks`.
-        let onChange: () -> Void = { [weak self, weak session] in
-            guard let self, let session else { return }
-            // Coalesce bursts of streaming chunks into one delta.
-            self.coalesce[id]?.cancel()
-            self.coalesce[id] = Task { @MainActor [weak self, weak session] in
-                try? await Task.sleep(nanoseconds: Self.coalesceNanos)
-                guard !Task.isCancelled, let self, let session else { return }
-                await self.sendDelta(id: id, session: session)
-            }
-        }
-        subscriptions[id] = [
-            session.transcript.willChange.observe(onChange),
-            session.transcript.streamingTicks.observe(onChange),
-        ]
-        // Re-emit sessionConfig when the session's config publishers change.
-        // ACPSession.willChange fires for ANY @Tracked change (agentState,
-        // queue, etc.), not just config — and BEFORE the value settles. Coalesce
-        // a run-loop turn's worth of fires into one next-tick read (zero-delay,
-        // mirroring the transcript coalesce above) and dedupe against the last
-        // config so non-config churn never reaches the wire.
-        configSubscriptions[id]?.cancel()
-        configCoalesce[id]?.cancel()
-        configSubscriptions[id] = session.willChange.observe { [weak self, weak session] in
-            guard let self, let session else { return }
-            self.configCoalesce[id]?.cancel()
-            self.configCoalesce[id] = Task { @MainActor [weak self, weak session] in
-                guard !Task.isCancelled, let self, let session else { return }
-                // Same publisher, independently deduped: ACPSession's
-                // willChange fires for queue mutations too, and the
-                // queue changes far more often than the config does.
-                self.sendQueueState(id: id, session: session)
-                if self.syncStates[id]?.sentBackgroundWorkCancellable != session.hasCancellableBackgroundWork {
-                    await self.sendDelta(id: id, session: session)
-                }
-                let cfg = RemoteSessionConfigProjection.config(sessionId: id, session: session)
-                guard self.lastConfig[id] != cfg else { return }
-                self.lastConfig[id] = cfg
-                self.send(.sessionConfig(cfg))
-            }
-        }
-    }
-
     /// Viewers update their config optimistically. When the host refuses or
-    /// ignores a config verb nothing changes, so the observation-driven
-    /// emission never fires; re-send the authoritative config so the viewer
-    /// reverts. Recording it in `lastConfig` keeps the coalesced emission from
-    /// sending a duplicate.
+    /// ignores a config verb nothing changes, so no state reaches the follow;
+    /// re-send the last config so the viewer reverts.
     private func resendConfig(id: String) {
-        guard let cfg = provider.sessionConfig(for: id) else { return }
-        lastConfig[id] = cfg
-        send(.sessionConfig(cfg))
+        guard let config = syncStates[id]?.sessionState?.config else { return }
+        send(.sessionConfig(config))
     }
 
-    /// Emits an incremental delta: only messages the change log marked
-    /// dirty since the last send. Structural transcript changes (prepend,
-    /// removal, wholesale replacement) resync via a fresh tail snapshot.
-    private func sendDelta(id: String, session: ACPSession) async {
-        guard let state = syncStates[id] else { return }
-        let log = session.transcript.changeLog
-        switch log.changes(since: state.sentVersion) {
-        case .resync:
-            await sendSnapshot(id: id, session: session)
+    /// A delta with no messages, for a change of state alone.
+    private func sendStateDelta(id: String, state: RemoteTranscriptSync) {
+        let cancellable = state.sessionState?.hasCancellableBackgroundWork ?? false
+        state.revision += 1
+        state.sentBackgroundWorkCancellable = cancellable
+        send(.transcriptDelta(sessionId: id,
+                              streamingState: Self.stateString(state.streamingState),
+                              canDrive: canDrive(state, id: id),
+                              upserts: [],
+                              epoch: state.epoch,
+                              revision: state.revision,
+                              hasCancellableBackgroundWork: cancellable))
+    }
+
+    /// Sends the messages the follow reported changed, and the background
+    /// task rows a newer snapshot of the same task retired.
+    private func sendDelta(id: String, state: RemoteTranscriptSync, changed: [Int]) async {
+        guard state.snapshotSent else { return }
+        let superseded = Self.supersededBackgroundRows(in: state.messages)
+        let indices = Set(changed).union(superseded.symmetricDifference(state.sentSupersededBackgroundRows))
+            .filter { state.messages[$0] != nil }
+            .sorted()
+        guard !indices.isEmpty else {
+            sendStateDelta(id: id, state: state)
             return
-        case .none:
-            // No transcript content changed — this tick was a state flip
-            // (streamingState / pending prompt). Send a content-free delta
-            // so the client still tracks state.
+        }
+        guard indices.count <= RemoteTranscriptSync.dirtyResnapshotThreshold else {
+            // Cheaper as a fresh snapshot: following again resets.
+            syncStates[id] = RemoteTranscriptSync()
+            try? follows?.follow(id)
+            return
+        }
+        // Claimed before the wire is built, as a snapshot does: two
+        // overlapping deltas must not send out of order.
+        state.generation += 1
+        let capturedGeneration = state.generation
+        // A dirty tool call's stored content may have grown past the cached copy.
+        for index in indices {
+            if case .toolCall(let call)? = state.messages[index] { state.invalidateToolContent(call.toolCallId) }
+        }
+        let batches = await wireBatches(id: id, state: state, indices: indices, superseded: superseded)
+        guard state.generation == capturedGeneration, syncStates[id] === state else { return }
+        state.sentSupersededBackgroundRows = superseded
+        let cancellable = state.sessionState?.hasCancellableBackgroundWork ?? false
+        // Sent without suspension, each frame with the next revision.
+        for wire in batches {
             state.revision += 1
-            state.sentBackgroundWorkCancellable = session.hasCancellableBackgroundWork
+            state.sentBackgroundWorkCancellable = cancellable
             send(.transcriptDelta(sessionId: id,
-                                  streamingState: Self.stateString(session.transcript.streamingState),
-                                  canDrive: provider.isWriter(for: id),
-                                  upserts: [],
+                                  streamingState: Self.stateString(state.streamingState),
+                                  canDrive: canDrive(state, id: id),
+                                  upserts: wire,
                                   epoch: state.epoch,
                                   revision: state.revision,
-                                  hasCancellableBackgroundWork: session.hasCancellableBackgroundWork))
-        case .dirty(let dirtyIndices):
-            let superseded = Self.supersededBackgroundRows(in: session.transcript.messages)
-            // Appending a task snapshot also retires its earlier positional
-            // rows, even though the change log only dirtied the new index.
-            let indices = Set(dirtyIndices).union(superseded.symmetricDifference(state.sentSupersededBackgroundRows)).sorted()
-            guard indices.count <= RemoteTranscriptSync.dirtyResnapshotThreshold else {
-                await sendSnapshot(id: id, session: session)
-                return
-            }
-            // Capture — but do NOT yet commit — the version this delta will
-            // cover. Committing it now (before the await) would make the
-            // change log treat `indices` as "already sent" even if this
-            // delta ends up discarded below: a later dirty mutation would
-            // then compute `changes(since:)` against an already-advanced
-            // sentVersion and never re-offer these indices, silently losing
-            // them until a full resync. Only write it once we know we're
-            // actually sending (see the guard below).
-            let newSentVersion = log.latestVersion
-            // Claim a generation for this send BEFORE the async serialize
-            // below — not just on sendSnapshot. Two overlapping dirty
-            // deltas can race the same way a delta and a snapshot can: a
-            // still-running (cancelled-but-not-stopped) coalesce Task can
-            // suspend on a tool-content fetch while a LATER mutation spawns
-            // its own coalesce Task that completes and sends first. Without
-            // bumping generation here too, the earlier delta would resume,
-            // pass an unchanged-generation check, and send its now-stale
-            // content at a higher revision — rolling the client back after
-            // it already received the newer delta. Bumping on every send
-            // attempt (snapshot OR dirty) makes generation a strict
-            // "did anyone else claim a send after me" ticket.
-            state.generation += 1
-            let capturedGeneration = state.generation
-            // A dirty tool call's persisted content may have grown past the
-            // cached copy — drop it so serialization re-fetches.
-            for index in indices where session.transcript.messages.indices.contains(index) {
-                if case .toolCall(let tc) = session.transcript.messages[index] {
-                    state.invalidateToolContent(tc.toolCallId)
-                }
-            }
-            let batches = await wireBatches(id: id, session: session, indices: indices, superseded: superseded)
-            guard state.generation == capturedGeneration else { return }
-            state.sentVersion = newSentVersion
-            state.sentSupersededBackgroundRows = superseded
-            // Send all batches without suspension, preserving the generation
-            // check and giving each frame the next revision clients expect.
-            for wire in batches {
-                state.revision += 1
-                state.sentBackgroundWorkCancellable = session.hasCancellableBackgroundWork
-                send(.transcriptDelta(sessionId: id,
-                                      streamingState: Self.stateString(session.transcript.streamingState),
-                                      canDrive: provider.isWriter(for: id),
-                                      upserts: wire,
-                                      epoch: state.epoch,
-                                      revision: state.revision,
-                                      hasCancellableBackgroundWork: session.hasCancellableBackgroundWork))
-            }
+                                  hasCancellableBackgroundWork: cancellable))
         }
-        emitPendingPermissionIfAny(id: id, session: session)
-        emitPendingQuestionIfAny(id: id, session: session)
-        emitPendingPlanIfAny(id: id, session: session)
-        emitPendingElicitationIfAny(id: id, session: session)
-    }
-
-    /// Push the session's queue to the client. `force` bypasses the dedupe so
-    /// a fresh subscribe always gets a baseline — otherwise an unchanged
-    /// (typically empty) queue would be suppressed and the client would show
-    /// nothing until the next mutation.
-    private func sendQueueState(id: String, session: ACPSession, force: Bool = false) {
-        let items = RemoteQueueProjection.project(session.queue)
-        guard force || lastQueue[id] != items else { return }
-        lastQueue[id] = items
-        send(.queueState(sessionId: id, items: items))
     }
 
     /// Shared preamble for the per-item queue verbs: writer gate plus item-id
@@ -1002,13 +903,13 @@ public final class RemoteSessionGateway {
     /// Build the newest contiguous suffix that fits. Older rows remain
     /// reachable through fetchOlder instead of disappearing from history.
     private func wireTail(
-        id: String, session: ACPSession, indices: Range<Int>, superseded: Set<Int>? = nil
+        id: String, state: RemoteTranscriptSync, indices: [Int], superseded: Set<Int>? = nil
     ) async -> [RemoteWireMessage] {
-        let superseded = superseded ?? Self.supersededBackgroundRows(in: session.transcript.messages)
+        let superseded = superseded ?? Self.supersededBackgroundRows(in: state.messages)
         var wire: [RemoteWireMessage] = []
         var remaining = RemoteTranscriptSync.payloadBudget(sessionId: id)
         for index in indices.reversed() {
-            guard let row = await wireMessage(id: id, session: session, index: index, superseded: superseded.contains(index)) else { continue }
+            guard let row = await wireMessage(id: id, state: state, index: index, superseded: superseded.contains(index)) else { continue }
             guard row.byteCount + 1 <= remaining else { break }
             remaining -= row.byteCount + 1
             wire.append(row.message)
@@ -1018,14 +919,14 @@ public final class RemoteSessionGateway {
     }
 
     private func wireBatches(
-        id: String, session: ACPSession, indices: [Int], superseded: Set<Int>
+        id: String, state: RemoteTranscriptSync, indices: [Int], superseded: Set<Int>
     ) async -> [[RemoteWireMessage]] {
         let budget = RemoteTranscriptSync.payloadBudget(sessionId: id)
         var batches: [[RemoteWireMessage]] = []
         var batch: [RemoteWireMessage] = []
         var remaining = budget
         for index in indices {
-            guard let row = await wireMessage(id: id, session: session, index: index, superseded: superseded.contains(index)) else { continue }
+            guard let row = await wireMessage(id: id, state: state, index: index, superseded: superseded.contains(index)) else { continue }
             if row.byteCount + 1 > remaining {
                 batches.append(batch)
                 batch = []
@@ -1039,12 +940,11 @@ public final class RemoteSessionGateway {
     }
 
     private func wireMessage(
-        id: String, session: ACPSession, index: Int, superseded: Bool
+        id: String, state: RemoteTranscriptSync, index: Int, superseded: Bool
     ) async -> (message: RemoteWireMessage, byteCount: Int)? {
-        // Re-check across awaits: a structural mutation can shrink the array;
-        // the caller's generation check will discard the stale serialization.
-        guard session.transcript.messages.indices.contains(index) else { return nil }
-        let message = session.transcript.messages[index]
+        // Re-read across awaits: a reset can replace what the gateway holds;
+        // the caller's generation check discards the stale serialization.
+        guard let message = state.messages[index] else { return nil }
         // A visual aid's answer prompt stays a positional marker: the phone's card shows the answer.
         if superseded || ACPVisualAidQuestionForm.isAnswerPrompt(message) {
             return RemoteWireMessage(stableId: "m\(index)", kind: message.kind, text: nil, json: nil,
@@ -1053,210 +953,198 @@ public final class RemoteSessionGateway {
         }
         return Self.toWire(
             message, index: index,
-            fullToolCallContent: await cachedFullToolCallContent(sessionId: id, message: message)
+            fullToolCallContent: await cachedFullToolCallContent(sessionId: id, state: state, message: message)
         ).boundedForTransport(maximumBytes: RemoteTranscriptSync.maxMessageBytes)
     }
 
-    /// Inspect the full transcript so an older page cannot revive a task
-    /// superseded outside that page. Keep positional IDs and paging cursors.
-    private static func supersededBackgroundRows(in messages: [ACPMessage]) -> Set<Int> {
+    /// Inspect every message the gateway holds so an older page cannot revive
+    /// a task superseded outside that page. Keep positional IDs and paging cursors.
+    private static func supersededBackgroundRows(in messages: [Int: ACPMessage]) -> Set<Int> {
         var latest: [String: Int] = [:]
         var backgroundIds: Set<String> = []
-        for (index, message) in messages.enumerated() {
+        for (index, message) in messages.sorted(by: { $0.key < $1.key }) {
             guard case .toolCall(let call) = message else { continue }
             latest[call.toolCallId] = index
             if ACPBackgroundTask(toolCall: call) != nil { backgroundIds.insert(call.toolCallId) }
         }
-        return Set(messages.enumerated().compactMap { index, message in
+        return Set(messages.compactMap { index, message in
             guard case .toolCall(let call) = message, backgroundIds.contains(call.toolCallId),
                   latest[call.toolCallId] != index else { return nil }
             return index
         })
     }
 
-    private func cachedFullToolCallContent(sessionId: String, message: ACPMessage) async -> String? {
+    private func cachedFullToolCallContent(sessionId: String, state: RemoteTranscriptSync, message: ACPMessage) async -> String? {
         guard case .toolCall(let toolCall) = message, toolCall.isContentTruncated,
               !ACPToolCallPresentation.isVisualShow(toolCall) else { return nil }
-        let state = syncState(for: sessionId)
         if let cached = state.cachedToolContent(toolCall.toolCallId) { return cached }
-        guard let full = await provider.fullToolCallContent(sessionId: sessionId, toolCallId: toolCall.toolCallId)
-        else { return nil }
+        guard let full = await hostCalls.fullToolCallContent(sessionId, toolCall.toolCallId) else { return nil }
         state.storeToolContent(toolCall.toolCallId, full)
         return full
     }
 
-    private func emitPendingPermissionIfAny(id: String, session: ACPSession) {
-        // Only surface a prompt when the session is genuinely awaiting it. A
-        // read-only mirror (no runner) can carry a stale pending* while idle —
-        // surfacing that would show a prompt the remote can't actually answer.
-        if session.transcript.streamingState == .awaitingPermission,
-           let pending = session.transcript.pendingPermission {
-            let rid = Self.requestIdInt(pending.id)
-            lastPermissionReq[id] = rid
-            let tc = pending.params.toolCall
-            let isVisualShow = ACPToolCallPresentation.isVisualShow(name: tc.name, title: tc.title)
-            let presentation = ACPPermissionPresentation(metadata: pending.params.metadata)
-            let payload = RemotePermissionPayload(
-                requestId: rid,
-                toolName: isVisualShow ? Self.visualAidToolName : tc.title ?? tc.kind ?? "tool",
-                options: pending.params.options.map {
-                    RemotePermissionOption(
-                        optionId: $0.optionId, name: $0.name, kind: $0.kind,
-                        description: isVisualShow ? nil : $0.presentationDescription)
-                },
-                // `defaultToNo` carries no agent text, so it survives the redaction of a visual's permission.
-                title: isVisualShow ? nil : presentation?.title,
-                reason: isVisualShow ? nil : presentation?.description,
-                defaultToNo: presentation?.defaultToNo ?? false,
-                mcpServerName: tc.mcpServerName,
-                commandSummary: isVisualShow ? nil : tc.content?.compactMap { block -> String? in
-                    guard case .content(.text(let text)) = block else { return nil }
-                    return text
-                }.first)
-            send(.permissionRequest(sessionId: id, payload: payload))
-        } else if let rid = lastPermissionReq.removeValue(forKey: id) {
-            // A prompt we surfaced was resolved elsewhere (the Mac or another
-            // client) — tell the client to dismiss it so it doesn't hang.
-            send(.permissionResolved(sessionId: id, requestId: rid))
+    /// A transcript message as the session store encodes it, decoded.
+    static func decode(_ message: HostTranscriptMessage) -> ACPMessage? {
+        guard let decoded = try? ACPMessageCodec.decode(kind: message.kind, payload: Data(message.payload.utf8)) else { return nil }
+        // The store's encoding drops the in-memory truncation mark.
+        if message.truncated == true, case .toolCall(var call) = decoded {
+            call.isContentTruncated = true
+            return .toolCall(call)
         }
+        return decoded
     }
 
-    private func emitPendingQuestionIfAny(id: String, session: ACPSession) {
-        if let pending = ACPRequestAnswers.pendingQuestion(in: session),
-           !pending.params.questions.isEmpty {
-            let rid = Self.requestIdInt(pending.id)
+    // MARK: pending requests
+
+    /// Shows the client a request the follow reports waiting on a person.
+    private func surfaceRequest(_ request: HostPendingRequest, sessionId id: String) {
+        guard let state = syncStates[id] else { return }
+        switch request {
+        case .permission(let requestID, let params):
+            let rid = state.wireID(for: requestID)
+            lastPermissionReq[id] = rid
+            send(.permissionRequest(sessionId: id, payload: Self.permissionPayload(params, requestId: rid)))
+        case .question(let requestID, let params):
+            guard !params.questions.isEmpty else { return }
+            let rid = state.wireID(for: requestID)
             lastQuestionReq[id] = rid
-            let payload = RemoteQuestionPayload(
+            send(.questionRequest(sessionId: id, payload: RemoteQuestionPayload(
                 requestId: rid,
-                title: pending.params.title,
-                questions: pending.params.questions.map { q in
+                title: params.title,
+                questions: params.questions.map { q in
                     RemoteQuestion(
                         id: q.id,
                         prompt: q.prompt,
                         options: q.options.map { RemoteQuestionOption(id: $0.id, label: $0.label) },
                         allowMultiple: q.allowMultiple == true)
-                })
-            send(.questionRequest(sessionId: id, payload: payload))
-        } else if let rid = lastQuestionReq.removeValue(forKey: id) {
-            send(.questionResolved(sessionId: id, requestId: rid))
-        }
-    }
-
-    private func emitPendingPlanIfAny(id: String, session: ACPSession) {
-        if let pending = session.transcript.pendingPlan {
-            guard lastPlanReq[id] != pending.id else { return }
-            lastPlanReq[id] = pending.id
-            let params = pending.params
-            let todos = params.todos.map {
-                RemotePlanTodo(id: $0.id, content: $0.content, status: $0.status)
-            }
+                })))
+        case .plan(let requestID, let params):
+            lastPlanReq[id] = requestID
+            let todos = params.todos.map { RemotePlanTodo(id: $0.id, content: $0.content, status: $0.status) }
             let phases = params.phases.map { phase in
-                RemotePlanPhase(
-                    name: phase.name,
-                    todos: phase.todos.map {
-                        RemotePlanTodo(id: $0.id, content: $0.content, status: $0.status)
-                    }
-                )
+                RemotePlanPhase(name: phase.name, todos: phase.todos.map {
+                    RemotePlanTodo(id: $0.id, content: $0.content, status: $0.status)
+                })
             }
-            send(.planRequest(
-                sessionId: id,
-                payload: .init(
-                    requestId: pending.id,
-                    toolCallId: params.toolCallId,
-                    name: params.name,
-                    overview: params.overview,
-                    plan: params.plan,
-                    todos: todos,
-                    isProject: params.isProject,
-                    phases: phases
-                )
-            ))
-        } else if let requestId = lastPlanReq.removeValue(forKey: id) {
-            send(.planResolved(sessionId: id, requestId: requestId))
+            send(.planRequest(sessionId: id, payload: .init(
+                requestId: requestID, toolCallId: params.toolCallId, name: params.name, overview: params.overview,
+                plan: params.plan, todos: todos, isProject: params.isProject, phases: phases
+            )))
+        case .userInput(let token, let params):
+            // Rebuilt from the agent's parameters for its fields; the id the
+            // client answers by is the host's.
+            guard let input = ACPUserInputRequest.elicitation(ACPElicitationRequest(id: .number(0), params: params)) else { return }
+            let requestId = token.uuidString
+            lastElicitationReq[id] = requestId
+            send(.elicitationRequest(sessionId: id, payload: Self.elicitationPayload(input, requestId: requestId)))
         }
     }
 
-    private func emitPendingElicitationIfAny(id: String, session: ACPSession) {
-        if let pending = session.transcript.pendingUserInputs.first,
-           case .elicitation = pending.source {
-            let requestId = pending.id.uuidString
-            guard lastElicitationReq[id] != requestId else { return }
-            lastElicitationReq[id] = requestId
-            let mode: String
-            let elicitationId: String?
-            let url: String?
-            switch pending.mode {
-            case .form:
-                mode = "form"
-                elicitationId = nil
-                url = nil
-            case .url(let request):
-                mode = "url"
-                elicitationId = request.elicitationId
-                url = request.url.absoluteString
-            }
-            let fields = pending.fields.map { field in
-                RemoteElicitationField(
-                    key: field.key,
-                    type: field.schema.type,
-                    title: field.label,
-                    description: field.schema.description,
-                    required: field.required,
-                    minLength: field.schema.minLength,
-                    maxLength: field.schema.maxLength,
-                    minimum: field.schema.minimum,
-                    maximum: field.schema.maximum,
-                    minItems: field.schema.minItems,
-                    maxItems: field.schema.maxItems,
-                    format: field.schema.format,
-                    pattern: field.schema.pattern,
-                    isSecret: field.schema.isSecret,
-                    options: field.schema.options.map {
-                        .init(value: $0.const, title: $0.title, description: $0.description)
-                    },
-                    defaultValue: Self.remoteDefault(field.schema.defaultValue)
-                )
-            }
-            send(.elicitationRequest(
-                sessionId: id,
-                payload: .init(
-                    requestId: requestId,
-                    title: pending.title,
-                    message: pending.message,
-                    mode: mode,
-                    fields: fields,
-                    elicitationId: elicitationId,
-                    url: url
-                )
-            ))
-        } else if let requestId = lastElicitationReq.removeValue(forKey: id) {
-            send(.elicitationResolved(sessionId: id, requestId: requestId))
+    /// Tells the client a request it was shown was answered, here or
+    /// elsewhere, or withdrawn, so its prompt does not hang.
+    private func resolveRequest(_ requestID: HostPendingRequestID, sessionId id: String) {
+        guard let state = syncStates[id] else { return }
+        switch requestID {
+        case .permission(let agentID):
+            let rid = state.wireID(for: agentID)
+            guard lastPermissionReq[id] == rid else { return }
+            lastPermissionReq[id] = nil
+            send(.permissionResolved(sessionId: id, requestId: rid))
+        case .question(let agentID):
+            let rid = state.wireID(for: agentID)
+            guard lastQuestionReq[id] == rid else { return }
+            lastQuestionReq[id] = nil
+            send(.questionResolved(sessionId: id, requestId: rid))
+        case .plan(let agentID):
+            guard lastPlanReq[id] == agentID else { return }
+            lastPlanReq[id] = nil
+            send(.planResolved(sessionId: id, requestId: agentID))
+        case .userInput(let token):
+            guard lastElicitationReq[id] == token.uuidString else { return }
+            lastElicitationReq[id] = nil
+            send(.elicitationResolved(sessionId: id, requestId: token.uuidString))
         }
+    }
+
+    private static func permissionPayload(_ params: ACPPermissionRequestParams, requestId: Int) -> RemotePermissionPayload {
+        let tc = params.toolCall
+        let isVisualShow = ACPToolCallPresentation.isVisualShow(name: tc.name, title: tc.title)
+        let presentation = ACPPermissionPresentation(metadata: params.metadata)
+        return RemotePermissionPayload(
+            requestId: requestId,
+            toolName: isVisualShow ? Self.visualAidToolName : tc.title ?? tc.kind ?? "tool",
+            options: params.options.map {
+                RemotePermissionOption(
+                    optionId: $0.optionId, name: $0.name, kind: $0.kind,
+                    description: isVisualShow ? nil : $0.presentationDescription)
+            },
+            // `defaultToNo` carries no agent text, so it survives the redaction of a visual's permission.
+            title: isVisualShow ? nil : presentation?.title,
+            reason: isVisualShow ? nil : presentation?.description,
+            defaultToNo: presentation?.defaultToNo ?? false,
+            mcpServerName: tc.mcpServerName,
+            commandSummary: isVisualShow ? nil : tc.content?.compactMap { block -> String? in
+                guard case .content(.text(let text)) = block else { return nil }
+                return text
+            }.first)
+    }
+
+    private static func elicitationPayload(_ pending: ACPUserInputRequest, requestId: String) -> RemoteElicitationPayload {
+        let mode: String
+        let elicitationId: String?
+        let url: String?
+        switch pending.mode {
+        case .form:
+            mode = "form"
+            elicitationId = nil
+            url = nil
+        case .url(let request):
+            mode = "url"
+            elicitationId = request.elicitationId
+            url = request.url.absoluteString
+        }
+        let fields = pending.fields.map { field in
+            RemoteElicitationField(
+                key: field.key,
+                type: field.schema.type,
+                title: field.label,
+                description: field.schema.description,
+                required: field.required,
+                minLength: field.schema.minLength,
+                maxLength: field.schema.maxLength,
+                minimum: field.schema.minimum,
+                maximum: field.schema.maximum,
+                minItems: field.schema.minItems,
+                maxItems: field.schema.maxItems,
+                format: field.schema.format,
+                pattern: field.schema.pattern,
+                isSecret: field.schema.isSecret,
+                options: field.schema.options.map {
+                    .init(value: $0.const, title: $0.title, description: $0.description)
+                },
+                defaultValue: Self.remoteDefault(field.schema.defaultValue)
+            )
+        }
+        return .init(
+            requestId: requestId, title: pending.title, message: pending.message, mode: mode,
+            fields: fields, elicitationId: elicitationId, url: url
+        )
     }
 
     // MARK: decision
 
+    /// Answers the permission the client was shown under `requestId`. The
+    /// host checks it is still the pending one; the follow then reports it
+    /// resolved, which dismisses the prompt.
     private func applyDecision(sessionId: String, requestId: Int, optionId: String, persistScope: String?) async {
-        guard let session = provider.session(for: sessionId),
-              let policy = provider.permissionPolicy(for: sessionId),
-              let pending = session.transcript.pendingPermission,
-              Self.requestIdInt(pending.id) == requestId          // first-wins guard
-        else { return }
+        guard let sessions, let requestID = syncStates[sessionId]?.requestIDs[requestId] else { return }
         let scope: ACPRequestAnswers.PermissionScope = switch persistScope {
         case nil: .optionDefault
         case "session": .session
         case "project": .project
         default: .once
         }
-        guard let answer = ACPRequestAnswers.permission(pending, optionId: optionId, scope: scope) else { return }
-        // Dismissed before answering: once the agent has the answer it may
-        // park its next request, under the same placeholder id, while the
-        // decision is still being recorded, and that one must stay up.
-        lastPermissionReq[sessionId] = nil
-        send(.permissionResolved(sessionId: sessionId, requestId: requestId))
-        await policy.userDecided(
-            scopeKey: answer.scopeKey, optionId: answer.optionId, decision: answer.decision, persistScope: answer.persistScope
-        )
+        try? await sessions.answerPermission(sessionId, requestID: requestID, optionID: optionId, scope: scope, caller: hostCaller)
     }
 
     private func handleVisualAidResponse(
@@ -1268,11 +1156,10 @@ public final class RemoteSessionGateway {
         func reject(_ reason: String) {
             send(.visualAidRejected(sessionId: sessionId, visualId: visualId, reason: reason, requestId: echoedRequestId))
         }
-        guard provider.isWriter(for: sessionId) else { return reject("notWriter") }
-        guard let id = UUID(uuidString: visualId),
-              let session = provider.session(for: sessionId),
-              let visual = session.transcript.visualAid(id: id)
-        else { return reject("notFound") }
+        guard let sessions, sessions.isWriter(sessionId) else { return reject("notWriter") }
+        guard let id = UUID(uuidString: visualId), let visual = sessions.visualAid(sessionId, id: id) else {
+            return reject("notFound")
+        }
         guard let question = visual.question, visual.answer == nil else { return reject("alreadyAnswered") }
 
         guard !RemoteVisualAidLimits.exceedsBounds(ids: selectedOptionIds, note: note) else { return reject("invalid") }
@@ -1280,7 +1167,7 @@ public final class RemoteSessionGateway {
         guard let answer = Self.visualAidAnswer(to: question, action: action, selectedOptionIds: selectedOptionIds, note: note) else {
             return reject("invalid")
         }
-        guard (try? await sessions?.answerVisualAid(sessionId, visualID: id, answer: answer, caller: hostCaller)) != nil else {
+        guard (try? await sessions.answerVisualAid(sessionId, visualID: id, answer: answer, caller: hostCaller)) != nil else {
             return reject("failed")
         }
     }
@@ -1314,25 +1201,17 @@ public final class RemoteSessionGateway {
         }
     }
 
-    private func applyQuestionAnswer(sessionId: String, requestId: Int, answers: [RemoteQuestionAnswer]) {
-        guard let session = provider.session(for: sessionId),
-              let pending = ACPRequestAnswers.pendingQuestion(in: session),
-              Self.requestIdInt(pending.id) == requestId,         // first-wins guard
-              let response = ACPRequestAnswers.question(
-                  pending,
-                  answers: answers.map { ACPQuestionAnswer(questionId: $0.questionId, selectedOptionIds: $0.selectedOptionIds) }
-              )
-        else { return }
-        provider.answerQuestion(for: sessionId, requestId: pending.id, response)
-        lastQuestionReq[sessionId] = nil
-        send(.questionResolved(sessionId: sessionId, requestId: requestId))
+    private func applyQuestionAnswer(sessionId: String, requestId: Int, answers: [RemoteQuestionAnswer]) async {
+        guard let sessions, let requestID = syncStates[sessionId]?.requestIDs[requestId] else { return }
+        try? await sessions.answerQuestion(
+            sessionId, requestID: requestID,
+            answers: answers.map { ACPQuestionAnswer(questionId: $0.questionId, selectedOptionIds: $0.selectedOptionIds) },
+            caller: hostCaller
+        )
     }
 
-    private func applyPlanResponse(sessionId: String, requestId: JSONRPCID, action: String, reason: String?) {
-        guard let session = provider.session(for: sessionId),
-              let pending = session.transcript.pendingPlan,
-              pending.id == requestId
-        else { return }
+    private func applyPlanResponse(sessionId: String, requestId: JSONRPCID, action: String, reason: String?) async {
+        guard let sessions else { return }
         let planAction: ACPRequestAnswers.PlanAction
         switch action {
         case "accept": planAction = .accept
@@ -1340,10 +1219,7 @@ public final class RemoteSessionGateway {
         case "cancel": planAction = .cancel
         default: return
         }
-        guard let response = ACPRequestAnswers.plan(pending, action: planAction) else { return }
-        provider.respondToPlan(for: sessionId, requestId: requestId, response)
-        lastPlanReq[sessionId] = nil
-        send(.planResolved(sessionId: sessionId, requestId: requestId))
+        try? await sessions.respondToPlan(sessionId, requestID: requestId, action: planAction, caller: hostCaller)
     }
 
     private func applyElicitationResponse(
@@ -1351,13 +1227,8 @@ public final class RemoteSessionGateway {
         requestId: String,
         action: String,
         content: [String: ACPElicitationValue]?
-    ) {
-        guard let token = UUID(uuidString: requestId),
-              let session = provider.session(for: sessionId),
-              let pending = session.transcript.pendingUserInputs.first,
-              pending.id == token,
-              case .elicitation = pending.source
-        else { return }
+    ) async {
+        guard let sessions, let token = UUID(uuidString: requestId) else { return }
         let answer: ACPRequestAnswers.UserInputAnswer
         switch action {
         case "accept": answer = .submit(content: content ?? [:])
@@ -1365,10 +1236,7 @@ public final class RemoteSessionGateway {
         case "cancel": answer = .cancel
         default: return
         }
-        guard let resolvedAction = ACPRequestAnswers.userInput(pending, answer: answer) else { return }
-        provider.respondToUserInput(for: sessionId, token: token, action: resolvedAction)
-        lastElicitationReq[sessionId] = nil
-        send(.elicitationResolved(sessionId: sessionId, requestId: requestId))
+        try? await sessions.respondToUserInput(sessionId, requestID: token, answer: answer, caller: hostCaller)
     }
 
     private static func remoteDefault(_ value: AnyCodable?) -> ACPElicitationValue? {

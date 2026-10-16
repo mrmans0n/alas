@@ -36,6 +36,20 @@ public final class RemoteTranscriptSync {
     /// callers that suspend mid-serialize must capture and re-check this
     /// instead of (or in addition to) `epoch`.
     public var generation = 0
+    /// The transcript as the gateway has received it from its follow, by
+    /// index: the newest messages since the last reset, and older pages the
+    /// client fetched. ponytail: never trimmed, so it grows to what the
+    /// client has scrolled through; trim to a window if memory matters.
+    public var messages: [Int: ACPMessage] = [:]
+    public var messageCount = 0
+    public var streamingState: ACPSession.StreamingState = .idle
+    /// The session's last state from the follow; nil until the first.
+    public var sessionState: HostSessionState?
+    /// Whether the client has had a snapshot, which deltas build on.
+    public var snapshotSent = false
+    /// The agent's ids for the requests surfaced under integer wire ids.
+    public var requestIDs: [Int: JSONRPCID] = [:]
+    private var nextRequestWireID = -2
     private var toolContent: [String: String] = [:]            // toolCallId → full content
     private var toolContentOrder: [String] = []                 // FIFO eviction
 
@@ -50,6 +64,20 @@ public final class RemoteTranscriptSync {
         toolContent[id] = content
     }
     public func invalidateToolContent(_ id: String) { toolContent[id] = nil }
+
+    /// The integer a client answers `requestID` by: the agent's own number
+    /// when it is one, otherwise a stable negative stand-in.
+    public func wireID(for requestID: JSONRPCID) -> Int {
+        if case .number(let number) = requestID {
+            requestIDs[number] = requestID
+            return number
+        }
+        if let known = requestIDs.first(where: { $0.value == requestID })?.key { return known }
+        let wireID = nextRequestWireID
+        nextRequestWireID -= 1
+        requestIDs[wireID] = requestID
+        return wireID
+    }
 
     public init() {}
 }

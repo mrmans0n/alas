@@ -26,7 +26,9 @@ struct RemoteFederationAggregationTests {
         let signer: RemoteIdentityKeyProvider
         let pairing = RemotePairingService(store: InMemoryDeviceStore())
         let peerStore = InMemoryPeerStore()
-        let provider: FakeSessionsProvider
+        /// The host this Mac serves its sessions from.
+        let home: GatewayHostFixture
+        var provider: FakeSessionsProvider { home.provider }
         let server: RemoteServer
         private(set) var peers: RemotePeerManager!
         private(set) var federation: FederatedSessionsProvider!
@@ -34,10 +36,11 @@ struct RemoteFederationAggregationTests {
 
         var origin: String { "http://127.0.0.1:\(port)" }
 
-        init(serverId: String, name: String, key: RemoteIdentityKeyProvider? = nil, provider: FakeSessionsProvider = FakeSessionsProvider()) {
+        init(serverId: String, name: String, key: RemoteIdentityKeyProvider? = nil, home: GatewayHostFixture? = nil) {
             self.serverId = serverId
             self.name = name
-            self.provider = provider
+            self.home = home ?? (try! GatewayHostFixture())
+            let provider = self.home.provider
             self.signer = key ?? RemoteIdentityKeyProvider(store: RemoteInMemorySecretStore())
             let signer = self.signer
             self.server = RemoteServer(
@@ -107,11 +110,8 @@ struct RemoteFederationAggregationTests {
         }
 
         /// Plants a live session on this Mac and returns its id.
-        func plantSession(text: String, manager: ACPSessionManager) -> String {
-            let session = manager.createSession(agentId: "claude")
-            session.transcript.messages = [.agent(id: UUID(), StreamingText(text))]
-            provider.sessions[session.id] = session
-            provider.writers.insert(session.id)
+        func plantSession(text: String) throws -> String {
+            let session = try home.session(UUID().uuidString, messages: [.agent(id: UUID(), StreamingText(text))])
             provider.summaries.append(
                 RemoteSessionSummary(id: session.id, title: "On \(name)", agentId: "claude",
                                      status: "idle", canDrive: true))
@@ -186,12 +186,6 @@ struct RemoteFederationAggregationTests {
         func close() { task.cancel(with: .goingAway, reason: nil) }
     }
 
-    private func makeManager() throws -> ACPSessionManager {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("remote-fed-\(UUID()).sqlite")
-        return ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp", store: try ACPSessionStore(path: url.path))
-    }
-
     private func waitUntil(_ condition: @MainActor () -> Bool, seconds: TimeInterval = 20) async throws {
         let deadline = Date().addingTimeInterval(seconds)
         while !condition() {
@@ -226,8 +220,7 @@ struct RemoteFederationAggregationTests {
             a.stop()
             b.stop()
         }
-        let manager = try makeManager()
-        let bSession = b.plantSession(text: "hello-from-b", manager: manager)
+        let bSession = try b.plantSession(text: "hello-from-b")
         try await pair(a, b)
         try await waitUntil { a.federation.peerSessionSummaries.contains { $0.id == "srv-b:\(bSession)" } }
 
@@ -255,7 +248,7 @@ struct RemoteFederationAggregationTests {
         let home = try GatewayHostFixture()
         defer { home.tearDown() }
         let a = Mac(serverId: "srv-a", name: "Mac A")
-        let b = Mac(serverId: "srv-b", name: "Mac B", provider: home.provider)
+        let b = Mac(serverId: "srv-b", name: "Mac B", home: home)
         try await a.start()
         try await b.start()
         defer {
@@ -308,9 +301,8 @@ struct RemoteFederationAggregationTests {
             b.stop()
             c.stop()
         }
-        let manager = try makeManager()
-        let aSession = a.plantSession(text: "a", manager: manager)
-        let cSession = c.plantSession(text: "c", manager: manager)
+        let aSession = try a.plantSession(text: "a")
+        let cSession = try c.plantSession(text: "c")
         try await pair(a, b)
         try await pair(b, c)
         // B sees both neighbours.
@@ -337,8 +329,7 @@ struct RemoteFederationAggregationTests {
             a.stop()
             b.stop()
         }
-        let manager = try makeManager()
-        let bSession = b.plantSession(text: "x", manager: manager)
+        let bSession = try b.plantSession(text: "x")
         try await pair(a, b)
         let phone = try await Phone(of: a)
         defer { phone.close() }
@@ -388,8 +379,7 @@ struct RemoteFederationAggregationTests {
             a.stop()
             keyless.stop()
         }
-        let manager = try makeManager()
-        _ = keyless.plantSession(text: "secret", manager: manager)
+        _ = try keyless.plantSession(text: "secret")
         let code = keyless.pairing.beginPairing()
         _ = await a.peers.addPeer(code: code, origins: [keyless.origin])
         try await waitUntil { a.peers.states.values.contains(.online) }

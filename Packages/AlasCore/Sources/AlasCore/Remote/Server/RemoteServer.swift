@@ -27,6 +27,8 @@ public final class RemoteServer {
     private let provider: RemoteSessionsProvider
     /// The app's windows, which each gateway takes tab requests to.
     @_spi(AppHost) public weak var presenter: RemoteSessionPresenter?
+    /// Test hook run on each gateway as a connection makes it.
+    @_spi(Testing) public var configureGateway: (@MainActor (RemoteSessionGateway) -> Void)?
     private var accessPolicy: RemoteAccessPolicy
     private var originPolicy: RemoteOriginPolicy
     private let identityProvider: @MainActor () -> RemoteServerIdentity
@@ -297,6 +299,7 @@ public final class RemoteServer {
                     caller: .remotePeer(deviceID: channel.deviceId), sendTracked: channel.sendTracked,
                     send: channel.send)
                 gateway.presenter = self?.presenter
+                self?.configureGateway?(gateway)
                 return gateway
             },
             makeHello: { RemoteServerMessage.hello(identity()) },

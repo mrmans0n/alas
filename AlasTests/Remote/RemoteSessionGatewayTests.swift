@@ -16,16 +16,9 @@ final class FakeSessionsProvider: RemoteSessionsProvider, RemoteSessionPresenter
         message: "Could not create worktree.",
         worktreeId: nil
     )
-    var sessions: [String: ACPSession] = [:]
-    var policies: [String: ACPPermissionPolicy] = [:]
-    var lastQuestionResponse: (id: String, requestId: JSONRPCID, response: ACPQuestionResponse)?
-    var lastPlanResponse: (id: String, requestId: JSONRPCID, response: ACPCursorPlanResponse)?
-    var lastUserInputResponse: (id: String, token: UUID, action: ACPUserInputAction)?
-    var writers: Set<String> = []
     var renamed: [(id: String, title: String)] = []
     var tabActions: [String] = []
     var tabActionResult: RemoteSessionTabActionResult = .success
-    var configs: [String: RemoteSessionConfig] = [:]
     var changeListResult: RemoteChangeListResult = .failure(reason: .sessionUnknown, message: nil)
     var fileDiffResult: RemoteFileDiffResult = .failure(reason: .sessionUnknown, message: nil)
     var fileTreeResult: RemoteFileTreeResult = .failure(reason: .sessionUnknown, message: nil)
@@ -207,18 +200,6 @@ final class FakeSessionsProvider: RemoteSessionsProvider, RemoteSessionPresenter
         waiters.removeAll { $0.count <= count }
         ready.forEach { $0.continuation.resume() }
     }
-    func session(for id: String) -> ACPSession? { sessions[id] }
-    func permissionPolicy(for id: String) -> ACPPermissionPolicy? { policies[id] }
-    func hydrateIfNeeded(id: String) async {}
-    func answerQuestion(for id: String, requestId: JSONRPCID, _ response: ACPQuestionResponse) {
-        lastQuestionResponse = (id, requestId, response)
-    }
-    func respondToPlan(for id: String, requestId: JSONRPCID, _ response: ACPCursorPlanResponse) {
-        lastPlanResponse = (id, requestId, response)
-    }
-    func respondToUserInput(for id: String, token: UUID, action: ACPUserInputAction) {
-        lastUserInputResponse = (id, token, action)
-    }
 
     func fullToolCallContent(sessionId: String, toolCallId: String) async -> String? {
         fullToolCallContentCallCount += 1
@@ -234,7 +215,6 @@ final class FakeSessionsProvider: RemoteSessionsProvider, RemoteSessionPresenter
         fullToolCallContentContinuation = nil
     }
 
-    func isWriter(for id: String) -> Bool { writers.contains(id) }
     func openSessionTab(for id: String) async -> RemoteSessionTabActionResult {
         tabActions.append("open \(id)")
         return tabActionResult
@@ -270,7 +250,8 @@ final class FakeSessionsProvider: RemoteSessionsProvider, RemoteSessionPresenter
             mentionCandidates: { sessionID, query, _ in
                 (await self.remoteMentionCandidates(sessionId: sessionID, query: query), [])
             },
-            mentionAttachments: { await self.remoteMentionAttachments($0, sessionId: $1) }
+            mentionAttachments: { await self.remoteMentionAttachments($0, sessionId: $1) },
+            fullToolCallContent: { await self.fullToolCallContent(sessionId: $0, toolCallId: $1) }
         )
     }
 
@@ -282,8 +263,6 @@ final class FakeSessionsProvider: RemoteSessionsProvider, RemoteSessionPresenter
     func remoteMentionAttachments(_ mentions: [RemoteMention], sessionId: String) async -> [ACPMessage.Attachment]? {
         mentions.isEmpty ? [] : mentionAttachments
     }
-
-    func sessionConfig(for id: String) -> RemoteSessionConfig? { configs[id] }
 
     func remoteChangeList(
         sessionId: String,
@@ -499,6 +478,13 @@ enum InvalidAttachmentBatch: String, CaseIterable, Sendable {
 
 @MainActor
 struct RemoteSessionGatewayTests {
+    /// A host for the tests whose sessions it serves; one per test.
+    let hosted: GatewayHostFixture
+
+    init() throws {
+        hosted = try GatewayHostFixture()
+    }
+
     /// A client drives a session through the host: prompts are trimmed and
     /// blank ones refused, a session this Mac does not drive refuses them,
     /// and rename, auto-run, takeover and stop reach it.
@@ -533,10 +519,13 @@ struct RemoteSessionGatewayTests {
         await gw.handle(.setAutoRun(sessionId: id, enabled: true))
         #expect(fixture.manager?.liveSession(for: id)?.autoRunEnabled == true)
 
-        // Takeover pushes a snapshot, so the client learns it can drive.
+        // Takeover pushes a snapshot to a client following the session, so it
+        // learns it can drive.
+        await gw.handle(.subscribe(sessionId: id))
+        try await fixture.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
         sent.removeAll()
         await gw.handle(.takeOver(sessionId: id))
-        #expect(sent.contains { if case .transcriptSnapshot(id, _, true, _, _, _, _, _, _) = $0 { true } else { false } })
+        try await fixture.until { sent.contains { if case .transcriptSnapshot(id, _, true, _, _, _, _, _, _) = $0 { true } else { false } } }
 
         // Stop is acknowledged before the agent is told.
         sent.removeAll()
@@ -632,18 +621,13 @@ struct RemoteSessionGatewayTests {
         #expect(recorded.last == linked)
     }
 
+    /// The host's manager for the fixture's worktree.
     private func makeManager() throws -> ACPSessionManager {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("remote-gw-\(UUID()).sqlite")
-        let store = try ACPSessionStore(path: url.path)
-        return ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp", store: store)
+        try hosted.core.sessionManager(for: hosted.worktree)
     }
 
-    private func makeSessionWithAgentText(_ text: String) throws -> ACPSession {
-        let mgr = try makeManager()
-        let s = mgr.createSession(agentId: "claude")
-        s.transcript.messages = [.agent(id: UUID(), StreamingText(text))]
-        return s
+    private func makeSessionWithAgentText(_ text: String, id: String = "s1") throws -> ACPSession {
+        try hosted.session(id, messages: [.agent(id: UUID(), StreamingText(text))])
     }
 
     private func makeLog() throws -> ACPPermissionDecisionLog {
@@ -964,10 +948,10 @@ struct RemoteSessionGatewayTests {
     }
 
     @Test func listSessionsDoesNotBlockFollowingSubscribe() async throws {
-        let provider = FakeSessionsProvider()
+        let provider = hosted.provider
         provider.summaries = [RemoteSessionSummary(id: "s1", title: "T", agentId: "claude", status: "idle", canDrive: false)]
         provider.pauseSessionSummaries = true
-        provider.sessions["s1"] = try makeSessionWithAgentText("hello")
+        _ = try makeSessionWithAgentText("hello")
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
 
@@ -986,6 +970,7 @@ struct RemoteSessionGatewayTests {
         #expect(sent.isEmpty)
 
         await gw.handle(.subscribe(sessionId: "s1"))
+        try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
         #expect(sent.contains { message in
             if case .transcriptSnapshot(let id, _, _, _, _, _, _, _, _) = message {
                 return id == "s1"
@@ -1021,7 +1006,6 @@ struct RemoteSessionGatewayTests {
             )
         ]
         provider.pauseRemoteWorktrees = true
-        provider.writers = ["s1"]
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
         gw.hostCalls = provider.hostCalls
@@ -1077,7 +1061,7 @@ struct RemoteSessionGatewayTests {
 
     @Test("latest background snapshots suppress older positional rows across tail, backfill and deltas", .timeLimit(.minutes(1)), arguments: [("snapshot", false), ("snapshot", true), ("page", false), ("page", true), ("delta", false), ("delta", true)])
     func latestBackgroundSnapshotsSuppressOlderRows(path: String, latestVisible: Bool) async throws {
-        let provider = FakeSessionsProvider()
+        let provider = hosted.provider
         let session = try makeSessionWithAgentText("unused")
         var task = ACPBackgroundTask(ownerSessionId: "s1", asyncTaskId: "job", name: "Older")
         session.transcript.messages = [.toolCall(task.transcriptRow)]
@@ -1090,7 +1074,6 @@ struct RemoteSessionGatewayTests {
         task.showInTranscript = latestVisible
         let latest = ACPMessage.toolCall(task.transcriptRow)
         if path != "delta" { session.transcript.appendMessage(latest) }
-        provider.sessions["s1"] = session
         var sent: [RemoteServerMessage] = []
         var nextDelta: CheckedContinuation<RemoteServerMessage, Never>?
         let gw = RemoteSessionGateway(provider: provider) { frame in
@@ -1101,6 +1084,7 @@ struct RemoteSessionGatewayTests {
             }
         }
         await gw.handle(.subscribe(sessionId: "s1"))
+        try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
         var mirror = NativePeerTranscript(sessionId: "s1")
         mirror.apply(try #require(sent.first))
         if path != "delta" {
@@ -1135,12 +1119,11 @@ struct RemoteSessionGatewayTests {
 
     @Test("remote snapshots and state-only deltas advertise cancellable background work while idle", .timeLimit(.minutes(1)), arguments: [false, true])
     func idleBackgroundStopSnapshot(supported: Bool) async throws {
-        let provider = FakeSessionsProvider()
+        let provider = hosted.provider
         let session = try makeSessionWithUserMessages(0)
         session.agentState = .ready
         session.backgroundTaskStopSupported = supported
         session.applyBackgroundTask(.init(sessionUpdate: "async_task_spawned", asyncTaskId: "job", canStop: true), ownerSessionId: "s1")
-        provider.sessions["s1"] = session
         var sent: [RemoteServerMessage] = []
         var nextDelta: CheckedContinuation<RemoteServerMessage, Never>?
         let gateway = RemoteSessionGateway(provider: provider) {
@@ -1152,6 +1135,7 @@ struct RemoteSessionGatewayTests {
         }
         defer { gateway.close() }
         await gateway.handle(.subscribe(sessionId: "s1"))
+        try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
         let data = try JSONEncoder().encode(try #require(sent.first))
         let fields = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
         #expect(fields["streamingState"] as? String == "idle")
@@ -1169,7 +1153,7 @@ struct RemoteSessionGatewayTests {
     }
 
     @Test func snapshotRestoresFullTruncatedToolCallContent() async throws {
-        let provider = FakeSessionsProvider()
+        let provider = hosted.provider
         let fullContent = String(repeating: "abcdef0123456789", count: 400)
         var toolCall = ACPMessage.ToolCall(
             toolCallId: "old",
@@ -1181,12 +1165,13 @@ struct RemoteSessionGatewayTests {
         toolCall.truncateForOffWindow()
         let session = try makeSessionWithAgentText("tail")
         session.transcript.messages = [.toolCall(toolCall)]
-        provider.sessions["s1"] = session
         provider.fullToolCallContents["s1|old"] = fullContent
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        gw.hostCalls.fullToolCallContent = { await provider.fullToolCallContent(sessionId: $0, toolCallId: $1) }
 
         await gw.handle(.subscribe(sessionId: "s1"))
+        try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
 
         guard case .transcriptSnapshot(_, _, _, let msgs, _, _, _, _, _)? = sent.first,
               let json = msgs.first(where: { $0.kind == "toolCall" })?.json,
@@ -1204,59 +1189,35 @@ struct RemoteSessionGatewayTests {
         }
     }
 
-    @Test func permissionDecisionCallsPolicyWhenRequestMatches() async throws {
-        let provider = FakeSessionsProvider()
-        let s = try makeSessionWithAgentText("x")
-        let policy = ACPPermissionPolicy(session: s, log: try makeLog())
-        provider.sessions["s1"] = s
-        provider.policies["s1"] = policy
-        // Simulate a pending permission with requestId 0.
-        s.transcript.pendingPermission = .init(id: .number(0), params: .stub())
-        let gw = RemoteSessionGateway(provider: provider) { _ in }
-        await gw.handle(.subscribe(sessionId: "s1"))
-        await gw.handle(.permissionDecision(sessionId: "s1", requestId: 0, optionId: "allow_once", persistScope: nil))
-        // After a matching decision, the policy clears the pending permission.
-        #expect(s.transcript.pendingPermission == nil)
-    }
-
-    @Test func staleDecisionIsNoOp() async throws {
-        let provider = FakeSessionsProvider()
-        let s = try makeSessionWithAgentText("x")
-        provider.sessions["s1"] = s
-        provider.policies["s1"] = ACPPermissionPolicy(session: s, log: try makeLog())
-        s.transcript.pendingPermission = .init(id: .number(5), params: .stub())  // current request is 5
-        let gw = RemoteSessionGateway(provider: provider) { _ in }
-        await gw.handle(.subscribe(sessionId: "s1"))
-        await gw.handle(.permissionDecision(sessionId: "s1", requestId: 0, optionId: "allow_once", persistScope: nil))
-        #expect(s.transcript.pendingPermission != nil)  // unchanged: stale requestId ignored
-    }
-
-    @Test func resolvesPermissionWhenClearedElsewhere() async throws {
-        let provider = FakeSessionsProvider()
-        let s = try makeSessionWithAgentText("x")
-        provider.sessions["s1"] = s
-        s.transcript.streamingState = .awaitingPermission
-        s.transcript.pendingPermission = .init(id: .number(0), params: .stub())
+    /// A permission reaches the phone under the agent's own request id, is
+    /// answered by it alone, and is dismissed once answered, here or on the Mac.
+    @Test func permissionsAreAnsweredByTheAgentsRequestId() async throws {
+        let id = try await hosted.drivenSession()
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-        await gw.handle(.subscribe(sessionId: "s1"))   // surfaces the prompt
-        #expect(sent.contains { if case .permissionRequest = $0 { return true }
-        return false })
-        // Resolve it "on the Mac": clear the pending prompt, then nudge the transcript.
-        s.transcript.pendingPermission = nil
-        s.transcript.streamingState = .idle
-        s.transcript.messages.append(.agent(id: UUID(), StreamingText("done")))
-        try await Task.sleep(nanoseconds: 250_000_000)   // > coalesce window
-        #expect(sent.contains { if case .permissionResolved(_, 0) = $0 { return true }
-        return false })
+        let gw = RemoteSessionGateway(provider: hosted.provider) { sent.append($0) }
+        defer { gw.close() }
+        await gw.handle(.subscribe(sessionId: id))
+        try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
+
+        hosted.agent.emitPermission(id: .number(7), params: .stub())
+        try await hosted.until { sent.contains { if case .permissionRequest(_, let payload) = $0 { payload.requestId == 7 } else { false } } }
+        // A reply under another id answers nothing.
+        await gw.handle(.permissionDecision(sessionId: id, requestId: 0, optionId: "allow_once", persistScope: nil))
+        #expect(hosted.agent.permissionResponses[.number(7)] == nil)
+        await gw.handle(.permissionDecision(sessionId: id, requestId: 7, optionId: "allow_once", persistScope: nil))
+        try await hosted.until { hosted.agent.permissionResponses[.number(7)]?.outcome == .selected(optionId: "allow_once") }
+        try await hosted.until { sent.contains(.permissionResolved(sessionId: id, requestId: 7)) }
+
+        // One answered on the Mac is dismissed on the phone too.
+        hosted.agent.emitPermission(id: .number(8), params: .stub())
+        try await hosted.until { sent.contains { if case .permissionRequest(_, let payload) = $0 { payload.requestId == 8 } else { false } } }
+        try await hosted.host.sessions.answerPermission(id, requestID: .number(8), optionID: "allow_once", caller: .app)
+        try await hosted.until { sent.contains(.permissionResolved(sessionId: id, requestId: 8)) }
     }
 
     @Test func permissionRequestForwardsDecodedPresentationToTheRemoteClient() async throws {
-        let provider = FakeSessionsProvider()
-        let s = try makeSessionWithAgentText("x")
-        provider.sessions["s1"] = s
-        s.transcript.streamingState = .awaitingPermission
-        s.transcript.pendingPermission = .init(id: .number(0), params: .stub(
+        let id = try await hosted.drivenSession()
+        let params = ACPPermissionRequestParams.stub(
             toolCallContent: [.content(.text("swift build"))],
             metadata: AnyCodable([
                 "permission": AnyCodable([
@@ -1277,10 +1238,14 @@ struct RemoteSessionGatewayTests {
                     "description": AnyCodable("Run this command one time"),
                 ] as [String: AnyCodable]),
             ] as [String: AnyCodable])
-        ))
+        )
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-        await gw.handle(.subscribe(sessionId: "s1"))
+        let gw = RemoteSessionGateway(provider: hosted.provider) { sent.append($0) }
+        defer { gw.close() }
+        await gw.handle(.subscribe(sessionId: id))
+        try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
+        hosted.agent.emitPermission(id: .number(7), params: params)
+        try await hosted.until { sent.contains { if case .permissionRequest = $0 { true } else { false } } }
 
         guard case .permissionRequest(_, let payload) = try #require(sent.first(where: {
             if case .permissionRequest = $0 { return true }
@@ -1299,13 +1264,13 @@ struct RemoteSessionGatewayTests {
     }
 
     @Test func subscribeEmitsQuestionRequest() async throws {
-        let provider = FakeSessionsProvider()
+        let provider = hosted.provider
         let s = try makeSessionWithAgentText("x")
-        provider.sessions["s1"] = s
         s.transcript.pendingQuestion = .init(id: .number(0), params: .stub())
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
         await gw.handle(.subscribe(sessionId: "s1"))
+        try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
         let req = sent.compactMap { msg -> RemoteQuestionPayload? in
             if case .questionRequest(_, let p) = msg { return p }
             return nil
@@ -1323,37 +1288,34 @@ struct RemoteSessionGatewayTests {
         ])
     }
 
-    @Test func questionAnswerCallsProviderWhenRequestMatches() async throws {
-        let provider = FakeSessionsProvider()
-        let s = try makeSessionWithAgentText("x")
-        provider.sessions["s1"] = s
-        s.transcript.pendingQuestion = .init(id: .number(0), params: .stub())
+    @Test func questionAnswerReachesTheAgent() async throws {
+        let id = try await hosted.drivenSession()
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-        await gw.handle(.subscribe(sessionId: "s1"))
+        let gw = RemoteSessionGateway(provider: hosted.provider) { sent.append($0) }
+        defer { gw.close() }
+        await gw.handle(.subscribe(sessionId: id))
+        try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
+        hosted.agent.emitQuestion(id: .number(3), params: .stub())
+        try await hosted.until { sent.contains { if case .questionRequest(_, let payload) = $0 { payload.requestId == 3 } else { false } } }
         await gw.handle(.questionAnswer(
-            sessionId: "s1",
-            requestId: 0,
-            answers: [RemoteQuestionAnswer(questionId: "q1", selectedOptionIds: ["o1"])]))
-        let last = try #require(provider.lastQuestionResponse, "expected answerQuestion call")
-        #expect(last.id == "s1")
-        #expect(last.requestId == .number(0))
-        #expect(last.response == .init(outcome: .answered(answers: [
-            ACPQuestionAnswer(questionId: "q1", selectedOptionIds: ["o1"])
-        ])))
-        #expect(sent.contains { if case .questionResolved(_, 0) = $0 { return true }
-        return false })
+            sessionId: id, requestId: 3, answers: [RemoteQuestionAnswer(questionId: "q1", selectedOptionIds: ["o1"])]))
+        try await hosted.until {
+            hosted.agent.questionResponses[.number(3)] == .init(outcome: .answered(answers: [
+                ACPQuestionAnswer(questionId: "q1", selectedOptionIds: ["o1"]),
+            ]))
+        }
+        try await hosted.until { sent.contains(.questionResolved(sessionId: id, requestId: 3)) }
     }
 
     @Test func subscribeEmitsPlanRequest() async throws {
-        let provider = FakeSessionsProvider()
+        let provider = hosted.provider
         let session = try makeSessionWithAgentText("x")
-        provider.sessions["s1"] = session
         session.transcript.pendingPlan = .init(id: .string("plan-1"), params: .stub())
         var sent: [RemoteServerMessage] = []
         let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
 
         await gateway.handle(.subscribe(sessionId: "s1"))
+        try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
 
         let payload = try #require(sent.compactMap { message -> RemotePlanPayload? in
             if case .planRequest(_, let payload) = message { return payload }
@@ -1373,77 +1335,62 @@ struct RemoteSessionGatewayTests {
         ])
     }
 
-    @Test func planResponseCallsProviderWhenRequestMatches() async throws {
-        let provider = FakeSessionsProvider()
-        let session = try makeSessionWithAgentText("x")
-        provider.sessions["s1"] = session
-        session.transcript.pendingPlan = .init(id: .string("plan-1"), params: .stub())
+    @Test func planResponseReachesTheAgent() async throws {
+        let id = try await hosted.drivenSession()
         var sent: [RemoteServerMessage] = []
-        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
-
-        await gateway.handle(.subscribe(sessionId: "s1"))
-        await gateway.handle(.planResponse(
-            sessionId: "s1",
-            requestId: .string("plan-1"),
-            action: "accept",
-            reason: nil
-        ))
-
-        let response = try #require(provider.lastPlanResponse)
-        #expect(response.id == "s1")
-        #expect(response.requestId == .string("plan-1"))
-        #expect(response.response == .init(outcome: .accepted(planUri: "alas://plans/tc-plan")))
-        #expect(sent.contains {
-            if case .planResolved(_, .string("plan-1")) = $0 { return true }
-            return false
-        })
+        let gw = RemoteSessionGateway(provider: hosted.provider) { sent.append($0) }
+        defer { gw.close() }
+        await gw.handle(.subscribe(sessionId: id))
+        try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
+        hosted.agent.emitPlan(id: .string("plan-1"), params: .stub())
+        try await hosted.until { sent.contains { if case .planRequest = $0 { true } else { false } } }
+        await gw.handle(.planResponse(sessionId: id, requestId: .string("plan-1"), action: "accept", reason: nil))
+        try await hosted.until {
+            hosted.agent.planResponses[.string("plan-1")] == .init(outcome: .accepted(planUri: "alas://plans/tc-plan"))
+        }
+        try await hosted.until { sent.contains(.planResolved(sessionId: id, requestId: .string("plan-1"))) }
     }
 
     @Test func stalePlanResponseIsNoOp() async throws {
-        let provider = FakeSessionsProvider()
-        let session = try makeSessionWithAgentText("x")
-        provider.sessions["s1"] = session
-        session.transcript.pendingPlan = .init(id: .string("plan-2"), params: .stub())
-        let gateway = RemoteSessionGateway(provider: provider) { _ in }
-
-        await gateway.handle(.subscribe(sessionId: "s1"))
-        await gateway.handle(.planResponse(
-            sessionId: "s1",
-            requestId: .string("plan-1"),
-            action: "accept",
-            reason: nil
-        ))
-
-        #expect(provider.lastPlanResponse == nil)
+        let id = try await hosted.drivenSession()
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: hosted.provider) { sent.append($0) }
+        defer { gw.close() }
+        await gw.handle(.subscribe(sessionId: id))
+        try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
+        hosted.agent.emitPlan(id: .string("plan-2"), params: .stub())
+        try await hosted.until { sent.contains { if case .planRequest = $0 { true } else { false } } }
+        await gw.handle(.planResponse(sessionId: id, requestId: .string("plan-1"), action: "accept", reason: nil))
+        #expect(hosted.agent.planResponses.isEmpty)
     }
 
     @Test(arguments: invalidQuestionAnswerCases)
     func invalidQuestionAnswerIsNoOp(_ testCase: InvalidQuestionAnswerCase) async throws {
-        let provider = FakeSessionsProvider()
-        let s = try makeSessionWithAgentText("x")
-        provider.sessions["s1"] = s
-        s.transcript.pendingQuestion = .init(id: .number(testCase.pendingRequestId), params: .stub())
+        let id = try await hosted.drivenSession()
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-        await gw.handle(.subscribe(sessionId: "s1"))
+        let gw = RemoteSessionGateway(provider: hosted.provider) { sent.append($0) }
+        defer { gw.close() }
+        await gw.handle(.subscribe(sessionId: id))
+        try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
+        let requestID = JSONRPCID.number(testCase.pendingRequestId)
+        hosted.agent.emitQuestion(id: requestID, params: .stub())
+        try await hosted.until { sent.contains { if case .questionRequest = $0 { true } else { false } } }
         // Must not resume the agent with a stale or vacuous answer.
         await gw.handle(.questionAnswer(
-            sessionId: "s1",
+            sessionId: id,
             requestId: 0,
             answers: [RemoteQuestionAnswer(questionId: "q1", selectedOptionIds: testCase.selectedOptionIds)]))
-        #expect(provider.lastQuestionResponse == nil)
-        #expect(!sent.contains { if case .questionResolved = $0 { return true }
-        return false })
+        #expect(hosted.agent.questionResponses[requestID] == nil)
+        #expect(!sent.contains { if case .questionResolved = $0 { true } else { false } })
     }
 
     @Test func subscribeEmitsStandardElicitationAndAcceptRoutesByOpaqueToken() async throws {
-        let provider = FakeSessionsProvider()
-        let session = try makeSessionWithAgentText("x")
-        provider.sessions["s1"] = session
+        let id = try await hosted.drivenSession()
+        let session = try #require(hosted.manager?.liveSession(for: id))
         let params = try JSONDecoder().decode(
             ACPElicitationRequestParams.self,
             from: Data(#"""
-            {"sessionId":"remote","mode":"form","message":"Pick", "requestedSchema":{
+            {"sessionId":"agent-1","mode":"form","message":"Pick", "requestedSchema":{
               "properties":{
                 "strategy":{"type":"string","enum":["safe","fast"]},
                 "token":{"type":"string","_meta":{"codex":{"isSecret":true}}}
@@ -1452,12 +1399,14 @@ struct RemoteSessionGatewayTests {
             }}
             """#.utf8)
         )
-        let pending = try #require(ACPUserInputRequest.elicitation(.init(id: .number(4), params: params)))
-        session.transcript.pendingUserInputs = [pending]
         var sent: [RemoteServerMessage] = []
-        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
-
-        await gateway.handle(.subscribe(sessionId: "s1"))
+        let gateway = RemoteSessionGateway(provider: hosted.provider) { sent.append($0) }
+        defer { gateway.close() }
+        await gateway.handle(.subscribe(sessionId: id))
+        try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
+        hosted.agent.emitElicitation(id: .number(4), params: params)
+        try await hosted.until { sent.contains { if case .elicitationRequest = $0 { true } else { false } } }
+        let pending = try #require(session.transcript.pendingUserInputs.first)
         let payload = try #require(sent.compactMap { message -> RemoteElicitationPayload? in
             if case .elicitationRequest(_, let payload) = message { return payload }
             return nil
@@ -1474,21 +1423,21 @@ struct RemoteSessionGatewayTests {
         }.count == 1)
 
         await gateway.handle(.elicitationResponse(
-            sessionId: "s1",
+            sessionId: id,
             requestId: payload.requestId,
             action: "accept",
             content: ["strategy": .string("safe")]
         ))
-        let response = try #require(provider.lastUserInputResponse)
-        #expect(response.id == "s1")
-        #expect(response.token == pending.id)
-        #expect(response.action == .submit(["strategy": .string("safe")]))
+        try await hosted.until {
+            if case .success(let response)? = hosted.agent.elicitationResponses[.number(4)] {
+                response == .accept(["strategy": .string("safe")])
+            } else { false }
+        }
     }
 
     @Test func remoteInputSurfaceDoesNotSkipPastSharedQueueHead() async throws {
-        let provider = FakeSessionsProvider()
+        let provider = hosted.provider
         let session = try makeSessionWithAgentText("x")
-        provider.sessions["s1"] = session
         let cursorParams = ACPQuestionRequestParams.stub(title: "First")
         let cursor = ACPUserInputRequest.cursor(.init(id: .number(1), params: cursorParams))
         let params = try JSONDecoder().decode(
@@ -1504,6 +1453,7 @@ struct RemoteSessionGatewayTests {
         let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
 
         await gateway.handle(.subscribe(sessionId: "s1"))
+        try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
 
         #expect(sent.contains {
             if case .questionRequest = $0 { return true }
@@ -1517,38 +1467,36 @@ struct RemoteSessionGatewayTests {
 
     @Test(arguments: elicitationValidationCases)
     func elicitationAcceptIsValidatedAgainstTheRequestedSchema(_ testCase: ElicitationValidationCase) async throws {
-        let provider = FakeSessionsProvider()
-        let session = try makeSessionWithAgentText("x")
-        provider.sessions["s1"] = session
-        let params = try JSONDecoder().decode(
-            ACPElicitationRequestParams.self,
-            from: Data(testCase.requestJSON.utf8)
-        )
-        let pending = try #require(ACPUserInputRequest.elicitation(.init(id: .number(4), params: params)))
-        session.transcript.pendingUserInputs = [pending]
-        let gateway = RemoteSessionGateway(provider: provider) { _ in }
-
-        await gateway.handle(.elicitationResponse(
-            sessionId: "s1",
-            requestId: pending.id.uuidString,
-            action: "accept",
-            content: testCase.content
-        ))
-
+        let id = try await hosted.drivenSession()
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: hosted.provider) { sent.append($0) }
+        defer { gw.close() }
+        await gw.handle(.subscribe(sessionId: id))
+        try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
+        // Addressed to the scripted agent's own session.
+        let json = testCase.requestJSON.replacingOccurrences(of: #""sessionId":"remote""#, with: #""sessionId":"agent-1""#)
+        let params = try JSONDecoder().decode(ACPElicitationRequestParams.self, from: Data(json.utf8))
+        hosted.agent.emitElicitation(id: .number(4), params: params)
+        let payload = try await hosted.firstElicitation(in: { sent })
+        await gw.handle(.elicitationResponse(sessionId: id, requestId: payload.requestId, action: "accept", content: testCase.content))
         if testCase.accepted {
-            #expect(provider.lastUserInputResponse?.action == .submit(testCase.content))
+            try await hosted.until {
+                if case .success(let response)? = hosted.agent.elicitationResponses[.number(4)] {
+                    response == .accept(testCase.content)
+                } else { false }
+            }
         } else {
-            #expect(provider.lastUserInputResponse == nil)
+            #expect(hosted.agent.elicitationResponses[.number(4)] == nil)
         }
     }
 
     @Test func closeStopsFurtherDeltas() async throws {
-        let provider = FakeSessionsProvider()
+        let provider = hosted.provider
         let s = try makeSessionWithAgentText("hello")
-        provider.sessions["s1"] = s
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
         await gw.handle(.subscribe(sessionId: "s1"))
+        try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
         gw.close()
         s.transcript.messages.append(.agent(id: UUID(), StreamingText("after-close")))
         try await Task.sleep(nanoseconds: 250_000_000)
@@ -1592,18 +1540,28 @@ struct RemoteSessionGatewayTests {
                          .mentionCandidates(sessionId: "s1", query: "a", candidates: provider.mentionCandidates)])
     }
 
+    /// A setting the host refuses changes nothing, so no new config arrives;
+    /// the gateway re-sends the last one, so the viewer reverts.
     @Test(arguments: [true, false])
-    func refusedConfigVerbResendsAuthoritativeConfig(isWriter: Bool) async {
-        let provider = FakeSessionsProvider()
-        let cfg = RemoteSessionConfig(sessionId: "s1", models: [.init(id: "sonnet", name: "Sonnet")], modes: [],
-                                      currentModel: "sonnet", currentMode: nil, autoRunEnabled: false,
-                                      acceptsImages: false)
-        provider.configs["s1"] = cfg
-        if isWriter { provider.writers.insert("s1") }   // fake setModel never changes the config
+    func refusedConfigVerbResendsAuthoritativeConfig(isWriter: Bool) async throws {
+        let session = try makeSessionWithAgentText("x")
+        session.availableModels = [.init(id: "sonnet", name: "Sonnet", description: nil)]
+        let manager = try makeManager()
+        if isWriter {
+            if !manager.isWriter(for: "s1") { #expect(await manager.acquireWriterLease(sessionId: "s1")) }
+        } else {
+            await manager.releaseWriterLease(sessionId: "s1")
+        }
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(provider: hosted.provider) { sent.append($0) }
+        defer { gw.close() }
+        await gw.handle(.subscribe(sessionId: "s1"))
+        try await hosted.until { sent.contains { if case .sessionConfig = $0 { true } else { false } } }
+        let config = try #require(sent.compactMap { if case .sessionConfig(let config) = $0 { config } else { nil } }.last)
+        sent.removeAll()
+        // Not an advertised model, so refused whether or not this Mac drives the session.
         await gw.handle(.setModel(sessionId: "s1", modelId: "opus"))
-        #expect(sent == [.sessionConfig(cfg)])
+        #expect(sent == [.sessionConfig(config)])
     }
 
     @Test func sessionTabActionsRefreshTheListOnSuccessAndReportFailure() async {
@@ -1639,19 +1597,16 @@ struct RemoteSessionGatewayTests {
     }
 
     @Test func sessionConfigChangeEmitsUpdate() async throws {
-        let provider = FakeSessionsProvider()
+        let provider = hosted.provider
         let s = try makeSessionWithAgentText("hi")
         s.availableModels = [.init(id: "opus", name: "Opus", description: nil)]
-        provider.sessions["s1"] = s
-        provider.configs["s1"] = .init(sessionId: "s1", models: [], modes: [], currentModel: nil,
-            currentMode: nil, autoRunEnabled: false, acceptsImages: false)
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
         await gw.handle(.subscribe(sessionId: "s1"))
+        try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
         sent.removeAll()
         s.currentModel = "opus"                    // mutate config
-        try await Task.sleep(nanoseconds: 50_000_000)
-        #expect(sent.contains { if case .sessionConfig = $0 { return true } else { return false } })
+        try await hosted.until { sent.contains { if case .sessionConfig(let config) = $0 { config.currentModel == "opus" } else { false } } }
     }
 
     @Test func imageOnlyUserMessageRendersPlaceholder() {
@@ -1725,10 +1680,7 @@ struct RemoteSessionGatewayTests {
     }
 
     @Test func visualShowPermissionRequestHidesTheVisualFromThePhone() async throws {
-        let provider = FakeSessionsProvider()
-        let s = try makeSessionWithAgentText("x")
-        provider.sessions["s1"] = s
-        s.transcript.streamingState = .awaitingPermission
+        let id = try await hosted.drivenSession()
         let meta = AnyCodable([
             "permission": AnyCodable([
                 "version": AnyCodable(1),
@@ -1737,13 +1689,17 @@ struct RemoteSessionGatewayTests {
                 "defaultToNo": AnyCodable(true),
             ] as [String: AnyCodable]),
         ] as [String: AnyCodable])
-        s.transcript.pendingPermission = .init(id: .number(0), params: .stub(
+        let params = ACPPermissionRequestParams.stub(
             toolTitle: "<h2>secret</h2>",
             toolCallContent: [.content(.text("<h2>secret</h2>"))],
-            metadata: meta, allowOptionMetadata: meta, toolName: "mcp__alas__visual_show"))
+            metadata: meta, allowOptionMetadata: meta, toolName: "mcp__alas__visual_show")
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-        await gw.handle(.subscribe(sessionId: "s1"))
+        let gw = RemoteSessionGateway(provider: hosted.provider) { sent.append($0) }
+        defer { gw.close() }
+        await gw.handle(.subscribe(sessionId: id))
+        try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
+        hosted.agent.emitPermission(id: .number(7), params: params)
+        try await hosted.until { sent.contains { if case .permissionRequest = $0 { true } else { false } } }
 
         guard case .permissionRequest(_, let payload) = try #require(sent.first(where: {
             if case .permissionRequest = $0 { return true }
@@ -1765,7 +1721,7 @@ struct RemoteSessionGatewayTests {
     }
 
     @Test func truncatedVisualShowCallIsNotRehydratedFromStorage() async throws {
-        let provider = FakeSessionsProvider()
+        let provider = hosted.provider
         let html = String(repeating: "<p>secret</p>", count: 600)
         var toolCall = ACPMessage.ToolCall(
             toolCallId: "old", title: "Show visual", status: "completed",
@@ -1773,12 +1729,13 @@ struct RemoteSessionGatewayTests {
         toolCall.truncateForOffWindow()
         let session = try makeSessionWithAgentText("tail")
         session.transcript.messages = [.toolCall(toolCall)]
-        provider.sessions["s1"] = session
         provider.fullToolCallContents["s1|old"] = html
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        gw.hostCalls.fullToolCallContent = { await provider.fullToolCallContent(sessionId: $0, toolCallId: $1) }
 
         await gw.handle(.subscribe(sessionId: "s1"))
+        try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
 
         guard case .transcriptSnapshot(_, _, _, let msgs, _, _, _, _, _)? = sent.first,
               let json = msgs.first(where: { $0.kind == "toolCall" })?.json
@@ -1794,12 +1751,12 @@ struct RemoteSessionGatewayTests {
     /// peers must hear about them through `streamingTicks` or their copy
     /// freezes mid-answer.
     @Test func streamedChunksIntoAnExistingRowReachThePeer() async throws {
-        let provider = FakeSessionsProvider()
+        let provider = hosted.provider
         let s = try makeSessionWithAgentText("Hello")
-        provider.sessions["s1"] = s
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
         await gw.handle(.subscribe(sessionId: "s1"))
+        try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
         guard case .agent(_, _, let buffer) = s.transcript.messages[0] else {
             Issue.record("expected an agent row")
             return
@@ -1817,11 +1774,10 @@ struct RemoteSessionGatewayTests {
     }
 
     @Test func answeringAVisualUpdatesTheSameRowThroughADelta() async throws {
-        let provider = FakeSessionsProvider()
+        let provider = hosted.provider
         let s = try makeSessionWithAgentText("hi")
         let visual = makeVisual()
         s.transcript.appendMessage(.visualAid(visual))
-        provider.sessions["s1"] = s
         var sent: [RemoteServerMessage] = []
         var nextDelta: CheckedContinuation<RemoteServerMessage, Never>?
         let gw = RemoteSessionGateway(provider: provider) { frame in
@@ -1832,6 +1788,7 @@ struct RemoteSessionGatewayTests {
             }
         }
         await gw.handle(.subscribe(sessionId: "s1"))
+        try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
         let snapshot = sent.compactMap { msg -> [RemoteWireMessage]? in
             if case .transcriptSnapshot(_, _, _, let m, _, _, _, _, _) = msg { return m }
             return nil
@@ -1908,10 +1865,9 @@ struct RemoteSessionGatewayTests {
     func invalidVisualResponsesAreRejectedWithoutCallingTheManager(
         reason: String, isWriter: Bool, allowMultiple: Bool, action: String, ids: [String], note: String?
     ) async throws {
-        let provider = FakeSessionsProvider()
+        let provider = hosted.provider
         let (s, visual) = try makeVisualSession(allowMultiple: allowMultiple)
-        provider.sessions["s1"] = s
-        if isWriter { provider.writers.insert("s1") }
+        if isWriter { #expect(try await makeManager().acquireWriterLease(sessionId: "s1")) }
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
         await gw.handle(.visualAidResponse(sessionId: "s1", visualId: visual.id.uuidString, action: action,
@@ -1922,10 +1878,9 @@ struct RemoteSessionGatewayTests {
 
     @Test(arguments: [(64, true), (65, false), (1_000_000, false)])
     func visualRejectionEchoesOnlyBoundedRequestIds(length: Int, echoed: Bool) async throws {
-        let provider = FakeSessionsProvider()
+        let provider = hosted.provider
         let (s, visual) = try makeVisualSession(allowMultiple: false)
-        provider.sessions["s1"] = s
-        provider.writers.insert("s1")
+        #expect(try await makeManager().acquireWriterLease(sessionId: "s1"))
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
         let id = String(repeating: "r", count: length)
@@ -1936,9 +1891,8 @@ struct RemoteSessionGatewayTests {
     }
 
     @Test func visualRejectionWithoutRequestIdCarriesNone() async throws {
-        let provider = FakeSessionsProvider()
+        let provider = hosted.provider
         let (s, visual) = try makeVisualSession(allowMultiple: false)
-        provider.sessions["s1"] = s
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
         await gw.handle(.visualAidResponse(sessionId: "s1", visualId: visual.id.uuidString, action: "answer",
@@ -1989,10 +1943,9 @@ struct RemoteSessionGatewayTests {
     }
 
     @Test func unknownAndAlreadyAnsweredVisualsAreRejected() async throws {
-        let provider = FakeSessionsProvider()
+        let provider = hosted.provider
         let (s, visual) = try makeVisualSession(allowMultiple: false)
-        provider.sessions["s1"] = s
-        provider.writers.insert("s1")
+        #expect(try await makeManager().acquireWriterLease(sessionId: "s1"))
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
         await gw.handle(.visualAidResponse(sessionId: "s1", visualId: UUID().uuidString, action: "dismiss", selectedOptionIds: [], note: nil))
@@ -2008,10 +1961,9 @@ struct RemoteSessionGatewayTests {
     /// A valid answer the host cannot deliver, here for want of a host, is
     /// reported as failed.
     @Test func aManagerFailureIsReportedAsFailed() async throws {
-        let provider = FakeSessionsProvider()
+        let provider = hosted.provider
         let (s, visual) = try makeVisualSession(allowMultiple: false)
-        provider.sessions["s1"] = s
-        provider.writers.insert("s1")
+        #expect(try await makeManager().acquireWriterLease(sessionId: "s1"))
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
         await gw.handle(.visualAidResponse(sessionId: "s1", visualId: visual.id.uuidString, action: "answer",
@@ -2103,13 +2055,10 @@ struct RemoteSessionGatewayTests {
         #expect(written.isEmpty)   // rejected before any write
     }
 
-    private func makeSessionWithUserMessages(_ count: Int) throws -> ACPSession {
-        let mgr = try makeManager()
-        let s = mgr.createSession(agentId: "claude")
-        s.transcript.messages = (0..<count).map {
+    private func makeSessionWithUserMessages(_ count: Int, id: String = "s1") throws -> ACPSession {
+        try hosted.session(id, messages: (0..<count).map {
             .user(id: UUID(), messageId: "u\($0)", text: "msg \($0)", attachments: [])
-        }
-        return s
+        })
     }
 
     private func largeFileEdits() -> [ACPMessage] {
@@ -2140,7 +2089,7 @@ struct RemoteSessionGatewayTests {
     }
 
     @Test func fileEditSnapshotCarriesCompactSummary() async throws {
-        let provider = FakeSessionsProvider()
+        let provider = hosted.provider
         let session = try makeSessionWithUserMessages(0)
         session.transcript.messages = [
             .fileEdit(id: UUID(), .init(
@@ -2148,12 +2097,12 @@ struct RemoteSessionGatewayTests {
                 oldText: String(repeating: "old\n", count: 100_000),
                 newText: String(repeating: "new\n", count: 100_000)))
         ]
-        provider.sessions["s1"] = session
         var sent: [RemoteServerMessage] = []
         let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
         defer { gateway.close() }
 
         await gateway.handle(.subscribe(sessionId: "s1"))
+        try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
 
         guard case .transcriptSnapshot(_, _, _, let rows, _, _, _, _, _) = try #require(sent.first) else {
             Issue.record("Expected initial snapshot")
@@ -2165,15 +2114,15 @@ struct RemoteSessionGatewayTests {
     }
 
     @Test func byteBoundedHistoryRetainsLargeEditsAcrossPages() async throws {
-        let provider = FakeSessionsProvider()
+        let provider = hosted.provider
         let session = try makeSessionWithUserMessages(0)
         let originals = largeFileEdits()
         session.transcript.messages = originals
-        provider.sessions["s1"] = session
         var sent: [RemoteServerMessage] = []
         let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
         defer { gateway.close() }
         await gateway.handle(.subscribe(sessionId: "s1"))
+        try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
         let snapshot = try #require(sent.first)
         guard case .transcriptSnapshot(_, _, _, _, let first, let total, _, _, _) = snapshot else {
             Issue.record("Expected initial snapshot")
@@ -2197,17 +2146,17 @@ struct RemoteSessionGatewayTests {
     }
 
     @Test func oversizedRowDoesNotPreventPagingPastIt() async throws {
-        let provider = FakeSessionsProvider()
+        let provider = hosted.provider
         let session = try makeSessionWithUserMessages(90)
         let original = ACPMessage.fileEdit(id: UUID(), .init(
             path: "Large.swift", added: 1, removed: 0,
             newText: String(repeating: "x", count: 5 * 1024 * 1024)))
         session.transcript.messages.insert(original, at: 0)
-        provider.sessions["s1"] = session
         var sent: [RemoteServerMessage] = []
         let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
         defer { gateway.close() }
         await gateway.handle(.subscribe(sessionId: "s1"))
+        try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
         sent.removeAll()
         await gateway.handle(.fetchOlder(sessionId: "s1", beforeIndex: 1, limit: 90))
         let frame = try #require(sent.first)
@@ -2225,9 +2174,8 @@ struct RemoteSessionGatewayTests {
 
     @Test(.timeLimit(.minutes(1)))
     func largeLiveUpdatesArriveInBoundedOrderedBatches() async throws {
-        let provider = FakeSessionsProvider()
+        let provider = hosted.provider
         let session = try makeSessionWithUserMessages(1)
-        provider.sessions["s1"] = session
         let (stream, continuation) = AsyncStream<RemoteServerMessage>.makeStream()
         let gateway = RemoteSessionGateway(provider: provider) { continuation.yield($0) }
         defer {
@@ -2235,9 +2183,16 @@ struct RemoteSessionGatewayTests {
             continuation.finish()
         }
         await gateway.handle(.subscribe(sessionId: "s1"))
+        var mirror = NativePeerTranscript(sessionId: "s1")
+        // The snapshot comes from the follow; the edits go out as deltas after it.
+        for await frame in stream {
+            if case .transcriptSnapshot = frame {
+                mirror.apply(frame)
+                break
+            }
+        }
         let edits = largeFileEdits()
         session.transcript.messages.append(contentsOf: edits)
-        var mirror = NativePeerTranscript(sessionId: "s1")
         var revisions: [Int] = []
         for await frame in stream {
             switch frame {
@@ -2262,12 +2217,12 @@ struct RemoteSessionGatewayTests {
     }
 
     @Test func snapshotOfLongTranscriptIsTailWindowed() async throws {
-        let provider = FakeSessionsProvider()
+        let provider = hosted.provider
         let s = try makeSessionWithUserMessages(200)
-        provider.sessions["s1"] = s
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
         await gw.handle(.subscribe(sessionId: "s1"))
+        try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
         guard case .transcriptSnapshot(_, _, _, let msgs, let first, let total, _, let revision, _)? = sent.first else {
             Issue.record("expected snapshot, got \(sent)")
             return
@@ -2281,12 +2236,12 @@ struct RemoteSessionGatewayTests {
     }
 
     @Test func deltaCarriesOnlyDirtyMessages() async throws {
-        let provider = FakeSessionsProvider()
+        let provider = hosted.provider
         let s = try makeSessionWithUserMessages(50)
-        provider.sessions["s1"] = s
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
         await gw.handle(.subscribe(sessionId: "s1"))
+        try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
         sent.removeAll()
         s.transcript.messages.append(.systemNotice(id: UUID(), text: "done"))
         try await Task.sleep(nanoseconds: 250_000_000)   // > coalesce window
@@ -2300,12 +2255,12 @@ struct RemoteSessionGatewayTests {
     }
 
     @Test func structuralChangeTriggersResyncSnapshotWithBumpedEpoch() async throws {
-        let provider = FakeSessionsProvider()
+        let provider = hosted.provider
         let s = try makeSessionWithUserMessages(10)
-        provider.sessions["s1"] = s
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
         await gw.handle(.subscribe(sessionId: "s1"))
+        try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
         guard case .transcriptSnapshot(_, _, _, _, _, _, let epoch0, _, _)? = sent.first else {
             Issue.record("expected snapshot")
             return
@@ -2325,12 +2280,12 @@ struct RemoteSessionGatewayTests {
     }
 
     @Test func fetchOlderReturnsClampedPage() async throws {
-        let provider = FakeSessionsProvider()
+        let provider = hosted.provider
         let s = try makeSessionWithUserMessages(200)
-        provider.sessions["s1"] = s
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
         await gw.handle(.subscribe(sessionId: "s1"))
+        try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
         sent.removeAll()
         await gw.handle(.fetchOlder(sessionId: "s1", beforeIndex: 110, limit: 90))
         guard case .transcriptPage(_, _, let first, let msgs)? = sent.last else {
@@ -2353,8 +2308,8 @@ struct RemoteSessionGatewayTests {
     }
 
     @Test func fetchOlderBeforeSubscribeIsIgnored() async throws {
-        let provider = FakeSessionsProvider()
-        provider.sessions["s1"] = try makeSessionWithUserMessages(5)
+        let provider = hosted.provider
+        _ = try makeSessionWithUserMessages(5)
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
         await gw.handle(.fetchOlder(sessionId: "s1", beforeIndex: 5, limit: 5))
@@ -2362,7 +2317,7 @@ struct RemoteSessionGatewayTests {
     }
 
     @Test func truncatedToolContentIsFetchedOnceAcrossSnapshotAndDeltas() async throws {
-        let provider = FakeSessionsProvider()
+        let provider = hosted.provider
         let fullContent = String(repeating: "abcdef0123456789", count: 400)
         var toolCall = ACPMessage.ToolCall(
             toolCallId: "old", title: "read", status: "completed",
@@ -2370,11 +2325,12 @@ struct RemoteSessionGatewayTests {
         toolCall.truncateForOffWindow()
         let session = try makeSessionWithAgentText("tail")
         session.transcript.messages = [.toolCall(toolCall), .agent(id: UUID(), StreamingText("tail"))]
-        provider.sessions["s1"] = session
         provider.fullToolCallContents["s1|old"] = fullContent
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        gw.hostCalls.fullToolCallContent = { await provider.fullToolCallContent(sessionId: $0, toolCallId: $1) }
         await gw.handle(.subscribe(sessionId: "s1"))
+        try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
         #expect(provider.fullToolCallContentCallCount == 1)
         // A dirty tick on the OTHER message must not re-fetch tool content.
         session.transcript.messages.append(.systemNotice(id: UUID(), text: "x"))
@@ -2383,79 +2339,13 @@ struct RemoteSessionGatewayTests {
     }
 
     @Test func resubscribeDoesNotLeakTrackingRetains() async throws {
-        let provider = FakeSessionsProvider()
+        let provider = hosted.provider
         let s = try makeSessionWithUserMessages(3)
-        provider.sessions["s1"] = s
         let gw = RemoteSessionGateway(provider: provider) { _ in }
         await gw.handle(.subscribe(sessionId: "s1"))
         await gw.handle(.subscribe(sessionId: "s1"))   // client resync
         await gw.handle(.unsubscribe(sessionId: "s1"))
         #expect(!s.transcript.changeLog.isTracking)
-    }
-
-    // Regression (codex review, PR #775): a dirty delta that suspends mid-
-    // serialize (awaiting truncated tool-call content) while a CONCURRENT
-    // structural resync lands on the same session must not resume and send
-    // its now-stale upserts stamped with the resync's new epoch/revision —
-    // the client would wrongly accept them as a legitimate next delta.
-    @Test func deltaDropsStaleUpsertsWhenEpochChangesDuringSerialize() async throws {
-        let provider = FakeSessionsProvider()
-        let fullContent = String(repeating: "abcdef0123456789", count: 400)
-        var toolCall = ACPMessage.ToolCall(
-            toolCallId: "old", title: "read", status: "in_progress",
-            content: fullContent, preview: "abcdef")
-        toolCall.truncateForOffWindow()
-        let mgr = try makeManager()
-        let session = mgr.createSession(agentId: "claude")
-        session.transcript.messages = [.toolCall(toolCall)] + (0..<5).map {
-            .user(id: UUID(), messageId: "u\($0)", text: "msg \($0)", attachments: [])
-        }
-        provider.sessions["s1"] = session
-        provider.fullToolCallContents["s1|old"] = fullContent
-        var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-        gw.hostCalls = provider.hostCalls
-
-        await gw.handle(.subscribe(sessionId: "s1"))   // caches "old"'s content
-        sent.removeAll()
-        provider.fullToolCallContentCallCount = 0
-        provider.pauseFullToolCallContentOnCall = 1   // suspend the delta's re-fetch below
-
-        // Mutate the tool call in place (dirty, not structural) — invalidates
-        // its cache and forces a real re-fetch in the resulting delta.
-        if case .toolCall(var tc) = session.transcript.messages[0] {
-            tc.status = "completed"
-            session.transcript.messages[0] = .toolCall(tc)
-        }
-
-        // Wait for the coalesce timer to fire and the delta to suspend on the
-        // paused fetch (call #1).
-        for _ in 0..<50 where provider.fullToolCallContentCallCount == 0 {
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
-        #expect(provider.fullToolCallContentCallCount == 1)
-
-        // While that delta is suspended, a structural change lands on the
-        // SAME session and its own coalesced delta resyncs via a fresh
-        // snapshot (its tool-content fetch is call #2, not paused).
-        session.transcript.messages.removeLast()
-        for _ in 0..<50 where !(sent.last.map { if case .transcriptSnapshot = $0 { return true }
-        return false } ?? false) {
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
-        guard case .transcriptSnapshot(_, _, _, _, _, _, let resyncEpoch, _, _)? = sent.last else {
-            Issue.record("expected a resync snapshot from the structural change, got \(sent)")
-            return
-        }
-
-        sent.removeAll()
-        // Resume the original delta's suspended fetch. With the fix, it must
-        // detect the epoch moved during its await and discard rather than
-        // send a stale delta stamped with the new epoch.
-        provider.resumeFullToolCallContent(fullContent)
-        try await Task.sleep(nanoseconds: 250_000_000)   // > coalesce window
-        #expect(sent.isEmpty, "stale delta must be discarded once epoch changed during serialize, got \(sent)")
-        #expect(resyncEpoch != 0)   // sanity: the resync did bump the epoch
     }
 
     // Regression (codex review, PR #775): an epoch-only guard misses a
@@ -2466,24 +2356,25 @@ struct RemoteSessionGatewayTests {
     // as the next legitimate delta after it. The generation counter (bumped
     // on every snapshot regardless of epoch) must catch this too.
     @Test func deltaDropsStaleUpsertsWhenSameEpochSnapshotLandsDuringSerialize() async throws {
-        let provider = FakeSessionsProvider()
+        let provider = hosted.provider
         let fullContent = String(repeating: "abcdef0123456789", count: 400)
         var toolCall = ACPMessage.ToolCall(
             toolCallId: "old", title: "read", status: "in_progress",
             content: fullContent, preview: "abcdef")
         toolCall.truncateForOffWindow()
         let mgr = try makeManager()
-        let session = mgr.createSession(agentId: "claude")
+        let session = mgr.createSession(id: "s1", agentId: "claude")
         session.transcript.messages = [.toolCall(toolCall)] + (0..<5).map {
             .user(id: UUID(), messageId: "u\($0)", text: "msg \($0)", attachments: [])
         }
-        provider.sessions["s1"] = session
         provider.fullToolCallContents["s1|old"] = fullContent
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        gw.hostCalls.fullToolCallContent = { await provider.fullToolCallContent(sessionId: $0, toolCallId: $1) }
         gw.hostCalls = provider.hostCalls
 
-        await gw.handle(.subscribe(sessionId: "s1"))   // caches "old"'s content
+        await gw.handle(.subscribe(sessionId: "s1"))
+        try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }   // caches "old"'s content
         sent.removeAll()
         provider.fullToolCallContentCallCount = 0
         provider.pauseFullToolCallContentOnCall = 1   // suspend the delta's re-fetch below
@@ -2500,348 +2391,51 @@ struct RemoteSessionGatewayTests {
 
         // A SAME-epoch snapshot lands via takeOver — no structural change,
         // so the transcript's epoch never moves.
+        // Following again resets; the paused delta belongs to the state it
+        // replaced, so it must not go out once its fetch resumes.
         await gw.handle(.takeOver(sessionId: "s1"))
-        guard case .transcriptSnapshot(_, _, _, _, _, _, let snapshotEpoch, _, _)? = sent.last else {
-            Issue.record("expected a snapshot from takeOver, got \(sent)")
-            return
-        }
-        #expect(snapshotEpoch == 0)   // sanity: confirms this is the same-epoch case
-
-        sent.removeAll()
         provider.resumeFullToolCallContent(fullContent)
-        try await Task.sleep(nanoseconds: 250_000_000)   // > coalesce window
-        #expect(sent.isEmpty, "stale delta must be discarded once a same-epoch snapshot landed during serialize, got \(sent)")
+        try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
+        let snapshotAt = try #require(sent.firstIndex { if case .transcriptSnapshot = $0 { true } else { false } })
+        #expect(!sent[..<snapshotAt].contains { if case .transcriptDelta(_, _, _, let rows, _, _, _) = $0 { !rows.isEmpty } else { false } },
+                "stale delta must be discarded once a same-epoch snapshot replaced its state, got \(sent)")
     }
 
-    // Regression (codex review, PR #775): two overlapping DIRTY deltas race
-    // the same way a delta and a snapshot do — a still-running (cancelled-
-    // but-not-stopped) coalesce Task can suspend mid-serialize while a later
-    // mutation's own coalesce Task completes and sends first. The earlier
-    // delta must not resume, pass an unchanged-generation check, and roll
-    // the client back with its now-stale content at a higher revision.
-    @Test func deltaDropsStaleUpsertsWhenOverlappingDirtyDeltaLandsDuringSerialize() async throws {
-        let provider = FakeSessionsProvider()
+    /// The follow is read one batch at a time, so a delta waiting on a tool
+    /// call's full content holds back the changes made meanwhile, which
+    /// follow it in order, each delta with the next revision.
+    @Test func changesWaitingBehindASlowContentFetchFollowInOrder() async throws {
+        let provider = hosted.provider
         let fullContent = String(repeating: "abcdef0123456789", count: 400)
         var toolCall = ACPMessage.ToolCall(
-            toolCallId: "old", title: "read", status: "in_progress",
-            content: fullContent, preview: "abcdef")
+            toolCallId: "old", title: "read", status: "in_progress", content: fullContent, preview: "abcdef")
         toolCall.truncateForOffWindow()
-        let mgr = try makeManager()
-        let session = mgr.createSession(agentId: "claude")
-        session.transcript.messages = [.toolCall(toolCall)] + (0..<5).map {
-            .user(id: UUID(), messageId: "u\($0)", text: "msg \($0)", attachments: [])
-        }
-        provider.sessions["s1"] = session
+        let session = try hosted.session(messages: [.toolCall(toolCall), .user(id: UUID(), messageId: "u0", text: "msg 0", attachments: [])])
         provider.fullToolCallContents["s1|old"] = fullContent
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
         gw.hostCalls = provider.hostCalls
-
-        await gw.handle(.subscribe(sessionId: "s1"))   // caches "old"'s content
+        defer { gw.close() }
+        await gw.handle(.subscribe(sessionId: "s1"))
+        try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
         sent.removeAll()
         provider.fullToolCallContentCallCount = 0
-        provider.pauseFullToolCallContentOnCall = 1   // suspend the delta's re-fetch below
+        provider.pauseFullToolCallContentOnCall = 1
 
-        // Dirty mutation #1: the tool call — invalidates its cache and
-        // forces a real re-fetch that suspends.
-        if case .toolCall(var tc) = session.transcript.messages[0] {
-            tc.status = "completed"
-            session.transcript.messages[0] = .toolCall(tc)
+        // The tool call's own delta re-fetches its content, and waits.
+        if case .toolCall(var call) = session.transcript.messages[0] {
+            call.status = "completed"
+            session.transcript.messages[0] = .toolCall(call)
         }
-        for _ in 0..<50 where provider.fullToolCallContentCallCount == 0 {
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
-        #expect(provider.fullToolCallContentCallCount == 1)
-
-        // Dirty mutation #2: an appended message — a non-truncated-tool-call
-        // dirty index, so its own coalesced delta completes fully (no
-        // suspension) while mutation #1's delta is still stuck above.
-        session.transcript.messages.append(.systemNotice(id: UUID(), text: "notice"))
-        for _ in 0..<50 where sent.isEmpty {
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
-        guard case .transcriptDelta(_, _, _, let firstUpserts, _, _, _)? = sent.last else {
-            Issue.record("expected the overlapping dirty delta to land, got \(sent)")
-            return
-        }
-        #expect(firstUpserts.contains { $0.kind == "systemNotice" })
-
-        sent.removeAll()
-        // Resume mutation #1's suspended fetch. With the fix, it must detect
-        // that mutation #2's delta already claimed a newer generation and
-        // discard instead of rolling the transcript back with stale content.
+        try await hosted.until { provider.fullToolCallContentCallCount == 1 }
+        session.transcript.messages.append(.systemNotice(id: UUID(), text: "meanwhile"))
         provider.resumeFullToolCallContent(fullContent)
-        try await Task.sleep(nanoseconds: 250_000_000)   // > coalesce window
-        #expect(sent.isEmpty, "stale overlapping delta must be discarded, got \(sent)")
-    }
 
-    // Regression (codex review, PR #775): discarding a superseded dirty
-    // delta must not silently lose the mutation it would have carried.
-    // sentVersion used to advance BEFORE the await, so a delta that got
-    // discarded still "consumed" its indices from the change log's
-    // perspective — the next delta would never re-offer them, losing the
-    // mutation until a full resync. sentVersion must only commit once the
-    // delta is actually accepted, so a superseding delta naturally re-picks
-    // up whatever the discarded one would have sent.
-    @Test func overlappingDirtyDeltaStillDeliversDiscardedMutation() async throws {
-        let provider = FakeSessionsProvider()
-        let fullContent = String(repeating: "abcdef0123456789", count: 400)
-        var toolCall = ACPMessage.ToolCall(
-            toolCallId: "old", title: "read", status: "in_progress",
-            content: fullContent, preview: "abcdef")
-        toolCall.truncateForOffWindow()
-        let mgr = try makeManager()
-        let session = mgr.createSession(agentId: "claude")
-        session.transcript.messages = [.toolCall(toolCall)] + (0..<5).map {
-            .user(id: UUID(), messageId: "u\($0)", text: "msg \($0)", attachments: [])
-        }
-        provider.sessions["s1"] = session
-        provider.fullToolCallContents["s1|old"] = fullContent
-        var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-        gw.hostCalls = provider.hostCalls
-
-        await gw.handle(.subscribe(sessionId: "s1"))   // caches "old"'s content
-        sent.removeAll()
-        provider.fullToolCallContentCallCount = 0
-        provider.pauseFullToolCallContentOnCall = 1   // suspend mutation #1's re-fetch
-
-        // Mutation #1: the tool call — invalidates its cache and suspends
-        // its own delta while re-fetching.
-        if case .toolCall(var tc) = session.transcript.messages[0] {
-            tc.status = "completed"
-            session.transcript.messages[0] = .toolCall(tc)
-        }
-        for _ in 0..<50 where provider.fullToolCallContentCallCount == 0 {
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
-        #expect(provider.fullToolCallContentCallCount == 1)
-
-        // Mutation #2: an appended message. Its own coalesced delta must
-        // include BOTH this new index AND mutation #1's index, because
-        // sentVersion was NOT prematurely advanced by the still-suspended
-        // (and about-to-be-discarded) delta from mutation #1.
-        session.transcript.messages.append(.systemNotice(id: UUID(), text: "notice"))
-        for _ in 0..<50 where sent.isEmpty {
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
-        guard case .transcriptDelta(_, _, _, let upserts, _, _, _)? = sent.last else {
-            Issue.record("expected the overlapping dirty delta to land, got \(sent)")
-            return
-        }
-        #expect(upserts.contains { $0.kind == "systemNotice" })
-        #expect(
-            upserts.contains { $0.stableId == "m0" && ($0.json?.contains(#""status":"completed""#) ?? false) },
-            "mutation #1's tool-call status change must not be lost, got \(upserts)"
-        )
-
-        sent.removeAll()
-        provider.resumeFullToolCallContent(fullContent)
-        try await Task.sleep(nanoseconds: 250_000_000)   // > coalesce window
-        #expect(sent.isEmpty, "the superseded delta must still discard, got \(sent)")
-    }
-
-    // Regression (codex review, PR #775): sendSnapshot bumps `generation`
-    // but, unlike the delta/page paths, never re-checked it after its own
-    // await — so a snapshot superseded by a concurrent send (another
-    // snapshot, or a dirty delta) still went out unconditionally. Because
-    // the web client applies snapshots without any epoch/revision ordering
-    // check (unlike deltas), this could roll the client back to stale
-    // content until a later resync happened to correct it.
-    @Test func sendSnapshotDropsStaleSendWhenSupersededDuringSerialize() async throws {
-        let provider = FakeSessionsProvider()
-        let fullContent = String(repeating: "abcdef0123456789", count: 400)
-        var toolCall = ACPMessage.ToolCall(
-            toolCallId: "old", title: "read", status: "completed",
-            content: fullContent, preview: "abcdef")
-        toolCall.truncateForOffWindow()
-        let mgr = try makeManager()
-        let session = mgr.createSession(agentId: "claude")
-        // Small transcript: the tool call is inside the tail window, so
-        // both subscribe's and takeOver's snapshots must serialize it.
-        session.transcript.messages = [.toolCall(toolCall)] + (0..<5).map {
-            .user(id: UUID(), messageId: "u\($0)", text: "msg \($0)", attachments: [])
-        }
-        provider.sessions["s1"] = session
-        provider.fullToolCallContents["s1|old"] = fullContent
-        provider.pauseFullToolCallContentOnCall = 1   // only subscribe's first fetch pauses
-        var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-        gw.hostCalls = provider.hostCalls
-
-        let subscribeTask = Task { @MainActor in
-            await gw.handle(.subscribe(sessionId: "s1"))
-        }
-        for _ in 0..<50 where provider.fullToolCallContentCallCount == 0 {
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
-        #expect(provider.fullToolCallContentCallCount == 1)
-
-        // A concurrent takeOver's own snapshot completes and sends first
-        // (its own fetch is call #2, not paused).
-        await gw.handle(.takeOver(sessionId: "s1"))
-        let snapshotsAfterTakeOver = sent.filter { if case .transcriptSnapshot = $0 { return true }
-        return false }.count
-        #expect(snapshotsAfterTakeOver == 1)
-
-        // Resume subscribe's suspended fetch. With the fix, it must detect
-        // it was superseded and NOT send a second, stale snapshot.
-        provider.resumeFullToolCallContent(fullContent)
-        await subscribeTask.value
-        try await Task.sleep(nanoseconds: 50_000_000)
-        let snapshotCount = sent.filter { if case .transcriptSnapshot = $0 { return true }
-        return false }.count
-        #expect(snapshotCount == 1, "the superseded subscribe snapshot must be discarded, got \(sent)")
-    }
-
-    // Regression (codex review, PR #775): sendSnapshot advanced sentVersion
-    // BEFORE its own await, the same premature-commit hazard as the dirty
-    // delta fix above. If the snapshot is later discarded because a
-    // concurrent dirty delta sent first, that delta computes its upserts
-    // against the ALREADY-advanced sentVersion and never re-offers the
-    // pre-snapshot dirty content — losing it entirely (neither send ever
-    // delivers it) until a later full resync.
-    @Test func sendSnapshotDefersSentVersionSoSupersedingDeltaStillDeliversIt() async throws {
-        let provider = FakeSessionsProvider()
-        let fullContent = String(repeating: "abcdef0123456789", count: 400)
-        var toolCall = ACPMessage.ToolCall(
-            toolCallId: "old", title: "read", status: "completed",
-            content: fullContent, preview: "abcdef")
-        toolCall.truncateForOffWindow()
-        let mgr = try makeManager()
-        let session = mgr.createSession(agentId: "claude")
-        session.transcript.messages = (0..<5).map {
-            .user(id: UUID(), messageId: "u\($0)", text: "msg \($0)", attachments: [])
-        }
-        provider.sessions["s1"] = session
-        provider.fullToolCallContents["s1|old"] = fullContent
-        var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-        gw.hostCalls = provider.hostCalls
-
-        await gw.handle(.subscribe(sessionId: "s1"))   // establishes observe(); nothing to cache yet
-        sent.removeAll()
-        provider.fullToolCallContentCallCount = 0
-        provider.pauseFullToolCallContentOnCall = 1   // suspend the re-subscribe snapshot's fetch below
-
-        // Append the truncated tool call directly (uncached anywhere) and
-        // immediately re-subscribe — its snapshot must fetch the tool call
-        // for the first time and suspends.
-        session.transcript.messages.append(.toolCall(toolCall))
-        let resubscribeTask = Task { @MainActor in
-            await gw.handle(.subscribe(sessionId: "s1"))
-        }
-        for _ in 0..<50 where provider.fullToolCallContentCallCount == 0 {
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
-        #expect(provider.fullToolCallContentCallCount == 1)
-
-        // The first subscribe's still-active observer reacts to the append
-        // with its own coalesced delta, which also needs the (still
-        // uncached) tool call — its fetch is call #2, not paused.
-        for _ in 0..<50 where sent.isEmpty {
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
-        guard case .transcriptDelta(_, _, _, let upserts, _, _, _)? = sent.last else {
-            Issue.record("expected the concurrent delta to land, got \(sent)")
-            return
-        }
-        #expect(
-            upserts.contains { $0.kind == "toolCall" },
-            "the appended tool call must not be lost, got \(upserts)"
-        )
-
-        sent.removeAll()
-        provider.resumeFullToolCallContent(fullContent)
-        await resubscribeTask.value
-        try await Task.sleep(nanoseconds: 50_000_000)
-        let snapshotCount = sent.filter { if case .transcriptSnapshot = $0 { return true }
-        return false }.count
-        #expect(snapshotCount == 0, "the superseded re-subscribe snapshot must be discarded, got \(sent)")
-    }
-
-    // Regression (codex review, PR #775): a same-epoch snapshot reset
-    // `state.revision = 0` synchronously up front, the same premature-commit
-    // hazard as sentVersion but on the send side. If the snapshot is then
-    // DISCARDED (superseded by a dirty delta claiming a later generation),
-    // that already-happened reset still corrupts the winning delta's own
-    // numbering: it computes `state.revision += 1` off the snapshot's
-    // premature reset (0) instead of the client's actual last-known
-    // revision, producing revision:1 when the client expects N+1 — the
-    // client rejects it and resubscribes, defeating incremental delivery
-    // right when it matters (an active resync race).
-    @Test func sendSnapshotDefersRevisionResetSoSupersedingDeltaStaysInSync() async throws {
-        let provider = FakeSessionsProvider()
-        let fullContent = String(repeating: "abcdef0123456789", count: 400)
-        var toolCall = ACPMessage.ToolCall(
-            toolCallId: "old", title: "read", status: "completed",
-            content: fullContent, preview: "abcdef")
-        toolCall.truncateForOffWindow()
-        let mgr = try makeManager()
-        let session = mgr.createSession(agentId: "claude")
-        session.transcript.messages = (0..<5).map {
-            .user(id: UUID(), messageId: "u\($0)", text: "msg \($0)", attachments: [])
-        }
-        provider.sessions["s1"] = session
-        provider.fullToolCallContents["s1|old"] = fullContent
-        var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-        gw.hostCalls = provider.hostCalls
-
-        await gw.handle(.subscribe(sessionId: "s1"))   // establishes observe(); revision committed at 0
-
-        // Three uncontested dirty deltas first, to establish a non-zero
-        // baseline revision — the bug is invisible when the baseline is
-        // already 0, since a premature reset and a legitimate prior value
-        // of 0 look identical.
-        for i in 0..<3 {
-            sent.removeAll()
-            session.transcript.messages.append(.systemNotice(id: UUID(), text: "warmup \(i)"))
-            for _ in 0..<50 where sent.isEmpty {
-                try await Task.sleep(nanoseconds: 20_000_000)
-            }
-            guard case .transcriptDelta? = sent.last else {
-                Issue.record("expected warmup delta \(i) to land, got \(sent)")
-                return
-            }
-        }
-        // state.revision is now legitimately 3.
-
-        sent.removeAll()
-        provider.fullToolCallContentCallCount = 0
-        provider.pauseFullToolCallContentOnCall = 1   // suspend the re-subscribe snapshot's fetch below
-
-        session.transcript.messages.append(.toolCall(toolCall))
-        let resubscribeTask = Task { @MainActor in
-            await gw.handle(.subscribe(sessionId: "s1"))
-        }
-        for _ in 0..<50 where provider.fullToolCallContentCallCount == 0 {
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
-        #expect(provider.fullToolCallContentCallCount == 1)
-
-        // The still-active observer reacts to the append with its own
-        // coalesced dirty delta, which supersedes (via generation) the
-        // suspended re-subscribe snapshot.
-        session.transcript.messages.append(.systemNotice(id: UUID(), text: "notice"))
-        for _ in 0..<50 where sent.isEmpty {
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
-        guard case .transcriptDelta(_, _, _, _, _, let winningRevision, _)? = sent.last else {
-            Issue.record("expected the superseding delta to land, got \(sent)")
-            return
-        }
-        #expect(
-            winningRevision == 4,
-            "the superseding delta must continue from the real prior revision (3), not the discarded snapshot's premature reset, got \(winningRevision)"
-        )
-
-        sent.removeAll()
-        provider.resumeFullToolCallContent(fullContent)
-        await resubscribeTask.value
-        let snapshotCount = sent.filter { if case .transcriptSnapshot = $0 { return true }
-        return false }.count
-        #expect(snapshotCount == 0, "the superseded re-subscribe snapshot must still be discarded, got \(sent)")
+        try await hosted.until { sent.contains { if case .transcriptDelta(_, _, _, let rows, _, _, _) = $0 { rows.contains { $0.kind == "systemNotice" } } else { false } } }
+        let deltas = sent.compactMap { if case .transcriptDelta(_, _, _, let rows, _, let revision, _) = $0 { (rows, revision) } else { nil } }
+        #expect(deltas.map(\.1) == Array(1...deltas.count))
+        #expect(deltas.first?.0.first?.index == 0, "the tool call goes out first")
+        #expect(deltas.last?.0.contains { $0.kind == "systemNotice" } == true)
     }
 
     // Regression (codex review, PR #775): fetchOlder's page serialization has
@@ -2853,14 +2447,14 @@ struct RemoteSessionGatewayTests {
     // re-stamped, fresh page — not silently drop the request (see the
     // dedicated retry test below for why silently dropping is itself a bug).
     @Test func fetchOlderRetriesAndDeliversFreshPageWhenEpochChangesDuringSerialize() async throws {
-        let provider = FakeSessionsProvider()
+        let provider = hosted.provider
         let fullContent = String(repeating: "abcdef0123456789", count: 400)
         var toolCall = ACPMessage.ToolCall(
             toolCallId: "old", title: "read", status: "completed",
             content: fullContent, preview: "abcdef")
         toolCall.truncateForOffWindow()
         let mgr = try makeManager()
-        let session = mgr.createSession(agentId: "claude")
+        let session = mgr.createSession(id: "s1", agentId: "claude")
         // 100 messages total: the tail-window snapshot (last 90) excludes
         // index 5, so subscribing never fetches/caches its content — the
         // fetchOlder page below performs the FIRST fetch for it.
@@ -2869,13 +2463,14 @@ struct RemoteSessionGatewayTests {
         } + [.toolCall(toolCall)] + (0..<94).map {
             .user(id: UUID(), messageId: "v\($0)", text: "msg \($0)", attachments: [])
         }
-        provider.sessions["s1"] = session
         provider.fullToolCallContents["s1|old"] = fullContent
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        gw.hostCalls.fullToolCallContent = { await provider.fullToolCallContent(sessionId: $0, toolCallId: $1) }
         gw.hostCalls = provider.hostCalls
 
         await gw.handle(.subscribe(sessionId: "s1"))
+        try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
         guard case .transcriptSnapshot(_, _, _, _, let firstIndex, _, _, _, _)? = sent.first else {
             Issue.record("expected snapshot, got \(sent)")
             return
@@ -2931,27 +2526,28 @@ struct RemoteSessionGatewayTests {
     // not. Silently dropping the page in that case would leave the client
     // stuck forever. The gateway must retry and still deliver a page.
     @Test func fetchOlderRetriesAndDeliversPageInsteadOfLeavingClientStuck() async throws {
-        let provider = FakeSessionsProvider()
+        let provider = hosted.provider
         let fullContent = String(repeating: "abcdef0123456789", count: 400)
         var toolCall = ACPMessage.ToolCall(
             toolCallId: "old", title: "read", status: "completed",
             content: fullContent, preview: "abcdef")
         toolCall.truncateForOffWindow()
         let mgr = try makeManager()
-        let session = mgr.createSession(agentId: "claude")
+        let session = mgr.createSession(id: "s1", agentId: "claude")
         // 100 messages: the tail-window snapshot (last 90) excludes index 0,
         // so subscribing never fetches/caches its content — fetchOlder below
         // performs the first, pausable fetch.
         session.transcript.messages = [.toolCall(toolCall)] + (0..<99).map {
             .user(id: UUID(), messageId: "u\($0)", text: "msg \($0)", attachments: [])
         }
-        provider.sessions["s1"] = session
         provider.fullToolCallContents["s1|old"] = fullContent
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        gw.hostCalls.fullToolCallContent = { await provider.fullToolCallContent(sessionId: $0, toolCallId: $1) }
         gw.hostCalls = provider.hostCalls
 
         await gw.handle(.subscribe(sessionId: "s1"))
+        try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
         sent.removeAll()
         provider.fullToolCallContentCallCount = 0
         provider.pauseFullToolCallContentOnCall = 1   // suspend the page's first fetch attempt
@@ -2991,9 +2587,9 @@ struct RemoteSessionGatewayTests {
     }
 
     @Test func resubscribeStillEmitsQueueStateWhenUnchanged() async throws {
-        let provider = FakeSessionsProvider()
+        let provider = hosted.provider
         let id = "s1"
-        provider.sessions[id] = try makeSessionWithAgentText("x")
+        _ = try makeSessionWithAgentText("x")
         var sent: [RemoteServerMessage] = []
         let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
 
@@ -3002,7 +2598,9 @@ struct RemoteSessionGatewayTests {
         // `force: true` on the subscribe path, the second subscribe's send
         // would be swallowed by the dedupe.
         await gateway.handle(.subscribe(sessionId: id))
+        try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
         await gateway.handle(.subscribe(sessionId: id))
+        try await hosted.until { sent.filter { if case .queueState = $0 { true } else { false } }.count == 2 }
 
         let states = sent.compactMap { message -> [RemoteQueuedPrompt]? in
             if case .queueState(_, let items) = message { return items }
@@ -3017,18 +2615,18 @@ struct RemoteSessionGatewayTests {
         // emission inside the config-coalesce closure in observe(id:session:)
         // that carries a live queue mutation (a real enqueue while the
         // browser tab is already open) to the client.
-        let provider = FakeSessionsProvider()
+        let provider = hosted.provider
         let id = "s1"
         let session = try makeSessionWithAgentText("x")
-        provider.sessions[id] = session
         var sent: [RemoteServerMessage] = []
         let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
         await gateway.handle(.subscribe(sessionId: id))
+        try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
         sent.removeAll()
 
         let item = QueuedPrompt(blocks: [.text("queued one")])
         session.queue = [item]                      // mutate the LIVE queue, not via subscribe
-        try await Task.sleep(nanoseconds: 50_000_000)
+        try await hosted.until { sent.contains { if case .queueState = $0 { true } else { false } } }
 
         let items = sent.compactMap { message -> [RemoteQueuedPrompt]? in
             if case .queueState(_, let items) = message { return items }
@@ -3045,22 +2643,24 @@ struct RemoteSessionGatewayTests {
         // too, not just be inert scaffolding — @Published fires
         // objectWillChange on every assignment regardless of equality, so
         // this exercises the gateway's own dedupe rather than Combine's.
-        let provider = FakeSessionsProvider()
+        let provider = hosted.provider
         let id = "s1"
         let session = try makeSessionWithAgentText("x")
-        provider.sessions[id] = session
         var sent: [RemoteServerMessage] = []
         let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
         await gateway.handle(.subscribe(sessionId: id))
+        try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
 
         let item = QueuedPrompt(blocks: [.text("queued one")])
         session.queue = [item]
-        try await Task.sleep(nanoseconds: 50_000_000)
+        try await hosted.until { sent.filter { if case .queueState = $0 { true } else { false } }.count == 2 }
         let countAfterMutation = sent.filter { if case .queueState = $0 { return true } else { return false } }.count
         #expect(countAfterMutation == 2)   // force:true baseline at subscribe + the mutation above
 
         session.queue = [item]             // reassign the identical value
-        try await Task.sleep(nanoseconds: 50_000_000)
+        // Anything the reassignment sent comes before this message's delta.
+        session.transcript.messages.append(.systemNotice(id: UUID(), text: "marker"))
+        try await hosted.until { sent.contains { if case .transcriptDelta(_, _, _, let upserts, _, _, _) = $0 { !upserts.isEmpty } else { false } } }
         let countAfterReassign = sent.filter { if case .queueState = $0 { return true } else { return false } }.count
         #expect(countAfterReassign == countAfterMutation)   // dedupe swallowed the no-op reassignment
     }
