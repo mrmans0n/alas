@@ -100,8 +100,10 @@ extension AlasCoreContext {
     ) async -> [(worktree: Worktree, manager: ACPSessionManager)] {
         var result: [(worktree: Worktree, manager: ACPSessionManager)] = []
         for worktree in projects.worktrees(projectId: projectId) {
-            guard let manager = sessionManagers[.worktree(worktree.id)]
-                ?? (try? environment.sessionManager(for: worktree, in: self))
+            // The environment may replace a loaded manager whose worktree
+            // moved to another project; one busy with an operation stays.
+            guard let manager = (try? environment.sessionManager(for: worktree, in: self))
+                ?? sessionManagers[.worktree(worktree.id)]
             else { continue }
             if loadingRecentRows {
                 // Queued local writes (an archive, a new session) land first,

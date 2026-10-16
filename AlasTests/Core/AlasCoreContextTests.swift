@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@_spi(Testing) import AlasCore
+@_spi(Testing) @_spi(AppHost) import AlasCore
 @testable import Alas
 
 @MainActor
@@ -742,6 +742,35 @@ struct AlasCoreContextTests {
         }
         #expect(!context.projects.admitsNewWork(in: worktree))
     }
+
+    private static func scratchStorePath() -> String {
+        FileManager.default.temporaryDirectory.appendingPathComponent("alas-rebind-\(UUID().uuidString).sqlite").path
+    }
+
+    /// The app replaces a loaded manager whose worktree moved to another
+    /// project, so a project's managers come from the environment even when
+    /// one is cached.
+    @Test func projectManagersComeFromTheEnvironmentOverTheCache() async throws {
+        let worktree = Worktree(
+            id: "w", projectId: "p", name: "w", branch: "w",
+            path: URL(fileURLWithPath: "/tmp/alas-rebind-w"), status: .clean, lastActivity: .distantPast
+        )
+        let projects = ProjectsManager(persistedProjects: [
+            ProjectConfig(id: "p", name: "p", path: "/tmp/alas-rebind", color: "blue", addedAt: .distantPast),
+        ])
+        projects.insertOptimisticWorktree(worktree)
+        let rebuilt = try ACPSessionManager(worktreeId: "w", worktreePath: worktree.path.path, store: ACPSessionStore(path: Self.scratchStorePath()))
+        let environment = TestHostEnvironment()
+        environment.sessionManager = { _ in rebuilt }
+        let context = AlasCoreContext(projects: projects, runHistoryStore: nil, environment: environment)
+        context.sessionManagers[.worktree("w")] = try ACPSessionManager(
+            worktreeId: "w", worktreePath: worktree.path.path, store: ACPSessionStore(path: Self.scratchStorePath()))
+
+        let managers = await context.acpProjectManagers(projectId: "p", loadingRecentRows: false)
+
+        #expect(managers.count == 1)
+        #expect(managers.first?.manager === rebuilt)
+    }
 }
 
 /// A headless environment whose repository hooks and refresh a test sets.
@@ -750,6 +779,12 @@ private final class TestHostEnvironment: AlasHostEnvironment {
     var repoHookLoader = RepoHookLoader()
     var repoHookPrompter: RepoHookPrompter = .skipping
     var refresh: ((String) async throws -> Bool)?
+    var sessionManager: ((Worktree) -> ACPSessionManager)?
+
+    func sessionManager(for worktree: Worktree, in core: AlasCoreContext) throws -> ACPSessionManager {
+        if let sessionManager { return sessionManager(worktree) }
+        return try core.sessionManager(for: worktree)
+    }
 
     func refreshProjectWorktrees(_ projectID: String, in core: AlasCoreContext) async throws -> Bool {
         if let refresh { return try await refresh(projectID) }
