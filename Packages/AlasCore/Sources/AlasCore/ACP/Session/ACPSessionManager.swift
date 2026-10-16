@@ -3903,7 +3903,9 @@ public final class ACPSessionManager: ChangeTracking {
             recent = (added + kept.filter { !addedIDs.contains($0.id) } + rows).filter {
                 listedNow.contains($0.id) || !listedBefore.contains($0.id)
             }
-            for row in rows {
+            // Only rows still listed: one archived meanwhile keeps its newer cache.
+            let listed = Set(recent.map(\.id))
+            for row in rows where listed.contains(row.id) {
                 persistedRows[row.id] = row
             }
         } catch {

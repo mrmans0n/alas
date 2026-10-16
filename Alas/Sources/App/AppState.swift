@@ -14042,7 +14042,7 @@ final class AppState {
         return state
     }
 
-    private func authoritativeCheckoutForWorkspaceACPSessionCreation(_ checkout: WorkspaceCheckout) async -> WorkspaceCheckout? {
+    func authoritativeCheckoutForWorkspaceACPSessionCreation(_ checkout: WorkspaceCheckout) async -> WorkspaceCheckout? {
         guard workspacesManager.canMutate else { return nil }
         guard let authoritative = await workspaceStore.checkout(id: checkout.id) else { return nil }
         guard authoritative.executionLocation.normalized == checkout.executionLocation.normalized else { return nil }
@@ -16879,9 +16879,11 @@ class AppHostEnvironment: AlasHostEnvironment {
     /// The app's own checkout manager, which also resolves remote roots.
     func sessionManager(forCheckout checkout: WorkspaceCheckout, in core: AlasCoreContext) async throws -> ACPSessionManager {
         guard let app else { throw SessionRefusal.ownerUnavailable(reason: "The app is closing.") }
-        switch await app.workspaceACPManager(for: checkout) {
-        case .ready(let manager): return manager
-        case .pendingRootOrLocation: throw SessionRefusal.ownerUnavailable(reason: "The Workspace checkout's folder is not reachable yet.")
-        }
+        let unreachable = SessionRefusal.ownerUnavailable(reason: "The Workspace checkout's folder is not reachable yet.")
+        guard case .ready(let manager) = await app.workspaceACPManager(for: checkout) else { throw unreachable }
+        // A cached manager skips the reachability checks; the app's own
+        // creation path rechecks the checkout the same way.
+        guard await app.authoritativeCheckoutForWorkspaceACPSessionCreation(checkout) != nil else { throw unreachable }
+        return manager
     }
 }
