@@ -53,6 +53,24 @@ public enum HostRequest: Codable, Equatable, Sendable {
     case workspaceCheckout(id: UUID)
     case startRun(scriptKey: String, worktree: WorktreeRef)
     case stopRun(scriptKey: String, worktree: WorktreeRef)
+    case createSession(target: SessionTarget, agentID: String, modelID: String?, autoRun: Bool)
+    case sendPrompt(sessionID: String, prompt: String)
+    case stopSession(sessionID: String)
+    case renameSession(sessionID: String, title: String)
+    case archiveSession(sessionID: String)
+    case setSessionModel(sessionID: String, modelID: String)
+    case setSessionMode(sessionID: String, modeID: String)
+    case setSessionConfigOption(sessionID: String, configID: String, value: ACPConfigValue)
+    /// Answers the request the subscription announced under `requestID`.
+    case answerPermission(sessionID: String, requestID: JSONRPCID, optionID: String, scope: ACPRequestAnswers.PermissionScope)
+    case answerQuestion(sessionID: String, requestID: JSONRPCID, answers: [ACPQuestionAnswer])
+    case respondToPlan(sessionID: String, requestID: JSONRPCID, action: ACPRequestAnswers.PlanAction)
+    case respondToUserInput(sessionID: String, requestID: UUID, answer: ACPRequestAnswers.UserInputAnswer)
+    /// Streams the session's transcript and pending requests on the
+    /// connection's subscription, which must exist: a new subscription
+    /// follows nothing until asked.
+    case followSession(sessionID: String, from: TranscriptRevision?)
+    case unfollowSession(sessionID: String)
 }
 
 public enum HostServerMessage: Codable, Equatable, Sendable {
@@ -74,6 +92,7 @@ public enum HostResponse: Codable, Equatable, Sendable {
     case workspaceCheckouts(checkouts: [WorkspaceCheckoutSnapshot])
     case workspaceCheckout(checkout: WorkspaceCheckoutSnapshot)
     case runStart(start: RunStart)
+    case session(session: HostSessionSummary)
     case failure(error: HostError)
 }
 
@@ -93,5 +112,6 @@ public enum HostError: Error, Codable, Equatable, Sendable {
     case worktreeDeletion(refusal: WorktreeDeletionRefusal)
     case worktreeArchive(refusal: WorktreeArchiveRefusal)
     case workspace(error: WorkspaceAutomationError)
+    case session(refusal: SessionRefusal)
     case failed(message: String)
 }

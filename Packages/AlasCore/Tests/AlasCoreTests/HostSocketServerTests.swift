@@ -100,7 +100,7 @@ private final class NoCheckpointsEnvironment: AlasHostEnvironment {
 /// A host protocol client over a Unix socket: requests by id, and the events
 /// that arrive meanwhile.
 @MainActor
-private final class SocketClient {
+final class SocketClient {
     private let fd: Int32
     private var nextID = 0
     private var responses: [Int: HostResponse] = [:]

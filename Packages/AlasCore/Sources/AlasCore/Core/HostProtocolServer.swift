@@ -180,7 +180,44 @@ public final class HostProtocolConnection {
         case .stopRun(let scriptKey, let ref):
             host.runs.stop(scriptKey: scriptKey, in: try worktree(ref), caller: caller)
             return .done
+        case .createSession(let target, let agentID, let modelID, let autoRun):
+            return .session(session: try await sessions.create(target, agentID: agentID, modelID: modelID, autoRun: autoRun, caller: caller))
+        case .sendPrompt(let id, let prompt):
+            try await sessions.send(id, prompt: prompt, caller: caller)
+        case .stopSession(let id):
+            try await sessions.stop(id, caller: caller)
+        case .renameSession(let id, let title):
+            try sessions.rename(id, title: title, caller: caller)
+        case .archiveSession(let id):
+            try await sessions.archive(id, caller: caller)
+        case .setSessionModel(let id, let modelID):
+            try await sessions.setModel(id, modelID: modelID, caller: caller)
+        case .setSessionMode(let id, let modeID):
+            try await sessions.setMode(id, modeID: modeID, caller: caller)
+        case .setSessionConfigOption(let id, let configID, let value):
+            try await sessions.setConfigOption(id, configID: configID, value: value, caller: caller)
+        case .answerPermission(let id, let requestID, let optionID, let scope):
+            try await sessions.answerPermission(id, requestID: requestID, optionID: optionID, scope: scope, caller: caller)
+        case .answerQuestion(let id, let requestID, let answers):
+            try await sessions.answerQuestion(id, requestID: requestID, answers: answers, caller: caller)
+        case .respondToPlan(let id, let requestID, let action):
+            try await sessions.respondToPlan(id, requestID: requestID, action: action, caller: caller)
+        case .respondToUserInput(let id, let requestID, let answer):
+            try await sessions.respondToUserInput(id, requestID: requestID, answer: answer, caller: caller)
+        case .followSession(let id, let revision):
+            try subscribed().follow(id, from: revision)
+        case .unfollowSession(let id):
+            try subscribed().unfollow(id)
         }
+        return .done
+    }
+
+    private var sessions: SessionsAPI { host.sessions }
+
+    /// Following acts on the connection's subscription, so it needs one.
+    private func subscribed() throws -> HostSubscription {
+        guard let subscription else { throw HostError.invalidRequest(reason: "Subscribe before following a session.") }
+        return subscription
     }
 
     /// Forwards the subscription's batches until it ends or another replaces it.
@@ -219,6 +256,7 @@ public final class HostProtocolConnection {
         case let failure as WorktreeCreationError: .worktreeCreationFailed(message: failure.message)
         case let error as ProjectCreationError: .project(error: error)
         case let error as WorkspaceAutomationError: .workspace(error: error)
+        case let refusal as SessionRefusal: .session(refusal: refusal)
         case is AlasCoreContext.WorktreeOperationInProgress: .operationInProgress
         default: .failed(message: error.localizedDescription)
         }

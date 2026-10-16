@@ -1400,7 +1400,7 @@ extension RemoteServerMessage {
             peers: identity.peers,
             capabilities: [
                 PeerConsoleCapability.v1, PeerConsoleCapability.terminateV1, PeerSessionTabsCapability.v1,
-                HostProtocolCapability.v1,
+                HostProtocolCapability.v1, HostProtocolCapability.sessionsV1,
             ])
     }
 }
@@ -1410,6 +1410,11 @@ public enum HostProtocolCapability: Sendable {
     /// Advertised in `hello` by hosts that answer `host` messages speaking
     /// `HostProtocolVersion` 1.
     public static let v1 = "host.v1"
+    /// Advertised by hosts that also serve the session requests and events
+    /// (`createSession` … `unfollowSession`). Older v1 hosts cannot decode
+    /// them and answer nothing matched to the request, so clients gate
+    /// session requests on this capability.
+    public static let sessionsV1 = "host.sessions.v1"
 }
 
 /// Opening and closing host tabs from a peer. Older hosts drop unknown client

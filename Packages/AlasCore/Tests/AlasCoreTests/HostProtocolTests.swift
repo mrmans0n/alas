@@ -24,6 +24,12 @@ struct HostProtocolTests {
         HostClientMessage(id: 5, request: .deleteWorktree(worktree: ref, lineageID: "l", branch: "feature", force: true, deleteBranchIfMerged: false)),
         HostClientMessage(id: 6, request: .workspaceCheckout(id: UUID(uuidString: "6F9619FF-8B86-D011-B42D-00CF4FC964FF")!)),
         HostClientMessage(id: 7, request: .stopRun(scriptKey: "dev", worktree: ref)),
+        HostClientMessage(id: 8, request: .createSession(target: .workspaceCheckout(id: UUID(uuidString: "6F9619FF-8B86-D011-B42D-00CF4FC964FF")!), agentID: "codex", modelID: "fast", autoRun: true)),
+        HostClientMessage(id: 9, request: .setSessionConfigOption(sessionID: "s", configID: "effort", value: .string("high"))),
+        HostClientMessage(id: 10, request: .answerPermission(sessionID: "s", requestID: .string("p-1"), optionID: "allow", scope: .project)),
+        HostClientMessage(id: 11, request: .answerQuestion(sessionID: "s", requestID: .number(3), answers: [ACPQuestionAnswer(questionId: "q", selectedOptionIds: ["a"])])),
+        HostClientMessage(id: 12, request: .respondToUserInput(sessionID: "s", requestID: UUID(uuidString: "6F9619FF-8B86-D011-B42D-00CF4FC964FF")!, answer: .cancel)),
+        HostClientMessage(id: 13, request: .followSession(sessionID: "s", from: TranscriptRevision(epoch: 2, version: 40))),
     ])
     func clientMessagesRoundTrip(_ message: HostClientMessage) throws {
         #expect(try JSONDecoder().decode(HostClientMessage.self, from: JSONEncoder().encode(message)) == message)
@@ -41,12 +47,23 @@ struct HostProtocolTests {
         .response(id: 2, result: .runStart(start: .refused(title: "No", message: "Busy"))),
         .response(id: 3, result: .failure(error: .worktreeDeletion(refusal: .needsForce("dirty")))),
         .response(id: 4, result: .failure(error: .workspace(error: .checkoutNotFound))),
+        .response(id: 5, result: .session(session: session)),
+        .response(id: 6, result: .failure(error: .session(refusal: .ownerUnavailable(reason: "busy")))),
         .events(events: [
             .worktreeChanged(WorktreeSnapshot(worktree: worktree, operation: .deleting, isArchived: false)),
             .worktreeRemoved(projectID: "p", worktreeID: worktree.id),
             .sessionChanged(session),
             .sessionRemoved(owner: .worktree(worktree.id), id: "s"),
             .runRemoved(id: "r"),
+            .transcript(owner: .worktree("w"), id: "s", delta: HostTranscriptDelta(
+                revision: TranscriptRevision(epoch: 1, version: 5), reset: true,
+                messages: [HostTranscriptMessage(index: 0, stableID: "m", kind: "user", payload: #"{"text":"hi"}"#)],
+                messageCount: 1, streamingState: .streaming
+            )),
+            .pendingRequest(owner: .worktree("w"), id: "s", request: .plan(requestID: .number(4), params: ACPCursorCreatePlanParams(
+                toolCallId: "t", name: "Plan", overview: "", plan: "Do it", todos: [], isProject: false, phases: []
+            ))),
+            .pendingRequestResolved(owner: .worktree("w"), id: "s", requestID: .userInput(UUID(uuidString: "6F9619FF-8B86-D011-B42D-00CF4FC964FF")!)),
             .resync,
         ], cursor: HostCursor(generation: UUID(uuidString: "6F9619FF-8B86-D011-B42D-00CF4FC964FF")!, sequence: 7)),
     ])

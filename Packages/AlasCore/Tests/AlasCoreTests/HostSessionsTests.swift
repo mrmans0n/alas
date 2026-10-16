@@ -110,8 +110,9 @@ struct HostSessionsTests {
 
     /// An answer that reaches no agent is not reported as given: a session
     /// shown here but not driven by this instance cannot pass it on.
-    /// Following streams a session's transcript and pending requests, for
-    /// the sessions followed only, and holds their change log just as long.
+    /// Following streams a session's transcript, for the sessions followed
+    /// only, and holds the session and its change log just as long. Pending
+    /// requests are covered over the wire by `aSocketClientDrivesASession`.
     @Test func followingStreamsATranscriptAndItsRequests() async throws {
         let fixture = try Fixture()
         defer { fixture.tearDown() }
@@ -134,22 +135,11 @@ struct HostSessionsTests {
             await received.deltas(of: id).contains { !$0.reset && $0.messages.contains { $0.kind == "user" && $0.payload.contains("hello") } }
         }
 
-        let requestID = JSONRPCID.number(7)
-        fixture.agent.emitPermission(id: requestID, params: ACPPermissionRequestParams(
-            sessionId: "agent-1",
-            toolCall: ACPPermissionToolCall(
-                toolCallId: "call-1", title: "Run", kind: nil, status: nil,
-                content: nil, locations: nil, rawInput: nil, rawOutput: nil
-            ),
-            options: [ACPPermissionOption(optionId: "allow", name: "Allow", kind: "allow_once")]
-        ))
-        try await eventually {
-            await received.events.contains { if case .pendingRequest(_, id, .permission(requestID, _)) = $0 { true } else { false } }
-        }
+        // Only followed sessions stream.
         other.transcript.messages.append(.systemNotice(id: UUID(), text: "unfollowed"))
-        try await sessions.answerPermission(id, requestID: requestID, optionID: "allow", caller: .app)
+        manager.liveSession(for: id)?.transcript.messages.append(.systemNotice(id: UUID(), text: "followed"))
         try await eventually {
-            await received.events.contains { if case .pendingRequestResolved(_, id, .permission(requestID)) = $0 { true } else { false } }
+            await received.deltas(of: id).contains { $0.messages.contains { $0.payload.contains("followed") } }
         }
         #expect(received.deltas(of: other.id).isEmpty)
 
@@ -183,6 +173,74 @@ struct HostSessionsTests {
         #expect(manager.liveSession(for: other.id) != nil)
         idle.unfollow(other.id)
         #expect(manager.liveSession(for: other.id) == nil)
+    }
+
+    /// A host socket client creates a session against a scripted agent,
+    /// follows it, prompts it, watches the transcript stream, answers its
+    /// permission request mid-turn and stops it.
+    @Test func aSocketClientDrivesASession() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        // The turn lasts until the agent is told to stop.
+        let (cancelled, cancel) = AsyncStream<Void>.makeStream()
+        fixture.agent.scriptNotifyAsync(method: "session/cancel") { _ in cancel.yield() }
+        fixture.agent.scriptAsync(method: "session/prompt") { _ in
+            for await _ in cancelled { break }
+            return Data(#"{"stopReason":"cancelled"}"#.utf8)
+        }
+        // Short: a socket path must fit in `sun_path`.
+        let socketDirectory = URL(fileURLWithPath: "/tmp/alas-host-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: socketDirectory) }
+        let path = socketDirectory.appendingPathComponent("host.sock").path
+        let socket = try #require(HostSocketServer(path: path, server: HostProtocolServer(host: fixture.host)))
+        defer { socket.stop() }
+        let client = try SocketClient(path: path)
+        defer { client.close() }
+
+        guard case .snapshot(let snapshot) = try await client.request(.snapshot) else {
+            Issue.record("expected a snapshot")
+            return
+        }
+        for request in [HostRequest.followSession(sessionID: "s", from: nil), .unfollowSession(sessionID: "s")] {
+            #expect(try await client.request(request) == .failure(error: .invalidRequest(reason: "Subscribe before following a session.")))
+        }
+        #expect(try await client.request(.subscribe(after: snapshot.cursor)) == .subscribed)
+        guard case .session(let created) = try await client.request(.createSession(
+            target: .worktree(fixture.ref), agentID: "gemini", modelID: nil, autoRun: false
+        )) else {
+            Issue.record("expected the created session")
+            return
+        }
+        let id = created.id
+        try await client.waitForEvent { if case .sessionChanged(let summary) = $0 { summary.id == id && summary.isWriter } else { false } }
+
+        #expect(try await client.request(.followSession(sessionID: id, from: nil)) == .done)
+        try await client.waitForEvent { if case .transcript(_, id, let delta) = $0 { delta.reset } else { false } }
+        // A prompt is answered when its turn ends; requests meanwhile are independent.
+        async let prompted = client.request(.sendPrompt(sessionID: id, prompt: "hello"))
+        try await client.waitForEvent { event in
+            guard case .transcript(_, id, let delta) = event else { return false }
+            return delta.messages.contains { $0.kind == "user" && $0.payload.contains("hello") }
+        }
+
+        let requestID = JSONRPCID.number(7)
+        fixture.agent.emitPermission(id: requestID, params: ACPPermissionRequestParams(
+            sessionId: "agent-1",
+            toolCall: ACPPermissionToolCall(
+                toolCallId: "call-1", title: "Run", kind: nil, status: nil,
+                content: nil, locations: nil, rawInput: nil, rawOutput: nil
+            ),
+            options: [ACPPermissionOption(optionId: "allow", name: "Allow", kind: "allow_once")]
+        ))
+        try await client.waitForEvent { if case .pendingRequest(_, id, .permission(requestID, _)) = $0 { true } else { false } }
+        #expect(try await client.request(.answerPermission(sessionID: id, requestID: requestID, optionID: "allow", scope: .once)) == .done)
+        try await client.waitForEvent { $0 == .pendingRequestResolved(owner: created.owner, id: id, requestID: .permission(requestID)) }
+        #expect(fixture.agent.permissionResponses[requestID]?.outcome == .selected(optionId: "allow"))
+
+        #expect(try await client.request(.stopSession(sessionID: id)) == .done)
+        try await client.waitForEvent { if case .transcript(_, id, let delta) = $0 { delta.streamingState == .idle } else { false } }
+        #expect(fixture.agent.sent.contains { $0.method == "session/cancel" })
+        #expect(try await prompted == .done)
     }
 
     @Test func answersWithNoAgentToReceiveThemAreRefused() async throws {
