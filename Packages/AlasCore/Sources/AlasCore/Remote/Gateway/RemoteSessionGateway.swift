@@ -282,16 +282,20 @@ public final class RemoteSessionGateway {
             refreshSessionList()
         case .fetchOlder(let id, let beforeIndex, let limit):
             // Ignore pages requested before a snapshot established sync state.
-            guard let sessions, let state = syncStates[id], state.snapshotSent else { return }
+            guard let sessions, syncStates[id]?.snapshotSent == true else { return }
             let clamped = min(max(limit, RemoteTranscriptSync.pageLimitRange.lowerBound),
                               RemoteTranscriptSync.pageLimitRange.upperBound)
             // A snapshot or delta can supersede this page while a truncated
             // tool call's content is fetched. The client has no other way out
             // of its "loading earlier messages" state, so retry, bounded, rather
             // than drop it; content an earlier attempt fetched stays cached.
+            // A resubscribe or takeover meanwhile replaces the state, and the
+            // retry reads for the one that replaced it.
             var attempt = 0
             while true {
-                guard let page = try? sessions.transcriptPage(id, before: beforeIndex, limit: clamped) else { return }
+                guard let state = syncStates[id], state.snapshotSent,
+                      let page = try? sessions.transcriptPage(id, before: beforeIndex, limit: clamped)
+                else { return }
                 // A page from another epoch is labelled with it, so the client
                 // drops it; the follow's reset follows.
                 if page.revision.epoch == state.epoch {
@@ -303,7 +307,8 @@ public final class RemoteSessionGateway {
                 let capturedGeneration = state.generation
                 let wire = await wireTail(id: id, state: state, indices: page.messages.map(\.index))
                 attempt += 1
-                guard state.generation == capturedGeneration || attempt > Self.maxFetchOlderAttempts else {
+                guard (state.generation == capturedGeneration && syncStates[id] === state)
+                    || attempt > Self.maxFetchOlderAttempts else {
                     continue
                 }
                 send(.transcriptPage(sessionId: id,
@@ -719,27 +724,35 @@ public final class RemoteSessionGateway {
     /// Sends what the follow reports, in the order a client expects: the
     /// transcript, the requests waiting on it, then config and queue.
     private func receiveFollowed(_ events: [HostEvent]) async {
+        // A resubscribe or takeover while this batch waits on a fetch follows
+        // again, and the reset that follows carries what this batch holds;
+        // nothing of it is sent against the state that replaced it.
+        let batchStates = syncStates
+        func current(_ id: String) -> RemoteTranscriptSync? {
+            guard let sync = syncStates[id], sync === batchStates[id] else { return nil }
+            return sync
+        }
         var previousStates: [String: HostSessionState?] = [:]
         for case .sessionState(_, let id, let state) in events {
-            guard let sync = syncStates[id] else { continue }
+            guard let sync = current(id) else { continue }
             if previousStates[id] == nil { previousStates[id] = .some(sync.sessionState) }
             sync.sessionState = state
         }
         var transcriptSent: Set<String> = []
         for case .transcript(_, let id, let delta) in events {
-            guard syncStates[id] != nil else { continue }
+            guard current(id) != nil else { continue }
             await applyTranscript(delta, id: id)
             transcriptSent.insert(id)
         }
         for event in events {
             switch event {
-            case .pendingRequest(_, let id, let request): surfaceRequest(request, sessionId: id)
-            case .pendingRequestResolved(_, let id, let requestID): resolveRequest(requestID, sessionId: id)
+            case .pendingRequest(_, let id, let request) where current(id) != nil: surfaceRequest(request, sessionId: id)
+            case .pendingRequestResolved(_, let id, let requestID) where current(id) != nil: resolveRequest(requestID, sessionId: id)
             default: break
             }
         }
         for (id, previous) in previousStates {
-            guard let sync = syncStates[id], let state = sync.sessionState else { continue }
+            guard let sync = current(id), let state = sync.sessionState else { continue }
             if previous?.config != state.config { send(.sessionConfig(state.config)) }
             if previous?.queue != state.queue { send(.queueState(sessionId: id, items: state.queue)) }
             // Who drives the session, or what it can stop, changed without

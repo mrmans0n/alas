@@ -2586,6 +2586,47 @@ struct RemoteSessionGatewayTests {
         #expect(provider.fullToolCallContentCallCount == 1)
     }
 
+    /// A resubscribe while an older page waits on a tool call's content
+    /// replaces the state the page was read for, so the page is read again
+    /// from the current one rather than sent stale after its snapshot.
+    @Test func fetchOlderRereadsThePageAfterAResubscribeReplacesItsState() async throws {
+        let provider = hosted.provider
+        let fullContent = String(repeating: "abcdef0123456789", count: 400)
+        var toolCall = ACPMessage.ToolCall(
+            toolCallId: "old", title: "read", status: "completed", content: fullContent, preview: "abcdef")
+        toolCall.truncateForOffWindow()
+        // Index 0 and 1 sit before the 90-row snapshot window.
+        let session = try hosted.session(messages: [.toolCall(toolCall)] + (0..<99).map {
+            .user(id: UUID(), messageId: "u\($0)", text: "msg \($0)", attachments: [])
+        })
+        provider.fullToolCallContents["s1|old"] = fullContent
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        gw.hostCalls = provider.hostCalls
+        defer { gw.close() }
+        await gw.handle(.subscribe(sessionId: "s1"))
+        try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
+        provider.fullToolCallContentCallCount = 0
+        provider.pauseFullToolCallContentOnCall = 1
+
+        let fetch = Task { @MainActor in await gw.handle(.fetchOlder(sessionId: "s1", beforeIndex: 10, limit: 90)) }
+        try await hosted.until { provider.fullToolCallContentCallCount == 1 }
+        sent.removeAll()
+        await gw.handle(.subscribe(sessionId: "s1"))
+        try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
+        session.transcript.messages[1] = .user(id: UUID(), messageId: "u0", text: "edited", attachments: [])
+        try await hosted.until { sent.contains { if case .transcriptDelta(_, _, _, let rows, _, _, _) = $0 { rows.contains { $0.index == 1 } } else { false } } }
+        provider.resumeFullToolCallContent(fullContent)
+        await fetch.value
+
+        guard case .transcriptPage(_, _, _, let rows)? = sent.last else {
+            Issue.record("expected the page last, got \(sent)")
+            return
+        }
+        let edited = try #require(rows.first { $0.index == 1 })
+        #expect(edited.text == "edited")
+    }
+
     @Test func resubscribeStillEmitsQueueStateWhenUnchanged() async throws {
         let provider = hosted.provider
         let id = "s1"
