@@ -266,7 +266,11 @@ final class FakeSessionsProvider: RemoteSessionsProvider, RemoteSessionPresenter
                     projectId: request.projectID, base: request.base, branch: request.branch, agentId: request.agentID,
                     modelId: request.modelID, effortId: request.effortID, caller: caller)
             },
-            inspection: self
+            inspection: self,
+            mentionCandidates: { sessionID, query, _ in
+                (await self.remoteMentionCandidates(sessionId: sessionID, query: query), [])
+            },
+            mentionAttachments: { await self.remoteMentionAttachments($0, sessionId: $1) }
         )
     }
 
@@ -605,6 +609,8 @@ struct RemoteSessionGatewayTests {
         let image = RemoteAttachment(name: "a.png", mimeType: "image/png", dataBase64: png)
         let mention = RemoteMention(kind: RemoteMention.file, value: "App.swift", name: "App.swift")
         let attachments = Paths.acpAttachmentsDir(forWorktreeId: fixture.worktree.id).path
+        let fake = fixture.provider
+        gw.hostCalls.mentionAttachments = { await fake.remoteMentionAttachments($0, sessionId: $1) }
 
         fixture.provider.mentionAttachments = nil
         await gw.handle(.sendPrompt(sessionId: id, text: "@App.swift", attachments: [image], intent: "auto", mentions: [mention]))
@@ -1578,6 +1584,7 @@ struct RemoteSessionGatewayTests {
         provider.mentionCandidates = [RemoteMention(kind: RemoteMention.file, value: "a", name: "a")]
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        gw.hostCalls = provider.hostCalls
         let long = String(repeating: "a", count: RemoteSessionGateway.maxMentionQueryLength + 1)
         await gw.handle(.searchMentions(sessionId: "s1", query: long))
         await gw.handle(.searchMentions(sessionId: "s1", query: "a"))

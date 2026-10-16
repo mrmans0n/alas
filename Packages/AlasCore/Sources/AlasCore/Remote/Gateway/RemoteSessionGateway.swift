@@ -18,6 +18,9 @@ public final class RemoteSessionGateway {
     @_spi(AppHost) public weak var presenter: RemoteSessionPresenter?
     /// What this gateway asks of the host besides session verbs.
     @_spi(Testing) public lazy var hostCalls = RemoteGatewayHostCalls.host(provider.eventHost)
+    /// The sessions a mention search listed, per session, reused while the
+    /// query grows.
+    private var mentionSessions: [String: [ACPSessionMentionCandidate]] = [:]
     private let federation: FederatedSessionsProvider?
     /// This gateway's registration with `federation`; nil without one.
     private var downstream: FederatedDownstream?
@@ -228,7 +231,7 @@ public final class RemoteSessionGateway {
             // Resolved before `materialize` writes anything, so a refused
             // mention leaves no orphan image files.
             guard mentions.count <= Self.maxMentionCount,
-                  let mentioned = await provider.remoteMentionAttachments(mentions, sessionId: id)
+                  let mentioned = await hostCalls.mentionAttachments(mentions, id)
             else {
                 send(.promptRejected(sessionId: id))
                 return
@@ -448,8 +451,12 @@ public final class RemoteSessionGateway {
             // session is enough to read its project.
             // An overlong query gets no rows rather than rows for a prefix
             // the viewer would take as the answer to the whole query.
-            let candidates = query.count > Self.maxMentionQueryLength
-                ? [] : await provider.remoteMentionCandidates(sessionId: id, query: query)
+            var candidates: [RemoteMention] = []
+            if query.count <= Self.maxMentionQueryLength {
+                let found = await hostCalls.mentionCandidates(id, query, mentionSessions[id])
+                mentionSessions[id] = found.sessions
+                candidates = found.mentions
+            }
             send(.mentionCandidates(sessionId: id, query: query, candidates: candidates))
         case .readFile(let id, let path):
             let key = "readFile\u{0}\(id)\u{0}\(path)"

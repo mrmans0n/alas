@@ -22,12 +22,6 @@ public protocol RemoteSessionsProvider: AnyObject {
     /// Projection of the session's config for the `sessionConfig` wire message,
     /// or nil if the session isn't live.
     func sessionConfig(for id: String) -> RemoteSessionConfig?
-    /// Files, sessions and symbols of the session's project matching an
-    /// `@` query, as the local mention picker ranks them.
-    func remoteMentionCandidates(sessionId: String, query: String) async -> [RemoteMention]
-    /// The prompt attachments for a viewer's mentions, or nil when any of
-    /// them doesn't resolve inside the session's project.
-    func remoteMentionAttachments(_ mentions: [RemoteMention], sessionId: String) async -> [ACPMessage.Attachment]?
     /// Serves peer console traffic; nil when this app does not.
     var peerConsoleHost: PeerConsoleHost? { get }
 }
@@ -36,11 +30,6 @@ extension RemoteSessionsProvider {
     public var peerConsoleHost: PeerConsoleHost? { nil }
     public var eventHost: AlasHost? { nil }
     public var sessionListChanges: ChangeSignal<Void>? { nil }
-
-    public func remoteMentionCandidates(sessionId: String, query: String) async -> [RemoteMention] { [] }
-    public func remoteMentionAttachments(_ mentions: [RemoteMention], sessionId: String) async -> [ACPMessage.Attachment]? {
-        mentions.isEmpty ? [] : nil
-    }
 
     public func respondToUserInput(for id: String, token: UUID, action: ACPUserInputAction) {}
     public func respondToPlan(for id: String, requestId: JSONRPCID, _ response: ACPCursorPlanResponse) {}
