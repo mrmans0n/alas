@@ -4,7 +4,7 @@ import Foundation
 @_spi(Testing) @_spi(AppHost) import AlasCore
 
 @MainActor
-final class FakeSessionsProvider: RemoteSessionsProvider, RemoteSessionPresenter {
+final class FakeSessionsProvider: RemoteSessionsProvider, RemoteSessionPresenter, RemoteWorktreeInspecting {
     var summaries: [RemoteSessionSummary] = []
     var worktrees: [RemoteWorktreeOption] = []
     var projects: [RemoteProjectOption] = []
@@ -265,7 +265,8 @@ final class FakeSessionsProvider: RemoteSessionsProvider, RemoteSessionPresenter
                 await self.createRemoteWorktreeSession(
                     projectId: request.projectID, base: request.base, branch: request.branch, agentId: request.agentID,
                     modelId: request.modelID, effortId: request.effortID, caller: caller)
-            }
+            },
+            inspection: self
         )
     }
 
@@ -313,6 +314,12 @@ final class FakeSessionsProvider: RemoteSessionsProvider, RemoteSessionPresenter
         return fileTreeResult
     }
 
+    func remoteCommitFiles(sessionId: String, sha: String) async -> RemoteCommitFilesResult {
+        .failure(reason: .unknown, message: "Commit inspection is unavailable.")
+    }
+    func remoteCommitDiff(sessionId: String, sha: String, path: String) async -> RemoteFileDiffResult {
+        .failure(reason: .unknown, message: "Commit inspection is unavailable.")
+    }
     func remoteFileContents(sessionId: String, path: String) async -> RemoteFileContentsResult {
         fileContentsRequests.append((sessionId, path))
         return fileContentsResult
@@ -3060,6 +3067,7 @@ struct RemoteSessionGatewayTests {
             commits: [], truncated: false)
         var sent: [RemoteServerMessage] = []
         let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        gateway.hostCalls = provider.hostCalls
 
         await gateway.handle(.listChanges(sessionId: "s1", comparisonMode: .branchUpstream))
 
@@ -3078,6 +3086,7 @@ struct RemoteSessionGatewayTests {
         provider.fileDiffResult = .success(hunks: [hunk], truncated: true)
         var sent: [RemoteServerMessage] = []
         let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        gateway.hostCalls = provider.hostCalls
 
         await gateway.handle(.fileDiff(
             sessionId: "s1",
@@ -3107,6 +3116,7 @@ struct RemoteSessionGatewayTests {
         provider.fileContentsResult = .success(text: "# Alas\n", truncated: false)
         var sent: [RemoteServerMessage] = []
         let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        gateway.hostCalls = provider.hostCalls
 
         await gateway.handle(.listFiles(
             sessionId: "s1",
@@ -3128,6 +3138,7 @@ struct RemoteSessionGatewayTests {
         provider.pauseFileDiff = true
         var sent: [RemoteServerMessage] = []
         let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        gateway.hostCalls = provider.hostCalls
 
         async let first: Void = gateway.handle(.fileDiff(sessionId: "s1", path: "a.txt", stage: nil))
         await provider.waitForFileDiffCall(1)   // first call has entered the provider and is now suspended — the gateway's dedup key is held

@@ -1566,25 +1566,25 @@ struct RemoteAppStateAccessTests {
 
     @Test func remoteChangeListReportsSessionUnknownForAnUnknownSession() async throws {
         let state = AppState(store: MemoryStore())
-        let result = await state.remoteChangeList(sessionId: "no-such-session")
+        let result = await state.core.remoteChangeList(sessionId: "no-such-session")
         #expect(result == .failure(reason: .sessionUnknown, message: nil))
     }
 
     @Test func remoteFileDiffReportsSessionUnknownForAnUnknownSession() async throws {
         let state = AppState(store: MemoryStore())
-        let result = await state.remoteFileDiff(sessionId: "no-such-session", path: "a.txt")
+        let result = await state.core.remoteFileDiff(sessionId: "no-such-session", path: "a.txt")
         #expect(result == .failure(reason: .sessionUnknown, message: nil))
     }
 
     @Test func remoteFileTreeReportsSessionUnknownForAnUnknownSession() async throws {
         let state = AppState(store: MemoryStore())
-        let result = await state.remoteFileTree(sessionId: "no-such-session", path: nil)
+        let result = await state.core.remoteFileTree(sessionId: "no-such-session", path: nil)
         #expect(result == .failure(reason: .sessionUnknown, message: nil))
     }
 
     @Test func remoteFileContentsReportsSessionUnknownForAnUnknownSession() async throws {
         let state = AppState(store: MemoryStore())
-        let result = await state.remoteFileContents(sessionId: "no-such-session", path: "a.txt")
+        let result = await state.core.remoteFileContents(sessionId: "no-such-session", path: "a.txt")
         #expect(result == .failure(reason: .sessionUnknown, byteSize: nil, message: nil))
     }
 
@@ -1614,7 +1614,7 @@ struct RemoteAppStateAccessTests {
             state.projectsManager.removeOptimisticWorktree(id: wt.id, projectId: project.id)
         }
 
-        let result = await state.remoteChangeList(sessionId: tab.sessionId)
+        let result = await state.core.remoteChangeList(sessionId: tab.sessionId)
         #expect(result == .failure(reason: .worktreeUnavailable, message: nil))
     }
 
@@ -1636,20 +1636,20 @@ struct RemoteAppStateAccessTests {
         defer { cleanupRemoteRenameFiles(worktreeId: worktreeId) }
         state.openNewACPSession(agentID: "test-agent")
         let tab = try #require(acpTabs(in: state).first)
-        guard case .success(let files, false) = await state.remoteCommitFiles(sessionId: tab.sessionId, sha: sha) else {
+        guard case .success(let files, false) = await state.core.remoteCommitFiles(sessionId: tab.sessionId, sha: sha) else {
             Issue.record("expected commit files")
             return
         }
         #expect(files.map(\.path) == [fileName])
-        guard case .success(let hunks, false, _) = await state.remoteCommitDiff(
+        guard case .success(let hunks, false, _) = await state.core.remoteCommitDiff(
             sessionId: tab.sessionId, sha: sha, path: fileName) else {
             Issue.record("expected commit diff")
             return
         }
         #expect(hunks.flatMap(\.lines).filter { $0.kind == "add" }.map(\.text) == ["committed"])
-        #expect(await state.remoteCommitDiff(sessionId: tab.sessionId, sha: sha, path: "b.txt")
+        #expect(await state.core.remoteCommitDiff(sessionId: tab.sessionId, sha: sha, path: "b.txt")
             == .failure(reason: .pathRejected, message: nil))
-        #expect(await state.remoteCommitFiles(sessionId: tab.sessionId, sha: "--all")
+        #expect(await state.core.remoteCommitFiles(sessionId: tab.sessionId, sha: "--all")
             == .failure(reason: .pathRejected, message: nil))
     }
 
@@ -1675,7 +1675,7 @@ struct RemoteAppStateAccessTests {
         state.openNewACPSession(agentID: "test-agent")
         let tab = try #require(acpTabs(in: state).first)
 
-        let result = await state.remoteChangeList(sessionId: tab.sessionId)
+        let result = await state.core.remoteChangeList(sessionId: tab.sessionId)
         guard case let .success(_, _, _, staged, unstaged, _, _, _) = result else {
             Issue.record("expected a successful change list, got \(result)")
             return
@@ -1708,7 +1708,7 @@ struct RemoteAppStateAccessTests {
         state.openNewACPSession(agentID: "test-agent")
         let tab = try #require(acpTabs(in: state).first)
 
-        let result = await state.remoteChangeList(sessionId: tab.sessionId)
+        let result = await state.core.remoteChangeList(sessionId: tab.sessionId)
         guard case let .success(_, _, _, _, unstaged, _, _, _) = result else {
             Issue.record("expected a successful change list, got \(result)")
             return
@@ -1737,10 +1737,10 @@ struct RemoteAppStateAccessTests {
         cleanupWorktreeId = worktreeId
         state.openNewACPSession(agentID: "test-agent")
         let tab = try #require(acpTabs(in: state).first)
-        let contentsResult = await state.remoteFileContents(sessionId: tab.sessionId, path: "secret.env")
+        let contentsResult = await state.core.remoteFileContents(sessionId: tab.sessionId, path: "secret.env")
         #expect(contentsResult == .failure(reason: .pathRejected, byteSize: nil, message: nil))
 
-        let diffResult = await state.remoteFileDiff(sessionId: tab.sessionId, path: "secret.env")
+        let diffResult = await state.core.remoteFileDiff(sessionId: tab.sessionId, path: "secret.env")
         #expect(diffResult == .failure(reason: .pathRejected, message: nil))
     }
 
@@ -1773,13 +1773,13 @@ struct RemoteAppStateAccessTests {
         cleanupWorktreeId = worktreeId
         state.openNewACPSession(agentID: "test-agent")
         let tab = try #require(acpTabs(in: state).first)
-        let contentsResult = await state.remoteFileContents(sessionId: tab.sessionId, path: " secret.env")
+        let contentsResult = await state.core.remoteFileContents(sessionId: tab.sessionId, path: " secret.env")
         if case .success(let text, _) = contentsResult {
             Issue.record("secret content must never be served for a whitespace-padded path, got: \(text)")
         }
         #expect(contentsResult == .failure(reason: .notFound, byteSize: nil, message: nil))
 
-        let diffResult = await state.remoteFileDiff(sessionId: tab.sessionId, path: " secret.env")
+        let diffResult = await state.core.remoteFileDiff(sessionId: tab.sessionId, path: " secret.env")
         if case .success(let hunks, _, _) = diffResult {
             let text = hunks.flatMap(\.lines).map(\.text).joined()
             #expect(!text.contains("abc"), "secret content must never be served for a whitespace-padded path")
@@ -1828,7 +1828,7 @@ struct RemoteAppStateAccessTests {
         let ignored = try await GitService().isPathIgnored(worktreePath: repository, path: "public-env")
         #expect(!ignored)
 
-        let contentsResult = await state.remoteFileContents(sessionId: tab.sessionId, path: "public-env")
+        let contentsResult = await state.core.remoteFileContents(sessionId: tab.sessionId, path: "public-env")
         #expect(contentsResult == .failure(reason: .notFound, byteSize: nil, message: nil))
         if case .success(let text, _) = contentsResult {
             Issue.record("secret content must never be served through a symlink alias, got: \(text)")
@@ -1838,7 +1838,7 @@ struct RemoteAppStateAccessTests {
         // tracks a symlink's blob as its destination path string only,
         // never the target's content — this must SUCCEED and show `.env`
         // (the destination), never the secret token inside it.
-        let diffResult = await state.remoteFileDiff(sessionId: tab.sessionId, path: "public-env")
+        let diffResult = await state.core.remoteFileDiff(sessionId: tab.sessionId, path: "public-env")
         guard case let .success(hunks, _, _) = diffResult else {
             Issue.record("expected a successful symlink diff, got \(diffResult)")
             return
@@ -1867,7 +1867,7 @@ struct RemoteAppStateAccessTests {
         state.openNewACPSession(agentID: "test-agent")
         let tab = try #require(acpTabs(in: state).first)
 
-        let contentsResult = await state.remoteFileContents(sessionId: tab.sessionId, path: "visible.txt")
+        let contentsResult = await state.core.remoteFileContents(sessionId: tab.sessionId, path: "visible.txt")
         #expect(contentsResult == .success(text: "hello\n", truncated: false))
     }
 
@@ -1905,7 +1905,7 @@ struct RemoteAppStateAccessTests {
 
         await manager.refreshRecentNow()
 
-        let contentsResult = await state.remoteFileContents(sessionId: tab.sessionId, path: "visible.txt")
+        let contentsResult = await state.core.remoteFileContents(sessionId: tab.sessionId, path: "visible.txt")
         #expect(contentsResult == .success(text: "hello\n", truncated: false))
     }
 
@@ -1938,7 +1938,7 @@ struct RemoteAppStateAccessTests {
         try marker.write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
 
         let state = AppState(store: MemoryStore())
-        let outcome = await state.readRemoteWorktreeFileRaw(
+        let outcome = await state.core.readRemoteWorktreeFileRaw(
             host: "nonexistent-host.invalid", worktreeRoot: root.path, relativePath: "a.txt")
 
         switch outcome {
@@ -2012,7 +2012,7 @@ struct RemoteAppStateAccessTests {
         state.openNewACPSession(agentID: "test-agent")
         let tab = try #require(acpTabs(in: state).first)
 
-        let result = await state.remoteFileTree(sessionId: tab.sessionId, path: "alias")
+        let result = await state.core.remoteFileTree(sessionId: tab.sessionId, path: "alias")
 
         guard case let .failure(reason, _) = result else {
             Issue.record("expected remote containment verification to fail closed, got \(result)")
@@ -2034,7 +2034,7 @@ struct RemoteAppStateAccessTests {
     /// listing the client could never issue the `listFiles` request that
     /// would reveal `generated/keep.txt`. This exercises the fix via the
     /// same seam other tests in this file use for the root-level remote file
-    /// tree (`state.remoteFileTree(sessionId:path: nil)`), against a real
+    /// tree (`state.core.remoteFileTree(sessionId:path: nil)`), against a real
     /// LOCAL git repo (not registered with `RemoteHostRegistry`), so it
     /// actually drives `GitService.fileTree`'s local branch end-to-end.
     @Test func remoteFileTreeSurfacesAnIgnoredRootDirectoryWithATrackedDescendant() async throws {
@@ -2062,7 +2062,7 @@ struct RemoteAppStateAccessTests {
         state.openNewACPSession(agentID: "test-agent")
         let tab = try #require(acpTabs(in: state).first)
 
-        let result = await state.remoteFileTree(sessionId: tab.sessionId, path: nil)
+        let result = await state.core.remoteFileTree(sessionId: tab.sessionId, path: nil)
 
         guard case let .success(nodes, _) = result else {
             Issue.record("expected a successful root file tree listing, got \(result)")
@@ -2102,7 +2102,7 @@ struct RemoteAppStateAccessTests {
         state.openNewACPSession(agentID: "test-agent")
         let tab = try #require(acpTabs(in: state).first)
 
-        let result = await state.remoteFileTree(sessionId: tab.sessionId, path: nil)
+        let result = await state.core.remoteFileTree(sessionId: tab.sessionId, path: nil)
 
         guard case let .success(nodes, _) = result else {
             Issue.record("expected a successful root file tree listing, got \(result)")
@@ -2139,7 +2139,7 @@ struct RemoteAppStateAccessTests {
         state.openNewACPSession(agentID: "test-agent")
         let tab = try #require(acpTabs(in: state).first)
 
-        let result = await state.remoteFileTree(sessionId: tab.sessionId, path: "subdir")
+        let result = await state.core.remoteFileTree(sessionId: tab.sessionId, path: "subdir")
 
         guard case let .success(nodes, _) = result else {
             Issue.record("expected a successful subdirectory file tree listing, got \(result)")
@@ -2185,7 +2185,7 @@ struct RemoteAppStateAccessTests {
         state.openNewACPSession(agentID: "test-agent")
         let tab = try #require(acpTabs(in: state).first)
 
-        let diffResult = await state.remoteFileDiff(sessionId: tab.sessionId, path: "image.bin")
+        let diffResult = await state.core.remoteFileDiff(sessionId: tab.sessionId, path: "image.bin")
         #expect(diffResult == .failure(reason: .binary, message: nil))
     }
 
@@ -2208,7 +2208,7 @@ struct RemoteAppStateAccessTests {
         state.openNewACPSession(agentID: "test-agent")
         let tab = try #require(acpTabs(in: state).first)
 
-        let diffResult = await state.remoteFileDiff(sessionId: tab.sessionId, path: "mixed.dat", stage: "staged")
+        let diffResult = await state.core.remoteFileDiff(sessionId: tab.sessionId, path: "mixed.dat", stage: "staged")
         guard case .success = diffResult else {
             Issue.record("expected staged text diff, got \(diffResult)")
             return
@@ -2242,7 +2242,7 @@ struct RemoteAppStateAccessTests {
         state.openNewACPSession(agentID: "test-agent")
         let tab = try #require(acpTabs(in: state).first)
 
-        let diffResult = await state.remoteFileDiff(sessionId: tab.sessionId, path: "mixed.dat", stage: "unstaged")
+        let diffResult = await state.core.remoteFileDiff(sessionId: tab.sessionId, path: "mixed.dat", stage: "unstaged")
         guard case let .success(hunks, _, _) = diffResult else {
             Issue.record("expected unstaged text deletion diff, got \(diffResult)")
             return
@@ -2272,7 +2272,7 @@ struct RemoteAppStateAccessTests {
         state.openNewACPSession(agentID: "test-agent")
         let tab = try #require(acpTabs(in: state).first)
 
-        let diffResult = await state.remoteFileDiff(sessionId: tab.sessionId, path: "new.txt", stage: "unstaged")
+        let diffResult = await state.core.remoteFileDiff(sessionId: tab.sessionId, path: "new.txt", stage: "unstaged")
         guard case let .success(hunks, _, _) = diffResult else {
             Issue.record("expected unstaged rename diff, got \(diffResult)")
             return

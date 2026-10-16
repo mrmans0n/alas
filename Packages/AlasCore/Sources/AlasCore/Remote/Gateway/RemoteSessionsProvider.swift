@@ -22,27 +22,6 @@ public protocol RemoteSessionsProvider: AnyObject {
     /// Projection of the session's config for the `sessionConfig` wire message,
     /// or nil if the session isn't live.
     func sessionConfig(for id: String) -> RemoteSessionConfig?
-    /// Read-only worktree inspection for the remote changes/files tabs. All
-    /// methods resolve the session's worktree first and are ungated by the writer
-    /// lease: seeing a session is enough to read its code.
-    func remoteChangeList(
-        sessionId: String,
-        comparisonMode: AppConfig.Changes.ChangesComparisonMode?
-    ) async -> RemoteChangeListResult
-    func remoteFileDiff(
-        sessionId: String,
-        path: String,
-        stage: String?,
-        comparisonMode: AppConfig.Changes.ChangesComparisonMode?
-    ) async -> RemoteFileDiffResult
-    func remoteFileTree(
-        sessionId: String,
-        path: String?,
-        comparisonMode: AppConfig.Changes.ChangesComparisonMode?
-    ) async -> RemoteFileTreeResult
-    func remoteCommitFiles(sessionId: String, sha: String) async -> RemoteCommitFilesResult
-    func remoteCommitDiff(sessionId: String, sha: String, path: String) async -> RemoteFileDiffResult
-    func remoteFileContents(sessionId: String, path: String) async -> RemoteFileContentsResult
     /// Files, sessions and symbols of the session's project matching an
     /// `@` query, as the local mention picker ranks them.
     func remoteMentionCandidates(sessionId: String, query: String) async -> [RemoteMention]
@@ -57,13 +36,6 @@ extension RemoteSessionsProvider {
     public var peerConsoleHost: PeerConsoleHost? { nil }
     public var eventHost: AlasHost? { nil }
     public var sessionListChanges: ChangeSignal<Void>? { nil }
-
-    public func remoteCommitFiles(sessionId: String, sha: String) async -> RemoteCommitFilesResult {
-        .failure(reason: .unknown, message: "Commit inspection is unavailable.")
-    }
-    public func remoteCommitDiff(sessionId: String, sha: String, path: String) async -> RemoteFileDiffResult {
-        .failure(reason: .unknown, message: "Commit inspection is unavailable.")
-    }
 
     public func remoteMentionCandidates(sessionId: String, query: String) async -> [RemoteMention] { [] }
     public func remoteMentionAttachments(_ mentions: [RemoteMention], sessionId: String) async -> [ACPMessage.Attachment]? {

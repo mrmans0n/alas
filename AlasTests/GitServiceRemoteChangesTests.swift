@@ -2,6 +2,7 @@ import Testing
 import Foundation
 import Darwin
 @testable import Alas
+@_spi(Testing) import AlasCore
 
 /// Races `operation` against a timeout so a regression that reintroduces a
 /// blocking read (e.g. `Data(contentsOf:)` against a writerless FIFO) fails
