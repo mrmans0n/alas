@@ -200,9 +200,23 @@ extension AlasCoreContext {
 
     /// Archives `worktree` through the same routine as the app, claiming it
     /// so nothing new starts in it meanwhile. The main checkout and members of
-    /// an active Workspace checkout are refused.
-    public func archiveWorktree(_ worktree: Worktree) async throws {
-        try await archiveWorktree(worktree, claim: beginArchive(worktree))
+    /// an active Workspace checkout are refused. With `verifiesCheckout`, so
+    /// is a local checkout whose lineage or branch on disk no longer matches
+    /// `worktree`, checked right before it is hidden.
+    public func archiveWorktree(_ worktree: Worktree, verifiesCheckout: Bool = false) async throws {
+        try await archiveWorktree(worktree, claim: beginArchive(worktree), verifiesCheckout: verifiesCheckout)
+    }
+
+    /// Why the checkout at `worktree`'s path is no longer the one with
+    /// `lineageID` on `worktree`'s branch; nil while it still is.
+    nonisolated static func checkoutChange(_ worktree: Worktree, lineageID: String) -> String? {
+        guard WorktreeService.existingLocalLineageID(forWorktreeAt: worktree.path) == lineageID else {
+            return "The path holds a different checkout"
+        }
+        guard WorktreeService.localBranchName(forWorktreeAt: worktree.path) == worktree.branch else {
+            return "The checkout is on another branch"
+        }
+        return nil
     }
 
     /// Claims `worktree` for archiving, for callers that ask the user
@@ -226,7 +240,7 @@ extension AlasCoreContext {
     }
 
     /// Archives a worktree claimed by `beginArchive`, and releases the claim.
-    public func archiveWorktree(_ worktree: Worktree, claim: UUID) async throws {
+    public func archiveWorktree(_ worktree: Worktree, claim: UUID, verifiesCheckout: Bool = false) async throws {
         defer { projects.releaseOperation(claim, for: worktree) }
         // Each check reads the claim after the ownership await: a refresh can
         // clear it meanwhile, and whatever is listed then is not this claim's.
@@ -238,6 +252,15 @@ extension AlasCoreContext {
             guard let self else { return nil }
             let refusal = await workspaceOwnershipRefusal(for: worktree)
             guard projects.holdsClaim(claim, for: worktree) else { return WorktreeArchiveRefusal.operationInProgress }
+            if verifiesCheckout {
+                // Stopping everything takes a while; another process can
+                // replace or switch the checkout meanwhile.
+                guard !worktree.path.isRemoteAlasPath else { return WorktreeArchiveRefusal.remoteUnsupported }
+                guard let lineageID = worktree.lineageID else { return WorktreeArchiveRefusal.changed("The worktree's identity is unknown") }
+                if let change = Self.checkoutChange(worktree, lineageID: lineageID) {
+                    return WorktreeArchiveRefusal.changed(change)
+                }
+            }
             return refusal.map(WorktreeArchiveRefusal.ownedByWorkspaceCheckout)
         })
         projects.finishOperation(claim, for: worktree)
@@ -298,25 +321,35 @@ extension AlasCoreContext {
 }
 
 /// Why `AlasCoreContext.archiveWorktree` or `unarchiveWorktree` refused.
-public enum WorktreeArchiveRefusal: LocalizedError, Equatable {
+public enum WorktreeArchiveRefusal: Codable, LocalizedError, Equatable {
     /// The project's main checkout is never archived.
     case mainWorktree
     /// Another operation holds the worktree.
     case operationInProgress
     /// An active Workspace checkout manages this worktree.
     case ownedByWorkspaceCheckout(String)
+    /// The checkout was replaced or switched branch since the caller looked.
+    case changed(String)
+    /// A remote checkout's identity cannot be checked, so only the app,
+    /// whose user sees it, archives one.
+    case remoteUnsupported
+
+    private enum OwnedByWorkspaceCheckoutCodingKeys: String, CodingKey { case _0 = "reason" }
+    private enum ChangedCodingKeys: String, CodingKey { case _0 = "reason" }
 
     public var errorDescription: String? {
         switch self {
         case .mainWorktree: "The main checkout cannot be archived."
         case .operationInProgress: "Wait for the current worktree operation to finish."
         case .ownedByWorkspaceCheckout(let reason): "\(reason)."
+        case .changed(let reason): reason
+        case .remoteUnsupported: "Remote worktrees can only be archived from the app."
         }
     }
 }
 
 /// Why `AlasCoreContext.deleteWorktree` did not delete.
-public enum WorktreeDeletionRefusal: LocalizedError, Equatable {
+public enum WorktreeDeletionRefusal: Codable, LocalizedError, Equatable {
     /// The project's main checkout is never deleted.
     case mainWorktree
     /// Remote checkouts carry no lineage marker to tell a replacement apart;
@@ -335,6 +368,10 @@ public enum WorktreeDeletionRefusal: LocalizedError, Equatable {
     case checkpointRecoveryPending
     case failed(String)
 
+    private enum NeedsForceCodingKeys: String, CodingKey { case _0 = "message" }
+    private enum ChangedCodingKeys: String, CodingKey { case _0 = "message" }
+    private enum FailedCodingKeys: String, CodingKey { case _0 = "message" }
+
     public var errorDescription: String? {
         switch self {
         case .mainWorktree: "The main checkout cannot be deleted."
@@ -343,6 +380,7 @@ public enum WorktreeDeletionRefusal: LocalizedError, Equatable {
         case .operationInProgress: "Wait for the current worktree operation to finish."
         case .needsForce(let refusal): refusal
         case .changed(let reason): reason
+        case .remoteUnsupported: "Remote worktrees can only be archived from the app."
         case .checkpointRecoveryPending: WorktreeRemovalResult.checkpointRecoveryMessage
         case .failed(let message): message
         }
@@ -364,15 +402,7 @@ extension AlasCoreContext {
         options.deleteBranchIfMerged = deleteBranchIfMerged
         options.recordsSkips = false
         options.refreshesProject = false
-        options.revalidate = {
-            guard WorktreeService.existingLocalLineageID(forWorktreeAt: worktree.path) == lineageID else {
-                return "The path holds a different checkout"
-            }
-            guard WorktreeService.localBranchName(forWorktreeAt: worktree.path) == worktree.branch else {
-                return "The checkout is on another branch"
-            }
-            return nil
-        }
+        options.revalidate = { Self.checkoutChange(worktree, lineageID: lineageID) }
         switch await deleteWorktree(worktree, claim: claim, options: options) {
         case .deleted, .deletedButNotSaved:
             try await finishDeletions([(worktree, claim)])

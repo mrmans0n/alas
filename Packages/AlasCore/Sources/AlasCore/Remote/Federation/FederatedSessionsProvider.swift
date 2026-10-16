@@ -43,11 +43,7 @@ public final class FederatedDownstream {
 public final class FederatedSessionsProvider {
     public static let peerUnavailableMessage = "Peer is unavailable."
 
-    /// How often a peer is re-asked for its list while anyone is attached.
-    /// Matches the web client's own idle poll, so a peer's status changes
-    /// reach a phone about as fast as its own Mac's do.
-    public static let listPollInterval: TimeInterval = 15
-    /// Several phones polling at once must not turn into a burst upstream.
+    /// Several phones asking at once must not turn into a burst upstream.
     public static let listRequestThrottle: TimeInterval = 2
     /// Unanswered queue edits remembered across all sessions. The peer never
     /// answers an edit it refuses, so the oldest are dropped past this.
@@ -70,9 +66,9 @@ public final class FederatedSessionsProvider {
     /// through its own strong `downstream` property — and it outlives every
     /// gateway: it hangs off `AppState.remoteFederation`, which survives each
     /// server start/stop cycle. A connection torn down without a clean
-    /// `detach(_:)` must therefore not pin its downstream, its subscriptions
-    /// or its share of the idle poll here forever. Entries whose value has
-    /// gone are pruned on the next read.
+    /// `detach(_:)` must therefore not pin its downstream or its
+    /// subscriptions here forever. Entries whose value has gone are pruned
+    /// on the next read.
     private struct WeakDownstream {
         weak var value: FederatedDownstream?
 
@@ -212,7 +208,6 @@ public final class FederatedSessionsProvider {
     private var comparisonRequests: [ComparisonRequestKey: [PendingComparisonRequest]] = [:]
     /// One queue per peer and kind; only the head is outstanding upstream.
     private var peerRequests: [PeerRequestKey: [PendingPeerRequest]] = [:]
-    private var pollTimer: Task<Void, Never>?
     private var lastListRequestAt: Date?
     private let now: () -> Date
 
@@ -235,10 +230,6 @@ public final class FederatedSessionsProvider {
         pruneDeadDownstreams()
     }
 
-    /// True while the idle peer-list poll is running: it needs both a live
-    /// downstream to tell and a session-carrying peer to ask.
-    public var isPollingPeerLists: Bool { pollTimer != nil }
-
     /// Forgets one downstream and everything it had asked for. The clean
     /// `detach(_:)` path and the prune path are deliberately the same code:
     /// a downstream that deallocated is a downstream that left.
@@ -260,13 +251,12 @@ public final class FederatedSessionsProvider {
         queueEditRequesters.removeAll { $0.downstreamId == id }
     }
 
-    /// Drops entries whose downstream deallocated without detaching, then
-    /// re-evaluates the poll. Called from every site that reads
+    /// Drops entries whose downstream deallocated without detaching. Called
+    /// from every site that reads
     /// `downstreams`, so a leaked entry cannot outlive one round of traffic
     /// and the map cannot grow across server restarts.
     private func pruneDeadDownstreams() {
         for (id, box) in downstreams where box.value == nil { forget(id) }
-        updatePollTimer()
     }
 
     public func peerSupports(_ capability: String, serverId: String) -> Bool {
@@ -493,6 +483,8 @@ public final class FederatedSessionsProvider {
         pruneDeadDownstreams()
     }
 
+    /// Peers push their lists when they change; a client asking for its
+    /// list asks them again, which also covers peers that predate pushing.
     private func requestPeerSessionLists() {
         let at = now()
         if let last = lastListRequestAt, at.timeIntervalSince(last) < Self.listRequestThrottle { return }
@@ -500,29 +492,6 @@ public final class FederatedSessionsProvider {
         for serverId in activePeers.keys {
             links.sendToPeer(.listSessions, serverId: serverId)
             links.sendToPeer(.listProjects, serverId: serverId)
-        }
-    }
-
-    /// Runs only while there is someone to tell and someone to ask. Reads
-    /// liveness without mutating `downstreams`, so pruning can call it.
-    private func updatePollTimer() {
-        let shouldRun = downstreams.values.contains { $0.value != nil } && !activePeers.isEmpty
-        if shouldRun, pollTimer == nil {
-            pollTimer = Task { @MainActor [weak self] in
-                while !Task.isCancelled {
-                    try? await Task.sleep(nanoseconds: UInt64(Self.listPollInterval * 1_000_000_000))
-                    guard !Task.isCancelled, let self else { return }
-                    // Re-check first: the last downstream may have gone away
-                    // with its connection instead of detaching, and this tick
-                    // is then the thing that has to stop itself.
-                    self.pruneDeadDownstreams()
-                    guard !Task.isCancelled else { return }
-                    self.requestPeerSessionLists()
-                }
-            }
-        } else if !shouldRun {
-            pollTimer?.cancel()
-            pollTimer = nil
         }
     }
 

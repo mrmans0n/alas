@@ -51,8 +51,15 @@ struct ReviewShepherdTests {
         var delivered: [String] = []
     }
 
-    @Test func turnEndingWhileTheFixPromptIsDeliveredKeepsTheFix() async throws {
-        let request = F.request(threads: [F.trustedThread])
+    private struct RulesUnreadable: Error {}
+
+    /// A shepherd watching `request`, a branch pushed at its head, owned by an
+    /// idle session.
+    private func makeShepherd(
+        request: ReviewRequest,
+        deliverPrompt: @escaping @MainActor (String, @escaping @MainActor () -> Bool) async -> ReviewShepherd.Delivery,
+        rules: @escaping @MainActor () throws -> ShepherdRules = { .none }
+    ) -> ReviewShepherd {
         let local = ReviewLoopLocalState(
             branchName: "fix-login", headSHA: F.head, baseBranch: "main",
             hasWorkingTreeChanges: false, hasStagedChanges: false, aheadCommitCount: 1,
@@ -68,8 +75,6 @@ struct ReviewShepherdTests {
             },
             now: { F.now }
         )
-        let gate = DeliveryGate()
-        let (entered, enteredContinuation) = AsyncStream<Void>.makeStream()
         shepherd.effects = ReviewShepherd.Effects(
             worktreeContext: { worktreeID in
                 ReviewShepherd.WorktreeContext(
@@ -78,23 +83,31 @@ struct ReviewShepherdTests {
                 )
             },
             sessionState: { _, _ in .idle },
-            deliverPrompt: { _, _, prompt, isStillWanted in
-                await withCheckedContinuation { continuation in
-                    gate.release = continuation
-                    enteredContinuation.yield()
-                }
-                guard isStillWanted() else { return .superseded }
-                gate.delivered.append(prompt.text)
-                return .delivered
-            },
-            rules: { _ in .none },
+            deliverPrompt: { _, _, prompt, isStillWanted in await deliverPrompt(prompt.text, isStillWanted) },
+            rules: { _ in try rules() },
             notify: { _ in },
             refreshPaneIfCached: { _ in },
             archiveWorktreeIfAllowed: { _, _, _ in .declined }
         )
+        return shepherd
+    }
+
+    @Test func turnEndingWhileTheFixPromptIsDeliveredKeepsTheFix() async throws {
+        let request = F.request(threads: [F.trustedThread])
+        let gate = DeliveryGate()
+        let (entered, enteredContinuation) = AsyncStream<Void>.makeStream()
+        let shepherd = makeShepherd(request: request) { text, isStillWanted in
+            await withCheckedContinuation { continuation in
+                gate.release = continuation
+                enteredContinuation.yield()
+            }
+            guard isStillWanted() else { return .superseded }
+            gate.delivered.append(text)
+            return .delivered
+        }
         let record = await shepherd.bind(
             sessionID: "session-1", worktreeID: "wt-1", request: request, baseBranch: "main",
-            autoFix: true, autoMerge: false, sendContext: false
+            autoFix: true, autoMerge: false, contextRules: nil
         )
 
         let evaluation = Task { await shepherd.evaluateNow(record.id) }
@@ -107,5 +120,23 @@ struct ReviewShepherdTests {
 
         #expect(gate.delivered.count == 1)
         #expect(shepherd.records[record.id]?.phase == .fixing(dispatchedAt: F.now))
+    }
+
+    @Test func unreadableRulesHoldEveryDecision() async {
+        let request = F.request(threads: [F.trustedThread])
+        var delivered: [String] = []
+        let shepherd = makeShepherd(request: request, deliverPrompt: { text, _ in
+            delivered.append(text)
+            return .delivered
+        }, rules: { throw RulesUnreadable() })
+        let record = await shepherd.bind(
+            sessionID: "session-1", worktreeID: "wt-1", request: request, baseBranch: "main",
+            autoFix: true, autoMerge: true, contextRules: nil
+        )
+
+        await shepherd.evaluateNow(record.id)
+
+        #expect(delivered.isEmpty)
+        #expect(shepherd.records[record.id]?.phase == .watching)
     }
 }

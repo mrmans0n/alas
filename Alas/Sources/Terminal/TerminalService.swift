@@ -180,7 +180,10 @@ final class TerminalService {
         // Cheap signature: re-init only if anything we wrote changed.
         let sig = try String(contentsOf: configURL, encoding: .utf8)
         if app == nil || sig != lastConfigSig {
-            app = try AlasGhostty.App(configPath: configURL.path)
+            app = try AlasGhostty.App(
+                configPath: configURL.path,
+                transparentBackground: cfg.backgroundMaterial != .none
+            )
             lastConfigSig = sig
         }
     }

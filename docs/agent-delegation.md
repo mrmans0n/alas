@@ -157,6 +157,33 @@ gpt-5.5
 $ alas session new --agent codex --model gpt-5.5 --reasoning high --prompt "Review the parser changes"
 ```
 
+## How native subagents reach Alas
+
+Alas asks for native subagents by sending `clientCapabilities.subagents: {}`
+in `initialize`. Each subagent then appears as its own row in the parent
+transcript. The agent decides which wire format to use, depending on how
+it classifies the client:
+
+| Format | Sent by | Updates |
+|---|---|---|
+| Revised RFD 1992 | claude-agent-acp 0.90 or later, to clients that are not AIR clients | `subagent_update`, plus `session_message` and `session_message_chunk` on the child session |
+| Earlier draft | claude-agent-acp before 0.90, or for AIR clients; other adapters that implemented the draft | `subagent_spawned`, `subagent_state_update` |
+| OpenCode | OpenCode 2 | `opencode/session/child_update` |
+
+Alas reads all three formats and turns them into the same subagent model.
+In the revised format, a child keeps its session id when `SendMessage`
+resumes it, so it stays on one row with one transcript. `requires_action`
+appears as **Waiting for input**. **Cancel** sends `session/cancel` to the
+child's session id, and only when the child advertises `capabilities.cancel`.
+Stopping the parent does not end its children: a background child can keep
+running after the parent is cancelled, and its row changes only when the
+agent reports a new state for it.
+
+Alas is not an AIR client and does not send `_meta.jetbrains.air`. That
+marker changes adapter behaviour well beyond subagents. Before relying on a
+newer ACP feature, check how the adapter selects that feature for clients
+that are not AIR clients.
+
 ## Disabling native subagents
 
 Some agents can start their own subagents. **Settings → Agents → (agent) →

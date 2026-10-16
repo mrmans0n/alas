@@ -30,6 +30,12 @@ public final class RemoteSessionGateway {
     private var sessionListGeneration = 0
     private var worktreeListRefresh: Task<Void, Never>?
     private var worktreeListGeneration = 0
+    /// Set once the client asks for worktrees or projects: only then are
+    /// they pushed.
+    private var wantsWorktreeList = false
+    private var wantsProjectList = false
+    private var hostSubscription: HostSubscription?
+    private var providerListChanges: ChangeSubscription?
     private var projectListRefresh: Task<Void, Never>?
     private var projectListGeneration = 0
     private var branchListRefresh: Task<Void, Never>?
@@ -48,13 +54,29 @@ public final class RemoteSessionGateway {
     private var inFlightFileRequests: Set<String> = []
     private static let coalesceNanos: UInt64 = 80_000_000  // ~80ms
 
+    /// The paired device this connection authenticated. Nil for a gateway
+    /// built without one: its Remote requests act as the app's, and it
+    /// serves no host protocol.
+    private let caller: HostCaller?
+    private let sendTracked: (@Sendable (RemoteServerMessage, _ onWritten: @escaping @Sendable () -> Void) -> Void)?
+    private var hostConnection: HostProtocolConnection?
+    /// Host messages waiting for their frame to be written. A connection that
+    /// fails never reports the write, so closing releases them.
+    private var pendingWrites: [UUID: CheckedContinuation<Void, Never>] = [:]
+
     public init(provider: RemoteSessionsProvider, federation: FederatedSessionsProvider? = nil,
          consoleLink: PeerConsoleLink? = nil,
+         caller: HostCaller? = nil,
+         sendTracked: (@Sendable (RemoteServerMessage, _ onWritten: @escaping @Sendable () -> Void) -> Void)? = nil,
          send: @escaping (RemoteServerMessage) -> Void) {
         self.provider = provider
+        self.caller = caller
+        self.sendTracked = sendTracked
         self.federation = federation
         self.consoleLink = consoleLink
         self.send = send
+        if let host = provider.eventHost { pushLists(from: host) }
+        providerListChanges = provider.sessionListChanges?.observe { [weak self] in self?.refreshSessionList() }
         guard let federation else { return }
         // A peer's cached list moving refreshes this client even if it has
         // never asked for the list, which matches what `renameSession`
@@ -72,15 +94,19 @@ public final class RemoteSessionGateway {
         case .helloAck:
             // Version acknowledgement from an Alas peer; nothing to do server-side.
             break
+        case .host(let request):
+            serveHost(request)
         case .console(let request):
             handleConsole(request)
         case .listSessions:
             refreshSessionList()
         case .listWorktrees:
+            wantsWorktreeList = true
             refreshWorktreeList()
         case .listAgents:
             send(.agentList(agents: provider.remoteAgents()))
         case .listProjects:
+            wantsProjectList = true
             refreshProjectList()
         case .listBranches(let projectId):
             refreshBranchList(projectId: projectId)
@@ -91,7 +117,8 @@ public final class RemoteSessionGateway {
                 branch: branch,
                 agentId: agentId,
                 modelId: modelId,
-                effortId: effortId
+                effortId: effortId,
+                caller: caller ?? .app
             )
             switch result {
             case .success(let summary):
@@ -475,6 +502,45 @@ public final class RemoteSessionGateway {
         provider.session(for: id)?.transcript.changeLog.releaseTracking()
     }
 
+    /// The lists `events` make stale. Session rows carry their worktree and
+    /// project, so changes to those refresh the session list too.
+    nonisolated static func listsChanged(by events: [HostEvent]) -> (sessions: Bool, worktrees: Bool, projects: Bool) {
+        var lists = (sessions: false, worktrees: false, projects: false)
+        for event in events {
+            switch event {
+            case .sessionChanged, .sessionRemoved:
+                lists.sessions = true
+            case .worktreeChanged, .worktreeRemoved:
+                lists.sessions = true
+                lists.worktrees = true
+            case .projectChanged, .projectRemoved, .resync:
+                return (true, true, true)
+            case .workspaceCheckoutChanged, .workspaceCheckoutRemoved, .runChanged, .runRemoved:
+                break
+            }
+        }
+        return lists
+    }
+
+    /// Lists are rebuilt at most this often; changes in between coalesce.
+    private static let listPushInterval: Duration = .milliseconds(500)
+
+    private func pushLists(from host: AlasHost) {
+        let subscription = host.subscribe()
+        hostSubscription = subscription
+        Task { @MainActor [weak self] in
+            while let events = await subscription.next() {
+                guard let self else { return }
+                let lists = Self.listsChanged(by: events)
+                if lists.sessions { refreshSessionList() }
+                if lists.worktrees, wantsWorktreeList { refreshWorktreeList() }
+                if lists.projects, wantsProjectList { refreshProjectList() }
+                // ponytail: fixed rate limit; each list runs git per worktree.
+                try? await Task.sleep(for: Self.listPushInterval)
+            }
+        }
+    }
+
     private func refreshSessionList() {
         sessionListGeneration += 1
         let generation = sessionListGeneration
@@ -599,11 +665,53 @@ public final class RemoteSessionGateway {
         }
     }
 
+    /// Hands a host protocol message to this connection's host connection,
+    /// opened on first use for the caller the transport authenticated.
+    private func serveHost(_ request: HostClientMessage) {
+        if hostConnection == nil, let host = provider.eventHost, let caller {
+            hostConnection = HostProtocolServer(host: host).connect(caller: caller) { [weak self] reply in
+                await self?.sendWritten(.host(reply))
+            }
+        }
+        guard let hostConnection else {
+            send(.host(.response(id: request.id, result: .failure(error: .invalidRequest(
+                reason: "This connection does not serve the host protocol."
+            )))))
+            return
+        }
+        // Answers are matched by id, so a slow verb need not hold the
+        // connection's ordered work.
+        Task { await hostConnection.receive(request) }
+    }
+
+    /// Returns once the frame is written, so a slow peer holds back its own
+    /// host events, where they coalesce.
+    private func sendWritten(_ message: RemoteServerMessage) async {
+        guard let sendTracked else {
+            send(message)
+            return
+        }
+        let id = UUID()
+        await withCheckedContinuation { continuation in
+            pendingWrites[id] = continuation
+            sendTracked(message) {
+                Task { @MainActor [weak self] in self?.pendingWrites.removeValue(forKey: id)?.resume() }
+            }
+        }
+    }
+
     /// Tear down all observation (called when the connection closes).
     public func close() {
+        hostConnection?.close()
+        hostConnection = nil
+        for continuation in pendingWrites.values { continuation.resume() }
+        pendingWrites.removeAll()
         if let consoleLink { provider.peerConsoleHost?.close(consoleLink) }
         if let federation, let downstream { federation.detach(downstream) }
         self.downstream = nil
+        hostSubscription?.cancel()
+        hostSubscription = nil
+        providerListChanges = nil
         sessionListRefresh?.cancel()
         sessionListRefresh = nil
         worktreeListRefresh?.cancel()
@@ -996,7 +1104,7 @@ public final class RemoteSessionGateway {
     }
 
     private func emitPendingQuestionIfAny(id: String, session: ACPSession) {
-        if let pending = Self.queuedQuestion(in: session),
+        if let pending = ACPRequestAnswers.pendingQuestion(in: session),
            !pending.params.questions.isEmpty {
             let rid = Self.requestIdInt(pending.id)
             lastQuestionReq[id] = rid
@@ -1116,28 +1224,21 @@ public final class RemoteSessionGateway {
               let pending = session.transcript.pendingPermission,
               Self.requestIdInt(pending.id) == requestId          // first-wins guard
         else { return }
-        guard let option = pending.params.options.first(where: { $0.optionId == optionId }) else { return }
-
-        // Mirror the local SwiftUI prompt's mapping so remote and local
-        // decisions log identically (ACPPermissionPrompt.handle).
-        let decision: ACPPermissionDecision = option.kind.hasPrefix("allow") ? .allow : .deny
-        let scope: ACPPermissionScopeKind?
-        if let persistScope {
-            scope = persistScope == "session" ? .session
-                  : (persistScope == "project" ? .project : nil)
-        } else {
-            switch option.kind {
-            case "allow_once", "reject_once":     scope = nil
-            case "allow_always", "reject_always": scope = .project
-            default:                              scope = .session
-            }
+        let scope: ACPRequestAnswers.PermissionScope = switch persistScope {
+        case nil: .optionDefault
+        case "session": .session
+        case "project": .project
+        default: .once
         }
-
-        // Same scopeKey derivation as ACPTabView.scopeKey(for:).
-        let scopeKey = Self.scopeKey(for: pending.params)
-        await policy.userDecided(scopeKey: scopeKey, optionId: optionId, decision: decision, persistScope: scope)
+        guard let answer = ACPRequestAnswers.permission(pending, optionId: optionId, scope: scope) else { return }
+        // Dismissed before answering: once the agent has the answer it may
+        // park its next request, under the same placeholder id, while the
+        // decision is still being recorded, and that one must stay up.
         lastPermissionReq[sessionId] = nil
         send(.permissionResolved(sessionId: sessionId, requestId: requestId))
+        await policy.userDecided(
+            scopeKey: answer.scopeKey, optionId: answer.optionId, decision: answer.decision, persistScope: answer.persistScope
+        )
     }
 
     private func handleVisualAidResponse(
@@ -1184,31 +1285,14 @@ public final class RemoteSessionGateway {
 
     private func applyQuestionAnswer(sessionId: String, requestId: Int, answers: [RemoteQuestionAnswer]) {
         guard let session = provider.session(for: sessionId),
-              let pending = Self.queuedQuestion(in: session),
-              Self.requestIdInt(pending.id) == requestId          // first-wins guard
+              let pending = ACPRequestAnswers.pendingQuestion(in: session),
+              Self.requestIdInt(pending.id) == requestId,         // first-wins guard
+              let response = ACPRequestAnswers.question(
+                  pending,
+                  answers: answers.map { ACPQuestionAnswer(questionId: $0.questionId, selectedOptionIds: $0.selectedOptionIds) }
+              )
         else { return }
-        // Require a non-empty selection for every question and order each by the
-        // question's option order — the same completeness rule the local prompt
-        // enforces (ACPQuestionPrompt.answeredResponse). Ignore malformed/partial
-        // input rather than resuming the agent with vacuous answers.
-        let selectionByQuestion = Dictionary(answers.map { ($0.questionId, Set($0.selectedOptionIds)) },
-                                             uniquingKeysWith: { $1 })
-        var acpAnswers: [ACPQuestionAnswer] = []
-        for question in pending.params.questions {
-            let selected = selectionByQuestion[question.id] ?? []
-            // Keep only ids that are real options for this question. If none
-            // survive (empty, or unknown ids from a stale/malicious client),
-            // treat the answer as incomplete rather than resuming the agent with
-            // a vacuous selection.
-            let ordered = question.options.map(\.id).filter { selected.contains($0) }
-            guard !ordered.isEmpty else { return }
-            acpAnswers.append(ACPQuestionAnswer(questionId: question.id, selectedOptionIds: ordered))
-        }
-        provider.answerQuestion(
-            for: sessionId,
-            requestId: pending.id,
-            .init(outcome: .answered(answers: acpAnswers))
-        )
+        provider.answerQuestion(for: sessionId, requestId: pending.id, response)
         lastQuestionReq[sessionId] = nil
         send(.questionResolved(sessionId: sessionId, requestId: requestId))
     }
@@ -1218,32 +1302,17 @@ public final class RemoteSessionGateway {
               let pending = session.transcript.pendingPlan,
               pending.id == requestId
         else { return }
-
-        let response: ACPCursorPlanResponse
+        let planAction: ACPRequestAnswers.PlanAction
         switch action {
-        case "accept":
-            response = .init(outcome: .accepted(planUri: "alas://plans/\(pending.params.toolCallId)"))
-        case "reject":
-            let trimmed = (reason ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { return }
-            response = .init(outcome: .rejected(reason: trimmed))
-        case "cancel":
-            response = .init(outcome: .cancelled)
-        default:
-            return
+        case "accept": planAction = .accept
+        case "reject": planAction = .reject(reason: reason ?? "")
+        case "cancel": planAction = .cancel
+        default: return
         }
-
+        guard let response = ACPRequestAnswers.plan(pending, action: planAction) else { return }
         provider.respondToPlan(for: sessionId, requestId: requestId, response)
         lastPlanReq[sessionId] = nil
         send(.planResolved(sessionId: sessionId, requestId: requestId))
-    }
-
-    private static func queuedQuestion(in session: ACPSession) -> ACPSession.PendingQuestion? {
-        guard let head = session.transcript.pendingUserInputs.first else {
-            return session.transcript.pendingQuestion
-        }
-        guard case .cursor(let id, let params) = head.source else { return nil }
-        return .init(id: id, params: params)
     }
 
     private func applyElicitationResponse(
@@ -1258,107 +1327,18 @@ public final class RemoteSessionGateway {
               pending.id == token,
               case .elicitation = pending.source
         else { return }
-
-        let resolvedAction: ACPUserInputAction
+        let answer: ACPRequestAnswers.UserInputAnswer
         switch action {
-        case "accept":
-            let content = content ?? [:]
-            guard Self.remoteContent(content, satisfies: pending) else { return }
-            resolvedAction = .submit(content)
-        case "decline":
-            resolvedAction = .decline
-        case "cancel":
-            resolvedAction = .cancel
-        default:
-            return
+        case "accept": answer = .submit(content: content ?? [:])
+        case "decline": answer = .decline
+        case "cancel": answer = .cancel
+        default: return
         }
+        guard let resolvedAction = ACPRequestAnswers.userInput(pending, answer: answer) else { return }
         provider.respondToUserInput(for: sessionId, token: token, action: resolvedAction)
         lastElicitationReq[sessionId] = nil
         send(.elicitationResolved(sessionId: sessionId, requestId: requestId))
     }
-
-    private static func remoteContent(
-        _ content: [String: ACPElicitationValue],
-        satisfies request: ACPUserInputRequest
-    ) -> Bool {
-        if case .url = request.mode { return content.isEmpty }
-        let fields = Dictionary(uniqueKeysWithValues: request.fields.map { ($0.key, $0) })
-        guard content.keys.allSatisfy({ fields[$0] != nil }) else { return false }
-        for field in request.fields where field.required {
-            guard content[field.key] != nil else { return false }
-        }
-        for (key, value) in content {
-            guard let field = fields[key] else { return false }
-            switch (field.schema.type, value) {
-            case ("string", .string(let string)):
-                guard validRemoteString(string, for: field) else { return false }
-            case ("number", .number(let number)):
-                guard validRemoteNumber(number, for: field) else { return false }
-            case ("number", .integer(let integer)):
-                guard validRemoteNumber(Double(integer), for: field) else { return false }
-            case ("integer", .integer(let integer)):
-                guard validRemoteNumber(Double(integer), for: field) else { return false }
-            case ("boolean", .boolean):
-                continue
-            case ("array", .strings(let selected)):
-                let allowed = Set(field.schema.options.map(\.const))
-                guard selected.allSatisfy(allowed.contains),
-                      field.schema.minItems.map({ selected.count >= $0 }) != false,
-                      field.schema.maxItems.map({ selected.count <= $0 }) != false
-                else { return false }
-            default:
-                return false
-            }
-        }
-        return true
-    }
-
-    private static func validRemoteString(_ value: String, for field: ACPUserInputField) -> Bool {
-        guard field.schema.minLength.map({ value.count >= $0 }) != false,
-              field.schema.maxLength.map({ value.count <= $0 }) != false
-        else { return false }
-        if !field.schema.options.isEmpty,
-           !field.schema.options.contains(where: { $0.const == value }) {
-            return false
-        }
-        if let pattern = field.schema.pattern,
-           let regex = try? NSRegularExpression(pattern: pattern),
-           regex.firstMatch(in: value, range: NSRange(value.startIndex..., in: value)) == nil {
-            return false
-        }
-        switch field.schema.format {
-        case "email":
-            let parts = value.split(separator: "@", omittingEmptySubsequences: false)
-            return parts.count == 2 && parts[1].contains(".")
-        case "uri":
-            return URL(string: value)?.scheme != nil
-        case "date":
-            return remoteDateFormatter.date(from: value) != nil
-        case "date-time":
-            let fractionalFormatter = ISO8601DateFormatter()
-            fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            return fractionalFormatter.date(from: value) != nil
-                || ISO8601DateFormatter().date(from: value) != nil
-        default:
-            return true
-        }
-    }
-
-    private static func validRemoteNumber(_ value: Double, for field: ACPUserInputField) -> Bool {
-        value.isFinite
-            && field.schema.minimum.map({ value >= $0 }) != false
-            && field.schema.maximum.map({ value <= $0 }) != false
-    }
-
-    private static let remoteDateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.calendar = Calendar(identifier: .iso8601)
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        formatter.dateFormat = "yyyy-MM-dd"
-        formatter.isLenient = false
-        return formatter
-    }()
 
     private static func remoteDefault(_ value: AnyCodable?) -> ACPElicitationValue? {
         guard let raw = value?.value else { return nil }
@@ -1398,7 +1378,7 @@ public final class RemoteSessionGateway {
     /// derivation in `ACPTabView.scopeKey(for:)` so remote and local decisions
     /// land on the same key in `permission_decisions`.
     public static func scopeKey(for params: ACPPermissionRequestParams) -> String {
-        "tool:\(params.toolCall.title ?? params.toolCall.toolCallId)"
+        ACPRequestAnswers.scopeKey(for: params)
     }
 
     /// Maps a live ACPMessage to the wire DTO. Simple kinds carry `text`;

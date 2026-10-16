@@ -56,4 +56,26 @@ public enum SidebarMaterialChoice: String, CaseIterable, Codable, Equatable, Sen
         case .swiftUIUltraThick: return "SwiftUI: Ultra Thick"
         }
     }
+
+    /// SwiftUI materials blend with the window's own content. Chat and
+    /// terminal sit on the center pane's opaque background, so there they
+    /// would only blur that solid color; those panes offer None and the
+    /// AppKit materials, which blend with what is behind the window.
+    public var showsThroughCenterPane: Bool {
+        switch self {
+        case .swiftUIUltraThin, .swiftUIThin, .swiftUIRegular, .swiftUIThick, .swiftUIUltraThick:
+            return false
+        default:
+            return true
+        }
+    }
+
+    public static let centerPaneChoices = allCases.filter(\.showsThroughCenterPane)
+
+    /// A saved chat or terminal material, or `.none` when it is missing or
+    /// cannot show through the center pane.
+    public static func centerPaneMaterial(_ decoded: SidebarMaterialChoice?) -> SidebarMaterialChoice {
+        guard let decoded, decoded.showsThroughCenterPane else { return .none }
+        return decoded
+    }
 }

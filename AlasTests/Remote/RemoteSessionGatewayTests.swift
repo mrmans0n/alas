@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 @testable import Alas
+@_spi(Testing) import AlasCore
 
 @MainActor
 final class FakeSessionsProvider: RemoteSessionsProvider {
@@ -68,6 +69,7 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     /// guard logic (e.g. refusing an item with a mention/image) through the
     /// gateway rather than a canned stub.
     var manager: ACPSessionManager?
+    var eventHost: AlasHost?
     var steerPromptAccepts = true
     var fullToolCallContents: [String: String] = [:]
     var fullToolCallContentCallCount = 0
@@ -80,7 +82,7 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     var remoteBranchRequests: [String] = []
     var remoteAgentsCallCount = 0
     var createRequests: [(worktreeId: String, agentId: String)] = []
-    var createWorktreeSessionRequests: [(projectId: String, base: String, branch: String, agentId: String)] = []
+    var createWorktreeSessionRequests: [(projectId: String, base: String, branch: String, agentId: String, caller: HostCaller)] = []
     var pauseSessionSummaries = false
     var pauseRemoteWorktrees = false
     var pauseRemoteProjects = false
@@ -163,9 +165,10 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
         branch: String,
         agentId: String,
         modelId: String?,
-        effortId: String?
+        effortId: String?,
+        caller: HostCaller
     ) async -> RemoteCreateWorktreeSessionResult {
-        createWorktreeSessionRequests.append((projectId, base, branch, agentId))
+        createWorktreeSessionRequests.append((projectId, base, branch, agentId, caller))
         return createWorktreeSessionResult
     }
     func resumeSessionSummaries() {
@@ -704,6 +707,64 @@ struct RemoteSessionGatewayTests {
         #expect(sent.isEmpty)
     }
 
+    /// A host change pushes the lists it makes stale, unasked: sessions
+    /// always, worktrees and projects once the client has asked for them.
+    @Test func hostChangesPushTheListsTheClientFollows() async throws {
+        let project = ProjectConfig(id: "p", name: "p", path: "/srv/repo", color: "blue", addedAt: .distantPast)
+        let projects = ProjectsManager(persistedProjects: [project])
+        let provider = FakeSessionsProvider()
+        provider.eventHost = AlasHost(core: AlasCoreContext(projects: projects, runHistoryStore: nil))
+        let gw = RemoteSessionGateway(provider: provider) { _ in }
+        defer { gw.close() }
+        await gw.handle(.listWorktrees)
+        await gw.handle(.listProjects)
+        #expect(provider.sessionSummariesCallCount == 0)
+
+        let path = URL(fileURLWithPath: "/srv/new")
+        projects.insertOptimisticWorktree(Worktree(
+            id: Worktree.makeId(path: path), projectId: "p", name: "new", branch: "new",
+            path: path, status: .clean, lastActivity: .distantPast
+        ))
+        let deadline = ContinuousClock.now + .seconds(5)
+        while provider.sessionSummariesCallCount == 0 || provider.remoteWorktreesCallCount < 2, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(provider.sessionSummariesCallCount == 1)
+        #expect(provider.remoteWorktreesCallCount == 2)
+        #expect(provider.remoteProjectsCallCount == 1)
+
+        // A project's own change refreshes the project list too.
+        projects.updateProject(id: "p", update: ProjectUpdate(name: "renamed", icon: .default()))
+        while provider.remoteProjectsCallCount < 2, ContinuousClock.now < deadline + .seconds(5) {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(provider.remoteProjectsCallCount == 2)
+    }
+
+    /// A connection serves host protocol messages for the caller its
+    /// transport authenticated, and refuses them without one.
+    @Test(arguments: [true, false])
+    func hostMessagesAreServedOnlyForAnAuthenticatedCaller(authenticated: Bool) async throws {
+        let projects = ProjectsManager(persistedProjects: [])
+        let provider = FakeSessionsProvider()
+        provider.eventHost = AlasHost(core: AlasCoreContext(projects: projects, runHistoryStore: nil))
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(
+            provider: provider, caller: authenticated ? .remotePeer(deviceID: "phone") : nil
+        ) { sent.append($0) }
+        defer { gw.close() }
+
+        await gw.handle(.host(HostClientMessage(id: 7, request: .listSessions)))
+        let deadline = ContinuousClock.now + .seconds(5)
+        while sent.isEmpty, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(sent == [.host(.response(id: 7, result: authenticated
+            ? .sessions(sessions: [])
+            : .failure(error: .invalidRequest(reason: "This connection does not serve the host protocol."))
+        ))])
+    }
+
     @Test func createWorktreeSessionEmitsCreatedSessionAndRefreshesLists() async {
         let provider = FakeSessionsProvider()
         let summary = RemoteSessionSummary(
@@ -732,7 +793,7 @@ struct RemoteSessionGatewayTests {
             )
         ]
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(provider: provider, caller: .remotePeer(deviceID: "phone")) { sent.append($0) }
 
         await gw.handle(.createWorktreeSession(
             projectId: "project-1",
@@ -750,6 +811,7 @@ struct RemoteSessionGatewayTests {
         #expect(provider.createWorktreeSessionRequests.first?.base == "main")
         #expect(provider.createWorktreeSessionRequests.first?.branch == "feature/remote")
         #expect(provider.createWorktreeSessionRequests.first?.agentId == "claude")
+        #expect(provider.createWorktreeSessionRequests.first?.caller == .remotePeer(deviceID: "phone"))
         #expect(sent.first == .worktreeSessionCreated(session: summary))
         #expect(sent.contains(.sessionList(sessions: [summary])))
         #expect(sent.contains(.worktreeList(worktrees: provider.worktrees)))

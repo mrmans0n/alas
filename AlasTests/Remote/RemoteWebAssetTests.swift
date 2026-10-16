@@ -1093,23 +1093,6 @@ struct RemoteWebAssetTests {
         #expect(scheduleBody.contains(#"activeTab === "changes" || activeTab === "chat""#))
     }
 
-    // Regression (PR #1329 review, chatgpt-codex-connector): sessionList is a
-    // pure pull snapshot — the gateway never pushes one when a session's
-    // streaming state changes elsewhere (another tab, another device, or a
-    // turn this client started and navigated away from) — so the Running
-    // filter, per-worktree status dot, and run-state pips would otherwise
-    // freeze at whatever they were when the list was last fetched.
-    @Test func sessionListPollsWhileTheRepoListIsVisible() throws {
-        let js = try asset("app.js")
-
-        #expect(js.contains("const SESSION_LIST_POLL_MS = 15 * 1000;"))
-        let body = try #require(
-            js.range(of: "const SESSION_LIST_POLL_MS").map { js[$0.lowerBound...].prefix(300) })
-        #expect(body.contains("setInterval("))
-        #expect(body.contains(#"if ($("sessions").classList.contains("hidden")) return;"#))
-        #expect(body.contains(#"send({ type: "listSessions" });"#))
-    }
-
     // Regression (PR #1285 review): a truncated changesState (worktrees
     // over the server's changed-file cap) made the badge show the capped
     // array length as if it were the exact total. changedFileCount is the

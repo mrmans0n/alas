@@ -21,7 +21,7 @@ extension AppState {
                 ) ?? .failed
             },
             rules: { [weak self] worktreeID in
-                self?.shepherdRules(worktreeID: worktreeID) ?? ShepherdRules.none
+                try await self?.shepherdRules(worktreeID: worktreeID) ?? ShepherdRules.none
             },
             notify: { [weak self] event in
                 self?.notifyShepherdEvent(event)
@@ -46,16 +46,24 @@ extension AppState {
 
     // MARK: - Eligibility, rules and base
 
-    /// Local git worktrees outside Workspace checkouts. Remote (SSH)
-    /// projects, folders and checkout members are out of scope for v1.
+    /// Git worktrees, local or SSH, outside Workspace checkouts. On an SSH
+    /// project git and `gh`/`glab` run on the remote host, which must have
+    /// the CLI installed and signed in. Folders and checkout members are out
+    /// of scope.
     func isShepherdEligible(_ worktree: Worktree) -> Bool {
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else { return false }
-        return project.host == nil && !project.isFolder && !isWorkspaceCheckoutMember(worktree)
+        return !project.isFolder && !isWorkspaceCheckoutMember(worktree)
     }
 
-    func shepherdRules(worktreeID: String) -> ShepherdRules {
+    /// Whether a session tab offers Ship, as the toolbar pill and `/ship`:
+    /// the shepherd's eligibility plus no Workspace checkout-owned sessions.
+    func offersShip(in worktree: Worktree, isWorkspaceCheckoutOwner: Bool) -> Bool {
+        !isWorkspaceCheckoutOwner && isShepherdEligible(worktree)
+    }
+
+    func shepherdRules(worktreeID: String) async throws -> ShepherdRules {
         guard let resolved = projectAndWorktree(withWorktreeId: worktreeID) else { return ShepherdRules.none }
-        return ShepherdRulesResolver.load(
+        return try await ShepherdRulesResolver.load(
             worktreePath: resolved.worktree.path,
             projectSettings: resolved.project.shepherd
         )
@@ -208,10 +216,43 @@ extension AppState {
         }
     }
 
+    /// `/ship`: runs what the Ship popover would offer this session, fetching
+    /// the branch's status first when nothing has it cached.
+    func shipFromCommand(session: ACPSession, worktree: Worktree) async {
+        var context = ShepherdSessionContext(sessionID: session.id, worktree: worktree, state: self)
+        if context.request == nil, let bound = context.record ?? context.otherRecord {
+            let fetched = await reviewShepherd.statusSnapshot(for: bound.id)
+            context = ShepherdSessionContext(sessionID: session.id, worktree: worktree, state: self, fetched: fetched)
+        } else if context.snapshot == nil {
+            let fetched = await reviewShepherd.fetchSnapshot(
+                worktreePath: worktree.path,
+                baseBranch: shepherdBaseBranch(for: worktree)
+            )
+            context = ShepherdSessionContext(sessionID: session.id, worktree: worktree, state: self, fetched: fetched)
+        }
+        switch ShepherdShipAction.resolve(
+            record: context.record,
+            otherRecord: context.otherRecord,
+            request: context.request,
+            snapshot: context.snapshot,
+            isBusy: session.transcript.streamingState != .idle
+        ) {
+        case .shepherding(let number):
+            session.lastError = "This session already shepherds \(number). Its status is in the toolbar's \(number) button."
+        case .adopt(let request):
+            await shepherdWithSession(session.id, worktree: worktree, request: request)
+        case .create:
+            requestShepherdCreatePR(sessionID: session.id, worktree: worktree)
+        case .unavailable(let reason):
+            session.lastError = reason
+        }
+    }
+
     /// Binds `request` to an existing session and sends it the context
     /// prompt. A rebind keeps the record's toggles; a new binding starts from
     /// the Settings defaults.
     func shepherdWithSession(_ sessionID: String, worktree: Worktree, request: ReviewRequest) async {
+        guard let rules = await shepherdRulesForBinding(worktree: worktree) else { return }
         let toggles = shepherdToggles(worktree: worktree, request: request)
         await reviewShepherd.bind(
             sessionID: sessionID,
@@ -220,7 +261,7 @@ extension AppState {
             baseBranch: request.baseRefName,
             autoFix: toggles.autoFix,
             autoMerge: toggles.autoMerge,
-            sendContext: true
+            contextRules: rules
         )
     }
 
@@ -239,10 +280,11 @@ extension AppState {
             )
             return
         }
+        guard let rules = await shepherdRulesForBinding(worktree: worktree) else { return }
         let prompt = ShepherdPromptBuilder.bindPrompt(
             request: request,
             fix: ShepherdPolicy.problems(in: request, handled: []),
-            rules: shepherdRules(worktreeID: worktree.id)
+            rules: rules
         )
         let prepared = PreparedWorktreeACPPrompt(
             sessionID: UUID().uuidString, promptID: UUID(), text: prompt.text, card: prompt.card)
@@ -287,11 +329,27 @@ extension AppState {
             baseBranch: request.baseRefName,
             autoFix: toggles.autoFix,
             autoMerge: toggles.autoMerge,
-            sendContext: false
+            contextRules: nil
         )
     }
 
     // MARK: - Effects
+
+    /// The rules a binding's context prompt carries, or nil after posting
+    /// why they could not be read: binding without them would hide the
+    /// repository's instructions from the session.
+    private func shepherdRulesForBinding(worktree: Worktree) async -> ShepherdRules? {
+        do {
+            return try await shepherdRules(worktreeID: worktree.id)
+        } catch {
+            inAppNotifications.post(
+                "Couldn't start shepherding: \(error.localizedDescription)",
+                severity: .error,
+                worktreeID: worktree.id
+            )
+            return nil
+        }
+    }
 
     private func shepherdToggles(worktree: Worktree, request: ReviewRequest) -> (autoFix: Bool, autoMerge: Bool) {
         let id = ShepherdRecordID(worktreeID: worktree.id, request: request)
@@ -351,7 +409,9 @@ extension AppState {
     }
 
     private func notifyShepherdEvent(_ event: ReviewShepherd.Event) {
-        let message = Self.shepherdNotification(for: event)
+        let message = Self.shepherdNotification(for: event) { record in
+            projectAndWorktree(withWorktreeId: record.id.worktreeID)?.project.host
+        }
         let record = message.record
         guard let resolved = projectAndWorktree(withWorktreeId: record.id.worktreeID) else { return }
         let agent = shepherdAgentKind(sessionID: record.sessionID, worktreeID: record.id.worktreeID)
@@ -398,8 +458,10 @@ extension AppState {
         return agentID.map { ACPHarnessBridge.agentKind(for: $0) } ?? .codex
     }
 
+    /// `host` is the SSH host of the record's project, where `gh`/`glab` run.
     private static func shepherdNotification(
-        for event: ReviewShepherd.Event
+        for event: ReviewShepherd.Event,
+        host: (ShepherdRecord) -> String?
     ) -> (record: ShepherdRecord, escalation: ShepherdEscalation?, title: String, body: String) {
         switch event {
         case .ready(let record, let title):
@@ -418,7 +480,12 @@ extension AppState {
             case .noProgress: "has not moved since the last fix prompt."
             case .deliveryFailed: "could not reach its chat session."
             case .ownerGone: "lost its chat session. Pick another one in Changes."
-            case .authFailed: "can't be checked: \(cli) is missing or signed out. Run \(cli) auth login."
+            case .authFailed:
+                if let host = host(record) {
+                    "can't be checked: \(cli) is missing or signed out on \(host). Run \(cli) auth login there."
+                } else {
+                    "can't be checked: \(cli) is missing or signed out. Run \(cli) auth login."
+                }
             }
             return (record, reason, "PR shepherd needs you", "\(subject) \(detail)")
         }

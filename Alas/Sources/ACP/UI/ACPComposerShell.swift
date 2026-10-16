@@ -196,6 +196,8 @@ struct ACPComposer: View {
     let dismissNextPromptOffer: () -> Void
     let onNextPromptStateChange: (NextPromptEligibilitySnapshot.Environment) -> Void
     let nextPromptInputBlocked: () -> Bool
+    /// Whether `/ship` is offered, as the toolbar's Ship pill is.
+    let offersShip: Bool
     /// Slash prompts plugins add, offered after Alas's own commands.
     let pluginPrompts: [ACPPromptSuggestion]
     /// Plugins that add context to every prompt; named in a chip so the context is never invisible.
@@ -230,6 +232,7 @@ struct ACPComposer: View {
         dismissNextPromptOffer: @escaping () -> Void = {},
         onNextPromptStateChange: @escaping (NextPromptEligibilitySnapshot.Environment) -> Void = { _ in },
         nextPromptInputBlocked: @escaping () -> Bool = { false },
+        offersShip: Bool = false,
         pluginPrompts: [ACPPromptSuggestion] = [],
         contextProviders: [String] = [],
         onSubmit: @escaping ACPComposerSubmitHandler
@@ -256,6 +259,7 @@ struct ACPComposer: View {
         self.dismissNextPromptOffer = dismissNextPromptOffer
         self.onNextPromptStateChange = onNextPromptStateChange
         self.nextPromptInputBlocked = nextPromptInputBlocked
+        self.offersShip = offersShip
         self.pluginPrompts = pluginPrompts
         self.contextProviders = contextProviders
     }
@@ -436,7 +440,9 @@ struct ACPComposer: View {
                 symbolMentions: symbolMentions,
                 alasCommands: manager.isMirror(sessionId: session.id) || session.readOnlyRestricted
                     ? []
-                    : [ACPAlasSlashCommand.btwSuggestion] + pluginPrompts
+                    : [ACPAlasSlashCommand.btwSuggestion]
+                        + (offersShip ? [ACPAlasSlashCommand.shipSuggestion] : [])
+                        + pluginPrompts
             )
             .disabled(isMirror)
             .opacity(isMirror ? 0.5 : 1)

@@ -90,4 +90,44 @@ private let parseCases: [ShepherdRulesParseCase] = [
         #expect(parsed.instructions == c.instructions)
         #expect(parsed.requiredReviewers == c.reviewers)
     }
+
+    /// `.alas/shepherd.md` is a directory, so reading it fails.
+    @Test("an unreadable repo file fails the load unless the local file wins", arguments: [true, false])
+    func unreadableRepoFile(hasLocalFile: Bool) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent(ShepherdRulesResolver.repoFilePath), withIntermediateDirectories: true
+        )
+        if hasLocalFile {
+            try "Local rules".write(
+                to: root.appendingPathComponent(ShepherdRulesResolver.localFilePath), atomically: true, encoding: .utf8
+            )
+            let rules = try await ShepherdRulesResolver.load(worktreePath: root, projectSettings: sampleSettings)
+            #expect(rules.source == .localFile)
+        } else {
+            await #expect(throws: (any Error).self) {
+                try await ShepherdRulesResolver.load(worktreePath: root, projectSettings: sampleSettings)
+            }
+        }
+    }
+
+    @Test("a remote read is missing only when cat reports ENOENT", arguments: [
+        (Int32(0), "", "rules" as String?),
+        (1, "cat: /r/.alas/shepherd.md: No such file or directory\n", nil),
+        (1, "cat: can't open '/r/.alas/shepherd.md': No such file or directory\n", nil),
+        (1, "cat: /r/.alas/shepherd.md: Permission denied\n", "throws"),
+        (1, "cat: /r/.alas/shepherd.md: Is a directory\n", "throws"),
+        (255, "ssh: connect to host box: No such file or directory\n", "throws"),
+    ])
+    func remoteReadContents(exitCode: Int32, stderr: String, expected: String?) throws {
+        let result = ProcessResultData(exitCode: exitCode, stdout: Data("rules".utf8), stderr: stderr)
+        if expected == "throws" {
+            #expect(throws: ShepherdRulesReadError.self) {
+                try ShepherdRulesResolver.remoteReadContents(result, file: "shepherd.md", host: "box")
+            }
+        } else {
+            #expect(try ShepherdRulesResolver.remoteReadContents(result, file: "shepherd.md", host: "box") == expected)
+        }
+    }
 }

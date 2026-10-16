@@ -928,21 +928,125 @@ struct ACPSubagentRoutingTests {
         #expect(runner.session.subagentRun("cancellable")?.state == .completed)
     }
 
-    @Test("a live cancellable child sends session/cancel addressed to the child")
-    func cancelAddressesTheChildSession() async throws {
+    @Test("a revised-form child keeps one row and transcript across a SendMessage resume")
+    func revisedResumeKeepsChildIdentity() async throws {
+        let (runner, _, _) = try makeRunner()
+        let announce = #"{"sessionId":"remote-parent","update":{"sessionId":"agent_n","sessionUpdate":"subagent_update","title":"general-purpose","capabilities":{"cancel":{}},"state":{"state":"running"}}}"#
+        feed(runner, announce)
+        feed(runner, #"{"sessionId":"agent_n","update":{"sessionUpdate":"session_message","messageId":"toolu_launch","senderSessionId":"remote-parent","recipientSessionId":"agent_n","content":[{"type":"text","text":"Fix the build"}]}}"#)
+        feed(runner, #"{"sessionId":"agent_n","update":{"sessionUpdate":"agent_message_chunk","messageId":"m1","content":{"type":"text","text":"Fixed."}}}"#)
+        feed(runner, #"{"sessionId":"remote-parent","update":{"sessionId":"agent_n","sessionUpdate":"subagent_update","state":{"state":"requires_action"}}}"#)
+        let run = try #require(runner.session.subagentRun("agent_n"))
+        #expect(run.state == .requiresAction)
+        #expect(run.isRunning)
+        feed(runner, #"{"sessionId":"remote-parent","update":{"sessionId":"agent_n","sessionUpdate":"subagent_update","state":{"state":"idle","stopReason":"end_turn"}}}"#)
+        #expect(run.state == .completed)
+
+        // SendMessage resumes the SAME session; an adapter restart may also
+        // re-announce it. Neither may open a second row or reset the child.
+        feed(runner, announce)
+        feed(runner, #"{"sessionId":"agent_n","update":{"sessionUpdate":"session_message","messageId":"toolu_send","senderSessionId":"remote-parent","recipientSessionId":"agent_n","content":[{"type":"text","text":"Now run the tests"}]}}"#)
+        #expect(run.state == .running)
+        #expect(run.finishedAt == nil)
+        feed(runner, #"{"sessionId":"remote-parent","update":{"sessionId":"agent_n","sessionUpdate":"subagent_update","state":{"state":"idle","stopReason":"end_turn"}}}"#)
+
+        #expect(runner.session.subagentRun("agent_n") === run)
+        #expect(runner.session.transcript.messages.count == 1)
+        #expect(run.name == "general-purpose")
+        #expect(run.capabilities.supportsCancel)
+        #expect(run.state == .completed)
+        #expect(Self.prompts(in: run) == ["Fix the build", "Now run the tests"])
+        #expect(run.messages.count == 3)
+    }
+
+    @Test("cancelling one child addresses session/cancel to it alone, leaving its siblings running")
+    func revisedCancelIsolatesTheChild() async throws {
         let (runner, _, _) = try makeRunner()
         let mock = try #require(runner.connection.client as? ACPMockClient)
-        runner.applyIncomingUpdateForTesting(.init(
-            sessionId: "remote-parent",
-            update: .subagentSpawned(.init(
-                subagentSessionId: "child-1", capabilities: .cancellable))))
+        for id in ["agent_a", "agent_b"] {
+            feed(runner, #"{"sessionId":"remote-parent","update":{"sessionId":"\#(id)","sessionUpdate":"subagent_update","capabilities":{"cancel":{}},"state":{"state":"running"}}}"#)
+        }
 
-        await runner.cancelSubagent(subagentSessionId: "child-1")
+        await runner.cancelSubagent(subagentSessionId: "agent_a")
 
         let cancels = mock.sent.filter { $0.method == "session/cancel" }
-        #expect(cancels.count == 1)
-        let params = try #require(cancels.first?.params as? ACPSessionCancelParams)
-        #expect(params.sessionId == "child-1")
+            .compactMap { ($0.params as? ACPSessionCancelParams)?.sessionId }
+        #expect(cancels == ["agent_a"])
+        // Nothing is assumed locally: the agent reports the outcome.
+        #expect(runner.session.subagentRun("agent_a")?.state == .running)
+        #expect(runner.session.subagentRun("agent_b")?.state == .running)
+    }
+
+    @Test("a revised session_message upserts its prompt row instead of appending to it")
+    func revisedSessionMessageUpsertsItsRow() async throws {
+        let (runner, _, _) = try makeRunner()
+        feed(runner, #"{"sessionId":"remote-parent","update":{"sessionId":"agent_n","sessionUpdate":"subagent_update","state":{"state":"running"}}}"#)
+        feed(runner, #"{"sessionId":"agent_n","update":{"sessionUpdate":"session_message_chunk","messageId":"toolu_launch","content":{"type":"text","text":"Fix the"}}}"#)
+        feed(runner, #"{"sessionId":"agent_n","update":{"sessionUpdate":"agent_message_chunk","messageId":"m1","content":{"type":"text","text":"On it."}}}"#)
+        let run = try #require(runner.session.subagentRun("agent_n"))
+
+        // The whole message rewrites the row it streamed into, even when it
+        // is no longer the trailing row, and repeating it changes nothing.
+        let whole = #"{"sessionId":"agent_n","update":{"sessionUpdate":"session_message","messageId":"toolu_launch","recipientSessionId":"agent_n","content":[{"type":"text","text":"Fix the build"}]}}"#
+        feed(runner, whole)
+        feed(runner, whole)
+        #expect(Self.prompts(in: run) == ["Fix the build"])
+
+        feed(runner, #"{"sessionId":"agent_n","update":{"sessionUpdate":"session_message","messageId":"toolu_launch","content":[]}}"#)
+        #expect(Self.prompts(in: run) == [""])
+        #expect(run.messages.count == 2)
+    }
+
+    @Test("a revised capabilities patch replaces the set, so an empty one revokes Cancel", arguments: [
+        (#""capabilities":null"#, false),
+        (#""capabilities":{}"#, false),
+        (#""capabilities":{"cancel":null}"#, false),
+        // Absent means unchanged.
+        (#""state":{"state":"running"}"#, true)
+    ])
+    func revisedCapabilitiesPatch(patch: String, stillCancellable: Bool) async throws {
+        let (runner, _, _) = try makeRunner()
+        feed(runner, #"{"sessionId":"remote-parent","update":{"sessionId":"agent_n","sessionUpdate":"subagent_update","capabilities":{"cancel":{}},"state":{"state":"running"}}}"#)
+        feed(runner, #"{"sessionId":"remote-parent","update":{"sessionId":"agent_n","sessionUpdate":"subagent_update",\#(patch)}}"#)
+
+        #expect(runner.session.subagentRun("agent_n")?.capabilities.supportsCancel == stillCancellable)
+    }
+
+    @Test("a revised null title or description removes it, and omission keeps it")
+    func revisedLabelPatches() async throws {
+        let (runner, _, _) = try makeRunner()
+        feed(runner, #"{"sessionId":"remote-parent","update":{"sessionId":"agent_n","sessionUpdate":"subagent_update","title":"Explore","description":"Find the router","state":{"state":"running"}}}"#)
+        feed(runner, #"{"sessionId":"remote-parent","update":{"sessionId":"agent_n","sessionUpdate":"subagent_update","title":null}}"#)
+
+        let run = try #require(runner.session.subagentRun("agent_n"))
+        #expect(run.name == nil)
+        #expect(run.task == "Find the router")
+        #expect(run.state == .running)
+    }
+
+    @Test("a revised session_message on the root never becomes a user turn")
+    func revisedSessionMessageOnRootIsIgnored() async throws {
+        let (runner, _, _) = try makeRunner()
+        feed(runner, #"{"sessionId":"remote-parent","update":{"sessionUpdate":"session_message","messageId":"m1","senderSessionId":"agent_n","recipientSessionId":"remote-parent","content":[{"type":"text","text":"Child result"}]}}"#)
+
+        #expect(runner.session.transcript.messages.isEmpty)
+        #expect(runner.session.transcript.pendingUserInputs.isEmpty)
+    }
+
+    private static func prompts(in run: ACPSubagentRun) -> [String] {
+        run.messages.compactMap { message in
+            guard case .user(_, _, let text, _, _, _) = message else { return nil }
+            return text
+        }
+    }
+
+    private func feed(_ runner: ACPSessionRunner, _ json: String) {
+        do {
+            let frame = try JSONDecoder().decode(ACPSessionUpdateFrame.self, from: Data(json.utf8))
+            for update in frame.updates { runner.applyIncomingUpdateForTesting(update) }
+        } catch {
+            Issue.record("undecodable frame: \(error)")
+        }
     }
 
     private struct StoredText: Decodable {

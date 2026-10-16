@@ -68,6 +68,32 @@ struct AppConfigTests {
         #expect(read == cfg)
     }
 
+    /// SwiftUI materials blend with the opaque center pane, so a saved one
+    /// loads as None instead of a setting that changes nothing.
+    @Test(arguments: [
+        (SidebarMaterialChoice.appKitSidebar, SidebarMaterialChoice.appKitSidebar),
+        (.swiftUIRegular, .none),
+    ])
+    func chatAndTerminalMaterialsSurviveReload(
+        saved: SidebarMaterialChoice, loaded: SidebarMaterialChoice
+    ) throws {
+        var cfg = AppConfig.defaults
+        cfg.agents.chatBackgroundMaterial = saved
+        cfg.terminal.backgroundMaterial = saved
+        cfg.contentMaterialOverrides["light"] = ContentMaterialOverride(
+            chatBackgroundOpacity: 0.35, terminalBackgroundOpacity: 0.65
+        )
+        let store = PersistenceStore()
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-cfg-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try store.write(cfg, to: url)
+        let read: AppConfig = try store.read(AppConfig.self, from: url)
+        #expect(read.agents.chatBackgroundMaterial == loaded)
+        #expect(read.terminal.backgroundMaterial == loaded)
+        #expect(read.contentMaterialOverride(forThemeId: "light").terminalBackgroundOpacity == 0.65)
+    }
+
     @Test func defaultsMatchSpec() {
         let cfg = AppConfig.defaults
         #expect(cfg.themeId == "cool-slate")
@@ -373,6 +399,7 @@ struct AppConfigTests {
         """
         let cfg = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
         #expect(cfg.sidebarVisible == true)
+        #expect(cfg.sessionRecapThreshold == .twoHours)
     }
 
     @Test func repoSelectorRecentsRoundTrip() throws {

@@ -684,7 +684,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
         case ready
         case failed(String)
     }
-    public enum StreamingState: Equatable, Sendable { case idle, sending, streaming, awaitingPermission, awaitingInput }
+    public enum StreamingState: String, Codable, Equatable, Sendable { case idle, sending, streaming, awaitingPermission, awaitingInput }
     public enum SetupState: Equatable, Sendable {
         case checking
         case ready
@@ -1070,6 +1070,9 @@ public final class ACPSession: ChangeTracking, Identifiable {
             }
             return flushedForAgent.union([i])
         case .userMessageChunk(let chunk):
+            // A message between sessions is not a human turn; on the root it
+            // must never claim prompt ownership (see `ACPDirectedMessage`).
+            guard chunk.directed == nil else { return [] }
             guard !isEchoedSymbolExpansion(chunk.content) else { return [] }
             let txt = text(of: chunk.content)
             // Recorded as a notice, not a user row: an echo has nothing to merge into.
@@ -1679,6 +1682,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
                 .flatMap { transcript.messageIndex(messageId: $0, kind: .thought) }
                 ?? firstIdLessMatch(of: .thought, atOrAfter: suppressedReplayInsertionCursor)
         case .userMessageChunk(let chunk):
+            guard chunk.directed == nil else { return [] }
             dirty = []
             matchedIndex = chunk.messageId
                 .flatMap { transcript.messageIndex(messageId: $0, kind: .user) }
@@ -2419,6 +2423,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
             subagentSessionId: id,
             name: spawn.name,
             task: spawn.task,
+            state: spawn.initialState,
             capabilities: spawn.capabilities,
             startedAt: timestamp)
         subagents[id] = run
@@ -3256,8 +3261,12 @@ public final class ACPSession: ChangeTracking, Identifiable {
         var changed: [Int] = []
         let backgroundToolIds = Set(activeBackgroundTasks.compactMap(\.toolCallId))
         for i in transcript.messages.indices {
+            // A subagent row mirrors its child's own lifecycle, which the
+            // agent reports: a background child can outlive the parent's
+            // cancel, so stopping the parent must not claim it stopped.
             if case .toolCall(var tc) = transcript.messages[i],
                ACPBackgroundTask(toolCall: tc) == nil,
+               ACPSubagentRowDescriptor(toolCall: tc) == nil,
                !backgroundToolIds.contains(tc.toolCallId),
                tc.status == "in_progress" || tc.status == "pending" {
                 tc.status = "canceled"

@@ -38,7 +38,10 @@ public final class AlasCoreContext {
     /// The on-device text engine every local-text feature shares.
     @ObservationIgnored public private(set) lazy var localText: any LocalTextGenerating =
         localTextOverride ?? LocalTextEngine.make(localTextModelStore)
-    @ObservationIgnored public private(set) lazy var sessionSummaries = SessionSummaryCoordinator(engine: localText)
+    @ObservationIgnored public private(set) lazy var sessionSummaries = SessionSummaryCoordinator(
+        engine: localText,
+        modelID: "\(LocalTextModelManifest.pinnedModel)@\(LocalTextModelManifest.pinnedRevision)"
+    )
     @ObservationIgnored private let localTextOverride: (any LocalTextGenerating)?
     /// Durable Workspace definitions and checkouts.
     @ObservationIgnored public let workspaceStore: WorkspaceStore
@@ -171,7 +174,10 @@ public final class AlasCoreContext {
             store: workspaceStore,
             sessions: WorkspaceCheckoutSessionStopper(
                 store: workspaceStore,
-                stop: { [weak self] checkout in try await self?.environment.stopWorkspaceCheckoutSessions(checkout) }
+                stop: { [weak self] checkout in
+                    guard let self else { return }
+                    try await environment.stopWorkspaceCheckoutSessions(checkout, in: self)
+                }
             ),
             resolveRepoHook: { [weak self] request in
                 try await self?.resolveWorkspaceRepoHook(request)
@@ -231,6 +237,32 @@ public final class AlasCoreContext {
         let manager = makeSessionManager(owner, worktree)
         let worktreeId = worktree.id
         manager.admitsNewWork = { [weak self] in self?.projects.admitsNewWork(worktreeId: worktreeId) ?? false }
+        sessionManagers[owner] = manager
+        return manager
+    }
+
+    /// The session manager for a local Workspace checkout, created on first
+    /// use through the same factory as a worktree's, at the checkout's root.
+    /// None is handed out for one that is archived, busy, remote, or whose
+    /// root is gone.
+    public func sessionManager(forCheckout checkout: WorkspaceCheckout) throws -> ACPSessionManager {
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+        if let manager = sessionManagers[owner] { return manager }
+        guard checkout.archivedAt == nil, checkout.operation == .idle else {
+            throw SessionRefusal.ownerUnavailable(reason: "The Workspace checkout is archived or busy.")
+        }
+        guard checkout.executionLocation.normalized == .local else {
+            throw SessionRefusal.ownerUnavailable(reason: "Sessions in remote Workspace checkouts start from the app.")
+        }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: checkout.rootPath, isDirectory: &isDirectory), isDirectory.boolValue else {
+            throw SessionRefusal.ownerUnavailable(reason: "The Workspace checkout's folder is missing.")
+        }
+        let root = URL(fileURLWithPath: checkout.rootPath)
+        let manager = makeSessionManager(owner, Worktree(
+            id: owner.storageKey, projectId: "", name: checkout.fallbackWorkspaceName, branch: checkout.branch,
+            path: root, status: .clean, lastActivity: Date()
+        ))
         sessionManagers[owner] = manager
         return manager
     }

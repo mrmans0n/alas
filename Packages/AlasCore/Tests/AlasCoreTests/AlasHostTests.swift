@@ -25,7 +25,7 @@ struct AlasHostTests {
         let host = AlasHost(core: AlasCoreContext(projects: projects, runHistoryStore: nil))
 
         #expect(host.worktrees.list() == [
-            WorktreeSnapshot(worktree: busy, operation: .deleting(projectId: "p"), isArchived: false),
+            WorktreeSnapshot(worktree: busy, operation: .deleting, isArchived: false),
         ])
         #expect(Set(host.worktrees.list(includingArchived: true).map(\.worktree.id)) == [busy.id, archived.id])
         #expect(host.worktrees.list(includingArchived: true).first { $0.worktree.id == archived.id }?.isArchived == true)
@@ -52,7 +52,7 @@ struct AlasHostTests {
         projects.removeOptimisticWorktree(id: removed.id, projectId: "p")
         let events = try #require(await Self.next(subscription))
         #expect(events.count == 2)
-        #expect(events.contains(.worktreeChanged(WorktreeSnapshot(worktree: shown, operation: .deleting(projectId: "p"), isArchived: false))))
+        #expect(events.contains(.worktreeChanged(WorktreeSnapshot(worktree: shown, operation: .deleting, isArchived: false))))
         #expect(events.contains(.worktreeRemoved(projectID: "p", worktreeID: removed.id)))
 
         let checkout = WorkspaceCheckout(
@@ -60,22 +60,29 @@ struct AlasHostTests {
             branch: "b", rootPath: "/srv/w", createdAt: .distantPast, members: []
         )
         try await store.mutate { $0.checkouts = [checkout] }
-        #expect(await Self.next(subscription) == [.workspaceCheckoutChanged(checkout)])
+        #expect(await Self.next(subscription) == [.workspaceCheckoutChanged(WorkspaceAutomationService.summary(checkout))])
         try await store.mutate { $0.checkouts = [] }
         #expect(await Self.next(subscription) == [.workspaceCheckoutRemoved(id: checkout.id)])
     }
 
-    /// Events a subscriber has not read yet coalesce per key, oldest key first.
+    /// Events a subscriber has not read yet coalesce per key, oldest key
+    /// first, and the batch's cursor is the last event it covers, so a
+    /// client that reconnects after it misses nothing and repeats nothing.
     @Test func unreadEventsCoalescePerKey() async {
         let log = HostEventLog()
         let subscription = log.subscribe(after: log.cursor)
         log.publish([.runRemoved(id: "a"), .projectRemoved(id: "p")])
         log.publish([.runRemoved(id: "b"), .projectRemoved(id: "p"), .runRemoved(id: "a")])
         #expect(await Self.next(subscription) == [.runRemoved(id: "a"), .projectRemoved(id: "p"), .runRemoved(id: "b")])
+        #expect(subscription.cursor == log.cursor)
+
+        subscription.cancel()
+        log.publish([.runRemoved(id: "c")])
+        #expect(await Self.next(log.subscribe(after: subscription.cursor)) == [.runRemoved(id: "c")])
     }
 
     /// A subscriber that falls too far behind, or asks for events the log no
-    /// longer keeps, is told to resync instead.
+    /// longer keeps or never issued, is told to resync instead.
     @Test func laggingSubscribersResync() async {
         let log = HostEventLog(retention: 2, pendingLimit: 2)
         let slow = log.subscribe(after: log.cursor)
@@ -87,6 +94,12 @@ struct AlasHostTests {
         let caughtUp = log.cursor
         log.publish([.runRemoved(id: "d")])
         #expect(await Self.next(log.subscribe(after: caughtUp)) == [.runRemoved(id: "d")])
+
+        // A cursor from another log, such as the host's before a restart,
+        // is never taken for one of this log's.
+        let restarted = HostEventLog()
+        restarted.publish([.runRemoved(id: "e")])
+        #expect(await Self.next(restarted.subscribe(after: start)) == [.resync])
     }
 
     /// Sessions join the host's list and events, keyed by their owner.
@@ -117,15 +130,51 @@ struct AlasHostTests {
 
         let manager = try core.sessionManager(for: shown)
         _ = manager.createSession(id: "s", agentId: "codex")
+        // The manager's first read of its store may land after the session
+        // exists and before its row is saved; the session stays listed.
+        await manager.refreshRecentNow()
         let created = try #require(await Self.next(subscription) { events in
-            events.contains { if case .sessionChanged(let summary) = $0 { summary.row.id == "s" } else { false } }
+            events.contains { if case .sessionChanged(let summary) = $0 { summary.id == "s" } else { false } }
         })
-        #expect(host.sessions.list().map(\.row.id) == ["s"])
+        #expect(host.sessions.list().map(\.id) == ["s"])
         #expect(created.contains { if case .sessionChanged(let summary) = $0 { summary.owner == owner } else { false } })
 
         try await manager.deleteSession(id: "s")
         #expect(await Self.next(subscription) { $0.contains(.sessionRemoved(owner: owner, id: "s")) } != nil)
         #expect(host.sessions.list().isEmpty)
+    }
+
+    /// Archiving takes a while to stop everything in a worktree; a checkout
+    /// another process switches meanwhile is refused instead of hidden.
+    @Test func archivingRefusesACheckoutChangedWhileItStops() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-archive-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repo = root.appendingPathComponent("repo")
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        for args in [["init", "-q", "-b", "main"], ["config", "maintenance.auto", "false"], ["commit", "-q", "--allow-empty", "-m", "init"]] {
+            let result = try await Process.git(args, cwd: repo)
+            guard result.exitCode == 0 else { throw ProcessError.nonZeroExit(result.exitCode, result.stderr) }
+        }
+        let environment = SwitchingEnvironment()
+        let core = AlasCoreContext(
+            projects: ProjectsManager(persistedProjects: []),
+            projectsFile: root.appendingPathComponent("projects.json"),
+            runHistoryStore: nil,
+            workspaceStore: WorkspaceStore(url: root.appendingPathComponent("workspaces.json")),
+            environment: environment
+        )
+        let project = try await core.addProject(path: repo, displayName: "repo", icon: .default())
+        let worktree = try await core.createWorktree(
+            projectID: project.id, branch: "feature", base: "main", destination: root.appendingPathComponent("feature")
+        )
+        environment.onQuiesce = { worktree in
+            _ = try? await Process.git(["switch", "-q", "-c", "other"], cwd: worktree.path)
+        }
+
+        await #expect(throws: WorktreeArchiveRefusal.changed("The checkout is on another branch")) {
+            try await core.archiveWorktree(worktree, verifiesCheckout: true)
+        }
+        #expect(!core.projects.isWorktreeHidden(projectId: project.id, path: worktree.path))
     }
 
     private static func worktree(_ name: String) -> Worktree {
@@ -153,5 +202,15 @@ struct AlasHostTests {
             if matches(events) { return events }
         }
         return nil
+    }
+}
+
+/// Runs `onQuiesce` where the host stops everything in a worktree.
+@MainActor
+private final class SwitchingEnvironment: AlasHostEnvironment {
+    var onQuiesce: (Worktree) async -> Void = { _ in }
+
+    func quiesceWorktree(_ worktree: Worktree, in core: AlasCoreContext) async throws {
+        await onQuiesce(worktree)
     }
 }

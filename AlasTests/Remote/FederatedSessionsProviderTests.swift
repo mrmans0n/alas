@@ -476,15 +476,13 @@ struct FederatedSessionsProviderTests {
         provider.attach(client.downstream)
         links.goOnline("srv-b", name: "Mac B")
         _ = provider.route(.subscribe(sessionId: "srv-b:s1"), from: client.downstream)
-        #expect(provider.isPollingPeerLists)
         links.sent.removeAll()
         client.loseDownstream()
         links.receive(.stopPending(sessionId: "s1"), from: "srv-b")
-        // Nothing is delivered for a client that is gone, its subscription is
-        // released upstream, and the idle poll has nobody left to tell.
+        // Nothing is delivered for a client that is gone, and its
+        // subscription is released upstream.
         #expect(client.received.isEmpty)
         #expect(links.sent(to: "srv-b") == [.unsubscribe(sessionId: "s1")])
-        #expect(!provider.isPollingPeerLists)
     }
 
     @Test func aDownstreamThatGoesAwayWithoutDetachingLeavesSurvivingSubscriptionsAlone() {
@@ -502,12 +500,10 @@ struct FederatedSessionsProviderTests {
         links.receive(.stopPending(sessionId: "s1"), from: "srv-b")
         #expect(survivor.received == [.stopPending(sessionId: "srv-b:s1")])
         #expect(!links.sent(to: "srv-b").contains(.unsubscribe(sessionId: "s1")))
-        #expect(provider.isPollingPeerLists)
         // The survivor leaving is still what ends the upstream subscription:
         // the lost downstream no longer holds the set open.
         provider.detach(survivor.downstream)
         #expect(links.sent(to: "srv-b").contains(.unsubscribe(sessionId: "s1")))
-        #expect(!provider.isPollingPeerLists)
     }
 
     @Test func downstreamsLostAcrossServerRestartsDoNotAccumulate() {
@@ -530,7 +526,6 @@ struct FederatedSessionsProviderTests {
         let sent = links.sent(to: "srv-b")
         #expect(sent.count == 5)
         for index in 0..<5 { #expect(sent.contains(.unsubscribe(sessionId: "s\(index)"))) }
-        #expect(!provider.isPollingPeerLists)
     }
 
     @Test func availabilityCallbackFiresOnEveryReconciliationIncludingNonCarryingTransitions() {

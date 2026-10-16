@@ -49,6 +49,7 @@ struct ACPMessageList: View {
     var promptCardContext: ACPPromptCardContext? = nil
     var visualAidActions: ACPVisualAidActions = .readOnly
     @Environment(\.theme) private var theme
+    @Environment(\.acpChatBackgroundIsMaterial) private var backgroundIsMaterial
 
     /// Height of an invisible spacer at the tail of the transcript stack. The
     /// composer pill plus its outer padding occupies roughly this much
@@ -113,12 +114,14 @@ struct ACPMessageList: View {
                 .padding(.trailing, showMinimap ? MinimapView.width : 0)
             }
         }
-        .background(
-            LinearGradient(
-                colors: [theme.color("bg-1"), theme.color("bg-0")],
-                startPoint: .top, endPoint: .bottom
-            )
-        )
+        .background {
+            if !backgroundIsMaterial {
+                LinearGradient(
+                    colors: [theme.color("bg-1"), theme.color("bg-0")],
+                    startPoint: .top, endPoint: .bottom
+                )
+            }
+        }
     }
 
     private func goToNewestButton(action: @escaping () -> Void) -> some View {

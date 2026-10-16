@@ -128,6 +128,10 @@ public enum ACPSessionUpdate: Codable, Equatable, Sendable {
             self = .subagentStateUpdate(try ACPSubagentStateUpdate(from: decoder))
         case "async_task_spawned", "async_task_progress", "async_task_state_update":
             self = .asyncTask(try ACPAsyncTaskUpdate(from: decoder))
+        // `subagent_update` and `session_message(_chunk)` land here on
+        // purpose: one of them can stand for several updates, so transports
+        // decode `session/update` through `ACPSessionUpdateFrame`, which
+        // normalizes them into the cases above.
         default:
             self = .unknown(kind)
         }
@@ -381,15 +385,25 @@ public struct ACPTextChunk: Codable, Equatable, Sendable {
     public let messageId: String?
     public let content: ACPContentBlock
     public let metadata: AnyCodable?
+    /// Set when this chunk came from a revised-form `session_message`, a
+    /// message between sessions rather than a human turn. Never on the wire;
+    /// see `ACPRevisedSubagentUpdate`.
+    public var directed: ACPDirectedMessage? = nil
 
     public var phase: ACPMessagePhase? {
         ACPMessagePhase.codexPhase(in: metadata)
     }
 
-    public init(messageId: String? = nil, content: ACPContentBlock, metadata: AnyCodable? = nil) {
+    public init(
+        messageId: String? = nil,
+        content: ACPContentBlock,
+        metadata: AnyCodable? = nil,
+        directed: ACPDirectedMessage? = nil
+    ) {
         self.messageId = messageId
         self.content = content
         self.metadata = metadata
+        self.directed = directed
     }
 
     private enum CodingKeys: String, CodingKey {

@@ -60,6 +60,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
     /// single-ScrollView tree — does not reach them automatically. Every row
     /// spec re-applies this value explicitly (see `wrapRow`).
     @Environment(\.theme) private var theme
+    @Environment(\.acpChatBackgroundIsMaterial) private var backgroundIsMaterial
 
     /// Routes markdown link taps inside message rows back through the host
     /// callback.
@@ -399,7 +400,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 scroller.minimap.update(drawing: MinimapDrawing())
                 return
             }
-            scroller.minimap.backgroundColor = NSColor(host.theme.color("bg-1"))
+            scroller.minimap.backgroundColor = host.backgroundIsMaterial ? .clear : NSColor(host.theme.color("bg-1"))
             scroller.minimap.indicatorColor = NSColor(host.theme.color("fg-muted"))
             // Keep the drawing and its navigation scale fixed throughout a drag.
             guard minimapGestureRange == nil else { return }

@@ -113,7 +113,6 @@ struct CommitsSectionView: View {
     /// A GG stack can display commits outside that set, which the palette
     /// could not anchor, so only these rows offer "Review Range From Here…".
     let reviewRangeAnchorSHAs: Set<String>
-    let onChooseReviewScope: () -> Void
     let onLoadOlder: () -> Void
     let onSelectBaseBranch: (String) -> Void
     let onOpenBaseBranchSelector: () -> Void
@@ -176,7 +175,6 @@ struct CommitsSectionView: View {
                         onSelect: onSelectBaseBranch,
                         onOpen: onOpenBaseBranchSelector
                     )
-                    ReviewScopeHeaderButton(action: onChooseReviewScope)
                     BranchOpsMenu(rps: rps)
             }
         }
@@ -379,22 +377,6 @@ struct CommitsSectionView: View {
             hasOlderCommits: !olderCommits.isEmpty,
             onLoadOlder: onLoadOlder
         )
-    }
-}
-
-private struct ReviewScopeHeaderButton: View {
-    let action: () -> Void
-    @Environment(\.theme) private var theme
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: "scope")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundColor(theme.color("fg-muted"))
-        }
-        .buttonStyle(.plain)
-        .help("Choose review scope")
-        .accessibilityLabel("Choose review scope")
     }
 }
 

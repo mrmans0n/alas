@@ -1,6 +1,6 @@
 import Foundation
 
-public enum ProjectCreationError: LocalizedError, Equatable, Sendable {
+public enum ProjectCreationError: Codable, LocalizedError, Equatable, Sendable {
     case projectPersistenceFailed
     case projectAlreadyExists
     case projectNotFound

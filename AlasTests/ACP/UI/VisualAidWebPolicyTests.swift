@@ -54,6 +54,83 @@ struct VisualAidWebPolicyTests {
         #expect(VisualAidWebPolicy.isFullDocument(html) == full)
     }
 
+    @Test("a wheel event scrolls the page only while it can move that way", arguments: [
+        (CGFloat(0), CGFloat(-5), true, true, VisualAidScrollRouting.Owner.page),
+        (0, -5, true, false, .transcript),
+        (0, 5, true, true, .page),
+        (0, 5, false, true, .transcript),
+        (8, 2, false, false, .page),
+    ])
+    func wheelRouting(deltaX: CGFloat, deltaY: CGFloat, up: Bool, down: Bool, owner: VisualAidScrollRouting.Owner) {
+        var routing = VisualAidScrollRouting()
+        let edges = VisualAidScrollRouting.Edges(canScrollUp: up, canScrollDown: down)
+        #expect(routing.route(phase: [], momentumPhase: [], deltaX: deltaX, deltaY: deltaY, edges: edges)
+            == .deliver(owner, includingHeld: true))
+    }
+
+    private static let midway = VisualAidScrollRouting.Edges(canScrollUp: true, canScrollDown: true)
+    private static let atBottom = VisualAidScrollRouting.Edges(canScrollUp: true, canScrollDown: false)
+
+    @Test("a trackpad gesture waits for its first movement, then keeps its owner through momentum")
+    func gestureRoutingLatches() {
+        var routing = VisualAidScrollRouting()
+        #expect(routing.route(phase: .mayBegin, momentumPhase: [], deltaX: 0, deltaY: 0, edges: Self.midway) == .hold)
+        #expect(routing.route(phase: .began, momentumPhase: [], deltaX: 0, deltaY: 0, edges: Self.midway) == .hold)
+        #expect(routing.route(phase: .stationary, momentumPhase: [], deltaX: 0, deltaY: 0, edges: Self.midway) == .hold)
+        #expect(routing.route(phase: .changed, momentumPhase: [], deltaX: 0, deltaY: -3, edges: Self.midway)
+            == .deliver(.page, includingHeld: true))
+        // Reaching the bottom mid-gesture does not hand the rest of it to the transcript.
+        #expect(routing.route(phase: .changed, momentumPhase: [], deltaX: 0, deltaY: -9, edges: Self.atBottom)
+            == .deliver(.page, includingHeld: true))
+        #expect(routing.route(phase: .ended, momentumPhase: [], deltaX: 0, deltaY: 0, edges: Self.atBottom)
+            == .deliver(.page, includingHeld: true))
+        #expect(routing.route(phase: [], momentumPhase: .began, deltaX: 0, deltaY: -4, edges: Self.atBottom)
+            == .deliver(.page, includingHeld: true))
+        #expect(routing.route(phase: [], momentumPhase: .ended, deltaX: 0, deltaY: 0, edges: Self.atBottom)
+            == .deliver(.page, includingHeld: true))
+        // Momentum from a gesture that started elsewhere, scrolling the card under a still pointer.
+        #expect(routing.route(phase: [], momentumPhase: .changed, deltaX: 0, deltaY: -4, edges: Self.midway)
+            == .deliver(.transcript, includingHeld: true))
+        // The next gesture starts at the bottom, so the transcript scrolls.
+        #expect(routing.route(phase: .began, momentumPhase: [], deltaX: 0, deltaY: -3, edges: Self.atBottom)
+            == .deliver(.transcript, includingHeld: true))
+    }
+
+    @Test("momentum that begins well after the card's own gesture ended belongs to the transcript")
+    func lateMomentumGoesToTheTranscript() {
+        var routing = VisualAidScrollRouting()
+        _ = routing.route(phase: .began, momentumPhase: [], deltaX: 0, deltaY: -3, edges: Self.midway, timestamp: 1)
+        _ = routing.route(phase: .ended, momentumPhase: [], deltaX: 0, deltaY: 0, edges: Self.midway, timestamp: 1)
+        #expect(routing.route(phase: [], momentumPhase: .began, deltaX: 0, deltaY: -4, edges: Self.midway, timestamp: 5)
+            == .deliver(.transcript, includingHeld: true))
+    }
+
+    @Test("a gesture that started over the transcript stays with it after sliding onto the card")
+    func gestureArrivingMidwayStaysWithTheTranscript() {
+        var routing = VisualAidScrollRouting()
+        // A previous gesture left the page as owner.
+        _ = routing.route(phase: .began, momentumPhase: [], deltaX: 0, deltaY: -3, edges: Self.midway)
+        _ = routing.route(phase: .ended, momentumPhase: [], deltaX: 0, deltaY: 0, edges: Self.midway)
+        #expect(routing.route(phase: .changed, momentumPhase: [], deltaX: 0, deltaY: -5, edges: Self.midway)
+            == .deliver(.transcript, includingHeld: false))
+        #expect(routing.route(phase: [], momentumPhase: .changed, deltaX: 0, deltaY: -4, edges: Self.midway)
+            == .deliver(.transcript, includingHeld: true))
+    }
+
+    @Test("a touch that rested on the card and left is dropped when another gesture slides in")
+    func abandonedMayBeginIsDropped() {
+        var routing = VisualAidScrollRouting()
+        #expect(routing.route(phase: .mayBegin, momentumPhase: [], deltaX: 0, deltaY: 0, edges: Self.midway) == .hold)
+        #expect(routing.route(phase: .changed, momentumPhase: [], deltaX: 0, deltaY: -5, edges: Self.midway)
+            == .deliver(.transcript, includingHeld: false))
+        #expect(routing.route(phase: .ended, momentumPhase: [], deltaX: 0, deltaY: 0, edges: Self.midway)
+            == .deliver(.transcript, includingHeld: false))
+        // A touch that rests and lifts without moving still pairs with its cancel.
+        #expect(routing.route(phase: .mayBegin, momentumPhase: [], deltaX: 0, deltaY: 0, edges: Self.midway) == .hold)
+        #expect(routing.route(phase: .cancelled, momentumPhase: [], deltaX: 0, deltaY: 0, edges: Self.midway)
+            == .deliver(.transcript, includingHeld: true))
+    }
+
     @Test("fragments go inside the template verbatim, placeholders included")
     func fragmentAssembly() {
         let html = "<p>{{CONTENT}} and {{HEAD}}</p>"
@@ -153,6 +230,67 @@ extension VisualAidWebPolicyTests {
             "srcdoc": "undefined/undefined",
             "dynamic": "undefined/undefined",
         ])
+    }
+
+    @MainActor
+    @Test("a tall page offers to scroll only when its overflow lets the user scroll it", arguments: [
+        ("", true),
+        ("html { overflow: hidden; }", false),
+        ("body { overflow: hidden; }", false),
+        ("html { overflow-y: clip; }", false),
+    ])
+    func scrollEdgesRespectOverflow(style: String, scrollsDown: Bool) async throws {
+        let page = VisualAidWebPage(
+            visualID: UUID(), html: "<style>\(style)</style><div style=\"height: 2000px\"></div>",
+            theme: try Theme.loadBundled(id: "cool-slate"), locksNetworkAfterLoad: false)
+        page.webView.frame = CGRect(x: 0, y: 0, width: 200, height: 200)
+        defer { page.close() }
+        try await waitUntilReady(page)
+        let edges = try await page.webView.evaluateJavaScript(
+            "alasVisualScrollEdges()", in: nil, contentWorld: .world(name: VisualAidWebPolicy.bridgeWorldName))
+        let result = try #require(edges as? [String: Bool])
+        #expect(result == ["scrollUp": false, "scrollDown": scrollsDown])
+    }
+
+    @MainActor
+    @Test("a nested scroll container under the pointer gives the page room to scroll")
+    func scrollEdgesFollowNestedScrollers() async throws {
+        let page = VisualAidWebPage(
+            visualID: UUID(),
+            html: #"<div style="height: 80px; width: 120px; overflow: auto"><div style="height: 1000px"></div></div>"#,
+            theme: try Theme.loadBundled(id: "cool-slate"), locksNetworkAfterLoad: false)
+        page.webView.frame = CGRect(x: 0, y: 0, width: 200, height: 200)
+        defer { page.close() }
+        try await waitUntilReady(page)
+        let world = WKContentWorld.world(name: VisualAidWebPolicy.bridgeWorldName)
+        let inside = try await page.webView.evaluateJavaScript("alasVisualScrollEdges(40, 40)", in: nil, contentWorld: world)
+        #expect(inside as? [String: Bool] == ["scrollUp": false, "scrollDown": true])
+        let outside = try await page.webView.evaluateJavaScript("alasVisualScrollEdges(40, 160)", in: nil, contentWorld: world)
+        #expect(outside as? [String: Bool] == ["scrollUp": false, "scrollDown": false])
+        // A pointer the app reports, with no DOM mousemove (the card moved under a still pointer), is used.
+        let reported = try await page.webView.evaluateJavaScript(
+            "alasVisualPointer(40, 40); alasVisualScrollEdges()", in: nil, contentWorld: world)
+        #expect(reported as? [String: Bool] == ["scrollUp": false, "scrollDown": true])
+    }
+
+    @MainActor
+    @Test("a nested scroller at its edge passes the page's room on only without an overscroll barrier", arguments: [
+        ("auto", true),
+        ("contain", false),
+        ("none", false),
+    ])
+    func scrollEdgesStopAtOverscrollBarriers(behavior: String, scrollsDown: Bool) async throws {
+        let page = VisualAidWebPage(
+            visualID: UUID(),
+            html: #"<div id="box" style="height: 80px; width: 120px; overflow: auto; overscroll-behavior-y: \#(behavior)"><div style="height: 1000px"></div></div><div style="height: 2000px"></div>"#,
+            theme: try Theme.loadBundled(id: "cool-slate"), locksNetworkAfterLoad: false)
+        page.webView.frame = CGRect(x: 0, y: 0, width: 200, height: 200)
+        defer { page.close() }
+        try await waitUntilReady(page)
+        let world = WKContentWorld.world(name: VisualAidWebPolicy.bridgeWorldName)
+        let edges = try await page.webView.evaluateJavaScript(
+            "document.getElementById('box').scrollTop = 1e6; alasVisualScrollEdges(40, 40)", in: nil, contentWorld: world)
+        #expect(edges as? [String: Bool] == ["scrollUp": true, "scrollDown": scrollsDown])
     }
 
     /// Waits until the page leaves `.loading` and requires that it landed on `.ready`.

@@ -333,10 +333,12 @@ public enum RemoteClientMessage: Equatable, Sendable {
     case visualAidResponse(sessionId: String, visualId: String, action: String, selectedOptionIds: [String], note: String?, requestId: String? = nil)
     /// Peer console traffic; see `PeerConsoleRequest`.
     case console(PeerConsoleRequest)
+    /// A host protocol message; see `HostClientMessage`.
+    case host(HostClientMessage)
 }
 
 extension RemoteClientMessage: Codable {
-    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, action, reason, content, text, attachments, modelId, effortId, modeId, enabled, configId, value, title, worktreeId, agentId, beforeIndex, limit, itemId, targetItemId, intent, mentions, query, projectId, base, branch, path, stage, comparisonMode, protocolVersion, challenge, sha, visualId, selectedOptionIds, note, console }
+    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, action, reason, content, text, attachments, modelId, effortId, modeId, enabled, configId, value, title, worktreeId, agentId, beforeIndex, limit, itemId, targetItemId, intent, mentions, query, projectId, base, branch, path, stage, comparisonMode, protocolVersion, challenge, sha, visualId, selectedOptionIds, note, console, host }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -508,6 +510,8 @@ extension RemoteClientMessage: Codable {
                              path: try c.decode(String.self, forKey: .path))
         case "console":
             self = .console(try c.decode(PeerConsoleRequest.self, forKey: .console))
+        case "host":
+            self = .host(try c.decode(HostClientMessage.self, forKey: .host))
         case let other:
             throw DecodingError.dataCorruptedError(forKey: .type, in: c, debugDescription: "unknown type \(other)")
         }
@@ -687,6 +691,9 @@ extension RemoteClientMessage: Codable {
         case .console(let request):
             try c.encode("console", forKey: .type)
             try c.encode(request, forKey: .console)
+        case .host(let message):
+            try c.encode("host", forKey: .type)
+            try c.encode(message, forKey: .host)
         }
     }
 }
@@ -857,6 +864,8 @@ public enum RemoteServerMessage: Equatable, Sendable {
     case mentionCandidates(sessionId: String, query: String, candidates: [RemoteMention])
     /// Peer console traffic; see `PeerConsoleEvent`.
     case console(PeerConsoleEvent)
+    /// A host protocol message; see `HostServerMessage`.
+    case host(HostServerMessage)
 }
 
 extension RemoteServerMessage: Codable {
@@ -871,7 +880,7 @@ extension RemoteServerMessage: Codable {
         case items, itemId, text
         case path, files, staged, unstaged, commits, comparisonRef, metricsAvailable, truncated, hunks, nodes, reason, byteSize
         case metadataNote, commitsTruncated, sha
-        case protocolVersion, serverId, name, hubEnabled, federationEnabled, peers, capabilities, console
+        case protocolVersion, serverId, name, hubEnabled, federationEnabled, peers, capabilities, console, host
         case challenge, publicKey, signature
         case visualId
     }
@@ -889,6 +898,8 @@ extension RemoteServerMessage: Codable {
                 capabilities: try c.decodeIfPresent([String].self, forKey: .capabilities) ?? [])
         case "console":
             self = .console(try c.decode(PeerConsoleEvent.self, forKey: .console))
+        case "host":
+            self = .host(try c.decode(HostServerMessage.self, forKey: .host))
         case "identityProof":
             self = .identityProof(
                 challenge: try c.decode(String.self, forKey: .challenge),
@@ -1135,6 +1146,9 @@ extension RemoteServerMessage: Codable {
         case .console(let event):
             try c.encode("console", forKey: .type)
             try c.encode(event, forKey: .console)
+        case .host(let message):
+            try c.encode("host", forKey: .type)
+            try c.encode(message, forKey: .host)
         case .identityProof(let challenge, let publicKey, let signature):
             try c.encode("identityProof", forKey: .type)
             try c.encode(challenge, forKey: .challenge)
@@ -1384,8 +1398,18 @@ extension RemoteServerMessage {
             // Older peers refuse to link to a Mac that doesn't advertise this.
             federationEnabled: true,
             peers: identity.peers,
-            capabilities: [PeerConsoleCapability.v1, PeerConsoleCapability.terminateV1, PeerSessionTabsCapability.v1])
+            capabilities: [
+                PeerConsoleCapability.v1, PeerConsoleCapability.terminateV1, PeerSessionTabsCapability.v1,
+                HostProtocolCapability.v1,
+            ])
     }
+}
+
+/// The host protocol, served to paired devices as `host` messages.
+public enum HostProtocolCapability: Sendable {
+    /// Advertised in `hello` by hosts that answer `host` messages speaking
+    /// `HostProtocolVersion` 1.
+    public static let v1 = "host.v1"
 }
 
 /// Opening and closing host tabs from a peer. Older hosts drop unknown client

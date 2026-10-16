@@ -27,11 +27,27 @@ public protocol AlasHostEnvironment: AnyObject {
     func globalTerminalConfig() -> AppConfig.Terminal
     /// Stops everything running in a Workspace checkout before a lifecycle
     /// operation touches it.
-    func stopWorkspaceCheckoutSessions(_ checkout: WorkspaceCheckout) async throws
+    func stopWorkspaceCheckoutSessions(_ checkout: WorkspaceCheckout, in core: AlasCoreContext) async throws
     /// Approves and prepares a Workspace member's repository hook. Nil skips it.
     func resolveWorkspaceRepoHook(_ request: WorkspaceRepoHookRequest) async throws -> String?
     /// Starts and hosts run scripts.
     var runLauncher: any RunLauncher { get }
+    /// Whether new sessions may use `agentID`, in a project on `remoteHost`
+    /// when it is set.
+    func admitsAgent(_ agentID: String, remoteHost: String?) -> Bool
+    /// Whether an interrupted checkpoint restore keeps new agent sessions out
+    /// of `owner` now.
+    func checkpointRecoveryBlocksSessions(owner: SessionOwnerID, in core: AlasCoreContext) async -> Bool
+    /// Whether `owner` takes a new session right now, read synchronously after
+    /// the last suspension of a creation: the app's own view of a checkout
+    /// or worktree being archived, deleted or changed.
+    func admitsSessionCreation(owner: SessionOwnerID, in core: AlasCoreContext) -> Bool
+    /// The session manager for a worktree, created on first use. Throws while
+    /// another operation holds the worktree.
+    func sessionManager(for worktree: Worktree, in core: AlasCoreContext) throws -> ACPSessionManager
+    /// The session manager for a Workspace checkout, created on first use.
+    /// Throws a `SessionRefusal` when the checkout cannot host sessions now.
+    func sessionManager(forCheckout checkout: WorkspaceCheckout, in core: AlasCoreContext) async throws -> ACPSessionManager
 }
 
 extension AlasHostEnvironment {
@@ -57,11 +73,44 @@ extension AlasHostEnvironment {
 
     public func globalTerminalConfig() -> AppConfig.Terminal { AppConfig.defaults.terminal }
 
-    public func stopWorkspaceCheckoutSessions(_ checkout: WorkspaceCheckout) async throws {}
+    /// Ends the checkout's agent sessions, as a removal ends a worktree's.
+    public func stopWorkspaceCheckoutSessions(_ checkout: WorkspaceCheckout, in core: AlasCoreContext) async throws {
+        await core.disposeSessionManager(owner: .workspaceCheckout(checkout.id, checkout.executionLocation))
+    }
 
     public func resolveWorkspaceRepoHook(_ request: WorkspaceRepoHookRequest) async throws -> String? { nil }
 
     public var runLauncher: any RunLauncher { HeadlessRunLauncher.shared }
+
+    /// A worktree's own restore journals decide; a checkout has none of its own.
+    public func checkpointRecoveryBlocksSessions(owner: SessionOwnerID, in core: AlasCoreContext) async -> Bool {
+        guard case .worktree(let worktreeID) = owner else { return false }
+        guard let worktree = core.projects.worktreesByProject.values.lazy.flatMap({ $0 }).first(where: { $0.id == worktreeID }) else {
+            return true
+        }
+        return await AlasCoreContext.hasPendingCheckpointRecovery(worktree)
+    }
+
+    public func admitsAgent(_ agentID: String, remoteHost: String?) -> Bool {
+        ACPLaunchCatalog.specs.contains { $0.agentID == agentID }
+    }
+
+    /// A headless host's teardown removes the owner's manager at once, which
+    /// creation checks on its own.
+    public func admitsSessionCreation(owner: SessionOwnerID, in core: AlasCoreContext) -> Bool { true }
+
+    /// Local worktrees only: a remote project's agent runs on its host,
+    /// which only the app reaches.
+    public func sessionManager(for worktree: Worktree, in core: AlasCoreContext) throws -> ACPSessionManager {
+        guard core.projects.projects.first(where: { $0.id == worktree.projectId })?.host == nil else {
+            throw SessionRefusal.ownerUnavailable(reason: "Sessions in remote worktrees start from the app.")
+        }
+        return try core.sessionManager(for: worktree)
+    }
+
+    public func sessionManager(forCheckout checkout: WorkspaceCheckout, in core: AlasCoreContext) async throws -> ACPSessionManager {
+        try core.sessionManager(forCheckout: checkout)
+    }
 }
 
 /// A host without a UI: every requirement keeps its default.

@@ -41,7 +41,21 @@ struct TerminalTabView: View {
             }
             onStartupRecoveryReady()
         }
-        .background(theme.color("bg-0"))
+        .background {
+            let material = state.config.terminal.backgroundMaterial
+            if material == .none {
+                theme.color("bg-0")
+            } else {
+                // Ghostty's default background is transparent in this mode;
+                // the theme tint comes from this layer instead.
+                SidebarMaterialBackground(
+                    choice: material,
+                    backgroundOpacity: state.config
+                        .contentMaterialOverride(forThemeId: state.themeStore.current.id)
+                        .terminalBackgroundOpacity
+                )
+            }
+        }
     }
 
     private var tabCoordinateSpace: String { "alas-tab-\(tabId)" }

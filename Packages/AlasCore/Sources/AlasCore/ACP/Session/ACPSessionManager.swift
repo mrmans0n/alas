@@ -278,6 +278,10 @@ public final class ACPSessionManager: ChangeTracking {
     /// the captured value then governs every attach of that session. Set
     /// post-init, mirroring `alasCLIEnvProvider`.
     public var nativeSubagentsPreferenceProvider: (@MainActor (_ agentId: String) -> Bool)?
+    /// The session instructions new sessions of an agent start with
+    /// (Settings → Agents), or nil. Read once, when Alas creates the session
+    /// row; the captured value then rides on every attach of that session.
+    public var sessionInstructionsProvider: (@MainActor (_ agentId: String) -> String?)?
     /// Whether a session was delegated by a parent Alas session. Read on
     /// every attach, independent of whether Alas tools are exposed, so a
     /// delegated Claude child never gets the tools that message other Claude
@@ -301,6 +305,8 @@ public final class ACPSessionManager: ChangeTracking {
     @Tracked private var missingPersistedSessionIds: Set<ACPSession.ID> = []
     private var rowLoadTasks: [ACPSession.ID: Task<Void, Never>] = [:]
     private var persistenceTail: Task<Void, Never>?
+    /// Sessions created here whose first save has not landed yet.
+    private var unsavedCreations: Set<ACPSession.ID> = []
     private var persistenceGeneration = 0
     private var draftFlushHandoffSequence: UInt64 = 0
     /// Whether new agent work may start for this manager's owner. Its
@@ -408,29 +414,39 @@ public final class ACPSessionManager: ChangeTracking {
     /// Returns nil if no runner is attached (session not actively connected).
     public func permissionPolicy(for id: ACPSession.ID) -> ACPPermissionPolicy? { runners[id]?.policy }
 
-    /// Answers a pending question for a session that currently has an attached runner.
+    /// Answers a pending question for a session that currently has an
+    /// attached runner. False when none does: the answer reached nobody.
+    @discardableResult
     public func answerQuestion(
         for id: ACPSession.ID,
         requestId: JSONRPCID,
         _ response: ACPQuestionResponse
-    ) {
-        elicitationCoordinators[id]?.respondToCursor(id: requestId, response: response)
+    ) -> Bool {
+        guard let coordinator = elicitationCoordinators[id] else { return false }
+        coordinator.respondToCursor(id: requestId, response: response)
+        return true
     }
 
+    @discardableResult
     public func respondToPlan(
         for id: ACPSession.ID,
         requestId: JSONRPCID,
         _ response: ACPCursorPlanResponse
-    ) {
-        elicitationCoordinators[id]?.respondToPlan(id: requestId, response: response)
+    ) -> Bool {
+        guard let coordinator = elicitationCoordinators[id] else { return false }
+        coordinator.respondToPlan(id: requestId, response: response)
+        return true
     }
 
+    @discardableResult
     public func respondToUserInput(
         for id: ACPSession.ID,
         token: UUID,
         action: ACPUserInputAction
-    ) {
-        elicitationCoordinators[id]?.respond(to: token, action: action)
+    ) -> Bool {
+        guard let coordinator = elicitationCoordinators[id] else { return false }
+        coordinator.respond(to: token, action: action)
+        return true
     }
 
     @discardableResult
@@ -459,6 +475,12 @@ public final class ACPSessionManager: ChangeTracking {
     /// Confirms ownership off-main immediately before an RPC or local process
     /// side effect. Cached observations remain suitable for rendering, but are
     /// not authority for actions that cannot be transactionally fenced.
+    /// Whether this instance still drives the session, read from the store
+    /// rather than its last view, for actions that resume the agent.
+    public func confirmsWriterLease(for sessionId: ACPSession.ID) async -> Bool {
+        await confirmedWriterLease(for: sessionId)
+    }
+
     private func confirmedWriterLease(for sessionId: ACPSession.ID) async -> Bool {
         guard !isDisposed, _ownedLeases.contains(sessionId),
               let token = ownedLeaseTokens[sessionId]
@@ -1585,6 +1607,14 @@ public final class ACPSessionManager: ChangeTracking {
     /// session without making its transcript visible; mirror polling uses
     /// this narrower signal to back off when the ACP tab is not on screen.
     private var visibleSessionCounts: [ACPSession.ID: Int] = [:]
+    /// Per-session count of on-screen chat surfaces. Narrower than
+    /// `visibleSessionCounts`: a visual-aid tab keeps the mirror hot but does
+    /// not show the conversation, so only the chat drives `seenTracker`.
+    private var chatVisibleCounts: [ACPSession.ID: Int] = [:]
+    /// Whether each session is seen (chat visible and app active). The app
+    /// owns `onEvent` and the real app-active state; the manager persists
+    /// `last_seen_at` whenever a session becomes unseen.
+    public let seenTracker = SessionSeenTracker(now: Date.init, appActive: true)
     public var remoteServerIdProvider: @MainActor () -> String? = { nil }
     private var remoteCoordinator: ACPRemoteSessionCoordinator? {
         didSet { observeRemoteAuthority() }
@@ -1999,6 +2029,28 @@ public final class ACPSessionManager: ChangeTracking {
             refreshRecent()
         }
         observeRemoteAuthority()
+        seenTracker.ownerObserver = { [weak self] event in
+            guard case let .becameUnseen(sessionId, at) = event else { return }
+            self?.persistLastSeen(sessionId: sessionId, at: at)
+        }
+    }
+
+    /// Ordered behind the session's row upsert: `setLastSeenAt` only updates
+    /// an existing row. Best-effort, so a failure never surfaces as an error.
+    private func persistLastSeen(sessionId: ACPSession.ID, at: Date) {
+        let seconds = Int64(at.timeIntervalSince1970)
+        enqueuePersistence { persistence in
+            try? await persistence.setLastSeenAt(id: sessionId, at: seconds)
+        }
+    }
+
+    /// Stores a live session. A tab may become visible before its session
+    /// exists (restored tabs on relaunch), so announce visibility on arrival.
+    private func installSession(_ session: ACPSession) {
+        sessions[session.id] = session
+        if (visibleSessionCounts[session.id] ?? 0) > 0 {
+            session.nextPromptVisibilityChanged.send(true)
+        }
     }
 
     @discardableResult
@@ -2092,6 +2144,7 @@ public final class ACPSessionManager: ChangeTracking {
             titleSource: isEphemeral ? .manual : .placeholder,
             currentModel: nil, currentMode: nil,
             nativeSubagentsDisabled: nativeSubagentsPreference(agentId: agentId),
+            sessionInstructions: sessionInstructionsProvider?(agentId),
             ephemeralParentId: ephemeralParentID,
             autoRun: isEphemeral ? false : autoRunDefault,
             createdAt: now, updatedAt: now, lastOpenedAt: now, archived: false)
@@ -2100,16 +2153,18 @@ public final class ACPSessionManager: ChangeTracking {
             recent.removeAll { $0.id == id }
             recent.insert(row, at: 0)
         }
-        enqueuePersistence { persistence in
+        unsavedCreations.insert(id)
+        markSaved(id, once: enqueuePersistenceResult { persistence -> Bool in
             try await persistence.upsertSession(row)
-        }
+            return true
+        })
         let session = ACPSession(
             id: id, agentId: agentId, worktreeId: worktreeId,
             title: row.title, owner: owner, titleSource: row.titleSource, origin: row.origin,
             hydrationState: .ready)
         session.autoRunEnabled = row.autoRun
         session.readOnlyRestricted = isEphemeral
-        sessions[id] = session
+        installSession(session)
         return session
     }
 
@@ -2169,6 +2224,11 @@ public final class ACPSessionManager: ChangeTracking {
             let targetID = UUID().uuidString
             let now = Int64(Date().timeIntervalSince1970)
             let copiedMessages = try snapshot.copiedMessages(targetSessionID: targetID, createdAt: now)
+            // A same-agent fork keeps the instructions its source runs with;
+            // another agent starts from its own configured instructions.
+            let targetInstructions = targetAgentID == source.agentId
+                ? await capturedSessionInstructions(sessionId: sourceSessionID)
+                : sessionInstructionsProvider?(targetAgentID)
             let targetTitle = ephemeralTitle ?? (source.title == "New session"
                 ? "New session (fork)"
                 : "\(source.title) (fork)")
@@ -2180,6 +2240,7 @@ public final class ACPSessionManager: ChangeTracking {
                 currentModel: nil,
                 currentMode: nil,
                 nativeSubagentsDisabled: nativeSubagentsPreference(agentId: targetAgentID),
+                sessionInstructions: targetInstructions,
                 // Seed the fork's composer suggestions only when the target
                 // agent is the SAME agent: its attach would re-advertise the
                 // identical list. A cross-agent fork gets nothing — the
@@ -2241,7 +2302,7 @@ public final class ACPSessionManager: ChangeTracking {
                     payload: message.payload
                 ))
             }
-            sessions[targetID] = target
+            installSession(target)
             persistedRows[targetID] = targetRow
             if !isEphemeral {
                 recent.removeAll { $0.id == targetID }
@@ -2636,7 +2697,7 @@ public final class ACPSessionManager: ChangeTracking {
         if let handoff = draftFlushHandoffs[id] {
             session.replaceComposerDraft(handoff.draft)
         }
-        sessions[id] = session
+        installSession(session)
         return session
     }
 
@@ -3046,6 +3107,8 @@ public final class ACPSessionManager: ChangeTracking {
         mirrorMessageSnapshots.removeValue(forKey: id)
         sessionRefCounts.removeValue(forKey: id)
         visibleSessionCounts.removeValue(forKey: id)
+        chatVisibleCounts.removeValue(forKey: id)
+        seenTracker.setVisible(false, sessionId: id)
         transcriptScrollMemory.removeValue(forKey: id)
         pendingModel.removeValue(forKey: id)
         pendingMode.removeValue(forKey: id)
@@ -3112,6 +3175,8 @@ public final class ACPSessionManager: ChangeTracking {
         mirrorMessageSnapshots.removeValue(forKey: id)
         sessionRefCounts.removeValue(forKey: id)
         visibleSessionCounts.removeValue(forKey: id)
+        chatVisibleCounts.removeValue(forKey: id)
+        seenTracker.setVisible(false, sessionId: id)
         transcriptScrollMemory.removeValue(forKey: id)
         pendingModel.removeValue(forKey: id)
         pendingMode.removeValue(forKey: id)
@@ -3134,9 +3199,10 @@ public final class ACPSessionManager: ChangeTracking {
 
     /// Marks an ACP tab as actively visible for `id`. This is intentionally
     /// separate from `retainSession`: sidebars can retain rows for cache
-    /// lifetime without needing the mirror poller to stay hot.
+    /// lifetime without needing the mirror poller to stay hot. Counts are
+    /// kept even before the session is loaded, so a tab restored on relaunch
+    /// is visible from its first appearance.
     public func markSessionVisible(id: ACPSession.ID) {
-        guard sessions[id] != nil else { return }
         let wasHidden = (visibleSessionCounts[id] ?? 0) == 0
         visibleSessionCounts[id, default: 0] += 1
         if wasHidden {
@@ -3153,6 +3219,29 @@ public final class ACPSessionManager: ChangeTracking {
             sessions[id]?.nextPromptVisibilityChanged.send(false)
         } else {
             visibleSessionCounts[id] = next
+        }
+    }
+
+    /// Marks the chat transcript for `id` as on screen. Only this signal
+    /// makes a session "seen"; `markSessionVisible` also covers surfaces
+    /// such as visual-aid tabs that do not show the conversation. Like
+    /// `markSessionVisible`, counts are kept before the session loads.
+    public func markChatVisible(id: ACPSession.ID) {
+        let wasHidden = (chatVisibleCounts[id] ?? 0) == 0
+        chatVisibleCounts[id, default: 0] += 1
+        if wasHidden {
+            seenTracker.setVisible(true, sessionId: id)
+        }
+    }
+
+    public func unmarkChatVisible(id: ACPSession.ID) {
+        guard let current = chatVisibleCounts[id], current > 0 else { return }
+        let next = current - 1
+        if next == 0 {
+            chatVisibleCounts.removeValue(forKey: id)
+            seenTracker.setVisible(false, sessionId: id)
+        } else {
+            chatVisibleCounts[id] = next
         }
     }
 
@@ -3242,6 +3331,64 @@ public final class ACPSessionManager: ChangeTracking {
         session.transcript.discardRenderState()
         sessions[id] = nil
         visibleSessionCounts.removeValue(forKey: id)
+        chatVisibleCounts.removeValue(forKey: id)
+        seenTracker.setVisible(false, sessionId: id)
+    }
+
+    /// Archives a session and stops it, unless another live instance drives
+    /// it. The row is written under a lease fence, this instance's own or one
+    /// claimed for the write, so no instance can start driving the session
+    /// between the decision and the write. Returns false, archiving nothing,
+    /// when another instance holds the lease.
+    public func archiveUnlessDrivenElsewhere(id: ACPSession.ID) async throws -> Bool {
+        // A session created a moment ago may not have its row yet.
+        await flushAllPersistence()
+        // On a remote host the local lease is half of authority; the other half
+        // is the host's, which only a writer here holds. Confirmed with the
+        // host rather than from the last heartbeat, as other destructive
+        // remote transitions do.
+        if effectiveRemoteHost() != nil {
+            guard isWriter(for: id), await confirmedWriterLease(for: id) else { return false }
+        }
+        let fence: ACPSessionLeaseFence
+        var claimedToken: String?
+        if let owned = leaseFence(sessionId: id) {
+            fence = owned
+        } else {
+            let token = UUID().uuidString
+            guard let lease = try await persistence.claimLease(
+                sessionId: id, instanceId: instanceId, pid: pid,
+                now: Int64(Date().timeIntervalSince1970), staleAfter: Self.leaseStaleAfter, leaseToken: token
+            ) else { return false }
+            // An attachment of this instance may hold the lease already, with
+            // its own token: the fence is whatever the store holds, and only a
+            // lease this call created is released after.
+            fence = ACPSessionLeaseFence(sessionId: id, ownerInstance: instanceId, token: lease.token)
+            claimedToken = lease.token == token ? token : nil
+        }
+        let archived: Bool
+        do {
+            archived = try await persistence.setArchived(id: id, archived: true, fence: fence)
+        } catch {
+            // Nobody heartbeats a lease claimed only for this write.
+            if let claimedToken {
+                try? await persistence.releaseLease(sessionId: id, instanceId: instanceId, leaseToken: claimedToken)
+            }
+            throw error
+        }
+        if let claimedToken {
+            try? await persistence.releaseLease(sessionId: id, instanceId: instanceId, leaseToken: claimedToken)
+        }
+        guard archived else { return false }
+        if var row = persistedRows[id] {
+            row.archived = true
+            persistedRows[id] = row
+        }
+        recent.removeAll { $0.id == id }
+        if sessions[id] != nil {
+            try await disposeSession(id: id)
+        }
+        return true
     }
 
     public func setArchived(id: ACPSession.ID, archived: Bool) {
@@ -3329,12 +3476,23 @@ public final class ACPSessionManager: ChangeTracking {
         replaceRecentRow(row)
         let rowToPersist = row
         let fence = leaseFence(sessionId: s.id)
-        enqueuePersistence { persistence in
-            _ = try await persistence.upsertSession(
+        markSaved(s.id, once: enqueuePersistenceResult { persistence in
+            try await persistence.upsertSession(
                 rowToPersist,
                 preserveTitle: preserveTitle,
                 fence: fence
             )
+        })
+    }
+
+    /// Clears a creation's not-yet-saved marker once `saving` lands its row,
+    /// whichever save that turns out to be.
+    private func markSaved(_ id: ACPSession.ID, once saving: Task<Bool?, Never>) {
+        guard unsavedCreations.contains(id) else { return }
+        Task { @MainActor [weak self] in
+            if await saving.value == true {
+                self?.unsavedCreations.remove(id)
+            }
         }
     }
 
@@ -3346,6 +3504,9 @@ public final class ACPSessionManager: ChangeTracking {
         let result = await enqueuePersistenceResult { persistence in
             try await persistence.upsertSession(rowToPersist, fence: fence)
         }.value
+        if result == true {
+            unsavedCreations.remove(s.id)
+        }
         guard result == true,
               isCurrentAttachment(sessionId: s.id, attempt: attempt, session: s)
         else { return false }
@@ -3793,9 +3954,37 @@ public final class ACPSessionManager: ChangeTracking {
         await previousManagerDisposal?.value
         let persistence = persistence
         do {
+            let listedBefore = Set(recent.map(\.id))
             let rows = try await persistence.recentSessions()
-            recent = rows
-            for row in rows {
+            // A live session missing from the store's list stays listed while
+            // the store holds it unarchived, or while its first save here has
+            // not landed. One another instance archived or deleted goes.
+            let loaded = Set(rows.map(\.id))
+            var kept: [ACPSessionRow] = []
+            for row in recent where !loaded.contains(row.id) && sessions[row.id] != nil {
+                if let stored = try await persistence.loadSession(id: row.id) {
+                    unsavedCreations.remove(row.id)
+                    persistedRows[row.id] = stored
+                    if !stored.archived {
+                        kept.append(stored)
+                    }
+                } else if unsavedCreations.contains(row.id) {
+                    kept.append(row)
+                } else {
+                    persistedRows[row.id] = nil
+                }
+            }
+            // The list may have changed while this read: sessions created
+            // meanwhile stay, and ones removed meanwhile stay removed.
+            let listedNow = Set(recent.map(\.id))
+            let added = recent.filter { !listedBefore.contains($0.id) && !loaded.contains($0.id) }
+            let addedIDs = Set(added.map(\.id))
+            recent = (added + kept.filter { !addedIDs.contains($0.id) } + rows).filter {
+                listedNow.contains($0.id) || !listedBefore.contains($0.id)
+            }
+            // Only rows still listed: one archived meanwhile keeps its newer cache.
+            let listed = Set(recent.map(\.id))
+            for row in rows where listed.contains(row.id) {
                 persistedRows[row.id] = row
             }
         } catch {
@@ -3947,6 +4136,13 @@ public final class ACPSessionManager: ChangeTracking {
     private func capturedNativeSubagentsPolicy(sessionId: ACPSession.ID) async -> Bool {
         let stored = try? await persistence.loadSession(id: sessionId)
         return (stored?.nativeSubagentsDisabled ?? persistedRows[sessionId]?.nativeSubagentsDisabled) == true
+    }
+
+    /// The session instructions this session was created with; see
+    /// `capturedNativeSubagentsPolicy` for the lookup order.
+    private func capturedSessionInstructions(sessionId: ACPSession.ID) async -> String? {
+        let stored = try? await persistence.loadSession(id: sessionId)
+        return stored?.sessionInstructions ?? persistedRows[sessionId]?.sessionInstructions
     }
 
     private func replaceRecentRow(_ row: ACPSessionRow) {
@@ -6446,6 +6642,7 @@ extension ACPSessionManager {
         var cliParentSessionId: String?
         let agentEnvironment: [String: String]
         let nativeSubagentsDisabled = await capturedNativeSubagentsPolicy(sessionId: sessionId)
+        let sessionInstructions = await capturedSessionInstructions(sessionId: sessionId)
         let isDelegatedChild = await delegatedChildProvider?(sessionId) ?? false
         guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { return }
         do {
@@ -6694,6 +6891,13 @@ extension ACPSessionManager {
             session.supportsSteering = initialized.supportsSteering
             session.supportsContextBreakdown = initialized.supportsContextBreakdown
             session.supportsCodexSteeringCompletion = (ACPManagedAdapterDescriptor.codex.verifiedPackageNames + ["codex-acp"]).contains(initialized.agentInfo?.name ?? "")
+            connection.mcpStartupAwaitTimeoutMs = ACPMCPStartupWaitPolicy.timeoutMilliseconds(for: initialized.agentInfo)
+            connection.sessionInstructions = ACPSessionInstructionsPolicy.append(
+                agentID: session.agentId,
+                captured: sessionInstructions,
+                advertisesAppend: initialized.supportsSystemPromptAppend,
+                maxBytes: initialized.systemPromptAppendMaxBytes
+            )
             session.backgroundTaskStopSupported = initialized.supportsAsyncTasks
             session.sessionCapabilities = initialized.sessionCapabilities
             session.authMethods = initialized.authMethods

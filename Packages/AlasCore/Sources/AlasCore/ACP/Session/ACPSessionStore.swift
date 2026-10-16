@@ -1,7 +1,7 @@
 import Foundation
 
 public final class ACPSessionStore {
-    public static let targetSchemaVersion = 26
+    public static let targetSchemaVersion = 28
     public let path: String
     public let db: SQLiteDatabase
 
@@ -58,6 +58,15 @@ public final class ACPSessionStore {
                 try db.exec("ALTER TABLE sessions ADD COLUMN goal_draft TEXT NOT NULL DEFAULT ''")
             }
         }
+        if current < 27 {
+            // Nullable: rows from before this column keep NULL (no session
+            // instructions), which is how those sessions were started.
+            let columns = try db.query("PRAGMA table_info(sessions)")
+            if !columns.contains(where: { ($0["name"] as? String) == "session_instructions" }) {
+                try db.exec("ALTER TABLE sessions ADD COLUMN session_instructions TEXT")
+            }
+        }
+        if current < 28 { try migrate_to_v28() }
         try recoverFromConcurrentWriters()
         if current == 0 {
             try db.exec("INSERT INTO schema_version (version) VALUES (?)", bindings: [Int64(Self.targetSchemaVersion)])
@@ -65,6 +74,22 @@ public final class ACPSessionStore {
             try db.exec("UPDATE schema_version SET version = ?", bindings: [Int64(Self.targetSchemaVersion)])
         }
         try db.exec("CREATE INDEX IF NOT EXISTS messages_session_kind_seq_idx ON messages(session_id, kind, seq)")
+    }
+
+    private func migrate_to_v28() throws {
+        let columns = try db.query("PRAGMA table_info(sessions)")
+        if !columns.contains(where: { ($0["name"] as? String) == "last_seen_at" }) {
+            try db.exec("ALTER TABLE sessions ADD COLUMN last_seen_at INTEGER")
+        }
+        try db.exec("""
+        CREATE TABLE IF NOT EXISTS session_summaries (
+          session_id   TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+          input_hash   TEXT NOT NULL,
+          model_id     TEXT NOT NULL,
+          summary_json TEXT NOT NULL,
+          created_at   INTEGER NOT NULL
+        )
+        """)
     }
 
     private func migrate_to_v23() throws {
@@ -444,6 +469,11 @@ public struct ACPSessionRow: Equatable, Sendable {
     /// reconnect or restore applies the policy the session started with.
     /// `nil` for sessions created before the policy existed (allowed).
     public var nativeSubagentsDisabled: Bool? = nil
+    /// Session instructions captured when Alas created the session, sent on
+    /// every session request (`ACPSessionInstructionsPolicy`). Written once
+    /// like `nativeSubagentsDisabled`, so editing the agent's default never
+    /// changes a session that already exists. `nil` means none.
+    public var sessionInstructions: String? = nil
     /// Slash commands and skills the agent advertised, persisted so their
     /// pills and chips survive an app restart and reach mirror sessions
     /// before any attach happens (see `migrate_to_v20`).
@@ -464,7 +494,7 @@ public struct ACPSessionRow: Equatable, Sendable {
     public var lastOpenedAt: Int64
     public var archived: Bool
 
-    public init(id: String, agentId: String, title: String, titleSource: ACPSessionTitleSource = .placeholder, remoteSessionId: String? = nil, origin: ACPSessionOrigin = .alasCreated, contextRecoveryPending: Bool = false, recoveryProcId: String? = nil, mcpPreamblePending: String? = nil, mcpPreambleSent: Bool = false, usageLimit: ACPUsageLimit? = nil, goalDraft: String = "", directTurnInFlight: Bool = false, authStatus: ACPAuthStatus? = nil, currentModel: String? = nil, currentMode: String? = nil, configOptionValues: [String: ACPConfigValue] = [:], nativeSubagentsDisabled: Bool? = nil, promptSuggestions: [ACPPromptSuggestion]? = nil, ephemeralParentId: String? = nil, ephemeralCleanupPending: Bool = false, autoRun: Bool, helperProcStdoutOffset: Int64? = nil, helperProcStderrOffset: Int64? = nil, acpBrokerId: String? = nil, acpBrokerGeneration: Int64? = nil, acpBrokerAcknowledgedCursor: Int64 = 0, createdAt: Int64, updatedAt: Int64, lastOpenedAt: Int64, archived: Bool) {
+    public init(id: String, agentId: String, title: String, titleSource: ACPSessionTitleSource = .placeholder, remoteSessionId: String? = nil, origin: ACPSessionOrigin = .alasCreated, contextRecoveryPending: Bool = false, recoveryProcId: String? = nil, mcpPreamblePending: String? = nil, mcpPreambleSent: Bool = false, usageLimit: ACPUsageLimit? = nil, goalDraft: String = "", directTurnInFlight: Bool = false, authStatus: ACPAuthStatus? = nil, currentModel: String? = nil, currentMode: String? = nil, configOptionValues: [String: ACPConfigValue] = [:], nativeSubagentsDisabled: Bool? = nil, sessionInstructions: String? = nil, promptSuggestions: [ACPPromptSuggestion]? = nil, ephemeralParentId: String? = nil, ephemeralCleanupPending: Bool = false, autoRun: Bool, helperProcStdoutOffset: Int64? = nil, helperProcStderrOffset: Int64? = nil, acpBrokerId: String? = nil, acpBrokerGeneration: Int64? = nil, acpBrokerAcknowledgedCursor: Int64 = 0, createdAt: Int64, updatedAt: Int64, lastOpenedAt: Int64, archived: Bool) {
         self.id = id
         self.agentId = agentId
         self.title = title
@@ -483,6 +513,7 @@ public struct ACPSessionRow: Equatable, Sendable {
         self.currentMode = currentMode
         self.configOptionValues = configOptionValues
         self.nativeSubagentsDisabled = nativeSubagentsDisabled
+        self.sessionInstructions = sessionInstructions
         self.promptSuggestions = promptSuggestions
         self.ephemeralParentId = ephemeralParentId
         self.ephemeralCleanupPending = ephemeralCleanupPending
@@ -751,10 +782,10 @@ extension ACPSessionStore {
         INSERT INTO sessions (id, agent_id, title, title_source, remote_session_id, origin, context_recovery_pending, recovery_proc_id,
                               mcp_preamble_pending, mcp_preamble_sent, prompt_suggestions,
                               current_model, current_mode, config_option_values, native_subagents_disabled,
-                              ephemeral_parent_id, ephemeral_cleanup_pending, auto_run, helper_proc_stdout_offset,
+                              session_instructions, ephemeral_parent_id, ephemeral_cleanup_pending, auto_run, helper_proc_stdout_offset,
                               helper_proc_stderr_offset, acp_broker_id, acp_broker_generation,
                               acp_broker_acknowledged_cursor, created_at, updated_at, last_opened_at, archived)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET
             title = CASE WHEN ? THEN sessions.title ELSE excluded.title END,
             title_source = CASE WHEN ? THEN sessions.title_source ELSE excluded.title_source END,
@@ -770,6 +801,7 @@ extension ACPSessionStore {
             current_mode = excluded.current_mode,
             config_option_values = excluded.config_option_values,
             native_subagents_disabled = COALESCE(sessions.native_subagents_disabled, excluded.native_subagents_disabled),
+            session_instructions = COALESCE(sessions.session_instructions, excluded.session_instructions),
             ephemeral_parent_id = sessions.ephemeral_parent_id,
             ephemeral_cleanup_pending = sessions.ephemeral_cleanup_pending,
             auto_run = excluded.auto_run,
@@ -785,7 +817,9 @@ extension ACPSessionStore {
             END,
             updated_at = excluded.updated_at,
             last_opened_at = excluded.last_opened_at,
-            archived = excluded.archived
+            -- A snapshot never brings an archived session back; only an
+            -- explicit unarchive does.
+            archived = MAX(sessions.archived, excluded.archived)
         """, bindings: [
             s.id, s.agentId, s.title, s.titleSource.rawValue, s.remoteSessionId, s.origin.rawValue,
             s.contextRecoveryPending ? 1 : 0, s.recoveryProcId,
@@ -793,6 +827,7 @@ extension ACPSessionStore {
             s.promptSuggestions.map { String(decoding: try JSONEncoder().encode($0), as: UTF8.self) },
             s.currentModel, s.currentMode, try JSONEncoder().encode(s.configOptionValues),
             s.nativeSubagentsDisabled.map { $0 ? 1 : 0 },
+            s.sessionInstructions,
             s.ephemeralParentId, s.ephemeralCleanupPending ? 1 : 0,
             s.autoRun ? 1 : 0,
             s.helperProcStdoutOffset, s.helperProcStderrOffset,
@@ -806,6 +841,93 @@ extension ACPSessionStore {
     public func loadSession(id: String) throws -> ACPSessionRow? {
         let rows = try db.query("SELECT * FROM sessions WHERE id = ?", bindings: [id])
         return rows.first.map(Self.rowToSession)
+    }
+
+    /// Written only here; upserts and row decoders never touch `last_seen_at`,
+    /// so a stale in-memory row cannot clobber the stamp.
+    public func setLastSeenAt(id: String, at: Int64) throws {
+        try db.exec(Self.setLastSeenAtSQL, bindings: [at, id])
+    }
+
+    private static let setLastSeenAtSQL = "UPDATE sessions SET last_seen_at = ? WHERE id = ?"
+
+    /// Stamps `last_seen_at` through a bare connection: no migrations and no
+    /// directory creation, so it is cheap enough for the main thread at quit.
+    /// A missing database is a no-op; a busy one fails after the short timeout.
+    public static func stampLastSeenAt(
+        path: String,
+        ids: [String],
+        at: Int64,
+        busyTimeoutMilliseconds: Int32 = 250
+    ) throws {
+        guard !ids.isEmpty, FileManager.default.fileExists(atPath: path) else { return }
+        let db = try SQLiteDatabase(path: path, busyTimeoutMilliseconds: busyTimeoutMilliseconds)
+        try db.transaction {
+            for id in ids {
+                try db.exec(setLastSeenAtSQL, bindings: [at, id])
+            }
+        }
+    }
+
+    public func loadLastSeenAt(id: String) throws -> Int64? {
+        let rows = try db.query("SELECT last_seen_at FROM sessions WHERE id = ?", bindings: [id])
+        return rows.first?["last_seen_at"] as? Int64
+    }
+
+    public func loadSummarySourceSnapshot(sessionId: String) throws -> StoredSummarySourceSnapshot? {
+        try db.transaction {
+            guard let row = try loadSession(id: sessionId) else { return nil }
+            let decoder = JSONDecoder()
+            let wires = try loadMessages(sessionId: sessionId).compactMap {
+                try? ACPMessageWire.decode(kind: $0.kind, payload: $0.payload, decoder: decoder)
+            }
+            let queue = try loadQueue(sessionId: sessionId)
+            return StoredSummarySourceSnapshot(
+                source: SessionSummarySource(
+                    goal: nil,
+                    plan: SessionSummarySource.currentPlan(in: wires),
+                    turns: SessionSummarySource.turns(in: wires)),
+                isIdle: queue.isEmpty && !row.contextRecoveryPending && !row.directTurnInFlight,
+                lastSeenAt: try loadLastSeenAt(id: sessionId),
+                updatedAt: row.updatedAt)
+        }
+    }
+
+    public func loadSessionSummary(sessionId: String, inputHash: String, modelID: String) throws -> SessionSummary? {
+        let rows = try db.query(
+            "SELECT summary_json FROM session_summaries WHERE session_id = ? AND input_hash = ? AND model_id = ?",
+            bindings: [sessionId, inputHash, modelID])
+        guard let json = rows.first?["summary_json"] as? String else { return nil }
+        return try? JSONDecoder().decode(StoredSummaryJSON.self, from: Data(json.utf8)).summary
+    }
+
+    public func saveSessionSummary(sessionId: String, _ stored: StoredSessionSummary) throws {
+        let data = try JSONEncoder().encode(StoredSummaryJSON(stored.summary))
+        try db.exec("""
+        INSERT INTO session_summaries (session_id, input_hash, model_id, summary_json, created_at)
+        VALUES (?,?,?,?,?)
+        ON CONFLICT(session_id) DO UPDATE SET
+            input_hash = excluded.input_hash,
+            model_id = excluded.model_id,
+            summary_json = excluded.summary_json,
+            created_at = excluded.created_at
+        """, bindings: [sessionId, stored.inputHash, stored.modelID, String(decoding: data, as: UTF8.self), stored.createdAt])
+    }
+
+    public func deleteAllSessionSummaries() throws {
+        try db.exec("DELETE FROM session_summaries")
+    }
+
+    /// Clears every summary through a bare connection, without migrating, so
+    /// it reaches databases whose worktree is not loaded. A missing file or a
+    /// database that predates the summaries table is a no-op.
+    public static func deleteAllSessionSummaries(path: String) throws {
+        guard FileManager.default.fileExists(atPath: path) else { return }
+        let db = try SQLiteDatabase(path: path)
+        let tables = try db.query(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'")
+        guard !tables.isEmpty else { return }
+        try db.exec("DELETE FROM session_summaries")
     }
 
     public func loadSession(acpBrokerId: String) throws -> ACPSessionRow? {
@@ -1439,6 +1561,7 @@ extension ACPSessionStore {
             configOptionValues: (r["config_option_values"] as? Data)
                 .flatMap { try? JSONDecoder().decode([String: ACPConfigValue].self, from: $0) } ?? [:],
             nativeSubagentsDisabled: (r["native_subagents_disabled"] as? Int64).map { $0 != 0 },
+            sessionInstructions: r["session_instructions"] as? String,
             promptSuggestions: (r["prompt_suggestions"] as? String)
                 .flatMap { try? JSONDecoder().decode([ACPPromptSuggestion].self, from: Data($0.utf8)) },
             ephemeralParentId: r["ephemeral_parent_id"] as? String,
@@ -1562,6 +1685,9 @@ extension ACPSessionStore {
     /// one `BEGIN IMMEDIATE` transaction so two instances racing on the
     /// same dead-owner lease can't both delete-then-insert and both win.
     /// A plain `BEGIN` (WAL) would defer the write lock and still race.
+    ///
+    /// An archived session is never claimed: archiving stopped it for good,
+    /// and nobody may start driving it again from a stale view.
     public func claimLease(sessionId: String, instanceId: String, pid: Int64,
                     now: Int64, staleAfter: Int64,
                     leaseToken: String = UUID().uuidString,
@@ -1569,6 +1695,11 @@ extension ACPSessionStore {
         let staleCutoff = now - staleAfter
         try db.exec("BEGIN IMMEDIATE")
         do {
+            let archived = try db.query("SELECT archived FROM sessions WHERE id = ?", bindings: [sessionId])
+            if let row = archived.first, (row["archived"] as? Int64) == 1 {
+                try db.exec("COMMIT")
+                return false
+            }
             // Fast-path crash reclaim: a lease whose owner pid is dead can
             // be removed unconditionally — a dead pid never comes back.
             if let existing = try loadLease(sessionId: sessionId),
@@ -1627,23 +1758,27 @@ extension ACPSessionStore {
 
     /// Forcibly seize the lease (explicit user takeover) regardless of
     /// the current owner's liveness.
+    /// Takes the lease whoever holds it, unless the session is archived:
+    /// archiving stopped it for good. Returns whether the lease was taken.
+    @discardableResult
     public func seizeLease(
         sessionId: String,
         instanceId: String,
         pid: Int64,
         now: Int64,
         leaseToken: String = UUID().uuidString
-    ) throws {
-        try db.exec("""
+    ) throws -> Bool {
+        try db.execChanges("""
         INSERT INTO session_leases (session_id, owner_instance, pid, heartbeat_at, status, lease_token)
-        VALUES (?,?,?,?,'idle',?)
+        SELECT ?,?,?,?,'idle',?
+        WHERE NOT EXISTS (SELECT 1 FROM sessions WHERE id = ? AND archived = 1)
         ON CONFLICT(session_id) DO UPDATE SET
             owner_instance = excluded.owner_instance,
             pid = excluded.pid,
             heartbeat_at = excluded.heartbeat_at,
             status = 'idle',
             lease_token = excluded.lease_token
-        """, bindings: [sessionId, instanceId, pid, now, leaseToken])
+        """, bindings: [sessionId, instanceId, pid, now, leaseToken, sessionId]) > 0
     }
 
     public func withLeaseFence<T>(_ fence: ACPSessionLeaseFence, _ operation: () throws -> T) throws -> T? {
@@ -1662,5 +1797,26 @@ extension ACPSessionStore {
             try? db.exec("ROLLBACK")
             throw error
         }
+    }
+}
+
+/// Persistence mirror of `SessionSummary`; keeps that type free of `Codable`.
+private struct StoredSummaryJSON: Codable {
+    let goal: String?
+    let completed: [String]
+    let blockers: [String]
+    let nextAction: String?
+    let isPartial: Bool
+
+    init(_ summary: SessionSummary) {
+        goal = summary.goal
+        completed = summary.completed
+        blockers = summary.blockers
+        nextAction = summary.nextAction
+        isPartial = summary.isPartial
+    }
+
+    var summary: SessionSummary {
+        SessionSummary(goal: goal, completed: completed, blockers: blockers, nextAction: nextAction, isPartial: isPartial)
     }
 }

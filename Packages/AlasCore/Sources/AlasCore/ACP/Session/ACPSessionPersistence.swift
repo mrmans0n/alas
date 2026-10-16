@@ -17,7 +17,7 @@ private enum ACPSessionPersistenceError: Error, LocalizedError {
 /// The initializer only records a path. Opening SQLite and running migrations
 /// happen on this actor's executor when the first operation is awaited, so
 /// constructing a manager on `MainActor` never performs database I/O.
-public actor ACPSessionPersistence {
+public actor ACPSessionPersistence: SessionSummaryStoring {
     public nonisolated let path: String
 
     private let busyTimeoutMilliseconds: Int32
@@ -64,6 +64,30 @@ public actor ACPSessionPersistence {
 
     public func loadSession(id: String) throws -> ACPSessionRow? {
         try openedStore().loadSession(id: id)
+    }
+
+    public func setLastSeenAt(id: String, at: Int64) throws {
+        try openedStore().setLastSeenAt(id: id, at: at)
+    }
+
+    public func loadLastSeenAt(id: String) throws -> Int64? {
+        try openedStore().loadLastSeenAt(id: id)
+    }
+
+    public func loadSummarySourceSnapshot(sessionId: String) throws -> StoredSummarySourceSnapshot? {
+        try openedStore().loadSummarySourceSnapshot(sessionId: sessionId)
+    }
+
+    public func loadSessionSummary(sessionId: String, inputHash: String, modelID: String) throws -> SessionSummary? {
+        try openedStore().loadSessionSummary(sessionId: sessionId, inputHash: inputHash, modelID: modelID)
+    }
+
+    public func saveSessionSummary(sessionId: String, _ stored: StoredSessionSummary) throws {
+        try openedStore().saveSessionSummary(sessionId: sessionId, stored)
+    }
+
+    public func deleteAllSessionSummaries() throws {
+        try openedStore().deleteAllSessionSummaries()
     }
 
     public func createFork(
@@ -127,10 +151,14 @@ public actor ACPSessionPersistence {
 
     public func rotateRemoteRecoveryLease(fence: ACPSessionLeaseFence, pid: Int64, now: Int64, token: String) throws -> ACPSessionLease? {
         let store = try openedStore()
-        return try store.withLeaseFence(fence) {
-            try store.seizeLease(sessionId: fence.sessionId, instanceId: fence.ownerInstance, pid: pid, now: now, leaseToken: token)
+        // Nil when the fence no longer holds, or the session was archived
+        // meanwhile and its lease cannot be taken.
+        return try store.withLeaseFence(fence) { () -> ACPSessionLease? in
+            guard try store.seizeLease(sessionId: fence.sessionId, instanceId: fence.ownerInstance, pid: pid, now: now, leaseToken: token) else {
+                return nil
+            }
             return ACPSessionLease(sessionId: fence.sessionId, ownerInstance: fence.ownerInstance, pid: pid, heartbeatAt: now, status: "idle", token: token)
-        }
+        } ?? nil
     }
 
     public func completeRemoteContextRecoveryBinding(
@@ -856,18 +884,24 @@ public actor ACPSessionPersistence {
         leaseToken: String
     ) throws -> ACPSessionLease {
         let store = try openedStore()
-        try store.seizeLease(
+        guard try store.seizeLease(
             sessionId: sessionId,
             instanceId: instanceId,
             pid: pid,
             now: now,
             leaseToken: leaseToken
-        )
+        ) else { throw ACPSessionLeaseRefusal.archived }
         guard let lease = try store.loadLease(sessionId: sessionId) else {
             throw SQLiteError.stepFailed(code: SQLITE_ERROR, message: "Lease seizure did not persist", sql: "session_leases")
         }
         return lease
     }
+}
+
+/// Why a lease was not taken.
+public enum ACPSessionLeaseRefusal: Error, Equatable, Sendable {
+    /// The session is archived; nobody drives it again.
+    case archived
 }
 
 extension ACPSessionPersistence {

@@ -140,7 +140,7 @@ struct OnDeviceAIPane: View {
 
     private var localOnlyFeatures: some View {
         SettingsGroup(title: "Local-model features") {
-            SettingsRow(name: "Session summaries", desc: "Summarize an idle chat to help you resume work.") {
+            SettingsRow(name: "Session summaries", desc: "Summarize an idle chat to help you resume work, automatically when you return after a while.") {
                 AlasToggle(on: Binding(
                     get: { state.config.sessionSummariesEnabled },
                     set: { enabled in Task {
@@ -161,6 +161,26 @@ struct OnDeviceAIPane: View {
                         .font(.system(size: 11.5)).foregroundStyle(theme.color("warn"))
                     AlasButton(title: "Retry Inference") { Task { await state.retrySessionSummarySettings() } }
                 }
+            }
+            SettingsRow(name: "Recap when returning after", desc: "How long you must be away from a chat before its recap appears.") {
+                Picker("Recap when returning after", selection: Binding(
+                    get: { state.config.sessionRecapThreshold },
+                    set: { value in
+                        let previous = state.config.sessionRecapThreshold
+                        state.config.sessionRecapThreshold = value
+                        guard state.saveConfig() else {
+                            state.config.sessionRecapThreshold = previous
+                            state.sessionSummarySettingsError = "Could not save the recap setting."
+                            return
+                        }
+                        if !state.sessionSummaryDisableSavePending { state.sessionSummarySettingsError = nil }
+                        state.rescheduleRecapPrecompute()
+                    }
+                )) {
+                    ForEach(SessionRecapThreshold.allCases, id: \.self) { Text($0.label).tag($0) }
+                }
+                .labelsHidden()
+                .disabled(!state.config.sessionSummariesEnabled)
             }
             SettingsRow(name: "Next-prompt suggestions", desc: "Suggest an optional follow-up after a successful agent turn. Tab inserts it for review; it never sends automatically.") {
                 AlasToggle(on: Binding(

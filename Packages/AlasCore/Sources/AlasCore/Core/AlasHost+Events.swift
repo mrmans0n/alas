@@ -2,22 +2,26 @@ import Foundation
 import Observation
 
 /// A position in the host's change log. Events after a cursor describe every
-/// change since the snapshot that returned it.
-public struct HostCursor: Hashable, Comparable, Sendable {
+/// change since the snapshot that returned it. Each log has its own
+/// generation, so a cursor from before the host restarted is never taken for
+/// one of the current log's.
+public struct HostCursor: Hashable, Codable, Sendable {
+    public let generation: UUID
     public let sequence: UInt64
 
-    public static func < (lhs: HostCursor, rhs: HostCursor) -> Bool {
-        lhs.sequence < rhs.sequence
+    public init(generation: UUID, sequence: UInt64) {
+        self.generation = generation
+        self.sequence = sequence
     }
 }
 
 /// One change to what the host holds. Each keyed kind has a removal event.
-public enum HostEvent: Equatable, Sendable {
-    case projectChanged(ProjectConfig)
+public enum HostEvent: Codable, Equatable, Sendable {
+    case projectChanged(ProjectSnapshot)
     case projectRemoved(id: String)
     case worktreeChanged(WorktreeSnapshot)
     case worktreeRemoved(projectID: String, worktreeID: String)
-    case workspaceCheckoutChanged(WorkspaceCheckout)
+    case workspaceCheckoutChanged(WorkspaceCheckoutSnapshot)
     case workspaceCheckoutRemoved(id: UUID)
     case runChanged(RunRecord)
     case runRemoved(id: String)
@@ -25,6 +29,13 @@ public enum HostEvent: Equatable, Sendable {
     case sessionRemoved(owner: SessionOwnerID, id: String)
     /// Changes were missed: read a new snapshot and subscribe after its cursor.
     case resync
+
+    // The wire names each payload.
+    private enum ProjectChangedCodingKeys: String, CodingKey { case _0 = "project" }
+    private enum WorktreeChangedCodingKeys: String, CodingKey { case _0 = "worktree" }
+    private enum WorkspaceCheckoutChangedCodingKeys: String, CodingKey { case _0 = "checkout" }
+    private enum RunChangedCodingKeys: String, CodingKey { case _0 = "run" }
+    private enum SessionChangedCodingKeys: String, CodingKey { case _0 = "session" }
 
     var key: HostEventKey {
         switch self {
@@ -36,7 +47,7 @@ public enum HostEvent: Equatable, Sendable {
         case .workspaceCheckoutRemoved(let id): .workspaceCheckout(id)
         case .runChanged(let record): .run(record.id)
         case .runRemoved(let id): .run(id)
-        case .sessionChanged(let summary): .session(owner: summary.owner, id: summary.row.id)
+        case .sessionChanged(let summary): .session(owner: summary.owner, id: summary.id)
         case .sessionRemoved(let owner, let id): .session(owner: owner, id: id)
         case .resync: .resync
         }
@@ -64,8 +75,15 @@ public final class HostSubscription {
     private var isCancelled = false
     private let pendingLimit: Int
     private let onCancel: (HostSubscription) -> Void
+    /// The log position the pending events reach.
+    private var pendingThrough: HostCursor
+    /// The log position the events `next()` last returned reach: a client
+    /// that read them resumes after it.
+    public private(set) var cursor: HostCursor
 
-    init(pendingLimit: Int, onCancel: @escaping (HostSubscription) -> Void) {
+    init(after cursor: HostCursor, pendingLimit: Int, onCancel: @escaping (HostSubscription) -> Void) {
+        self.cursor = cursor
+        pendingThrough = cursor
         self.pendingLimit = pendingLimit
         self.onCancel = onCancel
     }
@@ -91,8 +109,9 @@ public final class HostSubscription {
         onCancel(self)
     }
 
-    func receive(_ events: [HostEvent]) {
+    func receive(_ events: [HostEvent], through position: HostCursor) {
         guard !isCancelled, !events.isEmpty else { return }
+        pendingThrough = position
         if pending[.resync] == nil {
             for event in events {
                 let key = event.key
@@ -112,6 +131,7 @@ public final class HostSubscription {
     }
 
     private func drain() -> [HostEvent] {
+        cursor = pendingThrough
         defer {
             pendingKeys.removeAll()
             pending.removeAll()
@@ -124,7 +144,7 @@ public final class HostSubscription {
 /// kept for subscribers catching up, and the live subscriptions.
 @MainActor
 final class HostEventLog {
-    private(set) var cursor = HostCursor(sequence: 0)
+    private(set) var cursor = HostCursor(generation: UUID(), sequence: 0)
     private var retained: [(cursor: HostCursor, event: HostEvent)] = []
     /// Held weakly: a subscription its owner drops goes away with it.
     private var subscriptions: [ObjectIdentifier: WeakSubscription] = [:]
@@ -139,7 +159,7 @@ final class HostEventLog {
     func publish(_ events: [HostEvent]) {
         guard !events.isEmpty else { return }
         for event in events {
-            cursor = HostCursor(sequence: cursor.sequence + 1)
+            cursor = HostCursor(generation: cursor.generation, sequence: cursor.sequence + 1)
             retained.append((cursor, event))
         }
         if retained.count > retention {
@@ -147,23 +167,26 @@ final class HostEventLog {
         }
         subscriptions = subscriptions.filter { $0.value.subscription != nil }
         for entry in subscriptions.values {
-            entry.subscription?.receive(events)
+            entry.subscription?.receive(events, through: cursor)
         }
     }
 
     /// A subscription delivering the events after `after`: those still
-    /// retained first, or `.resync` when some have been dropped.
+    /// retained first, or `.resync` when some have been dropped or the
+    /// cursor is not one of this log's.
     func subscribe(after: HostCursor) -> HostSubscription {
-        let subscription = HostSubscription(pendingLimit: pendingLimit) { [weak self] in
+        let subscription = HostSubscription(after: after, pendingLimit: pendingLimit) { [weak self] in
             self?.subscriptions.removeValue(forKey: ObjectIdentifier($0))
         }
         subscriptions[ObjectIdentifier(subscription)] = WeakSubscription(subscription: subscription)
-        if after < cursor {
+        if after.generation != cursor.generation || after.sequence > cursor.sequence {
+            subscription.receive([.resync], through: cursor)
+        } else if after.sequence < cursor.sequence {
             let oldest = retained.first?.cursor.sequence ?? cursor.sequence + 1
             if after.sequence + 1 < oldest {
-                subscription.receive([.resync])
+                subscription.receive([.resync], through: cursor)
             } else {
-                subscription.receive(retained.filter { $0.cursor > after }.map(\.event))
+                subscription.receive(retained.filter { $0.cursor.sequence > after.sequence }.map(\.event), through: cursor)
             }
         }
         return subscription
@@ -181,7 +204,7 @@ private struct WeakSubscription {
 final class HostEventSource {
     let log = HostEventLog()
     private let core: AlasCoreContext
-    private var projects: [String: ProjectConfig] = [:]
+    private var projects: [String: ProjectSnapshot] = [:]
     private var worktrees: [HostEventKey: WorktreeSnapshot] = [:]
     private var runs: [String: RunRecord] = [:]
     private var sessions: [HostEventKey: HostSessionSummary] = [:]
@@ -189,8 +212,8 @@ final class HostEventSource {
     /// signals rather than Observation; renewed on every refresh.
     private var sessionSignals: Set<ChangeSubscription> = []
     /// Nil until the first load, which is the baseline rather than a change.
-    private var checkouts: [UUID: WorkspaceCheckout]?
-    private var checkoutList: [WorkspaceCheckout] = []
+    private var checkouts: [UUID: WorkspaceCheckoutSnapshot]?
+    private var checkoutList: [WorkspaceCheckoutSnapshot] = []
     private var checkoutLoads = 0
     /// The store's change stream, registered before any load reads the
     /// store, so no write can land between a load and the first event.
@@ -250,7 +273,7 @@ final class HostEventSource {
     /// Loads the Workspace checkouts and publishes what changed among them,
     /// returning the latest published list. A load that finishes after a
     /// later one is dropped, so it can never put back an older state.
-    func loadCheckouts() async throws -> [WorkspaceCheckout] {
+    func loadCheckouts() async throws -> [WorkspaceCheckoutSnapshot] {
         _ = await checkoutChanges?.value
         checkoutLoads += 1
         let load = checkoutLoads
@@ -315,7 +338,7 @@ final class HostEventSource {
 
     private static func keyed(_ summaries: [HostSessionSummary]) -> [HostEventKey: HostSessionSummary] {
         Dictionary(
-            summaries.map { (HostEventKey.session(owner: $0.owner, id: $0.row.id), $0) },
+            summaries.map { (HostEventKey.session(owner: $0.owner, id: $0.id), $0) },
             uniquingKeysWith: { _, last in last }
         )
     }

@@ -209,6 +209,43 @@ struct ACPGoalControl: View {
     }
 }
 
+/// The goal control in flight. Claude answers a set only when the turn it
+/// starts ends, so a set settles as soon as the agent publishes its
+/// objective. Each control carries a generation, and a response for one that
+/// already settled or was superseded changes nothing.
+struct ACPGoalSubmission {
+    private struct Pending {
+        let generation: Int
+        let action: ACPGoalAction
+        let objective: String?
+    }
+
+    private var generation = 0
+    private var pending: Pending?
+
+    var isSubmitting: Bool { pending != nil }
+
+    mutating func begin(_ action: ACPGoalAction, objective: String?) -> Int {
+        generation += 1
+        pending = Pending(generation: generation, action: action, objective: objective)
+        return generation
+    }
+
+    /// Settles a pending set the agent has published; returns its objective.
+    mutating func settle(publishing objective: String?) -> String? {
+        guard let pending, pending.action == .set, let objective, objective == pending.objective else { return nil }
+        self.pending = nil
+        return objective
+    }
+
+    /// Whether the response for `generation` belongs to the pending control.
+    mutating func finish(_ generation: Int) -> Bool {
+        guard pending?.generation == generation else { return false }
+        pending = nil
+        return true
+    }
+}
+
 /// The goal card: objective, budget, and stats, with the goal's actions in a
 /// footer bar. Clearing confirms inside the footer.
 private struct ACPGoalPopover: View {
@@ -221,7 +258,7 @@ private struct ACPGoalPopover: View {
     private var objective: String { session.goalDraft }
     @State private var isEditing = false
     @State private var confirmsClear = false
-    @State private var isSubmitting = false
+    @State private var submission = ACPGoalSubmission()
     @State private var errorMessage: String?
     @FocusState private var editorFocused: Bool
 
@@ -229,6 +266,8 @@ private struct ACPGoalPopover: View {
         let label: String
         let value: String
     }
+
+    private var isSubmitting: Bool { submission.isSubmitting }
 
     private var canMutate: Bool {
         session.agentState == .ready && !isSubmitting
@@ -265,6 +304,13 @@ private struct ACPGoalPopover: View {
         }
         .frame(width: 320)
         .background(theme.color("bg-1"))
+        .onChange(of: session.currentGoal?.objective) { _, published in
+            guard let objective = submission.settle(publishing: published) else { return }
+            isEditing = false
+            if session.goalDraft.trimmingCharacters(in: .whitespacesAndNewlines) == objective {
+                onDraftChange("")
+            }
+        }
     }
 
     // MARK: Header
@@ -521,23 +567,28 @@ private struct ACPGoalPopover: View {
         guard canMutate else { return }
         if action == .set, trimmedObjective.isEmpty { return }
         let submittedObjective = objective
-        isSubmitting = true
+        let token = submission.begin(action, objective: action == .set ? trimmedObjective : nil)
         errorMessage = nil
         Task {
+            var failure: Error?
             do {
                 try await onAction(action, action == .set ? submittedObjective : nil)
-                switch action {
-                case .set:
-                    isEditing = false
-                case .clear:
-                    confirmsClear = false
-                case .pause, .resume:
-                    break
-                }
             } catch {
-                errorMessage = error.localizedDescription
+                failure = error
             }
-            isSubmitting = false
+            guard submission.finish(token) else { return }
+            if let failure {
+                errorMessage = failure.localizedDescription
+                return
+            }
+            switch action {
+            case .set:
+                isEditing = false
+            case .clear:
+                confirmsClear = false
+            case .pause, .resume:
+                break
+            }
         }
     }
 }

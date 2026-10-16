@@ -3789,6 +3789,9 @@ struct ACPSessionRunnerTests {
         }
         #expect(writeError.code == -32002)
         #expect(terminalError.code == -32002)
+        // The agent reads this; it must say to answer instead of retrying.
+        #expect(writeError.message == ACPSideQuestion.readOnlyRejection)
+        #expect(terminalError.message == ACPSideQuestion.readOnlyRejection)
         let target = URL(fileURLWithPath: FileManager.default.temporaryDirectory.path).appendingPathComponent(path)
         #expect(!FileManager.default.fileExists(atPath: target.path))
         #expect(runner.session.readOnlyBlockedTools.count == 2)

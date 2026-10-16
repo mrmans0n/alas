@@ -9,12 +9,22 @@ public struct BuiltinAgentState: Codable, Equatable, Sendable {
     /// Absent (nil) means off. Only honoured where
     /// `ACPNativeDelegationSupport` has a verified control.
     public var nativeSubagentsDisabled: Bool?
+    /// "Session instructions" for new ACP sessions of this agent. Absent
+    /// (nil) means none. See `ACPSessionInstructionsPolicy`.
+    public var sessionInstructions: String?
 
-    public init(isEnabled: Bool, binaryOverride: String? = nil, extraTerminalArgs: [String]? = nil, nativeSubagentsDisabled: Bool? = nil) {
+    public init(
+        isEnabled: Bool,
+        binaryOverride: String? = nil,
+        extraTerminalArgs: [String]? = nil,
+        nativeSubagentsDisabled: Bool? = nil,
+        sessionInstructions: String? = nil
+    ) {
         self.isEnabled = isEnabled
         self.binaryOverride = binaryOverride
         self.extraTerminalArgs = extraTerminalArgs
         self.nativeSubagentsDisabled = nativeSubagentsDisabled
+        self.sessionInstructions = sessionInstructions
     }
 }
 
@@ -24,6 +34,12 @@ extension AppConfig.Agents {
     public func nativeSubagentsDisabled(for agentID: String) -> Bool {
         builtinState[agentID]?.nativeSubagentsDisabled == true
             && ACPNativeDelegationSupport.resolve(agentID: agentID).canEnforce
+    }
+
+    /// The instructions new ACP sessions of `agentID` start with, or nil.
+    public func sessionInstructions(for agentID: String) -> String? {
+        guard ACPSessionInstructionsPolicy.isConfigurable(agentID: agentID) else { return nil }
+        return ACPSessionInstructionsPolicy.normalized(builtinState[agentID]?.sessionInstructions)
     }
 }
 

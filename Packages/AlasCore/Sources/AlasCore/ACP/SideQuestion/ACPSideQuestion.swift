@@ -18,8 +18,14 @@ public struct ACPSideQuestion: Equatable, Sendable {
     public static let guidance = """
     This is a quick side question asked while another task runs. Answer it \
     directly in text. You may read files to answer, but do not write a plan, \
-    edit files, or ask to leave plan mode.
+    edit files, or ask to leave plan mode. Any edit, write, or command will be \
+    rejected, so don't attempt them.
     """
+
+    /// The error a blocked write or command returns to the agent. Agents
+    /// read it, so it says what to do instead.
+    public static let readOnlyRejection =
+        "Rejected: this is a read-only side question. Do not retry or try another way to change files or run commands; answer in text."
 
     public init(question: String, sessionID: ACPSession.ID? = nil, error: String? = nil, isSubmitted: Bool = false, isPromoting: Bool = false) {
         self.question = question
@@ -27,6 +33,37 @@ public struct ACPSideQuestion: Equatable, Sendable {
         self.error = error
         self.isSubmitted = isSubmitted
         self.isPromoting = isPromoting
+    }
+}
+
+/// The calls Alas blocked in a side session, folded for the card's chip.
+public struct ACPSideQuestionBlockedSummary: Equatable, Sendable {
+    public struct Entry: Equatable, Sendable {
+        public let title: String
+        public let count: Int
+
+        public init(title: String, count: Int) {
+            self.title = title
+            self.count = count
+        }
+    }
+
+    public let entries: [Entry]
+    public let total: Int
+
+    public init(_ blocked: [ACPBlockedToolCall]) {
+        var order: [String] = []
+        var counts: [String: Int] = [:]
+        for call in blocked {
+            if counts[call.title] == nil { order.append(call.title) }
+            counts[call.title, default: 0] += 1
+        }
+        entries = order.map { Entry(title: $0, count: counts[$0] ?? 0) }
+        total = blocked.count
+    }
+
+    public var label: String {
+        "\(total) action\(total == 1 ? "" : "s") skipped · read-only"
     }
 }
 
@@ -50,6 +87,8 @@ public enum ACPSideQuestionError: LocalizedError, Equatable, Sendable {
 /// Slash commands Alas handles itself instead of sending to the agent.
 public enum ACPAlasSlashCommand: Equatable, Sendable {
     case btw(question: String)
+    /// The toolbar's Ship action. `arguments` is whatever followed the command.
+    case ship(arguments: String)
 
     public static let btwSuggestion = ACPPromptSuggestion(
         command: "/btw",
@@ -57,16 +96,27 @@ public enum ACPAlasSlashCommand: Equatable, Sendable {
         hint: "question"
     )
 
+    public static let shipSuggestion = ACPPromptSuggestion(
+        command: "/ship",
+        description: "Have this session open a PR for the branch, or shepherd the open one."
+    )
+
     public static func parse(_ text: String) -> ACPAlasSlashCommand? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.hasPrefix(btwSuggestion.command) else { return nil }
-        let rest = trimmed.dropFirst(btwSuggestion.command.count)
+        if let question = arguments(of: btwSuggestion, in: trimmed) { return .btw(question: question) }
+        if let arguments = arguments(of: shipSuggestion, in: trimmed) { return .ship(arguments: arguments) }
+        return nil
+    }
+
+    private static func arguments(of suggestion: ACPPromptSuggestion, in text: String) -> String? {
+        guard text.hasPrefix(suggestion.command) else { return nil }
+        let rest = text.dropFirst(suggestion.command.count)
         guard rest.first.map({ $0.isWhitespace }) ?? true else { return nil }
-        return .btw(question: rest.trimmingCharacters(in: .whitespacesAndNewlines))
+        return rest.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     public static func isAlasCommand(_ suggestion: ACPPromptSuggestion) -> Bool {
-        suggestion == btwSuggestion
+        suggestion == btwSuggestion || suggestion == shipSuggestion
     }
 
     /// Alas commands first; an agent command with the same name is hidden,

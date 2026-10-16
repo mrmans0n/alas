@@ -82,6 +82,23 @@ struct GhosttyConfigBuilderTests {
         #expect(body.contains("shell-integration = none"))
     }
 
+    @Test(arguments: [(SidebarMaterialChoice.none, false), (.appKitHudWindow, true)])
+    @MainActor func writeGlobalConfigMakesBackgroundTransparentOnlyWithMaterial(
+        material: SidebarMaterialChoice, transparent: Bool
+    ) throws {
+        let url = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("ghostty-config-material-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        var cfg = AppConfig.defaults.terminal
+        cfg.backgroundMaterial = material
+        let theme = try Theme.loadBundled(id: "cool-slate")
+        try GhosttyConfigBuilder.writeGlobalConfigFile(cfg: cfg, theme: theme, to: url)
+        let body = try String(contentsOf: url, encoding: .utf8)
+
+        #expect(body.contains("background-opacity") == transparent)
+    }
+
     @Test @MainActor func surfaceConfigurationEmitsEmptyZmxSessionOverride() {
         let project = ProjectConfig(id: "p", name: "x/y", path: "/r", color: "#0", addedAt: Date())
         let worktree = Worktree(

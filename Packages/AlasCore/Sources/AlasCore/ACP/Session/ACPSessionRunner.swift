@@ -845,7 +845,7 @@ public final class ACPSessionRunner {
                         self.session.recordReadOnlyBlock("write \(params.path)")
                         self.connection.client.respondToFileRequest(
                             id: id,
-                            result: .failure(.init(code: -32002, message: "read-only side session", data: nil)))
+                            result: .failure(.init(code: -32002, message: ACPSideQuestion.readOnlyRejection, data: nil)))
                         break
                     }
                     // Guard the actual disk write: if this runner has lost
@@ -1881,7 +1881,7 @@ public final class ACPSessionRunner {
             if session.readOnlyRestricted {
                 session.recordReadOnlyBlock("run \(p.command)")
                 self.connection.client.respondToTerminalRequest(
-                    id: id, result: .failure(.init(code: -32002, message: "read-only side session", data: nil)))
+                    id: id, result: .failure(.init(code: -32002, message: ACPSideQuestion.readOnlyRejection, data: nil)))
                 break
             }
             // Gate terminal creation on the lease: a runner that has lost

@@ -173,6 +173,9 @@ private struct ShepherdPopover: View {
     @State private var fetchedSnapshot: ReviewLoopSnapshot?
     @State private var isLoading = true
     @State private var rules: ShepherdRules = .none
+    /// The rules files could not be read: the popover keeps the shepherd's
+    /// own merge gate rather than judge it without them.
+    @State private var rulesUnreadable = false
     @State private var reviewerResult: ReviewerResult?
 
     private var isBusy: Bool { transcript.streamingState != .idle }
@@ -200,9 +203,13 @@ private struct ShepherdPopover: View {
     private func load() async {
         let settings = state.projectsManager.projects.first(where: { $0.id == worktree.projectId })?.shepherd
         let root = worktree.path
-        rules = await Task.detached {
-            ShepherdRulesResolver.load(worktreePath: root, projectSettings: settings)
-        }.value
+        do {
+            rules = try await ShepherdRulesResolver.load(worktreePath: root, projectSettings: settings)
+            rulesUnreadable = false
+        } catch {
+            rules = .none
+            rulesUnreadable = true
+        }
         let context = ShepherdSessionContext(sessionID: session.id, worktree: worktree, state: state)
         // Read-only fetches: the UI never runs the shepherd policy.
         if context.request == nil, let bound = context.record ?? context.otherRecord {
@@ -293,7 +300,7 @@ private struct ShepherdPopover: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             .accessibilityElement(children: .combine)
-            Text("Attempt \(record.fixAttempts) of \(ShepherdPolicy.maxFixAttempts) · Rules: \(rules.sourceLabel ?? "none")")
+            Text("Attempt \(record.fixAttempts) of \(ShepherdPolicy.maxFixAttempts) · Rules: \(rulesUnreadable ? "unreadable" : rules.sourceLabel ?? "none")")
                 .font(.system(size: 10.5))
                 .foregroundStyle(theme.color("fg-muted"))
             ShepherdSwitchRow(
@@ -325,7 +332,9 @@ private struct ShepherdPopover: View {
     /// current head arrive, `headReviewers` is nil and the gate fails closed
     /// when the rules require any.
     private func exactPresentation(record: ShepherdRecord, context: ShepherdSessionContext) -> ShepherdPresentation {
-        guard !isLoading, let snapshot = context.snapshot, context.request != nil else { return context.presentation }
+        guard !isLoading, !rulesUnreadable, let snapshot = context.snapshot, context.request != nil else {
+            return context.presentation
+        }
         let observation = ShepherdObservation(
             snapshot: snapshot,
             headReviewers: reviewers(for: context)?.logins,
@@ -472,7 +481,7 @@ private struct ShepherdPopover: View {
                     request: request
                 )
             } else {
-                createRow(kind: snapshot?.remote?.kind, reason: Self.createDisabledReason(
+                createRow(kind: snapshot?.remote?.kind, reason: ShepherdShipAction.createUnavailableReason(
                     isBusy: isBusy, snapshot: snapshot, isLoading: isLoading
                 ))
             }
@@ -515,19 +524,6 @@ private struct ShepherdPopover: View {
                 .foregroundStyle(theme.color(reason == nil ? "fg-muted" : "warn"))
                 .fixedSize(horizontal: false, vertical: true)
         }
-    }
-
-    /// Why Ship with agent is unavailable, or nil when it can be pressed.
-    private static func createDisabledReason(isBusy: Bool, snapshot: ReviewLoopSnapshot?, isLoading: Bool) -> String? {
-        if isBusy { return "Wait for the current turn to finish." }
-        guard let snapshot else {
-            return isLoading ? "Checking the code host…" : "Couldn't read this branch's code host."
-        }
-        guard let remote = snapshot.remote else { return "This branch has no GitHub or GitLab remote." }
-        let cli = remote.kind == .github ? "gh" : "glab"
-        if !snapshot.providerAvailable { return "\(cli) isn't installed. Install it with brew install \(cli)." }
-        if !snapshot.providerAuthenticated { return "\(cli) isn't signed in. Run \(cli) auth login." }
-        return nil
     }
 
     // MARK: Pieces

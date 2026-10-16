@@ -174,6 +174,12 @@ final class AppState {
     }
     var sessionSummaryCoordinator: SessionSummaryCoordinator { core.sessionSummaries }
     @ObservationIgnored let localTextObservers = LocalTextObservers()
+    @ObservationIgnored let sessionRecapRuntime = SessionRecapRuntime()
+    @ObservationIgnored lazy var sessionRecapPrecomputeScheduler = SessionRecapPrecomputeScheduler(
+        now: { Date() },
+        sleep: { try await Task.sleep(for: $0) },
+        run: { [weak self] sessionId in await self?.runRecapPrecompute(sessionId: sessionId) ?? .skipped }
+    )
     @ObservationIgnored let qwenTitleRequests = ACPQwenTitleRequests()
     @ObservationIgnored private var worktreeExplainerStoreInstance: WorktreeExplainerStore?
     var worktreeExplainerStore: WorktreeExplainerStore {
@@ -197,7 +203,12 @@ final class AppState {
     var nextPromptRuntimeEnabled = false
     var nextPromptDisableSavePending = false
     var nextPromptSettingsError: String?
-    var sessionSummariesRuntimeEnabled = false
+    var sessionSummariesRuntimeEnabled = false {
+        didSet {
+            guard sessionSummariesRuntimeEnabled != oldValue else { return }
+            sessionSummariesRuntimeEnabledChanged()
+        }
+    }
     var sessionSummaryDisableSavePending = false
     var sessionSummarySettingsError: String?
     var localTextRemovalFailure: LocalTextModelFailure?
@@ -209,6 +220,7 @@ final class AppState {
     var nextPromptOffer: String?
     @ObservationIgnored var nextPromptSettingsGeneration: UInt64 = 0
     @ObservationIgnored var sessionSummarySettingsGeneration: UInt64 = 0
+    @ObservationIgnored var sessionSummaryCleanupTask: Task<Void, Never>?
     @ObservationIgnored var localTextModelGeneration: UInt64 = 0
     @ObservationIgnored var localTextSettingsInspected = false
     @ObservationIgnored var localTextRuntimeStarted = false
@@ -228,6 +240,13 @@ final class AppState {
     /// The core's public API. Paths move onto it from `core` as they are
     /// migrated.
     let host: AlasHost
+    /// Serves `host` to local clients over the host protocol, from launch.
+    @ObservationIgnored private(set) var hostSocket: HostSocketServer?
+    /// Sent when what the Remote session list shows changes without a host
+    /// event: a session tab opening, closing or moving, or the Git status of
+    /// a worktree with sessions. Followed from its first read.
+    @ObservationIgnored private var remoteSessionListChanges: ChangeSignal<Void>?
+    @ObservationIgnored private var remoteSessionListInputs: [String: RemoteSessionListInputs] = [:]
     var projectsManager: ProjectsManager {
         get { core.projects }
         set { core.projects = newValue }
@@ -1724,6 +1743,7 @@ final class AppState {
         }
         installRunScheduleRunner()
         installReviewShepherdEffects()
+        installSessionRecap()
         startLocalTextObservers()
         AlasTerminationCoordinator.shared.flush = { [weak self] in
             await self?.shutdownLocalTextFeatures()
@@ -1735,6 +1755,7 @@ final class AppState {
             await self?.flushRunHistoryPersistence()
             await self?.flushAllACPComposerDrafts()
             await PluginStorage.flushAll()
+            await self?.awaitSessionSummaryCleanup()
         }
         Task.detached {
             RunScriptCompletionMonitor.cleanupStaleLocalFiles()
@@ -4783,7 +4804,8 @@ final class AppState {
         ggWorktreeMode: GGWorktreeMode = .inherit,
         issueAttachment: IssueAttachment? = nil,
         destinationAlreadyPrepared: Bool = false,
-        namesBranchFromFirstPrompt: Bool = false
+        namesBranchFromFirstPrompt: Bool = false,
+        caller: HostCaller = .app
     ) async -> String {
         guard let project = projects.first(where: { $0.id == projectId }), !project.isFolder else {
             // Should not happen if the dialog validated the project; fail silently.
@@ -4800,7 +4822,7 @@ final class AppState {
         request.cancelledHookApprovalFails = true
         let pending: PendingWorktreeCreation
         do {
-            pending = try await host.worktrees.beginCreate(request)
+            pending = try await host.worktrees.beginCreate(request, caller: caller)
         } catch WorktreeCreationRefusal.alreadyListed {
             return ""
         } catch {
@@ -4909,7 +4931,8 @@ final class AppState {
             destination: destination,
             runStartup: true,
             launchSurface: .none,
-            destinationAlreadyPrepared: true
+            destinationAlreadyPrepared: true,
+            caller: .cli
         )
         guard !id.isEmpty else {
             return .error("A worktree already exists at this path.")
@@ -4927,7 +4950,8 @@ final class AppState {
         destination: URL,
         runStartup: Bool,
         ggWorktreeMode: GGWorktreeMode = .inherit,
-        destinationAlreadyPrepared: Bool = false
+        destinationAlreadyPrepared: Bool = false,
+        caller: HostCaller = .app
     ) async -> Result<Worktree, WorktreeCreationFailure> {
         let id = await createWorktree(
             projectId: projectId,
@@ -4937,7 +4961,8 @@ final class AppState {
             runStartup: runStartup,
             launchSurface: .delegated,
             ggWorktreeMode: ggWorktreeMode,
-            destinationAlreadyPrepared: destinationAlreadyPrepared
+            destinationAlreadyPrepared: destinationAlreadyPrepared,
+            caller: caller
         )
         guard !id.isEmpty else {
             return .failure(.init(message: "Could not start worktree creation."))
@@ -5000,7 +5025,8 @@ final class AppState {
             branch: branch,
             destination: destination,
             runStartup: true,
-            destinationAlreadyPrepared: true
+            destinationAlreadyPrepared: true,
+            caller: .cli
         )
         switch result {
         case .success(let worktree):
@@ -6920,6 +6946,9 @@ final class AppState {
             LegacyHookSweep.sweepAll()
         }
         harness.notifications.setEnabled(config.harness.notifyOnFinish)
+        if hostSocket == nil {
+            hostSocket = HostSocketServer(server: HostProtocolServer(host: host))
+        }
         harness.start(
             stateLookup: { [weak self] sessionId in
                 self?.harnessSessionLocation(sessionId: sessionId)
@@ -7609,11 +7638,11 @@ final class AppState {
             switch command {
             case .list:
                 return try jsonLine(WorkspaceAutomationListResponse(
-                    checkouts: try await host.workspaces.list().map(WorkspaceAutomationService.summary)
+                    checkouts: try await host.workspaces.list()
                 ))
             case .show(let checkoutID):
                 return try jsonLine(WorkspaceAutomationShowResponse(
-                    checkout: WorkspaceAutomationService.summary(try await host.workspaces.checkout(id: checkoutID))
+                    checkout: try await host.workspaces.checkout(id: checkoutID)
                 ))
             case .switch(let checkoutID):
                 try await service.selectCheckout(id: checkoutID)
@@ -9533,6 +9562,7 @@ final class AppState {
     }
 
     private func cleanupACPSession(owner: SessionOwnerID, sessionId: String) {
+        dropRecapPrecompute(sessionId: sessionId)
         guard let manager = acpManagers[owner] else { return }
         Task { await manager.dismissSideQuestion(parentID: sessionId) }
         if retainedScheduledSessionStillNeedsRunner(manager: manager, sessionId: sessionId) {
@@ -10950,7 +10980,7 @@ final class AppState {
         if saveBuffersFirst {
             Task { @MainActor in
                 guard await !checkpointWorktreeRemovalDisabledAfterDiscovery(worktree) else {
-                    if let claim = try? host.worktrees.beginDelete(worktree) {
+                    if let claim = try? host.worktrees.beginDelete(worktree, caller: .app) {
                         host.worktrees.failClaim(claim, for: worktree, message: Self.checkpointRecoveryBlocksWorktreeRemovalMessage)
                     }
                     return
@@ -11176,7 +11206,7 @@ final class AppState {
                 .firstIndex(where: { $0.id == worktree.id }) ?? 0
             let claim: UUID
             do {
-                claim = try host.worktrees.beginDelete(worktree)
+                claim = try host.worktrees.beginDelete(worktree, caller: .app)
             } catch {
                 results.append(WorktreeBatchResult(
                     worktreeId: worktree.id,
@@ -11728,7 +11758,7 @@ final class AppState {
         // loop could otherwise admit new work into the worktree.
         let claim: UUID
         do {
-            claim = try host.worktrees.beginDelete(worktree)
+            claim = try host.worktrees.beginDelete(worktree, caller: .app)
         } catch {
             showFileActionError(title: "Delete Failed", message: error.localizedDescription)
             return
@@ -11794,7 +11824,7 @@ final class AppState {
         // main-actor work, and an unclaimed gap would admit new sessions.
         let claim: UUID
         do {
-            claim = try host.worktrees.beginDelete(worktree)
+            claim = try host.worktrees.beginDelete(worktree, caller: .cli)
         } catch {
             return .error(error.localizedDescription)
         }
@@ -13384,6 +13414,9 @@ final class AppState {
         mgr.nativeSubagentsPreferenceProvider = { [weak self] agentId in
             self?.config.agents.nativeSubagentsDisabled(for: agentId) ?? false
         }
+        mgr.sessionInstructionsProvider = { [weak self] agentId in
+            self?.config.agents.sessionInstructions(for: agentId)
+        }
         mgr.delegatedChildProvider = { [weak self] sessionId in
             await self?.delegatedParentSessionID(for: sessionId) != nil
         }
@@ -13446,6 +13479,7 @@ final class AppState {
         acpManagers[owner] = mgr
         acpManagerProjectIds[owner] = worktree.projectId
         observeNextPromptSessions(mgr, owner: owner)
+        installSessionRecapHandler(on: mgr)
         acpHarnessBridge.attach(manager: mgr)
         Task {
             await previousManagerDisposal?.value
@@ -13729,6 +13763,9 @@ final class AppState {
         manager.nativeSubagentsPreferenceProvider = { [weak self] agentId in
             self?.config.agents.nativeSubagentsDisabled(for: agentId) ?? false
         }
+        manager.sessionInstructionsProvider = { [weak self] agentId in
+            self?.config.agents.sessionInstructions(for: agentId)
+        }
         manager.externalMCPStatusProvider = { [weak self] worktreePath -> (
             adapterState: PiMCPAdapterInspector.State,
             configOutcome: PiMCPConfigWriter.Outcome?,
@@ -13781,6 +13818,7 @@ final class AppState {
         }
         acpManagers[owner] = manager
         observeNextPromptSessions(manager, owner: owner)
+        installSessionRecapHandler(on: manager)
         acpHarnessBridge.attach(manager: manager)
         Task { await manager.purgeOrphanedEphemeralSessions() }
         #if DEBUG
@@ -14023,7 +14061,7 @@ final class AppState {
         return state
     }
 
-    private func authoritativeCheckoutForWorkspaceACPSessionCreation(_ checkout: WorkspaceCheckout) async -> WorkspaceCheckout? {
+    func authoritativeCheckoutForWorkspaceACPSessionCreation(_ checkout: WorkspaceCheckout) async -> WorkspaceCheckout? {
         guard workspacesManager.canMutate else { return nil }
         guard let authoritative = await workspaceStore.checkout(id: checkout.id) else { return nil }
         guard authoritative.executionLocation.normalized == checkout.executionLocation.normalized else { return nil }
@@ -15116,7 +15154,51 @@ private extension WorkspaceCheckoutMember {
 // Lives in this file (not a separate one) so it can reach the private
 // `acpManagers` dictionary. Aggregates across every live per-worktree manager;
 // worktrees not opened this run simply don't appear (documented v1 behavior).
+/// What the Remote session list shows of a worktree beyond host events.
+private struct RemoteSessionListInputs: Equatable {
+    /// Each session tab by its position among all the worktree's tabs,
+    /// which is the `tabIndex` the list reports.
+    var sessionTabs: [Int: ACPSession.ID]
+    var status: WorktreeDirtyState
+    var diff: WorktreeDiffStats?
+}
+
 extension AppState: RemoteSessionsProvider {
+    var eventHost: AlasHost? { host }
+
+    var sessionListChanges: ChangeSignal<Void>? {
+        if let remoteSessionListChanges { return remoteSessionListChanges }
+        let signal = ChangeSignal<Void>()
+        remoteSessionListChanges = signal
+        followRemoteSessionListInputs()
+        return signal
+    }
+
+    /// Per worktree with sessions: where its session tabs are, and its Git status.
+    private func currentRemoteSessionListInputs() -> [String: RemoteSessionListInputs] {
+        let statuses = WorktreeStatusStore.shared
+        return Dictionary(acpManagers.values.map { manager in
+            (manager.worktreeId, RemoteSessionListInputs(
+                sessionTabs: tabs.tabs(forWorktree: manager.worktreeId).enumerated().reduce(into: [:]) { tabs, entry in
+                    if case .acpSession(let state) = entry.element { tabs[entry.offset] = state.sessionId }
+                },
+                status: statuses.status(forPath: manager.worktreePath),
+                diff: statuses.diffStats(forPath: manager.worktreePath)
+            ))
+        }, uniquingKeysWith: { first, _ in first })
+    }
+
+    private func followRemoteSessionListInputs() {
+        let inputs = withObservationTracking { currentRemoteSessionListInputs() } onChange: {
+            Task { @MainActor [weak self] in self?.followRemoteSessionListInputs() }
+        }
+        // Editor tabs and other worktrees change what is tracked too.
+        if inputs != remoteSessionListInputs {
+            remoteSessionListInputs = inputs
+            remoteSessionListChanges?.send()
+        }
+    }
+
     private func remoteWorktreeSummary(project: ProjectConfig, worktree: Worktree) async -> RemoteWorktreeSummary {
         // A folder has no git metrics to compute.
         if project.isFolder { return remoteWorktreeSummaryWithoutMetrics(project: project, worktree: worktree) }
@@ -15493,7 +15575,8 @@ extension AppState: RemoteSessionsProvider {
         branch: String,
         agentId: String,
         modelId: String? = nil,
-        effortId: String? = nil
+        effortId: String? = nil,
+        caller: HostCaller = .app
     ) async -> RemoteCreateWorktreeSessionResult {
         guard let project = projects.first(where: { $0.id == projectId }) else {
             return .failure(
@@ -15555,7 +15638,8 @@ extension AppState: RemoteSessionsProvider {
             destination: destination,
             runStartup: true,
             ggWorktreeMode: .inherit,
-            destinationAlreadyPrepared: true
+            destinationAlreadyPrepared: true,
+            caller: caller
         )
         switch worktreeResult {
         case .success(let worktree):
@@ -16771,11 +16855,62 @@ class AppHostEnvironment: AlasHostEnvironment {
         app?.config.terminal ?? AppConfig.defaults.terminal
     }
 
-    func stopWorkspaceCheckoutSessions(_ checkout: WorkspaceCheckout) async throws {
+    func stopWorkspaceCheckoutSessions(_ checkout: WorkspaceCheckout, in core: AlasCoreContext) async throws {
         try await app?.stopWorkspaceCheckoutSessions(checkout)
+    }
+
+    /// The app's own manager, configured for its remote host, MCP servers and UI.
+    func sessionManager(for worktree: Worktree, in core: AlasCoreContext) throws -> ACPSessionManager {
+        guard core.projects.admitsNewWork(in: worktree) else {
+            throw SessionRefusal.ownerUnavailable(reason: "Another operation holds the worktree.")
+        }
+        guard let manager = app?.acpManager(for: worktree) else {
+            throw SessionRefusal.ownerUnavailable(reason: "The worktree cannot host sessions now.")
+        }
+        return manager
     }
 
     func resolveWorkspaceRepoHook(_ request: WorkspaceRepoHookRequest) async throws -> String? {
         try await app?.preparedWorkspaceRepoHook(request)
+    }
+
+    /// The app's own view of its checkouts and worktrees, kept on the main
+    /// actor, so a lifecycle operation that started meanwhile refuses.
+    func admitsSessionCreation(owner: SessionOwnerID, in core: AlasCoreContext) -> Bool {
+        guard let app else { return false }
+        switch owner {
+        case .worktree(let worktreeID):
+            return app.projectsManager.admitsNewWork(worktreeId: worktreeID)
+        case .workspaceCheckout(let id, let location):
+            guard let checkout = app.workspacesManager.checkout(id: id) else { return false }
+            return checkout.executionLocation.normalized == location.normalized
+                && checkout.operation == .idle && checkout.archivedAt == nil
+        }
+    }
+
+    /// The app's own recovery checks, which also cover Workspace checkouts.
+    func checkpointRecoveryBlocksSessions(owner: SessionOwnerID, in core: AlasCoreContext) async -> Bool {
+        await app?.checkpointACPAdmissionDisabledAfterDiscovery(owner: owner, fallbackWorktree: nil) ?? true
+    }
+
+    /// The agents the app offers for new sessions: enabled ACP agents, and on
+    /// a remote project only those that can run there.
+    func admitsAgent(_ agentID: String, remoteHost: String?) -> Bool {
+        guard let app,
+              ACPLaunchCatalog.specs.contains(where: { $0.agentID == agentID }),
+              let agent = app.agentRegistry.enabled().first(where: { $0.id == agentID })
+        else { return false }
+        return remoteHost == nil || agent.canRunOnRemoteHost
+    }
+
+    /// The app's own checkout manager, which also resolves remote roots.
+    func sessionManager(forCheckout checkout: WorkspaceCheckout, in core: AlasCoreContext) async throws -> ACPSessionManager {
+        guard let app else { throw SessionRefusal.ownerUnavailable(reason: "The app is closing.") }
+        let unreachable = SessionRefusal.ownerUnavailable(reason: "The Workspace checkout's folder is not reachable yet.")
+        guard case .ready(let manager) = await app.workspaceACPManager(for: checkout) else { throw unreachable }
+        // A cached manager skips the reachability checks; the app's own
+        // creation path rechecks the checkout the same way.
+        guard await app.authoritativeCheckoutForWorkspaceACPSessionCreation(checkout) != nil else { throw unreachable }
+        return manager
     }
 }

@@ -277,7 +277,7 @@ private struct ProjectDialog: View {
             .background(theme.color("bg-2"))
             .overlay(Divider(), alignment: .top)
         }
-        .frame(width: 800)
+        .frame(minWidth: 800, idealWidth: 800, maxWidth: .infinity)
         .frame(minHeight: 480, idealHeight: 660, maxHeight: .infinity)
         .background(theme.color("bg-1"))
         .clipShape(RoundedRectangle(cornerRadius: 10))
@@ -936,11 +936,11 @@ private struct ProjectDialog: View {
         }
     }
 
-    /// Per-project PR shepherd rules. Shown only when editing a local git
-    /// project: the shepherd does not run for folders or remote worktrees.
+    /// Per-project PR shepherd rules. Shown only when editing a git project:
+    /// the shepherd does not run for folders.
     @ViewBuilder
     private var shepherdSection: some View {
-        if case .edit(let project) = mode, !project.isFolder, project.host == nil {
+        if case .edit(let project) = mode, !project.isFolder {
             VStack(alignment: .leading, spacing: 12) {
                 Text("PR shepherd")
                     .font(.system(size: 12.5, weight: .semibold))
@@ -1032,12 +1032,10 @@ private struct ProjectDialog: View {
     /// Reads only the repo files (no project settings), so any non-`none`
     /// source means a file overrides this section.
     private func loadShepherdRulesOverride() {
-        guard case .edit(let project) = mode, !project.isFolder, project.host == nil else { return }
+        guard case .edit(let project) = mode, !project.isFolder else { return }
         let root = URL(fileURLWithPath: project.path, isDirectory: true)
         Task {
-            let rules = await Task.detached {
-                ShepherdRulesResolver.load(worktreePath: root, projectSettings: nil)
-            }.value
+            guard let rules = try? await ShepherdRulesResolver.load(worktreePath: root, projectSettings: nil) else { return }
             shepherdRulesOverride = rules.source == .none ? nil : rules.sourceLabel
         }
     }
@@ -1757,7 +1755,10 @@ private struct SSHConnectionAssistant: View {
             content: {
                 Group {
                     if let surface {
+                        // Opaque even when terminal materials make Ghostty's
+                        // default background transparent.
                         GhosttyHost(surface: surface)
+                            .background(theme.color("bg-0"))
                     } else {
                         ProgressView()
                             .controlSize(.small)
@@ -1828,7 +1829,7 @@ private struct SSHConnectionAssistant: View {
     }
 }
 
-/// Fixes the sheet's width while allowing its detail pane to grow vertically.
+/// Sets the sheet's initial size while allowing its detail pane to grow in both dimensions.
 private struct ProjectSettingsSheetSizing: NSViewRepresentable {
     func makeNSView(context: Context) -> SizingView { SizingView() }
 
@@ -1848,7 +1849,7 @@ private struct ProjectSettingsSheetSizing: NSViewRepresentable {
                 let maximumHeight = max(480, screenHeight - 80)
                 window.styleMask.insert(.resizable)
                 window.contentMinSize = NSSize(width: 800, height: 480)
-                window.contentMaxSize = NSSize(width: 800, height: maximumHeight)
+                window.contentMaxSize = NSSize(width: .greatestFiniteMagnitude, height: maximumHeight)
                 window.setContentSize(NSSize(width: 800, height: min(660, maximumHeight)))
             }
         }
