@@ -86,6 +86,12 @@ extension AppState {
     /// Covers a relaunch: hydration plus the agent reconnecting.
     static let sessionRecapReadinessTimeout: Duration = .seconds(30)
 
+    /// Built outside the main actor: `AppState` can be released off-main (tests),
+    /// and a main-actor-isolated cancel closure would trap in that deinit.
+    nonisolated private static func observerRemoval(_ token: any NSObjectProtocol) -> AnyCancellable {
+        AnyCancellable { NotificationCenter.default.removeObserver(token) }
+    }
+
     /// Startup wiring: the coordinator's store lookup and app-focus forwarding.
     func installSessionRecap() {
         sessionSummaryCoordinator.storeProvider = { [weak self] session in
@@ -102,7 +108,7 @@ extension AppState {
                 MainActor.assumeIsolated { self?.setSessionsAppActive(active) }
             }
             sessionRecapRuntime.sessionRecapObservers.append(
-                AnyCancellable { NotificationCenter.default.removeObserver(token) }
+                Self.observerRemoval(token)
             )
         }
         sessionRecapPrecomputeScheduler.isSuspended = ProcessInfo.processInfo.isLowPowerModeEnabled
@@ -114,7 +120,7 @@ extension AppState {
             }
         }
         sessionRecapRuntime.sessionRecapObservers.append(
-            AnyCancellable { NotificationCenter.default.removeObserver(power) }
+            Self.observerRemoval(power)
         )
     }
 
