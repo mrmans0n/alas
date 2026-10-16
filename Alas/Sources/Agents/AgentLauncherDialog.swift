@@ -925,7 +925,7 @@ struct AgentLauncherDialog: View {
             do {
                 try await discoveryModel.rename(target, to: title) { localSessionId, newTitle in
                     guard let worktreeId = target.worktreeId else { return nil }
-                    return await appState.renameLocalACPSession(worktreeId: worktreeId, sessionId: localSessionId, title: newTitle)
+                    return try await appState.renameLocalACPSession(worktreeId: worktreeId, sessionId: localSessionId, title: newTitle)
                 }
             } catch {
                 guard self.discoveryModel === discoveryModel else { return }

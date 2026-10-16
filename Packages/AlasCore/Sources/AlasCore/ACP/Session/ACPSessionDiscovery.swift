@@ -617,7 +617,8 @@ public final class ACPSessionDiscoveryModel {
     /// Sessions deleted agent-side whose Alas copy could not be removed:
     /// their row stays for a Remove from Alas retry, whatever removals the
     /// agent later reports.
-    private var cleanupRetryIds: Set<String> = []
+    private var cleanupRetryRows: [String: ACPDiscoveredSession] = [:]
+    private var cleanupRetryIds: Set<String> { Set(cleanupRetryRows.keys) }
     /// The `localActionGeneration` each session's last local action ended at.
     private var lastLocalAction: [String: Int] = [:]
     /// Live changes that arrived while a list read was in flight. They are
@@ -694,7 +695,7 @@ public final class ACPSessionDiscoveryModel {
             } catch {
                 // Keep the row for a local-cleanup retry: drop the queued
                 // removal, and ignore later ones, until the retry succeeds.
-                cleanupRetryIds.insert(session.remoteSessionId)
+                cleanupRetryRows[session.remoteSessionId] = session
                 pendingChanges.removeAll {
                     if case .live(let changed, let removed, nil) = $0 {
                         return changed.isEmpty && removed == [session.remoteSessionId]
@@ -715,7 +716,7 @@ public final class ACPSessionDiscoveryModel {
         guard await beginDeletion(session.remoteSessionId) else { return }
         defer { finishDeletion(session.remoteSessionId) }
         try await manager.deletePersistedSession(id: localSessionId)
-        cleanupRetryIds.remove(session.remoteSessionId)
+        cleanupRetryRows[session.remoteSessionId] = nil
         localActionGeneration += 1
         lastLocalAction[session.remoteSessionId] = localActionGeneration
         handle?.forgetLocalCopy(localSessionId, of: session.remoteSessionId)
@@ -791,6 +792,7 @@ public final class ACPSessionDiscoveryModel {
             guard generation == filterGeneration else { return }
             if replaceSessionsOnNextLoad {
                 sessions = page
+                reapplyRetryRows()
                 notePageRows(page, read: read)
                 replaceSessionsOnNextLoad = false
                 paginationError = nil
@@ -838,6 +840,7 @@ public final class ACPSessionDiscoveryModel {
             handle.commit(filter: newFilter, cursor: page.cursor)
             appliedFilter = newFilter
             sessions = page.rows
+            reapplyRetryRows()
             notePageRows(page.rows, read: read)
             firstPageIds = Set(page.rows.map(\.remoteSessionId))
             replaceSessionsOnNextLoad = false
@@ -867,6 +870,7 @@ public final class ACPSessionDiscoveryModel {
         // until each is found or provably absent, so a missed deletion is
         // not kept forever.
         var confirmedGone: Set<String> = []
+        var found: [ACPDiscoveredSession] = []
         let candidates = ACPSessionBrowserReducer.unsettledCandidates(
             firstPage: page.rows, previousFirstPage: firstPageIds, rows: sessions
         )
@@ -883,6 +887,7 @@ public final class ACPSessionDiscoveryModel {
             while cursorsRead.insert(cursor).inserted {
                 guard let next = try? await handle.page(after: cursor, filter: listedFilter) else { break }
                 seen.formUnion(next.rows.map(\.remoteSessionId))
+                found += next.rows.filter { candidates.contains($0.remoteSessionId) }
                 let pastCandidates = oldestCandidate.map { oldest in
                     next.rows.contains { ($0.lastActivity ?? .distantFuture) < oldest }
                 } ?? false
@@ -905,6 +910,15 @@ public final class ACPSessionDiscoveryModel {
             browsingWorktreeId: handle.browsingWorktreeId,
             confirmedGone: confirmedGone
         )
+        // Rows the boundary scan found are current too.
+        if !found.isEmpty {
+            notePageRows(found, read: read)
+            sessions = ACPSessionBrowserReducer.applying(
+                changed: found, removed: [], to: sessions, filter: appliedFilter,
+                browsingWorktreeId: handle.browsingWorktreeId
+            )
+        }
+        reapplyRetryRows()
         // This read proved those sessions gone: an older notification about
         // them is superseded like one about a row the page showed.
         for id in listedBefore.subtracting(sessions.map(\.remoteSessionId)) {
@@ -922,7 +936,7 @@ public final class ACPSessionDiscoveryModel {
     public func rename(
         _ session: ACPDiscoveredSession,
         to title: String,
-        renameLocal: @MainActor (_ localSessionId: String, _ title: String) async -> (@MainActor () async -> Void)?
+        renameLocal: @MainActor (_ localSessionId: String, _ title: String) async throws -> (@MainActor () async -> Void)?
     ) async throws {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let handle, !trimmed.isEmpty else { return }
@@ -930,7 +944,9 @@ public final class ACPSessionDiscoveryModel {
         defer { updatingSessionIds.remove(session.remoteSessionId) }
         var restoreLocal: (@MainActor () async -> Void)?
         if let localSessionId = session.localSessionId {
-            restoreLocal = await renameLocal(localSessionId, trimmed)
+            // A failure to store the Alas title stops here: the agent is not
+            // renamed unless the Alas copy was.
+            restoreLocal = try await renameLocal(localSessionId, trimmed)
         }
         do {
             try await handle.renameSession(remoteSessionId: session.remoteSessionId, title: trimmed)
@@ -1031,6 +1047,12 @@ public final class ACPSessionDiscoveryModel {
     private func restoreRetryRow(_ row: ACPDiscoveredSession) {
         if listReadsInFlight > 0 { pendingChanges.append(.restore(row)) }
         reduceRestore(row)
+    }
+
+    /// A page from the agent never lists a session it deleted: put back the
+    /// cleanup-retry rows that match the listed filter after each one.
+    private func reapplyRetryRows() {
+        for row in cleanupRetryRows.values { reduceRestore(row) }
     }
 
     private func reduceRestore(_ row: ACPDiscoveredSession) {

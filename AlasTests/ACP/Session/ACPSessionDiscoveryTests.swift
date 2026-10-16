@@ -686,6 +686,13 @@ struct ACPSessionDiscoveryTests {
         #expect(model.sessions.first?.title == "Renamed")
         #expect(renamedLocally == ["local-1": "Renamed"])
 
+        // An Alas title that cannot be stored stops the agent rename.
+        localTitles = []
+        await #expect(throws: TestError.failed) {
+            try await model.rename(try #require(model.sessions.first), to: "Unstored") { _, _ in throw TestError.failed }
+        }
+        #expect(localTitles.isEmpty)
+
         // A failed rename puts the Alas title back.
         localTitles = []
         await #expect(throws: TestError.failed) {
@@ -1207,10 +1214,13 @@ struct ACPSessionDiscoveryTests {
         let client = indexClient()
         var reconciled = false
         let row = Self.listedRow
+        // Renamed elsewhere while its notification was missed.
+        let moved = ACPAgentSessionInfo(sessionId: "d", cwd: "/tmp/wt", title: "Renamed elsewhere",
+                                        updatedAt: "2026-10-16T08:00:00Z", index: .init(archived: false))
         client.script(method: "session/list") { request in
             if (request.params as? ACPSessionListParams)?.cursor == "page-2" {
                 // "d" is on page 2 only if it was not deleted.
-                return try JSONEncoder().encode(ACPSessionListResult(sessions: (stillListed ? [row("d", "2026-10-16T08:00:00Z")] : [])
+                return try JSONEncoder().encode(ACPSessionListResult(sessions: (stillListed ? [moved] : [])
                     + [row("older", "2026-10-16T07:00:00Z")]))
             }
             defer { reconciled = true }
@@ -1225,6 +1235,7 @@ struct ACPSessionDiscoveryTests {
         await model.start(manager: manager(store: store, client: client), agentId: "claude")
         await model.reconcile()
         #expect(model.sessions.contains { $0.remoteSessionId == "d" } == stillListed)
+        if stillListed { #expect(model.sessions.first { $0.remoteSessionId == "d" }?.title == "Renamed elsewhere") }
         await model.stop()
     }
 
@@ -1332,6 +1343,9 @@ struct ACPSessionDiscoveryTests {
         }
         gate.continuation.yield()
         try await change.value
+        #expect(model.sessions.contains { $0.remoteSessionId == "a" })
+        // Switching away and back: the agent's pages never list "a" again.
+        try await model.setFilter(.init())
         #expect(model.sessions.contains { $0.remoteSessionId == "a" })
         await model.stop()
     }

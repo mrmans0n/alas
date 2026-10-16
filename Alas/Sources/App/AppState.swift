@@ -14654,13 +14654,13 @@ final class AppState {
         worktreeId: String,
         sessionId: ACPSession.ID,
         title: String
-    ) async -> (@MainActor () async -> Void)? {
+    ) async throws -> (@MainActor () async -> Void)? {
         guard let worktree = worktree(withId: worktreeId), let manager = acpManager(for: worktree) else { return nil }
         let previous = await manager.persistedSessionRow(id: sessionId)
-        await Self.storeACPSessionTitle(title, source: .manual, sessionId: sessionId, manager: manager)
+        try await Self.storeACPSessionTitle(title, source: .manual, sessionId: sessionId, manager: manager)
         guard let previous else { return nil }
         return {
-            await Self.storeACPSessionTitle(previous.title, source: previous.titleSource, sessionId: sessionId, manager: manager)
+            try? await Self.storeACPSessionTitle(previous.title, source: previous.titleSource, sessionId: sessionId, manager: manager)
         }
     }
 
@@ -14672,12 +14672,12 @@ final class AppState {
         source: ACPSessionTitleSource,
         sessionId: ACPSession.ID,
         manager: ACPSessionManager
-    ) async {
+    ) async throws {
         if manager.renameSessionCosmetic(id: sessionId, title: title, source: source) {
             await manager.flushAllPersistence()
             return
         }
-        _ = try? await manager.persistence.renameSession(
+        _ = try await manager.persistence.renameSession(
             id: sessionId, title: title, titleSource: source, updatedAt: Int64(Date().timeIntervalSince1970)
         )
     }
