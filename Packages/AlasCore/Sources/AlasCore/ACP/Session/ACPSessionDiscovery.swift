@@ -205,48 +205,34 @@ public enum ACPSessionBrowserReducer {
         return (changed.filter { current($0.remoteSessionId) }, removed.filter(current))
     }
 
-    /// Previous first-page rows a new first page lacks without proving them
+    /// Listed rows a new first page lacks without proving them
     /// gone: tied with or older than the page's oldest row, or undated. They
     /// may have moved to a later page, so the pages after the boundary are
     /// read to settle them.
     public static func unsettledCandidates(
         firstPage: [ACPDiscoveredSession],
-        previousFirstPage: Set<String>,
+        listedBefore: Set<String>,
         rows: [ACPDiscoveredSession]
     ) -> Set<String> {
         let present = Set(firstPage.map(\.remoteSessionId))
         let oldest = firstPage.compactMap(\.lastActivity).min()
         return Set(rows.filter { row in
-            guard previousFirstPage.contains(row.remoteSessionId), !present.contains(row.remoteSessionId) else { return false }
+            guard listedBefore.contains(row.remoteSessionId), !present.contains(row.remoteSessionId) else { return false }
             guard let oldest, let activity = row.lastActivity else { return true }
             return activity <= oldest
         }.map(\.remoteSessionId))
     }
 
-    /// The ids the next reconcile compares against: the new first page, plus
-    /// earlier first-page rows it lacks that are still listed. Those could
-    /// not be told apart from a row that moved to the next page (a timestamp
-    /// tie with the page's oldest row), so a later page decides.
-    public static func nextFirstPageIds(
-        previous: Set<String>,
-        page: [ACPDiscoveredSession],
-        listed: [ACPDiscoveredSession]
-    ) -> Set<String> {
-        let pageIds = Set(page.map(\.remoteSessionId))
-        let stillListed = Set(listed.map(\.remoteSessionId))
-        return pageIds.union(previous.subtracting(pageIds).intersection(stillListed))
-    }
-
-    /// Merges a freshly read first page. A row the previous first page held
-    /// that the new one lacks is gone (a missed removal) when the new page is
-    /// the whole list, or when it is newer than the new page's oldest row;
-    /// an older one may just have moved to the next page, so it stays.
+    /// Merges a freshly read first page. A listed row the new page lacks is
+    /// gone (a missed removal) when the new page is the whole list, or when
+    /// it is newer than the new page's oldest row; an older one may just be
+    /// on a later page, so it stays unless the boundary scan settled it.
     /// `confirmedGone` holds rows that reading past the page boundary did not
     /// find (see `unsettledCandidates`).
     public static func reconciling(
         firstPage: [ACPDiscoveredSession],
         hasMorePages: Bool,
-        previousFirstPage: Set<String>,
+        listedBefore: Set<String>,
         rows: [ACPDiscoveredSession],
         filter: ACPSessionBrowserFilter,
         browsingWorktreeId: String?,
@@ -255,7 +241,7 @@ public enum ACPSessionBrowserReducer {
         let present = Set(firstPage.map(\.remoteSessionId))
         let oldest = firstPage.compactMap(\.lastActivity).min()
         let vanished = rows.filter { row in
-            guard previousFirstPage.contains(row.remoteSessionId), !present.contains(row.remoteSessionId) else { return false }
+            guard listedBefore.contains(row.remoteSessionId), !present.contains(row.remoteSessionId) else { return false }
             guard hasMorePages, !confirmedGone.contains(row.remoteSessionId) else { return true }
             guard let oldest, let activity = row.lastActivity else { return false }
             return activity > oldest
@@ -644,8 +630,6 @@ public final class ACPSessionDiscoveryModel {
     /// Bumped by every filter change; a load that started under an older
     /// generation is discarded.
     private var filterGeneration = 0
-    /// Ids of the last first page read, for `reconcile`.
-    private var firstPageIds: Set<String> = []
     private var subscriptionTask: Task<Void, Never>?
     private var reconcileTask: Task<Void, Never>?
     /// While a subscription is open, the first page is read again this often
@@ -739,7 +723,6 @@ public final class ACPSessionDiscoveryModel {
         sessions = []
         do {
             try await loadMore()
-            firstPageIds = Set(sessions.map(\.remoteSessionId))
         } catch {
             sessions = previous
             throw error
@@ -766,7 +749,6 @@ public final class ACPSessionDiscoveryModel {
             capabilities = handle.capabilities
             sessionIndex = handle.sessionIndex
             try await loadMore()
-            firstPageIds = Set(sessions.map(\.remoteSessionId))
             phase = .ready
             await startSubscription()
         } catch ACPSessionDiscoveryError.listingUnsupported {
@@ -842,7 +824,6 @@ public final class ACPSessionDiscoveryModel {
             sessions = page.rows
             reapplyRetryRows()
             notePageRows(page.rows, read: read)
-            firstPageIds = Set(page.rows.map(\.remoteSessionId))
             replaceSessionsOnNextLoad = false
             paginationError = nil
         } catch {
@@ -871,8 +852,11 @@ public final class ACPSessionDiscoveryModel {
         // not kept forever.
         var confirmedGone: Set<String> = []
         var found: [ACPDiscoveredSession] = []
+        // Every listed row, also ones loaded with Load more: a missed removal
+        // beyond the first page is settled the same way.
+        let listedIds = Set(sessions.map(\.remoteSessionId))
         let candidates = ACPSessionBrowserReducer.unsettledCandidates(
-            firstPage: page.rows, previousFirstPage: firstPageIds, rows: sessions
+            firstPage: page.rows, listedBefore: listedIds, rows: sessions
         )
         if !candidates.isEmpty, var cursor = page.cursor {
             let candidateDates = sessions.filter { candidates.contains($0.remoteSessionId) }.map(\.lastActivity)
@@ -904,7 +888,7 @@ public final class ACPSessionDiscoveryModel {
         sessions = ACPSessionBrowserReducer.reconciling(
             firstPage: page.rows,
             hasMorePages: page.cursor != nil,
-            previousFirstPage: firstPageIds,
+            listedBefore: listedIds,
             rows: sessions,
             filter: appliedFilter,
             browsingWorktreeId: handle.browsingWorktreeId,
@@ -924,7 +908,6 @@ public final class ACPSessionDiscoveryModel {
         for id in listedBefore.subtracting(sessions.map(\.remoteSessionId)) {
             pageReadIndex[id] = max(pageReadIndex[id] ?? 0, read)
         }
-        firstPageIds = ACPSessionBrowserReducer.nextFirstPageIds(previous: firstPageIds, page: page.rows, listed: sessions)
     }
 
     /// Renames the agent's session and its Alas copy, in whichever worktree
@@ -1122,8 +1105,11 @@ public final class ACPSessionDiscoveryModel {
                 let current = ACPSessionBrowserReducer.droppingRows(
                     changed, predating: stamp, lastLocalAction: self.lastLocalAction
                 )
+                // Removals too: one read before a later archive or unarchive
+                // must not hide the row that action put back.
+                let currentRemovals = removed.filter { (self.lastLocalAction[$0] ?? Int.min) <= stamp.localActions }
                 let fresh = ACPSessionBrowserReducer.unsuperseded(
-                    changed: current, removed: removed, stamp: stamp, pageReadIndex: self.pageReadIndex
+                    changed: current, removed: currentRemovals, stamp: stamp, pageReadIndex: self.pageReadIndex
                 )
                 self.applyLiveChanges(changed: fresh.changed, removed: fresh.removed, stamp: stamp)
             }

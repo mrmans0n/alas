@@ -762,7 +762,7 @@ struct ACPSessionDiscoveryTests {
         let result = ACPSessionBrowserReducer.reconciling(
             firstPage: [Self.reducerRow("a", 40, title: "A2"), Self.reducerRow("c", 20)],
             hasMorePages: hasMorePages,
-            previousFirstPage: ["a", "b", "c"],
+            listedBefore: ["a", "b", "c"],
             rows: rows,
             filter: filter,
             browsingWorktreeId: "wt"
@@ -772,7 +772,7 @@ struct ACPSessionDiscoveryTests {
         let older = ACPSessionBrowserReducer.reconciling(
             firstPage: [Self.reducerRow("a", 40), Self.reducerRow("b", 30)],
             hasMorePages: hasMorePages,
-            previousFirstPage: ["a", "b", "c"],
+            listedBefore: ["a", "b", "c"],
             rows: rows,
             filter: filter,
             browsingWorktreeId: "wt"
@@ -1155,22 +1155,20 @@ struct ACPSessionDiscoveryTests {
         await model.stop()
     }
 
-    @Test("a first-page row kept on a timestamp tie is checked again by the next reconcile")
+    @Test("a missing row kept on a timestamp tie is removed once a page settles it")
     func reconciliationTieIsRechecked() {
         let filter = ACPSessionBrowserFilter()
         let rows = [Self.reducerRow("a", 40), Self.reducerRow("tie", 20), Self.reducerRow("c", 20)]
         // "tie" is missing and ties the new page's oldest row: kept for now.
         let page = [Self.reducerRow("a", 40), Self.reducerRow("c", 20)]
         let merged = ACPSessionBrowserReducer.reconciling(
-            firstPage: page, hasMorePages: true, previousFirstPage: ["a", "tie", "c"], rows: rows,
+            firstPage: page, hasMorePages: true, listedBefore: ["a", "tie", "c"], rows: rows,
             filter: filter, browsingWorktreeId: "wt"
         )
         #expect(merged.map(\.remoteSessionId) == ["a", "tie", "c"])
-        let next = ACPSessionBrowserReducer.nextFirstPageIds(previous: ["a", "tie", "c"], page: page, listed: merged)
-        #expect(next == ["a", "tie", "c"])
         // A later page with an older oldest row settles it.
         let later = ACPSessionBrowserReducer.reconciling(
-            firstPage: page + [Self.reducerRow("d", 10)], hasMorePages: true, previousFirstPage: next, rows: merged,
+            firstPage: page + [Self.reducerRow("d", 10)], hasMorePages: true, listedBefore: ["a", "tie", "c"], rows: merged,
             filter: filter, browsingWorktreeId: "wt"
         )
         #expect(!later.contains { $0.remoteSessionId == "tie" })
@@ -1242,6 +1240,32 @@ struct ACPSessionDiscoveryTests {
         await model.reconcile()
         #expect(model.sessions.contains { $0.remoteSessionId == "d" } == stillListed)
         if stillListed { #expect(model.sessions.first { $0.remoteSessionId == "d" }?.title == "Renamed elsewhere") }
+        await model.stop()
+    }
+
+    @MainActor
+    @Test("a row loaded with Load more and deleted with its removal missed is settled by a reconcile")
+    func reconcileSettlesLoadMoreRows() async throws {
+        let store = try temporaryStore()
+        let client = indexClient()
+        var deleted = false
+        let row = Self.listedRow
+        client.script(method: "session/list") { request in
+            guard (request.params as? ACPSessionListParams)?.cursor == "page-2" else {
+                return try JSONEncoder().encode(ACPSessionListResult(
+                    sessions: [row("a", "2026-10-16T10:00:00Z")], nextCursor: "page-2"))
+            }
+            return try JSONEncoder().encode(ACPSessionListResult(
+                sessions: deleted ? [row("older", "2026-10-16T07:00:00Z")]
+                    : [row("late", "2026-10-16T08:00:00Z"), row("older", "2026-10-16T07:00:00Z")]))
+        }
+        let model = ACPSessionDiscoveryModel()
+        await model.start(manager: manager(store: store, client: client), agentId: "claude")
+        try await model.loadMore()
+        #expect(model.sessions.map(\.remoteSessionId) == ["a", "late", "older"])
+        deleted = true
+        await model.reconcile()
+        #expect(model.sessions.map(\.remoteSessionId) == ["a", "older"])
         await model.stop()
     }
 
