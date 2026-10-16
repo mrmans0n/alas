@@ -3261,8 +3261,12 @@ public final class ACPSessionManager: ChangeTracking {
         // A session created a moment ago may not have its row yet.
         await flushAllPersistence()
         // On a remote host the local lease is half of authority; the other half
-        // is the host's, which only a writer here holds.
-        if effectiveRemoteHost() != nil, !isWriter(for: id) { return false }
+        // is the host's, which only a writer here holds. Confirmed with the
+        // host rather than from the last heartbeat, as other destructive
+        // remote transitions do.
+        if effectiveRemoteHost() != nil {
+            guard isWriter(for: id), await confirmedWriterLease(for: id) else { return false }
+        }
         let fence: ACPSessionLeaseFence
         var claimedToken: String?
         if let owned = leaseFence(sessionId: id) {
