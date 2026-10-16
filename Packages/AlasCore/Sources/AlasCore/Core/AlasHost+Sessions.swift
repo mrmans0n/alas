@@ -140,11 +140,12 @@ extension SessionsAPI {
 
     public func setConfigOption(_ sessionID: String, configID: String, value: ACPConfigValue, caller: HostCaller) async throws {
         caller.log("sessions.setConfigOption", sessionID)
-        // Nil when the session offers no such option or the value does not fit it.
-        guard let applying = try writerManager(for: sessionID).setConfigOption(for: sessionID, configId: configID, value: value) else {
-            throw SessionRefusal.invalidSetting
-        }
-        await applying.value
+        let manager = try writerManager(for: sessionID)
+        guard let option = manager.liveSession(for: sessionID)?.availableConfigOptions.first(where: { $0.id == configID }),
+              option.acceptsPersistedValue(value)
+        else { throw SessionRefusal.invalidSetting }
+        // Nil from here means applied later, once the session finishes attaching.
+        await manager.setConfigOption(for: sessionID, configId: configID, value: value)?.value
     }
 
     /// Answers the session's pending permission request `requestID`.
@@ -163,9 +164,9 @@ extension SessionsAPI {
         guard let answer = ACPRequestAnswers.permission(pending, optionId: optionID, scope: scope) else {
             throw SessionRefusal.invalidAnswer
         }
-        await policy.userDecided(
+        guard await policy.userDecided(
             scopeKey: answer.scopeKey, optionId: answer.optionId, decision: answer.decision, persistScope: answer.persistScope
-        )
+        ) else { throw SessionRefusal.notPending }
     }
 
     /// Answers the session's pending question `requestID`.

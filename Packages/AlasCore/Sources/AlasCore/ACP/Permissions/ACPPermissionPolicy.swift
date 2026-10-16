@@ -146,12 +146,22 @@ public final class ACPPermissionPolicy {
     /// Called by the UI when the user clicks a button. `persistScope` is
     /// .session for Allow/Deny, .project for "Always for this tool", and nil
     /// for Allow-once. Decision recorded if non-nil.
+    /// Records the decision and answers the pending request with it. The
+    /// request is taken before anything is awaited, so a caller that checks
+    /// for it first never races another for the same one. Returns whether a
+    /// request was pending.
+    @discardableResult
     public func userDecided(
         scopeKey: String,
         optionId: String,
         decision: ACPPermissionDecision,
         persistScope: ACPPermissionScopeKind?
-    ) async {
+    ) async -> Bool {
+        let wasPending = pendingContinuation != nil || session.transcript.pendingPermission != nil
+        let cont = pendingContinuation
+        pendingContinuation = nil
+        session.transcript.pendingPermission = nil
+        session.transcript.streamingState = .streaming
         if let scope = persistScope {
             try? await log.record(
                 sessionId: session.id,
@@ -160,11 +170,8 @@ public final class ACPPermissionPolicy {
                 scope: scope
             )
         }
-        session.transcript.pendingPermission = nil
-        session.transcript.streamingState = .streaming
-        let cont = pendingContinuation
-        pendingContinuation = nil
         cont?.resume(returning: .init(outcome: .selected(optionId: optionId)))
+        return wasPending
     }
 
     public func userCancelled() {

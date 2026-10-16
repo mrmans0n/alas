@@ -1562,6 +1562,9 @@ extension ACPSessionStore {
     /// one `BEGIN IMMEDIATE` transaction so two instances racing on the
     /// same dead-owner lease can't both delete-then-insert and both win.
     /// A plain `BEGIN` (WAL) would defer the write lock and still race.
+    ///
+    /// An archived session is never claimed: archiving stopped it for good,
+    /// and nobody may start driving it again from a stale view.
     public func claimLease(sessionId: String, instanceId: String, pid: Int64,
                     now: Int64, staleAfter: Int64,
                     leaseToken: String = UUID().uuidString,
@@ -1569,6 +1572,11 @@ extension ACPSessionStore {
         let staleCutoff = now - staleAfter
         try db.exec("BEGIN IMMEDIATE")
         do {
+            let archived = try db.query("SELECT archived FROM sessions WHERE id = ?", bindings: [sessionId])
+            if let row = archived.first, (row["archived"] as? Int64) == 1 {
+                try db.exec("COMMIT")
+                return false
+            }
             // Fast-path crash reclaim: a lease whose owner pid is dead can
             // be removed unconditionally — a dead pid never comes back.
             if let existing = try loadLease(sessionId: sessionId),

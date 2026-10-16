@@ -45,11 +45,18 @@ struct HostSessionsTests {
         await #expect(throws: SessionRefusal.invalidAnswer) {
             try await sessions.answerPermission(id, requestID: pending.id, optionID: "maybe", caller: .app)
         }
-        try await sessions.answerPermission(id, requestID: pending.id, optionID: "allow", caller: .app)
-        try await eventually { fixture.agent.permissionResponses[requestID] != nil }
-        await #expect(throws: SessionRefusal.notPending) {
-            try await sessions.answerPermission(id, requestID: pending.id, optionID: "allow", caller: .app)
+        // Two answers race, each recording a decision for the session: only
+        // the first to claim the request counts.
+        let answers = [
+            Task { try await sessions.answerPermission(id, requestID: pending.id, optionID: "allow", scope: .session, caller: .app) },
+            Task { try await sessions.answerPermission(id, requestID: pending.id, optionID: "reject", scope: .session, caller: .app) },
+        ]
+        var refused = 0
+        for answer in answers {
+            do { try await answer.value } catch SessionRefusal.notPending { refused += 1 }
         }
+        #expect(refused == 1)
+        try await eventually { fixture.agent.permissionResponses[requestID] != nil }
 
         // Another instance on the same store cannot archive what this one drives.
         let elsewhere = ACPSessionManager(
@@ -66,6 +73,11 @@ struct HostSessionsTests {
         #expect(sessions.list().first { $0.id == id }?.title == "Renamed")
         try await sessions.archive(id, caller: .app)
         #expect(!sessions.list().contains { $0.id == id })
+        // Nobody drives an archived session again, even with a stale view of it.
+        #expect(try await ACPSessionPersistence(path: fixture.sessionsDatabase.path).claimLease(
+            sessionId: id, instanceId: "elsewhere", pid: Int64(getpid()),
+            now: Int64(Date().timeIntervalSince1970), staleAfter: 60, leaseToken: "stale"
+        ) == nil)
         await #expect(throws: SessionRefusal.notFound) { try await sessions.send(id, prompt: "again", caller: .app) }
     }
 
