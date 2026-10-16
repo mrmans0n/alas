@@ -222,6 +222,9 @@ private struct ACPGoalPopover: View {
     @State private var isEditing = false
     @State private var confirmsClear = false
     @State private var isSubmitting = false
+    /// The objective of a set still in flight. Claude answers a set only when
+    /// the turn it starts ends, so the set settles once the agent publishes it.
+    @State private var pendingObjective: String?
     @State private var errorMessage: String?
     @FocusState private var editorFocused: Bool
 
@@ -265,6 +268,13 @@ private struct ACPGoalPopover: View {
         }
         .frame(width: 320)
         .background(theme.color("bg-1"))
+        .onChange(of: session.currentGoal?.objective) { _, published in
+            guard let pendingObjective, published == pendingObjective else { return }
+            settleSet()
+            if session.goalDraft.trimmingCharacters(in: .whitespacesAndNewlines) == pendingObjective {
+                onDraftChange("")
+            }
+        }
     }
 
     // MARK: Header
@@ -521,24 +531,30 @@ private struct ACPGoalPopover: View {
         guard canMutate else { return }
         if action == .set, trimmedObjective.isEmpty { return }
         let submittedObjective = objective
+        let pending = action == .set ? trimmedObjective : nil
+        pendingObjective = pending
         isSubmitting = true
         errorMessage = nil
         Task {
             do {
                 try await onAction(action, action == .set ? submittedObjective : nil)
-                switch action {
-                case .set:
-                    isEditing = false
-                case .clear:
-                    confirmsClear = false
-                case .pause, .resume:
-                    break
-                }
+                if action == .clear { confirmsClear = false }
             } catch {
                 errorMessage = error.localizedDescription
             }
+            // A set the agent already published has settled; leave the
+            // popover to whatever the user did since.
+            guard action != .set || pendingObjective == pending else { return }
+            if action == .set, errorMessage == nil { isEditing = false }
+            pendingObjective = nil
             isSubmitting = false
         }
+    }
+
+    private func settleSet() {
+        pendingObjective = nil
+        isEditing = false
+        isSubmitting = false
     }
 }
 
