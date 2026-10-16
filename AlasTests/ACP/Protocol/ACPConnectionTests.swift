@@ -96,6 +96,8 @@ struct ACPConnectionTests {
         (#"{"sessionIndex":{"version":1}}"#, ACPSessionIndexSupport()),
         (#"{"sessionIndex":{"capabilities":["sessionArchive"]}}"#, nil),
         (#"{"sessionIndex":{"version":0,"capabilities":["sessionArchive"]}}"#, nil),
+        // A newer version may change the request shapes: fall back.
+        (#"{"sessionIndex":{"version":2,"capabilities":["sessionArchive"]}}"#, nil),
         (#"{"sessionIndex":true}"#, nil),
         (#"{"jetbrains":{"air":{"version":1,"capabilities":["sessionIndex","sessionArchive"]}}}"#, nil),
     ] as [(String, ACPSessionIndexSupport?)])

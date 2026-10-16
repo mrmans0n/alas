@@ -265,30 +265,35 @@ public final class ACPSessionDiscoveryHandle {
 
     public var canLoadMore: Bool { !hasLoadedPage || nextCursor != nil }
 
-    /// Changes the scope and archive filter. Only an agent with the session
-    /// index honors them; the next load starts from the first page.
-    public func setFilter(_ filter: ACPSessionBrowserFilter) {
-        guard sessionIndex != nil else { return }
-        self.filter = filter
-        refresh()
-    }
-
     public func loadNextPage() async throws -> [ACPDiscoveredSession] {
         guard !closed, canLoadMore else { return [] }
-        let (rows, cursor) = try await readPages(from: nextCursor)
+        let (rows, cursor) = try await readPages(from: nextCursor, filter: filter)
         hasLoadedPage = true
         nextCursor = cursor
         return rows
     }
 
-    /// The first page again, without moving the browser's own cursor, so a
-    /// reconcile neither races nor undoes "Load more".
-    public func firstPage() async throws -> [ACPDiscoveredSession] {
-        guard !closed else { return [] }
-        return try await readPages(from: nil).rows
+    /// The first page for `filter`, without changing the handle's filter or
+    /// cursor: a filter change commits it with `commit(filter:cursor:)` only
+    /// if it is still the latest, and a reconcile never moves "Load more".
+    public func firstPage(filter: ACPSessionBrowserFilter) async throws -> (rows: [ACPDiscoveredSession], cursor: String?) {
+        guard !closed else { return ([], nil) }
+        return try await readPages(from: nil, filter: filter)
     }
 
-    private func readPages(from start: String?) async throws -> (rows: [ACPDiscoveredSession], cursor: String?) {
+    /// Makes `filter` the handle's filter, continuing after its first page.
+    /// Only an agent with the session index honors a filter.
+    public func commit(filter: ACPSessionBrowserFilter, cursor: String?) {
+        guard sessionIndex != nil else { return }
+        self.filter = filter
+        hasLoadedPage = true
+        nextCursor = cursor
+    }
+
+    private func readPages(
+        from start: String?,
+        filter: ACPSessionBrowserFilter
+    ) async throws -> (rows: [ACPDiscoveredSession], cursor: String?) {
         let options = sessionIndex == nil ? nil : filter.listOptions
         var discovered: [ACPDiscoveredSession] = []
         var cursor = start
@@ -298,7 +303,7 @@ public final class ACPSessionDiscoveryHandle {
             cursor = page.nextCursor
             requests += 1
             for info in page.sessions {
-                if let row = await discoveredSession(info) { discovered.append(row) }
+                if let row = await discoveredSession(info, filter: filter) { discovered.append(row) }
             }
         } while discovered.isEmpty && cursor != nil && requests < Self.maxPagesPerLoad
         return (discovered, cursor)
@@ -307,7 +312,7 @@ public final class ACPSessionDiscoveryHandle {
     /// A browser row for `info`, or nil when it is outside the browser's
     /// scope: without the linked-worktree scope only this worktree's exact
     /// cwd is listed, as before the session index.
-    private func discoveredSession(_ info: ACPAgentSessionInfo) async -> ACPDiscoveredSession? {
+    private func discoveredSession(_ info: ACPAgentSessionInfo, filter: ACPSessionBrowserFilter) async -> ACPDiscoveredSession? {
         let target = worktreeResolver(info.cwd)
         let includeLinked = sessionIndex != nil && filter.includeLinkedWorktrees
         guard includeLinked || target?.worktreeId == worktreeId else { return nil }
@@ -367,7 +372,7 @@ public final class ACPSessionDiscoveryHandle {
                     guard let self, !self.closed else { break }
                     var rows: [ACPDiscoveredSession] = []
                     for info in changes.sessions {
-                        if let row = await self.discoveredSession(info) { rows.append(row) }
+                        if let row = await self.discoveredSession(info, filter: self.filter) { rows.append(row) }
                     }
                     continuation.yield((rows, changes.removed))
                 }
@@ -420,6 +425,9 @@ public final class ACPSessionDiscoveryModel {
     /// Rows with a rename or archive request in flight.
     public private(set) var updatingSessionIds: Set<String> = []
     private var handle: ACPSessionDiscoveryHandle?
+    /// Bumped by every filter change; a load that started under an older
+    /// generation is discarded.
+    private var filterGeneration = 0
     private var subscriptionTask: Task<Void, Never>?
     private var reconcileTask: Task<Void, Never>?
     /// While a subscription is open, the first page is read again this often
@@ -528,8 +536,10 @@ public final class ACPSessionDiscoveryModel {
 
     public func loadMore() async throws {
         guard let handle else { return }
+        let generation = filterGeneration
         do {
             let page = try await handle.loadNextPage()
+            guard generation == filterGeneration else { return }
             if replaceSessionsOnNextLoad {
                 sessions = page
                 replaceSessionsOnNextLoad = false
@@ -545,22 +555,36 @@ public final class ACPSessionDiscoveryModel {
         }
     }
 
-    /// Switches scope or archive filter and reloads from the first page.
+    /// Switches scope or archive filter and shows its first page. When
+    /// changes overlap, only the latest one's page is shown; a failed change
+    /// restores the previous filter and keeps its rows.
     public func setFilter(_ newFilter: ACPSessionBrowserFilter) async throws {
         guard let handle, sessionIndex != nil, newFilter != filter else { return }
+        let previous = handle.filter
         filter = newFilter
-        handle.setFilter(newFilter)
-        replaceSessionsOnNextLoad = true
-        try await loadMore()
+        filterGeneration += 1
+        let generation = filterGeneration
+        do {
+            let page = try await handle.firstPage(filter: newFilter)
+            guard generation == filterGeneration, !stopped else { return }
+            handle.commit(filter: newFilter, cursor: page.cursor)
+            sessions = page.rows
+            replaceSessionsOnNextLoad = false
+            paginationError = nil
+        } catch {
+            guard generation == filterGeneration else { return }
+            filter = previous
+            throw error
+        }
     }
 
     /// Reads the first page again and merges it into the listed rows, keeping
     /// rows loaded from later pages.
     public func reconcile() async {
         guard let handle, !stopped else { return }
-        let reconciledFilter = filter
-        guard let page = try? await handle.firstPage(), filter == reconciledFilter else { return }
-        sessions = ACPSessionBrowserReducer.applying(changed: page, removed: [], to: sessions, filter: filter)
+        let generation = filterGeneration
+        guard let page = try? await handle.firstPage(filter: filter), generation == filterGeneration else { return }
+        sessions = ACPSessionBrowserReducer.applying(changed: page.rows, removed: [], to: sessions, filter: filter)
     }
 
     /// Renames the agent's session; on success `renameLocal` gets the Alas

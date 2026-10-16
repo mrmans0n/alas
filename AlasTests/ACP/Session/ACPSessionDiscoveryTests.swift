@@ -518,6 +518,55 @@ struct ACPSessionDiscoveryTests {
     }
 
     @MainActor
+    @Test("overlapping filter changes show only the latest; a failed change restores the previous filter")
+    func overlappingFilterChanges() async throws {
+        let store = try temporaryStore()
+        let client = indexClient()
+        let gate = AsyncStream<Void>.makeStream()
+        let staleStarted = AsyncStream<Void>.makeStream()
+        client.scriptAsync(method: "session/list") { request in
+            let list = try #require((request.params as? ACPSessionListParams)?.meta?.sessionIndex.list)
+            switch (list.includeWorktrees, list.archived) {
+            case (true, .unarchived):
+                // The older change: answers after the newer one finished.
+                staleStarted.continuation.yield()
+                for await _ in gate.stream { break }
+                return try JSONEncoder().encode(ACPSessionListResult(
+                    sessions: [.init(sessionId: "stale", cwd: "/tmp/wt", index: .init(archived: false))],
+                    nextCursor: "stale-cursor"))
+            case (true, .archived):
+                return try JSONEncoder().encode(ACPSessionListResult(
+                    sessions: [.init(sessionId: "latest", cwd: "/tmp/wt", index: .init(archived: true))]))
+            case (false, .archived):
+                throw TestError.failed
+            default:
+                return try JSONEncoder().encode(ACPSessionListResult(
+                    sessions: [.init(sessionId: "initial", cwd: "/tmp/wt", index: .init(archived: false))]))
+            }
+        }
+        let model = ACPSessionDiscoveryModel()
+        await model.start(manager: manager(store: store, client: client), agentId: "claude")
+        #expect(model.sessions.map(\.remoteSessionId) == ["initial"])
+
+        let stale = Task { try await model.setFilter(.init(includeLinkedWorktrees: true)) }
+        for await _ in staleStarted.stream { break }
+        let latest = ACPSessionBrowserFilter(includeLinkedWorktrees: true, showArchived: true)
+        try await model.setFilter(latest)
+        gate.continuation.yield()
+        try await stale.value
+        #expect(model.filter == latest)
+        #expect(model.sessions.map(\.remoteSessionId) == ["latest"])
+        #expect(!model.canLoadMore)
+
+        await #expect(throws: TestError.failed) {
+            try await model.setFilter(.init(showArchived: true))
+        }
+        #expect(model.filter == latest)
+        #expect(model.sessions.map(\.remoteSessionId) == ["latest"])
+        await model.stop()
+    }
+
+    @MainActor
     @Test("a basic agent keeps the exact-cwd list and sends no session index metadata")
     func basicAgentFallback() async throws {
         let store = try temporaryStore()

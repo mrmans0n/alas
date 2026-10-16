@@ -40,9 +40,13 @@ public struct ACPSessionIndexCapability: Codable, Equatable, Sendable {
     public let version: Int?
     public let capabilities: [String]?
 
-    /// Nil unless the advertisement is a version this client speaks.
+    /// The only version this client speaks; another one could change the
+    /// list or request shapes, so it falls back to the basic browser.
+    public static let supportedVersion = 1
+
+    /// Nil unless the advertisement is the version this client speaks.
     public var support: ACPSessionIndexSupport? {
-        guard let version, version >= 1 else { return nil }
+        guard version == Self.supportedVersion else { return nil }
         let names = Set(capabilities ?? [])
         return .init(
             archive: names.contains("sessionArchive"),
