@@ -717,8 +717,10 @@ public final class ACPSessionDiscoveryModel {
         // pending filter page commits.
         guard let handle, filterLoadsInFlight == 0 else { return }
         let generation = filterGeneration
-        let read = startRead()
-        defer { readIndicesInFlight.remove(read) }
+        // Buffers live changes too: a removal that lands while this page is
+        // in flight is replayed after the page is appended.
+        let read = beginListRead()
+        defer { finishListRead(read) }
         do {
             let page = try await handle.loadNextPage { generation == self.filterGeneration }
             guard generation == filterGeneration else { return }
@@ -904,7 +906,7 @@ public final class ACPSessionDiscoveryModel {
         return listReadsStarted
     }
 
-    /// Starts a first-page read, which buffers live changes until it ends.
+    /// Starts a list read that buffers live changes until it ends.
     private func beginListRead() -> Int {
         listReadsInFlight += 1
         return startRead()
@@ -944,7 +946,8 @@ public final class ACPSessionDiscoveryModel {
                 switch ACPSessionBrowserReducer.disposition(
                     of: stamp, latestCommittedRead: self.latestCommittedRead, readsInFlight: self.readIndicesInFlight
                 ) {
-                case .drop: self.applyLiveChanges(changed: [], removed: removed)
+                // Removals too: the newer page already shows what became of them.
+                case .drop: break
                 case .applyWithoutReplay: self.applyLiveChanges(changed: current, removed: removed, replay: false)
                 case .apply: self.applyLiveChanges(changed: current, removed: removed)
                 }

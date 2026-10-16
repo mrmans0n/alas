@@ -1095,6 +1095,42 @@ struct ACPSessionDiscoveryTests {
     }
 
     @MainActor
+    @Test("a removal that lands while Load more is in flight is not undone by its page")
+    func removalDuringLoadMore() async throws {
+        let store = try temporaryStore()
+        let client = indexClient()
+        let gate = AsyncStream<Void>.makeStream()
+        let pageTwoStarted = AsyncStream<Void>.makeStream()
+        client.scriptAsync(method: "session/list") { request in
+            guard (request.params as? ACPSessionListParams)?.cursor == "page-2" else {
+                return try JSONEncoder().encode(ACPSessionListResult(
+                    sessions: [.init(sessionId: "first", cwd: "/tmp/wt", index: .init(archived: false))],
+                    nextCursor: "page-2"))
+            }
+            pageTwoStarted.continuation.yield()
+            for await _ in gate.stream { break }
+            return try JSONEncoder().encode(ACPSessionListResult(sessions: [
+                .init(sessionId: "gone", cwd: "/tmp/wt", index: .init(archived: false)),
+                .init(sessionId: "kept", cwd: "/tmp/wt", index: .init(archived: false)),
+            ]))
+        }
+        let model = ACPSessionDiscoveryModel()
+        await model.start(manager: manager(store: store, client: client), agentId: "claude")
+        let loadMore = Task { try await model.loadMore() }
+        for await _ in pageTwoStarted.stream { break }
+        // The title change shows when the notification has been applied,
+        // before page 2 resumes.
+        client.emitSessionListChanges(.init(subscriptionId: "sub-1", sessions: [
+            .init(sessionId: "first", cwd: "/tmp/wt", title: "Seen", index: .init(archived: false)),
+        ], removed: ["gone"]))
+        #expect(await awaitCondition { model.sessions.first?.title == "Seen" })
+        gate.continuation.yield()
+        try await loadMore.value
+        #expect(model.sessions.map(\.remoteSessionId) == ["first", "kept"])
+        await model.stop()
+    }
+
+    @MainActor
     @Test("a Load more answering after a filter change neither shows its rows nor moves the cursor")
     func loadMoreAfterFilterChange() async throws {
         let store = try temporaryStore()
