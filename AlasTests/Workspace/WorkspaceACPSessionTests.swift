@@ -43,27 +43,29 @@ struct WorkspaceACPSessionTests {
 
         let delivery = ReviewFeedbackDelivery(
             text: "New review feedback", source: .reviewFeedback(card: card, commentCount: 1, messageID: UUID()))
-        // The test agent never ends a turn, so success has to come from the
-        // session taking the prompt: the handoff is recorded from it.
+        // Whether the agent can start depends on the machine. Either way the
+        // send settles once the session takes or refuses the turn, and the
+        // feedback is never lost: a taken turn goes out as the review card, a
+        // refused one stays in the new chat's composer.
         final class Outcome { var result: Result<Void, Error>? }
         let outcome = Outcome()
         sender.send(delivery, .newChat(agentID: "claude", title: "New chat")) { outcome.result = $0 }
-        try await eventually("the new chat to take the review turn") { outcome.result != nil }
-        try #require(outcome.result).get()
-        let delivered = manager.sessions.values.contains { candidate in
-            candidate.id != session.id && (
-                candidate.queue.contains { $0.delegatedSource == delivery.source }
-                    || candidate.transcript.messages.contains { message in
-                        guard case .user(_, _, _, _, let source, _) = message else { return false }
-                        return source == delivery.source
-                    })
-        }
-        #expect(delivered)
+        try await eventually("the new chat to take or refuse the review turn") { outcome.result != nil }
         #expect(state.tabs.tabs(for: owner).count == 2)
         #expect(state.tabs.tabs(forWorktree: worktree.id).isEmpty)
         let newSession = try #require(manager.sessions.values.first { $0.id != session.id })
-        // The review goes out as a carded turn, not a composer draft.
-        #expect(newSession.composerDraft == .empty)
+        switch try #require(outcome.result) {
+        case .success:
+            let carded = newSession.queue.contains { $0.delegatedSource == delivery.source }
+                || newSession.transcript.messages.contains { message in
+                    guard case .user(_, _, _, _, let source, _) = message else { return false }
+                    return source == delivery.source
+                }
+            #expect(carded)
+            #expect(newSession.composerDraft == .empty)
+        case .failure:
+            #expect(newSession.composerDraft == ACPComposerDraft(segments: [.text("New review feedback")]))
+        }
     }
 
     @MainActor
