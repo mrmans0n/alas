@@ -1145,6 +1145,23 @@ extension ACPSessionStore {
         """, bindings: [title, titleSource.rawValue, updatedAt, id]) > 0
     }
 
+    /// Renames only while the stored title and source are still `expected`
+    /// (one statement, so no other write lands in between).
+    public func renameSession(
+        id: String,
+        title: String,
+        titleSource: ACPSessionTitleSource,
+        updatedAt: Int64,
+        ifStillTitled expected: String,
+        source expectedSource: ACPSessionTitleSource
+    ) throws -> Bool {
+        try db.execChanges("""
+        UPDATE sessions
+        SET title = ?, title_source = ?, updated_at = ?
+        WHERE id = ? AND archived = 0 AND title = ? AND title_source = ?
+        """, bindings: [title, titleSource.rawValue, updatedAt, id, expected, expectedSource.rawValue]) > 0
+    }
+
     public func updateFallbackTitleIfPlaceholder(id: String, title: String, updatedAt: Int64) throws -> Bool {
         try db.execChanges("""
         UPDATE sessions

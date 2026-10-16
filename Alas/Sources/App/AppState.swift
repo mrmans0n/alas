@@ -14654,19 +14654,28 @@ final class AppState {
         worktreeId: String,
         sessionId: ACPSession.ID,
         title: String
-    ) async throws -> (@MainActor () async throws -> Void)? {
+    ) async throws -> (@MainActor () async throws -> String)? {
         guard let worktree = worktree(withId: worktreeId), let manager = acpManager(for: worktree) else { return nil }
         // Read so a failure stops here: without the old title there would be
         // no way back if the agent rename then fails.
         let previous = try await manager.persistence.loadSession(id: sessionId)
         try await Self.storeACPSessionTitle(title, source: .manual, sessionId: sessionId, manager: manager)
         guard let previous else { return nil }
+        // Returns the title stored afterwards. Only while the stored title
+        // is still this rename's, in one conditional update: a newer rename
+        // from elsewhere is not undone.
         return {
-            // Only while the stored title is still this rename's: a newer
-            // rename from elsewhere must not be undone.
-            let current = try await manager.persistence.loadSession(id: sessionId)
-            guard current?.title == title, current?.titleSource == .manual else { return }
-            try await Self.storeACPSessionTitle(previous.title, source: previous.titleSource, sessionId: sessionId, manager: manager)
+            let restored = try await manager.persistence.renameSession(
+                id: sessionId, title: previous.title, titleSource: previous.titleSource,
+                updatedAt: Int64(Date().timeIntervalSince1970), ifStillTitled: title, source: .manual
+            )
+            guard restored else {
+                return try await manager.persistence.loadSession(id: sessionId)?.title ?? title
+            }
+            if manager.renameSessionCosmetic(id: sessionId, title: previous.title, source: previous.titleSource) {
+                await manager.flushAllPersistence()
+            }
+            return previous.title
         }
     }
 

@@ -94,6 +94,22 @@ struct ACPSessionStoreSchemaTests {
         #expect(try store.loadSession(id: "legacy")?.sessionInstructions == nil)
     }
 
+    @Test("a conditional rename applies only while the stored title and source still match")
+    func conditionalRename() throws {
+        let store = try tmpStore()
+        try store.upsertSession(.init(
+            id: "s", agentId: "claude", title: "Mine", titleSource: .manual,
+            currentModel: nil, currentMode: nil, autoRun: false, createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false
+        ))
+        #expect(try !store.renameSession(id: "s", title: "Old", titleSource: .provider, updatedAt: 1,
+                                         ifStillTitled: "Other", source: .manual))
+        #expect(try store.loadSession(id: "s")?.title == "Mine")
+        #expect(try store.renameSession(id: "s", title: "Old", titleSource: .provider, updatedAt: 1,
+                                        ifStillTitled: "Mine", source: .manual))
+        #expect(try store.loadSession(id: "s")?.title == "Old")
+        #expect(try store.loadSession(id: "s")?.titleSource == .provider)
+    }
+
     @Test("agent prompt suggestions round-trip and a nil rewrite keeps the stored list")
     func promptSuggestionsRoundTrip() throws {
         let store = try tmpStore()

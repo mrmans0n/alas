@@ -444,6 +444,20 @@ public actor ACPSessionPersistence {
         try openedStore().updateFallbackTitleIfPlaceholder(id: id, title: title, updatedAt: updatedAt)
     }
 
+    public func renameSession(
+        id: String,
+        title: String,
+        titleSource: ACPSessionTitleSource,
+        updatedAt: Int64,
+        ifStillTitled expected: String,
+        source expectedSource: ACPSessionTitleSource
+    ) throws -> Bool {
+        try openedStore().renameSession(
+            id: id, title: title, titleSource: titleSource, updatedAt: updatedAt,
+            ifStillTitled: expected, source: expectedSource
+        )
+    }
+
     public func updateFallbackTitleIfPlaceholder(
         id: String,
         title: String,

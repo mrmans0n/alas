@@ -632,9 +632,9 @@ public final class ACPSessionDiscoveryModel {
     private var filterGeneration = 0
     private var subscriptionTask: Task<Void, Never>?
     private var reconcileTask: Task<Void, Never>?
-    /// While a subscription is open, the first page is read again this often
-    /// to pick up changes the adapter missed (subscriptions are best effort).
-    /// It stops when the browser stops.
+    /// While the browser is open, the first page is read again this often to
+    /// pick up changes a subscription missed or could not deliver. It stops
+    /// when the browser stops.
     public static let reconcileInterval: Duration = .seconds(60)
     private var stopped = false
     private var replaceSessionsOnNextLoad = false
@@ -914,19 +914,19 @@ public final class ACPSessionDiscoveryModel {
     /// Renames the agent's session and its Alas copy, in whichever worktree
     /// it lives, through `renameLocal`, which returns once the title is
     /// stored, with a closure that restores the previous title and its
-    /// source. The Alas copy is renamed first: a row is listed with its Alas
+    /// source and returns the title stored afterwards. The Alas copy is renamed first: a row is listed with its Alas
     /// title, so a change notification the rename triggers must already read
     /// the new one. A failed rename runs the restore.
     public func rename(
         _ session: ACPDiscoveredSession,
         to title: String,
-        renameLocal: @MainActor (_ localSessionId: String, _ title: String) async throws -> (@MainActor () async throws -> Void)?
+        renameLocal: @MainActor (_ localSessionId: String, _ title: String) async throws -> (@MainActor () async throws -> String)?
     ) async throws {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let handle, !trimmed.isEmpty else { return }
         guard updatingSessionIds.insert(session.remoteSessionId).inserted else { return }
         defer { updatingSessionIds.remove(session.remoteSessionId) }
-        var restoreLocal: (@MainActor () async throws -> Void)?
+        var restoreLocal: (@MainActor () async throws -> String)?
         if let localSessionId = session.localSessionId {
             // A failure to store the Alas title stops here: the agent is not
             // renamed unless the Alas copy was.
@@ -940,11 +940,12 @@ public final class ACPSessionDiscoveryModel {
             // The row shows the Alas title as stored: the original if the
             // restore stored it again, else the new one, which stays stored.
             if let restoreLocal {
-                let restored = (try? await restoreLocal()) != nil
+                // The title stored after the rollback: the original, a newer
+                // rename's, or this one's if the rollback failed.
+                let stored = (try? await restoreLocal()) ?? trimmed
                 // A page read meanwhile may show another title: drop such pages.
                 localActionGeneration += 1
                 lastLocalAction[session.remoteSessionId] = localActionGeneration
-                let stored = restored ? session.title : trimmed
                 applyLocalPatch(id: session.remoteSessionId) { $0.title = stored }
             }
             throw error
@@ -1095,12 +1096,30 @@ public final class ACPSessionDiscoveryModel {
         }
     }
 
+    /// Subscribes to list changes when the agent can, and relists the first
+    /// page periodically either way: a subscription is best effort, and one
+    /// that could not be set up must not leave the rows stale.
     private func startSubscription() async {
-        guard let handle, !stopped,
-              let stream = try? await handle.subscribe(stamp: { [weak self] in
-                  .init(localActions: self?.localActionGeneration ?? 0, listReads: self?.listReadsStarted ?? 0)
-              })
-        else { return }
+        guard let handle, !stopped, handle.sessionIndex != nil else { return }
+        if let stream = try? await handle.subscribe(stamp: { [weak self] in
+            .init(localActions: self?.localActionGeneration ?? 0, listReads: self?.listReadsStarted ?? 0)
+        }) {
+            consume(stream)
+        }
+        // Rows that changed between the first page and the subscription.
+        await reconcile()
+        reconcileTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: Self.reconcileInterval)
+                guard let self, !self.stopped, !Task.isCancelled else { return }
+                await self.reconcile()
+            }
+        }
+    }
+
+    private func consume(
+        _ stream: AsyncStream<(changed: [ACPDiscoveredSession], removed: [String], stamp: ACPSessionBrowserStamp)>
+    ) {
         subscriptionTask = Task { @MainActor [weak self] in
             for await (changed, removed, stamp) in stream {
                 guard let self, !self.stopped else { break }
@@ -1114,15 +1133,6 @@ public final class ACPSessionDiscoveryModel {
                     changed: current, removed: currentRemovals, stamp: stamp, pageReadIndex: self.pageReadIndex
                 )
                 self.applyLiveChanges(changed: fresh.changed, removed: fresh.removed, stamp: stamp)
-            }
-        }
-        // Rows that changed between the first page and the subscription.
-        await reconcile()
-        reconcileTask = Task { @MainActor [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: Self.reconcileInterval)
-                guard let self, !self.stopped, !Task.isCancelled else { return }
-                await self.reconcile()
             }
         }
     }

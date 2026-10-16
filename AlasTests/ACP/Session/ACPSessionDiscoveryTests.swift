@@ -588,6 +588,25 @@ struct ACPSessionDiscoveryTests {
     }
 
     @MainActor
+    @Test("a list subscription that cannot be set up still leaves the first page reconciled")
+    func reconcileWithoutSubscription() async throws {
+        let store = try temporaryStore()
+        let client = indexClient()
+        client.script(method: "_session/list/subscribe") { _ in throw TestError.failed }
+        var lists = 0
+        client.script(method: "session/list") { _ in
+            lists += 1
+            return try JSONEncoder().encode(ACPSessionListResult(sessions: [
+                .init(sessionId: "s", cwd: "/tmp/wt", title: lists == 1 ? "First" : "Current", index: .init(archived: false)),
+            ]))
+        }
+        let model = ACPSessionDiscoveryModel()
+        await model.start(manager: manager(store: store, client: client), agentId: "claude")
+        #expect(model.sessions.first?.title == "Current")
+        await model.stop()
+    }
+
+    @MainActor
     @Test("a basic agent keeps the exact-cwd list and sends no session index metadata")
     func basicAgentFallback() async throws {
         let store = try temporaryStore()
@@ -676,7 +695,10 @@ struct ACPSessionDiscoveryTests {
         try await model.rename(first, to: "  Renamed  ") { id, title in
             renamedLocally[id] = title
             localTitles.append(title)
-            return { localTitles.append("restored") }
+            return {
+                localTitles.append("restored")
+                return "Local"
+            }
         }
         // The Alas copy is renamed before the agent, so a notification the
         // rename triggers already reads the new Alas title.
@@ -698,7 +720,10 @@ struct ACPSessionDiscoveryTests {
         await #expect(throws: TestError.failed) {
             try await model.rename(try #require(model.sessions.last), to: "Nope") { _, title in
                 localTitles.append(title)
-                return { localTitles.append("restored") }
+                return {
+                    localTitles.append("restored")
+                    return "Other"
+                }
             }
         }
         // The restore puts back the previous title and its source.
@@ -713,6 +738,14 @@ struct ACPSessionDiscoveryTests {
             }
         }
         #expect(model.sessions.last?.title == "Stuck")
+
+        // A newer rename from elsewhere is kept by the rollback, and shown.
+        await #expect(throws: TestError.failed) {
+            try await model.rename(try #require(model.sessions.last), to: "Mine") { _, _ in
+                { "Newer from elsewhere" }
+            }
+        }
+        #expect(model.sessions.last?.title == "Newer from elsewhere")
 
         try await model.setArchived(true, for: try #require(model.sessions.first))
         #expect(model.sessions.map(\.remoteSessionId) == ["remote-2"])
