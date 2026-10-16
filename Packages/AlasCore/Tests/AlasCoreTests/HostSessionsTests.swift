@@ -110,6 +110,72 @@ struct HostSessionsTests {
 
     /// An answer that reaches no agent is not reported as given: a session
     /// shown here but not driven by this instance cannot pass it on.
+    /// Following streams a session's transcript and pending requests, for
+    /// the sessions followed only, and holds their change log just as long.
+    @Test func followingStreamsATranscriptAndItsRequests() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let sessions = fixture.host.sessions
+        let id = try await sessions.create(.worktree(fixture.ref), agentID: "gemini", caller: .app).id
+        try await eventually { await sessions.list().first { $0.id == id }?.isWriter == true }
+        let manager = try #require(fixture.core.sessionManagers.values.first)
+        let other = manager.createSession(agentId: "gemini")
+        let log = try #require(manager.liveSession(for: id)?.transcript.changeLog)
+
+        let subscription = fixture.host.subscribe()
+        let received = Collected(subscription)
+        await #expect(throws: SessionRefusal.notFound) { try subscription.follow("no-such-session") }
+        try subscription.follow(id)
+        #expect(log.isTracking)
+        try await eventually { await received.deltas(of: id).first?.reset == true }
+
+        try await sessions.send(id, prompt: "hello", caller: .app)
+        try await eventually {
+            await received.deltas(of: id).contains { !$0.reset && $0.messages.contains { $0.kind == "user" && $0.payload.contains("hello") } }
+        }
+
+        let requestID = JSONRPCID.number(7)
+        fixture.agent.emitPermission(id: requestID, params: ACPPermissionRequestParams(
+            sessionId: "agent-1",
+            toolCall: ACPPermissionToolCall(
+                toolCallId: "call-1", title: "Run", kind: nil, status: nil,
+                content: nil, locations: nil, rawInput: nil, rawOutput: nil
+            ),
+            options: [ACPPermissionOption(optionId: "allow", name: "Allow", kind: "allow_once")]
+        ))
+        try await eventually {
+            await received.events.contains { if case .pendingRequest(_, id, .permission(requestID, _)) = $0 { true } else { false } }
+        }
+        other.transcript.messages.append(.systemNotice(id: UUID(), text: "unfollowed"))
+        try await sessions.answerPermission(id, requestID: requestID, optionID: "allow", caller: .app)
+        try await eventually {
+            await received.events.contains { if case .pendingRequestResolved(_, id, .permission(requestID)) = $0 { true } else { false } }
+        }
+        #expect(received.deltas(of: other.id).isEmpty)
+
+        // A second follower resumes from where the first got to.
+        let resumed = fixture.host.subscribe()
+        let resumedEvents = Collected(resumed)
+        try resumed.follow(id, from: try #require(received.deltas(of: id).last).revision)
+        manager.liveSession(for: id)?.transcript.messages.append(.systemNotice(id: UUID(), text: "more"))
+        try await eventually { await resumedEvents.deltas(of: id).first.map { !$0.reset } == true }
+
+        subscription.unfollow(id)
+        #expect(log.isTracking)
+        resumed.cancel()
+        #expect(!log.isTracking)
+
+        // Changes while nobody follows are not logged, so resuming from
+        // before them starts over.
+        let lastSeen = try #require(resumedEvents.deltas(of: id).last).revision
+        manager.liveSession(for: id)?.transcript.messages.append(.systemNotice(id: UUID(), text: "unseen"))
+        let late = fixture.host.subscribe()
+        let lateEvents = Collected(late)
+        try late.follow(id, from: lastSeen)
+        try await eventually { await lateEvents.deltas(of: id).first?.reset == true }
+        late.cancel()
+    }
+
     @Test func answersWithNoAgentToReceiveThemAreRefused() async throws {
         let fixture = try Fixture()
         defer { fixture.tearDown() }
@@ -401,6 +467,24 @@ struct HostSessionsTests {
 }
 
 /// A host that can refuse what the tests ask it to.
+/// What a subscription delivers, read as it arrives.
+@MainActor
+private final class Collected {
+    private(set) var events: [HostEvent] = []
+
+    init(_ subscription: HostSubscription) {
+        Task { [weak self] in
+            while let batch = await subscription.next() {
+                self?.events += batch
+            }
+        }
+    }
+
+    func deltas(of id: String) -> [HostTranscriptDelta] {
+        events.compactMap { if case .transcript(_, id, let delta) = $0 { delta } else { nil } }
+    }
+}
+
 @MainActor
 private final class RefusingEnvironment: AlasHostEnvironment {
     var recovering = false
