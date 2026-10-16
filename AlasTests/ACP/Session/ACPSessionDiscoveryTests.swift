@@ -1050,17 +1050,22 @@ struct ACPSessionDiscoveryTests {
         ).isEmpty == !kept)
     }
 
-    @Test("a live change older than a committed list page is dropped, kept over a failed one", arguments: [
-        // Reads started by the change: 5. Committed up to, and in flight.
-        (5, [], ACPSessionBrowserReducer.LiveRowsDisposition.apply),
-        (6, [], .drop),
-        (5, [6], .applyWithoutReplay),
-        (5, [4], .apply),
-    ] as [(Int, Set<Int>, ACPSessionBrowserReducer.LiveRowsDisposition)])
-    func liveRowsAgainstListReads(committed: Int, inFlight: Set<Int>, expected: ACPSessionBrowserReducer.LiveRowsDisposition) {
-        #expect(ACPSessionBrowserReducer.disposition(
-            of: .init(localActions: 0, listReads: 5), latestCommittedRead: committed, readsInFlight: inFlight
-        ) == expected)
+    @Test("a live change is superseded only for the sessions a later-started page showed", arguments: [
+        // Page read index that last showed "s"; the change started at read 5.
+        (nil, true),
+        (5, true),
+        (6, false),
+    ] as [(Int?, Bool)])
+    func liveChangeSupersession(pageRead: Int?, kept: Bool) {
+        let index = pageRead.map { ["s": $0] } ?? [:]
+        let result = ACPSessionBrowserReducer.unsuperseded(
+            changed: [Self.reducerRow("s", 1), Self.reducerRow("other", 1)],
+            removed: ["s", "other-removed"],
+            stamp: .init(localActions: 0, listReads: 5),
+            pageReadIndex: index
+        )
+        #expect(result.changed.map(\.remoteSessionId) == (kept ? ["s", "other"] : ["other"]))
+        #expect(result.removed == (kept ? ["s", "other-removed"] : ["other-removed"]))
     }
 
     @MainActor
