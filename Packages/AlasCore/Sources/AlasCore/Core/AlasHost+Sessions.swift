@@ -65,13 +65,15 @@ extension SessionsAPI {
             }
             manager = try await core.environment.sessionManager(forCheckout: checkout, in: core)
         }
+        if case .workspaceCheckout(let id) = target { _ = try await idleCheckout(id) }
         // A checkpoint restore being recovered keeps agents out of the owner.
+        // This is the last suspension before the session exists; what follows
+        // checks synchronously what may have changed while it waited: a
+        // checkout being archived or removed disposes its manager, and a
+        // worktree's claim stops it admitting work.
         guard await !core.environment.checkpointRecoveryBlocksSessions(owner: manager.owner, in: core) else {
             throw SessionRefusal.ownerUnavailable(reason: Self.checkpointRecoveryReason)
         }
-        // Everything above can suspend: what the owner is now decides. This is
-        // the last suspension before the session exists.
-        if case .workspaceCheckout(let id) = target { _ = try await idleCheckout(id) }
         if let worktreeOwner {
             guard core.projects.admitsNewWork(in: worktreeOwner),
                   !core.projects.isWorktreeHidden(projectId: worktreeOwner.projectId, path: worktreeOwner.path)

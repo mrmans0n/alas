@@ -187,6 +187,8 @@ struct HostSessionsTests {
         /// The worktree belongs to a remote project, which a headless host
         /// cannot run agents for.
         case remoteWorktree
+        /// A checkpoint recovery starts while a checkout session is created.
+        case recoveryStartsMeanwhile
     }
 
     /// A session is not created where it could not safely run.
@@ -218,6 +220,14 @@ struct HostSessionsTests {
         case .remoteWorktree:
             target = .worktree(fixture.ref)
             refusal = .ownerUnavailable(reason: "Sessions in remote worktrees start from the app.")
+        case .recoveryStartsMeanwhile:
+            var checks = 0
+            environment.duringRecoveryCheck = {
+                checks += 1
+                environment.recovering = checks > 1
+            }
+            target = .workspaceCheckout(id: try await fixture.addCheckout(operation: .idle, location: .local))
+            refusal = .ownerUnavailable(reason: SessionsAPI.checkpointRecoveryReason)
         }
 
         await #expect(throws: refusal) {
