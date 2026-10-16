@@ -909,6 +909,13 @@ struct ACPSessionDiscoveryTests {
         gate.continuation.yield()
         await reconcile.value
         #expect(model.sessions.contains { $0.remoteSessionId == "b" })
+        // The agent's own removal arrives after the failed cleanup: the retry
+        // row stays (the title change shows the notification was applied).
+        client.emitSessionListChanges(.init(subscriptionId: "sub-1", sessions: [
+            .init(sessionId: "c", cwd: "/tmp/wt", title: "Seen", index: .init(archived: false)),
+        ], removed: ["b"]))
+        #expect(await awaitCondition { model.sessions.last?.title == "Seen" })
+        #expect(model.sessions.contains { $0.remoteSessionId == "b" })
         await model.stop()
     }
 

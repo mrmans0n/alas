@@ -612,6 +612,10 @@ public final class ACPSessionDiscoveryModel {
     /// The newest version of each row seen in a live change, also after it
     /// left the current filter, so a local patch starts from the newest data.
     private var latestLiveRows: [String: ACPDiscoveredSession] = [:]
+    /// Sessions deleted agent-side whose Alas copy could not be removed:
+    /// their row stays for a Remove from Alas retry, whatever removals the
+    /// agent later reports.
+    private var cleanupRetryIds: Set<String> = []
     /// The `localActionGeneration` each session's last local action ended at.
     private var lastLocalAction: [String: Int] = [:]
     /// Live changes that arrived while a list read was in flight. They are
@@ -674,7 +678,8 @@ public final class ACPSessionDiscoveryModel {
                 try await manager.deletePersistedSession(id: localSessionId)
             } catch {
                 // Keep the row for a local-cleanup retry: drop the queued
-                // removal so a pending read's replay does not hide it again.
+                // removal, and ignore later ones, until the retry succeeds.
+                cleanupRetryIds.insert(session.remoteSessionId)
                 pendingChanges.removeAll { $0.changed.isEmpty && $0.removed == [session.remoteSessionId] }
                 // Back only if it matches what the browser now lists.
                 if !sessions.contains(where: { $0.remoteSessionId == session.remoteSessionId }) {
@@ -696,6 +701,7 @@ public final class ACPSessionDiscoveryModel {
         guard await beginDeletion(session.remoteSessionId) else { return }
         defer { finishDeletion(session.remoteSessionId) }
         try await manager.deletePersistedSession(id: localSessionId)
+        cleanupRetryIds.remove(session.remoteSessionId)
         localActionGeneration += 1
         lastLocalAction[session.remoteSessionId] = localActionGeneration
         handle?.forgetLocalCopy(localSessionId, of: session.remoteSessionId)
@@ -854,7 +860,9 @@ public final class ACPSessionDiscoveryModel {
         )
         if !tied.isEmpty, var cursor = page.cursor, let tie = page.rows.compactMap(\.lastActivity).min() {
             var seen: Set<String> = []
-            for _ in 0 ..< 3 {
+            // Until the tie ends or the list does; the bound only guards
+            // against an adapter that never ends its pages.
+            for _ in 0 ..< 50 {
                 guard let next = try? await handle.page(after: cursor, filter: listedFilter) else { break }
                 seen.formUnion(next.rows.map(\.remoteSessionId))
                 if next.cursor == nil || next.rows.contains(where: { ($0.lastActivity ?? .distantPast) < tie }) {
@@ -963,6 +971,7 @@ public final class ACPSessionDiscoveryModel {
         stamp: ACPSessionBrowserStamp? = nil
     ) {
         guard let handle else { return }
+        let removed = removed.filter { !cleanupRetryIds.contains($0) }
         // Applied now so the listed rows stay current, and replayed after the
         // pending reads in case a page that predates the change lands later.
         if listReadsInFlight > 0 { pendingChanges.append((changed, removed, stamp)) }
@@ -991,11 +1000,12 @@ public final class ACPSessionDiscoveryModel {
         pendingChanges = []
         for change in changes {
             // A page that started after the change and showed a session is newer.
-            let (changed, removed) = change.stamp.map {
+            var (changed, removed) = change.stamp.map {
                 ACPSessionBrowserReducer.unsuperseded(
                     changed: change.changed, removed: change.removed, stamp: $0, pageReadIndex: pageReadIndex
                 )
             } ?? (change.changed, change.removed)
+            removed.removeAll { cleanupRetryIds.contains($0) }
             // The page applied before the replay cached older rows.
             for row in changed { latestLiveRows[row.remoteSessionId] = row }
             sessions = ACPSessionBrowserReducer.applying(
