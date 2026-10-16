@@ -237,7 +237,9 @@ struct HostSessionsTests {
 
     /// A session another instance archived leaves this one's list on its
     /// next read of the store, even while it is still loaded here.
-    @Test func sessionsArchivedElsewhereLeaveTheList() async throws {
+    /// Another instance archives the session, or deletes it outright.
+    @Test(arguments: [false, true])
+    func sessionsArchivedElsewhereLeaveTheList(deleted: Bool) async throws {
         let fixture = try Fixture()
         defer { fixture.tearDown() }
         let manager = try fixture.core.sessionManager(for: fixture.worktree)
@@ -245,7 +247,12 @@ struct HostSessionsTests {
         await manager.flushAllPersistence()
         try await eventually { await fixture.host.sessions.list().contains { $0.id == session.id } }
 
-        try await ACPSessionPersistence(path: fixture.sessionsDatabase.path).setArchived(id: session.id, archived: true)
+        let elsewhere = ACPSessionPersistence(path: fixture.sessionsDatabase.path)
+        if deleted {
+            try await elsewhere.deleteSession(id: session.id)
+        } else {
+            try await elsewhere.setArchived(id: session.id, archived: true)
+        }
         await manager.refreshRecentNow()
         #expect(!fixture.host.sessions.list().contains { $0.id == session.id })
         // Nor does renaming it bring it back.

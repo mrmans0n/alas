@@ -301,6 +301,8 @@ public final class ACPSessionManager: ChangeTracking {
     @Tracked private var missingPersistedSessionIds: Set<ACPSession.ID> = []
     private var rowLoadTasks: [ACPSession.ID: Task<Void, Never>] = [:]
     private var persistenceTail: Task<Void, Never>?
+    /// Sessions created here whose first save has not landed yet.
+    private var unsavedCreations: Set<ACPSession.ID> = []
     private var persistenceGeneration = 0
     private var draftFlushHandoffSequence: UInt64 = 0
     /// Whether new agent work may start for this manager's owner. Its
@@ -2108,8 +2110,15 @@ public final class ACPSessionManager: ChangeTracking {
             recent.removeAll { $0.id == id }
             recent.insert(row, at: 0)
         }
-        enqueuePersistence { persistence in
+        unsavedCreations.insert(id)
+        let saving = enqueuePersistenceResult { persistence -> Bool in
             try await persistence.upsertSession(row)
+            return true
+        }
+        Task { @MainActor [weak self] in
+            if await saving.value == true {
+                self?.unsavedCreations.remove(id)
+            }
         }
         let session = ACPSession(
             id: id, agentId: agentId, worktreeId: worktreeId,
@@ -3857,22 +3866,35 @@ public final class ACPSessionManager: ChangeTracking {
         await previousManagerDisposal?.value
         let persistence = persistence
         do {
+            let listedBefore = Set(recent.map(\.id))
             let rows = try await persistence.recentSessions()
-            // A live session missing from the store's list may just not have
-            // been saved when the list was read, and stays listed. The store
-            // decides: only a session whose row it holds as archived, such as
-            // one another instance archived, goes.
+            // A live session missing from the store's list stays listed while
+            // the store holds it unarchived, or while its first save here has
+            // not landed. One another instance archived or deleted goes.
             let loaded = Set(rows.map(\.id))
-            var unsaved: [ACPSessionRow] = []
+            var kept: [ACPSessionRow] = []
             for row in recent where !loaded.contains(row.id) && sessions[row.id] != nil {
-                let stored = try await persistence.loadSession(id: row.id)
-                if let stored, stored.archived {
-                    persistedRows[row.id] = stored
+                if let stored = try await persistence.loadSession(id: row.id) {
+                    unsavedCreations.remove(row.id)
+                    if stored.archived {
+                        persistedRows[row.id] = stored
+                    } else {
+                        kept.append(stored)
+                    }
+                } else if unsavedCreations.contains(row.id) {
+                    kept.append(row)
                 } else {
-                    unsaved.append(stored ?? row)
+                    persistedRows[row.id] = nil
                 }
             }
-            recent = unsaved + rows
+            // The list may have changed while this read: sessions created
+            // meanwhile stay, and ones removed meanwhile stay removed.
+            let listedNow = Set(recent.map(\.id))
+            let added = recent.filter { !listedBefore.contains($0.id) && !loaded.contains($0.id) }
+            let addedIDs = Set(added.map(\.id))
+            recent = (added + kept.filter { !addedIDs.contains($0.id) } + rows).filter {
+                listedNow.contains($0.id) || !listedBefore.contains($0.id)
+            }
             for row in rows {
                 persistedRows[row.id] = row
             }
