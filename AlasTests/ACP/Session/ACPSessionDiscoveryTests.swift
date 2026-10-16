@@ -705,6 +705,14 @@ struct ACPSessionDiscoveryTests {
         #expect(localTitles == ["Nope", "rpc", "restored"])
         #expect(model.sessions.last?.title == "Other")
 
+        // A restore that cannot be stored still reports the agent's error.
+        await #expect(throws: TestError.failed) {
+            try await model.rename(try #require(model.sessions.last), to: "Stuck") { _, _ in
+                { throw TestError.failed }
+            }
+        }
+        #expect(model.sessions.last?.title == "Other")
+
         try await model.setArchived(true, for: try #require(model.sessions.first))
         #expect(model.sessions.map(\.remoteSessionId) == ["remote-2"])
         #expect(try store.loadSession(id: "local-1") != nil)

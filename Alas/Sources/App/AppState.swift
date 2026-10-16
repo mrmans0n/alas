@@ -14654,13 +14654,13 @@ final class AppState {
         worktreeId: String,
         sessionId: ACPSession.ID,
         title: String
-    ) async throws -> (@MainActor () async -> Void)? {
+    ) async throws -> (@MainActor () async throws -> Void)? {
         guard let worktree = worktree(withId: worktreeId), let manager = acpManager(for: worktree) else { return nil }
         let previous = await manager.persistedSessionRow(id: sessionId)
         try await Self.storeACPSessionTitle(title, source: .manual, sessionId: sessionId, manager: manager)
         guard let previous else { return nil }
         return {
-            try? await Self.storeACPSessionTitle(previous.title, source: previous.titleSource, sessionId: sessionId, manager: manager)
+            try await Self.storeACPSessionTitle(previous.title, source: previous.titleSource, sessionId: sessionId, manager: manager)
         }
     }
 

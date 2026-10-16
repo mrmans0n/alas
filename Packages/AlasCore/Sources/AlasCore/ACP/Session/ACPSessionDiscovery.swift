@@ -919,13 +919,13 @@ public final class ACPSessionDiscoveryModel {
     public func rename(
         _ session: ACPDiscoveredSession,
         to title: String,
-        renameLocal: @MainActor (_ localSessionId: String, _ title: String) async throws -> (@MainActor () async -> Void)?
+        renameLocal: @MainActor (_ localSessionId: String, _ title: String) async throws -> (@MainActor () async throws -> Void)?
     ) async throws {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let handle, !trimmed.isEmpty else { return }
         guard updatingSessionIds.insert(session.remoteSessionId).inserted else { return }
         defer { updatingSessionIds.remove(session.remoteSessionId) }
-        var restoreLocal: (@MainActor () async -> Void)?
+        var restoreLocal: (@MainActor () async throws -> Void)?
         if let localSessionId = session.localSessionId {
             // A failure to store the Alas title stops here: the agent is not
             // renamed unless the Alas copy was.
@@ -936,8 +936,9 @@ public final class ACPSessionDiscoveryModel {
         } catch {
             // Only an Alas copy was changed before the request; a row without
             // one shows whatever the agent last reported.
-            if let restoreLocal {
-                await restoreLocal()
+            // The visible title goes back only if the old one was stored
+            // again; otherwise the row keeps showing the stored title.
+            if let restoreLocal, (try? await restoreLocal()) != nil {
                 // A page read meanwhile may show the stored, now undone title:
                 // drop such pages and show the original title again.
                 localActionGeneration += 1
