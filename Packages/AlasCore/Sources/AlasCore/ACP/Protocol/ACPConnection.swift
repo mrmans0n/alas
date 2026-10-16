@@ -59,6 +59,10 @@ public struct ACPInitializeOutcome: Equatable, Sendable {
     public let supportsSteering: Bool
     public let supportsAsyncTasks: Bool
     public let supportsContextBreakdown: Bool
+    /// The adapter advertised `_meta.systemPrompt.append` (codex-acp).
+    public let supportsSystemPromptAppend: Bool
+    /// The advertised append limit in UTF-8 bytes, if any.
+    public let systemPromptAppendMaxBytes: Int?
     /// The adapter's self-reported name/version, when it sent `agentInfo`.
     public let agentInfo: ACPImplementationInfo?
 
@@ -75,7 +79,9 @@ public struct ACPInitializeOutcome: Equatable, Sendable {
         agentInfo: ACPImplementationInfo? = nil,
         supportsSteering: Bool = false,
         supportsAsyncTasks: Bool = false,
-        supportsContextBreakdown: Bool = false
+        supportsContextBreakdown: Bool = false,
+        supportsSystemPromptAppend: Bool = false,
+        systemPromptAppendMaxBytes: Int? = nil
     ) {
         self.promptCapabilities = promptCapabilities
         self.authMethods = authMethods
@@ -90,6 +96,8 @@ public struct ACPInitializeOutcome: Equatable, Sendable {
         self.supportsSteering = supportsSteering
         self.supportsAsyncTasks = supportsAsyncTasks
         self.supportsContextBreakdown = supportsContextBreakdown
+        self.supportsSystemPromptAppend = supportsSystemPromptAppend
+        self.systemPromptAppendMaxBytes = systemPromptAppendMaxBytes
     }
 }
 
@@ -148,17 +156,26 @@ public final class ACPConnection: @unchecked Sendable {
     /// session/new, session/resume, and session/fork when Alas requests MCP
     /// servers; never on session/load, which ignores it.
     public var mcpStartupAwaitTimeoutMs: Int?
+    /// Set after `initialize` from `ACPSessionInstructionsPolicy`. Sent as
+    /// `_meta.systemPrompt.append` on session/new, load, resume, and fork.
+    public var sessionInstructions: String?
 
     public init(client: ACPClient, sessionMeta: ACPSessionMeta? = nil) {
         self.client = client
         self.sessionMeta = sessionMeta
     }
 
-    private func startupMeta(mcpServers: [ACPMCPServer]) -> ACPSessionMeta? {
-        guard let mcpStartupAwaitTimeoutMs, !mcpServers.isEmpty else { return sessionMeta }
+    /// `sessionMeta` plus the per-connection fields. `mcpServers` is nil for
+    /// session/load, which never gets the MCP startup wait.
+    private func requestMeta(mcpServers: [ACPMCPServer]?) -> ACPSessionMeta? {
         var meta = sessionMeta ?? ACPSessionMeta()
-        meta.mcpStartupAwaitTimeoutMs = mcpStartupAwaitTimeoutMs
-        return meta
+        if let mcpStartupAwaitTimeoutMs, let mcpServers, !mcpServers.isEmpty {
+            meta.mcpStartupAwaitTimeoutMs = mcpStartupAwaitTimeoutMs
+        }
+        if let sessionInstructions {
+            meta.systemPrompt = .init(append: sessionInstructions)
+        }
+        return meta == ACPSessionMeta() ? sessionMeta : meta
     }
 
     /// Returns the initialize outcome advertised by the agent, defaulting
@@ -191,7 +208,9 @@ public final class ACPConnection: @unchecked Sendable {
             agentInfo: result.agentInfo,
             supportsSteering: result.supportsSteering,
             supportsAsyncTasks: result.meta?.asyncTasks?.supportsStop == true,
-            supportsContextBreakdown: result.supportsContextBreakdown
+            supportsContextBreakdown: result.supportsContextBreakdown,
+            supportsSystemPromptAppend: result.supportsSystemPromptAppend,
+            systemPromptAppendMaxBytes: result.systemPromptAppendMaxBytes
         )
     }
 
@@ -201,7 +220,7 @@ public final class ACPConnection: @unchecked Sendable {
         brokerOperationKey: String? = nil
     ) async throws -> ACPSessionNewResult {
         let req = ACPRequest(method: "session/new",
-                             params: ACPSessionNewParams(cwd: cwd, mcpServers: mcpServers, meta: startupMeta(mcpServers: mcpServers)),
+                             params: ACPSessionNewParams(cwd: cwd, mcpServers: mcpServers, meta: requestMeta(mcpServers: mcpServers)),
                              brokerOperationKey: brokerOperationKey)
         let resp = try await client.send(req)
         let result = try JSONDecoder().decode(ACPSessionNewResult.self, from: resp.body)
@@ -230,7 +249,7 @@ public final class ACPConnection: @unchecked Sendable {
         brokerOperationKey: String? = nil
     ) async throws -> ACPSessionNewResult {
         let req = ACPRequest(method: "session/load",
-                             params: ACPSessionLoadParams(cwd: cwd, sessionId: sessionId, mcpServers: mcpServers, meta: sessionMeta),
+                             params: ACPSessionLoadParams(cwd: cwd, sessionId: sessionId, mcpServers: mcpServers, meta: requestMeta(mcpServers: nil)),
                              brokerOperationKey: brokerOperationKey)
         let resp = try await client.send(req)
         let result = try JSONDecoder().decode(ACPSessionNewResult.self, from: resp.body)
@@ -246,7 +265,7 @@ public final class ACPConnection: @unchecked Sendable {
     ) async throws -> ACPSessionNewResult {
         let req = ACPRequest(
             method: "session/resume",
-            params: ACPSessionResumeParams(cwd: cwd, sessionId: sessionId, mcpServers: mcpServers, meta: startupMeta(mcpServers: mcpServers)),
+            params: ACPSessionResumeParams(cwd: cwd, sessionId: sessionId, mcpServers: mcpServers, meta: requestMeta(mcpServers: mcpServers)),
             brokerOperationKey: brokerOperationKey
         )
         let resp = try await client.send(req)
@@ -273,7 +292,7 @@ public final class ACPConnection: @unchecked Sendable {
     ) async throws -> ACPSessionNewResult {
         let req = ACPRequest(
             method: "session/fork",
-            params: ACPSessionForkParams(cwd: cwd, sessionId: sessionId, mcpServers: mcpServers, meta: startupMeta(mcpServers: mcpServers)),
+            params: ACPSessionForkParams(cwd: cwd, sessionId: sessionId, mcpServers: mcpServers, meta: requestMeta(mcpServers: mcpServers)),
             brokerOperationKey: brokerOperationKey
         )
         let resp = try await client.send(req)

@@ -373,6 +373,16 @@ public struct ACPInitializeResult: Codable, Equatable, Sendable {
         meta?.contextUsage?.supported == true
     }
 
+    /// The adapter accepts `_meta.systemPrompt.append` on session requests.
+    public var supportsSystemPromptAppend: Bool {
+        meta?.systemPrompt?.append == true && (meta?.systemPrompt?.version ?? 0) >= 1
+    }
+
+    /// The largest append, in UTF-8 bytes, the adapter accepts, when it says.
+    public var systemPromptAppendMaxBytes: Int? {
+        supportsSystemPromptAppend ? meta?.systemPrompt?.maxBytes : nil
+    }
+
     public init(
         protocolVersion: Int,
         agentCapabilities: ACPAgentCapabilities?,
@@ -407,9 +417,12 @@ public struct ACPInitializeResult: Codable, Equatable, Sendable {
         public let steering: Steering?
         /// `_alas/context_usage` extension (our Claude adapter fork).
         public let contextUsage: Steering?
+        /// `_meta.systemPrompt` session instruction append (our Codex
+        /// adapter fork, upstream codex-acp PR #585).
+        public let systemPrompt: SystemPromptCapability?
 
         public enum CodingKeys: String, CodingKey, Sendable {
-            case goal, steering, contextUsage
+            case goal, steering, contextUsage, systemPrompt
             case asyncTasks = "async-tasks"
         }
 
@@ -419,6 +432,13 @@ public struct ACPInitializeResult: Codable, Equatable, Sendable {
             asyncTasks = try? c.decodeIfPresent(ACPAsyncTaskCapability.self, forKey: .asyncTasks)
             steering = try? c.decodeIfPresent(Steering.self, forKey: .steering)
             contextUsage = try? c.decodeIfPresent(Steering.self, forKey: .contextUsage)
+            systemPrompt = try? c.decodeIfPresent(SystemPromptCapability.self, forKey: .systemPrompt)
+        }
+
+        public struct SystemPromptCapability: Codable, Equatable, Sendable {
+            public let version: Int?
+            public let append: Bool?
+            public let maxBytes: Int?
         }
 
         public struct Steering: Codable, Equatable, Sendable {
@@ -913,15 +933,34 @@ public struct ACPSessionMeta: Codable, Equatable, Sendable {
         }
     }
 
+    /// Read by `claude-agent-acp` and `codex-acp`, which append `append` to
+    /// the agent's own instructions. Only the append form: a bare string
+    /// would replace Claude's whole system prompt. See
+    /// `ACPSessionInstructionsPolicy`.
+    public struct SystemPrompt: Codable, Equatable, Sendable {
+        public let append: String
+
+        public init(append: String) {
+            self.append = append
+        }
+    }
+
     public var claudeCode: ClaudeCode? = nil
     public var agy: Agy? = nil
     /// Read by `codex-acp`. See `ACPMCPStartupWaitPolicy`.
     public var mcpStartupAwaitTimeoutMs: Int? = nil
+    public var systemPrompt: SystemPrompt? = nil
 
-    public init(claudeCode: ClaudeCode? = nil, agy: Agy? = nil, mcpStartupAwaitTimeoutMs: Int? = nil) {
+    public init(
+        claudeCode: ClaudeCode? = nil,
+        agy: Agy? = nil,
+        mcpStartupAwaitTimeoutMs: Int? = nil,
+        systemPrompt: SystemPrompt? = nil
+    ) {
         self.claudeCode = claudeCode
         self.agy = agy
         self.mcpStartupAwaitTimeoutMs = mcpStartupAwaitTimeoutMs
+        self.systemPrompt = systemPrompt
     }
 }
 

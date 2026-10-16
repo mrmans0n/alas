@@ -58,6 +58,36 @@ struct ACPConnectionTests {
         #expect(initialized.supportsAsyncTasks == supported)
     }
 
+    @Test("session instructions go only to adapters with a verified append contract", arguments: [
+        // codex-acp 2.2.2-alas.2's advertisement.
+        ("codex", #"{"systemPrompt":{"version":1,"append":true,"clear":true,"maxBytes":262144}}"#, "Review migrations.", "Review migrations."),
+        ("codex", #"{}"#, "Review migrations.", nil),
+        // Over the advertised limit the adapter would reject every session request.
+        ("codex", #"{"systemPrompt":{"version":1,"append":true,"maxBytes":18}}"#, "Review migrations.", "Review migrations."),
+        ("codex", #"{"systemPrompt":{"version":1,"append":true,"maxBytes":17}}"#, "Review migrations.", nil),
+        ("codex", #"{"systemPrompt":{"version":1,"append":"true"}}"#, "Review migrations.", nil),
+        ("codex", #"{"systemPrompt":{"append":true}}"#, "Review migrations.", nil),
+        ("codex", #"{"jetbrains":{"air":{"version":1,"capabilities":["customInstructions"]}}}"#, "Review migrations.", nil),
+        // claude-agent-acp reads `_meta.systemPrompt` without advertising it.
+        ("claude", #"{}"#, "Review migrations.", "Review migrations."),
+        ("claude", #"{}"#, " \n ", nil),
+        ("claude", #"{}"#, nil, nil),
+        ("pi", #"{"systemPrompt":{"version":1,"append":true}}"#, "Review migrations.", nil),
+    ] as [(String, String, String?, String?)])
+    func sessionInstructionsNegotiation(agentID: String, metadata: String, captured: String?, sent: String?) async throws {
+        let mock = ACPMockClient()
+        mock.script(method: "initialize") { _ in
+            Data("{\"protocolVersion\":1,\"_meta\":\(metadata)}".utf8)
+        }
+        let initialized = try await ACPConnection(client: mock).initialize()
+        #expect(ACPSessionInstructionsPolicy.append(
+            agentID: agentID,
+            captured: captured,
+            advertisesAppend: initialized.supportsSystemPromptAppend,
+            maxBytes: initialized.systemPromptAppendMaxBytes
+        ) == sent)
+    }
+
     @Test("top-level goal negotiation preserves valid sibling capabilities", arguments: [false, true])
     func topLevelGoalCapability(malformedTasks: Bool) async throws {
         let mock = ACPMockClient()
@@ -426,6 +456,9 @@ struct ACPConnectionTests {
             isDelegatedChild: false
         ))
         let conn = ACPConnection(client: mock, sessionMeta: meta)
+        conn.sessionInstructions = "Review migrations."
+        var expected = meta
+        expected.systemPrompt = .init(append: "Review migrations.")
 
         _ = try await conn.newSession(cwd: "/tmp", mcpServers: [])
         _ = try await conn.loadSession(cwd: "/tmp", sessionId: "remote", mcpServers: [])
@@ -434,18 +467,20 @@ struct ACPConnectionTests {
 
         #expect(mock.sent.map(\.method) == ["session/new", "session/load", "session/resume", "session/fork"])
         let newParams = try #require(mock.sent.first?.params as? ACPSessionNewParams)
-        #expect(newParams.meta == meta)
+        #expect(newParams.meta == expected)
         for request in mock.sent.dropFirst() {
-            #expect((request.params as? ACPSessionLoadParams)?.meta == meta, "\(request.method)")
+            #expect((request.params as? ACPSessionLoadParams)?.meta == expected, "\(request.method)")
         }
         // The wire key is `_meta`, and it is omitted when no policy applies.
         let wire = try #require(
             JSONSerialization.jsonObject(with: JSONEncoder().encode(newParams)) as? [String: Any]
         )
-        let options = (wire["_meta"] as? [String: Any])
-            .flatMap { $0["claudeCode"] as? [String: Any] }
+        let wireMeta = try #require(wire["_meta"] as? [String: Any])
+        let options = (wireMeta["claudeCode"] as? [String: Any])
             .flatMap { $0["options"] as? [String: Any] }
         #expect(options?["disallowedTools"] as? [String] == meta.claudeCode?.options.disallowedTools)
+        // Only the append form: a bare string would replace Claude's whole system prompt.
+        #expect(wireMeta["systemPrompt"] as? [String: String] == ["append": "Review migrations."])
         let plain = try #require(
             JSONSerialization.jsonObject(
                 with: JSONEncoder().encode(ACPSessionNewParams(cwd: "/tmp", mcpServers: []))

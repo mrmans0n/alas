@@ -55,7 +55,8 @@ struct AppConfigAgentsCodingTests {
     @Test func roundTripsBuiltinStateAndCustoms() throws {
         var cfg = AppConfig.defaults
         cfg.agents.builtinState = [
-            "codex": BuiltinAgentState(isEnabled: false, binaryOverride: nil),
+            "codex": BuiltinAgentState(isEnabled: false, binaryOverride: nil, sessionInstructions: " Review migrations.\n"),
+            "pi": BuiltinAgentState(isEnabled: true, sessionInstructions: "Not offered for Pi."),
             "claude": BuiltinAgentState(
                 isEnabled: true,
                 binaryOverride: "/opt/local/bin/claude",
@@ -89,6 +90,9 @@ struct AppConfigAgentsCodingTests {
         #expect(decoded.agents.builtinState["claude"]?.extraTerminalArgs == ["--model", "sonnet"])
         #expect(decoded.agents.nativeSubagentsDisabled(for: "claude"))
         #expect(!decoded.agents.nativeSubagentsDisabled(for: "codex"))
+        #expect(decoded.agents.sessionInstructions(for: "codex") == "Review migrations.")
+        #expect(decoded.agents.sessionInstructions(for: "claude") == nil)
+        #expect(decoded.agents.sessionInstructions(for: "pi") == nil)
         #expect(decoded.agents.custom.first?.extraTerminalArgs == ["--verbose"])
     }
 
