@@ -1157,6 +1157,39 @@ struct ACPSessionDiscoveryTests {
     }
 
     @MainActor
+    @Test("a reconcile with a tied page boundary reads on to settle the missing tied row", arguments: [false, true])
+    func reconcileReadsPastTiedBoundary(movedToNextPage: Bool) async throws {
+        let store = try temporaryStore()
+        let client = indexClient()
+        var reconciled = false
+        let row = Self.listedRow
+        client.script(method: "session/list") { request in
+            let cursor = (request.params as? ACPSessionListParams)?.cursor
+            if cursor == "page-2" {
+                // Past the tie: an older row, and "t2" only if it merely moved.
+                return try JSONEncoder().encode(ACPSessionListResult(
+                    sessions: (movedToNextPage ? [row("t2", "2026-10-16T09:00:00Z")] : []) + [row("old", "2026-10-16T08:00:00Z")]))
+            }
+            defer { reconciled = true }
+            // The first page is full of sessions sharing one whole second.
+            let tied = reconciled ? ["t1", "t3"] : ["t1", "t2"]
+            return try JSONEncoder().encode(ACPSessionListResult(
+                sessions: [
+                    row("a", "2026-10-16T10:00:00Z"),
+                    row(tied[0], "2026-10-16T09:00:00Z"),
+                    row(tied[1], "2026-10-16T09:00:00Z"),
+                ],
+                nextCursor: "page-2"))
+        }
+        let model = ACPSessionDiscoveryModel()
+        await model.start(manager: manager(store: store, client: client), agentId: "claude")
+        await model.reconcile()
+        #expect(model.sessions.contains { $0.remoteSessionId == "t2" } == movedToNextPage)
+        #expect(model.sessions.contains { $0.remoteSessionId == "t3" })
+        await model.stop()
+    }
+
+    @MainActor
     @Test("a Load more answering after a filter change neither shows its rows nor moves the cursor")
     func loadMoreAfterFilterChange() async throws {
         let store = try temporaryStore()
@@ -1357,6 +1390,12 @@ struct ACPSessionDiscoveryTests {
             return Data("{}".utf8)
         }
         return client
+    }
+
+    /// A listed session at `time` in /tmp/wt; usable from mock handlers,
+    /// which run off the main actor.
+    private nonisolated static func listedRow(_ id: String, _ time: String) -> ACPAgentSessionInfo {
+        .init(sessionId: id, cwd: "/tmp/wt", updatedAt: time, index: .init(archived: false))
     }
 
     /// A project with only the browsing worktree at /tmp/wt: enables the
