@@ -3885,9 +3885,8 @@ public final class ACPSessionManager: ChangeTracking {
             for row in recent where !loaded.contains(row.id) && sessions[row.id] != nil {
                 if let stored = try await persistence.loadSession(id: row.id) {
                     unsavedCreations.remove(row.id)
-                    if stored.archived {
-                        persistedRows[row.id] = stored
-                    } else {
+                    persistedRows[row.id] = stored
+                    if !stored.archived {
                         kept.append(stored)
                     }
                 } else if unsavedCreations.contains(row.id) {
