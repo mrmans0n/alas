@@ -246,6 +246,15 @@ final class FakeSessionsProvider: RemoteSessionsProvider, RemoteSessionPresenter
     func sessionRenamed(_ id: String, title: String) {
         renamed.append((id, title))
     }
+    /// The lists this fake serves, as a gateway reads them.
+    var reads: RemoteGatewayReads {
+        RemoteGatewayReads(
+            worktrees: { await self.remoteWorktrees() },
+            projects: { await self.remoteProjects() },
+            branches: { await self.remoteBranches(projectId: $0) },
+            agents: { self.remoteAgents() }
+        )
+    }
 
     var mentionCandidates: [RemoteMention] = []
     func remoteMentionCandidates(sessionId: String, query: String) async -> [RemoteMention] { mentionCandidates }
@@ -634,6 +643,7 @@ struct RemoteSessionGatewayTests {
         provider.pauseRemoteProjects = true
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        gw.reads = provider.reads
 
         await gw.handle(.listProjects)
         await provider.waitForRemoteProjectsCall(1)
@@ -661,6 +671,7 @@ struct RemoteSessionGatewayTests {
         provider.pauseRemoteBranches = true
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        gw.reads = provider.reads
 
         await gw.handle(.listBranches(projectId: "project-old"))
         await provider.waitForRemoteBranchesCall(1)
@@ -684,6 +695,7 @@ struct RemoteSessionGatewayTests {
         provider.pauseRemoteProjects = true
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        gw.reads = provider.reads
 
         await gw.handle(.listProjects)
         await provider.waitForRemoteProjectsCall(1)
@@ -701,6 +713,7 @@ struct RemoteSessionGatewayTests {
         provider.pauseRemoteBranches = true
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        gw.reads = provider.reads
 
         await gw.handle(.listBranches(projectId: "project-1"))
         await provider.waitForRemoteBranchesCall(1)
@@ -720,6 +733,7 @@ struct RemoteSessionGatewayTests {
         let provider = FakeSessionsProvider()
         provider.eventHost = AlasHost(core: AlasCoreContext(projects: projects, runHistoryStore: nil))
         let gw = RemoteSessionGateway(provider: provider) { _ in }
+        gw.reads = provider.reads
         defer { gw.close() }
         await gw.handle(.listWorktrees)
         await gw.handle(.listProjects)
@@ -799,6 +813,7 @@ struct RemoteSessionGatewayTests {
         ]
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider, caller: .remotePeer(deviceID: "phone")) { sent.append($0) }
+        gw.reads = provider.reads
 
         await gw.handle(.createWorktreeSession(
             projectId: "project-1",
@@ -832,6 +847,7 @@ struct RemoteSessionGatewayTests {
         )
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        gw.reads = provider.reads
 
         await gw.handle(.createWorktreeSession(
             projectId: "project-1",
@@ -876,6 +892,7 @@ struct RemoteSessionGatewayTests {
         ]
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        gw.reads = provider.reads
 
         await gw.handle(.createWorktreeSession(
             projectId: "project-1",
@@ -980,6 +997,7 @@ struct RemoteSessionGatewayTests {
         provider.writers = ["s1"]
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        gw.reads = provider.reads
 
         var listHandleReturned = false
         let listTask = Task { @MainActor in

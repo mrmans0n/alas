@@ -926,13 +926,7 @@ struct NewWorktreeDialog: View {
         availableBranches: [String],
         configuredDefault: String
     ) -> String {
-        if !configuredDefault.isEmpty && availableBranches.contains(configuredDefault) {
-            return configuredDefault
-        }
-        for preferred in ["main", "master", "trunk"] where availableBranches.contains(preferred) {
-            return preferred
-        }
-        return availableBranches.first ?? configuredDefault
+        WorktreeBaseBranch.preferred(availableBranches: availableBranches, configuredDefault: configuredDefault)
     }
 
     nonisolated static func projectIDAfterIssueAttach(

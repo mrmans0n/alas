@@ -16,6 +16,8 @@ public final class RemoteSessionGateway {
     private let provider: RemoteSessionsProvider
     /// The app's windows, for the tab requests; nil where there are none.
     @_spi(AppHost) public weak var presenter: RemoteSessionPresenter?
+    /// Where the lists this gateway serves come from: the host's.
+    @_spi(Testing) public lazy var reads = RemoteGatewayReads.host(provider.eventHost)
     private let federation: FederatedSessionsProvider?
     /// This gateway's registration with `federation`; nil without one.
     private var downstream: FederatedDownstream?
@@ -106,7 +108,7 @@ public final class RemoteSessionGateway {
             wantsWorktreeList = true
             refreshWorktreeList()
         case .listAgents:
-            send(.agentList(agents: provider.remoteAgents()))
+            send(.agentList(agents: reads.agents()))
         case .listProjects:
             wantsProjectList = true
             refreshProjectList()
@@ -553,7 +555,7 @@ public final class RemoteSessionGateway {
         worktreeListRefresh?.cancel()
         worktreeListRefresh = Task { @MainActor [weak self] in
             guard let self else { return }
-            let worktrees = await provider.remoteWorktrees()
+            let worktrees = await reads.worktrees()
             guard !Task.isCancelled, generation == worktreeListGeneration else { return }
             send(.worktreeList(worktrees: worktrees))
         }
@@ -565,7 +567,7 @@ public final class RemoteSessionGateway {
         projectListRefresh?.cancel()
         projectListRefresh = Task { @MainActor [weak self] in
             guard let self else { return }
-            let projects = await provider.remoteProjects()
+            let projects = await reads.projects()
             guard !Task.isCancelled, generation == projectListGeneration else { return }
             send(.projectList(projects: projects))
         }
@@ -577,7 +579,7 @@ public final class RemoteSessionGateway {
         branchListRefresh?.cancel()
         branchListRefresh = Task { @MainActor [weak self] in
             guard let self else { return }
-            let result = await provider.remoteBranches(projectId: projectId)
+            let result = await reads.branches(projectId)
             guard !Task.isCancelled, generation == branchListGeneration else { return }
             switch result {
             case .success(let branches, let preferredBase):
