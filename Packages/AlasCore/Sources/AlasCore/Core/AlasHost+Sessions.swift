@@ -178,8 +178,11 @@ extension SessionsAPI {
     ) async throws {
         caller.log("sessions.answerPermission", sessionID)
         let manager = try await answeringManager(for: sessionID)
-        guard let pending = manager.liveSession(for: sessionID)?.transcript.pendingPermission, pending.id == requestID,
-              let policy = manager.permissionPolicy(for: sessionID)
+        // The agent's own request id: the transcript shows every permission
+        // under one placeholder id, so it cannot tell one request from the next.
+        guard let pending = manager.liveSession(for: sessionID)?.transcript.pendingPermission,
+              let policy = manager.permissionPolicy(for: sessionID),
+              policy.pendingPermissionRequestID == requestID
         else { throw SessionRefusal.notPending }
         guard let answer = ACPRequestAnswers.permission(pending, optionId: optionID, scope: scope) else {
             throw SessionRefusal.invalidAnswer

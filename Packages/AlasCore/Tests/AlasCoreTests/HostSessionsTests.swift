@@ -44,16 +44,14 @@ struct HostSessionsTests {
         ))
         let manager = try #require(fixture.core.sessionManagers.values.first)
         try await eventually { await manager.liveSession(for: id)?.transcript.pendingPermission != nil }
-        // Clients answer the request by the id the session shows for it.
-        let pending = try #require(manager.liveSession(for: id)?.transcript.pendingPermission)
         await #expect(throws: SessionRefusal.invalidAnswer) {
-            try await sessions.answerPermission(id, requestID: pending.id, optionID: "maybe", caller: .app)
+            try await sessions.answerPermission(id, requestID: requestID, optionID: "maybe", caller: .app)
         }
         // Two answers race, each recording a decision for the session: only
         // the first to claim the request counts.
         let answers = [
-            Task { try await sessions.answerPermission(id, requestID: pending.id, optionID: "allow", scope: .session, caller: .app) },
-            Task { try await sessions.answerPermission(id, requestID: pending.id, optionID: "reject", scope: .session, caller: .app) },
+            Task { try await sessions.answerPermission(id, requestID: requestID, optionID: "allow", scope: .session, caller: .app) },
+            Task { try await sessions.answerPermission(id, requestID: requestID, optionID: "reject", scope: .session, caller: .app) },
         ]
         var refused = 0
         for answer in answers {
@@ -61,6 +59,23 @@ struct HostSessionsTests {
         }
         #expect(refused == 1)
         try await eventually { fixture.agent.permissionResponses[requestID] != nil }
+
+        // A late reply to that request does not answer the next one, though
+        // it offers the same option.
+        let nextID = JSONRPCID.number(8)
+        fixture.agent.emitPermission(id: nextID, params: ACPPermissionRequestParams(
+            sessionId: "agent-1",
+            toolCall: ACPPermissionToolCall(
+                toolCallId: "call-3", title: "Delete", kind: nil, status: nil,
+                content: nil, locations: nil, rawInput: nil, rawOutput: nil
+            ),
+            options: [ACPPermissionOption(optionId: "allow", name: "Allow", kind: "allow_once")]
+        ))
+        try await eventually { await manager.permissionPolicy(for: id)?.pendingPermissionRequestID == nextID }
+        await #expect(throws: SessionRefusal.notPending) {
+            try await sessions.answerPermission(id, requestID: requestID, optionID: "allow", caller: .app)
+        }
+        try await sessions.answerPermission(id, requestID: nextID, optionID: "allow", caller: .app)
 
         // Another instance on the same store cannot archive what this one drives.
         let elsewhere = ACPSessionManager(
@@ -144,8 +159,7 @@ struct HostSessionsTests {
             ),
             options: [ACPPermissionOption(optionId: "allow", name: "Allow", kind: "allow_once")]
         ))
-        try await eventually { await manager.liveSession(for: id)?.transcript.pendingPermission != nil }
-        let pending = try #require(manager.liveSession(for: id)?.transcript.pendingPermission)
+        try await eventually { await manager.permissionPolicy(for: id)?.pendingPermissionRequestID == .number(9) }
 
         // Another instance takes the lease while this one still believes it holds it.
         let store = ACPSessionPersistence(path: fixture.sessionsDatabase.path)
@@ -157,7 +171,7 @@ struct HostSessionsTests {
         #expect(manager.isWriter(for: id), "the takeover is not observed yet")
 
         await #expect(throws: SessionRefusal.notWriter) {
-            try await sessions.answerPermission(id, requestID: pending.id, optionID: "allow", caller: .app)
+            try await sessions.answerPermission(id, requestID: .number(9), optionID: "allow", caller: .app)
         }
         // Standing down cancels the request; the answer never reaches the agent.
         #expect(fixture.agent.permissionResponses[.number(9)]?.outcome != .selected(optionId: "allow"))
@@ -219,6 +233,21 @@ struct HostSessionsTests {
             pid: Int64(getpid()), now: now, token: "new"
         )
         #expect(rotated == nil)
+    }
+
+    /// A session another instance archived leaves this one's list on its
+    /// next read of the store, even while it is still loaded here.
+    @Test func sessionsArchivedElsewhereLeaveTheList() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let manager = try fixture.core.sessionManager(for: fixture.worktree)
+        let session = manager.createSession(agentId: "gemini")
+        await manager.flushAllPersistence()
+        try await eventually { await fixture.host.sessions.list().contains { $0.id == session.id } }
+
+        try await ACPSessionPersistence(path: fixture.sessionsDatabase.path).setArchived(id: session.id, archived: true)
+        await manager.refreshRecentNow()
+        #expect(!fixture.host.sessions.list().contains { $0.id == session.id })
     }
 
     enum Unavailable: CaseIterable {
