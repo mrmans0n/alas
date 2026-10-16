@@ -1201,6 +1201,33 @@ struct ACPSessionDiscoveryTests {
     }
 
     @MainActor
+    @Test("an undated missing row is settled at the end of a long history")
+    func undatedRowSettledAtLongHistoryEnd() async throws {
+        let store = try temporaryStore()
+        let client = indexClient()
+        var reconciled = false
+        let row = Self.listedRow
+        client.script(method: "session/list") { request in
+            guard let cursor = (request.params as? ACPSessionListParams)?.cursor else {
+                defer { reconciled = true }
+                return try JSONEncoder().encode(ACPSessionListResult(
+                    sessions: [row("a", "2026-10-16T10:00:00Z"), row(reconciled ? "b" : "gone", nil)],
+                    nextCursor: "page-2"))
+            }
+            // Sixty more pages, none holding "gone".
+            let number = Int(cursor.dropFirst("page-".count)) ?? 0
+            return try JSONEncoder().encode(ACPSessionListResult(
+                sessions: [row("older-\(number)", "2026-10-15T10:00:00Z")],
+                nextCursor: number < 61 ? "page-\(number + 1)" : nil))
+        }
+        let model = ACPSessionDiscoveryModel()
+        await model.start(manager: manager(store: store, client: client), agentId: "claude")
+        await model.reconcile()
+        #expect(!model.sessions.contains { $0.remoteSessionId == "gone" })
+        await model.stop()
+    }
+
+    @MainActor
     @Test("a rename made during an older read keeps the newer data a later page brought")
     func renamePatchOverNewerPage() async throws {
         let store = try temporaryStore()

@@ -873,9 +873,10 @@ public final class ACPSessionDiscoveryModel {
             // finding it, settles it. Dated ties settle at an older row.
             let undated = sessions.contains { tied.contains($0.remoteSessionId) && $0.lastActivity == nil }
             var seen: Set<String> = []
-            // Until settled or the list ends; the bound only guards against an
-            // adapter that never ends its pages.
-            for _ in 0 ..< 50 {
+            // Until settled or the list ends, however long; a cursor the
+            // adapter repeats would never end, so it stops the scan.
+            var cursorsRead: Set<String> = []
+            while cursorsRead.insert(cursor).inserted {
                 guard let next = try? await handle.page(after: cursor, filter: listedFilter) else { break }
                 seen.formUnion(next.rows.map(\.remoteSessionId))
                 let pastTie = tie.map { tie in next.rows.contains { ($0.lastActivity ?? .distantFuture) < tie } } ?? false
