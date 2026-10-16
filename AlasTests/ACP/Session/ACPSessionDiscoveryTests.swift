@@ -1135,6 +1135,27 @@ struct ACPSessionDiscoveryTests {
         await model.stop()
     }
 
+    @Test("a first-page row kept on a timestamp tie is checked again by the next reconcile")
+    func reconciliationTieIsRechecked() {
+        let filter = ACPSessionBrowserFilter()
+        let rows = [Self.reducerRow("a", 40), Self.reducerRow("tie", 20), Self.reducerRow("c", 20)]
+        // "tie" is missing and ties the new page's oldest row: kept for now.
+        let page = [Self.reducerRow("a", 40), Self.reducerRow("c", 20)]
+        let merged = ACPSessionBrowserReducer.reconciling(
+            firstPage: page, hasMorePages: true, previousFirstPage: ["a", "tie", "c"], rows: rows,
+            filter: filter, browsingWorktreeId: "wt"
+        )
+        #expect(merged.map(\.remoteSessionId) == ["a", "tie", "c"])
+        let next = ACPSessionBrowserReducer.nextFirstPageIds(previous: ["a", "tie", "c"], page: page, listed: merged)
+        #expect(next == ["a", "tie", "c"])
+        // A later page with an older oldest row settles it.
+        let later = ACPSessionBrowserReducer.reconciling(
+            firstPage: page + [Self.reducerRow("d", 10)], hasMorePages: true, previousFirstPage: next, rows: merged,
+            filter: filter, browsingWorktreeId: "wt"
+        )
+        #expect(!later.contains { $0.remoteSessionId == "tie" })
+    }
+
     @MainActor
     @Test("a Load more answering after a filter change neither shows its rows nor moves the cursor")
     func loadMoreAfterFilterChange() async throws {

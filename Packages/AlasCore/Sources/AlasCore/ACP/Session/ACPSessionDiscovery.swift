@@ -205,6 +205,20 @@ public enum ACPSessionBrowserReducer {
         return (changed.filter { current($0.remoteSessionId) }, removed.filter(current))
     }
 
+    /// The ids the next reconcile compares against: the new first page, plus
+    /// earlier first-page rows it lacks that are still listed. Those could
+    /// not be told apart from a row that moved to the next page (a timestamp
+    /// tie with the page's oldest row), so a later page decides.
+    public static func nextFirstPageIds(
+        previous: Set<String>,
+        page: [ACPDiscoveredSession],
+        listed: [ACPDiscoveredSession]
+    ) -> Set<String> {
+        let pageIds = Set(page.map(\.remoteSessionId))
+        let stillListed = Set(listed.map(\.remoteSessionId))
+        return pageIds.union(previous.subtracting(pageIds).intersection(stillListed))
+    }
+
     /// Merges a freshly read first page. A row the previous first page held
     /// that the new one lacks is gone (a missed removal) when the new page is
     /// the whole list, or when it is newer than the new page's oldest row;
@@ -482,11 +496,19 @@ public final class ACPSessionDiscoveryHandle {
         let id = try await connection.subscribeSessionList(cwd: cwd)
         subscriptionId = id
         let incoming = connection.client.sessionListChanges
+        // Stamped on arrival, before waiting behind a batch whose rows are
+        // still being read from the session store.
+        let (stamped, stampedContinuation) = AsyncStream<(ACPSessionListChanges, ACPSessionBrowserStamp)>.makeStream()
+        let receiver = Task { @MainActor in
+            for await changes in incoming where changes.subscriptionId == id {
+                stampedContinuation.yield((changes, stamp()))
+            }
+            stampedContinuation.finish()
+        }
         return AsyncStream { continuation in
             let task = Task { @MainActor [weak self] in
-                for await changes in incoming where changes.subscriptionId == id {
+                for await (changes, started) in stamped {
                     guard let self, !self.closed else { break }
-                    let started = stamp()
                     var rows: [ACPDiscoveredSession] = []
                     for info in changes.sessions {
                         // Mapped with the linked scope: the model scopes rows by
@@ -499,7 +521,10 @@ public final class ACPSessionDiscoveryHandle {
                 }
                 continuation.finish()
             }
-            continuation.onTermination = { _ in task.cancel() }
+            continuation.onTermination = { _ in
+                task.cancel()
+                receiver.cancel()
+            }
         }
     }
 
@@ -801,7 +826,7 @@ public final class ACPSessionDiscoveryModel {
             filter: appliedFilter,
             browsingWorktreeId: handle.browsingWorktreeId
         )
-        firstPageIds = Set(page.rows.map(\.remoteSessionId))
+        firstPageIds = ACPSessionBrowserReducer.nextFirstPageIds(previous: firstPageIds, page: page.rows, listed: sessions)
     }
 
     /// Renames the agent's session and its Alas copy, in whichever worktree
