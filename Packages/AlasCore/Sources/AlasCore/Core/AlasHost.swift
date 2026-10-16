@@ -11,6 +11,9 @@ public final class AlasHost {
     let core: AlasCoreContext
     /// Started by the first snapshot: nobody holds a cursor before it.
     private var eventSource: HostEventSource?
+    /// Test hook that replaces the session step of a Remote client's
+    /// worktree-and-session creation.
+    @_spi(Testing) public var remoteSessionCreator: (@MainActor (RemoteSessionCreation) async -> RemoteCreateSessionResult)?
 
     public init(core: AlasCoreContext) {
         self.core = core

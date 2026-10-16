@@ -16,8 +16,8 @@ public final class RemoteSessionGateway {
     private let provider: RemoteSessionsProvider
     /// The app's windows, for the tab requests; nil where there are none.
     @_spi(AppHost) public weak var presenter: RemoteSessionPresenter?
-    /// Where the lists this gateway serves come from: the host's.
-    @_spi(Testing) public lazy var reads = RemoteGatewayReads.host(provider.eventHost)
+    /// What this gateway asks of the host besides session verbs.
+    @_spi(Testing) public lazy var hostCalls = RemoteGatewayHostCalls.host(provider.eventHost)
     private let federation: FederatedSessionsProvider?
     /// This gateway's registration with `federation`; nil without one.
     private var downstream: FederatedDownstream?
@@ -108,24 +108,19 @@ public final class RemoteSessionGateway {
             wantsWorktreeList = true
             refreshWorktreeList()
         case .listAgents:
-            send(.agentList(agents: reads.agents()))
+            send(.agentList(agents: hostCalls.agents()))
         case .listProjects:
             wantsProjectList = true
             refreshProjectList()
         case .listBranches(let projectId):
             refreshBranchList(projectId: projectId)
         case .createWorktreeSession(let projectId, let base, let branch, let agentId, let modelId, let effortId):
-            let result = await provider.createRemoteWorktreeSession(
-                projectId: projectId,
-                base: base,
-                branch: branch,
-                agentId: agentId,
-                modelId: modelId,
-                effortId: effortId,
-                caller: caller ?? .app
-            )
+            let result = await hostCalls.createWorktreeSession(RemoteWorktreeSessionCreation(
+                projectID: projectId, base: base, branch: branch, agentID: agentId, modelID: modelId, effortID: effortId
+            ), hostCaller)
             switch result {
             case .success(let summary):
+                presentCreated(summary)
                 send(.worktreeSessionCreated(session: summary))
                 refreshSessionList()
                 refreshWorktreeList()
@@ -140,10 +135,12 @@ public final class RemoteSessionGateway {
                 }
             }
         case .createSession(let worktreeId, let agentId, let modelId, let effortId):
-            let result = await provider.createRemoteSession(
-                worktreeId: worktreeId, agentId: agentId, modelId: modelId, effortId: effortId)
+            let result = await hostCalls.createSession(RemoteSessionCreation(
+                worktreeID: worktreeId, agentID: agentId, modelID: modelId, effortID: effortId
+            ), hostCaller)
             switch result {
             case .success(let summary):
+                presentCreated(summary)
                 send(.sessionCreated(session: summary))
                 refreshSessionList()
             case .failure(let message):
@@ -555,7 +552,7 @@ public final class RemoteSessionGateway {
         worktreeListRefresh?.cancel()
         worktreeListRefresh = Task { @MainActor [weak self] in
             guard let self else { return }
-            let worktrees = await reads.worktrees()
+            let worktrees = await hostCalls.worktrees()
             guard !Task.isCancelled, generation == worktreeListGeneration else { return }
             send(.worktreeList(worktrees: worktrees))
         }
@@ -567,7 +564,7 @@ public final class RemoteSessionGateway {
         projectListRefresh?.cancel()
         projectListRefresh = Task { @MainActor [weak self] in
             guard let self else { return }
-            let projects = await reads.projects()
+            let projects = await hostCalls.projects()
             guard !Task.isCancelled, generation == projectListGeneration else { return }
             send(.projectList(projects: projects))
         }
@@ -579,7 +576,7 @@ public final class RemoteSessionGateway {
         branchListRefresh?.cancel()
         branchListRefresh = Task { @MainActor [weak self] in
             guard let self else { return }
-            let result = await reads.branches(projectId)
+            let result = await hostCalls.branches(projectId)
             guard !Task.isCancelled, generation == branchListGeneration else { return }
             switch result {
             case .success(let branches, let preferredBase):
@@ -981,6 +978,12 @@ public final class RemoteSessionGateway {
     @discardableResult
     private func editQueue(_ id: String, _ edit: SessionQueueEdit) async -> String? {
         (try? await sessions?.editQueue(id, edit, caller: hostCaller)) ?? nil
+    }
+
+    /// The app shows a session a client created, as it shows one it creates.
+    private func presentCreated(_ summary: RemoteSessionSummary) {
+        guard let worktreeID = summary.worktreeId else { return }
+        presenter?.sessionCreated(summary.id, worktreeID: worktreeID)
     }
 
     /// The host's session verbs; nil without a host, which refuses them all.

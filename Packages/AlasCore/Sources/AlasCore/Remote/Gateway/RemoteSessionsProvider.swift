@@ -11,17 +11,6 @@ public protocol RemoteSessionsProvider: AnyObject {
     /// such as a session tab opening or closing.
     var sessionListChanges: ChangeSignal<Void>? { get }
     func sessionSummaries() async -> [RemoteSessionSummary]
-    func createRemoteSession(worktreeId: String, agentId: String, modelId: String?, effortId: String?) async -> RemoteCreateSessionResult
-    /// `caller` is the device the connection authenticated.
-    func createRemoteWorktreeSession(
-        projectId: String,
-        base: String,
-        branch: String,
-        agentId: String,
-        modelId: String?,
-        effortId: String?,
-        caller: HostCaller
-    ) async -> RemoteCreateWorktreeSessionResult
     func session(for id: String) -> ACPSession?
     func permissionPolicy(for id: String) -> ACPPermissionPolicy?
     func hydrateIfNeeded(id: String) async
