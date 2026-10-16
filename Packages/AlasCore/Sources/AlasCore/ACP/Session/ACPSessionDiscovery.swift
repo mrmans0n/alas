@@ -936,15 +936,15 @@ public final class ACPSessionDiscoveryModel {
         } catch {
             // Only an Alas copy was changed before the request; a row without
             // one shows whatever the agent last reported.
-            // The visible title goes back only if the old one was stored
-            // again; otherwise the row keeps showing the stored title.
-            if let restoreLocal, (try? await restoreLocal()) != nil {
-                // A page read meanwhile may show the stored, now undone title:
-                // drop such pages and show the original title again.
+            // The row shows the Alas title as stored: the original if the
+            // restore stored it again, else the new one, which stays stored.
+            if let restoreLocal {
+                let restored = (try? await restoreLocal()) != nil
+                // A page read meanwhile may show another title: drop such pages.
                 localActionGeneration += 1
                 lastLocalAction[session.remoteSessionId] = localActionGeneration
-                let original = session.title
-                applyLocalPatch(id: session.remoteSessionId) { $0.title = original }
+                let stored = restored ? session.title : trimmed
+                applyLocalPatch(id: session.remoteSessionId) { $0.title = stored }
             }
             throw error
         }
