@@ -2111,15 +2111,10 @@ public final class ACPSessionManager: ChangeTracking {
             recent.insert(row, at: 0)
         }
         unsavedCreations.insert(id)
-        let saving = enqueuePersistenceResult { persistence -> Bool in
+        markSaved(id, once: enqueuePersistenceResult { persistence -> Bool in
             try await persistence.upsertSession(row)
             return true
-        }
-        Task { @MainActor [weak self] in
-            if await saving.value == true {
-                self?.unsavedCreations.remove(id)
-            }
-        }
+        })
         let session = ACPSession(
             id: id, agentId: agentId, worktreeId: worktreeId,
             title: row.title, owner: owner, titleSource: row.titleSource, origin: row.origin,
@@ -3402,12 +3397,23 @@ public final class ACPSessionManager: ChangeTracking {
         replaceRecentRow(row)
         let rowToPersist = row
         let fence = leaseFence(sessionId: s.id)
-        enqueuePersistence { persistence in
-            _ = try await persistence.upsertSession(
+        markSaved(s.id, once: enqueuePersistenceResult { persistence in
+            try await persistence.upsertSession(
                 rowToPersist,
                 preserveTitle: preserveTitle,
                 fence: fence
             )
+        })
+    }
+
+    /// Clears a creation's not-yet-saved marker once `saving` lands its row,
+    /// whichever save that turns out to be.
+    private func markSaved(_ id: ACPSession.ID, once saving: Task<Bool?, Never>) {
+        guard unsavedCreations.contains(id) else { return }
+        Task { @MainActor [weak self] in
+            if await saving.value == true {
+                self?.unsavedCreations.remove(id)
+            }
         }
     }
 
@@ -3419,6 +3425,9 @@ public final class ACPSessionManager: ChangeTracking {
         let result = await enqueuePersistenceResult { persistence in
             try await persistence.upsertSession(rowToPersist, fence: fence)
         }.value
+        if result == true {
+            unsavedCreations.remove(s.id)
+        }
         guard result == true,
               isCurrentAttachment(sessionId: s.id, attempt: attempt, session: s)
         else { return false }
