@@ -32,6 +32,12 @@ public protocol AlasHostEnvironment: AnyObject {
     func resolveWorkspaceRepoHook(_ request: WorkspaceRepoHookRequest) async throws -> String?
     /// Starts and hosts run scripts.
     var runLauncher: any RunLauncher { get }
+    /// Whether new sessions may use `agentID`, in a project on `remoteHost`
+    /// when it is set.
+    func admitsAgent(_ agentID: String, remoteHost: String?) -> Bool
+    /// The session manager for a Workspace checkout, created on first use.
+    /// Throws a `SessionRefusal` when the checkout cannot host sessions now.
+    func sessionManager(forCheckout checkout: WorkspaceCheckout, in core: AlasCoreContext) async throws -> ACPSessionManager
 }
 
 extension AlasHostEnvironment {
@@ -62,6 +68,14 @@ extension AlasHostEnvironment {
     public func resolveWorkspaceRepoHook(_ request: WorkspaceRepoHookRequest) async throws -> String? { nil }
 
     public var runLauncher: any RunLauncher { HeadlessRunLauncher.shared }
+
+    public func admitsAgent(_ agentID: String, remoteHost: String?) -> Bool {
+        ACPLaunchCatalog.specs.contains { $0.agentID == agentID }
+    }
+
+    public func sessionManager(forCheckout checkout: WorkspaceCheckout, in core: AlasCoreContext) async throws -> ACPSessionManager {
+        try core.sessionManager(forCheckout: checkout)
+    }
 }
 
 /// A host without a UI: every requirement keeps its default.

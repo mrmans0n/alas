@@ -234,4 +234,30 @@ public final class AlasCoreContext {
         sessionManagers[owner] = manager
         return manager
     }
+
+    /// The session manager for a local Workspace checkout, created on first
+    /// use through the same factory as a worktree's, at the checkout's root.
+    /// None is handed out for one that is archived, busy, remote, or whose
+    /// root is gone.
+    public func sessionManager(forCheckout checkout: WorkspaceCheckout) throws -> ACPSessionManager {
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+        if let manager = sessionManagers[owner] { return manager }
+        guard checkout.archivedAt == nil, checkout.operation == .idle else {
+            throw SessionRefusal.ownerUnavailable(reason: "The Workspace checkout is archived or busy.")
+        }
+        guard checkout.executionLocation.normalized == .local else {
+            throw SessionRefusal.ownerUnavailable(reason: "Sessions in remote Workspace checkouts start from the app.")
+        }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: checkout.rootPath, isDirectory: &isDirectory), isDirectory.boolValue else {
+            throw SessionRefusal.ownerUnavailable(reason: "The Workspace checkout's folder is missing.")
+        }
+        let root = URL(fileURLWithPath: checkout.rootPath)
+        let manager = makeSessionManager(owner, Worktree(
+            id: owner.storageKey, projectId: "", name: checkout.fallbackWorkspaceName, branch: checkout.branch,
+            path: root, status: .clean, lastActivity: Date()
+        ))
+        sessionManagers[owner] = manager
+        return manager
+    }
 }

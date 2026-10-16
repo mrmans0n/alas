@@ -1104,7 +1104,7 @@ public final class RemoteSessionGateway {
     }
 
     private func emitPendingQuestionIfAny(id: String, session: ACPSession) {
-        if let pending = Self.queuedQuestion(in: session),
+        if let pending = ACPRequestAnswers.pendingQuestion(in: session),
            !pending.params.questions.isEmpty {
             let rid = Self.requestIdInt(pending.id)
             lastQuestionReq[id] = rid
@@ -1224,26 +1224,16 @@ public final class RemoteSessionGateway {
               let pending = session.transcript.pendingPermission,
               Self.requestIdInt(pending.id) == requestId          // first-wins guard
         else { return }
-        guard let option = pending.params.options.first(where: { $0.optionId == optionId }) else { return }
-
-        // Mirror the local SwiftUI prompt's mapping so remote and local
-        // decisions log identically (ACPPermissionPrompt.handle).
-        let decision: ACPPermissionDecision = option.kind.hasPrefix("allow") ? .allow : .deny
-        let scope: ACPPermissionScopeKind?
-        if let persistScope {
-            scope = persistScope == "session" ? .session
-                  : (persistScope == "project" ? .project : nil)
-        } else {
-            switch option.kind {
-            case "allow_once", "reject_once":     scope = nil
-            case "allow_always", "reject_always": scope = .project
-            default:                              scope = .session
-            }
+        let scope: ACPRequestAnswers.PermissionScope = switch persistScope {
+        case nil: .optionDefault
+        case "session": .session
+        case "project": .project
+        default: .once
         }
-
-        // Same scopeKey derivation as ACPTabView.scopeKey(for:).
-        let scopeKey = Self.scopeKey(for: pending.params)
-        await policy.userDecided(scopeKey: scopeKey, optionId: optionId, decision: decision, persistScope: scope)
+        guard let answer = ACPRequestAnswers.permission(pending, optionId: optionId, scope: scope) else { return }
+        await policy.userDecided(
+            scopeKey: answer.scopeKey, optionId: answer.optionId, decision: answer.decision, persistScope: answer.persistScope
+        )
         lastPermissionReq[sessionId] = nil
         send(.permissionResolved(sessionId: sessionId, requestId: requestId))
     }
@@ -1292,31 +1282,14 @@ public final class RemoteSessionGateway {
 
     private func applyQuestionAnswer(sessionId: String, requestId: Int, answers: [RemoteQuestionAnswer]) {
         guard let session = provider.session(for: sessionId),
-              let pending = Self.queuedQuestion(in: session),
-              Self.requestIdInt(pending.id) == requestId          // first-wins guard
+              let pending = ACPRequestAnswers.pendingQuestion(in: session),
+              Self.requestIdInt(pending.id) == requestId,         // first-wins guard
+              let response = ACPRequestAnswers.question(
+                  pending,
+                  answers: answers.map { ACPQuestionAnswer(questionId: $0.questionId, selectedOptionIds: $0.selectedOptionIds) }
+              )
         else { return }
-        // Require a non-empty selection for every question and order each by the
-        // question's option order — the same completeness rule the local prompt
-        // enforces (ACPQuestionPrompt.answeredResponse). Ignore malformed/partial
-        // input rather than resuming the agent with vacuous answers.
-        let selectionByQuestion = Dictionary(answers.map { ($0.questionId, Set($0.selectedOptionIds)) },
-                                             uniquingKeysWith: { $1 })
-        var acpAnswers: [ACPQuestionAnswer] = []
-        for question in pending.params.questions {
-            let selected = selectionByQuestion[question.id] ?? []
-            // Keep only ids that are real options for this question. If none
-            // survive (empty, or unknown ids from a stale/malicious client),
-            // treat the answer as incomplete rather than resuming the agent with
-            // a vacuous selection.
-            let ordered = question.options.map(\.id).filter { selected.contains($0) }
-            guard !ordered.isEmpty else { return }
-            acpAnswers.append(ACPQuestionAnswer(questionId: question.id, selectedOptionIds: ordered))
-        }
-        provider.answerQuestion(
-            for: sessionId,
-            requestId: pending.id,
-            .init(outcome: .answered(answers: acpAnswers))
-        )
+        provider.answerQuestion(for: sessionId, requestId: pending.id, response)
         lastQuestionReq[sessionId] = nil
         send(.questionResolved(sessionId: sessionId, requestId: requestId))
     }
@@ -1326,32 +1299,17 @@ public final class RemoteSessionGateway {
               let pending = session.transcript.pendingPlan,
               pending.id == requestId
         else { return }
-
-        let response: ACPCursorPlanResponse
+        let planAction: ACPRequestAnswers.PlanAction
         switch action {
-        case "accept":
-            response = .init(outcome: .accepted(planUri: "alas://plans/\(pending.params.toolCallId)"))
-        case "reject":
-            let trimmed = (reason ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { return }
-            response = .init(outcome: .rejected(reason: trimmed))
-        case "cancel":
-            response = .init(outcome: .cancelled)
-        default:
-            return
+        case "accept": planAction = .accept
+        case "reject": planAction = .reject(reason: reason ?? "")
+        case "cancel": planAction = .cancel
+        default: return
         }
-
+        guard let response = ACPRequestAnswers.plan(pending, action: planAction) else { return }
         provider.respondToPlan(for: sessionId, requestId: requestId, response)
         lastPlanReq[sessionId] = nil
         send(.planResolved(sessionId: sessionId, requestId: requestId))
-    }
-
-    private static func queuedQuestion(in session: ACPSession) -> ACPSession.PendingQuestion? {
-        guard let head = session.transcript.pendingUserInputs.first else {
-            return session.transcript.pendingQuestion
-        }
-        guard case .cursor(let id, let params) = head.source else { return nil }
-        return .init(id: id, params: params)
     }
 
     private func applyElicitationResponse(
@@ -1366,107 +1324,18 @@ public final class RemoteSessionGateway {
               pending.id == token,
               case .elicitation = pending.source
         else { return }
-
-        let resolvedAction: ACPUserInputAction
+        let answer: ACPRequestAnswers.UserInputAnswer
         switch action {
-        case "accept":
-            let content = content ?? [:]
-            guard Self.remoteContent(content, satisfies: pending) else { return }
-            resolvedAction = .submit(content)
-        case "decline":
-            resolvedAction = .decline
-        case "cancel":
-            resolvedAction = .cancel
-        default:
-            return
+        case "accept": answer = .submit(content: content ?? [:])
+        case "decline": answer = .decline
+        case "cancel": answer = .cancel
+        default: return
         }
+        guard let resolvedAction = ACPRequestAnswers.userInput(pending, answer: answer) else { return }
         provider.respondToUserInput(for: sessionId, token: token, action: resolvedAction)
         lastElicitationReq[sessionId] = nil
         send(.elicitationResolved(sessionId: sessionId, requestId: requestId))
     }
-
-    private static func remoteContent(
-        _ content: [String: ACPElicitationValue],
-        satisfies request: ACPUserInputRequest
-    ) -> Bool {
-        if case .url = request.mode { return content.isEmpty }
-        let fields = Dictionary(uniqueKeysWithValues: request.fields.map { ($0.key, $0) })
-        guard content.keys.allSatisfy({ fields[$0] != nil }) else { return false }
-        for field in request.fields where field.required {
-            guard content[field.key] != nil else { return false }
-        }
-        for (key, value) in content {
-            guard let field = fields[key] else { return false }
-            switch (field.schema.type, value) {
-            case ("string", .string(let string)):
-                guard validRemoteString(string, for: field) else { return false }
-            case ("number", .number(let number)):
-                guard validRemoteNumber(number, for: field) else { return false }
-            case ("number", .integer(let integer)):
-                guard validRemoteNumber(Double(integer), for: field) else { return false }
-            case ("integer", .integer(let integer)):
-                guard validRemoteNumber(Double(integer), for: field) else { return false }
-            case ("boolean", .boolean):
-                continue
-            case ("array", .strings(let selected)):
-                let allowed = Set(field.schema.options.map(\.const))
-                guard selected.allSatisfy(allowed.contains),
-                      field.schema.minItems.map({ selected.count >= $0 }) != false,
-                      field.schema.maxItems.map({ selected.count <= $0 }) != false
-                else { return false }
-            default:
-                return false
-            }
-        }
-        return true
-    }
-
-    private static func validRemoteString(_ value: String, for field: ACPUserInputField) -> Bool {
-        guard field.schema.minLength.map({ value.count >= $0 }) != false,
-              field.schema.maxLength.map({ value.count <= $0 }) != false
-        else { return false }
-        if !field.schema.options.isEmpty,
-           !field.schema.options.contains(where: { $0.const == value }) {
-            return false
-        }
-        if let pattern = field.schema.pattern,
-           let regex = try? NSRegularExpression(pattern: pattern),
-           regex.firstMatch(in: value, range: NSRange(value.startIndex..., in: value)) == nil {
-            return false
-        }
-        switch field.schema.format {
-        case "email":
-            let parts = value.split(separator: "@", omittingEmptySubsequences: false)
-            return parts.count == 2 && parts[1].contains(".")
-        case "uri":
-            return URL(string: value)?.scheme != nil
-        case "date":
-            return remoteDateFormatter.date(from: value) != nil
-        case "date-time":
-            let fractionalFormatter = ISO8601DateFormatter()
-            fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            return fractionalFormatter.date(from: value) != nil
-                || ISO8601DateFormatter().date(from: value) != nil
-        default:
-            return true
-        }
-    }
-
-    private static func validRemoteNumber(_ value: Double, for field: ACPUserInputField) -> Bool {
-        value.isFinite
-            && field.schema.minimum.map({ value >= $0 }) != false
-            && field.schema.maximum.map({ value <= $0 }) != false
-    }
-
-    private static let remoteDateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.calendar = Calendar(identifier: .iso8601)
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        formatter.dateFormat = "yyyy-MM-dd"
-        formatter.isLenient = false
-        return formatter
-    }()
 
     private static func remoteDefault(_ value: AnyCodable?) -> ACPElicitationValue? {
         guard let raw = value?.value else { return nil }
@@ -1506,7 +1375,7 @@ public final class RemoteSessionGateway {
     /// derivation in `ACPTabView.scopeKey(for:)` so remote and local decisions
     /// land on the same key in `permission_decisions`.
     public static func scopeKey(for params: ACPPermissionRequestParams) -> String {
-        "tool:\(params.toolCall.title ?? params.toolCall.toolCallId)"
+        ACPRequestAnswers.scopeKey(for: params)
     }
 
     /// Maps a live ACPMessage to the wire DTO. Simple kinds carry `text`;

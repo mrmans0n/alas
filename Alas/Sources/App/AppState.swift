@@ -16835,4 +16835,23 @@ class AppHostEnvironment: AlasHostEnvironment {
     func resolveWorkspaceRepoHook(_ request: WorkspaceRepoHookRequest) async throws -> String? {
         try await app?.preparedWorkspaceRepoHook(request)
     }
+
+    /// The agents the app offers for new sessions: enabled ACP agents, and on
+    /// a remote project only those that can run there.
+    func admitsAgent(_ agentID: String, remoteHost: String?) -> Bool {
+        guard let app,
+              ACPLaunchCatalog.specs.contains(where: { $0.agentID == agentID }),
+              let agent = app.agentRegistry.enabled().first(where: { $0.id == agentID })
+        else { return false }
+        return remoteHost == nil || agent.canRunOnRemoteHost
+    }
+
+    /// The app's own checkout manager, which also resolves remote roots.
+    func sessionManager(forCheckout checkout: WorkspaceCheckout, in core: AlasCoreContext) async throws -> ACPSessionManager {
+        guard let app else { throw SessionRefusal.ownerUnavailable(reason: "The app is closing.") }
+        switch await app.workspaceACPManager(for: checkout) {
+        case .ready(let manager): return manager
+        case .pendingRootOrLocation: throw SessionRefusal.ownerUnavailable(reason: "The Workspace checkout's folder is not reachable yet.")
+        }
+    }
 }
