@@ -364,9 +364,11 @@ struct RemoteAppStateAccessTests {
             let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
             let session = try #require(manager.placeholderSession(id: tab.sessionId))
 
-            let renamed = state.renameSession(for: tab.sessionId, title: "  Remote Title  ")
+            // What a Remote rename does: the host renames the row, then the
+            // presenter retitles the tab.
+            try state.host.sessions.rename(tab.sessionId, title: "  Remote Title  ", caller: .app)
+            state.sessionRenamed(tab.sessionId, title: "Remote Title")
 
-            #expect(renamed)
             #expect(session.title == "Remote Title")
             #expect(session.titleSource == .manual)
             #expect(state.tabs.tabs(forWorktree: worktreeId).first?.title == "Remote Title")
@@ -733,32 +735,6 @@ struct RemoteAppStateAccessTests {
         #expect(summaries.map(\.id).contains("claude-session"))
     }
 
-    @Test func remoteRenameSessionRejectsEmptyAndUnknownSession() async throws {
-        var cleanupWorktreeId: String?
-        defer {
-            if let cleanupWorktreeId {
-                cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId)
-            }
-        }
-
-        let worktreeId: String
-        do {
-            let state = makeRemoteRenameState()
-            worktreeId = try #require(state.selectedWorktreeId)
-            cleanupWorktreeId = worktreeId
-            state.openNewACPSession(agentID: "test-agent")
-            let tab = try #require(acpTabs(in: state).first)
-            let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
-            let session = try #require(manager.placeholderSession(id: tab.sessionId))
-
-            #expect(!state.renameSession(for: tab.sessionId, title: " \n\t "))
-            #expect(!state.renameSession(for: "missing", title: "Remote Title"))
-            #expect(session.title == "New session")
-            #expect(session.titleSource == .placeholder)
-            #expect(state.tabs.tabs(forWorktree: worktreeId).first?.title == "New session")
-        }
-    }
-
     @Test func remoteRenameSessionUpdatesNonLiveRecentSession() async throws {
         var cleanupWorktreeId: String?
         defer {
@@ -777,13 +753,10 @@ struct RemoteAppStateAccessTests {
             let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
             try await seedStoredSession(id: sessionId, title: "Recent", in: manager)
 
-            let renamed = state.renameSession(for: sessionId, title: "Recent Remote")
+            try state.host.sessions.rename(sessionId, title: "Recent Remote", caller: .app)
 
-            #expect(renamed)
-            let session = try #require(manager.liveSession(for: sessionId))
-            #expect(session.title == "Recent Remote")
-            #expect(session.titleSource == .manual)
             let summaries = await state.sessionSummaries()
+            #expect(summaries.first(where: { $0.id == sessionId })?.title == "Recent Remote")
             #expect(summaries.first(where: { $0.id == sessionId })?.isActive == false)
         }
         do {
@@ -812,7 +785,9 @@ struct RemoteAppStateAccessTests {
             let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
             try await seedStoredSession(id: sessionId, title: "Archived", archived: true, in: manager)
 
-            #expect(!state.renameSession(for: sessionId, title: "Remote Title"))
+            #expect(throws: SessionRefusal.self) {
+                try state.host.sessions.rename(sessionId, title: "Remote Title", caller: .app)
+            }
             #expect(manager.liveSession(for: sessionId) == nil)
         }
     }
@@ -849,10 +824,10 @@ struct RemoteAppStateAccessTests {
             #expect(!(await manager.acquireWriterLease(sessionId: sessionId)))
             #expect(manager.isMirror(sessionId: sessionId))
 
-            let renamed = state.renameSession(for: sessionId, title: "Mirror Title")
+            try state.host.sessions.rename(sessionId, title: "Mirror Title", caller: .app)
+            state.sessionRenamed(sessionId, title: "Mirror Title")
             await manager.flushPersistence()
 
-            #expect(renamed)
             #expect(session.title == "Mirror Title")
             #expect(session.titleSource == .manual)
             #expect(state.tabs.tabs(forWorktree: worktreeId).first?.title == "Mirror Title")

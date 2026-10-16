@@ -12,4 +12,6 @@ public protocol RemoteSessionPresenter: AnyObject {
     /// a local close, minus the confirmation the requesting Mac already ran.
     /// The session stays in recent history.
     func closeSessionTab(for id: String) async -> RemoteSessionTabActionResult
+    /// The session was renamed; its tabs show the new title.
+    func sessionRenamed(_ id: String, title: String)
 }
