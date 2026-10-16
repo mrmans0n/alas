@@ -131,6 +131,10 @@ extension SessionsAPI {
     public func setModel(_ sessionID: String, modelID: String, caller: HostCaller) async throws {
         caller.log("sessions.setModel", sessionID)
         let manager = try writerManager(for: sessionID)
+        if let advertised = manager.liveSession(for: sessionID)?.availableModels, !advertised.isEmpty,
+           !advertised.contains(where: { $0.id == modelID }) {
+            throw SessionRefusal.invalidSetting
+        }
         await manager.setModel(for: sessionID, modelId: modelID)
         try confirmStillWriter(manager, sessionID)
     }
@@ -138,6 +142,10 @@ extension SessionsAPI {
     public func setMode(_ sessionID: String, modeID: String, caller: HostCaller) async throws {
         caller.log("sessions.setMode", sessionID)
         let manager = try writerManager(for: sessionID)
+        if let advertised = manager.liveSession(for: sessionID)?.availableModes, !advertised.isEmpty,
+           !advertised.contains(where: { $0.id == modeID }) {
+            throw SessionRefusal.invalidSetting
+        }
         await manager.setMode(for: sessionID, modeId: modeID)
         try confirmStillWriter(manager, sessionID)
     }

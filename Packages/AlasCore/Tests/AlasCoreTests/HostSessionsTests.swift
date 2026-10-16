@@ -25,6 +25,10 @@ struct HostSessionsTests {
         await #expect(throws: SessionRefusal.invalidSetting) {
             try await sessions.setConfigOption(id, configID: "no-such-option", value: .string("x"), caller: .app)
         }
+        fixture.core.sessionManagers.values.first?.liveSession(for: id)?.availableModels = [ACPModelInfo(id: "fast", name: "Fast")]
+        await #expect(throws: SessionRefusal.invalidSetting) {
+            try await sessions.setModel(id, modelID: "unadvertised", caller: .app)
+        }
 
         let requestID = JSONRPCID.number(7)
         fixture.agent.emitPermission(id: requestID, params: ACPPermissionRequestParams(
@@ -155,6 +159,20 @@ struct HostSessionsTests {
         try await fixture.host.sessions.archive(session.id, caller: .app)
         #expect(!fixture.host.sessions.list().contains { $0.id == session.id })
         #expect(try await store.loadLease(sessionId: session.id)?.token == "attaching")
+    }
+
+    /// Archiving right after creating waits for the session's row, and no
+    /// later snapshot of the session brings it back.
+    @Test func archivingJustAfterCreatingSticks() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let id = try await fixture.host.sessions.create(.worktree(fixture.ref), agentID: "gemini", caller: .app).id
+        try await fixture.host.sessions.archive(id, caller: .app)
+
+        let manager = try #require(fixture.core.sessionManagers.values.first)
+        await manager.flushAllPersistence()
+        #expect(try await ACPSessionPersistence(path: fixture.sessionsDatabase.path).loadSession(id: id)?.archived == true)
+        #expect(!fixture.host.sessions.list().contains { $0.id == id })
     }
 
     enum Unavailable: CaseIterable {

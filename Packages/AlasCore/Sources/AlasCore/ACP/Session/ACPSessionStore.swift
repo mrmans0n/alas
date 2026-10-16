@@ -785,7 +785,9 @@ extension ACPSessionStore {
             END,
             updated_at = excluded.updated_at,
             last_opened_at = excluded.last_opened_at,
-            archived = excluded.archived
+            -- A snapshot never brings an archived session back; only an
+            -- explicit unarchive does.
+            archived = MAX(sessions.archived, excluded.archived)
         """, bindings: [
             s.id, s.agentId, s.title, s.titleSource.rawValue, s.remoteSessionId, s.origin.rawValue,
             s.contextRecoveryPending ? 1 : 0, s.recoveryProcId,

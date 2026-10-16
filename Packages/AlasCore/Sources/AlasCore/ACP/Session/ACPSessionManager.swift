@@ -3252,6 +3252,8 @@ public final class ACPSessionManager: ChangeTracking {
     /// between the decision and the write. Returns false, archiving nothing,
     /// when another instance holds the lease.
     public func archiveUnlessDrivenElsewhere(id: ACPSession.ID) async throws -> Bool {
+        // A session created a moment ago may not have its row yet.
+        await flushAllPersistence()
         let fence: ACPSessionLeaseFence
         var claimedToken: String?
         if let owned = leaseFence(sessionId: id) {
