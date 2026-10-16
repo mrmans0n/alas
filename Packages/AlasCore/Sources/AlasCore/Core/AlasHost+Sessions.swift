@@ -47,7 +47,7 @@ extension SessionsAPI {
             let remoteHost = core.projects.projects.first { $0.id == ref.projectID }?.host
             guard core.environment.admitsAgent(agentID, remoteHost: remoteHost) else { throw SessionRefusal.agentUnavailable }
             do {
-                manager = try core.sessionManager(for: worktree)
+                manager = try core.environment.sessionManager(for: worktree, in: core)
             } catch is AlasCoreContext.WorktreeOperationInProgress {
                 throw SessionRefusal.ownerUnavailable(reason: "Another operation holds the worktree.")
             }
@@ -60,13 +60,16 @@ extension SessionsAPI {
                 throw SessionRefusal.ownerUnavailable(reason: Self.checkpointRecoveryReason)
             }
             manager = try await core.environment.sessionManager(forCheckout: checkout, in: core)
-            // The lookup can suspend: whatever happened to the checkout meanwhile
-            // decides, not what it was before.
-            _ = try await idleCheckout(id)
         }
         // A checkpoint restore being recovered keeps agents out of the owner.
         guard await !core.environment.checkpointRecoveryBlocksSessions(owner: manager.owner, in: core) else {
             throw SessionRefusal.ownerUnavailable(reason: Self.checkpointRecoveryReason)
+        }
+        // Everything above can suspend: what the owner is now decides. This is
+        // the last suspension before the session exists.
+        if case .workspaceCheckout(let id) = target { _ = try await idleCheckout(id) }
+        guard core.sessionManagers[manager.owner] === manager else {
+            throw SessionRefusal.ownerUnavailable(reason: "The session's owner was closed meanwhile.")
         }
         let session = manager.createSession(agentId: agentID, autoRunDefault: autoRun)
         // Picked up by `attach`, so the first turn already runs on it.
@@ -160,7 +163,7 @@ extension SessionsAPI {
               let pending = ACPRequestAnswers.pendingQuestion(in: session), pending.id == requestID
         else { throw SessionRefusal.notPending }
         guard let response = ACPRequestAnswers.question(pending, answers: answers) else { throw SessionRefusal.invalidAnswer }
-        manager.answerQuestion(for: sessionID, requestId: requestID, response)
+        guard manager.answerQuestion(for: sessionID, requestId: requestID, response) else { throw SessionRefusal.notPending }
     }
 
     /// Answers the session's pending plan `requestID`.
@@ -171,7 +174,7 @@ extension SessionsAPI {
             throw SessionRefusal.notPending
         }
         guard let response = ACPRequestAnswers.plan(pending, action: action) else { throw SessionRefusal.invalidAnswer }
-        manager.respondToPlan(for: sessionID, requestId: requestID, response)
+        guard manager.respondToPlan(for: sessionID, requestId: requestID, response) else { throw SessionRefusal.notPending }
     }
 
     /// Answers the session's pending form or URL request `requestID`.
@@ -187,7 +190,7 @@ extension SessionsAPI {
               pending.id == requestID, case .elicitation = pending.source
         else { throw SessionRefusal.notPending }
         guard let action = ACPRequestAnswers.userInput(pending, answer: answer) else { throw SessionRefusal.invalidAnswer }
-        manager.respondToUserInput(for: sessionID, token: requestID, action: action)
+        guard manager.respondToUserInput(for: sessionID, token: requestID, action: action) else { throw SessionRefusal.notPending }
     }
 
     static let checkpointRecoveryReason = "An interrupted checkpoint restore must be recovered first."

@@ -171,7 +171,10 @@ public final class AlasCoreContext {
             store: workspaceStore,
             sessions: WorkspaceCheckoutSessionStopper(
                 store: workspaceStore,
-                stop: { [weak self] checkout in try await self?.environment.stopWorkspaceCheckoutSessions(checkout) }
+                stop: { [weak self] checkout in
+                    guard let self else { return }
+                    try await environment.stopWorkspaceCheckoutSessions(checkout, in: self)
+                }
             ),
             resolveRepoHook: { [weak self] request in
                 try await self?.resolveWorkspaceRepoHook(request)

@@ -27,7 +27,7 @@ public protocol AlasHostEnvironment: AnyObject {
     func globalTerminalConfig() -> AppConfig.Terminal
     /// Stops everything running in a Workspace checkout before a lifecycle
     /// operation touches it.
-    func stopWorkspaceCheckoutSessions(_ checkout: WorkspaceCheckout) async throws
+    func stopWorkspaceCheckoutSessions(_ checkout: WorkspaceCheckout, in core: AlasCoreContext) async throws
     /// Approves and prepares a Workspace member's repository hook. Nil skips it.
     func resolveWorkspaceRepoHook(_ request: WorkspaceRepoHookRequest) async throws -> String?
     /// Starts and hosts run scripts.
@@ -38,6 +38,9 @@ public protocol AlasHostEnvironment: AnyObject {
     /// Whether an interrupted checkpoint restore keeps new agent sessions out
     /// of `owner` now.
     func checkpointRecoveryBlocksSessions(owner: SessionOwnerID, in core: AlasCoreContext) async -> Bool
+    /// The session manager for a worktree, created on first use. Throws while
+    /// another operation holds the worktree.
+    func sessionManager(for worktree: Worktree, in core: AlasCoreContext) throws -> ACPSessionManager
     /// The session manager for a Workspace checkout, created on first use.
     /// Throws a `SessionRefusal` when the checkout cannot host sessions now.
     func sessionManager(forCheckout checkout: WorkspaceCheckout, in core: AlasCoreContext) async throws -> ACPSessionManager
@@ -66,7 +69,10 @@ extension AlasHostEnvironment {
 
     public func globalTerminalConfig() -> AppConfig.Terminal { AppConfig.defaults.terminal }
 
-    public func stopWorkspaceCheckoutSessions(_ checkout: WorkspaceCheckout) async throws {}
+    /// Ends the checkout's agent sessions, as a removal ends a worktree's.
+    public func stopWorkspaceCheckoutSessions(_ checkout: WorkspaceCheckout, in core: AlasCoreContext) async throws {
+        await core.disposeSessionManager(owner: .workspaceCheckout(checkout.id, checkout.executionLocation))
+    }
 
     public func resolveWorkspaceRepoHook(_ request: WorkspaceRepoHookRequest) async throws -> String? { nil }
 
@@ -83,6 +89,10 @@ extension AlasHostEnvironment {
 
     public func admitsAgent(_ agentID: String, remoteHost: String?) -> Bool {
         ACPLaunchCatalog.specs.contains { $0.agentID == agentID }
+    }
+
+    public func sessionManager(for worktree: Worktree, in core: AlasCoreContext) throws -> ACPSessionManager {
+        try core.sessionManager(for: worktree)
     }
 
     public func sessionManager(forCheckout checkout: WorkspaceCheckout, in core: AlasCoreContext) async throws -> ACPSessionManager {

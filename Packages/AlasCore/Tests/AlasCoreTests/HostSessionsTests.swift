@@ -66,6 +66,39 @@ struct HostSessionsTests {
         await #expect(throws: SessionRefusal.notFound) { try await sessions.send(id, prompt: "again", caller: .app) }
     }
 
+    /// An answer that reaches no agent is not reported as given: a session
+    /// shown here but not connected cannot pass it on.
+    @Test func answersWithNoAgentToReceiveThemAreRefused() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let manager = try fixture.core.sessionManager(for: fixture.worktree)
+        let session = manager.createSession(agentId: "gemini")
+        session.transcript.pendingQuestion = .init(id: .number(3), params: ACPQuestionRequestParams(
+            toolCallId: "call-1", title: nil,
+            questions: [ACPQuestion(id: "q", prompt: "Which?", options: [ACPQuestionOption(id: "a", label: "A")], allowMultiple: false)]
+        ))
+
+        #expect(throws: SessionRefusal.notPending) {
+            try fixture.host.sessions.answerQuestion(
+                session.id, requestID: .number(3), answers: [ACPQuestionAnswer(questionId: "q", selectedOptionIds: ["a"])], caller: .app
+            )
+        }
+    }
+
+    /// A headless host ends a Workspace checkout's sessions before the
+    /// checkout is archived or removed, as the app does.
+    @Test func headlessCheckoutTeardownEndsItsSessions() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let id = try await fixture.addCheckout(operation: .idle, location: .local)
+        let created = try await fixture.host.sessions.create(.workspaceCheckout(id: id), agentID: "gemini", caller: .app)
+        #expect(fixture.core.sessionManagers[created.owner] != nil)
+
+        let checkout = try await WorkspaceAutomationService(store: fixture.core.workspaceStore).checkout(id: id)
+        try await fixture.core.environment.stopWorkspaceCheckoutSessions(checkout, in: fixture.core)
+        #expect(fixture.core.sessionManagers[created.owner] == nil)
+    }
+
     enum Unavailable: CaseIterable {
         /// An interrupted checkpoint restore is being recovered.
         case recoveringCheckpoint

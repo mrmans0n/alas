@@ -408,29 +408,39 @@ public final class ACPSessionManager: ChangeTracking {
     /// Returns nil if no runner is attached (session not actively connected).
     public func permissionPolicy(for id: ACPSession.ID) -> ACPPermissionPolicy? { runners[id]?.policy }
 
-    /// Answers a pending question for a session that currently has an attached runner.
+    /// Answers a pending question for a session that currently has an
+    /// attached runner. False when none does: the answer reached nobody.
+    @discardableResult
     public func answerQuestion(
         for id: ACPSession.ID,
         requestId: JSONRPCID,
         _ response: ACPQuestionResponse
-    ) {
-        elicitationCoordinators[id]?.respondToCursor(id: requestId, response: response)
+    ) -> Bool {
+        guard let coordinator = elicitationCoordinators[id] else { return false }
+        coordinator.respondToCursor(id: requestId, response: response)
+        return true
     }
 
+    @discardableResult
     public func respondToPlan(
         for id: ACPSession.ID,
         requestId: JSONRPCID,
         _ response: ACPCursorPlanResponse
-    ) {
-        elicitationCoordinators[id]?.respondToPlan(id: requestId, response: response)
+    ) -> Bool {
+        guard let coordinator = elicitationCoordinators[id] else { return false }
+        coordinator.respondToPlan(id: requestId, response: response)
+        return true
     }
 
+    @discardableResult
     public func respondToUserInput(
         for id: ACPSession.ID,
         token: UUID,
         action: ACPUserInputAction
-    ) {
-        elicitationCoordinators[id]?.respond(to: token, action: action)
+    ) -> Bool {
+        guard let coordinator = elicitationCoordinators[id] else { return false }
+        coordinator.respond(to: token, action: action)
+        return true
     }
 
     @discardableResult
@@ -3236,20 +3246,38 @@ public final class ACPSessionManager: ChangeTracking {
         visibleSessionCounts.removeValue(forKey: id)
     }
 
-    /// Stops and archives a session no other live instance drives, reading
-    /// its lease from the store rather than this instance's last view of it.
-    /// Returns false, archiving nothing, while another instance holds it.
+    /// Archives a session and stops it, unless another live instance drives
+    /// it. The row is written under a lease fence, this instance's own or one
+    /// claimed for the write, so no instance can start driving the session
+    /// between the decision and the write. Returns false, archiving nothing,
+    /// when another instance holds the lease.
     public func archiveUnlessDrivenElsewhere(id: ACPSession.ID) async throws -> Bool {
-        if let lease = try await persistence.loadLease(sessionId: id),
-           lease.ownerInstance != instanceId,
-           ACPProcessLiveness.pidAlive(lease.pid),
-           lease.heartbeatAt >= Int64(Date().timeIntervalSince1970) - Self.leaseStaleAfter {
-            return false
+        let fence: ACPSessionLeaseFence
+        var claimedToken: String?
+        if let owned = leaseFence(sessionId: id) {
+            fence = owned
+        } else {
+            let token = UUID().uuidString
+            guard try await persistence.claimLease(
+                sessionId: id, instanceId: instanceId, pid: pid,
+                now: Int64(Date().timeIntervalSince1970), staleAfter: Self.leaseStaleAfter, leaseToken: token
+            ) != nil else { return false }
+            fence = ACPSessionLeaseFence(sessionId: id, ownerInstance: instanceId, token: token)
+            claimedToken = token
         }
+        let archived = try await persistence.setArchived(id: id, archived: true, fence: fence)
+        if let claimedToken {
+            try? await persistence.releaseLease(sessionId: id, instanceId: instanceId, leaseToken: claimedToken)
+        }
+        guard archived else { return false }
+        if var row = persistedRows[id] {
+            row.archived = true
+            persistedRows[id] = row
+        }
+        recent.removeAll { $0.id == id }
         if sessions[id] != nil {
             try await disposeSession(id: id)
         }
-        setArchived(id: id, archived: true)
         return true
     }
 

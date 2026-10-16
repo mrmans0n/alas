@@ -16828,8 +16828,19 @@ class AppHostEnvironment: AlasHostEnvironment {
         app?.config.terminal ?? AppConfig.defaults.terminal
     }
 
-    func stopWorkspaceCheckoutSessions(_ checkout: WorkspaceCheckout) async throws {
+    func stopWorkspaceCheckoutSessions(_ checkout: WorkspaceCheckout, in core: AlasCoreContext) async throws {
         try await app?.stopWorkspaceCheckoutSessions(checkout)
+    }
+
+    /// The app's own manager, configured for its remote host, MCP servers and UI.
+    func sessionManager(for worktree: Worktree, in core: AlasCoreContext) throws -> ACPSessionManager {
+        guard core.projects.admitsNewWork(in: worktree) else {
+            throw SessionRefusal.ownerUnavailable(reason: "Another operation holds the worktree.")
+        }
+        guard let manager = app?.acpManager(for: worktree) else {
+            throw SessionRefusal.ownerUnavailable(reason: "The worktree cannot host sessions now.")
+        }
+        return manager
     }
 
     func resolveWorkspaceRepoHook(_ request: WorkspaceRepoHookRequest) async throws -> String? {
