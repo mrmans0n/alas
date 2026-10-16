@@ -278,6 +278,10 @@ public final class ACPSessionManager: ChangeTracking {
     /// the captured value then governs every attach of that session. Set
     /// post-init, mirroring `alasCLIEnvProvider`.
     public var nativeSubagentsPreferenceProvider: (@MainActor (_ agentId: String) -> Bool)?
+    /// The session instructions new sessions of an agent start with
+    /// (Settings → Agents), or nil. Read once, when Alas creates the session
+    /// row; the captured value then rides on every attach of that session.
+    public var sessionInstructionsProvider: (@MainActor (_ agentId: String) -> String?)?
     /// Whether a session was delegated by a parent Alas session. Read on
     /// every attach, independent of whether Alas tools are exposed, so a
     /// delegated Claude child never gets the tools that message other Claude
@@ -2110,6 +2114,7 @@ public final class ACPSessionManager: ChangeTracking {
             titleSource: isEphemeral ? .manual : .placeholder,
             currentModel: nil, currentMode: nil,
             nativeSubagentsDisabled: nativeSubagentsPreference(agentId: agentId),
+            sessionInstructions: sessionInstructionsProvider?(agentId),
             ephemeralParentId: ephemeralParentID,
             autoRun: isEphemeral ? false : autoRunDefault,
             createdAt: now, updatedAt: now, lastOpenedAt: now, archived: false)
@@ -2187,6 +2192,11 @@ public final class ACPSessionManager: ChangeTracking {
             let targetID = UUID().uuidString
             let now = Int64(Date().timeIntervalSince1970)
             let copiedMessages = try snapshot.copiedMessages(targetSessionID: targetID, createdAt: now)
+            // A same-agent fork keeps the instructions its source runs with;
+            // another agent starts from its own configured instructions.
+            let targetInstructions = targetAgentID == source.agentId
+                ? await capturedSessionInstructions(sessionId: sourceSessionID)
+                : sessionInstructionsProvider?(targetAgentID)
             let targetTitle = ephemeralTitle ?? (source.title == "New session"
                 ? "New session (fork)"
                 : "\(source.title) (fork)")
@@ -2198,6 +2208,7 @@ public final class ACPSessionManager: ChangeTracking {
                 currentModel: nil,
                 currentMode: nil,
                 nativeSubagentsDisabled: nativeSubagentsPreference(agentId: targetAgentID),
+                sessionInstructions: targetInstructions,
                 // Seed the fork's composer suggestions only when the target
                 // agent is the SAME agent: its attach would re-advertise the
                 // identical list. A cross-agent fork gets nothing — the
@@ -3971,6 +3982,13 @@ public final class ACPSessionManager: ChangeTracking {
     private func capturedNativeSubagentsPolicy(sessionId: ACPSession.ID) async -> Bool {
         let stored = try? await persistence.loadSession(id: sessionId)
         return (stored?.nativeSubagentsDisabled ?? persistedRows[sessionId]?.nativeSubagentsDisabled) == true
+    }
+
+    /// The session instructions this session was created with; see
+    /// `capturedNativeSubagentsPolicy` for the lookup order.
+    private func capturedSessionInstructions(sessionId: ACPSession.ID) async -> String? {
+        let stored = try? await persistence.loadSession(id: sessionId)
+        return stored?.sessionInstructions ?? persistedRows[sessionId]?.sessionInstructions
     }
 
     private func replaceRecentRow(_ row: ACPSessionRow) {
@@ -6470,6 +6488,7 @@ extension ACPSessionManager {
         var cliParentSessionId: String?
         let agentEnvironment: [String: String]
         let nativeSubagentsDisabled = await capturedNativeSubagentsPolicy(sessionId: sessionId)
+        let sessionInstructions = await capturedSessionInstructions(sessionId: sessionId)
         let isDelegatedChild = await delegatedChildProvider?(sessionId) ?? false
         guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { return }
         do {
@@ -6718,6 +6737,13 @@ extension ACPSessionManager {
             session.supportsSteering = initialized.supportsSteering
             session.supportsContextBreakdown = initialized.supportsContextBreakdown
             session.supportsCodexSteeringCompletion = (ACPManagedAdapterDescriptor.codex.verifiedPackageNames + ["codex-acp"]).contains(initialized.agentInfo?.name ?? "")
+            connection.mcpStartupAwaitTimeoutMs = ACPMCPStartupWaitPolicy.timeoutMilliseconds(for: initialized.agentInfo)
+            connection.sessionInstructions = ACPSessionInstructionsPolicy.append(
+                agentID: session.agentId,
+                captured: sessionInstructions,
+                advertisesAppend: initialized.supportsSystemPromptAppend,
+                maxBytes: initialized.systemPromptAppendMaxBytes
+            )
             session.backgroundTaskStopSupported = initialized.supportsAsyncTasks
             session.sessionCapabilities = initialized.sessionCapabilities
             session.authMethods = initialized.authMethods

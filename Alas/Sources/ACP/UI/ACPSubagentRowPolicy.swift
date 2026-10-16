@@ -6,6 +6,8 @@ enum ACPSubagentRowPolicy {
     static func stateLabel(for state: ACPSubagentState) -> String {
         switch state {
         case .running: "Working"
+        case .requiresAction: "Waiting for input"
+        case .unconfirmed: "Not active"
         case .completed: "Done"
         case .failed: "Failed"
         case .cancelled: "Cancelled"
@@ -14,11 +16,12 @@ enum ACPSubagentRowPolicy {
         }
     }
 
-    /// A spinner means "this child is still producing output". Only a
-    /// terminal state stops it — an unrecognized state keeps spinning
-    /// rather than falsely claiming the child finished.
+    /// A spinner means "this child is still producing output". A terminal
+    /// state stops it, and so does a child blocked on the user — an
+    /// unrecognized state keeps spinning rather than falsely claiming the
+    /// child finished.
     static func showsSpinner(state: ACPSubagentState) -> Bool {
-        !state.isTerminal
+        !state.isTerminal && state != .requiresAction
     }
 
     /// Cancel is offered only when the agent said it would honour it AND

@@ -240,6 +240,8 @@ final class AppState {
     /// The core's public API. Paths move onto it from `core` as they are
     /// migrated.
     let host: AlasHost
+    /// Serves `host` to local clients over the host protocol, from launch.
+    @ObservationIgnored private(set) var hostSocket: HostSocketServer?
     /// Sent when what the Remote session list shows changes without a host
     /// event: a session tab opening, closing or moving, or the Git status of
     /// a worktree with sessions. Followed from its first read.
@@ -6944,6 +6946,9 @@ final class AppState {
             LegacyHookSweep.sweepAll()
         }
         harness.notifications.setEnabled(config.harness.notifyOnFinish)
+        if hostSocket == nil {
+            hostSocket = HostSocketServer(server: HostProtocolServer(host: host))
+        }
         harness.start(
             stateLookup: { [weak self] sessionId in
                 self?.harnessSessionLocation(sessionId: sessionId)
@@ -13409,6 +13414,9 @@ final class AppState {
         mgr.nativeSubagentsPreferenceProvider = { [weak self] agentId in
             self?.config.agents.nativeSubagentsDisabled(for: agentId) ?? false
         }
+        mgr.sessionInstructionsProvider = { [weak self] agentId in
+            self?.config.agents.sessionInstructions(for: agentId)
+        }
         mgr.delegatedChildProvider = { [weak self] sessionId in
             await self?.delegatedParentSessionID(for: sessionId) != nil
         }
@@ -13754,6 +13762,9 @@ final class AppState {
         }
         manager.nativeSubagentsPreferenceProvider = { [weak self] agentId in
             self?.config.agents.nativeSubagentsDisabled(for: agentId) ?? false
+        }
+        manager.sessionInstructionsProvider = { [weak self] agentId in
+            self?.config.agents.sessionInstructions(for: agentId)
         }
         manager.externalMCPStatusProvider = { [weak self] worktreePath -> (
             adapterState: PiMCPAdapterInspector.State,

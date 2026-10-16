@@ -146,6 +146,110 @@ struct ACPSubagentProtocolTests {
         #expect(state.state == .other("awaiting_permission"))
         #expect(state.state.isTerminal == false)
     }
+
+    // Frames below are claude-agent-acp 0.91.0's own scenario snapshots
+    // (`subagent-native-sessions.jsonl`), the revised RFD form it sends to a
+    // non-AIR client that declares `clientCapabilities.subagents`.
+
+    @Test("the revised subagent_update announces the child and its state on the parent")
+    func revisedAnnouncementNormalizes() throws {
+        let updates = try Self.frame("""
+        {"sessionId":"root","update":{"capabilities":{"cancel":{}},"description":"Fix the build",\
+        "sessionId":"agent_n","sessionUpdate":"subagent_update","state":{"state":"running"},"title":"general-purpose"}}
+        """)
+
+        #expect(updates.map(\.sessionId) == ["root", "root"])
+        guard case .subagentSpawned(let spawn) = updates[0].update,
+              case .subagentStateUpdate(let state) = updates[1].update else {
+            Issue.record("expected a spawn followed by a state update, got \(updates.map(\.update))")
+            return
+        }
+        #expect(spawn.subagentSessionId == "agent_n")
+        #expect(spawn.name == "general-purpose")
+        #expect(spawn.task == "Fix the build")
+        #expect(spawn.capabilities.supportsCancel)
+        #expect(state.subagentSessionId == "agent_n")
+        #expect(state.state == .running)
+    }
+
+    @Test("a revised session_message is the child's prompt, keyed by its message id")
+    func revisedSessionMessageNormalizes() throws {
+        let updates = try Self.frame("""
+        {"sessionId":"agent_n","update":{"content":[{"text":"Make the build pass","type":"text"},\
+        {"type":"text"}],"messageId":"toolu_native","recipientSessionId":"agent_n",\
+        "senderSessionId":"root","sessionUpdate":"session_message"}}
+        """)
+        let chunk = try Self.frame("""
+        {"sessionId":"agent_n","update":{"content":{"text":"and run tests","type":"text"},\
+        "messageId":"toolu_native","sessionUpdate":"session_message_chunk"}}
+        """)
+
+        // The malformed block is skipped rather than failing the whole message.
+        // The whole message replaces the row's content; the chunk extends it.
+        #expect(updates + chunk == [
+            .init(sessionId: "agent_n", update: .userMessageChunk(.init(
+                messageId: "toolu_native", content: .text("Make the build pass"),
+                directed: .init(senderSessionId: "root", recipientSessionId: "agent_n", replacesContent: true)))),
+            .init(sessionId: "agent_n", update: .userMessageChunk(.init(
+                messageId: "toolu_native", content: .text("and run tests"),
+                directed: .init(senderSessionId: nil, recipientSessionId: nil, replacesContent: false))))
+        ])
+    }
+
+    @Test("a revised session_message not addressed to this session is not its turn", arguments: [
+        #""senderSessionId":"agent_n","recipientSessionId":"root""#,
+        // Only the sender is known yet, and it is this session.
+        #""senderSessionId":"agent_n""#
+    ])
+    func revisedMessageForAnotherSession(participants: String) throws {
+        let updates = try Self.frame("""
+        {"sessionId":"agent_n","update":{"sessionUpdate":"session_message","messageId":"m1",\
+        \(participants),"content":[{"type":"text","text":"done"}]}}
+        """)
+        #expect(updates.isEmpty)
+    }
+
+    @Test("revised work states map onto the subagent lifecycle", arguments: [
+        (#"{"state":"requires_action"}"#, ACPSubagentState.requiresAction, nil as String?),
+        (#"{"state":"idle","stopReason":"end_turn"}"#, .completed, nil),
+        (#"{"state":"idle"}"#, .completed, nil),
+        (#"{"state":"idle","stopReason":"cancelled"}"#, .cancelled, nil),
+        (#"{"state":"idle","stopReason":"error","error":{"code":-32603,"message":"boom"}}"#, .failed, "boom"),
+        // Not terminal: the work may still be live, and a later snapshot replaces it.
+        (#"{"state":"unknown"}"#, .other("unknown"), nil),
+        // `null` clears the snapshot: no activity is asserted any more.
+        ("null", .unconfirmed, nil)
+    ])
+    func revisedStatesNormalize(state json: String, expected: ACPSubagentState, error: String?) throws {
+        let updates = try Self.frame("""
+        {"sessionId":"root","update":{"sessionId":"agent_n","sessionUpdate":"subagent_update","state":\(json)}}
+        """)
+        guard updates.count == 2, case .subagentStateUpdate(let state) = updates[1].update else {
+            Issue.record("expected a state update, got \(updates.map(\.update))")
+            return
+        }
+        #expect(state.state == expected)
+        #expect(state.error == error)
+    }
+
+    @Test("a revised metadata-only update asserts no state")
+    func revisedUpdateWithoutState() throws {
+        let updates = try Self.frame("""
+        {"sessionId":"root","update":{"sessionId":"agent_n","sessionUpdate":"subagent_update","title":"Explore"}}
+        """)
+        #expect(updates.count == 1)
+        guard case .subagentSpawned(let spawn) = updates.first?.update else {
+            Issue.record("expected a spawn")
+            return
+        }
+        #expect(spawn.name == "Explore")
+        // A child first announced this way is not claimed to be running.
+        #expect(spawn.initialState == .unconfirmed)
+    }
+
+    private static func frame(_ json: String) throws -> [ACPSessionUpdateParams] {
+        try JSONDecoder().decode(ACPSessionUpdateFrame.self, from: Data(json.utf8)).updates
+    }
 }
 
 @Suite("OpenCode child updates")

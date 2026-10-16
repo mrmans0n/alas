@@ -1543,6 +1543,78 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(session.mcpPreambleSent == false)
     }
 
+    @Test("stopping a Codex attach during its MCP startup wait never sends the queued prompt early",
+          arguments: [true, false])
+    func codexMCPStartupWaitInterruptedKeepsQueuedPrompt(restart: Bool) async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let startupWait = AttachPhaseGate()
+        let waitingClient = ACPMockClient()
+        let replacementClient = ACPMockClient()
+        scriptNativeDelegationInitialize(waitingClient, agentID: "codex", adapterVersion: "2.2.2-alas.1")
+        waitingClient.scriptAsync(method: "session/new") { _ in
+            await startupWait.enterAndWait()
+            return try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-waited",
+                availableModels: [],
+                availableModes: [],
+                currentModel: nil,
+                currentMode: nil,
+                promptSuggestions: []
+            ))
+        }
+        waitingClient.script(method: "session/prompt") { _ in Data("null".utf8) }
+        scriptNativeDelegationInitialize(replacementClient, agentID: "codex", adapterVersion: "2.2.2-alas.1")
+        scriptSessionResult(replacementClient, method: "session/new", sessionId: "remote-replacement")
+        replacementClient.script(method: "session/prompt") { _ in Data("null".utf8) }
+        var launchCount = 0
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in
+                launchCount += 1
+                return ACPConnection(client: launchCount == 1 ? waitingClient : replacementClient)
+            },
+            mcpProjectContextProvider: {
+                MCPProjectContext(
+                    projectDirectory: "/tmp/project",
+                    configuredServers: [.stdio(name: "filesystem", command: "mcp-files")]
+                )
+            }
+        )
+        let session = manager.createSession(agentId: "codex")
+        session.enqueue(blocks: [.text("first prompt")])
+        let attach = Task { await manager.attach(to: session.id, freshlyCreated: true) }
+        defer { Task { await startupWait.release() } }
+        try await waitUntilAsync { await startupWait.hasEntered }
+
+        let waitedParams = try #require(waitingClient.sent.last?.params as? ACPSessionNewParams)
+        #expect(waitedParams.meta?.mcpStartupAwaitTimeoutMs == ACPMCPStartupWaitPolicy.timeoutMilliseconds)
+
+        if restart {
+            await manager.restartConnection(to: session.id)
+        } else {
+            await manager.detach(sessionId: session.id)
+        }
+        await startupWait.release()
+        await attach.value
+
+        #expect(!waitingClient.sent.contains { $0.method == "session/prompt" })
+        if restart {
+            try await waitUntilAsync { replacementClient.sent.contains { $0.method == "session/prompt" } }
+            #expect(replacementClient.sent.filter { $0.method == "session/prompt" }.count == 1)
+            let replacementParams = try #require(
+                replacementClient.sent.first { $0.method == "session/new" }?.params as? ACPSessionNewParams
+            )
+            #expect(replacementParams.meta?.mcpStartupAwaitTimeoutMs == ACPMCPStartupWaitPolicy.timeoutMilliseconds)
+            await manager.detach(sessionId: session.id)
+        } else {
+            #expect(session.queue.count == 1)
+            #expect(launchCount == 1)
+        }
+    }
+
     @Test("local attach uses broker client and persists durable broker state")
     func localAttachUsesBrokerClientAndPersistsDurableState() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
@@ -1941,7 +2013,7 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(session.terminalHost.sessionEnv["PATH"] == "/managed/bin:/usr/bin")
     }
 
-    @Test("the native subagent policy captured at creation governs fresh and restored Claude attaches")
+    @Test("the native subagent policy and instructions captured at creation govern fresh and restored Claude attaches")
     func nativeSubagentsPolicyAppliesOnFreshAndRestoredAttach() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
         var clients: [ACPMockClient] = []
@@ -1960,14 +2032,17 @@ struct ACPSessionManagerAttachRestoreTests {
             }
         )
         var preference = true
+        var instructions: String? = "Review migrations."
         manager.nativeSubagentsPreferenceProvider = { _ in preference }
+        manager.sessionInstructionsProvider = { _ in instructions }
         let session = manager.createSession(agentId: "claude")
         await manager.attach(to: session.id, freshlyCreated: true)
         await manager.flushAllPersistence()
         #expect(session.pendingMCPPreamble?.contains("native subagent tool is turned off") == true)
 
-        // Turning the setting off later does not weaken the running session.
+        // Changing the settings later does not change the running session.
         preference = false
+        instructions = "Edited default."
         await manager.detach(sessionId: session.id)
         let reopened = try #require(manager.placeholderSession(id: session.id))
         await manager.hydrateIfNeeded(id: reopened.id)
@@ -1978,6 +2053,7 @@ struct ACPSessionManagerAttachRestoreTests {
         let newMeta = (requests.first?.params as? ACPSessionNewParams)?.meta
         let loadMeta = (requests.last?.params as? ACPSessionLoadParams)?.meta
         #expect(newMeta?.claudeCode?.options.disallowedTools == ["Agent", "Task", "Workflow", "SendMessage", "ListAgents"])
+        #expect(newMeta?.systemPrompt == .init(append: "Review migrations."))
         #expect(loadMeta == newMeta)
         await manager.detach(sessionId: session.id)
     }

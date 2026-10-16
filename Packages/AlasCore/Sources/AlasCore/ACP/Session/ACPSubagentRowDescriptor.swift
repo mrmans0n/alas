@@ -71,8 +71,8 @@ public struct ACPSubagentRowDescriptor: Equatable, Sendable {
     /// a live subagent as in-progress and a finished one as done.
     public var toolCallStatus: String {
         switch state {
-        case .running, .other: "in_progress"
-        case .completed: "completed"
+        case .running, .requiresAction, .other: "in_progress"
+        case .completed, .unconfirmed: "completed"
         case .failed, .disconnected: "failed"
         case .cancelled: "cancelled"
         }

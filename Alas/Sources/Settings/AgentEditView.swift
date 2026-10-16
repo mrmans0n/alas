@@ -8,6 +8,7 @@ struct AgentEditView: View {
 
     @State private var draft: AgentDefinition
     @State private var nativeSubagentsDisabled: Bool
+    @State private var sessionInstructions: String
     @State private var deleteConfirmShown = false
     /// Pi only: what the installed Pi extensions leave uncovered. Read once
     /// when the sheet opens.
@@ -23,6 +24,9 @@ struct AgentEditView: View {
         _nativeSubagentsDisabled = State(initialValue: targetID.map {
             state.config.agents.nativeSubagentsDisabled(for: $0)
         } ?? false)
+        _sessionInstructions = State(initialValue: targetID.flatMap {
+            state.config.agents.builtinState[$0]?.sessionInstructions
+        } ?? "")
         _piExtensionCoverage = State(initialValue: targetID == ACPManagedAdapterDescriptor.pi.agentID
             ? ACPPiSubagentExtensions.coverage(
                 agentDirectory: ACPPiSubagentExtensions.agentDirectory(),
@@ -152,6 +156,21 @@ struct AgentEditView: View {
                     .disabled(!nativeDelegationSupport.canEnforce)
                     .opacity(nativeDelegationSupport.canEnforce ? 1 : 0.4)
             }
+            if supportsSessionInstructions {
+                SettingsRow(
+                    name: "Session instructions",
+                    desc: "Added to the agent's own instructions and project rules. Applies to new sessions."
+                ) {
+                    TextEditor(text: $sessionInstructions)
+                        .font(.system(size: 12))
+                        .scrollContentBackground(.hidden)
+                        .frame(height: 72)
+                        .padding(8)
+                        .background(theme.color("bg-0"))
+                        .overlay(RoundedRectangle(cornerRadius: 6)
+                            .strokeBorder(theme.color("line"), lineWidth: 0.5))
+                }
+            }
 
             HStack(spacing: 8) {
                 if !draft.isBuiltin && !isNew {
@@ -212,6 +231,10 @@ struct AgentEditView: View {
         draft.isBuiltin ? .resolve(agentID: draft.id) : .unsupported
     }
 
+    private var supportsSessionInstructions: Bool {
+        draft.isBuiltin && ACPSessionInstructionsPolicy.isConfigurable(agentID: draft.id)
+    }
+
     private var isNew: Bool {
         if case .new = target { return true } else { return false }
     }
@@ -238,6 +261,9 @@ struct AgentEditView: View {
             entry.extraTerminalArgs = (trimmedExtra?.isEmpty == false) ? trimmedExtra : nil
             if nativeDelegationSupport.canEnforce {
                 entry.nativeSubagentsDisabled = nativeSubagentsDisabled ? true : nil
+            }
+            if supportsSessionInstructions {
+                entry.sessionInstructions = ACPSessionInstructionsPolicy.normalized(sessionInstructions)
             }
             state.config.agents.builtinState[draft.id] = entry
         } else if isNew {

@@ -1063,6 +1063,45 @@ struct ACPBrokerClientTests {
         }
     }
 
+    // Claude's revised subagent form announces a child and its state in one
+    // frame, which Alas routes as a spawn plus a state update. The cursor
+    // belongs to the frame, so only the last of them may acknowledge it.
+    @Test func revisedSubagentFrameAcksItsCursorOnlyAfterItsLastUpdate() async throws {
+        let service = MockBrokerService()
+        await service.enqueueAttach(events: [
+            ACPBrokerEvent(
+                cursor: ACPBrokerEventCursor(rawValue: 2),
+                kind: .adapterNotification(
+                    method: "session/update",
+                    params: .object([
+                        "sessionId": .string("remote-1"),
+                        "update": .object([
+                            "sessionUpdate": .string("subagent_update"),
+                            "sessionId": .string("agent_n"),
+                            "state": .object(["state": .string("running")])
+                        ])
+                    ])
+                )
+            )
+        ])
+        let client = makeClient(service: service)
+
+        try await client.start()
+        let spawn = try await nextUpdate(from: client.incomingUpdates)
+        let state = try await nextUpdate(from: client.incomingUpdates)
+        #expect(client.yieldedUpdateCount == 2)
+        guard case .subagentSpawned = spawn.update, case .subagentStateUpdate = state.update else {
+            Issue.record("expected a spawn then a state update")
+            return
+        }
+        #expect(spawn.durableConsumptionAcknowledgement == nil)
+
+        state.durableConsumptionAcknowledgement?()
+        try await waitUntil {
+            await service.acks.map(\.cursor) == [ACPBrokerEventCursor(rawValue: 2)]
+        }
+    }
+
     @Test func sendWaitsAcrossPendingResultAndReplaysPendingRequest() async throws {
         let service = MockBrokerService()
         await service.enqueueAttach(events: [])

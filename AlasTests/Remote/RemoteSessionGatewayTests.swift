@@ -741,6 +741,30 @@ struct RemoteSessionGatewayTests {
         #expect(provider.remoteProjectsCallCount == 2)
     }
 
+    /// A connection serves host protocol messages for the caller its
+    /// transport authenticated, and refuses them without one.
+    @Test(arguments: [true, false])
+    func hostMessagesAreServedOnlyForAnAuthenticatedCaller(authenticated: Bool) async throws {
+        let projects = ProjectsManager(persistedProjects: [])
+        let provider = FakeSessionsProvider()
+        provider.eventHost = AlasHost(core: AlasCoreContext(projects: projects, runHistoryStore: nil))
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(
+            provider: provider, caller: authenticated ? .remotePeer(deviceID: "phone") : nil
+        ) { sent.append($0) }
+        defer { gw.close() }
+
+        await gw.handle(.host(HostClientMessage(id: 7, request: .listSessions)))
+        let deadline = ContinuousClock.now + .seconds(5)
+        while sent.isEmpty, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(sent == [.host(.response(id: 7, result: authenticated
+            ? .sessions(sessions: [])
+            : .failure(error: .invalidRequest(reason: "This connection does not serve the host protocol."))
+        ))])
+    }
+
     @Test func createWorktreeSessionEmitsCreatedSessionAndRefreshesLists() async {
         let provider = FakeSessionsProvider()
         let summary = RemoteSessionSummary(

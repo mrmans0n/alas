@@ -1,7 +1,7 @@
 import Foundation
 
 public final class ACPSessionStore {
-    public static let targetSchemaVersion = 27
+    public static let targetSchemaVersion = 28
     public let path: String
     public let db: SQLiteDatabase
 
@@ -58,7 +58,15 @@ public final class ACPSessionStore {
                 try db.exec("ALTER TABLE sessions ADD COLUMN goal_draft TEXT NOT NULL DEFAULT ''")
             }
         }
-        if current < 27 { try migrate_to_v27() }
+        if current < 27 {
+            // Nullable: rows from before this column keep NULL (no session
+            // instructions), which is how those sessions were started.
+            let columns = try db.query("PRAGMA table_info(sessions)")
+            if !columns.contains(where: { ($0["name"] as? String) == "session_instructions" }) {
+                try db.exec("ALTER TABLE sessions ADD COLUMN session_instructions TEXT")
+            }
+        }
+        if current < 28 { try migrate_to_v28() }
         try recoverFromConcurrentWriters()
         if current == 0 {
             try db.exec("INSERT INTO schema_version (version) VALUES (?)", bindings: [Int64(Self.targetSchemaVersion)])
@@ -68,7 +76,7 @@ public final class ACPSessionStore {
         try db.exec("CREATE INDEX IF NOT EXISTS messages_session_kind_seq_idx ON messages(session_id, kind, seq)")
     }
 
-    private func migrate_to_v27() throws {
+    private func migrate_to_v28() throws {
         let columns = try db.query("PRAGMA table_info(sessions)")
         if !columns.contains(where: { ($0["name"] as? String) == "last_seen_at" }) {
             try db.exec("ALTER TABLE sessions ADD COLUMN last_seen_at INTEGER")
@@ -461,6 +469,11 @@ public struct ACPSessionRow: Equatable, Sendable {
     /// reconnect or restore applies the policy the session started with.
     /// `nil` for sessions created before the policy existed (allowed).
     public var nativeSubagentsDisabled: Bool? = nil
+    /// Session instructions captured when Alas created the session, sent on
+    /// every session request (`ACPSessionInstructionsPolicy`). Written once
+    /// like `nativeSubagentsDisabled`, so editing the agent's default never
+    /// changes a session that already exists. `nil` means none.
+    public var sessionInstructions: String? = nil
     /// Slash commands and skills the agent advertised, persisted so their
     /// pills and chips survive an app restart and reach mirror sessions
     /// before any attach happens (see `migrate_to_v20`).
@@ -481,7 +494,7 @@ public struct ACPSessionRow: Equatable, Sendable {
     public var lastOpenedAt: Int64
     public var archived: Bool
 
-    public init(id: String, agentId: String, title: String, titleSource: ACPSessionTitleSource = .placeholder, remoteSessionId: String? = nil, origin: ACPSessionOrigin = .alasCreated, contextRecoveryPending: Bool = false, recoveryProcId: String? = nil, mcpPreamblePending: String? = nil, mcpPreambleSent: Bool = false, usageLimit: ACPUsageLimit? = nil, goalDraft: String = "", directTurnInFlight: Bool = false, authStatus: ACPAuthStatus? = nil, currentModel: String? = nil, currentMode: String? = nil, configOptionValues: [String: ACPConfigValue] = [:], nativeSubagentsDisabled: Bool? = nil, promptSuggestions: [ACPPromptSuggestion]? = nil, ephemeralParentId: String? = nil, ephemeralCleanupPending: Bool = false, autoRun: Bool, helperProcStdoutOffset: Int64? = nil, helperProcStderrOffset: Int64? = nil, acpBrokerId: String? = nil, acpBrokerGeneration: Int64? = nil, acpBrokerAcknowledgedCursor: Int64 = 0, createdAt: Int64, updatedAt: Int64, lastOpenedAt: Int64, archived: Bool) {
+    public init(id: String, agentId: String, title: String, titleSource: ACPSessionTitleSource = .placeholder, remoteSessionId: String? = nil, origin: ACPSessionOrigin = .alasCreated, contextRecoveryPending: Bool = false, recoveryProcId: String? = nil, mcpPreamblePending: String? = nil, mcpPreambleSent: Bool = false, usageLimit: ACPUsageLimit? = nil, goalDraft: String = "", directTurnInFlight: Bool = false, authStatus: ACPAuthStatus? = nil, currentModel: String? = nil, currentMode: String? = nil, configOptionValues: [String: ACPConfigValue] = [:], nativeSubagentsDisabled: Bool? = nil, sessionInstructions: String? = nil, promptSuggestions: [ACPPromptSuggestion]? = nil, ephemeralParentId: String? = nil, ephemeralCleanupPending: Bool = false, autoRun: Bool, helperProcStdoutOffset: Int64? = nil, helperProcStderrOffset: Int64? = nil, acpBrokerId: String? = nil, acpBrokerGeneration: Int64? = nil, acpBrokerAcknowledgedCursor: Int64 = 0, createdAt: Int64, updatedAt: Int64, lastOpenedAt: Int64, archived: Bool) {
         self.id = id
         self.agentId = agentId
         self.title = title
@@ -500,6 +513,7 @@ public struct ACPSessionRow: Equatable, Sendable {
         self.currentMode = currentMode
         self.configOptionValues = configOptionValues
         self.nativeSubagentsDisabled = nativeSubagentsDisabled
+        self.sessionInstructions = sessionInstructions
         self.promptSuggestions = promptSuggestions
         self.ephemeralParentId = ephemeralParentId
         self.ephemeralCleanupPending = ephemeralCleanupPending
@@ -768,10 +782,10 @@ extension ACPSessionStore {
         INSERT INTO sessions (id, agent_id, title, title_source, remote_session_id, origin, context_recovery_pending, recovery_proc_id,
                               mcp_preamble_pending, mcp_preamble_sent, prompt_suggestions,
                               current_model, current_mode, config_option_values, native_subagents_disabled,
-                              ephemeral_parent_id, ephemeral_cleanup_pending, auto_run, helper_proc_stdout_offset,
+                              session_instructions, ephemeral_parent_id, ephemeral_cleanup_pending, auto_run, helper_proc_stdout_offset,
                               helper_proc_stderr_offset, acp_broker_id, acp_broker_generation,
                               acp_broker_acknowledged_cursor, created_at, updated_at, last_opened_at, archived)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET
             title = CASE WHEN ? THEN sessions.title ELSE excluded.title END,
             title_source = CASE WHEN ? THEN sessions.title_source ELSE excluded.title_source END,
@@ -787,6 +801,7 @@ extension ACPSessionStore {
             current_mode = excluded.current_mode,
             config_option_values = excluded.config_option_values,
             native_subagents_disabled = COALESCE(sessions.native_subagents_disabled, excluded.native_subagents_disabled),
+            session_instructions = COALESCE(sessions.session_instructions, excluded.session_instructions),
             ephemeral_parent_id = sessions.ephemeral_parent_id,
             ephemeral_cleanup_pending = sessions.ephemeral_cleanup_pending,
             auto_run = excluded.auto_run,
@@ -810,6 +825,7 @@ extension ACPSessionStore {
             s.promptSuggestions.map { String(decoding: try JSONEncoder().encode($0), as: UTF8.self) },
             s.currentModel, s.currentMode, try JSONEncoder().encode(s.configOptionValues),
             s.nativeSubagentsDisabled.map { $0 ? 1 : 0 },
+            s.sessionInstructions,
             s.ephemeralParentId, s.ephemeralCleanupPending ? 1 : 0,
             s.autoRun ? 1 : 0,
             s.helperProcStdoutOffset, s.helperProcStderrOffset,
@@ -1543,6 +1559,7 @@ extension ACPSessionStore {
             configOptionValues: (r["config_option_values"] as? Data)
                 .flatMap { try? JSONDecoder().decode([String: ACPConfigValue].self, from: $0) } ?? [:],
             nativeSubagentsDisabled: (r["native_subagents_disabled"] as? Int64).map { $0 != 0 },
+            sessionInstructions: r["session_instructions"] as? String,
             promptSuggestions: (r["prompt_suggestions"] as? String)
                 .flatMap { try? JSONDecoder().decode([ACPPromptSuggestion].self, from: Data($0.utf8)) },
             ephemeralParentId: r["ephemeral_parent_id"] as? String,

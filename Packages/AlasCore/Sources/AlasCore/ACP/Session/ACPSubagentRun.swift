@@ -140,11 +140,15 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
     public func merge(spawn: ACPSubagentSpawn) {
         if let incoming = spawn.name, !incoming.isEmpty, incoming != name {
             name = incoming
+        } else if spawn.clearsName, name != nil {
+            name = nil
         }
         if let incoming = spawn.task, !incoming.isEmpty, incoming != task {
             task = incoming
+        } else if spawn.clearsTask, task != nil {
+            task = nil
         }
-        if spawn.capabilities != .init(), spawn.capabilities != capabilities {
+        if spawn.replacesCapabilities || spawn.capabilities != .init(), spawn.capabilities != capabilities {
             capabilities = spawn.capabilities
         }
     }
@@ -189,10 +193,17 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
         // connection permanently strand a still-running child's row;
         // replay reporting the child's real (non-terminal) status is
         // strictly more informed and should win.
-        if replaying, state.isTerminal, state != .disconnected, !newState.isTerminal { return }
+        // `.unconfirmed` is excluded for the same reason: it claims nothing.
+        if replaying, state.isTerminal, state != .disconnected, state != .unconfirmed,
+           !newState.isTerminal { return }
         guard state != newState else { return }
+        // A reusable child starting new work (a revised-form resume) leaves
+        // its previous failure behind: each state is a whole snapshot, so a
+        // later failure without text must not show the old reason.
+        if state.isTerminal, !newState.isTerminal { lastError = error.flatMap { $0.isEmpty ? nil : $0 } }
         state = newState
-        if newState.isTerminal {
+        // Nothing finished for an unconfirmed child, so it has no finish time.
+        if newState.isTerminal, newState != .unconfirmed {
             finishedAt = timestamp
         } else {
             finishedAt = nil
@@ -243,6 +254,9 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
             // sharing a `messageId` extend one bubble rather than opening
             // a new one each time, and an image or resource block carries
             // its attachment instead of vanishing as empty text.
+            if let directed = chunk.directed, let messageId = chunk.messageId {
+                return applyDirectedMessage(chunk, messageId: messageId, directed: directed, replaying: false, at: timestamp)
+            }
             let text = Self.text(of: chunk.content)
             let attachments = Self.attachments(of: chunk.content)
             guard !text.isEmpty || !attachments.isEmpty else { return [] }
@@ -705,6 +719,9 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
     /// (newest) row every time. Id-less prompts use the equivalent
     /// `legacyOpenUserRun`/`legacyUserRunOrdinal` tracking.
     private func applyReplayedUserChunk(_ chunk: ACPTextChunk, at timestamp: Date) -> Set<Int> {
+        if let directed = chunk.directed, let messageId = chunk.messageId {
+            return applyDirectedMessage(chunk, messageId: messageId, directed: directed, replaying: true, at: timestamp)
+        }
         let text = Self.text(of: chunk.content)
         let attachments = Self.attachments(of: chunk.content)
         guard !text.isEmpty || !attachments.isEmpty else { return [] }
@@ -777,6 +794,44 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
         let index = insertRecovered(
             .user(id: UUID(), messageId: nil, text: text, attachments: attachments), at: timestamp)
         legacyOpenUserRun = index
+        return [index]
+    }
+
+    /// A revised-form `session_message` into this child. Its id is unique
+    /// (the tool use that sent it), so it addresses its row wherever that
+    /// sits, and a whole-content upsert REPLACES the row: the adapter can
+    /// resend a prompt (after a restart, or in `session/load` replay) and
+    /// the RFD lets `session_message` rewrite or clear what chunks built.
+    private func applyDirectedMessage(
+        _ chunk: ACPTextChunk,
+        messageId: String,
+        directed: ACPDirectedMessage,
+        replaying: Bool,
+        at timestamp: Date
+    ) -> Set<Int> {
+        let text = Self.text(of: chunk.content)
+        let attachments = Self.attachments(of: chunk.content)
+        if replaying { closeLegacyRuns() }
+        let existing = messages.lastIndex { message in
+            if case .user(_, let id, _, _, _, _) = message { return id == messageId }
+            return false
+        }
+        guard let index = existing,
+              case .user(let id, _, let existingText, let existingAttachments, let source, _) = messages[index]
+        else {
+            guard !text.isEmpty || !attachments.isEmpty else { return [] }
+            let row = ACPMessage.user(id: UUID(), messageId: messageId, text: text, attachments: attachments)
+            return [replaying ? insertRecovered(row, at: timestamp) : append(row, at: timestamp)]
+        }
+        if replaying { replayCursor = max(replayCursor, index + 1) }
+        if directed.replacesContent {
+            guard text != existingText || attachments != existingAttachments else { return [] }
+            messages[index] = .user(
+                id: id, messageId: messageId, text: text, attachments: attachments, delegatedSource: source)
+        } else {
+            guard !text.isEmpty || !attachments.isEmpty else { return [] }
+            appendToUserRow(at: index, messageId: messageId, text: text, attachments: attachments)
+        }
         return [index]
     }
 
