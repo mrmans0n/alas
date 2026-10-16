@@ -71,12 +71,16 @@ struct WorkspaceCheckoutCreationModelTests {
         #expect(model.rootPath == "/checkouts/feature-second")
     }
 
-    @Test func advancesThroughThreeStepsOnlyWithSharedBranchAndRoot() {
+    @Test func advancesThroughThreeStepsOnlyWithValidSharedBranchAndRoot() throws {
         let workspace = fixtureWorkspace()
         var model = WorkspaceCheckoutCreationModel(workspace: workspace, rootPath: "")
 
         #expect(model.step == .details)
         #expect(model.advance() == .failure("A shared branch is required."))
+        #expect(model.branchValidationMessage == nil)
+        model.branch = "release..1091"
+        let invalid = try #require(model.branchValidationMessage)
+        #expect(model.advance() == .failure(invalid))
         model.branch = "release/1091"
         #expect(model.advance() == .failure("Checkout root is required."))
         model.rootPath = "/checkouts/release"

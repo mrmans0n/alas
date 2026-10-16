@@ -50,6 +50,14 @@ struct WorkspaceCheckoutCreationModel: Equatable {
         )
     }
 
+    /// Nil while the field is empty: the disabled confirm button already says
+    /// a name is required. Validates the composed ref git will be asked for.
+    var branchValidationMessage: String? {
+        guard !composedBranch.isEmpty else { return nil }
+        if case .invalid(let message) = GitNameValidator.validateBranchName(composedBranch) { return message }
+        return nil
+    }
+
     static func checkoutRoot(parentPath: String, branch: String) -> String {
         let branch = branch.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !branch.isEmpty else { return "" }
@@ -86,6 +94,7 @@ struct WorkspaceCheckoutCreationModel: Equatable {
 
     mutating func advance() -> WorkspaceCheckoutCreationAdvanceResult {
         guard !composedBranch.isEmpty else { return .failure("A shared branch is required.") }
+        if let branchValidationMessage { return .failure(branchValidationMessage) }
         guard !rootPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return .failure("Checkout root is required.") }
         step = .preflight
         return .success

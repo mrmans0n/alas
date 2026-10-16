@@ -352,12 +352,23 @@ struct CreateWorkspaceCheckoutDialog: View {
     private var details: some View {
         VStack(alignment: .leading, spacing: 14) {
             DialogField(label: "Shared branch") {
-                AlasField(text: Binding(get: { model.branch }, set: { model.setBranch($0) }), placeholder: "my-change", monospaced: true, focusOnAppear: true, disablesAutomaticTextSubstitutions: true)
+                AlasField(
+                    text: Binding(get: { model.branch }, set: { model.setBranch($0) }),
+                    placeholder: "my-change",
+                    monospaced: true,
+                    focusOnAppear: true,
+                    onSubmit: proceed,
+                    disablesAutomaticTextSubstitutions: true,
+                    inputPolicy: .gitBranchName
+                )
             }
             if !model.composedBranch.isEmpty {
                 Text("Branch: \(model.composedBranch)")
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundColor(theme.color("fg-dim"))
+            }
+            if let validationMessage = model.branchValidationMessage {
+                Text(validationMessage).font(.system(size: 11)).foregroundColor(.red)
             }
             DialogField(label: "Checkout folder") {
                 HStack(spacing: 8) {
@@ -459,7 +470,9 @@ struct CreateWorkspaceCheckoutDialog: View {
 
     private var canProceed: Bool {
         switch model.step {
-        case .details: return !model.request().branch.isEmpty && !model.request().rootPath.isEmpty
+        case .details:
+            return !model.request().branch.isEmpty && model.branchValidationMessage == nil
+                && !model.request().rootPath.isEmpty
         case .preflight:
             if case .success = model.preflightResult { return !isChecking }
             return false
