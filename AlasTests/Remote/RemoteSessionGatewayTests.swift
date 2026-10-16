@@ -1215,6 +1215,27 @@ struct RemoteSessionGatewayTests {
         try await hosted.until { sent.contains(.permissionResolved(sessionId: id, requestId: 8)) }
     }
 
+    /// Following again dismisses what the client was shown before the new
+    /// follow surfaces what is still pending, so a request resolved while
+    /// the old follow was replaced cannot stay on screen.
+    @Test func followingAgainDismissesSurfacedRequestsBeforeResurfacingThem() async throws {
+        let id = try await hosted.drivenSession()
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: hosted.provider) { sent.append($0) }
+        defer { gw.close() }
+        await gw.handle(.subscribe(sessionId: id))
+        hosted.agent.emitPermission(id: .number(7), params: .stub())
+        try await hosted.until { sent.contains { if case .permissionRequest(_, let payload) = $0 { payload.requestId == 7 } else { false } } }
+        sent.removeAll()
+
+        await gw.handle(.subscribe(sessionId: id))
+        try await hosted.until { sent.contains { if case .permissionRequest = $0 { true } else { false } } }
+
+        let dismissed = try #require(sent.firstIndex(of: .permissionResolved(sessionId: id, requestId: 7)))
+        let resurfaced = try #require(sent.firstIndex { if case .permissionRequest = $0 { true } else { false } })
+        #expect(dismissed < resurfaced)
+    }
+
     @Test func permissionRequestForwardsDecodedPresentationToTheRemoteClient() async throws {
         let id = try await hosted.drivenSession()
         let params = ACPPermissionRequestParams.stub(

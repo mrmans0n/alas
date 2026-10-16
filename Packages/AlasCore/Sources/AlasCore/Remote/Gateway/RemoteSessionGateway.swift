@@ -153,9 +153,8 @@ public final class RemoteSessionGateway {
             }
             // A new follow resets: the client gets a snapshot, its pending
             // requests, config and queue.
-            syncStates[id] = RemoteTranscriptSync()
             do {
-                try follows.follow(id)
+                try followAgain(id, on: follows)
             } catch {
                 syncStates[id] = nil
                 send(.sessionClosed(sessionId: id))
@@ -190,8 +189,7 @@ public final class RemoteSessionGateway {
             // again resets, so the client gets a snapshot that says it can
             // drive and its composer unlocks at once.
             if syncStates[id] != nil, let follows {
-                syncStates[id] = RemoteTranscriptSync()
-                try? follows.follow(id)
+                try? followAgain(id, on: follows)
             }
         case .openSessionTab(let id):
             reportTabAction(await presenter?.openSessionTab(for: id) ?? .failure("Opening session tabs is unavailable."), sessionId: id)
@@ -721,6 +719,18 @@ public final class RemoteSessionGateway {
         return subscription
     }
 
+    /// Follows `id` afresh under a new sync state. What the client was shown
+    /// is dismissed first: the new follow knows nothing of a request
+    /// resolved meanwhile, and surfaces again those still pending.
+    private func followAgain(_ id: String, on follows: HostSubscription) throws {
+        if let rid = lastPermissionReq.removeValue(forKey: id) { send(.permissionResolved(sessionId: id, requestId: rid)) }
+        if let rid = lastQuestionReq.removeValue(forKey: id) { send(.questionResolved(sessionId: id, requestId: rid)) }
+        if let rid = lastPlanReq.removeValue(forKey: id) { send(.planResolved(sessionId: id, requestId: rid)) }
+        if let rid = lastElicitationReq.removeValue(forKey: id) { send(.elicitationResolved(sessionId: id, requestId: rid)) }
+        syncStates[id] = RemoteTranscriptSync()
+        try follows.follow(id)
+    }
+
     /// Sends what the follow reports, in the order a client expects: the
     /// transcript, the requests waiting on it, then config and queue.
     private func receiveFollowed(_ events: [HostEvent]) async {
@@ -855,8 +865,7 @@ public final class RemoteSessionGateway {
         }
         guard indices.count <= RemoteTranscriptSync.dirtyResnapshotThreshold else {
             // Cheaper as a fresh snapshot: following again resets.
-            syncStates[id] = RemoteTranscriptSync()
-            try? follows?.follow(id)
+            if let follows { try? followAgain(id, on: follows) }
             return
         }
         // Claimed before the wire is built, as a snapshot does: two
