@@ -18,9 +18,8 @@ public final class FederatedDownstream {
 
 /// Composes this Mac's peers' sessions into what its own remote clients see.
 ///
-/// Sits beside `RemoteSessionsProvider`, not in front of it: the local
-/// provider hands gateways live `ACPSession`s, while a peer's session only
-/// ever exists here as wire frames. Each `RemoteSessionGateway` asks
+/// Sits beside the host, not in front of it: the host serves gateways its
+/// own sessions, while a peer's session only ever exists here as wire frames. Each `RemoteSessionGateway` asks
 /// `route(_:from:)` first; a message naming a peer session is rewritten to
 /// the peer's own id and sent over that peer's link, and everything the peer
 /// answers for a subscribed session comes back re-prefixed to every gateway

@@ -4,7 +4,7 @@ import Testing
 @_spi(Testing) import AlasCore
 
 /// A host built from `AlasCoreContext` with one worktree and a scripted
-/// agent, behind the gateway's remaining `RemoteSessionsProvider` fake.
+/// agent, with the fake app around it.
 @MainActor
 final class GatewayHostFixture {
     let root: URL
@@ -12,7 +12,7 @@ final class GatewayHostFixture {
     let core: AlasCoreContext
     let host: AlasHost
     let worktree: Worktree
-    let provider = FakeSessionsProvider()
+    let provider = FakeRemoteApp()
 
     init() throws {
         root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-gateway-\(UUID().uuidString)")
@@ -47,7 +47,7 @@ final class GatewayHostFixture {
             }
         )
         host = AlasHost(core: core)
-        provider.eventHost = host
+        provider.host = host
     }
 
     var manager: ACPSessionManager? { core.sessionManagers.values.first }

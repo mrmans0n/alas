@@ -733,6 +733,43 @@ struct WorkspaceACPSessionTests {
         #expect(state.acpManager(for: SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)) === firstManager)
     }
 
+    /// A peer opens and closes a checkout session's tab as it does a
+    /// worktree session's, without switching the tab shown here.
+    @MainActor
+    @Test func remoteTabActionsReachCheckoutOwnedSessions() async throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let checkout = WorkspaceCheckout(
+            workspaceID: nil, fallbackWorkspaceName: "Workspace", executionLocation: .local,
+            branch: "topic", rootPath: root.path, members: []
+        )
+        try writeManifest(for: checkout)
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, .local)
+        defer { try? FileManager.default.removeItem(at: Paths.acpSessionsDB(for: owner)) }
+        let workspaceStore = WorkspaceStore(url: root.appendingPathComponent("workspaces.json"))
+        try await workspaceStore.checkpoint(.init(checkouts: [checkout]))
+        let workspacesManager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore))
+        let state = AppState(store: TestPersistenceStore(), workspacesManager: workspacesManager, workspaceStore: workspaceStore)
+        _ = await workspacesManager.load(spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
+        guard case let .ready(manager) = await state.workspaceACPManager(for: checkout) else {
+            Issue.record("Expected checkout manager")
+            return
+        }
+        let shown = state.tabs.append(acpSession: .init(sessionId: "shown", title: "Shown"), to: owner)
+        state.tabs.activate(owner: owner, tabId: shown.id)
+        let session = manager.createSession(id: "checkout-remote", agentId: "test")
+        await manager.flushPersistence()
+
+        let opened = await state.openSessionTab(for: session.id)
+        #expect(opened == .success)
+        #expect(state.sessionTabIndex(session.id, owner: owner) == 1)
+        #expect(state.tabs.activeTabId(for: owner) == shown.id)
+
+        #expect(await state.closeSessionTab(for: session.id) == .success)
+        #expect(state.sessionTabIndex(session.id, owner: owner) == nil)
+    }
+
     @MainActor
     @Test func openingExistingCheckoutACPSessionUsesTheOwnerBucket() async throws {
         let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)

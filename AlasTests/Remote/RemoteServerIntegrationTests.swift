@@ -19,13 +19,12 @@ struct RemoteServerIntegrationTests {
     }
 
     private func startServer(pairing: RemotePairingService,
-                             provider: RemoteSessionsProvider = FakeSessionsProvider()) async throws -> (RemoteServer, UInt16) {
+                             provider: FakeRemoteApp = FakeRemoteApp()) async throws -> (RemoteServer, UInt16) {
         let assets = RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory()))
-        let server = RemoteServer(pairing: pairing, assets: assets, provider: provider)
+        let server = RemoteServer(pairing: pairing, assets: assets, host: provider.host)
+        server.present(provider)
         // The fake's reads, which tests hold back to pin ordering.
-        if let fake = provider as? FakeSessionsProvider {
-            server.configureGateway = { $0.hostCalls = fake.hostCalls }
-        }
+        server.configureGateway = { $0.hostCalls = provider.hostCalls }
         try server.start(port: 0)
         for _ in 0..<50 where server.port == nil {
             try await Task.sleep(nanoseconds: 20_000_000)
@@ -135,11 +134,10 @@ struct RemoteServerIntegrationTests {
 
         let assets = RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory()))
         let pairing = RemotePairingService(store: InMemoryDeviceStore())
-        let server = RemoteServer(pairing: pairing, assets: assets, provider: provider)
+        let server = RemoteServer(pairing: pairing, assets: assets, host: provider.host)
+        server.present(provider)
         // The fake's reads, which tests hold back to pin ordering.
-        if let fake = provider as? FakeSessionsProvider {
-            server.configureGateway = { $0.hostCalls = fake.hostCalls }
-        }
+        server.configureGateway = { $0.hostCalls = provider.hostCalls }
         try server.start(port: 0)
 
         // Wait for port assignment.
@@ -190,7 +188,7 @@ struct RemoteServerIntegrationTests {
         let server = RemoteServer(
             pairing: pairing,
             assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),
-            provider: FakeSessionsProvider(),
+            host: nil,
             identity: { RemoteServerIdentity(serverId: "srv-1", name: "Test Mac") }
         )
         try server.start(port: 0)
@@ -213,7 +211,7 @@ struct RemoteServerIntegrationTests {
         let server = RemoteServer(
             pairing: pairing,
             assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),
-            provider: FakeSessionsProvider(),
+            host: nil,
             identity: { RemoteServerIdentity(serverId: "srv-1", name: "Test Mac") }
         )
         try server.start(port: 0)
@@ -661,7 +659,7 @@ struct RemoteServerIntegrationTests {
         let server = RemoteServer(
             pairing: pairing,
             assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),
-            provider: FakeSessionsProvider(),
+            host: nil,
             identity: { RemoteServerIdentity(serverId: "srv-a", name: "Mac A") }
         )
         try server.start(port: 0)
@@ -736,7 +734,7 @@ struct RemoteServerIntegrationTests {
         let server = RemoteServer(
             pairing: pairing,
             assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),
-            provider: FakeSessionsProvider(),
+            host: nil,
             identity: { RemoteServerIdentity(serverId: "srv-a", name: "Mac A") }
         )
         try server.start(port: 0)
@@ -773,11 +771,10 @@ struct RemoteServerIntegrationTests {
 
         let assets = RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory()))
         let pairing = RemotePairingService(store: InMemoryDeviceStore())
-        let server = RemoteServer(pairing: pairing, assets: assets, provider: provider)
+        let server = RemoteServer(pairing: pairing, assets: assets, host: provider.host)
+        server.present(provider)
         // The fake's reads, which tests hold back to pin ordering.
-        if let fake = provider as? FakeSessionsProvider {
-            server.configureGateway = { $0.hostCalls = fake.hostCalls }
-        }
+        server.configureGateway = { $0.hostCalls = provider.hostCalls }
         try server.start(port: 0)
         for _ in 0..<50 where server.port == nil {
             try await Task.sleep(nanoseconds: 20_000_000)
@@ -837,8 +834,9 @@ struct RemoteServerIntegrationTests {
         let server = RemoteServer(
             pairing: pairing,
             assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),
-            provider: provider
+            host: provider.host
         )
+        server.present(provider)
         var publishedCounts: [[String: Int]] = []
         server.onConnectionDeviceCountsChange = { counts in
             publishedCounts.append(counts)
@@ -971,7 +969,7 @@ struct RemoteServerIntegrationTests {
         let server = RemoteServer(
             pairing: pairing,
             assets: RemoteWebAssets(root: root),
-            provider: FakeSessionsProvider(),
+            host: nil,
             accessPolicy: RemoteAccessPolicy(allowedHosts: ["127.0.0.1"]),
             diagnostics: { providerPort in
                 diagnosticsPorts.append(providerPort)
@@ -1139,7 +1137,7 @@ struct RemoteServerIntegrationTests {
 
         let pairing = RemotePairingService(store: InMemoryDeviceStore())
         let assets = RemoteWebAssets(root: root)
-        let server = RemoteServer(pairing: pairing, assets: assets, provider: FakeSessionsProvider())
+        let server = RemoteServer(pairing: pairing, assets: assets, host: nil)
         try server.start(port: 0)
         defer { server.stop() }
 
@@ -1162,7 +1160,7 @@ struct RemoteServerIntegrationTests {
         let server = RemoteServer(
             pairing: pairing,
             assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),
-            provider: FakeSessionsProvider(),
+            host: nil,
             identity: { RemoteServerIdentity(serverId: "srv-a", name: "Mac A") }
         )
         final class Sink { var requests: [RemotePeerPairingRequest] = [] }
@@ -1203,7 +1201,7 @@ struct RemoteServerIntegrationTests {
         let server = RemoteServer(
             pairing: pairing,
             assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),
-            provider: FakeSessionsProvider(),
+            host: nil,
             identity: { RemoteServerIdentity(serverId: "srv-a", name: "Mac A") },
             signer: RemoteIdentityKeyProvider(store: RemoteInMemorySecretStore())
         )
@@ -1235,7 +1233,7 @@ struct RemoteServerIntegrationTests {
     }
 
     @Test func aConnectionOpenedAfterFederationIsSetSeesPeerRows() async throws {
-        let provider = FakeSessionsProvider()
+        let provider = FakeRemoteApp()
         provider.summaries = [RemoteSessionSummary(id: "local", title: "L", agentId: "claude", status: "idle", canDrive: true)]
         let pairing = RemotePairingService(store: InMemoryDeviceStore())
         let (server, port) = try await startServer(pairing: pairing, provider: provider)

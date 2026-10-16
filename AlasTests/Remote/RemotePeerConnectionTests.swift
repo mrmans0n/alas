@@ -132,14 +132,14 @@ struct RemotePeerConnectionTests {
     /// diagnostics snapshot exactly, so it changes nothing for the tests that
     /// do not care; the health-identity tests set it.
     private func startServer(pairing: RemotePairingService,
-                             provider: RemoteSessionsProvider = FakeSessionsProvider(),
+                             provider: FakeRemoteApp = FakeRemoteApp(),
                              serverId: String? = nil,
                              helloServerId: String = "srv-a",
                              signer: (any RemoteIdentitySigning)? = nil) async throws -> (RemoteServer, String) {
         let server = RemoteServer(
             pairing: pairing,
             assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),
-            provider: provider,
+            host: provider.host,
             diagnostics: { port in
                 RemoteDiagnosticsSnapshot(appName: "Alas", port: port, addresses: [],
                                           usesPlainHTTP: true, pairedDeviceCount: 0, serverId: serverId)
@@ -147,6 +147,7 @@ struct RemotePeerConnectionTests {
             identity: { RemoteServerIdentity(serverId: helloServerId, name: "Mac A") },
             signer: signer
         )
+        server.present(provider)
         try server.start(port: 0)
         for _ in 0..<50 where server.port == nil {
             try await Task.sleep(nanoseconds: 20_000_000)
@@ -564,7 +565,7 @@ struct RemotePeerConnectionTests {
     @Test func forwardsServerMessagesAfterHello() async throws {
         let pairing = RemotePairingService(store: InMemoryDeviceStore())
         let token = try pairing.redeem(code: pairing.beginPairing(), deviceName: "Mac B")
-        let provider = FakeSessionsProvider()
+        let provider = FakeRemoteApp()
         provider.summaries = [RemoteSessionSummary(id: "s1", title: "T", agentId: "claude", status: "idle", canDrive: false)]
         let (server, origin) = try await startServer(pairing: pairing, provider: provider)
         defer { server.stop() }

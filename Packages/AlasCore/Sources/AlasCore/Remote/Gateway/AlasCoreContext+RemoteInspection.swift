@@ -659,7 +659,7 @@ extension AlasCoreContext {
     }
 
     /// The project and listed worktree with id `id`.
-    private func projectAndWorktree(withWorktreeId id: String) -> (project: ProjectConfig, worktree: Worktree)? {
+    func projectAndWorktree(withWorktreeId id: String) -> (project: ProjectConfig, worktree: Worktree)? {
         for project in projects.projects {
             if let worktree = projects.worktrees(projectId: project.id).first(where: { $0.id == id }) {
                 return (project, worktree)

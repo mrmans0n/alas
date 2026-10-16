@@ -13,11 +13,18 @@ import Foundation
 /// after a first-wins staleness guard.
 @MainActor
 public final class RemoteSessionGateway {
-    private let provider: RemoteSessionsProvider
+    /// Whose sessions this gateway serves, and whose events push session and
+    /// worktree lists to clients; without one, clients get lists only when
+    /// they ask.
+    private let host: AlasHost?
     /// The app's windows, for the tab requests; nil where there are none.
-    @_spi(AppHost) public weak var presenter: RemoteSessionPresenter?
+    @_spi(AppHost) public weak var presenter: RemoteSessionPresenter? {
+        didSet {
+            presenterListChanges = presenter?.sessionListChanges?.observe { [weak self] in self?.refreshSessionList() }
+        }
+    }
     /// What this gateway asks of the host besides session verbs.
-    @_spi(Testing) public lazy var hostCalls = RemoteGatewayHostCalls.host(provider.eventHost)
+    @_spi(Testing) public lazy var hostCalls = RemoteGatewayHostCalls.host(host)
     /// The sessions a mention search listed, per session, reused while the
     /// query grows.
     private var mentionSessions: [String: [ACPSessionMentionCandidate]] = [:]
@@ -38,7 +45,7 @@ public final class RemoteSessionGateway {
     private var hostSubscription: HostSubscription?
     /// Where the client's subscribed sessions are followed.
     private var follows: HostSubscription?
-    private var providerListChanges: ChangeSubscription?
+    private var presenterListChanges: ChangeSubscription?
     private var projectListRefresh: Task<Void, Never>?
     private var projectListGeneration = 0
     private var branchListRefresh: Task<Void, Never>?
@@ -66,19 +73,18 @@ public final class RemoteSessionGateway {
     /// fails never reports the write, so closing releases them.
     private var pendingWrites: [UUID: CheckedContinuation<Void, Never>] = [:]
 
-    public init(provider: RemoteSessionsProvider, federation: FederatedSessionsProvider? = nil,
+    public init(host: AlasHost?, federation: FederatedSessionsProvider? = nil,
          consoleLink: PeerConsoleLink? = nil,
          caller: HostCaller? = nil,
          sendTracked: (@Sendable (RemoteServerMessage, _ onWritten: @escaping @Sendable () -> Void) -> Void)? = nil,
          send: @escaping (RemoteServerMessage) -> Void) {
-        self.provider = provider
+        self.host = host
         self.caller = caller
         self.sendTracked = sendTracked
         self.federation = federation
         self.consoleLink = consoleLink
         self.send = send
-        if let host = provider.eventHost { pushLists(from: host) }
-        providerListChanges = provider.sessionListChanges?.observe { [weak self] in self?.refreshSessionList() }
+        if let host { pushLists(from: host) }
         guard let federation else { return }
         // A peer's cached list moving refreshes this client even if it has
         // never asked for the list, which matches what `renameSession`
@@ -516,7 +522,9 @@ public final class RemoteSessionGateway {
         sessionListRefresh?.cancel()
         sessionListRefresh = Task { @MainActor [weak self] in
             guard let self else { return }
-            let summaries = await provider.sessionSummaries() + (federation?.peerSessionSummaries ?? [])
+            let summaries = await hostCalls.sessionSummaries { [weak presenter] id, owner in
+                presenter?.sessionTabIndex(id, owner: owner)
+            } + (federation?.peerSessionSummaries ?? [])
             guard !Task.isCancelled, generation == sessionListGeneration else { return }
             send(.sessionList(sessions: summaries))
         }
@@ -623,7 +631,7 @@ public final class RemoteSessionGateway {
     }
 
     private func handleConsole(_ request: PeerConsoleRequest) {
-        if let consoleLink, let host = provider.peerConsoleHost {
+        if let consoleLink, let host = presenter?.peerConsoleHost {
             host.handle(request, from: consoleLink)
             return
         }
@@ -637,7 +645,7 @@ public final class RemoteSessionGateway {
     /// Hands a host protocol message to this connection's host connection,
     /// opened on first use for the caller the transport authenticated.
     private func serveHost(_ request: HostClientMessage) {
-        if hostConnection == nil, let host = provider.eventHost, let caller {
+        if hostConnection == nil, let host, let caller {
             hostConnection = HostProtocolServer(host: host).connect(caller: caller) { [weak self] reply in
                 await self?.sendWritten(.host(reply))
             }
@@ -675,12 +683,12 @@ public final class RemoteSessionGateway {
         hostConnection = nil
         for continuation in pendingWrites.values { continuation.resume() }
         pendingWrites.removeAll()
-        if let consoleLink { provider.peerConsoleHost?.close(consoleLink) }
+        if let consoleLink { presenter?.peerConsoleHost?.close(consoleLink) }
         if let federation, let downstream { federation.detach(downstream) }
         self.downstream = nil
         hostSubscription?.cancel()
         hostSubscription = nil
-        providerListChanges = nil
+        presenterListChanges = nil
         sessionListRefresh?.cancel()
         sessionListRefresh = nil
         worktreeListRefresh?.cancel()
@@ -705,7 +713,7 @@ public final class RemoteSessionGateway {
     /// apart from the list one, which rate-limits its reads.
     private func followSubscription() -> HostSubscription? {
         if let follows { return follows }
-        guard let host = provider.eventHost else { return nil }
+        guard let host else { return nil }
         let subscription = host.subscribe()
         follows = subscription
         Task { @MainActor [weak self] in
@@ -917,7 +925,7 @@ public final class RemoteSessionGateway {
     }
 
     /// The host's session verbs; nil without a host, which refuses them all.
-    private var sessions: SessionsAPI? { provider.eventHost?.sessions }
+    private var sessions: SessionsAPI? { host?.sessions }
 
     /// Who the host verbs act for: the authenticated device, or this app.
     private var hostCaller: HostCaller { caller ?? .app }

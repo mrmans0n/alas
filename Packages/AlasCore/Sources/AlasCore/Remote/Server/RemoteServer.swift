@@ -24,7 +24,7 @@ public final class RemoteServer {
 
     nonisolated public let pairing: RemotePairingService
     private let assets: RemoteWebAssets
-    private let provider: RemoteSessionsProvider
+    private let host: AlasHost?
     /// The app's windows, which each gateway takes tab requests to.
     @_spi(AppHost) public weak var presenter: RemoteSessionPresenter?
     /// Test hook run on each gateway as a connection makes it.
@@ -85,7 +85,7 @@ public final class RemoteServer {
     public init(
         pairing: RemotePairingService,
         assets: RemoteWebAssets,
-        provider: RemoteSessionsProvider,
+        host: AlasHost?,
         accessPolicy: RemoteAccessPolicy = .loopback,
         originPolicy: RemoteOriginPolicy = .loopback,
         diagnostics: @escaping @MainActor (UInt16?) -> RemoteDiagnosticsSnapshot = { port in
@@ -104,7 +104,7 @@ public final class RemoteServer {
     ) {
         self.pairing = pairing
         self.assets = assets
-        self.provider = provider
+        self.host = host
         self.accessPolicy = accessPolicy
         self.originPolicy = originPolicy
         self.diagnosticsProvider = diagnostics
@@ -270,7 +270,7 @@ public final class RemoteServer {
             })
         }
         let responder = configured   // immutable copy so the escaping closure below captures a value
-        let provider = self.provider   // captured strongly; the server owns it for its lifetime
+        let host = self.host
         let federation = self.federation
         let conn = RemoteConnection(
             conn: nwConn,
@@ -295,7 +295,7 @@ public final class RemoteServer {
                     }
                 }
                 let gateway = RemoteSessionGateway(
-                    provider: provider, federation: federation, consoleLink: consoleLink,
+                    host: host, federation: federation, consoleLink: consoleLink,
                     caller: .remotePeer(deviceID: channel.deviceId), sendTracked: channel.sendTracked,
                     send: channel.send)
                 gateway.presenter = self?.presenter
