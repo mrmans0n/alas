@@ -83,7 +83,8 @@ public final class RunService {
             branch: worktree.branch,
             projectName: project.name,
             repoRoot: project.path,
-            capturePaths: location.paths
+            capturePaths: location.paths,
+            executionIdentity: RunScriptExecutionIdentity(runID: runID, worktreeID: worktree.id, projectID: project.id)
         )
         let exitCode: Int32
         do {
