@@ -140,4 +140,26 @@ struct ACPGoalPillTests {
 
         #expect(ACPGoalPill.tokenProgress(goal) == expected)
     }
+
+    @Test("a published set settles before its response, and late responses change nothing")
+    func publishedSetSettlesEarly() {
+        var submission = ACPGoalSubmission()
+        let first = submission.begin(.set, objective: "Ship it")
+
+        let unrelated = submission.settle(publishing: "Old goal")
+        let settled = submission.settle(publishing: "Ship it")
+        #expect(unrelated == nil)
+        #expect(settled == "Ship it")
+        #expect(!submission.isSubmitting)
+
+        // The same objective submitted again is a new control; the first
+        // response must not settle it.
+        let second = submission.begin(.set, objective: "Ship it")
+        let lateFirst = submission.finish(first)
+        #expect(!lateFirst)
+        #expect(submission.isSubmitting)
+        let ownResponse = submission.finish(second)
+        #expect(ownResponse)
+        #expect(!submission.isSubmitting)
+    }
 }
