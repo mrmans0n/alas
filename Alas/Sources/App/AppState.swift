@@ -35,12 +35,6 @@ enum ReviewSessionConsolidation {
     }
 }
 
-private struct RemoteWorktreeDestinationCheckError: LocalizedError {
-    var errorDescription: String? {
-        "The remote host did not report whether the destination already exists."
-    }
-}
-
 enum WorkspaceDefinitionSaveError: LocalizedError {
     case spacePlacementFailed
     case workspacePersistenceFailed
@@ -714,16 +708,6 @@ final class AppState {
     @ObservationIgnored private var remoteTailscaleSync: Task<Void, Never>?
     @ObservationIgnored private var remoteTailscaleServeProcess: RemoteTailscaleServeProcess?
     private(set) var remoteConnectedDeviceCountsSnapshot: [String: Int] = [:]
-    @ObservationIgnored
-    var remoteSessionAttachScheduler: (@MainActor (ACPSessionManager, ACPSession.ID) -> Void)?
-    @ObservationIgnored
-    var remoteWorktreeBranchLoader: (@MainActor (URL) async throws -> [String])?
-    @ObservationIgnored
-    var remoteWorktreeDestinationPreparer: (@MainActor (URL, URL) async throws -> URL)?
-    @ObservationIgnored
-    var remoteWorktreeCommandRunner: (@MainActor (String, String?, String) async throws -> ProcessResult)?
-    @ObservationIgnored
-    var remoteSessionCreator: (@MainActor (String, String) async -> RemoteCreateSessionResult)?
 
     private func makeRemoteInterfaces() -> [RemoteNetworkInterface] {
         RemoteNetwork.interfaces()
@@ -4911,7 +4895,7 @@ final class AppState {
         let destination: URL
         let shownPath: String
         do {
-            let prepared = try await preparedCreationDestination(project: project, branch: branch)
+            let prepared = try await core.preparedCreationDestination(project: project, branch: branch)
             guard !prepared.exists else { return .error("A worktree already exists at this path.") }
             destination = prepared.destination
             // Local output keeps the configured path as typed; a remote one
@@ -5005,7 +4989,7 @@ final class AppState {
         }
         let destination: URL
         do {
-            let prepared = try await preparedCreationDestination(project: project, branch: branch)
+            let prepared = try await core.preparedCreationDestination(project: project, branch: branch)
             guard !prepared.exists else { return .failure(.init(message: "A worktree already exists at this path.")) }
             destination = prepared.destination
         } catch {
@@ -15300,26 +15284,6 @@ extension AppState: RemoteSessionsProvider {
         }
     }
 
-    private func remoteSessionSummary(
-        session: ACPSession,
-        manager: ACPSessionManager,
-        worktreeSummary: RemoteWorktreeSummary?
-    ) -> RemoteSessionSummary {
-        let streamingState = manager.runners[session.id]?.session.transcript.streamingState
-            ?? session.transcript.streamingState
-        return RemoteSessionSummary(
-            id: session.id,
-            title: session.title,
-            agentId: session.agentId,
-            status: RemoteSessionGateway.stateString(streamingState),
-            canDrive: manager.isWriter(for: session.id),
-            projectId: projectAndWorktree(withWorktreeId: manager.worktreeId)?.project.id,
-            worktreeId: worktreeSummary == nil ? nil : manager.worktreeId,
-            updatedAt: manager.sessionRows.first(where: { $0.id == session.id })?.updatedAt ?? 0,
-            worktree: worktreeSummary
-        )
-    }
-
     func sessionSummaries() async -> [RemoteSessionSummary] {
         var summariesByIdentity: [String: RemoteSessionSummaryCandidate] = [:]
         var identities: [String] = []
@@ -15489,221 +15453,6 @@ extension AppState: RemoteSessionsProvider {
             host: host
         )
         acpModelCatalog.recordEffort(agentID: agentId, thinking: chips.thinking)
-    }
-
-    func createRemoteSession(
-        worktreeId: String, agentId: String, modelId: String? = nil, effortId: String? = nil
-    ) async -> RemoteCreateSessionResult {
-        guard let resolved = projectAndWorktree(withWorktreeId: worktreeId),
-              projectsManager.visibleWorktrees(projectId: resolved.project.id).contains(where: { $0.id == worktreeId })
-        else {
-            return .failure("Worktree is no longer available.")
-        }
-        guard await !checkpointACPAdmissionDisabledAfterDiscovery(worktreeId: resolved.worktree.id) else {
-            return .failure(Self.checkpointRecoveryBlocksACPMessage)
-        }
-        switch projectsManager.operationState(forWorktreeId: worktreeId, projectId: resolved.project.id) {
-        case .creating, .preparingDelete, .deleting, .archiving, .createFailed:
-            return .failure("Worktree is no longer available.")
-        case nil, .launchFailed, .deleteFailed:
-            break
-        }
-
-        let acpIds = Set(ACPLaunchCatalog.specs.map(\.agentID))
-        guard let agent = agentRegistry.enabled().first(where: { $0.id == agentId }),
-              acpIds.contains(agent.id),
-              resolved.project.host == nil || agent.canRunOnRemoteHost else {
-            return .failure("Agent is no longer available.")
-        }
-
-        guard let manager = acpManager(for: resolved.worktree) else {
-            return .failure("Could not create session.")
-        }
-
-        let session = manager.createSession(agentId: agent.id, autoRunDefault: config.harness.acpAutoRunByDefault)
-        // Picked up by `attach`, so the first turn already runs on the
-        // requested model. An id the agent no longer advertises is dropped
-        // there; creation never fails over the model.
-        if let modelId {
-            manager.pendingModel[session.id] = modelId
-        }
-        // Applied by `attach` after the model; a level the agent no longer
-        // offers is skipped there. Creation never fails over the effort.
-        if let effortId {
-            if let effort = acpModelCatalog.efforts(for: agent.id) {
-                manager.queueInitialConfigOption(
-                    for: session.id, configId: effort.configId, value: .string(effortId))
-            } else {
-                Self.logger.warning("Ignoring requested effort for \(agent.id, privacy: .public): no remembered thinking levels")
-            }
-        }
-        focusGlobalWorktree(id: resolved.worktree.id, projectId: resolved.project.id)
-        let tabState = ACPSessionTabState(sessionId: session.id, title: session.title)
-        let tab = tabs.append(acpSession: tabState, to: resolved.worktree.id)
-        activateWorktreeCenterTab(worktreeId: resolved.worktree.id, tabId: tab.id)
-
-        if let remoteSessionAttachScheduler {
-            remoteSessionAttachScheduler(manager, session.id)
-        } else {
-            Task { @MainActor [weak manager] in
-                await manager?.attach(to: session.id, freshlyCreated: true)
-            }
-        }
-
-        let worktreeSummary = core.remoteWorktreeSummaryWithoutMetrics(project: resolved.project, worktree: resolved.worktree)
-        return .success(remoteSessionSummary(session: session, manager: manager, worktreeSummary: worktreeSummary))
-    }
-
-    func createRemoteWorktreeSession(
-        projectId: String,
-        base: String,
-        branch: String,
-        agentId: String,
-        modelId: String? = nil,
-        effortId: String? = nil,
-        caller: HostCaller = .app
-    ) async -> RemoteCreateWorktreeSessionResult {
-        guard let project = projects.first(where: { $0.id == projectId }) else {
-            return .failure(
-                stage: .worktree,
-                message: "Repository is no longer available.",
-                worktreeId: nil
-            )
-        }
-        guard !project.isFolder else {
-            return .failure(stage: .worktree, message: Self.folderWorktreeCreationMessage, worktreeId: nil)
-        }
-
-        let acpIDs = Set(ACPLaunchCatalog.specs.map(\.agentID))
-        guard agentRegistry.enabled().contains(where: {
-            $0.id == agentId && acpIDs.contains($0.id) && (project.host == nil || $0.canRunOnRemoteHost)
-        }) else {
-            return .failure(stage: .worktree, message: "Could not create worktree.", worktreeId: nil)
-        }
-
-        guard case .valid = GitNameValidator.validateBranchName(branch) else {
-            return .failure(stage: .worktree, message: "Could not create worktree.", worktreeId: nil)
-        }
-
-        do {
-            let repoPath = URL(fileURLWithPath: project.path)
-            let branches = if let remoteWorktreeBranchLoader {
-                try await remoteWorktreeBranchLoader(repoPath)
-            } else {
-                try await GitService().branches(at: repoPath)
-            }
-            guard branches.contains(base) else {
-                return .failure(stage: .worktree, message: "Could not create worktree.", worktreeId: nil)
-            }
-        } catch {
-            Self.logger.error("Could not load branches for remote worktree creation in project \(project.id, privacy: .private): \(String(describing: error), privacy: .private)")
-            return .failure(stage: .worktree, message: "Could not load branches.", worktreeId: nil)
-        }
-
-        let destination: URL
-        do {
-            let prepared = try await preparedCreationDestination(project: project, branch: branch)
-            destination = prepared.destination
-            if prepared.exists {
-                return .failure(
-                    stage: .worktree,
-                    message: "A worktree already exists at this path.",
-                    worktreeId: nil
-                )
-            }
-        } catch {
-            Self.logger.error("Could not preflight remote worktree creation for project \(project.id, privacy: .private): \(String(describing: error), privacy: .private)")
-            return .failure(stage: .worktree, message: "Could not create worktree.", worktreeId: nil)
-        }
-
-        let worktreeResult = await createWorktreeAndWait(
-            projectId: project.id,
-            base: base,
-            branch: branch,
-            destination: destination,
-            runStartup: true,
-            ggWorktreeMode: .inherit,
-            destinationAlreadyPrepared: true,
-            caller: caller
-        )
-        switch worktreeResult {
-        case .success(let worktree):
-            let sessionResult = if let remoteSessionCreator {
-                await remoteSessionCreator(worktree.id, agentId)
-            } else {
-                await createRemoteSession(
-                    worktreeId: worktree.id, agentId: agentId, modelId: modelId, effortId: effortId)
-            }
-            return Self.remoteWorktreeSessionResult(
-                worktree: worktree,
-                sessionResult: sessionResult
-            )
-        case .failure(let error):
-            Self.logger.error("Could not create remote worktree for project \(project.id, privacy: .private): \(error.message, privacy: .private)")
-            return .failure(stage: .worktree, message: "Could not create worktree.", worktreeId: nil)
-        }
-    }
-
-    nonisolated static func remoteWorktreeSessionResult(
-        worktree: Worktree,
-        sessionResult: RemoteCreateSessionResult
-    ) -> RemoteCreateWorktreeSessionResult {
-        switch sessionResult {
-        case .success(let summary):
-            return .success(summary)
-        case .failure:
-            return .failure(
-                stage: .session,
-                message: "Worktree created, but the session could not be created.",
-                worktreeId: worktree.id
-            )
-        }
-    }
-
-    /// Renders the configured destination, prepares it for the project's own
-    /// host (remote home and virtual path), and checks whether it is taken
-    /// there. A same-path directory on this Mac says nothing about a remote
-    /// project, so existence is never checked before preparation.
-    private func preparedCreationDestination(
-        project: ProjectConfig,
-        branch: String
-    ) async throws -> (destination: URL, rendered: URL, exists: Bool) {
-        let rendered = WorktreePathTemplateRenderer.render(
-            template: config.worktrees.pathTemplate,
-            worktreeRoot: config.worktrees.rootPath,
-            repoName: project.name,
-            branch: branch
-        )
-        let repoPath = URL(fileURLWithPath: project.path)
-        let destination = if let remoteWorktreeDestinationPreparer {
-            try await remoteWorktreeDestinationPreparer(repoPath, rendered)
-        } else {
-            try await WorktreeLifecycle.preparedCreateWorktreeDestination(repoPath: repoPath, destination: rendered)
-        }
-        return (destination, rendered, try await creationDestinationExists(project: project, destination: destination))
-    }
-
-    private func creationDestinationExists(
-        project: ProjectConfig,
-        destination: URL
-    ) async throws -> Bool {
-        guard let host = project.host ?? RemoteHostRegistry.shared.host(forPath: project.path) else {
-            return FileManager.default.fileExists(atPath: destination.path)
-        }
-        let command = "test -e \(SSHCommand.shellQuote(destination.path))"
-        let result = if let remoteWorktreeCommandRunner {
-            try await remoteWorktreeCommandRunner(host, nil, command)
-        } else {
-            try await RemoteExec.run(host: host, cwd: nil, command: command)
-        }
-        switch result.exitCode {
-        case 0:
-            return true
-        case 1:
-            return false
-        default:
-            throw RemoteWorktreeDestinationCheckError()
-        }
     }
 
     func session(for id: String) -> ACPSession? {
@@ -15939,6 +15688,15 @@ extension AppState: RemoteSessionsProvider {
     func stop(for id: String, worktreeID: String) async {
         guard let manager = acpManager(forWorktreeId: worktreeID) else { return }
         await manager.interrupt(for: id)
+    }
+
+    func sessionCreated(_ id: String, worktreeID: String) {
+        guard let resolved = projectAndWorktree(withWorktreeId: worktreeID),
+              let session = acpManagers.values.lazy.compactMap({ $0.liveSession(for: id) }).first
+        else { return }
+        focusGlobalWorktree(id: resolved.worktree.id, projectId: resolved.project.id)
+        let tab = tabs.append(acpSession: ACPSessionTabState(sessionId: id, title: session.title), to: resolved.worktree.id)
+        activateWorktreeCenterTab(worktreeId: resolved.worktree.id, tabId: tab.id)
     }
 
     func sessionRenamed(_ id: String, title: String) {

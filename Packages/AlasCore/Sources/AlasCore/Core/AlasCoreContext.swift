@@ -54,6 +54,13 @@ public final class AlasCoreContext {
     /// the store flips, and display snapshots catch up only afterwards.
     /// Counted, since two unarchives of one checkout can overlap.
     @ObservationIgnored var unarchivingWorkspaceCheckouts: [UUID: Int] = [:]
+    /// Test hooks for preparing a new worktree's destination: a project's
+    /// branches, the prepared path, and a command on the project's host.
+    @_spi(Testing) @ObservationIgnored public var worktreeBranchLoader: (@MainActor (URL) async throws -> [String])?
+    @_spi(Testing) @ObservationIgnored public var worktreeDestinationPreparer: (@MainActor (URL, URL) async throws -> URL)?
+    @_spi(Testing) @ObservationIgnored public var remoteCommandRunner: (@MainActor (String, String?, String) async throws -> ProcessResult)?
+    /// Test hook that replaces connecting a new session to its agent.
+    @_spi(Testing) @ObservationIgnored public var sessionAttachScheduler: (@MainActor (ACPSessionManager, ACPSession.ID) -> Void)?
 
     /// Attention items and the gate observations pass through to reach them.
     public let attention: AttentionIntake

@@ -53,7 +53,7 @@ struct SSHIntegrationTests {
         )
         let state = AppState(store: TestPersistenceStore(ProjectsFile(projects: [project]), AppConfig.defaults))
 
-        let result = await RemoteGatewayReads.host(state.host).branches(project.id)
+        let result = await RemoteGatewayHostCalls.host(state.host).branches(project.id)
 
         guard case let .success(branches, preferredBase) = result else {
             Issue.record("expected branch list success, got \(result)")
@@ -99,14 +99,15 @@ struct SSHIntegrationTests {
             customs: [],
             installedIds: ["claude"]
         )
-        state.remoteSessionAttachScheduler = { _, _ in }
+        state.core.sessionAttachScheduler = { _, _ in }
 
-        let result = await state.createRemoteWorktreeSession(
-            projectId: project.id,
-            base: "main",
-            branch: "feature/ssh",
-            agentId: "claude"
+        let result = await RemoteGatewayHostCalls.host(state.host).createWorktreeSession(
+            RemoteWorktreeSessionCreation(projectID: project.id, base: "main", branch: "feature/ssh", agentID: "claude"), .app
         )
+        // As the gateway does: the app opens what the host created.
+        if case .success(let created) = result, let worktreeID = created.worktreeId {
+            state.sessionCreated(created.id, worktreeID: worktreeID)
+        }
 
         guard case let .success(summary) = result else {
             Issue.record("expected remote worktree session creation, got \(result)")

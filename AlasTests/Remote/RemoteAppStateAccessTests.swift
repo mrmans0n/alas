@@ -850,7 +850,7 @@ struct RemoteAppStateAccessTests {
         let state = makeRemoteRenameState()
         let worktreeId = try #require(state.selectedWorktreeId)
 
-        let worktrees = await RemoteGatewayReads.host(state.host).worktrees()
+        let worktrees = await RemoteGatewayHostCalls.host(state.host).worktrees()
 
         #expect(worktrees.contains { $0.id == worktreeId })
         #expect(worktrees.first { $0.id == worktreeId }?.projectName == "test")
@@ -885,7 +885,7 @@ struct RemoteAppStateAccessTests {
         )
         state.projectsManager.setOperationState(forWorktreeId: deleteFailed.id, projectId: deleteFailed.projectId, state: .deleteFailed(message: "failed"))
 
-        let ids = Set(await RemoteGatewayReads.host(state.host).worktrees().map(\.id))
+        let ids = Set(await RemoteGatewayHostCalls.host(state.host).worktrees().map(\.id))
 
         #expect(!ids.contains(creating.id))
         #expect(!ids.contains(deleting.id))
@@ -917,7 +917,7 @@ struct RemoteAppStateAccessTests {
         )
         let claudeName = try #require(state.agentRegistry.enabled().first { $0.id == "claude" }?.displayName)
 
-        let agents = RemoteGatewayReads.host(state.host).agents()
+        let agents = RemoteGatewayHostCalls.host(state.host).agents()
 
         #expect(agents == [RemoteAgentOption(id: "claude", name: claudeName, isDefault: true)])
     }
@@ -932,7 +932,7 @@ struct RemoteAppStateAccessTests {
             installedIds: ["codex", "gemini"]
         )
 
-        let agents = RemoteGatewayReads.host(state.host).agents()
+        let agents = RemoteGatewayHostCalls.host(state.host).agents()
 
         #expect(agents.map(\.id) == ["gemini", "codex"])
         #expect(agents.map(\.isDefault) == [true, false])
@@ -953,7 +953,7 @@ struct RemoteAppStateAccessTests {
             options: [.init(id: "high", name: "High", description: nil)],
             currentId: nil))
 
-        let agents = RemoteGatewayReads.host(state.host).agents()
+        let agents = RemoteGatewayHostCalls.host(state.host).agents()
 
         #expect(agents.first { $0.id == "codex" }?.models == [RemoteModelOption(id: "gpt-5", name: "GPT-5")])
         #expect(agents.first { $0.id == "gemini" }?.models == nil)
@@ -981,11 +981,11 @@ struct RemoteAppStateAccessTests {
                 options: [.init(id: "high", name: "High", description: nil)],
                 currentId: nil))
         }
-        state.remoteSessionAttachScheduler = { _, _ in }
+        state.core.sessionAttachScheduler = { _, _ in }
         let worktreeId = try #require(state.selectedWorktreeId)
         cleanupWorktreeId = worktreeId
 
-        let result = await state.createRemoteSession(
+        let result = await createRemoteSession(state,
             worktreeId: worktreeId, agentId: "claude", modelId: "opus", effortId: "high")
 
         guard case .success(let summary) = result else {
@@ -1015,13 +1015,13 @@ struct RemoteAppStateAccessTests {
             installedIds: ["claude"]
         )
         var scheduledAttach: (managerWorktreeId: String, sessionId: String)?
-        state.remoteSessionAttachScheduler = { (manager: ACPSessionManager, sessionId: ACPSession.ID) in
+        state.core.sessionAttachScheduler = { (manager: ACPSessionManager, sessionId: ACPSession.ID) in
             scheduledAttach = (manager.worktreeId, sessionId)
         }
         let worktreeId = try #require(state.selectedWorktreeId)
         cleanupWorktreeId = worktreeId
 
-        let result = await state.createRemoteSession(worktreeId: worktreeId, agentId: "claude")
+        let result = await createRemoteSession(state, worktreeId: worktreeId, agentId: "claude")
 
         guard case .success(let summary) = result else {
             Issue.record("expected success, got \(result)")
@@ -1113,7 +1113,7 @@ struct RemoteAppStateAccessTests {
             installedIds: ["claude"]
         )
         var scheduledAttach: (managerWorktreeId: String, sessionId: String)?
-        state.remoteSessionAttachScheduler = { manager, sessionId in
+        state.core.sessionAttachScheduler = { manager, sessionId in
             scheduledAttach = (manager.worktreeId, sessionId)
         }
         let firstWorktree = Worktree(
@@ -1141,7 +1141,7 @@ struct RemoteAppStateAccessTests {
         state.projectsManager.insertOptimisticWorktree(secondWorktree)
         state.selectedWorktreeId = firstWorktree.id
 
-        let result = await state.createRemoteSession(worktreeId: secondWorktree.id, agentId: "claude")
+        let result = await createRemoteSession(state, worktreeId: secondWorktree.id, agentId: "claude")
 
         guard case .success(let summary) = result else {
             Issue.record("expected success, got \(result)")
@@ -1161,7 +1161,7 @@ struct RemoteAppStateAccessTests {
     @Test func createRemoteSessionRejectsMissingWorktree() async throws {
         let state = makeRemoteRenameState()
 
-        let result = await state.createRemoteSession(worktreeId: "missing", agentId: "claude")
+        let result = await createRemoteSession(state, worktreeId: "missing", agentId: "claude")
 
         #expect(result == .failure("Worktree is no longer available."))
     }
@@ -1170,7 +1170,7 @@ struct RemoteAppStateAccessTests {
         let state = makeRemoteRenameState()
         let worktreeId = try #require(state.selectedWorktreeId)
 
-        let result = await state.createRemoteSession(worktreeId: worktreeId, agentId: "missing")
+        let result = await createRemoteSession(state, worktreeId: worktreeId, agentId: "missing")
 
         #expect(result == .failure("Agent is no longer available."))
     }
@@ -1198,8 +1198,8 @@ struct RemoteAppStateAccessTests {
         )
         let worktreeId = try #require(state.selectedWorktreeId)
 
-        let disabled = await state.createRemoteSession(worktreeId: worktreeId, agentId: "claude")
-        let nonACP = await state.createRemoteSession(worktreeId: worktreeId, agentId: "custom-agent")
+        let disabled = await createRemoteSession(state, worktreeId: worktreeId, agentId: "claude")
+        let nonACP = await createRemoteSession(state, worktreeId: worktreeId, agentId: "custom-agent")
 
         #expect(disabled == .failure("Agent is no longer available."))
         #expect(nonACP == .failure("Agent is no longer available."))
@@ -1227,7 +1227,7 @@ struct RemoteAppStateAccessTests {
             projectsFile: ProjectsFile(projects: [firstProject, folder, secondProject])
         ))
 
-        let projects = await RemoteGatewayReads.host(state.host).projects()
+        let projects = await RemoteGatewayHostCalls.host(state.host).projects()
 
         #expect(projects == [
             RemoteProjectOption(id: "project-first", name: "First Project"),
@@ -1249,7 +1249,7 @@ struct RemoteAppStateAccessTests {
             projectsFile: ProjectsFile(projects: [project])
         ))
 
-        let result = await RemoteGatewayReads.host(state.host).branches(project.id)
+        let result = await RemoteGatewayHostCalls.host(state.host).branches(project.id)
 
         guard case let .success(branches, preferredBase) = result else {
             Issue.record("expected branch list success, got \(result)")
@@ -1263,7 +1263,7 @@ struct RemoteAppStateAccessTests {
     @Test func remoteBranchesRejectsMissingProject() async {
         let state = AppState(store: ProjectMemoryStore(projectsFile: ProjectsFile(projects: [])))
 
-        let result = await RemoteGatewayReads.host(state.host).branches("missing-project")
+        let result = await RemoteGatewayHostCalls.host(state.host).branches("missing-project")
 
         #expect(result == .failure("Repository is no longer available."))
     }
@@ -1289,16 +1289,10 @@ struct RemoteAppStateAccessTests {
         state.config.worktrees.rootPath = worktreeRoot.path
         state.config.worktrees.pathTemplate = "{worktreeRoot}/{repo}-{branch}"
         state.agentRegistry = enabledClaudeRegistry()
-        state.remoteSessionAttachScheduler = { _, _ in }
+        state.core.sessionAttachScheduler = { _, _ in }
 
-        let provider: RemoteSessionsProvider = state
-        let result = await provider.createRemoteWorktreeSession(
-            projectId: project.id,
-            base: "main",
-            branch: "feature/phone",
-            agentId: "claude",
-            modelId: nil,
-            effortId: nil,
+        let result = await createRemoteWorktreeSession(
+            state, projectId: project.id, base: "main", branch: "feature/phone", agentId: "claude",
             caller: .remotePeer(deviceID: "phone")
         )
 
@@ -1332,24 +1326,24 @@ struct RemoteAppStateAccessTests {
         ))
         state.agentRegistry = enabledClaudeRegistry()
         var branchLookupCount = 0
-        state.remoteWorktreeBranchLoader = { _ in
+        state.core.worktreeBranchLoader = { _ in
             branchLookupCount += 1
             return ["main"]
         }
 
-        let missing = await state.createRemoteWorktreeSession(
+        let missing = await createRemoteWorktreeSession(state,
             projectId: "missing",
             base: "main",
             branch: "feature/phone",
             agentId: "claude"
         )
-        let invalid = await state.createRemoteWorktreeSession(
+        let invalid = await createRemoteWorktreeSession(state,
             projectId: project.id,
             base: "main",
             branch: "bad..branch",
             agentId: "claude"
         )
-        let invalidAgent = await state.createRemoteWorktreeSession(
+        let invalidAgent = await createRemoteWorktreeSession(state,
             projectId: project.id,
             base: "main",
             branch: "feature/phone",
@@ -1357,13 +1351,13 @@ struct RemoteAppStateAccessTests {
         )
         #expect(branchLookupCount == 0)
 
-        let missingBase = await state.createRemoteWorktreeSession(
+        let missingBase = await createRemoteWorktreeSession(state,
             projectId: project.id,
             base: "missing-base",
             branch: "feature/phone",
             agentId: "claude"
         )
-        let invalidBase = await state.createRemoteWorktreeSession(
+        let invalidBase = await createRemoteWorktreeSession(state,
             projectId: project.id,
             base: "bad..base",
             branch: "feature/phone",
@@ -1416,20 +1410,20 @@ struct RemoteAppStateAccessTests {
         state.agentRegistry = enabledClaudeRegistry()
         state.config.worktrees.rootPath = "/remote worktrees"
         state.config.worktrees.pathTemplate = "{worktreeRoot}/{repo}-{branch}"
-        state.remoteWorktreeBranchLoader = { _ in ["main"] }
-        state.remoteWorktreeDestinationPreparer = { _, destination in destination }
+        state.core.worktreeBranchLoader = { _ in ["main"] }
+        state.core.worktreeDestinationPreparer = { _, destination in destination }
         var command: (host: String, cwd: String?, command: String)?
-        state.remoteWorktreeCommandRunner = { host, cwd, commandToRun in
+        state.core.remoteCommandRunner = { host, cwd, commandToRun in
             command = (host, cwd, commandToRun)
             return ProcessResult(exitCode: 0, stdout: "", stderr: "")
         }
         var sessionCreationAttempted = false
-        state.remoteSessionCreator = { _, _ in
+        state.host.remoteSessionCreator = { _ in
             sessionCreationAttempted = true
             return .failure("should not be reached")
         }
 
-        let result = await state.createRemoteWorktreeSession(
+        let result = await createRemoteWorktreeSession(state,
             projectId: project.id,
             base: "main",
             branch: "feature/phone",
@@ -1467,11 +1461,11 @@ struct RemoteAppStateAccessTests {
         let state = AppState(store: ProjectMemoryStore(projectsFile: ProjectsFile(projects: [project])))
         state.config.worktrees.rootPath = worktreeRoot.path
         state.config.worktrees.pathTemplate = "{worktreeRoot}/{repo}-{branch}"
-        state.remoteWorktreeDestinationPreparer = { repo, destination in
+        state.core.worktreeDestinationPreparer = { repo, destination in
             URL(fileURLWithPath: RemotePath.virtualizing(destination.path, like: repo.path))
         }
         var probedHost: String?
-        state.remoteWorktreeCommandRunner = { host, _, _ in
+        state.core.remoteCommandRunner = { host, _, _ in
             probedHost = host
             return ProcessResult(exitCode: 0, stdout: "", stderr: "")
         }
@@ -1505,8 +1499,8 @@ struct RemoteAppStateAccessTests {
             host: "remote.test",
             realPath: "/home/remote/.alas/worktrees/Remote Delegated-feature-child"
         ))
-        state.remoteWorktreeDestinationPreparer = { _, _ in prepared }
-        state.remoteWorktreeCommandRunner = { _, _, _ in ProcessResult(exitCode: 1, stdout: "", stderr: "") }
+        state.core.worktreeDestinationPreparer = { _, _ in prepared }
+        state.core.remoteCommandRunner = { _, _, _ in ProcessResult(exitCode: 1, stdout: "", stderr: "") }
         var recorded: URL?
 
         let result = await state.createDelegatedWorktree(
@@ -1549,9 +1543,9 @@ struct RemoteAppStateAccessTests {
         state.config.worktrees.rootPath = worktreeRoot.path
         state.config.worktrees.pathTemplate = "{worktreeRoot}/{repo}-{branch}"
         state.agentRegistry = enabledClaudeRegistry()
-        state.remoteSessionCreator = { _, _ in .failure("internal details") }
+        state.host.remoteSessionCreator = { _ in .failure("internal details") }
 
-        let result = await state.createRemoteWorktreeSession(
+        let result = await createRemoteWorktreeSession(state,
             projectId: project.id,
             base: "main",
             branch: "feature/phone",
@@ -2508,6 +2502,32 @@ struct RemoteAppStateAccessTests {
             archived: archived
         ))
         await manager.refreshRecentNow()
+    }
+
+    /// What a Remote client's creation does: the host creates the session,
+    /// then the app opens it as the gateway asks.
+    private func createRemoteSession(
+        _ state: AppState, worktreeId: String, agentId: String, modelId: String? = nil, effortId: String? = nil
+    ) async -> RemoteCreateSessionResult {
+        let result = await RemoteGatewayHostCalls.host(state.host).createSession(
+            RemoteSessionCreation(worktreeID: worktreeId, agentID: agentId, modelID: modelId, effortID: effortId), .app
+        )
+        if case .success(let summary) = result, let worktreeID = summary.worktreeId {
+            state.sessionCreated(summary.id, worktreeID: worktreeID)
+        }
+        return result
+    }
+
+    private func createRemoteWorktreeSession(
+        _ state: AppState, projectId: String, base: String, branch: String, agentId: String, caller: HostCaller = .app
+    ) async -> RemoteCreateWorktreeSessionResult {
+        let result = await RemoteGatewayHostCalls.host(state.host).createWorktreeSession(
+            RemoteWorktreeSessionCreation(projectID: projectId, base: base, branch: branch, agentID: agentId), caller
+        )
+        if case .success(let summary) = result, let worktreeID = summary.worktreeId {
+            state.sessionCreated(summary.id, worktreeID: worktreeID)
+        }
+        return result
     }
 
     private func cleanupRemoteRenameFiles(worktreeId: String) {

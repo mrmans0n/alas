@@ -14,4 +14,7 @@ public protocol RemoteSessionPresenter: AnyObject {
     func closeSessionTab(for id: String) async -> RemoteSessionTabActionResult
     /// The session was renamed; its tabs show the new title.
     func sessionRenamed(_ id: String, title: String)
+    /// A client created the session in `worktreeID`: the app opens it there,
+    /// as it opens a session it creates.
+    func sessionCreated(_ id: String, worktreeID: String)
 }

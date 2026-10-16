@@ -50,6 +50,7 @@ extension SessionsAPI {
         _ target: SessionTarget,
         agentID: String,
         modelID: String? = nil,
+        effortID: String? = nil,
         autoRun: Bool = false,
         caller: HostCaller
     ) async throws -> HostSessionSummary {
@@ -106,8 +107,18 @@ extension SessionsAPI {
         let session = manager.createSession(agentId: agentID, autoRunDefault: autoRun)
         // Picked up by `attach`, so the first turn already runs on it.
         if let modelID { manager.pendingModel[session.id] = modelID }
-        Task { @MainActor [weak manager] in
-            await manager?.attach(to: session.id, freshlyCreated: true)
+        // Applied by `attach` after the model; a level the agent no longer
+        // offers is skipped there. Without remembered levels there is no
+        // option to set, so the effort is dropped rather than failing.
+        if let effortID, let effort = core.environment.modelCatalog?.efforts(for: agentID) {
+            manager.queueInitialConfigOption(for: session.id, configId: effort.configId, value: .string(effortID))
+        }
+        if let schedule = core.sessionAttachScheduler {
+            schedule(manager, session.id)
+        } else {
+            Task { @MainActor [weak manager] in
+                await manager?.attach(to: session.id, freshlyCreated: true)
+            }
         }
         guard let row = manager.sessionRows.first(where: { $0.id == session.id }) else { throw SessionRefusal.notFound }
         return Self.summary(of: row, in: manager)
