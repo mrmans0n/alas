@@ -619,8 +619,9 @@ struct AgentSidebarSubagentRowView: View {
     private var stateColor: Color {
         switch subagent.state {
         case .running, .other: theme.color("add")
+        case .requiresAction: theme.color("warn")
         case .failed: theme.color("del")
-        case .completed, .cancelled, .disconnected: theme.color("fg-faint")
+        case .completed, .cancelled, .disconnected, .unconfirmed: theme.color("fg-faint")
         }
     }
 

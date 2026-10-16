@@ -91,6 +91,18 @@ struct ACPSubagentSessionTests {
         #expect(session.subagentRun("child-1")?.lastError == "network error")
     }
 
+    @Test("a resumed child's next failure does not show the previous failure's reason")
+    func resumeClearsFailureDiagnostic() {
+        let session = makeSession()
+        session.apply(.subagentSpawned(.init(subagentSessionId: "child-1")))
+        session.apply(.subagentStateUpdate(.init(
+            subagentSessionId: "child-1", state: .failed, error: "network error")))
+        session.apply(.subagentStateUpdate(.init(subagentSessionId: "child-1", state: .running)))
+        session.apply(.subagentStateUpdate(.init(subagentSessionId: "child-1", state: .failed)))
+
+        #expect(session.subagentRun("child-1")?.lastError == nil)
+    }
+
     @Test("a state update for an unknown child changes nothing")
     func unknownChildStateIsIgnored() {
         let session = makeSession()
@@ -1188,6 +1200,24 @@ struct ACPSubagentSessionTests {
         #expect(session.subagentRun("done")?.state == .completed)
     }
 
+    @Test("stopping the parent leaves a running child's row to the child's own lifecycle")
+    func parentCancelDoesNotStopChildren() {
+        let session = makeSession()
+        session.apply(.subagentSpawned(.init(subagentSessionId: "background", capabilities: .cancellable)))
+
+        let changed = session.cancelInFlightToolCalls()
+
+        // A background child can outlive its parent's cancel; only the
+        // agent's own state update may end it.
+        #expect(changed.isEmpty)
+        #expect(session.subagentRun("background")?.state == .running)
+        guard case .toolCall(let row) = session.transcript.messages[0] else {
+            Issue.record("expected the subagent row")
+            return
+        }
+        #expect(row.status == "in_progress")
+    }
+
     // MARK: - Restore
 
     @Test("restoring rebuilds each child with its persisted transcript")
@@ -1263,11 +1293,13 @@ struct ACPSubagentRowPolicyTests {
         #expect(ACPSubagentRowPolicy.showsCancel(state: .running, capabilities: .init()) == false)
     }
 
-    @Test("the spinner stops only on a terminal state")
+    @Test("the spinner stops on a terminal state or while the child waits for the user")
     func spinnerVisibility() {
         #expect(ACPSubagentRowPolicy.showsSpinner(state: .running))
         #expect(ACPSubagentRowPolicy.showsSpinner(state: .other("thinking")))
-        for state in [ACPSubagentState.completed, .failed, .cancelled, .disconnected] {
+        // Waiting for input is still live, so it stays cancellable.
+        #expect(ACPSubagentRowPolicy.showsCancel(state: .requiresAction, capabilities: .cancellable))
+        for state in [ACPSubagentState.requiresAction, .unconfirmed, .completed, .failed, .cancelled, .disconnected] {
             #expect(ACPSubagentRowPolicy.showsSpinner(state: state) == false)
         }
     }

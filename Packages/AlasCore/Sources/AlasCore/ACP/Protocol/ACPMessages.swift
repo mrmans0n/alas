@@ -74,6 +74,16 @@ public struct ACPClientCapabilities: Codable, Equatable, Sendable {
     /// Native subagent (child session) support. `{}` opts in; agents that
     /// don't know the key ignore it and keep folding subagents into an
     /// opaque tool call, exactly as before.
+    ///
+    /// The wire format an agent answers with is the agent's choice, keyed on
+    /// how it classifies the client. claude-agent-acp >= 0.90 sends the
+    /// revised RFD form (`subagent_update`, `session_message`) to non-AIR
+    /// clients and the earlier draft (`subagent_spawned`,
+    /// `subagent_state_update`) only to clients that send
+    /// `_meta.jetbrains.air`. Alas stays non-AIR on purpose — that marker
+    /// changes adapter behaviour well beyond subagents — and decodes both
+    /// forms (see `ACPSessionUpdateFrame`). Later ACP features negotiated the
+    /// same way should be checked against that classification first.
     public let subagents: EmptyObject?
     public let meta: ACPClientCapabilitiesMeta
 

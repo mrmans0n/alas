@@ -227,17 +227,23 @@ public final class ACPStdioClient: ACPClient, @unchecked Sendable {
         guard let method = head.method else { return }
         switch method {
         case "session/update":
-            if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPSessionUpdateParams>.self, from: data),
-               let p = env.params {
+            // One frame is usually one update; the revised subagent form can
+            // normalize to several, and the durable acknowledgement belongs
+            // to the LAST one, as for OpenCode's child updates below.
+            if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPSessionUpdateFrame>.self, from: data),
+               let frame = env.params, !frame.updates.isEmpty {
                 stateLock.lock()
-                _yieldedUpdateCount += 1
+                _yieldedUpdateCount += frame.updates.count
                 stateLock.unlock()
                 acknowledgeAfterDispatch = false
-                updatesCont.yield(.init(
-                    sessionId: p.sessionId,
-                    update: p.update,
-                    durableConsumptionAcknowledgement: onConsumed
-                ))
+                for (offset, p) in frame.updates.enumerated() {
+                    let isLast = offset == frame.updates.count - 1
+                    updatesCont.yield(.init(
+                        sessionId: p.sessionId,
+                        update: p.update,
+                        durableConsumptionAcknowledgement: isLast ? onConsumed : nil
+                    ))
+                }
             }
         case ACPOpenCodeChildUpdate.method:
             // One notification normalizes to several standard updates; the
