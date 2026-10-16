@@ -912,6 +912,48 @@ struct ACPSessionDiscoveryTests {
     }
 
     @MainActor
+    @Test("a Load more answering after a deletion refresh neither shows its rows nor moves the cursor")
+    func loadMoreAfterDeletionRefresh() async throws {
+        let store = try temporaryStore()
+        try store.upsertSession(row(id: "local-first", remoteSessionId: "first", title: "First", origin: .agentImported))
+        let client = indexClient()
+        let gate = AsyncStream<Void>.makeStream()
+        let pageTwoStarted = AsyncStream<Void>.makeStream()
+        var holdPageTwo = true
+        client.scriptAsync(method: "session/list") { request in
+            if (request.params as? ACPSessionListParams)?.cursor == "page-2" {
+                // Only the first page-2 read is held: the stale Load more.
+                if holdPageTwo {
+                    holdPageTwo = false
+                    pageTwoStarted.continuation.yield()
+                    for await _ in gate.stream { break }
+                }
+                return try JSONEncoder().encode(ACPSessionListResult(
+                    sessions: [.init(sessionId: "second", cwd: "/tmp/wt", index: .init(archived: false))],
+                    nextCursor: "page-3"))
+            }
+            return try JSONEncoder().encode(ACPSessionListResult(
+                sessions: [.init(sessionId: "first", cwd: "/tmp/wt", index: .init(archived: false))],
+                nextCursor: "page-2"))
+        }
+        let manager = manager(store: store, client: client)
+        let model = ACPSessionDiscoveryModel()
+        await model.start(manager: manager, agentId: "claude")
+        let loadMore = Task { try await model.loadMore() }
+        for await _ in pageTwoStarted.stream { break }
+        try await model.removeLocalHistory(for: try #require(model.sessions.first), manager: manager)
+        gate.continuation.yield()
+        try await loadMore.value
+        #expect(model.sessions.map(\.remoteSessionId) == ["first"])
+        #expect(model.sessions.first?.localSessionId == nil)
+        // The refreshed first page's cursor, not the stale page-3.
+        let sentBefore = client.sent.count
+        try await model.loadMore()
+        #expect((client.sent.dropFirst(sentBefore).first?.params as? ACPSessionListParams)?.cursor == "page-2")
+        await model.stop()
+    }
+
+    @MainActor
     @Test("a Load more answering after a filter change neither shows its rows nor moves the cursor")
     func loadMoreAfterFilterChange() async throws {
         let store = try temporaryStore()

@@ -109,14 +109,24 @@ struct ACPConnectionTests {
         #expect(try await ACPConnection(client: mock).initialize().sessionIndex == expected)
     }
 
-    @Test("session/delete treats an unknown session as deleted and still reports other errors", arguments: [-32002, -32603])
-    func deleteUnknownSession(code: Int) async throws {
+    @Test("only a session index adapter's unknown-session error counts as deleted", arguments: [
+        (-32002, true, true),
+        (-32603, true, false),
+        (-32002, false, false),
+    ])
+    func deleteUnknownSession(code: Int, sessionIndex: Bool, deleted: Bool) async throws {
         let mock = ACPMockClient()
+        mock.script(method: "initialize") { _ in
+            Data((sessionIndex
+                ? #"{"protocolVersion":1,"_meta":{"sessionIndex":{"version":1,"capabilities":[]}}}"#
+                : #"{"protocolVersion":1}"#).utf8)
+        }
         mock.script(method: "session/delete") { _ in
             throw ACPClientError.jsonrpc(.init(code: code, message: "error", data: nil))
         }
         let connection = ACPConnection(client: mock)
-        if code == -32002 {
+        _ = try await connection.initialize()
+        if deleted {
             try await connection.deleteSession(sessionId: "gone")
         } else {
             await #expect(throws: (any Error).self) { try await connection.deleteSession(sessionId: "gone") }

@@ -31,7 +31,7 @@ public struct ACPDiscoveredSession: Identifiable, Equatable, Sendable {
     public var title: String
     public let updatedAt: Date?
     public let additionalDirectories: [String]
-    public let localSessionId: String?
+    public var localSessionId: String?
     /// Session index row fields, when the agent sent them.
     public var index: ACPSessionIndexRowMeta?
 
@@ -566,6 +566,12 @@ public final class ACPSessionDiscoveryModel {
         defer { finishDeletion(session.remoteSessionId) }
         try await manager.deletePersistedSession(id: localSessionId)
         localActionGeneration += 1
+        // Replayed after any pending read, like the other local actions, so
+        // an older page cannot bring the Alas copy back.
+        if var current = sessions.first(where: { $0.remoteSessionId == session.remoteSessionId }) {
+            current.localSessionId = nil
+            applyLiveChanges(changed: [current], removed: [])
+        }
         try await refreshAfterDeletion()
     }
 
@@ -575,6 +581,8 @@ public final class ACPSessionDiscoveryModel {
         // rows here would leave them empty if that load then fails.
         guard let handle, filterLoadsInFlight == 0 else { return }
         let previous = sessions
+        // A Load more still running reads from the old cursor: drop it.
+        filterGeneration += 1
         handle.refresh()
         replaceSessionsOnNextLoad = true
         sessions = []

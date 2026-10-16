@@ -160,6 +160,8 @@ public final class ACPConnection: @unchecked Sendable {
     /// session/new, session/resume, and session/fork when Alas requests MCP
     /// servers; never on session/load, which ignores it.
     public var mcpStartupAwaitTimeoutMs: Int?
+    /// The session index the agent advertised on `initialize`, if any.
+    public private(set) var negotiatedSessionIndex: ACPSessionIndexSupport?
     /// Set after `initialize` from `ACPSessionInstructionsPolicy`. Sent as
     /// `_meta.systemPrompt.append` on session/new, load, resume, and fork.
     public var sessionInstructions: String?
@@ -198,6 +200,7 @@ public final class ACPConnection: @unchecked Sendable {
         defer { resp.acknowledgeDurableConsumption() }
         let result = try JSONDecoder().decode(ACPInitializeResult.self, from: resp.body)
         let capabilities = result.agentCapabilities
+        negotiatedSessionIndex = result.meta?.sessionIndex?.support
         return ACPInitializeOutcome(
             promptCapabilities: capabilities?.promptCapabilities ?? .init(),
             authMethods: result.authMethods,
@@ -361,9 +364,10 @@ public final class ACPConnection: @unchecked Sendable {
         response.acknowledgeDurableConsumption()
     }
 
-    /// An unknown session (`-32002`) counts as deleted: ACP makes delete
-    /// idempotent, and a session index adapter answers `-32002` for a session
-    /// that is already gone.
+    /// For an agent with the session index (our adapter forks), an unknown
+    /// session (`-32002`) counts as deleted: they answer that for a session
+    /// that is already gone. ACP gives `-32002` no such meaning, so for any
+    /// other agent it stays an error.
     public func deleteSession(sessionId: String) async throws {
         let response: ACPResponse
         do {
@@ -371,7 +375,7 @@ public final class ACPConnection: @unchecked Sendable {
                 method: "session/delete",
                 params: ACPSessionDeleteParams(sessionId: sessionId)
             ))
-        } catch ACPClientError.jsonrpc(let error) where error.code == -32002 {
+        } catch ACPClientError.jsonrpc(let error) where error.code == -32002 && negotiatedSessionIndex != nil {
             return
         }
         defer { response.acknowledgeDurableConsumption() }
