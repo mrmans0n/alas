@@ -371,7 +371,7 @@ public final class RemoteSessionGateway {
             }
             guard inFlightFileRequests.insert(key).inserted else { return }
             defer { inFlightFileRequests.remove(key) }
-            switch await provider.remoteChangeList(
+            switch await hostCalls.inspection.remoteChangeList(
                 sessionId: id,
                 comparisonMode: comparisonMode
             ) {
@@ -391,7 +391,7 @@ public final class RemoteSessionGateway {
             }
             guard inFlightFileRequests.insert(key).inserted else { return }
             defer { inFlightFileRequests.remove(key) }
-            switch await provider.remoteFileDiff(
+            switch await hostCalls.inspection.remoteFileDiff(
                 sessionId: id,
                 path: path,
                 stage: stage,
@@ -408,7 +408,7 @@ public final class RemoteSessionGateway {
             guard let key = message.fileRequestDedupKey,
                   inFlightFileRequests.insert(key).inserted else { return }
             defer { inFlightFileRequests.remove(key) }
-            switch await provider.remoteCommitFiles(sessionId: id, sha: sha) {
+            switch await hostCalls.inspection.remoteCommitFiles(sessionId: id, sha: sha) {
             case .success(let files, let truncated):
                 send(.commitFiles(sessionId: id, sha: sha, files: files, truncated: truncated))
             case .failure(let reason, let message):
@@ -418,7 +418,7 @@ public final class RemoteSessionGateway {
             guard let key = message.fileRequestDedupKey,
                   inFlightFileRequests.insert(key).inserted else { return }
             defer { inFlightFileRequests.remove(key) }
-            switch await provider.remoteCommitDiff(sessionId: id, sha: sha, path: path) {
+            switch await hostCalls.inspection.remoteCommitDiff(sessionId: id, sha: sha, path: path) {
             case .success(let hunks, let truncated, let metadataNote):
                 send(.commitDiffResult(sessionId: id, sha: sha, path: path, hunks: hunks,
                                        truncated: truncated, metadataNote: metadataNote))
@@ -433,7 +433,7 @@ public final class RemoteSessionGateway {
             }
             guard inFlightFileRequests.insert(key).inserted else { return }
             defer { inFlightFileRequests.remove(key) }
-            switch await provider.remoteFileTree(
+            switch await hostCalls.inspection.remoteFileTree(
                 sessionId: id,
                 path: path,
                 comparisonMode: comparisonMode
@@ -455,7 +455,7 @@ public final class RemoteSessionGateway {
             let key = "readFile\u{0}\(id)\u{0}\(path)"
             guard inFlightFileRequests.insert(key).inserted else { return }
             defer { inFlightFileRequests.remove(key) }
-            switch await provider.remoteFileContents(sessionId: id, path: path) {
+            switch await hostCalls.inspection.remoteFileContents(sessionId: id, path: path) {
             case .success(let text, let truncated):
                 send(.fileContents(sessionId: id, path: path, text: text, truncated: truncated))
             case .failure(let reason, let byteSize, let message):

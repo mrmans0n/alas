@@ -357,7 +357,7 @@ struct SSHIntegrationTests {
         try String(repeating: "x", count: byteCount).write(to: file, atomically: true, encoding: .utf8)
 
         let state = AppState(store: TestPersistenceStore(ProjectsFile(projects: []), AppConfig.defaults))
-        let outcome = await state.readRemoteWorktreeFileRaw(
+        let outcome = await state.core.readRemoteWorktreeFileRaw(
             host: "localhost", worktreeRoot: directory.path, relativePath: "huge.txt")
 
         guard case let .tooLarge(byteSize) = outcome else {

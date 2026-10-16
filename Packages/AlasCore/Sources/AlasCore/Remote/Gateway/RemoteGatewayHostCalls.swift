@@ -10,6 +10,8 @@ import Foundation
     public var agents: @MainActor () -> [RemoteAgentOption]
     public var createSession: @MainActor (_ request: RemoteSessionCreation, _ caller: HostCaller) async -> RemoteCreateSessionResult
     public var createWorktreeSession: @MainActor (_ request: RemoteWorktreeSessionCreation, _ caller: HostCaller) async -> RemoteCreateWorktreeSessionResult
+    /// Reads of a session's worktree: changes, diffs, files and commits.
+    public var inspection: any RemoteWorktreeInspecting
 
     public init(
         worktrees: @escaping @MainActor () async -> [RemoteWorktreeOption],
@@ -21,7 +23,8 @@ import Foundation
         },
         createWorktreeSession: @escaping @MainActor (_ request: RemoteWorktreeSessionCreation, _ caller: HostCaller) async -> RemoteCreateWorktreeSessionResult = { _, _ in
             .failure(stage: .worktree, message: "Could not create worktree.", worktreeId: nil)
-        }
+        },
+        inspection: any RemoteWorktreeInspecting
     ) {
         self.worktrees = worktrees
         self.projects = projects
@@ -29,14 +32,16 @@ import Foundation
         self.agents = agents
         self.createSession = createSession
         self.createWorktreeSession = createWorktreeSession
+        self.inspection = inspection
     }
 
     /// The host's lists and creations; empty and refused without a host.
-    public static func host(_ host: AlasHost?) -> RemoteGatewayHostCalls {
+    @MainActor public static func host(_ host: AlasHost?) -> RemoteGatewayHostCalls {
         guard let host else {
             return RemoteGatewayHostCalls(
                 worktrees: { [] }, projects: { [] },
-                branches: { _ in .failure("Repository is no longer available.") }, agents: { [] }
+                branches: { _ in .failure("Repository is no longer available.") }, agents: { [] },
+                inspection: NoRemoteWorktreeInspection()
             )
         }
         let core = host.core
@@ -53,7 +58,51 @@ import Foundation
             createWorktreeSession: { [weak host] request, caller in
                 await host?.remoteCreateWorktreeSession(request, caller: caller)
                     ?? .failure(stage: .worktree, message: "Could not create worktree.", worktreeId: nil)
-            }
+            },
+            inspection: core
         )
+    }
+}
+
+/// Reads of a session's worktree a Remote client asks for. The core reads
+/// them; tests substitute reads they can hold back.
+@_spi(Testing) @MainActor
+public protocol RemoteWorktreeInspecting: AnyObject {
+    func remoteChangeList(sessionId: String, comparisonMode: AppConfig.Changes.ChangesComparisonMode?) async -> RemoteChangeListResult
+    func remoteFileDiff(
+        sessionId: String, path: String, stage: String?, comparisonMode: AppConfig.Changes.ChangesComparisonMode?
+    ) async -> RemoteFileDiffResult
+    func remoteFileTree(sessionId: String, path: String?, comparisonMode: AppConfig.Changes.ChangesComparisonMode?) async -> RemoteFileTreeResult
+    func remoteCommitFiles(sessionId: String, sha: String) async -> RemoteCommitFilesResult
+    func remoteCommitDiff(sessionId: String, sha: String, path: String) async -> RemoteFileDiffResult
+    func remoteFileContents(sessionId: String, path: String) async -> RemoteFileContentsResult
+}
+
+@_spi(Testing) extension AlasCoreContext: RemoteWorktreeInspecting {}
+
+/// Without a host there is no session to read.
+@_spi(Testing) @MainActor
+public final class NoRemoteWorktreeInspection: RemoteWorktreeInspecting {
+    public init() {}
+
+    public func remoteChangeList(sessionId: String, comparisonMode: AppConfig.Changes.ChangesComparisonMode?) async -> RemoteChangeListResult {
+        .failure(reason: .sessionUnknown, message: nil)
+    }
+    public func remoteFileDiff(
+        sessionId: String, path: String, stage: String?, comparisonMode: AppConfig.Changes.ChangesComparisonMode?
+    ) async -> RemoteFileDiffResult {
+        .failure(reason: .sessionUnknown, message: nil)
+    }
+    public func remoteFileTree(sessionId: String, path: String?, comparisonMode: AppConfig.Changes.ChangesComparisonMode?) async -> RemoteFileTreeResult {
+        .failure(reason: .sessionUnknown, message: nil)
+    }
+    public func remoteCommitFiles(sessionId: String, sha: String) async -> RemoteCommitFilesResult {
+        .failure(reason: .sessionUnknown, message: nil)
+    }
+    public func remoteCommitDiff(sessionId: String, sha: String, path: String) async -> RemoteFileDiffResult {
+        .failure(reason: .sessionUnknown, message: nil)
+    }
+    public func remoteFileContents(sessionId: String, path: String) async -> RemoteFileContentsResult {
+        .failure(reason: .sessionUnknown, byteSize: nil, message: nil)
     }
 }
