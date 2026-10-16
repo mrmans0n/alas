@@ -2111,12 +2111,16 @@ public final class ACPSessionManager: ChangeTracking {
             recent.insert(row, at: 0)
         }
         unsavedCreations.insert(id)
-        let saving = enqueuePersistence { persistence in
+        let saving = enqueuePersistenceResult { persistence -> Bool in
             try await persistence.upsertSession(row)
+            return true
         }
         Task { @MainActor [weak self] in
-            await saving.value
-            self?.unsavedCreations.remove(id)
+            // Only a save that landed lets the store's list speak for the
+            // session; a failed one keeps it listed until a later save lands.
+            if await saving.value == true {
+                self?.unsavedCreations.remove(id)
+            }
         }
         let session = ACPSession(
             id: id, agentId: agentId, worktreeId: worktreeId,
