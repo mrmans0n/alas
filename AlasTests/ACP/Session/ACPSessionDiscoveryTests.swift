@@ -986,6 +986,59 @@ struct ACPSessionDiscoveryTests {
     }
 
     @MainActor
+    @Test("an archive keeps the newer data its own notification brought, across a pending filter page")
+    func archiveAfterItsNotification() async throws {
+        let store = try temporaryStore()
+        let client = indexClient()
+        let archiveGate = AsyncStream<Void>.makeStream()
+        let archiveStarted = AsyncStream<Void>.makeStream()
+        let pageGate = AsyncStream<Void>.makeStream()
+        let pageStarted = AsyncStream<Void>.makeStream()
+        var holdArchivedPage = true
+        client.scriptAsync(method: "session/list") { request in
+            let list = try #require((request.params as? ACPSessionListParams)?.meta?.sessionIndex.list)
+            guard list.archived == .archived else {
+                return try JSONEncoder().encode(ACPSessionListResult(sessions: [
+                    .init(sessionId: "s", cwd: "/tmp/wt", title: "Original", index: .init(archived: false)),
+                ]))
+            }
+            // The first read predates the archive: nothing archived yet. The
+            // filter load reads again after the archive and gets the row.
+            if holdArchivedPage {
+                holdArchivedPage = false
+                pageStarted.continuation.yield()
+                for await _ in pageGate.stream { break }
+                return try JSONEncoder().encode(ACPSessionListResult(sessions: []))
+            }
+            return try JSONEncoder().encode(ACPSessionListResult(sessions: [
+                .init(sessionId: "s", cwd: "/tmp/wt", title: "Fresh", index: .init(archived: true)),
+            ]))
+        }
+        client.scriptAsync(method: "_session/archive") { _ in
+            archiveStarted.continuation.yield()
+            for await _ in archiveGate.stream { break }
+            return Data("{}".utf8)
+        }
+        let model = ACPSessionDiscoveryModel()
+        await model.start(manager: manager(store: store, client: client), agentId: "claude")
+        let archive = Task { try await model.setArchived(true, for: try #require(model.sessions.first)) }
+        for await _ in archiveStarted.stream { break }
+        let filter = Task { try await model.setFilter(.init(showArchived: true)) }
+        for await _ in pageStarted.stream { break }
+        // The archive notification, with a newer title, before the RPC answers.
+        client.emitSessionListChanges(.init(subscriptionId: "sub-1", sessions: [
+            .init(sessionId: "s", cwd: "/tmp/wt", title: "Fresh", index: .init(archived: true)),
+        ], removed: []))
+        #expect(await awaitCondition { model.sessions.isEmpty })
+        archiveGate.continuation.yield()
+        try await archive.value
+        pageGate.continuation.yield()
+        try await filter.value
+        #expect(model.sessions.map(\.title) == ["Fresh"])
+        await model.stop()
+    }
+
+    @MainActor
     @Test("a Load more answering after a filter change neither shows its rows nor moves the cursor")
     func loadMoreAfterFilterChange() async throws {
         let store = try temporaryStore()

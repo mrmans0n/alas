@@ -498,6 +498,9 @@ public final class ACPSessionDiscoveryModel {
     /// remove from Alas). A first page read across one may predate it: a
     /// filter load reads again, a reconcile drops its page.
     private var localActionGeneration = 0
+    /// The newest version of each row seen in a live change, also after it
+    /// left the current filter, so a local patch starts from the newest data.
+    private var latestLiveRows: [String: ACPDiscoveredSession] = [:]
     /// Live changes that arrived while a list read was in flight. They are
     /// applied at once and again when the last read finishes, so a page read
     /// before a change cannot undo it.
@@ -777,9 +780,12 @@ public final class ACPSessionDiscoveryModel {
         defer { updatingSessionIds.remove(session.remoteSessionId) }
         try await handle.setArchived(archived, remoteSessionId: session.remoteSessionId)
         localActionGeneration += 1
-        // Patch the row as it is now: a live update may have changed its
-        // title or state while the request ran.
-        var updated = sessions.first { $0.remoteSessionId == session.remoteSessionId } ?? session
+        // Patch the newest version of the row: a live update (often the
+        // archive notification itself) may have changed or moved it while
+        // the request ran.
+        var updated = latestLiveRows[session.remoteSessionId]
+            ?? sessions.first { $0.remoteSessionId == session.remoteSessionId }
+            ?? session
         updated.index = (updated.index ?? .init()).with(archived: archived)
         // Like a pushed change: a list page read before the archive must not
         // bring the row back.
@@ -791,6 +797,7 @@ public final class ACPSessionDiscoveryModel {
         // Applied now so the listed rows stay current, and replayed after the
         // pending read in case its page predates the change.
         if listReadsInFlight > 0 { pendingChanges.append((changed, removed)) }
+        for row in changed { latestLiveRows[row.remoteSessionId] = row }
         sessions = ACPSessionBrowserReducer.applying(
             changed: changed, removed: removed, to: sessions, filter: appliedFilter,
             browsingWorktreeId: handle.browsingWorktreeId
