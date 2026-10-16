@@ -130,12 +130,16 @@ extension SessionsAPI {
 
     public func setModel(_ sessionID: String, modelID: String, caller: HostCaller) async throws {
         caller.log("sessions.setModel", sessionID)
-        try await writerManager(for: sessionID).setModel(for: sessionID, modelId: modelID)
+        let manager = try writerManager(for: sessionID)
+        await manager.setModel(for: sessionID, modelId: modelID)
+        try confirmStillWriter(manager, sessionID)
     }
 
     public func setMode(_ sessionID: String, modeID: String, caller: HostCaller) async throws {
         caller.log("sessions.setMode", sessionID)
-        try await writerManager(for: sessionID).setMode(for: sessionID, modeId: modeID)
+        let manager = try writerManager(for: sessionID)
+        await manager.setMode(for: sessionID, modeId: modeID)
+        try confirmStillWriter(manager, sessionID)
     }
 
     public func setConfigOption(_ sessionID: String, configID: String, value: ACPConfigValue, caller: HostCaller) async throws {
@@ -146,6 +150,7 @@ extension SessionsAPI {
         else { throw SessionRefusal.invalidSetting }
         // Nil from here means applied later, once the session finishes attaching.
         await manager.setConfigOption(for: sessionID, configId: configID, value: value)?.value
+        try confirmStillWriter(manager, sessionID)
     }
 
     /// Answers the session's pending permission request `requestID`.
@@ -232,6 +237,12 @@ extension SessionsAPI {
         let manager = try liveManager(for: sessionID)
         guard manager.isWriter(for: sessionID) else { throw SessionRefusal.notWriter }
         return manager
+    }
+
+    /// A setting is applied only once the manager confirms the lease; one it
+    /// lost meanwhile drops the setting, which the caller must hear about.
+    private func confirmStillWriter(_ manager: ACPSessionManager, _ sessionID: String) throws {
+        guard manager.isWriter(for: sessionID) else { throw SessionRefusal.notWriter }
     }
 
     /// The manager that lists `sessionID`, live or not.

@@ -114,6 +114,49 @@ struct HostSessionsTests {
         #expect(fixture.core.sessionManagers[created.owner] == nil)
     }
 
+    /// A setting the session drops because another instance took it over
+    /// while the lease was being confirmed is reported, not acknowledged.
+    @Test func settingsLostToATakeoverAreRefused() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let sessions = fixture.host.sessions
+        let id = try await sessions.create(.worktree(fixture.ref), agentID: "gemini", caller: .app).id
+        try await eventually { await sessions.list().first { $0.id == id }?.isWriter == true }
+        let manager = try #require(fixture.core.sessionManagers.values.first)
+
+        // Another instance takes the lease while this one still believes it holds it.
+        let store = ACPSessionPersistence(path: fixture.sessionsDatabase.path)
+        try await store.releaseLease(sessionId: id, instanceId: manager.instanceId)
+        _ = try await store.claimLease(
+            sessionId: id, instanceId: "elsewhere", pid: Int64(getpid()),
+            now: Int64(Date().timeIntervalSince1970), staleAfter: 60, leaseToken: "theirs"
+        )
+        #expect(manager.isWriter(for: id), "the takeover is not observed yet")
+
+        await #expect(throws: SessionRefusal.notWriter) {
+            try await sessions.setModel(id, modelID: "fast", caller: .app)
+        }
+    }
+
+    /// An attachment of this instance can hold the session's lease before
+    /// the manager records it; archiving fences with that lease and leaves it.
+    @Test func archiveUsesALeaseThisInstanceAlreadyHolds() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let manager = try fixture.core.sessionManager(for: fixture.worktree)
+        let session = manager.createSession(agentId: "gemini")
+        await manager.flushAllPersistence()
+        let store = ACPSessionPersistence(path: fixture.sessionsDatabase.path)
+        _ = try await store.claimLease(
+            sessionId: session.id, instanceId: manager.instanceId, pid: Int64(getpid()),
+            now: Int64(Date().timeIntervalSince1970), staleAfter: 60, leaseToken: "attaching"
+        )
+
+        try await fixture.host.sessions.archive(session.id, caller: .app)
+        #expect(!fixture.host.sessions.list().contains { $0.id == session.id })
+        #expect(try await store.loadLease(sessionId: session.id)?.token == "attaching")
+    }
+
     enum Unavailable: CaseIterable {
         /// An interrupted checkpoint restore is being recovered.
         case recoveringCheckpoint

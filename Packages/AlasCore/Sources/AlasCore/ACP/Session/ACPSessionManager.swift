@@ -3258,12 +3258,15 @@ public final class ACPSessionManager: ChangeTracking {
             fence = owned
         } else {
             let token = UUID().uuidString
-            guard try await persistence.claimLease(
+            guard let lease = try await persistence.claimLease(
                 sessionId: id, instanceId: instanceId, pid: pid,
                 now: Int64(Date().timeIntervalSince1970), staleAfter: Self.leaseStaleAfter, leaseToken: token
-            ) != nil else { return false }
-            fence = ACPSessionLeaseFence(sessionId: id, ownerInstance: instanceId, token: token)
-            claimedToken = token
+            ) else { return false }
+            // An attachment of this instance may hold the lease already, with
+            // its own token: the fence is whatever the store holds, and only a
+            // lease this call created is released after.
+            fence = ACPSessionLeaseFence(sessionId: id, ownerInstance: instanceId, token: lease.token)
+            claimedToken = lease.token == token ? token : nil
         }
         let archived = try await persistence.setArchived(id: id, archived: true, fence: fence)
         if let claimedToken {
