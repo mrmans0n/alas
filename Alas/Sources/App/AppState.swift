@@ -14620,18 +14620,53 @@ final class AppState {
         await openExistingACPSession(sessionId: summary.sessionId)
     }
 
+    /// Maps the cwd of a session the agent lists to the worktree of
+    /// `worktree`'s project whose path it is, with that worktree's session
+    /// store. A session store is opened only when its file exists, so
+    /// browsing never creates one.
+    func acpSessionBrowserResolver(for worktree: Worktree) -> @MainActor (String) -> ACPSessionBrowserTarget? {
+        // Adapters report the cwd with symlinks resolved.
+        func key(_ path: String) -> String { URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path }
+        var byPath: [String: String] = [:]
+        for candidate in projectsManager.worktrees(projectId: worktree.projectId) where byPath[key(candidate.path.path)] == nil {
+            byPath[key(candidate.path.path)] = candidate.id
+        }
+        var stores: [String: ACPSessionPersistence?] = [:]
+        return { [weak self] cwd in
+            guard let id = byPath[key(cwd)] else { return nil }
+            if let cached = stores[id] { return .init(worktreeId: id, persistence: cached) }
+            let store: ACPSessionPersistence?
+            if let manager = self?.acpManagers[.worktree(id)] {
+                store = manager.persistence
+            } else {
+                let url = Paths.acpSessionsDB(forWorktreeId: id)
+                store = FileManager.default.fileExists(atPath: url.path) ? ACPSessionPersistence(path: url.path) : nil
+            }
+            stores[id] = store
+            return .init(worktreeId: id, persistence: store)
+        }
+    }
+
+    /// Shows an agent-side rename on the Alas copy of the session.
+    func renameLocalACPSession(worktreeId: String, sessionId: ACPSession.ID, title: String) {
+        guard let worktree = worktree(withId: worktreeId), let manager = acpManager(for: worktree) else { return }
+        manager.renameSessionCosmetic(id: sessionId, title: title, source: .manual)
+    }
+
     @discardableResult
     func openDiscoveredACPSession(
         _ discovered: ACPDiscoveredSession,
         capabilities: ACPSessionDiscoveryCapabilities
     ) async -> Bool {
-        guard let resolved = projectAndWorktree(withWorktreeId: discovered.worktreeId),
+        guard let worktreeId = discovered.worktreeId,
+              let resolved = projectAndWorktree(withWorktreeId: worktreeId),
               let manager = acpManager(for: resolved.worktree)
         else { return false }
 
         focusGlobalWorktree(id: resolved.worktree.id, projectId: resolved.project.id)
+        // Open in the session's own worktree, whatever the selection says by now.
         if let localSessionId = discovered.localSessionId {
-            await openExistingACPSession(sessionId: localSessionId)
+            await openExistingACPSession(sessionId: localSessionId, worktree: resolved.worktree)
             return true
         }
         guard capabilities.canOpenRemoteSession,
@@ -14641,7 +14676,7 @@ final class AppState {
               )
         else { return false }
 
-        await openExistingACPSession(sessionId: row.id)
+        await openExistingACPSession(sessionId: row.id, worktree: resolved.worktree)
         return true
     }
 
@@ -14651,6 +14686,11 @@ final class AppState {
         owner: SessionOwnerID,
         capabilities: ACPSessionDiscoveryCapabilities
     ) async -> Bool {
+        // A session of a linked worktree opens in that worktree, never in
+        // the directory the browser was opened from.
+        if let target = discovered.worktreeId, owner.worktreeID != nil, target != owner.worktreeID {
+            return await openDiscoveredACPSession(discovered, capabilities: capabilities)
+        }
         guard let manager = acpManager(for: owner) else { return false }
 
         if let localSessionId = discovered.localSessionId {

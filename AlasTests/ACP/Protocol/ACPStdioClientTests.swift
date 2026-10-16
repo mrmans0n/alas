@@ -147,6 +147,28 @@ struct ACPStdioClientTests {
         await client.shutdown()
     }
 
+    @Test("routes _session/list/changes rows with their session index fields")
+    func routesSessionListChanges() async throws {
+        let transport = FakeJSONRPCTransport()
+        let client = ACPStdioClient.makeForTesting(transport: transport)
+        try client.start()
+
+        // A malformed row field drops that field, not the row or the notification.
+        transport.send(frame: Data(#"""
+        {"jsonrpc":"2.0","method":"_session/list/changes","params":{"subscriptionId":"sub-1","sessions":[
+         {"sessionId":"s","cwd":"/repo-wt","title":"T","updatedAt":"2026-10-16T09:00:00Z",
+          "_meta":{"sessionIndex":{"archived":false,"state":"reviewing","model":7,"agentWorktree":true}}}],"removed":["gone"]}}
+        """#.utf8)) {}
+
+        var iterator = client.sessionListChanges.makeAsyncIterator()
+        let changes = try #require(await iterator.next())
+        #expect(changes.subscriptionId == "sub-1")
+        #expect(changes.removed == ["gone"])
+        #expect(changes.sessions.map(\.cwd) == ["/repo-wt"])
+        #expect(changes.sessions.first?.index == .init(archived: false, agentWorktree: true, state: "reviewing"))
+        await client.shutdown()
+    }
+
     @Test("transport request ID prefix namespaces outbound requests")
     func requestIDPrefixNamespacesOutboundRequests() async throws {
         let transport = FakeJSONRPCTransport()

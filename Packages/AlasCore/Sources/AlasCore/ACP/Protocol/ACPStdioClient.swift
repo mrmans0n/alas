@@ -13,6 +13,7 @@ public final class ACPStdioClient: ACPClient, @unchecked Sendable {
     private let terminalsCont: AsyncStream<ACPTerminalRequest>.Continuation
     private let stderrCont: AsyncStream<Data>.Continuation
     private let authStatusCont: AsyncStream<ACPAuthStatusEvent>.Continuation
+    private let sessionListChangesCont: AsyncStream<ACPSessionListChanges>.Continuation
 
     public let incomingUpdates: AsyncStream<ACPSessionUpdateParams>
     public var yieldedUpdateCount: Int {
@@ -30,6 +31,7 @@ public final class ACPStdioClient: ACPClient, @unchecked Sendable {
     public let terminalRequests: AsyncStream<ACPTerminalRequest>
     public let incomingStderr: AsyncStream<Data>
     public let authStatusUpdates: AsyncStream<ACPAuthStatusEvent>
+    public let sessionListChanges: AsyncStream<ACPSessionListChanges>
 
     private let stateLock = NSLock()
     private var nextId: Int = 0
@@ -96,6 +98,10 @@ public final class ACPStdioClient: ACPClient, @unchecked Sendable {
         var asC: AsyncStream<ACPAuthStatusEvent>.Continuation!
         self.authStatusUpdates = AsyncStream { asC = $0 }
         self.authStatusCont = asC
+
+        var slC: AsyncStream<ACPSessionListChanges>.Continuation!
+        self.sessionListChanges = AsyncStream { slC = $0 }
+        self.sessionListChangesCont = slC
     }
 
     /// Accepts a pre-built transport directly, skipping the local
@@ -146,6 +152,10 @@ public final class ACPStdioClient: ACPClient, @unchecked Sendable {
         var asC: AsyncStream<ACPAuthStatusEvent>.Continuation!
         self.authStatusUpdates = AsyncStream { asC = $0 }
         self.authStatusCont = asC
+
+        var slC: AsyncStream<ACPSessionListChanges>.Continuation!
+        self.sessionListChanges = AsyncStream { slC = $0 }
+        self.sessionListChangesCont = slC
     }
 
     /// Convenience factory for tests — wraps `init(transport:)`.
@@ -182,6 +192,7 @@ public final class ACPStdioClient: ACPClient, @unchecked Sendable {
             terminalsCont.finish()
             stderrCont.finish()
             authStatusCont.finish()
+            sessionListChangesCont.finish()
         }
     }
 
@@ -312,6 +323,11 @@ public final class ACPStdioClient: ACPClient, @unchecked Sendable {
                     status: p.authStatus,
                     durableConsumptionAcknowledgement: onConsumed
                 ))
+            }
+        case "_session/list/changes":
+            if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPSessionListChanges>.self, from: data),
+               let p = env.params {
+                sessionListChangesCont.yield(p)
             }
         case "fs/read_text_file":
             if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPFsReadParams>.self, from: data),

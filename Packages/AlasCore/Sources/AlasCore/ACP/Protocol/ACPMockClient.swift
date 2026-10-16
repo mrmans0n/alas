@@ -20,6 +20,7 @@ public final class ACPMockClient: ACPRequestHandoffPreparing, @unchecked Sendabl
     private let filesCont: AsyncStream<ACPFileRequest>.Continuation
     private let terminalsCont: AsyncStream<ACPTerminalRequest>.Continuation
     private let authStatusCont: AsyncStream<ACPAuthStatusEvent>.Continuation
+    private let sessionListChangesCont: AsyncStream<ACPSessionListChanges>.Continuation
     private let updateCountLock = NSLock()
     private var _yieldedUpdateCount = 0
     public private(set) var shutdownCount = 0
@@ -41,6 +42,7 @@ public final class ACPMockClient: ACPRequestHandoffPreparing, @unchecked Sendabl
     public let fileRequests: AsyncStream<ACPFileRequest>
     public let terminalRequests: AsyncStream<ACPTerminalRequest>
     public let authStatusUpdates: AsyncStream<ACPAuthStatusEvent>
+    public let sessionListChanges: AsyncStream<ACPSessionListChanges>
 
     public var terminalResponses: [JSONRPCID: Result<Data, JSONRPCError>] = [:]
 
@@ -77,6 +79,9 @@ public final class ACPMockClient: ACPRequestHandoffPreparing, @unchecked Sendabl
         var a: AsyncStream<ACPAuthStatusEvent>.Continuation!
         self.authStatusUpdates = AsyncStream { a = $0 }
         self.authStatusCont = a
+        var slc: AsyncStream<ACPSessionListChanges>.Continuation!
+        self.sessionListChanges = AsyncStream { slc = $0 }
+        self.sessionListChangesCont = slc
     }
 
     public func send(_ request: ACPRequest) async throws -> ACPResponse {
@@ -157,6 +162,10 @@ public final class ACPMockClient: ACPRequestHandoffPreparing, @unchecked Sendabl
         ))
     }
 
+    public func emitSessionListChanges(_ changes: ACPSessionListChanges) {
+        sessionListChangesCont.yield(changes)
+    }
+
     public var permissionResponses: [JSONRPCID: ACPPermissionResponse] = [:]
     public func respondToPermission(id: JSONRPCID, response: ACPPermissionResponse) {
         permissionResponses[id] = response
@@ -212,5 +221,6 @@ public final class ACPMockClient: ACPRequestHandoffPreparing, @unchecked Sendabl
         filesCont.finish()
         terminalsCont.finish()
         authStatusCont.finish()
+        sessionListChangesCont.finish()
     }
 }

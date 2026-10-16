@@ -25,6 +25,12 @@ struct AgentLauncherDialog: View {
     @State private var openingError: String?
     @State private var deletionRequest: ACPSessionDeletionRequest?
     @State private var deletionError: String?
+    /// The worktree the browser lists from, so rows of linked worktrees can
+    /// name theirs.
+    @State private var discoveryWorktreeId: String?
+    @State private var renameTarget: ACPDiscoveredSession?
+    @State private var renameDraft = ""
+    @State private var indexActionError: String?
     /// Installs in flight, keyed like the install coordinator so another
     /// agent or host stays installable meanwhile.
     @State private var installingAdapters: Set<ACPAdapterUpdateKey> = []
@@ -106,6 +112,19 @@ struct AgentLauncherDialog: View {
         .task(id: selectedAgentAvailabilityTaskID) {
             guard appState.isAgentLauncherOpen else { return }
             await loadSelectedAgentAvailability()
+        }
+        .alert(
+            "Rename session",
+            isPresented: Binding(
+                get: { renameTarget != nil },
+                set: { if !$0 { renameTarget = nil } }
+            )
+        ) {
+            TextField("Title", text: $renameDraft)
+            Button("Rename", action: commitRename)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The agent stores the new title, so its own session list shows it too.")
         }
         .confirmationDialog(
             deletionRequest?.title ?? "Delete session history?",
@@ -600,6 +619,10 @@ struct AgentLauncherDialog: View {
                     onTap: launchNewChat
                 )
 
+                if discoveryModel?.sessionIndex != nil {
+                    browserFilterBar
+                }
+
                 sessionDiscoveryState(agent: agent, discovered: discovered, capabilities: capabilities)
             }
             .padding(.vertical, 4)
@@ -635,25 +658,37 @@ struct AgentLauncherDialog: View {
             .frame(minHeight: 38)
         case .ready:
             if discovered.isEmpty {
-                launcherStatusRow("No agent sessions for this worktree.")
+                launcherStatusRow(emptySessionsText)
             } else {
                 ForEach(Array(discovered.enumerated()), id: \.element.id) { index, item in
-                    let canOpen = item.isAlreadyInAlas
-                        || (capabilities?.canOpenRemoteSession == true && item.isCompatibleWithAlas)
+                    let canOpen = ACPSessionBrowserRowPolicy.canOpen(item, capabilities: capabilities)
                     let isOpening = openingSessionId == item.remoteSessionId
                     AgentSessionLauncherRow(
                         title: item.title,
                         detail: isOpening
                             ? "Opening…"
                             : sessionDetail(item, canOpen: canOpen),
-                        systemImage: isOpening ? nil : (item.isAlreadyInAlas ? "checkmark.circle" : "clock"),
+                        systemImage: isOpening ? nil : rowSymbol(item),
                         isSelected: selectedSessionIndex == index + 1,
                         isEnabled: canOpen && openingSessionId == nil,
                         spinner: isOpening,
                         onTap: { openDiscoveredSession(item) }
                     )
                     .contextMenu {
-                        if item.localSessionId != nil {
+                        if discoveryModel?.sessionIndex?.rename == true {
+                            Button("Rename…") {
+                                renameDraft = item.title
+                                renameTarget = item
+                            }
+                        }
+                        if discoveryModel?.sessionIndex?.archive == true {
+                            Button(item.isArchived ? "Unarchive" : "Archive") {
+                                setArchived(!item.isArchived, item)
+                            }
+                        }
+                        // A linked worktree's Alas copy and live session belong to
+                        // that worktree's manager: delete from there.
+                        if item.localSessionId != nil, item.worktreeId == discoveryWorktreeId {
                             Button("Remove from Alas…", role: .destructive) {
                                 deletionRequest = .init(
                                     kind: .localOnly,
@@ -662,7 +697,7 @@ struct AgentLauncherDialog: View {
                                 )
                             }
                         }
-                        if capabilities?.canDelete == true,
+                        if capabilities?.canDelete == true, item.worktreeId == discoveryWorktreeId,
                            discoveryModel?.remotelyDeletedSessionIds.contains(item.remoteSessionId) != true {
                             Button("Delete agent-side history…", role: .destructive) {
                                 deletionRequest = .init(
@@ -673,7 +708,8 @@ struct AgentLauncherDialog: View {
                             }
                         }
                     }
-                    .disabled(discoveryModel?.deletingSessionIds.contains(item.remoteSessionId) == true)
+                    .disabled(discoveryModel?.deletingSessionIds.contains(item.remoteSessionId) == true
+                        || discoveryModel?.updatingSessionIds.contains(item.remoteSessionId) == true)
                     .onHover { hovering in
                         if hovering { selectedSessionIndex = index + 1 }
                     }
@@ -701,6 +737,9 @@ struct AgentLauncherDialog: View {
             }
             if let deletionError {
                 launcherStatusRow(deletionError)
+            }
+            if let indexActionError {
+                launcherStatusRow(indexActionError)
             }
             if let openingError {
                 launcherStatusRow(openingError)
@@ -803,13 +842,102 @@ struct AgentLauncherDialog: View {
     }
 
     private func sessionDetail(_ session: ACPDiscoveredSession, canOpen: Bool) -> String {
-        if session.isAlreadyInAlas { return "Already in Alas" }
-        if !session.isCompatibleWithAlas { return "Uses unsupported additional folders" }
-        if !canOpen { return "Browsing only" }
-        if let updatedAt = session.updatedAt {
-            return updatedAt.formatted(.relative(presentation: .named))
+        ACPSessionBrowserRowPolicy.detail(
+            for: session,
+            browsingWorktreeId: discoveryWorktreeId,
+            worktreeName: session.worktreeId.flatMap { appState.worktree(withId: $0)?.name },
+            canOpen: canOpen,
+            formatDate: { $0.formatted(.relative(presentation: .named)) }
+        )
+    }
+
+    private func rowSymbol(_ session: ACPDiscoveredSession) -> String {
+        if session.isArchived { return "archivebox" }
+        return session.isAlreadyInAlas ? "checkmark.circle" : "clock"
+    }
+
+    private var emptySessionsText: String {
+        let filter = discoveryModel?.filter ?? .init()
+        if filter.showArchived { return "No archived agent sessions." }
+        return filter.includeLinkedWorktrees
+            ? "No agent sessions in this repository's worktrees."
+            : "No agent sessions for this worktree."
+    }
+
+    /// Scope and archive filter of the session index, as two pairs of chips.
+    private var browserFilterBar: some View {
+        let filter = discoveryModel?.filter ?? .init()
+        return HStack(spacing: 4) {
+            filterChip("This worktree", isOn: !filter.includeLinkedWorktrees) { $0.includeLinkedWorktrees = false }
+            filterChip("All worktrees", isOn: filter.includeLinkedWorktrees) { $0.includeLinkedWorktrees = true }
+            Divider().frame(height: 12).padding(.horizontal, 6)
+            filterChip("Active", isOn: !filter.showArchived) { $0.showArchived = false }
+            filterChip("Archived", isOn: filter.showArchived) { $0.showArchived = true }
+            Spacer()
         }
-        return "Agent history"
+        .padding(.horizontal, 14)
+        .frame(height: 30)
+    }
+
+    private func filterChip(
+        _ title: String,
+        isOn: Bool,
+        change: @escaping (inout ACPSessionBrowserFilter) -> Void
+    ) -> some View {
+        Button {
+            guard let discoveryModel else { return }
+            var filter = discoveryModel.filter
+            change(&filter)
+            selectedSessionIndex = 0
+            indexActionError = nil
+            Task {
+                do {
+                    try await discoveryModel.setFilter(filter)
+                } catch {
+                    guard self.discoveryModel === discoveryModel else { return }
+                    indexActionError = error.localizedDescription
+                }
+            }
+        } label: {
+            Text(title)
+                .font(.system(size: 11, weight: isOn ? .semibold : .regular))
+                .foregroundStyle(theme.color(isOn ? "accent" : "fg-muted"))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(Capsule().fill(isOn ? theme.color("accent").opacity(0.14) : Color.clear))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func commitRename() {
+        guard let target = renameTarget, let discoveryModel else { return }
+        renameTarget = nil
+        indexActionError = nil
+        let title = renameDraft
+        Task {
+            do {
+                try await discoveryModel.rename(target, to: title) { localSessionId, newTitle in
+                    guard let worktreeId = target.worktreeId else { return }
+                    appState.renameLocalACPSession(worktreeId: worktreeId, sessionId: localSessionId, title: newTitle)
+                }
+            } catch {
+                guard self.discoveryModel === discoveryModel else { return }
+                indexActionError = "Rename failed: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func setArchived(_ archived: Bool, _ session: ACPDiscoveredSession) {
+        guard let discoveryModel else { return }
+        indexActionError = nil
+        Task {
+            do {
+                try await discoveryModel.setArchived(archived, for: session)
+            } catch {
+                guard self.discoveryModel === discoveryModel else { return }
+                indexActionError = "\(archived ? "Archive" : "Unarchive") failed: \(error.localizedDescription)"
+            }
+        }
     }
 
     private var hintLine: some View {
@@ -985,12 +1113,19 @@ struct AgentLauncherDialog: View {
         let prior = discoveryModel
         let model = ACPSessionDiscoveryModel()
         adapterInstallError = nil
+        indexActionError = nil
         discoveryModel = model
         discoveryOwner = manager.owner
         discoveryProjectId = projectId
+        discoveryWorktreeId = manager.worktreeId
+        // A worktree browser can list the repository's linked worktrees; a
+        // checkout browser stays on its own directory.
+        let resolver = manager.owner.worktreeID
+            .flatMap { appState.worktree(withId: $0) }
+            .map { appState.acpSessionBrowserResolver(for: $0) }
         Task {
             await prior?.stop()
-            await model.start(manager: manager, agentId: agent.id)
+            await model.start(manager: manager, agentId: agent.id, worktreeResolver: resolver)
         }
     }
 
@@ -1107,6 +1242,9 @@ struct AgentLauncherDialog: View {
         deletionError = nil
         openingSessionId = nil
         openingError = nil
+        renameTarget = nil
+        indexActionError = nil
+        discoveryWorktreeId = nil
         Task { await prior?.stop() }
     }
 

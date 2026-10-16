@@ -471,6 +471,192 @@ struct ACPSessionDiscoveryTests {
         #expect(!client.sent.contains { $0.method == "session/delete" })
     }
 
+    @MainActor
+    @Test("the session index lists linked worktrees, follows empty pages, and routes rows to their worktree")
+    func sessionIndexScopeAndRouting() async throws {
+        let store = try temporaryStore()
+        let client = indexClient()
+        var listRequests: [ACPSessionListParams] = []
+        client.script(method: "session/list") { request in
+            let params = try #require(request.params as? ACPSessionListParams)
+            listRequests.append(params)
+            guard params.meta?.sessionIndex.list.includeWorktrees == true else {
+                return try JSONEncoder().encode(ACPSessionListResult(sessions: [
+                    .init(sessionId: "own", cwd: "/tmp/wt", title: "Own", index: .init(archived: false)),
+                ]))
+            }
+            // An empty page that still has a cursor is followed.
+            guard params.cursor != nil else {
+                return try JSONEncoder().encode(ACPSessionListResult(sessions: [], nextCursor: "page-2"))
+            }
+            return try JSONEncoder().encode(ACPSessionListResult(sessions: [
+                .init(sessionId: "own", cwd: "/tmp/wt", title: "Own", index: .init(archived: false)),
+                .init(sessionId: "sibling", cwd: "/tmp/wt2/", title: "Sibling",
+                      index: .init(archived: false, model: "gpt-5", state: "running")),
+                .init(sessionId: "agent-made", cwd: "/tmp/agent-wt", title: "Agent worktree",
+                      index: .init(archived: false, agentWorktree: true)),
+            ]))
+        }
+        let manager = manager(store: store, client: client)
+        let model = ACPSessionDiscoveryModel()
+        let stores = ["/tmp/wt": "wt", "/tmp/wt2": "wt2"]
+        await model.start(manager: manager, agentId: "claude") { cwd in
+            stores[URL(fileURLWithPath: cwd).standardizedFileURL.path].map { .init(worktreeId: $0, persistence: nil) }
+        }
+
+        #expect(model.sessionIndex == .init(archive: true, rename: true, listSubscribe: true, worktrees: true))
+        #expect(model.sessions.map(\.remoteSessionId) == ["own"])
+        #expect(listRequests.first?.meta?.sessionIndex.list == .init(includeWorktrees: false, archived: .unarchived))
+
+        try await model.setFilter(.init(includeLinkedWorktrees: true))
+        #expect(model.sessions.map(\.remoteSessionId) == ["own", "sibling", "agent-made"])
+        #expect(model.sessions.map(\.worktreeId) == ["wt", "wt2", nil])
+        #expect(listRequests.suffix(2).map(\.cursor) == [nil, "page-2"])
+        let capabilities = try #require(model.capabilities)
+        #expect(model.sessions.map { ACPSessionBrowserRowPolicy.canOpen($0, capabilities: capabilities) } == [true, true, false])
+        await model.stop()
+    }
+
+    @MainActor
+    @Test("a basic agent keeps the exact-cwd list and sends no session index metadata")
+    func basicAgentFallback() async throws {
+        let store = try temporaryStore()
+        let client = discoveryClient(deleteCapability: false)
+        let model = ACPSessionDiscoveryModel()
+        await model.start(manager: manager(store: store, client: client), agentId: "claude")
+        #expect(model.sessionIndex == nil)
+        #expect((client.sent.first { $0.method == "session/list" }?.params as? ACPSessionListParams)?.meta == nil)
+        try await model.setFilter(.init(includeLinkedWorktrees: true))
+        #expect(client.sent.filter { $0.method == "session/list" }.count == 1)
+        let session = try #require(model.sessions.first)
+        await #expect(throws: ACPSessionDiscoveryError.archiveUnsupported) {
+            try await model.setArchived(true, for: session)
+        }
+        #expect(!client.sent.contains { $0.method.hasPrefix("_session/") })
+    }
+
+    @MainActor
+    @Test("list changes update rows in place, insert new ones once, and the subscription ends with the browser")
+    func listSubscriptionLifecycle() async throws {
+        let store = try temporaryStore()
+        let client = indexClient()
+        client.script(method: "session/list") { _ in
+            try JSONEncoder().encode(ACPSessionListResult(sessions: [
+                .init(sessionId: "a", cwd: "/tmp/wt", title: "A", updatedAt: "2026-10-16T10:00:00Z", index: .init(archived: false)),
+                .init(sessionId: "b", cwd: "/tmp/wt", title: "B", updatedAt: "2026-10-16T09:00:00Z", index: .init(archived: false)),
+            ]))
+        }
+        let model = ACPSessionDiscoveryModel()
+        await model.start(manager: manager(store: store, client: client), agentId: "claude")
+        let subscribe = try #require(client.sent.first { $0.method == "_session/list/subscribe" })
+        #expect(subscribe.params as? ACPSessionListSubscribeParams == .init(cwd: "/tmp/wt"))
+
+        let newer = ACPAgentSessionInfo(sessionId: "c", cwd: "/tmp/wt", title: "C", updatedAt: "2026-10-16T11:00:00Z", index: .init(archived: false))
+        client.emitSessionListChanges(.init(subscriptionId: "other-subscription", sessions: [newer], removed: ["a"]))
+        client.emitSessionListChanges(.init(subscriptionId: "sub-1", sessions: [
+            .init(sessionId: "b", cwd: "/tmp/wt", title: "B renamed", updatedAt: "2026-10-16T09:00:00Z", index: .init(archived: false, state: "running")),
+            newer, newer,
+        ], removed: []))
+        client.emitSessionListChanges(.init(subscriptionId: "sub-1", sessions: [
+            .init(sessionId: "a", cwd: "/tmp/wt", title: "A", index: .init(archived: true)),
+        ], removed: ["missing"]))
+        #expect(await awaitCondition { model.sessions.map(\.remoteSessionId) == ["c", "b"] })
+        #expect(model.sessions.last?.title == "B renamed")
+        #expect(model.sessions.last?.index?.state == "running")
+
+        await model.stop()
+        let methods = client.sent.map(\.method)
+        #expect(methods.contains("_session/list/unsubscribe"))
+        #expect(client.shutdownCount == 1)
+    }
+
+    @MainActor
+    @Test("rename and archive go to the agent; archive leaves the Alas session and a failure keeps the row")
+    func renameAndArchive() async throws {
+        let store = try temporaryStore()
+        try store.upsertSession(row(id: "local-1", remoteSessionId: "remote-1", title: "Local", origin: .agentImported))
+        let client = indexClient()
+        client.script(method: "session/list") { _ in
+            try JSONEncoder().encode(ACPSessionListResult(sessions: [
+                .init(sessionId: "remote-1", cwd: "/tmp/wt", title: "Remote", index: .init(archived: false)),
+                .init(sessionId: "remote-2", cwd: "/tmp/wt", title: "Other", index: .init(archived: false)),
+            ]))
+        }
+        client.script(method: "_session/rename") { _ in Data("{}".utf8) }
+        client.script(method: "_session/archive") { request in
+            guard (request.params as? ACPSessionArchiveParams)?.sessionId == "remote-1" else { throw TestError.failed }
+            return Data("{}".utf8)
+        }
+        let model = ACPSessionDiscoveryModel()
+        await model.start(manager: manager(store: store, client: client), agentId: "claude")
+        let first = try #require(model.sessions.first)
+
+        var renamedLocally: [String: String] = [:]
+        try await model.rename(first, to: "  Renamed  ") { renamedLocally[$0] = $1 }
+        #expect(client.sent.first { $0.method == "_session/rename" }?.params as? ACPSessionRenameParams
+            == .init(sessionId: "remote-1", title: "Renamed"))
+        #expect(model.sessions.first?.title == "Renamed")
+        #expect(renamedLocally == ["local-1": "Renamed"])
+
+        try await model.setArchived(true, for: try #require(model.sessions.first))
+        #expect(model.sessions.map(\.remoteSessionId) == ["remote-2"])
+        #expect(try store.loadSession(id: "local-1") != nil)
+        #expect(!client.sent.contains { $0.method == "session/delete" })
+
+        await #expect(throws: TestError.failed) {
+            try await model.setArchived(true, for: try #require(model.sessions.first))
+        }
+        #expect(model.sessions.map(\.remoteSessionId) == ["remote-2"])
+        await model.stop()
+    }
+
+    @Test("list changes reducer keeps ids unique and honors the archive filter", arguments: [false, true])
+    func reducer(showArchived: Bool) {
+        func row(_ id: String, _ minute: Int, archived: Bool = false, title: String? = nil) -> ACPDiscoveredSession {
+            .init(worktreeId: "wt", agentId: "codex", remoteSessionId: id, cwd: "/tmp/wt", title: title ?? id,
+                  updatedAt: Date(timeIntervalSince1970: TimeInterval(minute * 60)), additionalDirectories: [],
+                  localSessionId: nil, index: .init(archived: archived))
+        }
+        let filter = ACPSessionBrowserFilter(showArchived: showArchived)
+        let listed = [row("a", 30, archived: showArchived), row("b", 10, archived: showArchived)]
+        let result = ACPSessionBrowserReducer.applying(
+            changed: [
+                row("b", 10, archived: showArchived, title: "B2"),
+                row("c", 20, archived: showArchived),
+                row("c", 20, archived: showArchived),
+                row("a", 30, archived: !showArchived),
+                row("d", 40, archived: !showArchived),
+            ],
+            removed: ["c-gone"],
+            to: listed + [row("c-gone", 5, archived: showArchived)],
+            filter: filter
+        )
+        #expect(result.map(\.remoteSessionId) == ["c", "b"])
+        #expect(result.last?.title == "B2")
+    }
+
+    @Test("row detail names the linked worktree, state and model; archived rows are browse-only", arguments: [
+        ("wt", nil, nil, false, "date", true),
+        ("wt2", "running", "gpt-5", false, "feature · Running · date · gpt-5", true),
+        (nil, "requires_action", nil, false, "Not an Alas worktree: agent-wt · Needs input · date", false),
+        ("wt", "idle", nil, false, "date", true),
+        ("wt", "idle", nil, true, "Archived, unarchive to open · date", false),
+    ] as [(String?, String?, String?, Bool, String, Bool)])
+    func rowDetail(worktreeId: String?, state: String?, model: String?, archived: Bool, expected: String, opens: Bool) {
+        let session = ACPDiscoveredSession(
+            worktreeId: worktreeId, agentId: "codex", remoteSessionId: "s", cwd: "/tmp/agent-wt", title: "S",
+            updatedAt: Date(timeIntervalSince1970: 0), additionalDirectories: [], localSessionId: nil,
+            index: .init(archived: archived, model: model, state: state)
+        )
+        let capabilities = ACPSessionDiscoveryCapabilities(canLoad: true, canResume: false, canFork: false, canDelete: false)
+        let canOpen = ACPSessionBrowserRowPolicy.canOpen(session, capabilities: capabilities)
+        #expect(canOpen == opens)
+        #expect(ACPSessionBrowserRowPolicy.detail(
+            for: session, browsingWorktreeId: "wt", worktreeName: worktreeId == "wt2" ? "feature" : nil,
+            canOpen: canOpen, formatDate: { _ in "date" }
+        ) == expected)
+    }
+
     @Test("store scopes remote identity by agent and preserves origin")
     func storeRemoteIdentityAndOrigin() throws {
         let store = try temporaryStore()
@@ -575,6 +761,20 @@ struct ACPSessionDiscoveryTests {
             if let deletionError { throw deletionError }
             return Data("{}".utf8)
         }
+        return client
+    }
+
+    /// An agent with the client-neutral session index and a list subscription.
+    private func indexClient() -> ACPMockClient {
+        let client = ACPMockClient()
+        client.script(method: "initialize") { _ in
+            Data(#"""
+            {"protocolVersion":1,"agentCapabilities":{"loadSession":true,"sessionCapabilities":{"list":{},"resume":{}}},
+             "_meta":{"sessionIndex":{"version":1,"capabilities":["sessionArchive","sessionRename","sessionListSubscribe","sessionWorktrees"]}}}
+            """#.utf8)
+        }
+        client.script(method: "_session/list/subscribe") { _ in Data(#"{"subscriptionId":"sub-1"}"#.utf8) }
+        client.script(method: "_session/list/unsubscribe") { _ in Data("{}".utf8) }
         return client
     }
 
