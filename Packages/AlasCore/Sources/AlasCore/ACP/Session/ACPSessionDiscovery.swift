@@ -118,17 +118,21 @@ public enum ACPSessionBrowserReducer {
     /// scrolling stay put. A new row is inserted by last activity, newest
     /// first. A row that no longer matches the archive filter leaves, and so
     /// does every removed id. Ids stay unique.
+    /// Without the linked-worktree scope, a row of another worktree leaves
+    /// too: subscriptions always cover every linked worktree.
     public static func applying(
         changed: [ACPDiscoveredSession],
         removed: [String],
         to rows: [ACPDiscoveredSession],
-        filter: ACPSessionBrowserFilter
+        filter: ACPSessionBrowserFilter,
+        browsingWorktreeId: String?
     ) -> [ACPDiscoveredSession] {
         let removedIds = Set(removed)
         var result = rows.filter { !removedIds.contains($0.remoteSessionId) }
         for row in changed where !removedIds.contains(row.remoteSessionId) {
             let existing = result.firstIndex { $0.remoteSessionId == row.remoteSessionId }
-            guard row.isArchived == filter.showArchived else {
+            let inScope = filter.includeLinkedWorktrees || row.worktreeId == browsingWorktreeId
+            guard row.isArchived == filter.showArchived, inScope else {
                 if let existing { result.remove(at: existing) }
                 continue
             }
@@ -141,6 +145,35 @@ public enum ACPSessionBrowserReducer {
             }
         }
         return result
+    }
+
+    /// Merges a freshly read first page. A row the previous first page held
+    /// that the new one lacks is gone (a missed removal) when the new page is
+    /// the whole list, or when it is newer than the new page's oldest row;
+    /// an older one may just have moved to the next page, so it stays.
+    public static func reconciling(
+        firstPage: [ACPDiscoveredSession],
+        hasMorePages: Bool,
+        previousFirstPage: Set<String>,
+        rows: [ACPDiscoveredSession],
+        filter: ACPSessionBrowserFilter,
+        browsingWorktreeId: String?
+    ) -> [ACPDiscoveredSession] {
+        let present = Set(firstPage.map(\.remoteSessionId))
+        let oldest = firstPage.compactMap(\.lastActivity).min()
+        let vanished = rows.filter { row in
+            guard previousFirstPage.contains(row.remoteSessionId), !present.contains(row.remoteSessionId) else { return false }
+            guard hasMorePages else { return true }
+            guard let oldest, let activity = row.lastActivity else { return false }
+            return activity > oldest
+        }
+        return applying(
+            changed: firstPage,
+            removed: vanished.map(\.remoteSessionId),
+            to: rows,
+            filter: filter,
+            browsingWorktreeId: browsingWorktreeId
+        )
     }
 }
 
@@ -211,6 +244,8 @@ public final class ACPSessionDiscoveryHandle {
     /// The client-neutral session index, when the agent advertised it.
     nonisolated public let sessionIndex: ACPSessionIndexSupport?
     private let worktreeId: String
+    /// The worktree this browser lists from.
+    nonisolated public var browsingWorktreeId: String { worktreeId }
     private let agentId: String
     private let cwd: String
     private let persistence: ACPSessionPersistence
@@ -265,9 +300,13 @@ public final class ACPSessionDiscoveryHandle {
 
     public var canLoadMore: Bool { !hasLoadedPage || nextCursor != nil }
 
-    public func loadNextPage() async throws -> [ACPDiscoveredSession] {
+    /// `isCurrent` is asked once the page arrives: when it says no (the
+    /// browser changed filter meanwhile), the page is dropped and the cursor
+    /// stays where the newer load put it.
+    public func loadNextPage(isCurrent: @MainActor () -> Bool = { true }) async throws -> [ACPDiscoveredSession] {
         guard !closed, canLoadMore else { return [] }
         let (rows, cursor) = try await readPages(from: nextCursor, filter: filter)
+        guard isCurrent() else { return [] }
         hasLoadedPage = true
         nextCursor = cursor
         return rows
@@ -372,7 +411,11 @@ public final class ACPSessionDiscoveryHandle {
                     guard let self, !self.closed else { break }
                     var rows: [ACPDiscoveredSession] = []
                     for info in changes.sessions {
-                        if let row = await self.discoveredSession(info, filter: self.filter) { rows.append(row) }
+                        // Mapped with the linked scope: the model scopes rows by
+                        // its current filter, which may be newer than the handle's.
+                        if let row = await self.discoveredSession(info, filter: .init(includeLinkedWorktrees: true)) {
+                            rows.append(row)
+                        }
                     }
                     continuation.yield((rows, changes.removed))
                 }
@@ -428,6 +471,8 @@ public final class ACPSessionDiscoveryModel {
     /// Bumped by every filter change; a load that started under an older
     /// generation is discarded.
     private var filterGeneration = 0
+    /// Ids of the last first page read, for `reconcile`.
+    private var firstPageIds: Set<String> = []
     private var subscriptionTask: Task<Void, Never>?
     private var reconcileTask: Task<Void, Never>?
     /// While a subscription is open, the first page is read again this often
@@ -497,6 +542,7 @@ public final class ACPSessionDiscoveryModel {
         sessions = []
         do {
             try await loadMore()
+            firstPageIds = Set(sessions.map(\.remoteSessionId))
         } catch {
             sessions = previous
             throw error
@@ -523,6 +569,7 @@ public final class ACPSessionDiscoveryModel {
             capabilities = handle.capabilities
             sessionIndex = handle.sessionIndex
             try await loadMore()
+            firstPageIds = Set(sessions.map(\.remoteSessionId))
             phase = .ready
             await startSubscription()
         } catch ACPSessionDiscoveryError.listingUnsupported {
@@ -538,7 +585,7 @@ public final class ACPSessionDiscoveryModel {
         guard let handle else { return }
         let generation = filterGeneration
         do {
-            let page = try await handle.loadNextPage()
+            let page = try await handle.loadNextPage { generation == self.filterGeneration }
             guard generation == filterGeneration else { return }
             if replaceSessionsOnNextLoad {
                 sessions = page
@@ -569,6 +616,7 @@ public final class ACPSessionDiscoveryModel {
             guard generation == filterGeneration, !stopped else { return }
             handle.commit(filter: newFilter, cursor: page.cursor)
             sessions = page.rows
+            firstPageIds = Set(page.rows.map(\.remoteSessionId))
             replaceSessionsOnNextLoad = false
             paginationError = nil
         } catch {
@@ -584,7 +632,15 @@ public final class ACPSessionDiscoveryModel {
         guard let handle, !stopped else { return }
         let generation = filterGeneration
         guard let page = try? await handle.firstPage(filter: filter), generation == filterGeneration else { return }
-        sessions = ACPSessionBrowserReducer.applying(changed: page.rows, removed: [], to: sessions, filter: filter)
+        sessions = ACPSessionBrowserReducer.reconciling(
+            firstPage: page.rows,
+            hasMorePages: page.cursor != nil,
+            previousFirstPage: firstPageIds,
+            rows: sessions,
+            filter: filter,
+            browsingWorktreeId: handle.browsingWorktreeId
+        )
+        firstPageIds = Set(page.rows.map(\.remoteSessionId))
     }
 
     /// Renames the agent's session; on success `renameLocal` gets the Alas
@@ -617,7 +673,9 @@ public final class ACPSessionDiscoveryModel {
         try await handle.setArchived(archived, remoteSessionId: session.remoteSessionId)
         var updated = session
         updated.index = (session.index ?? .init()).with(archived: archived)
-        sessions = ACPSessionBrowserReducer.applying(changed: [updated], removed: [], to: sessions, filter: filter)
+        sessions = ACPSessionBrowserReducer.applying(
+            changed: [updated], removed: [], to: sessions, filter: filter, browsingWorktreeId: handle.browsingWorktreeId
+        )
     }
 
     private func startSubscription() async {
@@ -628,7 +686,8 @@ public final class ACPSessionDiscoveryModel {
             for await (changed, removed) in stream {
                 guard let self, !self.stopped else { break }
                 self.sessions = ACPSessionBrowserReducer.applying(
-                    changed: changed, removed: removed, to: self.sessions, filter: self.filter
+                    changed: changed, removed: removed, to: self.sessions, filter: self.filter,
+                    browsingWorktreeId: handle.browsingWorktreeId
                 )
             }
         }

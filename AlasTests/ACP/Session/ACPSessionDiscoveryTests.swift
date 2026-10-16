@@ -659,12 +659,18 @@ struct ACPSessionDiscoveryTests {
         await model.stop()
     }
 
-    @Test("list changes reducer keeps ids unique and honors the archive filter", arguments: [false, true])
+    private static func reducerRow(
+        _ id: String, _ minute: Int, archived: Bool = false, title: String? = nil, worktreeId: String = "wt"
+    ) -> ACPDiscoveredSession {
+        .init(worktreeId: worktreeId, agentId: "codex", remoteSessionId: id, cwd: "/tmp/\(worktreeId)", title: title ?? id,
+              updatedAt: Date(timeIntervalSince1970: TimeInterval(minute * 60)), additionalDirectories: [],
+              localSessionId: nil, index: .init(archived: archived))
+    }
+
+    @Test("list changes reducer keeps ids unique and honors the archive filter and worktree scope", arguments: [false, true])
     func reducer(showArchived: Bool) {
-        func row(_ id: String, _ minute: Int, archived: Bool = false, title: String? = nil) -> ACPDiscoveredSession {
-            .init(worktreeId: "wt", agentId: "codex", remoteSessionId: id, cwd: "/tmp/wt", title: title ?? id,
-                  updatedAt: Date(timeIntervalSince1970: TimeInterval(minute * 60)), additionalDirectories: [],
-                  localSessionId: nil, index: .init(archived: archived))
+        func row(_ id: String, _ minute: Int, archived: Bool = false, title: String? = nil, worktreeId: String = "wt") -> ACPDiscoveredSession {
+            Self.reducerRow(id, minute, archived: archived, title: title, worktreeId: worktreeId)
         }
         let filter = ACPSessionBrowserFilter(showArchived: showArchived)
         let listed = [row("a", 30, archived: showArchived), row("b", 10, archived: showArchived)]
@@ -675,13 +681,81 @@ struct ACPSessionDiscoveryTests {
                 row("c", 20, archived: showArchived),
                 row("a", 30, archived: !showArchived),
                 row("d", 40, archived: !showArchived),
+                // Subscriptions cover every linked worktree; this browser does not.
+                row("e", 50, archived: showArchived, worktreeId: "wt2"),
             ],
             removed: ["c-gone"],
             to: listed + [row("c-gone", 5, archived: showArchived)],
-            filter: filter
+            filter: filter,
+            browsingWorktreeId: "wt"
         )
         #expect(result.map(\.remoteSessionId) == ["c", "b"])
         #expect(result.last?.title == "B2")
+    }
+
+    @Test("first-page reconciliation removes missed removals but keeps rows that may have moved to a later page",
+          arguments: [false, true])
+    func reconciliation(hasMorePages: Bool) {
+        let filter = ACPSessionBrowserFilter()
+        // Listed: first page a, b, c; then d from a later page.
+        let rows = [Self.reducerRow("a", 40), Self.reducerRow("b", 30), Self.reducerRow("c", 20), Self.reducerRow("d", 10)]
+        // Refreshed first page: a and c; b (newer than c) is gone. With more
+        // pages, d and anything older than c may simply be on the next page.
+        let result = ACPSessionBrowserReducer.reconciling(
+            firstPage: [Self.reducerRow("a", 40, title: "A2"), Self.reducerRow("c", 20)],
+            hasMorePages: hasMorePages,
+            previousFirstPage: ["a", "b", "c"],
+            rows: rows,
+            filter: filter,
+            browsingWorktreeId: "wt"
+        )
+        #expect(result.map(\.remoteSessionId) == ["a", "c", "d"])
+        #expect(result.first?.title == "A2")
+        let older = ACPSessionBrowserReducer.reconciling(
+            firstPage: [Self.reducerRow("a", 40), Self.reducerRow("b", 30)],
+            hasMorePages: hasMorePages,
+            previousFirstPage: ["a", "b", "c"],
+            rows: rows,
+            filter: filter,
+            browsingWorktreeId: "wt"
+        )
+        #expect(older.map(\.remoteSessionId) == (hasMorePages ? ["a", "b", "c", "d"] : ["a", "b", "d"]))
+    }
+
+    @MainActor
+    @Test("a Load more answering after a filter change neither shows its rows nor moves the cursor")
+    func loadMoreAfterFilterChange() async throws {
+        let store = try temporaryStore()
+        let client = indexClient()
+        let gate = AsyncStream<Void>.makeStream()
+        let pageTwoStarted = AsyncStream<Void>.makeStream()
+        client.scriptAsync(method: "session/list") { request in
+            let params = try #require(request.params as? ACPSessionListParams)
+            if params.cursor == "page-2" {
+                pageTwoStarted.continuation.yield()
+                for await _ in gate.stream { break }
+                return try JSONEncoder().encode(ACPSessionListResult(
+                    sessions: [.init(sessionId: "old-page-2", cwd: "/tmp/wt", index: .init(archived: false))],
+                    nextCursor: "page-3"))
+            }
+            if params.meta?.sessionIndex.list.includeWorktrees == true {
+                return try JSONEncoder().encode(ACPSessionListResult(
+                    sessions: [.init(sessionId: "linked", cwd: "/tmp/wt", index: .init(archived: false))]))
+            }
+            return try JSONEncoder().encode(ACPSessionListResult(
+                sessions: [.init(sessionId: "first", cwd: "/tmp/wt", index: .init(archived: false))],
+                nextCursor: "page-2"))
+        }
+        let model = ACPSessionDiscoveryModel()
+        await model.start(manager: manager(store: store, client: client), agentId: "claude")
+        let loadMore = Task { try await model.loadMore() }
+        for await _ in pageTwoStarted.stream { break }
+        try await model.setFilter(.init(includeLinkedWorktrees: true))
+        gate.continuation.yield()
+        try await loadMore.value
+        #expect(model.sessions.map(\.remoteSessionId) == ["linked"])
+        #expect(!model.canLoadMore)
+        await model.stop()
     }
 
     @Test("row detail names the linked worktree, state and model; archived rows are browse-only", arguments: [
