@@ -91,8 +91,13 @@ extension AlasHostEnvironment {
         ACPLaunchCatalog.specs.contains { $0.agentID == agentID }
     }
 
+    /// Local worktrees only: a remote project's agent runs on its host,
+    /// which only the app reaches.
     public func sessionManager(for worktree: Worktree, in core: AlasCoreContext) throws -> ACPSessionManager {
-        try core.sessionManager(for: worktree)
+        guard core.projects.projects.first(where: { $0.id == worktree.projectId })?.host == nil else {
+            throw SessionRefusal.ownerUnavailable(reason: "Sessions in remote worktrees start from the app.")
+        }
+        return try core.sessionManager(for: worktree)
     }
 
     public func sessionManager(forCheckout checkout: WorkspaceCheckout, in core: AlasCoreContext) async throws -> ACPSessionManager {

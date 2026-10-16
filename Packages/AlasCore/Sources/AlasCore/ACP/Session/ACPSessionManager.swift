@@ -3270,7 +3270,16 @@ public final class ACPSessionManager: ChangeTracking {
             fence = ACPSessionLeaseFence(sessionId: id, ownerInstance: instanceId, token: lease.token)
             claimedToken = lease.token == token ? token : nil
         }
-        let archived = try await persistence.setArchived(id: id, archived: true, fence: fence)
+        let archived: Bool
+        do {
+            archived = try await persistence.setArchived(id: id, archived: true, fence: fence)
+        } catch {
+            // Nobody heartbeats a lease claimed only for this write.
+            if let claimedToken {
+                try? await persistence.releaseLease(sessionId: id, instanceId: instanceId, leaseToken: claimedToken)
+            }
+            throw error
+        }
         if let claimedToken {
             try? await persistence.releaseLease(sessionId: id, instanceId: instanceId, leaseToken: claimedToken)
         }

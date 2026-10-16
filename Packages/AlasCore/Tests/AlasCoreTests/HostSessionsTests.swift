@@ -184,13 +184,16 @@ struct HostSessionsTests {
         case agentNotOnRemoteHost
         /// An archive or delete claims the worktree while creation waits.
         case worktreeClaimedMeanwhile
+        /// The worktree belongs to a remote project, which a headless host
+        /// cannot run agents for.
+        case remoteWorktree
     }
 
     /// A session is not created where it could not safely run.
     @Test(arguments: Unavailable.allCases)
     func creationIsRefusedWhereASessionCannotRun(_ reason: Unavailable) async throws {
         let environment = RefusingEnvironment()
-        let fixture = try Fixture(environment: environment)
+        let fixture = try Fixture(environment: environment, projectHost: reason == .remoteWorktree ? "build" : nil)
         defer { fixture.tearDown() }
         let target: SessionTarget
         let refusal: SessionRefusal
@@ -212,6 +215,9 @@ struct HostSessionsTests {
             environment.duringRecoveryCheck = { projects.setOperationState(for: worktree, state: .archiving(projectId: "p")) }
             target = .worktree(fixture.ref)
             refusal = .ownerUnavailable(reason: "Another operation holds the worktree.")
+        case .remoteWorktree:
+            target = .worktree(fixture.ref)
+            refusal = .ownerUnavailable(reason: "Sessions in remote worktrees start from the app.")
         }
 
         await #expect(throws: refusal) {
@@ -230,10 +236,11 @@ struct HostSessionsTests {
         var ref: WorktreeRef { WorktreeRef(projectID: "p", path: worktree.path.path) }
         var sessionsDatabase: URL { root.appendingPathComponent("sessions.sqlite") }
 
-        init(environment: any AlasHostEnvironment = HeadlessHostEnvironment()) throws {
+        init(environment: any AlasHostEnvironment = HeadlessHostEnvironment(), projectHost: String? = nil) throws {
             root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-sessions-\(UUID().uuidString)")
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-            let project = ProjectConfig(id: "p", name: "p", path: root.path, color: "blue", addedAt: .distantPast)
+            var project = ProjectConfig(id: "p", name: "p", path: root.path, color: "blue", addedAt: .distantPast)
+            project.host = projectHost
             let projects = ProjectsManager(persistedProjects: [project])
             let path = root.appendingPathComponent("feature")
             worktree = Worktree(
