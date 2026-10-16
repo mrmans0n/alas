@@ -103,6 +103,18 @@ public enum ACPSessionBrowserPaths {
     }
 }
 
+/// When a live change started being turned into rows: the local actions
+/// completed and the list reads started by then.
+public struct ACPSessionBrowserStamp: Equatable, Sendable {
+    public var localActions: Int
+    public var listReads: Int
+
+    public init(localActions: Int = 0, listReads: Int = 0) {
+        self.localActions = localActions
+        self.listReads = listReads
+    }
+}
+
 /// The Alas worktree a listed session runs in, with its session store.
 public struct ACPSessionBrowserTarget: Sendable {
     public let worktreeId: String
@@ -166,15 +178,18 @@ public enum ACPSessionBrowserReducer {
         return result
     }
 
-    /// Live rows whose session had a local action complete after the rows
-    /// started being read (`stamp`) may predate that action: they are left
-    /// out, and the next relist brings the agent's current state.
+    /// Live rows that may be older than what the browser already shows are
+    /// left out; the next relist brings the agent's current state. A list
+    /// read started after the change arrived has newer data for every row,
+    /// and a local action completed meanwhile has newer data for its session.
     public static func droppingRows(
         _ rows: [ACPDiscoveredSession],
-        predating stamp: Int,
+        predating stamp: ACPSessionBrowserStamp,
+        listReadsStarted: Int,
         lastLocalAction: [String: Int]
     ) -> [ACPDiscoveredSession] {
-        rows.filter { (lastLocalAction[$0.remoteSessionId] ?? Int.min) <= stamp }
+        guard listReadsStarted == stamp.listReads else { return [] }
+        return rows.filter { (lastLocalAction[$0.remoteSessionId] ?? Int.min) <= stamp.localActions }
     }
 
     /// Merges a freshly read first page. A row the previous first page held
@@ -445,10 +460,10 @@ public final class ACPSessionDiscoveryHandle {
     /// has no list subscription.
     /// `stamp` is read when a notification starts being turned into rows
     /// (which reads the session store) and yielded with them, so the caller
-    /// can tell which local actions completed meanwhile.
+    /// can tell which local actions and list reads happened meanwhile.
     public func subscribe(
-        stamp: @escaping @MainActor () -> Int = { 0 }
-    ) async throws -> AsyncStream<(changed: [ACPDiscoveredSession], removed: [String], stamp: Int)>? {
+        stamp: @escaping @MainActor () -> ACPSessionBrowserStamp = { .init() }
+    ) async throws -> AsyncStream<(changed: [ACPDiscoveredSession], removed: [String], stamp: ACPSessionBrowserStamp)>? {
         guard !closed, sessionIndex?.listSubscribe == true, subscriptionId == nil else { return nil }
         // Subscribe before relisting: changes are tracked from the answer on.
         let id = try await connection.subscribeSessionList(cwd: cwd)
@@ -517,6 +532,8 @@ public final class ACPSessionDiscoveryModel {
     private var filterLoadsInFlight = 0
     /// First-page reads in flight: filter loads and reconciles.
     private var listReadsInFlight = 0
+    /// Every list read started, Load more included.
+    private var listReadsStarted = 0
     /// Bumped by every completed local action (rename, archive, delete,
     /// remove from Alas). A first page read across one may predate it: a
     /// filter load reads again, a reconcile drops its page.
@@ -673,6 +690,7 @@ public final class ACPSessionDiscoveryModel {
         // pending filter page commits.
         guard let handle, filterLoadsInFlight == 0 else { return }
         let generation = filterGeneration
+        listReadsStarted += 1
         do {
             let page = try await handle.loadNextPage { generation == self.filterGeneration }
             guard generation == filterGeneration else { return }
@@ -850,6 +868,7 @@ public final class ACPSessionDiscoveryModel {
 
     private func beginListRead() {
         listReadsInFlight += 1
+        listReadsStarted += 1
     }
 
     /// Ends a list read after its page was applied (or dropped). The last one
@@ -872,13 +891,16 @@ public final class ACPSessionDiscoveryModel {
 
     private func startSubscription() async {
         guard let handle, !stopped,
-              let stream = try? await handle.subscribe(stamp: { [weak self] in self?.localActionGeneration ?? 0 })
+              let stream = try? await handle.subscribe(stamp: { [weak self] in
+                  .init(localActions: self?.localActionGeneration ?? 0, listReads: self?.listReadsStarted ?? 0)
+              })
         else { return }
         subscriptionTask = Task { @MainActor [weak self] in
             for await (changed, removed, stamp) in stream {
                 guard let self, !self.stopped else { break }
                 let current = ACPSessionBrowserReducer.droppingRows(
-                    changed, predating: stamp, lastLocalAction: self.lastLocalAction
+                    changed, predating: stamp, listReadsStarted: self.listReadsStarted,
+                    lastLocalAction: self.lastLocalAction
                 )
                 self.applyLiveChanges(changed: current, removed: removed)
             }

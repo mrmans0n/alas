@@ -554,13 +554,14 @@ struct ACPSessionDiscoveryTests {
 
         let stale = Task { try await model.setFilter(.init(includeLinkedWorktrees: true)) }
         for await _ in staleStarted.stream { break }
-        // Buffered while both loads are pending; replayed when the last ends.
+        let latest = ACPSessionBrowserFilter(includeLinkedWorktrees: true, showArchived: true)
+        try await model.setFilter(latest)
+        // Arrives while the older load is still pending: buffered, and
+        // replayed when that last load ends.
         client.emitSessionListChanges(.init(subscriptionId: "sub-1", sessions: [
             .init(sessionId: "fresh", cwd: "/tmp/wt", index: .init(archived: true)),
         ], removed: []))
-        try await Task.yield()
-        let latest = ACPSessionBrowserFilter(includeLinkedWorktrees: true, showArchived: true)
-        try await model.setFilter(latest)
+        #expect(await awaitCondition { model.sessions.map(\.remoteSessionId) == ["fresh", "latest"] })
         gate.continuation.yield()
         try await stale.value
         #expect(model.filter == latest)
@@ -1038,15 +1039,19 @@ struct ACPSessionDiscoveryTests {
         await model.stop()
     }
 
-    @Test("live rows read before a session's local action finished are left out", arguments: [
-        (nil, 3, true),
-        (3, 3, true),
-        (4, 3, false),
-    ] as [(Int?, Int, Bool)])
-    func liveRowsPredatingLocalActions(lastAction: Int?, stamp: Int, kept: Bool) {
+    @Test("live rows read before a list read started or their session's local action finished are left out", arguments: [
+        (nil, 3, 5, true),
+        (3, 3, 5, true),
+        (4, 3, 5, false),
+        (nil, 3, 6, false),
+    ] as [(Int?, Int, Int, Bool)])
+    func liveRowsPredatingNewerData(lastAction: Int?, actionsAtStart: Int, readsNow: Int, kept: Bool) {
         let row = Self.reducerRow("s", 1)
         let actions = lastAction.map { ["s": $0] } ?? [:]
-        #expect(ACPSessionBrowserReducer.droppingRows([row], predating: stamp, lastLocalAction: actions).isEmpty == !kept)
+        let stamp = ACPSessionBrowserStamp(localActions: actionsAtStart, listReads: 5)
+        #expect(ACPSessionBrowserReducer.droppingRows(
+            [row], predating: stamp, listReadsStarted: readsNow, lastLocalAction: actions
+        ).isEmpty == !kept)
     }
 
     @MainActor
