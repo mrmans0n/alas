@@ -299,11 +299,16 @@ extension ACPSessionStore {
         return try localReference(reference) == nil ? payload : nil
     }
 
+    /// App actions and carded Alas turns (Ship, review, shepherd, missions)
+    /// name a portable origin, not a creator-local session id.
+    private static func hasPortableOrigin(_ source: [String: Any]) -> Bool {
+        source["appAction"] != nil || source["card"] != nil
+    }
+
     private func portableMessagePayload(_ payload: Data) throws -> Data {
         guard var object = try JSONSerialization.jsonObject(with: payload) as? [String: Any],
               var source = object["delegatedSource"] as? [String: Any] else { return payload }
-        // App actions have a portable origin, not a creator-local session id.
-        if source["appAction"] != nil { return payload }
+        if Self.hasPortableOrigin(source) { return payload }
         source["sessionId"] = ""
         object["delegatedSource"] = source
         return try JSONSerialization.data(withJSONObject: object, options: .sortedKeys)
@@ -347,7 +352,7 @@ extension ACPSessionStore {
                     var refs: [String: ReplicaReference] = [:]
                     for i in objects.indices {
                         guard var source = objects[i]["delegatedSource"] as? [String: Any], let sourceId = source["sessionId"] as? String else { continue }
-                        if source["appAction"] != nil { continue }
+                        if Self.hasPortableOrigin(source) { continue }
                         if let ref = try sourceReference(sourceId: sourceId, sessionId: sessionId, relationKey: "queue:" + queue[i].id.uuidString) {
                             refs[queue[i].id.uuidString] = ref
                             source["sessionId"] = ""
@@ -440,7 +445,7 @@ extension ACPSessionStore {
 
     private func importedMessagePayload(_ message: ReplicaMessage) throws -> Data {
         guard var object = try JSONSerialization.jsonObject(with: message.payload) as? [String: Any], var source = object["delegatedSource"] as? [String: Any] else { return message.payload }
-        if source["appAction"] != nil { return message.payload }
+        if Self.hasPortableOrigin(source) { return message.payload }
         if let ref = message.delegatedReference {
             source["sessionId"] = try localReference(ref) ?? sourceMarker(ref)
             object["delegatedSource"] = source

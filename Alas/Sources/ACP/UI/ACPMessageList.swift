@@ -46,6 +46,7 @@ struct ACPMessageList: View {
     var showMinimap: Bool = false
     var collapsesFinishedToolCalls: Bool = false
     var upstreamReferences: ACPUpstreamReferenceStore? = nil
+    var promptCardContext: ACPPromptCardContext? = nil
     var visualAidActions: ACPVisualAidActions = .readOnly
     @Environment(\.theme) private var theme
     @Environment(\.acpChatBackgroundIsMaterial) private var backgroundIsMaterial
@@ -99,6 +100,7 @@ struct ACPMessageList: View {
                 showMinimap: showMinimap,
                 collapsesFinishedToolCalls: collapsesFinishedToolCalls,
                 upstreamReferences: upstreamReferences,
+                promptCardContext: promptCardContext,
                 visualAidActions: visualAidActions
             )
             if Self.shouldShowGoToNewestAffordance(

@@ -14045,8 +14045,7 @@ final class AppState {
     @discardableResult
     func openWorkspaceCheckoutACPSession(
         checkout: WorkspaceCheckout,
-        agentID: String,
-        initialPrompt: String? = nil
+        agentID: String
     ) async -> ACPSessionTabState? {
         guard let checkout = await authoritativeCheckoutForWorkspaceACPSessionCreation(checkout) else { return nil }
         guard await !checkpointACPAdmissionDisabledAfterDiscovery(owner: .workspaceCheckout(checkout.id, checkout.executionLocation), fallbackWorktree: nil) else { return nil }
@@ -14057,9 +14056,6 @@ final class AppState {
             return nil
         }
         let session = manager.createSession(agentId: agentID, autoRunDefault: config.harness.acpAutoRunByDefault)
-        if let initialPrompt, !initialPrompt.isEmpty {
-            manager.persistComposerDraft(.init(segments: [.text(initialPrompt)]), for: session)
-        }
         let state = ACPSessionTabState(sessionId: session.id, title: session.title)
         tabs.append(acpSession: state, to: owner)
         return state
@@ -14102,7 +14098,8 @@ final class AppState {
         sessionID: ACPSession.ID,
         agentID: String,
         promptID: UUID,
-        prompt: String?
+        prompt: String?,
+        promptCard: ACPPromptCard? = nil
     ) async throws -> ACPSession.ID {
         guard await !checkpointACPAdmissionDisabledAfterDiscovery(worktreeId: worktree.id) else {
             throw ACPWorktreeSessionBootstrapError(message: Self.checkpointRecoveryBlocksACPMessage)
@@ -14142,7 +14139,7 @@ final class AppState {
             enqueuePrompt: { _, id, promptID, text in
                 // Queuing into an attached session would start its turn.
                 guard self.projectsManager.admitsNewWork(in: worktree) else { return false }
-                return await manager.enqueuePrompt(id: promptID, text: text, into: id)
+                return await manager.enqueuePrompt(id: promptID, text: text, card: promptCard, into: id)
             },
             attach: { _, id, freshlyCreated in
                 guard await !self.checkpointACPAdmissionDisabledAfterDiscovery(worktreeId: worktree.id) else {
@@ -14226,7 +14223,8 @@ final class AppState {
                 sessionID: preparedPrompt.sessionID,
                 agentID: agentID,
                 promptID: preparedPrompt.promptID,
-                prompt: queuedPrompt
+                prompt: queuedPrompt,
+                promptCard: preparedPrompt.card
             )
         } catch {
             manager.liveSession(for: preparedPrompt.sessionID)?.lastError = error.localizedDescription
@@ -15937,10 +15935,16 @@ extension AppState: RemoteSessionsProvider {
                          normalUserTurn: true, onResult: onResult)
     }
 
-    func sendPrompt(for id: String, text: String, attachments: [ACPMessage.Attachment], normalUserTurn: Bool, onResult: @escaping @MainActor (Bool) -> Void) async {
+    func sendPrompt(
+        for id: String, text: String, attachments: [ACPMessage.Attachment],
+        delegatedSource: ACPDelegatedPromptSource? = nil, normalUserTurn: Bool,
+        onAccepted: (@MainActor () -> Void)? = nil,
+        onResult: @escaping @MainActor (Bool) -> Void
+    ) async {
         for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
             await mgr.sendPrompt(for: id, text: text, attachments: attachments,
-                                 normalUserTurn: normalUserTurn, onResult: onResult)
+                                 delegatedSource: delegatedSource, normalUserTurn: normalUserTurn,
+                                 onAccepted: onAccepted, onResult: onResult)
             return
         }
         onResult(false)

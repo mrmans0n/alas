@@ -12,13 +12,16 @@ public struct PreparedWorktreeACPPrompt: Equatable, Sendable {
     /// Model to switch the session to before the prompt goes out, or nil for
     /// the agent's default.
     public var modelID: String? = nil
+    /// Shown in place of `text` in the transcript; nil for typed prompts.
+    public var card: ACPPromptCard? = nil
 
-    public init(sessionID: ACPSession.ID, promptID: UUID, text: String, sendsAutomatically: Bool = true, modelID: String? = nil) {
+    public init(sessionID: ACPSession.ID, promptID: UUID, text: String, sendsAutomatically: Bool = true, modelID: String? = nil, card: ACPPromptCard? = nil) {
         self.sessionID = sessionID
         self.promptID = promptID
         self.text = text
         self.sendsAutomatically = sendsAutomatically
         self.modelID = modelID
+        self.card = card
     }
 }
 

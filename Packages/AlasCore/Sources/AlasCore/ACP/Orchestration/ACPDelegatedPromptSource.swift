@@ -27,6 +27,10 @@ public struct ACPDelegatedPromptSource: Codable, Equatable, Sendable {
     /// An action requested through Alas's UI, rather than words the user typed.
     public var appAction: AppAction? = nil
 
+    /// What the receiving transcript shows instead of the raw text. Nil for
+    /// prompts between sessions and for sources saved by older builds.
+    public var card: ACPPromptCard? = nil
+
     /// Individual inbox identities retained by a combined parent prompt.
     /// Nil for single deliveries and sources saved by older builds.
     public var batchedSources: [ACPDelegatedPromptSource]? = nil
@@ -53,21 +57,40 @@ public struct ACPDelegatedPromptSource: Codable, Equatable, Sendable {
     /// merge request. `recordKey` (the shepherd record's storage key) names
     /// the sender; every prompt gets its own `messageID`, so two prompts are
     /// never deduplicated as one delivery.
-    public static func shepherd(recordKey: String, messageID: UUID) -> ACPDelegatedPromptSource {
-        ACPDelegatedPromptSource(
+    public static func shepherd(recordKey: String, messageID: UUID, card: ACPPromptCard? = nil) -> ACPDelegatedPromptSource {
+        var source = ACPDelegatedPromptSource(
             sessionId: "shepherd:\(recordKey)",
             messageId: messageID.uuidString,
             senderRelationship: shepherdRelationship
         )
+        source.card = card
+        return source
     }
 
-    public static func shipCreate(kind: CodeHostKind, messageID: UUID) -> ACPDelegatedPromptSource {
+    public static let appActionRelationship = "alas-action"
+
+    public static func shipCreate(kind: CodeHostKind, branch: String, messageID: UUID) -> ACPDelegatedPromptSource {
         var source = ACPDelegatedPromptSource(
             sessionId: "alas:ship", messageId: messageID.uuidString,
-            senderRelationship: "alas-action")
+            senderRelationship: appActionRelationship)
+        let title = kind == .gitlab ? "Create merge request" : "Create pull request"
+        source.appAction = AppAction(title: title, source: "Ship")
+        source.card = ACPPromptCard(
+            origin: .ship, title: title,
+            facts: [.init(kind: .branch, text: branch), .init(kind: .provider, text: kind.displayName)])
+        return source
+    }
+
+    /// Review comments sent from a review surface. An app action, so the
+    /// queue treats it like Ship: visible while pending and not editable.
+    public static func reviewFeedback(card: ACPPromptCard, commentCount: Int, messageID: UUID) -> ACPDelegatedPromptSource {
+        var source = ACPDelegatedPromptSource(
+            sessionId: "alas:review", messageId: messageID.uuidString,
+            senderRelationship: appActionRelationship)
         source.appAction = AppAction(
-            title: kind == .gitlab ? "Create merge request" : "Create pull request",
-            source: "Ship")
+            title: "Address \(commentCount) review comment\(commentCount == 1 ? "" : "s")",
+            source: "Review")
+        source.card = card
         return source
     }
 

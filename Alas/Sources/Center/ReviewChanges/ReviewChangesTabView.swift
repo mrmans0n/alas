@@ -358,7 +358,8 @@ struct ReviewChangesTabView: View {
             title: "Review Changes",
             repositoryPath: worktree.path.path,
             providerDescription: nil,
-            sourceDescription: "Review Changes"
+            sourceDescription: "Review Changes",
+            reopenAction: .reviewChanges(worktreeID: worktree.id)
         )
     }
 

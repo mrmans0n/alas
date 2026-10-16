@@ -123,12 +123,12 @@ public final class ReviewShepherd {
         /// Nil when the worktree is gone or archived; its records are dropped.
         public var worktreeContext: @MainActor (_ worktreeID: String) -> WorktreeContext?
         public var sessionState: @MainActor (_ sessionID: String, _ worktreeID: String) async -> ShepherdSessionState
-        /// Queues `text` on the session. `isStillWanted` is checked right
+        /// Queues `prompt` on the session. `isStillWanted` is checked right
         /// before the session's queue changes, after any suspension.
         public var deliverPrompt: @MainActor (
             _ sessionID: String,
             _ worktreeID: String,
-            _ text: String,
+            _ prompt: ShepherdPrompt,
             _ isStillWanted: @escaping @MainActor () -> Bool
         ) async -> Delivery
         public var rules: @MainActor (_ worktreeID: String) async throws -> ShepherdRules
@@ -150,7 +150,7 @@ public final class ReviewShepherd {
             deliverPrompt: @escaping @MainActor (
                 _ sessionID: String,
                 _ worktreeID: String,
-                _ text: String,
+                _ prompt: ShepherdPrompt,
                 _ isStillWanted: @escaping @MainActor () -> Bool
             ) async -> Delivery,
             rules: @escaping @MainActor (_ worktreeID: String) async throws -> ShepherdRules,

@@ -222,10 +222,10 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
                 onRestoreCheckpoint: onRestoreCheckpoint,
                 messageMenuItems: messageMenuItems
             ) {
-                if let action = delegatedSource?.appAction {
-                    AppActionRow(
-                        action: action, text: text, typography: typography,
-                        initiallyExpanded: isExpanded, onExpandedChange: onExpandedChange)
+                if let card = ACPPromptCard.resolved(for: delegatedSource) {
+                    PromptCardRow(
+                        card: card, text: text, contentMaxWidth: contentMaxWidth, typography: typography,
+                        instructionExpanded: isExpanded, onInstructionExpandedChange: onExpandedChange)
                 } else if let delegatedSource {
                     DelegatedPromptRow(
                         text: text,

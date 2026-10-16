@@ -420,6 +420,25 @@ struct ACPSessionManagerTests {
         #expect(try store.loadQueue(sessionId: "session").map(\.id) == [promptID])
     }
 
+    @Test("a delivered mission prompt is not queued again when only its card differs")
+    func deliveredMissionPromptIgnoresCard() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-mission-card-dedupe-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let session = manager.createSession(id: "session", agentId: "codex", autoRunDefault: false)
+        let promptID = UUID()
+        _ = session.recordUserPrompt(
+            text: "Investigate.", attachments: [],
+            delegatedSource: ACPDelegatedPromptSource(sessionId: "mission:session", messageId: promptID.uuidString))
+
+        #expect(await manager.enqueuePrompt(
+            id: promptID, text: "Investigate.",
+            card: ACPPromptCard(origin: .shepherd, title: "GitHub #7 · Fix login"), into: "session"))
+
+        #expect(session.queue.isEmpty)
+    }
+
     @Test("mission prompts stay ahead of scheduled prompts")
     func missionPromptStaysAheadOfScheduledPrompt() async throws {
         let url = FileManager.default.temporaryDirectory

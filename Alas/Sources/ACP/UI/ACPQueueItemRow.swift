@@ -149,8 +149,8 @@ struct ACPQueueItemRow: View {
 
     @ViewBuilder
     private func contentColumn(preview: String, pastedSpans: [ACPPastedTextSpan]) -> some View {
-        if let action = item.delegatedSource?.appAction {
-            AppActionRow(action: action, text: preview, typography: typography)
+        if let card = ACPPromptCard.resolved(for: item.delegatedSource) {
+            PromptCardRow(card: card, text: preview, contentMaxWidth: contentMaxWidth, typography: typography, isCompact: true)
         } else {
             if !imageURLs.isEmpty {
                 imageRow

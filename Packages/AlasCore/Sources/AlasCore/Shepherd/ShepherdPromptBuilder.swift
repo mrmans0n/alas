@@ -15,10 +15,19 @@ public struct ShepherdCheckLog: Equatable, Sendable {
     }
 }
 
+/// A shepherd turn: the instruction the agent receives and the card the
+/// transcript shows in its place.
+public struct ShepherdPrompt: Equatable, Sendable {
+    public let text: String
+    public let card: ACPPromptCard
+}
+
 /// Pure text for the turns the shepherd sends to the owning session.
 public enum ShepherdPromptBuilder {
     public static let header = "Alas PR shepherd"
     public static let maxCheckLogs = 3
+    /// Log lines a card shows per check; the text carries the full tail.
+    public static let cardLogLines = 12
 
     /// A backtick fence longer than any backtick run in `text` (at least 3),
     /// so untrusted text such as a check log can't close it early.
@@ -37,7 +46,7 @@ public enum ShepherdPromptBuilder {
         fix: ShepherdFixRequest,
         logs: [ShepherdCheckLog],
         rules: ShepherdRules
-    ) -> String {
+    ) -> ShepherdPrompt {
         var sections = [
             identity(request),
             """
@@ -50,13 +59,13 @@ public enum ShepherdPromptBuilder {
         if !fix.threads.isEmpty { sections.append(threadsSection(fix.threads)) }
         sections.append(howToWork(request.provider))
         if let rulesSection = projectRulesSection(rules) { sections.append(rulesSection) }
-        return sections.joined(separator: "\n\n")
+        return ShepherdPrompt(text: sections.joined(separator: "\n\n"), card: fixCard(request: request, fix: fix, logs: logs))
     }
 
     /// Context for a session that just became the owner (bind, adopt, or
     /// rebind). Lists current problems by name only; the next fix turn
     /// carries logs and full threads.
-    public static func bindPrompt(request: ReviewRequest, fix: ShepherdFixRequest, rules: ShepherdRules) -> String {
+    public static func bindPrompt(request: ReviewRequest, fix: ShepherdFixRequest, rules: ShepherdRules) -> ShepherdPrompt {
         let label = request.provider.reviewRequestLabel
         var sections = [
             identity(request),
@@ -78,7 +87,7 @@ public enum ShepherdPromptBuilder {
             sections.append(lines.joined(separator: "\n"))
         }
         if let rulesSection = projectRulesSection(rules) { sections.append(rulesSection) }
-        return sections.joined(separator: "\n\n")
+        return ShepherdPrompt(text: sections.joined(separator: "\n\n"), card: bindCard(request: request, fix: fix))
     }
 
     /// Sent by the toolbar popover's Ship with agent button.
@@ -171,6 +180,90 @@ public enum ShepherdPromptBuilder {
         let text = rules.instructions.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return nil }
         return "## Project rules\n\(text)"
+    }
+
+    // MARK: - Cards
+
+    private static func card(_ request: ReviewRequest, sections: [ACPPromptCard.Section]) -> ACPPromptCard {
+        var facts = [ACPPromptCard.Fact(kind: .branch, text: "\(request.headRefName) → \(request.baseRefName)")]
+        if let head = request.headSHA, !head.isEmpty { facts.append(.init(kind: .revision, text: String(head.prefix(7)))) }
+        return ACPPromptCard(
+            origin: .shepherd, title: "\(request.displayIdentity) · \(request.title)",
+            facts: facts, sections: sections, action: .url(request.url))
+    }
+
+    private static func fixCard(request: ReviewRequest, fix: ShepherdFixRequest, logs: [ShepherdCheckLog]) -> ACPPromptCard {
+        let logsByID = Dictionary(logs.map { ($0.checkID, $0) }, uniquingKeysWith: { first, _ in first })
+        var sections: [ACPPromptCard.Section] = []
+        if fix.hasConflict {
+            sections.append(.init(title: "Merge conflict", items: [
+                .init(bodyMarkdown: "Conflicts with `\(request.baseRefName)`", status: .conflict),
+            ]))
+        }
+        if !fix.failingChecks.isEmpty {
+            let heading = fix.failingChecks.contains { $0.bucket == .cancel } ? "Failing or cancelled checks" : "Failing checks"
+            let items = fix.failingChecks.enumerated().map { index, check -> ACPPromptCard.Item in
+                // Only the checks the text gives a log get an excerpt.
+                let log = index < maxCheckLogs ? logsByID[check.id] : nil
+                return .init(
+                    bodyMarkdown: checkTitle(check),
+                    excerpt: log.flatMap(logExcerpt),
+                    url: log?.url ?? check.detailURL,
+                    status: check.bucket == .cancel ? .cancelled : .failed)
+            }
+            sections.append(.init(title: "\(heading) (\(fix.failingChecks.count))", items: items))
+        }
+        if !fix.threads.isEmpty {
+            sections.append(.init(
+                title: "Review threads (\(fix.threads.count))",
+                items: fix.threads.map { threadItem($0, includesBody: true) }))
+        }
+        return card(request, sections: sections)
+    }
+
+    private static func bindCard(request: ReviewRequest, fix: ShepherdFixRequest) -> ACPPromptCard {
+        guard !fix.isEmpty else { return card(request, sections: []) }
+        var items: [ACPPromptCard.Item] = []
+        if fix.hasConflict {
+            items.append(.init(bodyMarkdown: "Merge conflict with `\(request.baseRefName)`", status: .conflict))
+        }
+        items += fix.failingChecks.map {
+            .init(bodyMarkdown: checkTitle($0), url: $0.detailURL, status: $0.bucket == .cancel ? .cancelled : .failed)
+        }
+        items += fix.threads.map { threadItem($0, includesBody: false) }
+        return card(request, sections: [.init(title: "Current problems", items: items)])
+    }
+
+    private static func logExcerpt(_ log: ShepherdCheckLog) -> ACPPromptCard.Excerpt? {
+        let body = log.body.trimmingCharacters(in: .newlines)
+        guard !body.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+        let lines = body.components(separatedBy: "\n")
+        return .init(text: lines.suffix(cardLogLines).joined(separator: "\n"), style: .log)
+    }
+
+    private static func threadItem(_ thread: ReviewThread, includesBody: Bool) -> ACPPromptCard.Item {
+        var location: ACPPromptCard.Location?
+        if let path = thread.path, !path.isEmpty {
+            let line = thread.isFileLevel ? nil : (thread.line ?? thread.originalLine)
+            location = .init(path: path, startLine: line, endLine: line)
+        }
+        let comments = thread.comments.filter { !$0.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        let author = comments.first.map { "@\($0.author ?? "unknown") · \($0.authorTrust.rawValue)" }
+        return .init(
+            location: location, author: author,
+            bodyMarkdown: includesBody ? threadBody(comments) : nil,
+            url: thread.url)
+    }
+
+    /// The first comment as is, then each reply under its author. Bodies keep
+    /// their inner whitespace so fences and indented code stay blocks.
+    private static func threadBody(_ comments: [ReviewComment]) -> String? {
+        guard let first = comments.first else { return nil }
+        let body = { (comment: ReviewComment) in comment.body.trimmingCharacters(in: .newlines) }
+        let replies = comments.dropFirst().map {
+            "**@\($0.author ?? "unknown")** (\($0.authorTrust.rawValue)):\n\n\(body($0))"
+        }
+        return ([body(first)] + replies).joined(separator: "\n\n")
     }
 
     // MARK: - Labels

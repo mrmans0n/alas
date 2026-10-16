@@ -171,7 +171,7 @@ struct ReviewFeedbackBundleTests {
         #expect(prompt.contains("- `Sources/App.swift:4 (new, unstaged)` [comment-id: unstaged] — Fix the working tree edit."))
     }
 
-    @Test func promptPreservesMultilineMarkdownBodies() {
+    @Test func promptKeepsMultilineBodiesInsideTheirListItem() {
         let session = ReviewDraftSessionID.localChanges(
             worktreeID: "wt",
             worktreePath: URL(fileURLWithPath: "/repo"),
@@ -183,32 +183,72 @@ struct ReviewFeedbackBundleTests {
             providerDescription: nil,
             sourceDescription: "local changes"
         )
-        let body = """
-        This needs a guard.
-
-        ```swift
-        if value == nil {
-            return
-        }
-        ```
-        """
+        let body = "This needs a guard.\n\n```swift\nif value == nil {\n    return\n}\n```"
         let bundle = ReviewFeedbackBundle(target: target, comments: [
-            comment(id: "a", session: session, path: "A.swift", line: 4, body: body),
+            comment(id: "a", session: session, path: "A.swift", line: 4, selectedText: "let value = load()", body: body),
         ])
 
         let prompt = bundle.promptMarkdown()
 
-        #expect(prompt.contains("- `A.swift:4 (new)`"))
-        #expect(prompt.contains("""
-        This needs a guard.
+        let expected = [
+            "- `A.swift:4 (new)` [comment-id: a]",
+            "  This needs a guard.",
+            "",
+            "  ```swift",
+            "  if value == nil {",
+            "      return",
+            "  }",
+            "  ```",
+            "  > let value = load()",
+        ].joined(separator: "\n")
+        #expect(prompt.contains(expected))
+    }
 
-        ```swift
-        if value == nil {
-            return
-        }
-        ```
-        """))
-        #expect(!prompt.contains("This needs a guard. ```swift if value == nil"))
+    @Test func cardGroupsActiveCommentsWithLiveStatusKeys() {
+        let session = ReviewDraftSessionID.localChanges(
+            worktreeID: "wt",
+            worktreePath: URL(fileURLWithPath: "/work/alas"),
+            scope: .all
+        )
+        let target = ReviewFeedbackTarget(
+            title: "Review Changes",
+            repositoryPath: "/work/alas",
+            providerDescription: nil,
+            sourceDescription: "Review Changes",
+            revisionDescription: "a392cbb3aae0b5a3f9927871c0766fb08ca1cfa3",
+            reopenAction: .reviewChanges(worktreeID: "wt")
+        )
+        let wholeFile = ReviewDraftComment(
+            id: "w", sessionID: session, fileID: DiffReviewFileID(namespace: "review", path: "A.swift"),
+            path: "A.swift", anchor: .file, bodyMarkdown: "Split this file.", state: .active,
+            createdAt: Date(timeIntervalSince1970: 1), updatedAt: Date(timeIntervalSince1970: 1)
+        )
+        let bundle = ReviewFeedbackBundle(target: target, comments: [
+            comment(id: "b", session: session, path: "B.swift", line: 9, endLine: 11,
+                    selectedText: "let x = 1\n", body: "    let renamed = 1\n    use(renamed)"),
+            comment(id: "a", session: session, path: "A.swift", line: 2, body: "Extract helper."),
+            comment(id: "r", session: session, path: "A.swift", line: 5, body: "Resolved.", state: .resolved),
+            wholeFile,
+        ])
+
+        let card = bundle.card()
+
+        #expect(card.origin == .review)
+        #expect(card.title == "Review Changes")
+        #expect(card.facts == [
+            .init(kind: .repository, text: "alas"),
+            .init(kind: .revision, text: "a392cbb"),
+            .init(kind: .other, text: "3 comments · 2 files"),
+        ])
+        #expect(card.sections.map(\.title) == ["A.swift", "B.swift"])
+        #expect(card.sections[0].items.map(\.reviewCommentID) == ["w", "a"])
+        #expect(card.sections[0].items[0].location == .init(path: "A.swift"))
+        #expect(card.sections[0].items[1].bodyMarkdown == "Extract helper.")
+        let ranged = card.sections[1].items[0]
+        #expect(ranged.location == .init(path: "B.swift", startLine: 9, endLine: 11, side: "new"))
+        #expect(ranged.excerpt == .init(text: "let x = 1", style: .code, language: "swift"))
+        #expect(ranged.bodyMarkdown == "    let renamed = 1\n    use(renamed)")
+        #expect(card.action == .reviewChanges(worktreeID: "wt"))
     }
 
     @Test func promptPreservesSelectedTextIndentation() {

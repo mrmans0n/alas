@@ -8,6 +8,8 @@ struct ReviewFeedbackTarget: Equatable, Sendable {
     var sessionDescription: String? = nil
     var revisionDescription: String? = nil
     var priorHandoffDescription: String? = nil
+    /// Reopens the review surface the comments came from, from the card.
+    var reopenAction: ACPPromptCard.Action? = nil
 }
 
 struct ReviewFeedbackBundle: Equatable, Sendable {
@@ -64,15 +66,14 @@ struct ReviewFeedbackBundle: Equatable, Sendable {
                     lines.append("- `\(reference)` [comment-id: \(comment.id)]\(suffix)")
                 } else {
                     lines.append("- `\(reference)` [comment-id: \(comment.id)]")
-                    lines.append(contentsOf: bodyLines)
+                    // Indented under the bullet so blank lines and fences
+                    // stay inside the list item.
+                    lines.append(contentsOf: bodyLines.map(Self.listItemContinuation))
                 }
 
-                if let selectedText = comment.selectedText {
-                    let selectedTextForDisplay = selectedText.trimmingCharacters(in: .newlines)
-                    if !selectedTextForDisplay.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        for selectedLine in selectedTextForDisplay.components(separatedBy: .newlines) {
-                            lines.append("> \(selectedLine)")
-                        }
+                if let selectedText = Self.displayedSelectedText(comment) {
+                    for selectedLine in selectedText.components(separatedBy: .newlines) {
+                        lines.append(Self.listItemContinuation("> \(selectedLine)"))
                     }
                 }
             }
@@ -84,6 +85,65 @@ struct ReviewFeedbackBundle: Equatable, Sendable {
         )
 
         return lines.joined(separator: "\n")
+    }
+
+    func card() -> ACPPromptCard {
+        let comments = sortedActiveComments()
+        let commentsByFile = Dictionary(grouping: comments, by: ReviewFeedbackFileContext.init(comment:))
+        let files = commentsByFile.keys.sorted()
+        var facts: [ACPPromptCard.Fact] = []
+        if let repositoryPath = target.repositoryPath, !repositoryPath.isEmpty {
+            facts.append(.init(kind: .repository, text: (repositoryPath as NSString).lastPathComponent))
+        }
+        if let revision = target.revisionDescription, !revision.isEmpty {
+            facts.append(.init(kind: .revision, text: Self.shortRevision(revision)))
+        }
+        if let provider = target.providerDescription, !provider.isEmpty {
+            facts.append(.init(kind: .provider, text: provider))
+        }
+        facts.append(.init(kind: .other, text: Self.countText(comments: comments.count, files: files.count)))
+        let sections = files.map { file in
+            ACPPromptCard.Section(title: file.heading, items: (commentsByFile[file] ?? []).map(Self.cardItem))
+        }
+        return ACPPromptCard(origin: .review, title: target.title, facts: facts, sections: sections, action: target.reopenAction)
+    }
+
+    private static func cardItem(_ comment: ReviewDraftComment) -> ACPPromptCard.Item {
+        let range = comment.normalizedLineRange
+        // Inner whitespace kept: a leading indent can make an indented code block.
+        let body = comment.bodyMarkdown.trimmingCharacters(in: .newlines)
+        let language = (comment.path as NSString).pathExtension.lowercased()
+        return ACPPromptCard.Item(
+            location: .init(
+                path: comment.path,
+                startLine: range?.lowerBound,
+                endLine: range?.upperBound,
+                side: comment.side == .unknown ? nil : comment.side.rawValue),
+            bodyMarkdown: body.trimmingCharacters(in: .whitespaces).isEmpty ? nil : body,
+            excerpt: displayedSelectedText(comment).map {
+                .init(text: $0, style: .code, language: language.isEmpty ? nil : language)
+            },
+            reviewCommentID: comment.id)
+    }
+
+    private static func displayedSelectedText(_ comment: ReviewDraftComment) -> String? {
+        guard let selectedText = comment.selectedText?.trimmingCharacters(in: .newlines),
+              !selectedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return nil }
+        return selectedText
+    }
+
+    private static func listItemContinuation(_ line: String) -> String {
+        line.isEmpty ? "" : "  " + line
+    }
+
+    private static func shortRevision(_ revision: String) -> String {
+        let isFullSHA = revision.count == 40 && revision.allSatisfy(\.isHexDigit)
+        return isFullSHA ? String(revision.prefix(7)) : revision
+    }
+
+    private static func countText(comments: Int, files: Int) -> String {
+        "\(comments) comment\(comments == 1 ? "" : "s") · \(files) file\(files == 1 ? "" : "s")"
     }
 
     private func sortedActiveComments() -> [ReviewDraftComment] {

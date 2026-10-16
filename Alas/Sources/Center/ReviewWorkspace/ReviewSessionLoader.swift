@@ -25,7 +25,8 @@ struct ReviewSessionLoadedContext {
                 sourceDescription: target.sourceDescription,
                 sessionDescription: "Review session: \(target.title)",
                 revisionDescription: target.revisionDescription,
-                priorHandoffDescription: nil
+                priorHandoffDescription: nil,
+                reopenAction: .reviewSession(target)
             ),
             providerContext: providerContext
         )
@@ -310,7 +311,8 @@ struct ReviewSessionLoader: @unchecked Sendable {
                 sourceDescription: target.sourceDescription,
                 sessionDescription: "Review session: \(target.title)",
                 revisionDescription: target.revisionDescription,
-                priorHandoffDescription: nil
+                priorHandoffDescription: nil,
+                reopenAction: .reviewSession(target)
             ),
             providerContext: providerContext
         )

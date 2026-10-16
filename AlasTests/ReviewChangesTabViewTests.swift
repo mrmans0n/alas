@@ -136,9 +136,11 @@ struct ReviewChangesTabViewTests {
         let target = ReviewFeedbackAgentTarget.newChat(agentID: "codex", title: "New chat")
         let sender = ReviewFeedbackAgentSender(
             availableTargets: { [target] },
-            send: { prompt, selectedTarget, completion in
-                #expect(prompt.contains("Please address each review comment below."))
-                #expect(prompt.contains("Extract this helper."))
+            send: { delivery, selectedTarget, completion in
+                #expect(delivery.text.contains("Please address each review comment below."))
+                #expect(delivery.text.contains("Extract this helper."))
+                #expect(delivery.source.appAction?.source == "Review")
+                #expect(delivery.source.card?.sections.first?.items.first?.bodyMarkdown == "Extract this helper.")
                 #expect(selectedTarget == target)
                 completion(.success(()))
             }
@@ -164,8 +166,8 @@ struct ReviewChangesTabViewTests {
         let target = ReviewFeedbackAgentTarget.existingSession(worktreeID: "wt-1", sessionID: "acp-1", title: "Codex")
         let sender = ReviewFeedbackAgentSender(
             availableTargets: { [target] },
-            send: { prompt, _, completion in
-                sentPrompt = prompt
+            send: { delivery, _, completion in
+                sentPrompt = delivery.text
                 completion(.success(()))
             }
         )
@@ -223,8 +225,8 @@ struct ReviewChangesTabViewTests {
         let target = ReviewFeedbackAgentTarget.existingSession(worktreeID: "wt-1", sessionID: "acp-1", title: "Codex")
         let sender = ReviewFeedbackAgentSender(
             availableTargets: { [target] },
-            send: { prompt, _, completion in
-                sentPrompt = prompt
+            send: { delivery, _, completion in
+                sentPrompt = delivery.text
                 completion(.failure(ReviewFeedbackAgentSendError.rejected))
             }
         )

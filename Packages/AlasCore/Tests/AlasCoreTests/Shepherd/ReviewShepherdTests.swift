@@ -83,7 +83,7 @@ struct ReviewShepherdTests {
                 )
             },
             sessionState: { _, _ in .idle },
-            deliverPrompt: { _, _, text, isStillWanted in await deliverPrompt(text, isStillWanted) },
+            deliverPrompt: { _, _, prompt, isStillWanted in await deliverPrompt(prompt.text, isStillWanted) },
             rules: { _ in try rules() },
             notify: { _ in },
             refreshPaneIfCached: { _ in },

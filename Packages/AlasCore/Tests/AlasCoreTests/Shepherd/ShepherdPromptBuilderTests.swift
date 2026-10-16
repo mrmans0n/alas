@@ -10,7 +10,7 @@ private typealias F = ShepherdFixtures
         let request = F.request(mergeState: .dirty, checks: [F.failing], threads: [F.trustedThread])
         let prompt = ShepherdPromptBuilder.fixPrompt(
             request: request, fix: ShepherdPolicy.problems(in: request, handled: []), logs: [], rules: .none
-        )
+        ).text
         let headings = prompt.split(separator: "\n").filter { $0.hasPrefix("## ") }.map(String.init)
         #expect(headings == [
             "## Merge conflict with main",
@@ -34,7 +34,7 @@ private typealias F = ShepherdFixtures
         }
         let prompt = ShepherdPromptBuilder.fixPrompt(
             request: request, fix: ShepherdPolicy.problems(in: request, handled: []), logs: logs, rules: .none
-        )
+        ).text
         #expect(prompt.contains("## Failing checks (5)"))
         for index in 1...3 {
             #expect(prompt.contains("log of check-\(index)"))
@@ -51,7 +51,7 @@ private typealias F = ShepherdFixtures
         let request = F.request(checks: [F.failing, F.check("train", .cancel)])
         let prompt = ShepherdPromptBuilder.fixPrompt(
             request: request, fix: ShepherdPolicy.problems(in: request, handled: []), logs: [], rules: .none
-        )
+        ).text
         #expect(prompt.contains("## Failing or cancelled checks (2)"))
         #expect(prompt.contains("### train (CI) (cancelled)"))
         #expect(!prompt.contains("### unit-tests (CI) (cancelled)"))
@@ -68,7 +68,7 @@ private typealias F = ShepherdFixtures
         let request = F.request(threads: [thread])
         let prompt = ShepherdPromptBuilder.fixPrompt(
             request: request, fix: ShepherdPolicy.problems(in: request, handled: []), logs: [], rules: .none
-        )
+        ).text
         #expect(prompt.contains("""
         ### Sources/App.swift:12
         @maintainer (trusted):
@@ -93,7 +93,7 @@ private typealias F = ShepherdFixtures
             fix: ShepherdPolicy.problems(in: request, handled: []),
             logs: [],
             rules: ShepherdRules(source: .repoFile, instructions: instructions, requiredReviewers: [])
-        )
+        ).text
         #expect(prompt.contains("## Project rules") == included)
         #expect(prompt.hasSuffix("## Project rules\nBatch fixes into one push.") == included)
     }
@@ -108,7 +108,7 @@ private typealias F = ShepherdFixtures
             fix: ShepherdPolicy.problems(in: request, handled: []),
             logs: [ShepherdCheckLog(checkID: check.id, body: body, isTruncated: false, url: nil)],
             rules: .none
-        )
+        ).text
         #expect(prompt.contains("````text\n" + body + "\n````\n"))
     }
 
@@ -120,5 +120,68 @@ private typealias F = ShepherdFixtures
         let prompt = ShepherdPromptBuilder.createPrompt(kind: kind)
         #expect(prompt.hasPrefix(opening))
         #expect(prompt.hasSuffix("then call pr_create."))
+    }
+
+    @Test("fix card mirrors the prompt's conflict, checks, and threads")
+    func fixCard() {
+        let request = F.request(
+            mergeState: .dirty,
+            checks: [F.check("unit-tests", .fail), F.check("train", .cancel)],
+            threads: [F.trustedThread]
+        )
+        let longLog = (1...20).map { "line \($0)" }.joined(separator: "\n")
+        let card = ShepherdPromptBuilder.fixPrompt(
+            request: request,
+            fix: ShepherdPolicy.problems(in: request, handled: []),
+            logs: [ShepherdCheckLog(checkID: "unit-tests", body: longLog, isTruncated: true,
+                                    url: URL(string: "https://ci.example/log"))],
+            rules: .none
+        ).card
+
+        #expect(card.origin == .shepherd)
+        #expect(card.title == "GitHub #7 · Fix login")
+        #expect(card.facts == [.init(kind: .branch, text: "fix-login → main"), .init(kind: .revision, text: "a3f9c1e")])
+        #expect(card.action == .url(request.url))
+        #expect(card.sections.map(\.title) == ["Merge conflict", "Failing or cancelled checks (2)", "Review threads (1)"])
+        #expect(card.sections[0].items.map(\.status) == [.conflict])
+        let unit = card.sections[1].items[0]
+        #expect(unit.bodyMarkdown == "unit-tests (CI)")
+        #expect(unit.status == .failed)
+        #expect(unit.excerpt == .init(text: (9...20).map { "line \($0)" }.joined(separator: "\n"), style: .log))
+        #expect(unit.url == URL(string: "https://ci.example/log"))
+        #expect(card.sections[1].items[1].status == .cancelled)
+        #expect(card.sections[1].items[1].excerpt == nil)
+        let thread = card.sections[2].items[0]
+        #expect(thread.location == .init(path: "Sources/App.swift", startLine: 12, endLine: 12))
+        #expect(thread.author == "@maintainer · trusted")
+        #expect(thread.bodyMarkdown == "Please fix PRRT_1.")
+        #expect(thread.url == URL(string: "https://github.com/acme/app/pull/7#PRRT_1"))
+
+        let chain = F.thread("PRRT_2", comments: [
+            F.comment("c1", author: "maintainer", body: "    let retries = 3\n    run(retries)", trust: .trusted),
+            F.comment("c2", author: "dev", body: "```swift\nrun()\n```", trust: .untrusted),
+        ])
+        let chained = F.request(threads: [chain])
+        let chainItem = ShepherdPromptBuilder.fixPrompt(
+            request: chained, fix: ShepherdPolicy.problems(in: chained, handled: []), logs: [], rules: .none
+        ).card.sections[0].items[0]
+        #expect(chainItem.bodyMarkdown == "    let retries = 3\n    run(retries)\n\n**@dev** (untrusted):\n\n```swift\nrun()\n```")
+    }
+
+    @Test("bind card lists current problems without details, and nothing when clean")
+    func bindCard() {
+        let clean = F.request()
+        #expect(ShepherdPromptBuilder.bindPrompt(
+            request: clean, fix: ShepherdPolicy.problems(in: clean, handled: []), rules: .none
+        ).card.sections.isEmpty)
+
+        let request = F.request(checks: [F.failing], threads: [F.trustedThread])
+        let card = ShepherdPromptBuilder.bindPrompt(
+            request: request, fix: ShepherdPolicy.problems(in: request, handled: []), rules: .none
+        ).card
+        #expect(card.sections.map(\.title) == ["Current problems"])
+        #expect(card.sections[0].items.map(\.status) == [.failed, nil])
+        #expect(card.sections[0].items.allSatisfy { $0.excerpt == nil })
+        #expect(card.sections[0].items[1].bodyMarkdown == nil)
     }
 }

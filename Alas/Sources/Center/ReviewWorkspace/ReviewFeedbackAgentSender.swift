@@ -7,10 +7,25 @@ enum ReviewDraftCommentGrouping {
     }
 }
 
+/// A review turn: the instruction the agent receives, and the source that
+/// makes the transcript show it as a review card.
+struct ReviewFeedbackDelivery {
+    let text: String
+    let source: ACPDelegatedPromptSource
+}
+
+extension ReviewFeedbackDelivery {
+    init(bundle: ReviewFeedbackBundle, messageID: UUID = UUID()) {
+        self.init(
+            text: bundle.promptMarkdown(),
+            source: .reviewFeedback(card: bundle.card(), commentCount: bundle.activeComments.count, messageID: messageID))
+    }
+}
+
 @MainActor
 struct ReviewFeedbackAgentSender {
     var availableTargets: () -> [ReviewFeedbackAgentTarget]
-    var send: (String, ReviewFeedbackAgentTarget, @escaping @MainActor (Result<Void, Error>) -> Void) -> Void
+    var send: (ReviewFeedbackDelivery, ReviewFeedbackAgentTarget, @escaping @MainActor (Result<Void, Error>) -> Void) -> Void
     var agent: (ReviewFeedbackAgentTarget) -> AgentDefinition? = { _ in nil }
 
     static func production(appState: AppState, worktreeID: String) -> ReviewFeedbackAgentSender {
@@ -44,27 +59,25 @@ struct ReviewFeedbackAgentSender {
                 }
                 return targets
             },
-            send: { prompt, target, completion in
+            send: { delivery, target, completion in
                 switch target {
                 case .newChat(let agentID, _):
                     guard Self.availableAgent(appState: appState, worktreeID: worktreeID, agentID: agentID) != nil else {
                         completion(.failure(ReviewFeedbackAgentSendError.rejected))
                         return
                     }
-                    if let checkout = selectedCheckout(appState: appState, worktreeID: worktreeID) {
-                        Task { @MainActor in
-                            let tab = await appState.openWorkspaceCheckoutACPSession(
-                                checkout: checkout, agentID: agentID, initialPrompt: prompt
-                            )
-                            completion(tab == nil ? .failure(ReviewFeedbackAgentSendError.rejected) : .success(()))
+                    Task { @MainActor in
+                        guard let opened = await Self.openNewChat(appState: appState, worktreeID: worktreeID, agentID: agentID) else {
+                            completion(.failure(ReviewFeedbackAgentSendError.rejected))
+                            return
                         }
-                        return
+                        await Self.deliver(delivery, appState: appState, sessionID: opened.sessionID, owner: opened.owner) { result in
+                            if case .failure = result {
+                                Self.keepAsDraft(delivery, appState: appState, sessionID: opened.sessionID)
+                            }
+                            completion(result)
+                        }
                     }
-                    if let resolved = Self.projectAndWorktree(appState: appState, worktreeID: worktreeID) {
-                        appState.focusGlobalWorktree(id: resolved.worktree.id, projectId: resolved.project.id)
-                    }
-                    appState.openNewACPSession(agentID: agentID, initialPrompt: prompt)
-                    completion(.success(()))
                 case .existingSession(let targetWorktreeID, let sessionID, _):
                     let owner = Self.sessionOwner(appState: appState, worktreeID: targetWorktreeID, sessionID: sessionID)
                     if case .workspaceCheckout = owner {
@@ -77,10 +90,7 @@ struct ReviewFeedbackAgentSender {
                         )
                     }
                     Task { @MainActor in
-                        await appState.prepareACPSessionForPrompt(sessionId: sessionID, owner: owner)
-                        await appState.sendPrompt(for: sessionID, text: prompt, attachments: [], normalUserTurn: false) { accepted in
-                            completion(accepted ? .success(()) : .failure(ReviewFeedbackAgentSendError.rejected))
-                        }
+                        await Self.deliver(delivery, appState: appState, sessionID: sessionID, owner: owner, completion: completion)
                     }
                 }
             },
@@ -94,6 +104,71 @@ struct ReviewFeedbackAgentSender {
                 }
             }
         )
+    }
+
+    /// A new chat that refuses the turn (its agent needs sign-in or setup)
+    /// would otherwise sit empty: the feedback goes to its composer instead,
+    /// to send once the agent is ready.
+    private static func keepAsDraft(_ delivery: ReviewFeedbackDelivery, appState: AppState, sessionID: String) {
+        guard let manager = appState.acpManager(forSession: sessionID),
+              let session = manager.liveSession(for: sessionID),
+              session.composerDraft.isEmpty
+        else { return }
+        manager.persistComposerDraft(ACPComposerDraft(segments: [.text(delivery.text)]), for: session)
+    }
+
+    /// Opens a chat for the review to go out in right away, in the focused
+    /// checkout when there is one, else in the worktree.
+    private static func openNewChat(
+        appState: AppState, worktreeID: String, agentID: String
+    ) async -> (sessionID: String, owner: SessionOwnerID)? {
+        if let checkout = selectedCheckout(appState: appState, worktreeID: worktreeID) {
+            guard let tab = await appState.openWorkspaceCheckoutACPSession(checkout: checkout, agentID: agentID) else { return nil }
+            return (tab.sessionId, .workspaceCheckout(checkout.id, checkout.executionLocation))
+        }
+        guard let resolved = projectAndWorktree(appState: appState, worktreeID: worktreeID),
+              let owner = appState.acpManager(for: resolved.worktree)?.owner
+        else { return nil }
+        appState.focusGlobalWorktree(id: resolved.worktree.id, projectId: resolved.project.id)
+        guard let tab = appState.openNewACPSession(agentID: agentID, owner: owner, projectId: resolved.project.id) else { return nil }
+        return (tab.sessionId, owner)
+    }
+
+    /// Reports success once the session takes the prompt, not when the turn
+    /// ends: the agent resolves comments during that turn, so the handoff
+    /// has to be on record first.
+    private static func deliver(
+        _ delivery: ReviewFeedbackDelivery,
+        appState: AppState,
+        sessionID: String,
+        owner: SessionOwnerID,
+        completion: @escaping @MainActor (Result<Void, Error>) -> Void
+    ) async {
+        let report = ReportOnce(completion)
+        await appState.prepareACPSessionForPrompt(sessionId: sessionID, owner: owner)
+        await appState.sendPrompt(
+            for: sessionID, text: delivery.text, attachments: [],
+            delegatedSource: delivery.source, normalUserTurn: false,
+            onAccepted: { report(.success(())) }
+        ) { ended in
+            report(ended ? .success(()) : .failure(ReviewFeedbackAgentSendError.rejected))
+        }
+    }
+
+    /// Hands the first result to `completion` and drops the rest.
+    @MainActor
+    private final class ReportOnce {
+        private var completion: (@MainActor (Result<Void, Error>) -> Void)?
+
+        init(_ completion: @escaping @MainActor (Result<Void, Error>) -> Void) {
+            self.completion = completion
+        }
+
+        func callAsFunction(_ result: Result<Void, Error>) {
+            let completion = completion
+            self.completion = nil
+            completion?(result)
+        }
     }
 
     private static func availableAgent(appState: AppState, worktreeID: String, agentID: String?) -> AgentDefinition? {
@@ -182,8 +257,9 @@ enum ReviewFeedbackPromptActions {
         now: @escaping () -> Date = Date.init,
         makeID: @escaping () -> String = { UUID().uuidString }
     ) {
-        let prompt = bundle.promptMarkdown()
-        sender.send(prompt, target) { result in
+        let delivery = ReviewFeedbackDelivery(bundle: bundle)
+        let prompt = delivery.text
+        sender.send(delivery, target) { result in
             switch result {
             case .success:
                 guard let sessionID, let recordHandoff else { return }
