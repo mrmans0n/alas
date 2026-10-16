@@ -480,6 +480,10 @@ public final class ACPSessionDiscoveryModel {
     private var filterLoadsInFlight = 0
     /// First-page reads in flight: filter loads and reconciles.
     private var listReadsInFlight = 0
+    /// Bumped by every completed local action (rename, archive, delete,
+    /// remove from Alas). A first page read across one may predate it: a
+    /// filter load reads again, a reconcile drops its page.
+    private var localActionGeneration = 0
     /// Live changes that arrived while a list read was in flight. They are
     /// applied at once and again when the last read finishes, so a page read
     /// before a change cannot undo it.
@@ -527,6 +531,7 @@ public final class ACPSessionDiscoveryModel {
                 try await handle.deleteSession(remoteSessionId: session.remoteSessionId)
             }
             remotelyDeletedSessionIds.insert(session.remoteSessionId)
+            localActionGeneration += 1
             // The relist below shows the deletion; a list page read before it
             // must not bring the row back once that read finishes.
             if listReadsInFlight > 0 { pendingChanges.append(([], [session.remoteSessionId])) }
@@ -553,6 +558,7 @@ public final class ACPSessionDiscoveryModel {
         guard await beginDeletion(session.remoteSessionId) else { return }
         defer { finishDeletion(session.remoteSessionId) }
         try await manager.deletePersistedSession(id: localSessionId)
+        localActionGeneration += 1
         try await refreshAfterDeletion()
     }
 
@@ -642,7 +648,13 @@ public final class ACPSessionDiscoveryModel {
             finishListRead()
         }
         do {
-            let page = try await handle.firstPage(filter: newFilter)
+            var actions = localActionGeneration
+            var page = try await handle.firstPage(filter: newFilter)
+            // A page read across a local action may predate it: read again.
+            for _ in 1 ..< 3 where actions != localActionGeneration && generation == filterGeneration {
+                actions = localActionGeneration
+                page = try await handle.firstPage(filter: newFilter)
+            }
             guard generation == filterGeneration, !stopped else { return }
             handle.commit(filter: newFilter, cursor: page.cursor)
             appliedFilter = newFilter
@@ -664,10 +676,12 @@ public final class ACPSessionDiscoveryModel {
         guard let handle, !stopped, filterLoadsInFlight == 0 else { return }
         let generation = filterGeneration
         let listedFilter = appliedFilter
+        let actions = localActionGeneration
         beginListRead()
         defer { finishListRead() }
         guard let page = try? await handle.firstPage(filter: listedFilter),
-              generation == filterGeneration, listedFilter == appliedFilter, filterLoadsInFlight == 0
+              generation == filterGeneration, listedFilter == appliedFilter, filterLoadsInFlight == 0,
+              actions == localActionGeneration
         else { return }
         sessions = ACPSessionBrowserReducer.reconciling(
             firstPage: page.rows,
@@ -693,6 +707,7 @@ public final class ACPSessionDiscoveryModel {
         guard updatingSessionIds.insert(session.remoteSessionId).inserted else { return }
         defer { updatingSessionIds.remove(session.remoteSessionId) }
         try await handle.renameSession(remoteSessionId: session.remoteSessionId, title: trimmed)
+        localActionGeneration += 1
         // Patched on the row as it is now, and replayed after any pending
         // list read so an older page cannot bring the old title back.
         if var updated = sessions.first(where: { $0.remoteSessionId == session.remoteSessionId }) {
@@ -711,6 +726,7 @@ public final class ACPSessionDiscoveryModel {
         guard updatingSessionIds.insert(session.remoteSessionId).inserted else { return }
         defer { updatingSessionIds.remove(session.remoteSessionId) }
         try await handle.setArchived(archived, remoteSessionId: session.remoteSessionId)
+        localActionGeneration += 1
         // Patch the row as it is now: a live update may have changed its
         // title or state while the request ran.
         var updated = sessions.first { $0.remoteSessionId == session.remoteSessionId } ?? session

@@ -775,9 +775,10 @@ struct ACPSessionDiscoveryTests {
     }
 
     @MainActor
-    @Test("a change made during a reconcile is not undone by the older page", arguments: ["push", "archive", "delete", "rename"])
+    @Test("a change made during a reconcile is not undone by the older page", arguments: ["push", "archive", "delete", "rename", "removeLocal"])
     func liveChangeDuringReconcile(action: String) async throws {
         let store = try temporaryStore()
+        try store.upsertSession(row(id: "local-1", remoteSessionId: "deleted", title: "Old", origin: .agentImported))
         let client = indexClient()
         let gate = AsyncStream<Void>.makeStream()
         let reconcileStarted = AsyncStream<Void>.makeStream()
@@ -812,14 +813,17 @@ struct ACPSessionDiscoveryTests {
         case "archive": try await model.setArchived(true, for: target)
         case "delete": try await model.deleteAgentHistory(for: target, removeLocalHistory: false, manager: manager)
         case "rename": try await model.rename(target, to: "Renamed") { _, _ in }
+        case "removeLocal": try await model.removeLocalHistory(for: target, manager: manager)
         default: client.emitSessionListChanges(.init(subscriptionId: "sub-1", sessions: [], removed: ["deleted"]))
         }
-        let expected = action == "rename" ? ["kept", "deleted"] : ["kept"]
+        let expected = ["rename", "removeLocal"].contains(action) ? ["kept", "deleted"] : ["kept"]
         #expect(await awaitCondition { model.sessions.map(\.remoteSessionId) == expected })
         gate.continuation.yield()
         await reconcile.value
         #expect(model.sessions.map(\.remoteSessionId) == expected)
         if action == "rename" { #expect(model.sessions.last?.title == "Renamed") }
+        // The older page still had the Alas copy; it must not come back.
+        if action == "removeLocal" { #expect(model.sessions.last?.localSessionId == nil) }
         await model.stop()
     }
 
