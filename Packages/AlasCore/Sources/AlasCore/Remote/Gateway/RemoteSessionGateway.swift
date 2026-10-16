@@ -15,7 +15,7 @@ import Foundation
 public final class RemoteSessionGateway {
     private let provider: RemoteSessionsProvider
     /// The app's windows, for the tab requests; nil where there are none.
-    private let presenter: RemoteSessionPresenter?
+    @_spi(AppHost) public weak var presenter: RemoteSessionPresenter?
     private let federation: FederatedSessionsProvider?
     /// This gateway's registration with `federation`; nil without one.
     private var downstream: FederatedDownstream?
@@ -66,14 +66,12 @@ public final class RemoteSessionGateway {
     /// fails never reports the write, so closing releases them.
     private var pendingWrites: [UUID: CheckedContinuation<Void, Never>] = [:]
 
-    public init(provider: RemoteSessionsProvider, presenter: RemoteSessionPresenter? = nil,
-         federation: FederatedSessionsProvider? = nil,
+    public init(provider: RemoteSessionsProvider, federation: FederatedSessionsProvider? = nil,
          consoleLink: PeerConsoleLink? = nil,
          caller: HostCaller? = nil,
          sendTracked: (@Sendable (RemoteServerMessage, _ onWritten: @escaping @Sendable () -> Void) -> Void)? = nil,
          send: @escaping (RemoteServerMessage) -> Void) {
         self.provider = provider
-        self.presenter = presenter
         self.caller = caller
         self.sendTracked = sendTracked
         self.federation = federation

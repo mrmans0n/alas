@@ -1,7 +1,7 @@
 import Testing
 import Foundation
 @testable import Alas
-@_spi(Testing) import AlasCore
+@_spi(Testing) @_spi(AppHost) import AlasCore
 
 @MainActor
 final class FakeSessionsProvider: RemoteSessionsProvider, RemoteSessionPresenter {
@@ -1687,7 +1687,8 @@ struct RemoteSessionGatewayTests {
         let provider = FakeSessionsProvider()
         provider.summaries = [RemoteSessionSummary(id: "s1", title: "S", agentId: "claude", status: "idle", canDrive: false)]
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider, presenter: provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        gw.presenter = provider
 
         await gw.handle(.openSessionTab(sessionId: "s1"))
         await Task.yield()

@@ -2,7 +2,8 @@ import Foundation
 
 /// What a Remote client can ask of the app's own windows. The host never
 /// presents anything; a front end with a UI hands its gateways one of these.
-@MainActor
+/// App wiring, so behind the `AppHost` SPI.
+@_spi(AppHost) @MainActor
 public protocol RemoteSessionPresenter: AnyObject {
     /// Opens a stored session as a tab in its worktree without selecting that
     /// worktree. Succeeds without change when the tab is already open.

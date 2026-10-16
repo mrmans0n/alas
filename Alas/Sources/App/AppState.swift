@@ -1,3 +1,4 @@
+@_spi(AppHost) import AlasCore
 import AppKit
 import Foundation
 import Observation
@@ -851,7 +852,6 @@ final class AppState {
                 pairing: remotePairing,
                 assets: assets,
                 provider: self,
-                presenter: self,
                 accessPolicy: makeRemoteAccessPolicy(),
                 originPolicy: makeRemoteOriginPolicy(),
                 diagnostics: { [weak self] port in
@@ -889,6 +889,7 @@ final class AppState {
             }
             configurePairingApprovals(server: server)
             server.federation = remoteFederation
+            server.presenter = self
             do {
                 try server.start(port: config.remote.preferredPort, loopbackOnly: config.remote.listensOnLoopbackOnly)
                 remoteServer = server
