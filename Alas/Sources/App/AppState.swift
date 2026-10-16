@@ -14675,13 +14675,18 @@ final class AppState {
         manager: ACPSessionManager
     ) async throws {
         // Written and awaited first, so a store error stops the agent rename;
-        // then the manager's cached row and live session follow.
-        _ = try await manager.persistence.renameSession(
+        // then the manager's cached row and live session follow. An archived
+        // Alas row is not updated, which counts as a failure too.
+        guard try await manager.persistence.renameSession(
             id: sessionId, title: title, titleSource: source, updatedAt: Int64(Date().timeIntervalSince1970)
-        )
+        ) else { throw ACPSessionTitleNotStored() }
         if manager.renameSessionCosmetic(id: sessionId, title: title, source: source) {
             await manager.flushAllPersistence()
         }
+    }
+
+    struct ACPSessionTitleNotStored: LocalizedError {
+        var errorDescription: String? { "The Alas copy of this session could not be renamed." }
     }
 
     @discardableResult
