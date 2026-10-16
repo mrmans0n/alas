@@ -84,6 +84,19 @@ public enum ACPSessionIndexDates {
     }
 }
 
+/// How a session's cwd is matched to an Alas worktree path.
+public enum ACPSessionBrowserPaths {
+    /// Adapters report agent-side paths: an SSH worktree's real path rather
+    /// than its `/.alas-remote/<host>/…` id, and a local cwd with symlinks
+    /// resolved (`/private/var/…` for `/var/…`). Both sides are keyed that way.
+    public static func key(_ path: String) -> String {
+        if let remote = RemotePath.split(path) {
+            return URL(fileURLWithPath: remote.realPath).standardizedFileURL.path
+        }
+        return URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
+    }
+}
+
 /// The Alas worktree a listed session runs in, with its session store.
 public struct ACPSessionBrowserTarget: Sendable {
     public let worktreeId: String
@@ -282,9 +295,9 @@ public final class ACPSessionDiscoveryHandle {
         self.connection = connection
         self.capabilities = capabilities
         self.sessionIndex = sessionIndex
-        let ownCWD = Self.standardized(cwd)
+        let ownCWD = ACPSessionBrowserPaths.key(cwd)
         let own = ACPSessionBrowserTarget(worktreeId: worktreeId, persistence: persistence)
-        self.worktreeResolver = worktreeResolver ?? { Self.standardized($0) == ownCWD ? own : nil }
+        self.worktreeResolver = worktreeResolver ?? { ACPSessionBrowserPaths.key($0) == ownCWD ? own : nil }
         self.onClosed = onClosed
     }
 
@@ -436,11 +449,6 @@ public final class ACPSessionDiscoveryHandle {
         onClosed?()
     }
 
-    /// Adapters report the cwd with symlinks resolved (`/private/var/…`
-    /// for `/var/…`), so both sides are compared that way.
-    private nonisolated static func standardized(_ path: String) -> String {
-        URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
-    }
 }
 
 @MainActor
@@ -640,9 +648,13 @@ public final class ACPSessionDiscoveryModel {
     /// Reads the first page again and merges it into the listed rows, keeping
     /// rows loaded from later pages.
     public func reconcile() async {
-        guard let handle, !stopped else { return }
+        // A pending filter change replaces the rows anyway.
+        guard let handle, !stopped, filterLoadsInFlight == 0 else { return }
         let generation = filterGeneration
-        guard let page = try? await handle.firstPage(filter: appliedFilter), generation == filterGeneration else { return }
+        let listedFilter = appliedFilter
+        guard let page = try? await handle.firstPage(filter: listedFilter),
+              generation == filterGeneration, listedFilter == appliedFilter, filterLoadsInFlight == 0
+        else { return }
         sessions = ACPSessionBrowserReducer.reconciling(
             firstPage: page.rows,
             hasMorePages: page.cursor != nil,
@@ -803,5 +815,16 @@ public enum ACPSessionBrowserRowPolicy {
         }
         if let model = session.index?.model, !model.isEmpty { parts.append(model) }
         return parts.joined(separator: " · ")
+    }
+}
+
+/// The session browser's highlight: row 0 is "New chat", row `i + 1` is
+/// session `i`.
+public enum ACPSessionBrowserSelection {
+    /// The index of the same session after the rows changed, or "New chat"
+    /// when it left the list.
+    public static func remapped(_ index: Int, from old: [String], to new: [String]) -> Int {
+        guard index > 0, old.indices.contains(index - 1) else { return min(index, new.count) }
+        return new.firstIndex(of: old[index - 1]).map { $0 + 1 } ?? 0
     }
 }

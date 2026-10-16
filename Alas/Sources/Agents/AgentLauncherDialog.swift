@@ -113,6 +113,10 @@ struct AgentLauncherDialog: View {
             guard appState.isAgentLauncherOpen else { return }
             await loadSelectedAgentAvailability()
         }
+        // Live list updates reorder rows: keep the highlight on the same session.
+        .onChange(of: filteredDiscoveredSessions.map(\.remoteSessionId)) { old, new in
+            selectedSessionIndex = ACPSessionBrowserSelection.remapped(selectedSessionIndex, from: old, to: new)
+        }
         .alert(
             "Rename session",
             isPresented: Binding(

@@ -4102,9 +4102,8 @@ public final class ACPSessionManager: ChangeTracking {
         defer { activeDiscoveryImportCount -= 1 }
         await previousManagerDisposal?.value
         guard !isDisposed else { return nil }
-        // Adapters report the cwd with symlinks resolved.
-        let discoveredCWD = URL(fileURLWithPath: discovered.cwd).resolvingSymlinksInPath().standardizedFileURL.path
-        let managerCWD = URL(fileURLWithPath: worktreePath).resolvingSymlinksInPath().standardizedFileURL.path
+        let discoveredCWD = ACPSessionBrowserPaths.key(discovered.cwd)
+        let managerCWD = ACPSessionBrowserPaths.key(worktreePath)
         guard discovered.worktreeId == worktreeId, discoveredCWD == managerCWD else { return nil }
         if let existing = try? await persistence.loadSession(
             agentId: discovered.agentId,

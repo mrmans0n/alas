@@ -565,6 +565,10 @@ struct ACPSessionDiscoveryTests {
         let failing = Task { try await model.setFilter(.init(showArchived: true)) }
         for await _ in failStarted.stream { break }
         #expect(!model.canLoadMore)
+        // The pending change replaces the rows anyway: no reconcile meanwhile.
+        let listsBefore = client.sent.filter { $0.method == "session/list" }.count
+        await model.reconcile()
+        #expect(client.sent.filter { $0.method == "session/list" }.count == listsBefore)
         // Reduced with the listed (linked) filter, not the pending one.
         client.emitSessionListChanges(.init(subscriptionId: "sub-1", sessions: [
             .init(sessionId: "linked-archived", cwd: "/tmp/elsewhere", index: .init(archived: true)),
@@ -767,6 +771,40 @@ struct ACPSessionDiscoveryTests {
         #expect(model.sessions.map(\.remoteSessionId) == ["linked"])
         #expect(!model.canLoadMore)
         await model.stop()
+    }
+
+    @Test("a listed cwd matches an SSH worktree by its real path", arguments: [
+        ("/srv/repo-wt2", true),
+        ("/srv/repo-wt2/", true),
+        ("/srv/repo", false),
+    ])
+    func remoteBrowserPathKeys(listedCWD: String, matches: Bool) {
+        let worktreePath = RemotePath.virtual(host: "devbox", realPath: "/srv/repo-wt2")
+        #expect((ACPSessionBrowserPaths.key(worktreePath) == ACPSessionBrowserPaths.key(listedCWD)) == matches)
+    }
+
+    @Test("a listed cwd with symlinks resolved matches the local worktree path")
+    func localBrowserPathKeys() throws {
+        // The temporary directory is under /var, a symlink to /private/var.
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let resolved = try #require(realpath(directory.path, nil).map { pointer in
+            defer { free(pointer) }
+            return String(cString: pointer)
+        })
+        #expect(resolved != directory.path)
+        #expect(ACPSessionBrowserPaths.key(directory.path) == ACPSessionBrowserPaths.key(resolved))
+    }
+
+    @Test("the highlight follows its session when live updates reorder the rows", arguments: [
+        (2, ["a", "b"], ["c", "a", "b"], 3),
+        (1, ["a", "b"], ["b"], 0),
+        (0, ["a"], ["b", "a"], 0),
+        (3, ["a", "b"], ["a"], 1),
+    ])
+    func selectionRemap(index: Int, old: [String], new: [String], expected: Int) {
+        #expect(ACPSessionBrowserSelection.remapped(index, from: old, to: new) == expected)
     }
 
     @Test("row detail names the linked worktree, state and model; archived rows are browse-only", arguments: [
