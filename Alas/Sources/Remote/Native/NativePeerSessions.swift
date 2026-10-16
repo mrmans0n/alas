@@ -213,6 +213,10 @@ final class NativePeerSessions {
         return consoles?.viewer.map { .console($0.consoleId) }
     }
 
+    /// Whether a peer worktree or tab covers the center pane. The local
+    /// selection stays set underneath but is not what the user sees.
+    var coversCenterPane: Bool { selectedWorktree != nil || selectedTab != nil }
+
     private func worktrees(on serverId: String) -> [NativePeerWorktreeGroup] {
         snapshot.groups.first { $0.serverId == serverId }?.repos(ordering: .manual).flatMap(\.worktrees) ?? []
     }

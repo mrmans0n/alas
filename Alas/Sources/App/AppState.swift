@@ -2854,10 +2854,7 @@ final class AppState {
     /// on the workspace overview or the empty state, and the checkout fallback
     /// pane posts under its pseudo worktree id.
     var inAppBannerWorktreeID: String? {
-        if isPreviewingForestScenes
-            || nativePeerSessions?.selectedWorktree != nil
-            || nativePeerSessions?.selectedSessionId != nil
-            || nativePeerSessions?.consoles?.viewer != nil { return nil }
+        if isPreviewingForestScenes || nativePeerSessions?.coversCenterPane == true { return nil }
         let resolver = CenterSelectionStateResolver(
             selectedWorktreeId: selectedWorktreeId,
             projects: navigationProjects,

@@ -107,10 +107,16 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
         .disabled(!isInteractive)
     }
 
+    /// A peer worktree takes the highlight while it covers the center pane.
+    private var peerCoversCenterPane: Bool {
+        state.nativePeerSessions?.coversCenterPane == true
+    }
+
     private func workspaceHeader(_ workspace: Workspace, projects: [String: ProjectConfig]) -> some View {
         let collapsed = model.collapsedWorkspaces.contains(workspace.id)
         let selected = state.workspaceNavigationState.selectedWorkspaceID == workspace.id
             && state.workspaceNavigationState.selectedCheckoutID == nil
+            && !peerCoversCenterPane
         let hovering = hoveringWorkspaceID == workspace.id
         let plusHovering = plusHoveringWorkspaceID == workspace.id
         let checkoutCount = state.workspacesManager.checkouts.count { $0.workspaceID == workspace.id }
@@ -219,6 +225,7 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
         projects: [String: ProjectConfig]
     ) -> some View {
         let selected = state.workspaceNavigationState.selectedCheckoutID == checkout.id
+            && !peerCoversCenterPane
         let expanded = model.expandedCheckouts.contains(checkout.id)
         let hovering = hoveringCheckoutID == checkout.id
         return VStack(alignment: .leading, spacing: 1) {
