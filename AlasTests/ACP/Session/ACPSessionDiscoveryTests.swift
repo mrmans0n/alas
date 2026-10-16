@@ -554,12 +554,17 @@ struct ACPSessionDiscoveryTests {
 
         let stale = Task { try await model.setFilter(.init(includeLinkedWorktrees: true)) }
         for await _ in staleStarted.stream { break }
+        // Buffered while both loads are pending; replayed when the last ends.
+        client.emitSessionListChanges(.init(subscriptionId: "sub-1", sessions: [
+            .init(sessionId: "fresh", cwd: "/tmp/wt", index: .init(archived: true)),
+        ], removed: []))
+        try await Task.yield()
         let latest = ACPSessionBrowserFilter(includeLinkedWorktrees: true, showArchived: true)
         try await model.setFilter(latest)
         gate.continuation.yield()
         try await stale.value
         #expect(model.filter == latest)
-        #expect(model.sessions.map(\.remoteSessionId) == ["latest"])
+        #expect(await awaitCondition { model.sessions.map(\.remoteSessionId) == ["fresh", "latest"] })
         #expect(!model.canLoadMore)
 
         let failing = Task { try await model.setFilter(.init(showArchived: true)) }
@@ -573,11 +578,11 @@ struct ACPSessionDiscoveryTests {
         client.emitSessionListChanges(.init(subscriptionId: "sub-1", sessions: [
             .init(sessionId: "linked-archived", cwd: "/tmp/elsewhere", index: .init(archived: true)),
         ], removed: []))
-        #expect(await awaitCondition { model.sessions.map(\.remoteSessionId) == ["linked-archived", "latest"] })
+        #expect(await awaitCondition { model.sessions.map(\.remoteSessionId) == ["linked-archived", "fresh", "latest"] })
         failGate.continuation.yield()
         await #expect(throws: TestError.failed) { try await failing.value }
         #expect(model.filter == latest)
-        #expect(model.sessions.map(\.remoteSessionId) == ["linked-archived", "latest"])
+        #expect(model.sessions.map(\.remoteSessionId) == ["linked-archived", "fresh", "latest"])
         await model.stop()
     }
 
@@ -766,6 +771,39 @@ struct ACPSessionDiscoveryTests {
         gate.continuation.yield()
         try await change.value
         #expect(model.sessions.map(\.remoteSessionId) == ["x"])
+        await model.stop()
+    }
+
+    @MainActor
+    @Test("a live removal during a reconcile is not undone by the older page")
+    func liveChangeDuringReconcile() async throws {
+        let store = try temporaryStore()
+        let client = indexClient()
+        let gate = AsyncStream<Void>.makeStream()
+        let reconcileStarted = AsyncStream<Void>.makeStream()
+        var lists = 0
+        client.scriptAsync(method: "session/list") { _ in
+            lists += 1
+            // The first page at start and after subscribing; the third read is
+            // the reconcile under test, whose page predates the removal.
+            if lists == 3 {
+                reconcileStarted.continuation.yield()
+                for await _ in gate.stream { break }
+            }
+            return try JSONEncoder().encode(ACPSessionListResult(sessions: [
+                .init(sessionId: "kept", cwd: "/tmp/wt", index: .init(archived: false)),
+                .init(sessionId: "deleted", cwd: "/tmp/wt", index: .init(archived: false)),
+            ]))
+        }
+        let model = ACPSessionDiscoveryModel()
+        await model.start(manager: manager(store: store, client: client), agentId: "claude")
+        let reconcile = Task { await model.reconcile() }
+        for await _ in reconcileStarted.stream { break }
+        client.emitSessionListChanges(.init(subscriptionId: "sub-1", sessions: [], removed: ["deleted"]))
+        #expect(await awaitCondition { model.sessions.map(\.remoteSessionId) == ["kept"] })
+        gate.continuation.yield()
+        await reconcile.value
+        #expect(model.sessions.map(\.remoteSessionId) == ["kept"])
         await model.stop()
     }
 

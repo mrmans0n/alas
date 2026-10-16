@@ -478,9 +478,11 @@ public final class ACPSessionDiscoveryModel {
     /// change, keep the rows consistent with what was listed.
     private var appliedFilter = ACPSessionBrowserFilter()
     private var filterLoadsInFlight = 0
-    /// Live changes that arrived while a filter page was pending; replayed
-    /// once that page is committed (or the change failed), so a change the
-    /// page predates is not lost.
+    /// First-page reads in flight: filter loads and reconciles.
+    private var listReadsInFlight = 0
+    /// Live changes that arrived while a list read was in flight. They are
+    /// applied at once and again when the last read finishes, so a page read
+    /// before a change cannot undo it.
     private var pendingChanges: [(changed: [ACPDiscoveredSession], removed: [String])] = []
     /// Rows with a rename or archive request in flight.
     public private(set) var updatingSessionIds: Set<String> = []
@@ -631,7 +633,11 @@ public final class ACPSessionDiscoveryModel {
         filterGeneration += 1
         let generation = filterGeneration
         filterLoadsInFlight += 1
-        defer { filterLoadsInFlight -= 1 }
+        beginListRead()
+        defer {
+            filterLoadsInFlight -= 1
+            finishListRead()
+        }
         do {
             let page = try await handle.firstPage(filter: newFilter)
             guard generation == filterGeneration, !stopped else { return }
@@ -641,11 +647,9 @@ public final class ACPSessionDiscoveryModel {
             firstPageIds = Set(page.rows.map(\.remoteSessionId))
             replaceSessionsOnNextLoad = false
             paginationError = nil
-            replayPendingChanges()
         } catch {
             guard generation == filterGeneration else { return }
             filter = previous
-            replayPendingChanges()
             throw error
         }
     }
@@ -657,6 +661,8 @@ public final class ACPSessionDiscoveryModel {
         guard let handle, !stopped, filterLoadsInFlight == 0 else { return }
         let generation = filterGeneration
         let listedFilter = appliedFilter
+        beginListRead()
+        defer { finishListRead() }
         guard let page = try? await handle.firstPage(filter: listedFilter),
               generation == filterGeneration, listedFilter == appliedFilter, filterLoadsInFlight == 0
         else { return }
@@ -708,19 +714,25 @@ public final class ACPSessionDiscoveryModel {
 
     private func applyLiveChanges(changed: [ACPDiscoveredSession], removed: [String]) {
         guard let handle else { return }
-        // Applied now too, so the listed rows stay current; the replay after
-        // the pending page covers rows that page does not reflect.
-        if filterLoadsInFlight > 0 { pendingChanges.append((changed, removed)) }
+        // Applied now so the listed rows stay current, and replayed after the
+        // pending read in case its page predates the change.
+        if listReadsInFlight > 0 { pendingChanges.append((changed, removed)) }
         sessions = ACPSessionBrowserReducer.applying(
             changed: changed, removed: removed, to: sessions, filter: appliedFilter,
             browsingWorktreeId: handle.browsingWorktreeId
         )
     }
 
-    /// Runs inside the finishing filter load; a newer pending load keeps the
-    /// buffer for its own replay.
-    private func replayPendingChanges() {
-        guard let handle, filterLoadsInFlight <= 1 else { return }
+    private func beginListRead() {
+        listReadsInFlight += 1
+    }
+
+    /// Ends a list read after its page was applied (or dropped). The last one
+    /// to finish replays the changes buffered meanwhile, whatever order the
+    /// reads complete in.
+    private func finishListRead() {
+        listReadsInFlight -= 1
+        guard listReadsInFlight == 0, let handle else { return }
         let changes = pendingChanges
         pendingChanges = []
         for change in changes {
