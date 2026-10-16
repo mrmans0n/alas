@@ -66,15 +66,18 @@ public final class RemoteTranscriptSync {
     public func invalidateToolContent(_ id: String) { toolContent[id] = nil }
 
     /// The integer a client answers `requestID` by: the agent's own number
-    /// when it is one, otherwise a stable negative stand-in.
+    /// when no other request holds it, otherwise a stable negative stand-in
+    /// no request holds.
     public func wireID(for requestID: JSONRPCID) -> Int {
-        if case .number(let number) = requestID {
-            requestIDs[number] = requestID
-            return number
-        }
         if let known = requestIDs.first(where: { $0.value == requestID })?.key { return known }
-        let wireID = nextRequestWireID
-        nextRequestWireID -= 1
+        let wireID: Int
+        if case .number(let number) = requestID, requestIDs[number] == nil {
+            wireID = number
+        } else {
+            while requestIDs[nextRequestWireID] != nil { nextRequestWireID -= 1 }
+            wireID = nextRequestWireID
+            nextRequestWireID -= 1
+        }
         requestIDs[wireID] = requestID
         return wireID
     }

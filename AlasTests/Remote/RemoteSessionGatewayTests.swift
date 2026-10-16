@@ -1215,6 +1215,21 @@ struct RemoteSessionGatewayTests {
         try await hosted.until { sent.contains(.permissionResolved(sessionId: id, requestId: 8)) }
     }
 
+    /// Every pending request gets its own wire id, whichever of the agent's
+    /// numbers and strings arrive first, and keeps it.
+    @Test(arguments: [
+        [JSONRPCID.number(-1), .string("a")],
+        [.string("a"), .number(-1)],
+        [.number(-2), .string("a"), .string("b")],
+    ])
+    func requestWireIDsNeverCollide(_ requests: [JSONRPCID]) {
+        let sync = RemoteTranscriptSync()
+        let wire = requests.map { sync.wireID(for: $0) }
+        #expect(Set(wire).count == requests.count)
+        #expect(requests.map { sync.wireID(for: $0) } == wire)
+        #expect(wire.map { sync.requestIDs[$0] } == requests)
+    }
+
     /// Following again dismisses what the client was shown before the new
     /// follow surfaces what is still pending, so a request resolved while
     /// the old follow was replaced cannot stay on screen.
