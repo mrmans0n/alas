@@ -14065,7 +14065,7 @@ final class AppState {
         return state
     }
 
-    private func authoritativeCheckoutForWorkspaceACPSessionCreation(_ checkout: WorkspaceCheckout) async -> WorkspaceCheckout? {
+    func authoritativeCheckoutForWorkspaceACPSessionCreation(_ checkout: WorkspaceCheckout) async -> WorkspaceCheckout? {
         guard workspacesManager.canMutate else { return nil }
         guard let authoritative = await workspaceStore.checkout(id: checkout.id) else { return nil }
         guard authoritative.executionLocation.normalized == checkout.executionLocation.normalized else { return nil }
@@ -16851,11 +16851,62 @@ class AppHostEnvironment: AlasHostEnvironment {
         app?.config.terminal ?? AppConfig.defaults.terminal
     }
 
-    func stopWorkspaceCheckoutSessions(_ checkout: WorkspaceCheckout) async throws {
+    func stopWorkspaceCheckoutSessions(_ checkout: WorkspaceCheckout, in core: AlasCoreContext) async throws {
         try await app?.stopWorkspaceCheckoutSessions(checkout)
+    }
+
+    /// The app's own manager, configured for its remote host, MCP servers and UI.
+    func sessionManager(for worktree: Worktree, in core: AlasCoreContext) throws -> ACPSessionManager {
+        guard core.projects.admitsNewWork(in: worktree) else {
+            throw SessionRefusal.ownerUnavailable(reason: "Another operation holds the worktree.")
+        }
+        guard let manager = app?.acpManager(for: worktree) else {
+            throw SessionRefusal.ownerUnavailable(reason: "The worktree cannot host sessions now.")
+        }
+        return manager
     }
 
     func resolveWorkspaceRepoHook(_ request: WorkspaceRepoHookRequest) async throws -> String? {
         try await app?.preparedWorkspaceRepoHook(request)
+    }
+
+    /// The app's own view of its checkouts and worktrees, kept on the main
+    /// actor, so a lifecycle operation that started meanwhile refuses.
+    func admitsSessionCreation(owner: SessionOwnerID, in core: AlasCoreContext) -> Bool {
+        guard let app else { return false }
+        switch owner {
+        case .worktree(let worktreeID):
+            return app.projectsManager.admitsNewWork(worktreeId: worktreeID)
+        case .workspaceCheckout(let id, let location):
+            guard let checkout = app.workspacesManager.checkout(id: id) else { return false }
+            return checkout.executionLocation.normalized == location.normalized
+                && checkout.operation == .idle && checkout.archivedAt == nil
+        }
+    }
+
+    /// The app's own recovery checks, which also cover Workspace checkouts.
+    func checkpointRecoveryBlocksSessions(owner: SessionOwnerID, in core: AlasCoreContext) async -> Bool {
+        await app?.checkpointACPAdmissionDisabledAfterDiscovery(owner: owner, fallbackWorktree: nil) ?? true
+    }
+
+    /// The agents the app offers for new sessions: enabled ACP agents, and on
+    /// a remote project only those that can run there.
+    func admitsAgent(_ agentID: String, remoteHost: String?) -> Bool {
+        guard let app,
+              ACPLaunchCatalog.specs.contains(where: { $0.agentID == agentID }),
+              let agent = app.agentRegistry.enabled().first(where: { $0.id == agentID })
+        else { return false }
+        return remoteHost == nil || agent.canRunOnRemoteHost
+    }
+
+    /// The app's own checkout manager, which also resolves remote roots.
+    func sessionManager(forCheckout checkout: WorkspaceCheckout, in core: AlasCoreContext) async throws -> ACPSessionManager {
+        guard let app else { throw SessionRefusal.ownerUnavailable(reason: "The app is closing.") }
+        let unreachable = SessionRefusal.ownerUnavailable(reason: "The Workspace checkout's folder is not reachable yet.")
+        guard case .ready(let manager) = await app.workspaceACPManager(for: checkout) else { throw unreachable }
+        // A cached manager skips the reachability checks; the app's own
+        // creation path rechecks the checkout the same way.
+        guard await app.authoritativeCheckoutForWorkspaceACPSessionCreation(checkout) != nil else { throw unreachable }
+        return manager
     }
 }

@@ -817,7 +817,9 @@ extension ACPSessionStore {
             END,
             updated_at = excluded.updated_at,
             last_opened_at = excluded.last_opened_at,
-            archived = excluded.archived
+            -- A snapshot never brings an archived session back; only an
+            -- explicit unarchive does.
+            archived = MAX(sessions.archived, excluded.archived)
         """, bindings: [
             s.id, s.agentId, s.title, s.titleSource.rawValue, s.remoteSessionId, s.origin.rawValue,
             s.contextRecoveryPending ? 1 : 0, s.recoveryProcId,
@@ -1683,6 +1685,9 @@ extension ACPSessionStore {
     /// one `BEGIN IMMEDIATE` transaction so two instances racing on the
     /// same dead-owner lease can't both delete-then-insert and both win.
     /// A plain `BEGIN` (WAL) would defer the write lock and still race.
+    ///
+    /// An archived session is never claimed: archiving stopped it for good,
+    /// and nobody may start driving it again from a stale view.
     public func claimLease(sessionId: String, instanceId: String, pid: Int64,
                     now: Int64, staleAfter: Int64,
                     leaseToken: String = UUID().uuidString,
@@ -1690,6 +1695,11 @@ extension ACPSessionStore {
         let staleCutoff = now - staleAfter
         try db.exec("BEGIN IMMEDIATE")
         do {
+            let archived = try db.query("SELECT archived FROM sessions WHERE id = ?", bindings: [sessionId])
+            if let row = archived.first, (row["archived"] as? Int64) == 1 {
+                try db.exec("COMMIT")
+                return false
+            }
             // Fast-path crash reclaim: a lease whose owner pid is dead can
             // be removed unconditionally — a dead pid never comes back.
             if let existing = try loadLease(sessionId: sessionId),
@@ -1748,23 +1758,27 @@ extension ACPSessionStore {
 
     /// Forcibly seize the lease (explicit user takeover) regardless of
     /// the current owner's liveness.
+    /// Takes the lease whoever holds it, unless the session is archived:
+    /// archiving stopped it for good. Returns whether the lease was taken.
+    @discardableResult
     public func seizeLease(
         sessionId: String,
         instanceId: String,
         pid: Int64,
         now: Int64,
         leaseToken: String = UUID().uuidString
-    ) throws {
-        try db.exec("""
+    ) throws -> Bool {
+        try db.execChanges("""
         INSERT INTO session_leases (session_id, owner_instance, pid, heartbeat_at, status, lease_token)
-        VALUES (?,?,?,?,'idle',?)
+        SELECT ?,?,?,?,'idle',?
+        WHERE NOT EXISTS (SELECT 1 FROM sessions WHERE id = ? AND archived = 1)
         ON CONFLICT(session_id) DO UPDATE SET
             owner_instance = excluded.owner_instance,
             pid = excluded.pid,
             heartbeat_at = excluded.heartbeat_at,
             status = 'idle',
             lease_token = excluded.lease_token
-        """, bindings: [sessionId, instanceId, pid, now, leaseToken])
+        """, bindings: [sessionId, instanceId, pid, now, leaseToken, sessionId]) > 0
     }
 
     public func withLeaseFence<T>(_ fence: ACPSessionLeaseFence, _ operation: () throws -> T) throws -> T? {

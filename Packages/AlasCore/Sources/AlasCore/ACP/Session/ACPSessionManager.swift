@@ -305,6 +305,8 @@ public final class ACPSessionManager: ChangeTracking {
     @Tracked private var missingPersistedSessionIds: Set<ACPSession.ID> = []
     private var rowLoadTasks: [ACPSession.ID: Task<Void, Never>] = [:]
     private var persistenceTail: Task<Void, Never>?
+    /// Sessions created here whose first save has not landed yet.
+    private var unsavedCreations: Set<ACPSession.ID> = []
     private var persistenceGeneration = 0
     private var draftFlushHandoffSequence: UInt64 = 0
     /// Whether new agent work may start for this manager's owner. Its
@@ -412,29 +414,39 @@ public final class ACPSessionManager: ChangeTracking {
     /// Returns nil if no runner is attached (session not actively connected).
     public func permissionPolicy(for id: ACPSession.ID) -> ACPPermissionPolicy? { runners[id]?.policy }
 
-    /// Answers a pending question for a session that currently has an attached runner.
+    /// Answers a pending question for a session that currently has an
+    /// attached runner. False when none does: the answer reached nobody.
+    @discardableResult
     public func answerQuestion(
         for id: ACPSession.ID,
         requestId: JSONRPCID,
         _ response: ACPQuestionResponse
-    ) {
-        elicitationCoordinators[id]?.respondToCursor(id: requestId, response: response)
+    ) -> Bool {
+        guard let coordinator = elicitationCoordinators[id] else { return false }
+        coordinator.respondToCursor(id: requestId, response: response)
+        return true
     }
 
+    @discardableResult
     public func respondToPlan(
         for id: ACPSession.ID,
         requestId: JSONRPCID,
         _ response: ACPCursorPlanResponse
-    ) {
-        elicitationCoordinators[id]?.respondToPlan(id: requestId, response: response)
+    ) -> Bool {
+        guard let coordinator = elicitationCoordinators[id] else { return false }
+        coordinator.respondToPlan(id: requestId, response: response)
+        return true
     }
 
+    @discardableResult
     public func respondToUserInput(
         for id: ACPSession.ID,
         token: UUID,
         action: ACPUserInputAction
-    ) {
-        elicitationCoordinators[id]?.respond(to: token, action: action)
+    ) -> Bool {
+        guard let coordinator = elicitationCoordinators[id] else { return false }
+        coordinator.respond(to: token, action: action)
+        return true
     }
 
     @discardableResult
@@ -463,6 +475,12 @@ public final class ACPSessionManager: ChangeTracking {
     /// Confirms ownership off-main immediately before an RPC or local process
     /// side effect. Cached observations remain suitable for rendering, but are
     /// not authority for actions that cannot be transactionally fenced.
+    /// Whether this instance still drives the session, read from the store
+    /// rather than its last view, for actions that resume the agent.
+    public func confirmsWriterLease(for sessionId: ACPSession.ID) async -> Bool {
+        await confirmedWriterLease(for: sessionId)
+    }
+
     private func confirmedWriterLease(for sessionId: ACPSession.ID) async -> Bool {
         guard !isDisposed, _ownedLeases.contains(sessionId),
               let token = ownedLeaseTokens[sessionId]
@@ -2127,9 +2145,11 @@ public final class ACPSessionManager: ChangeTracking {
             recent.removeAll { $0.id == id }
             recent.insert(row, at: 0)
         }
-        enqueuePersistence { persistence in
+        unsavedCreations.insert(id)
+        markSaved(id, once: enqueuePersistenceResult { persistence -> Bool in
             try await persistence.upsertSession(row)
-        }
+            return true
+        })
         let session = ACPSession(
             id: id, agentId: agentId, worktreeId: worktreeId,
             title: row.title, owner: owner, titleSource: row.titleSource, origin: row.origin,
@@ -3307,6 +3327,62 @@ public final class ACPSessionManager: ChangeTracking {
         seenTracker.setVisible(false, sessionId: id)
     }
 
+    /// Archives a session and stops it, unless another live instance drives
+    /// it. The row is written under a lease fence, this instance's own or one
+    /// claimed for the write, so no instance can start driving the session
+    /// between the decision and the write. Returns false, archiving nothing,
+    /// when another instance holds the lease.
+    public func archiveUnlessDrivenElsewhere(id: ACPSession.ID) async throws -> Bool {
+        // A session created a moment ago may not have its row yet.
+        await flushAllPersistence()
+        // On a remote host the local lease is half of authority; the other half
+        // is the host's, which only a writer here holds. Confirmed with the
+        // host rather than from the last heartbeat, as other destructive
+        // remote transitions do.
+        if effectiveRemoteHost() != nil {
+            guard isWriter(for: id), await confirmedWriterLease(for: id) else { return false }
+        }
+        let fence: ACPSessionLeaseFence
+        var claimedToken: String?
+        if let owned = leaseFence(sessionId: id) {
+            fence = owned
+        } else {
+            let token = UUID().uuidString
+            guard let lease = try await persistence.claimLease(
+                sessionId: id, instanceId: instanceId, pid: pid,
+                now: Int64(Date().timeIntervalSince1970), staleAfter: Self.leaseStaleAfter, leaseToken: token
+            ) else { return false }
+            // An attachment of this instance may hold the lease already, with
+            // its own token: the fence is whatever the store holds, and only a
+            // lease this call created is released after.
+            fence = ACPSessionLeaseFence(sessionId: id, ownerInstance: instanceId, token: lease.token)
+            claimedToken = lease.token == token ? token : nil
+        }
+        let archived: Bool
+        do {
+            archived = try await persistence.setArchived(id: id, archived: true, fence: fence)
+        } catch {
+            // Nobody heartbeats a lease claimed only for this write.
+            if let claimedToken {
+                try? await persistence.releaseLease(sessionId: id, instanceId: instanceId, leaseToken: claimedToken)
+            }
+            throw error
+        }
+        if let claimedToken {
+            try? await persistence.releaseLease(sessionId: id, instanceId: instanceId, leaseToken: claimedToken)
+        }
+        guard archived else { return false }
+        if var row = persistedRows[id] {
+            row.archived = true
+            persistedRows[id] = row
+        }
+        recent.removeAll { $0.id == id }
+        if sessions[id] != nil {
+            try await disposeSession(id: id)
+        }
+        return true
+    }
+
     public func setArchived(id: ACPSession.ID, archived: Bool) {
         if var row = persistedRows[id] {
             row.archived = archived
@@ -3392,12 +3468,23 @@ public final class ACPSessionManager: ChangeTracking {
         replaceRecentRow(row)
         let rowToPersist = row
         let fence = leaseFence(sessionId: s.id)
-        enqueuePersistence { persistence in
-            _ = try await persistence.upsertSession(
+        markSaved(s.id, once: enqueuePersistenceResult { persistence in
+            try await persistence.upsertSession(
                 rowToPersist,
                 preserveTitle: preserveTitle,
                 fence: fence
             )
+        })
+    }
+
+    /// Clears a creation's not-yet-saved marker once `saving` lands its row,
+    /// whichever save that turns out to be.
+    private func markSaved(_ id: ACPSession.ID, once saving: Task<Bool?, Never>) {
+        guard unsavedCreations.contains(id) else { return }
+        Task { @MainActor [weak self] in
+            if await saving.value == true {
+                self?.unsavedCreations.remove(id)
+            }
         }
     }
 
@@ -3409,6 +3496,9 @@ public final class ACPSessionManager: ChangeTracking {
         let result = await enqueuePersistenceResult { persistence in
             try await persistence.upsertSession(rowToPersist, fence: fence)
         }.value
+        if result == true {
+            unsavedCreations.remove(s.id)
+        }
         guard result == true,
               isCurrentAttachment(sessionId: s.id, attempt: attempt, session: s)
         else { return false }
@@ -3856,9 +3946,37 @@ public final class ACPSessionManager: ChangeTracking {
         await previousManagerDisposal?.value
         let persistence = persistence
         do {
+            let listedBefore = Set(recent.map(\.id))
             let rows = try await persistence.recentSessions()
-            recent = rows
-            for row in rows {
+            // A live session missing from the store's list stays listed while
+            // the store holds it unarchived, or while its first save here has
+            // not landed. One another instance archived or deleted goes.
+            let loaded = Set(rows.map(\.id))
+            var kept: [ACPSessionRow] = []
+            for row in recent where !loaded.contains(row.id) && sessions[row.id] != nil {
+                if let stored = try await persistence.loadSession(id: row.id) {
+                    unsavedCreations.remove(row.id)
+                    persistedRows[row.id] = stored
+                    if !stored.archived {
+                        kept.append(stored)
+                    }
+                } else if unsavedCreations.contains(row.id) {
+                    kept.append(row)
+                } else {
+                    persistedRows[row.id] = nil
+                }
+            }
+            // The list may have changed while this read: sessions created
+            // meanwhile stay, and ones removed meanwhile stay removed.
+            let listedNow = Set(recent.map(\.id))
+            let added = recent.filter { !listedBefore.contains($0.id) && !loaded.contains($0.id) }
+            let addedIDs = Set(added.map(\.id))
+            recent = (added + kept.filter { !addedIDs.contains($0.id) } + rows).filter {
+                listedNow.contains($0.id) || !listedBefore.contains($0.id)
+            }
+            // Only rows still listed: one archived meanwhile keeps its newer cache.
+            let listed = Set(recent.map(\.id))
+            for row in rows where listed.contains(row.id) {
                 persistedRows[row.id] = row
             }
         } catch {

@@ -151,10 +151,14 @@ public actor ACPSessionPersistence: SessionSummaryStoring {
 
     public func rotateRemoteRecoveryLease(fence: ACPSessionLeaseFence, pid: Int64, now: Int64, token: String) throws -> ACPSessionLease? {
         let store = try openedStore()
-        return try store.withLeaseFence(fence) {
-            try store.seizeLease(sessionId: fence.sessionId, instanceId: fence.ownerInstance, pid: pid, now: now, leaseToken: token)
+        // Nil when the fence no longer holds, or the session was archived
+        // meanwhile and its lease cannot be taken.
+        return try store.withLeaseFence(fence) { () -> ACPSessionLease? in
+            guard try store.seizeLease(sessionId: fence.sessionId, instanceId: fence.ownerInstance, pid: pid, now: now, leaseToken: token) else {
+                return nil
+            }
             return ACPSessionLease(sessionId: fence.sessionId, ownerInstance: fence.ownerInstance, pid: pid, heartbeatAt: now, status: "idle", token: token)
-        }
+        } ?? nil
     }
 
     public func completeRemoteContextRecoveryBinding(
@@ -880,18 +884,24 @@ public actor ACPSessionPersistence: SessionSummaryStoring {
         leaseToken: String
     ) throws -> ACPSessionLease {
         let store = try openedStore()
-        try store.seizeLease(
+        guard try store.seizeLease(
             sessionId: sessionId,
             instanceId: instanceId,
             pid: pid,
             now: now,
             leaseToken: leaseToken
-        )
+        ) else { throw ACPSessionLeaseRefusal.archived }
         guard let lease = try store.loadLease(sessionId: sessionId) else {
             throw SQLiteError.stepFailed(code: SQLITE_ERROR, message: "Lease seizure did not persist", sql: "session_leases")
         }
         return lease
     }
+}
+
+/// Why a lease was not taken.
+public enum ACPSessionLeaseRefusal: Error, Equatable, Sendable {
+    /// The session is archived; nobody drives it again.
+    case archived
 }
 
 extension ACPSessionPersistence {
