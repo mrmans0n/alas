@@ -178,18 +178,37 @@ public enum ACPSessionBrowserReducer {
         return result
     }
 
-    /// Live rows that may be older than what the browser already shows are
-    /// left out; the next relist brings the agent's current state. A list
-    /// read started after the change arrived has newer data for every row,
-    /// and a local action completed meanwhile has newer data for its session.
+    /// Live rows of sessions whose local action completed after the rows
+    /// started being read (`stamp`) may predate that action: they are left
+    /// out, and the next relist brings the agent's current state.
     public static func droppingRows(
         _ rows: [ACPDiscoveredSession],
         predating stamp: ACPSessionBrowserStamp,
-        listReadsStarted: Int,
         lastLocalAction: [String: Int]
     ) -> [ACPDiscoveredSession] {
-        guard listReadsStarted == stamp.listReads else { return [] }
-        return rows.filter { (lastLocalAction[$0.remoteSessionId] ?? Int.min) <= stamp.localActions }
+        rows.filter { (lastLocalAction[$0.remoteSessionId] ?? Int.min) <= stamp.localActions }
+    }
+
+    public enum LiveRowsDisposition: Equatable, Sendable {
+        /// A list read started after the change committed newer data.
+        case drop
+        /// A list read started after the change is still running: its page
+        /// will be newer, so the change must not be replayed over it.
+        case applyWithoutReplay
+        case apply
+    }
+
+    /// What to do with a live change's rows, given the list reads started
+    /// after it (start indices above `stamp.listReads`). A read that failed
+    /// counts for nothing: the change is kept.
+    public static func disposition(
+        of stamp: ACPSessionBrowserStamp,
+        latestCommittedRead: Int,
+        readsInFlight: Set<Int>
+    ) -> LiveRowsDisposition {
+        if latestCommittedRead > stamp.listReads { return .drop }
+        if readsInFlight.contains(where: { $0 > stamp.listReads }) { return .applyWithoutReplay }
+        return .apply
     }
 
     /// Merges a freshly read first page. A row the previous first page held
@@ -532,8 +551,12 @@ public final class ACPSessionDiscoveryModel {
     private var filterLoadsInFlight = 0
     /// First-page reads in flight: filter loads and reconciles.
     private var listReadsInFlight = 0
-    /// Every list read started, Load more included.
+    /// Every list read started, Load more included; each read's index is
+    /// the count after it started.
     private var listReadsStarted = 0
+    /// The highest index of a list read whose page was applied.
+    private var latestCommittedRead = 0
+    private var readIndicesInFlight: Set<Int> = []
     /// Bumped by every completed local action (rename, archive, delete,
     /// remove from Alas). A first page read across one may predate it: a
     /// filter load reads again, a reconcile drops its page.
@@ -605,8 +628,12 @@ public final class ACPSessionDiscoveryModel {
                 // Keep the row for a local-cleanup retry: drop the queued
                 // removal so a pending read's replay does not hide it again.
                 pendingChanges.removeAll { $0.changed.isEmpty && $0.removed == [session.remoteSessionId] }
+                // Back only if it matches what the browser now lists.
                 if !sessions.contains(where: { $0.remoteSessionId == session.remoteSessionId }) {
-                    sessions.append(session)
+                    sessions = ACPSessionBrowserReducer.applying(
+                        changed: [session], removed: [], to: sessions, filter: appliedFilter,
+                        browsingWorktreeId: handle.browsingWorktreeId
+                    )
                 }
                 throw error
             }
@@ -690,10 +717,12 @@ public final class ACPSessionDiscoveryModel {
         // pending filter page commits.
         guard let handle, filterLoadsInFlight == 0 else { return }
         let generation = filterGeneration
-        listReadsStarted += 1
+        let read = startRead()
+        defer { readIndicesInFlight.remove(read) }
         do {
             let page = try await handle.loadNextPage { generation == self.filterGeneration }
             guard generation == filterGeneration else { return }
+            latestCommittedRead = max(latestCommittedRead, read)
             if replaceSessionsOnNextLoad {
                 sessions = page
                 notePageRows(page)
@@ -726,10 +755,10 @@ public final class ACPSessionDiscoveryModel {
         filterGeneration += 1
         let generation = filterGeneration
         filterLoadsInFlight += 1
-        beginListRead()
+        let read = beginListRead()
         defer {
             filterLoadsInFlight -= 1
-            finishListRead()
+            finishListRead(read)
         }
         do {
             var actions = localActionGeneration
@@ -741,6 +770,7 @@ public final class ACPSessionDiscoveryModel {
             }
             guard generation == filterGeneration, !stopped else { return }
             handle.commit(filter: newFilter, cursor: page.cursor)
+            latestCommittedRead = max(latestCommittedRead, read)
             appliedFilter = newFilter
             sessions = page.rows
             notePageRows(page.rows)
@@ -762,13 +792,14 @@ public final class ACPSessionDiscoveryModel {
         let generation = filterGeneration
         let listedFilter = appliedFilter
         let actions = localActionGeneration
-        beginListRead()
-        defer { finishListRead() }
+        let read = beginListRead()
+        defer { finishListRead(read) }
         guard let page = try? await handle.firstPage(filter: listedFilter),
               generation == filterGeneration, listedFilter == appliedFilter, filterLoadsInFlight == 0,
               actions == localActionGeneration
         else { return }
         notePageRows(page.rows)
+        latestCommittedRead = max(latestCommittedRead, read)
         sessions = ACPSessionBrowserReducer.reconciling(
             firstPage: page.rows,
             hasMorePages: page.cursor != nil,
@@ -854,11 +885,11 @@ public final class ACPSessionDiscoveryModel {
         for row in rows { latestLiveRows[row.remoteSessionId] = row }
     }
 
-    private func applyLiveChanges(changed: [ACPDiscoveredSession], removed: [String]) {
+    private func applyLiveChanges(changed: [ACPDiscoveredSession], removed: [String], replay: Bool = true) {
         guard let handle else { return }
         // Applied now so the listed rows stay current, and replayed after the
         // pending read in case its page predates the change.
-        if listReadsInFlight > 0 { pendingChanges.append((changed, removed)) }
+        if replay, listReadsInFlight > 0 { pendingChanges.append((changed, removed)) }
         for row in changed { latestLiveRows[row.remoteSessionId] = row }
         sessions = ACPSessionBrowserReducer.applying(
             changed: changed, removed: removed, to: sessions, filter: appliedFilter,
@@ -866,15 +897,24 @@ public final class ACPSessionDiscoveryModel {
         )
     }
 
-    private func beginListRead() {
-        listReadsInFlight += 1
+    /// Starts any list read and returns its index.
+    private func startRead() -> Int {
         listReadsStarted += 1
+        readIndicesInFlight.insert(listReadsStarted)
+        return listReadsStarted
+    }
+
+    /// Starts a first-page read, which buffers live changes until it ends.
+    private func beginListRead() -> Int {
+        listReadsInFlight += 1
+        return startRead()
     }
 
     /// Ends a list read after its page was applied (or dropped). The last one
     /// to finish replays the changes buffered meanwhile, whatever order the
     /// reads complete in.
-    private func finishListRead() {
+    private func finishListRead(_ read: Int) {
+        readIndicesInFlight.remove(read)
         listReadsInFlight -= 1
         guard listReadsInFlight == 0, let handle else { return }
         let changes = pendingChanges
@@ -899,10 +939,15 @@ public final class ACPSessionDiscoveryModel {
             for await (changed, removed, stamp) in stream {
                 guard let self, !self.stopped else { break }
                 let current = ACPSessionBrowserReducer.droppingRows(
-                    changed, predating: stamp, listReadsStarted: self.listReadsStarted,
-                    lastLocalAction: self.lastLocalAction
+                    changed, predating: stamp, lastLocalAction: self.lastLocalAction
                 )
-                self.applyLiveChanges(changed: current, removed: removed)
+                switch ACPSessionBrowserReducer.disposition(
+                    of: stamp, latestCommittedRead: self.latestCommittedRead, readsInFlight: self.readIndicesInFlight
+                ) {
+                case .drop: self.applyLiveChanges(changed: [], removed: removed)
+                case .applyWithoutReplay: self.applyLiveChanges(changed: current, removed: removed, replay: false)
+                case .apply: self.applyLiveChanges(changed: current, removed: removed)
+                }
             }
         }
         // Rows that changed between the first page and the subscription.

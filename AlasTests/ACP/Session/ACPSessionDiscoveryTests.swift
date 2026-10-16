@@ -1039,19 +1039,28 @@ struct ACPSessionDiscoveryTests {
         await model.stop()
     }
 
-    @Test("live rows read before a list read started or their session's local action finished are left out", arguments: [
-        (nil, 3, 5, true),
-        (3, 3, 5, true),
-        (4, 3, 5, false),
-        (nil, 3, 6, false),
-    ] as [(Int?, Int, Int, Bool)])
-    func liveRowsPredatingNewerData(lastAction: Int?, actionsAtStart: Int, readsNow: Int, kept: Bool) {
-        let row = Self.reducerRow("s", 1)
+    @Test("live rows read before their session's local action finished are left out", arguments: [
+        (nil, true), (3, true), (4, false),
+    ] as [(Int?, Bool)])
+    func liveRowsPredatingLocalActions(lastAction: Int?, kept: Bool) {
+        let stamp = ACPSessionBrowserStamp(localActions: 3, listReads: 5)
         let actions = lastAction.map { ["s": $0] } ?? [:]
-        let stamp = ACPSessionBrowserStamp(localActions: actionsAtStart, listReads: 5)
         #expect(ACPSessionBrowserReducer.droppingRows(
-            [row], predating: stamp, listReadsStarted: readsNow, lastLocalAction: actions
+            [Self.reducerRow("s", 1)], predating: stamp, lastLocalAction: actions
         ).isEmpty == !kept)
+    }
+
+    @Test("a live change older than a committed list page is dropped, kept over a failed one", arguments: [
+        // Reads started by the change: 5. Committed up to, and in flight.
+        (5, [], ACPSessionBrowserReducer.LiveRowsDisposition.apply),
+        (6, [], .drop),
+        (5, [6], .applyWithoutReplay),
+        (5, [4], .apply),
+    ] as [(Int, Set<Int>, ACPSessionBrowserReducer.LiveRowsDisposition)])
+    func liveRowsAgainstListReads(committed: Int, inFlight: Set<Int>, expected: ACPSessionBrowserReducer.LiveRowsDisposition) {
+        #expect(ACPSessionBrowserReducer.disposition(
+            of: .init(localActions: 0, listReads: 5), latestCommittedRead: committed, readsInFlight: inFlight
+        ) == expected)
     }
 
     @MainActor
