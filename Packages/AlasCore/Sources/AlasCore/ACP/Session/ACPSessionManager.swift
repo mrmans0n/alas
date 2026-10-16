@@ -469,6 +469,12 @@ public final class ACPSessionManager: ChangeTracking {
     /// Confirms ownership off-main immediately before an RPC or local process
     /// side effect. Cached observations remain suitable for rendering, but are
     /// not authority for actions that cannot be transactionally fenced.
+    /// Whether this instance still drives the session, read from the store
+    /// rather than its last view, for actions that resume the agent.
+    public func confirmsWriterLease(for sessionId: ACPSession.ID) async -> Bool {
+        await confirmedWriterLease(for: sessionId)
+    }
+
     private func confirmedWriterLease(for sessionId: ACPSession.ID) async -> Bool {
         guard !isDisposed, _ownedLeases.contains(sessionId),
               let token = ownedLeaseTokens[sessionId]

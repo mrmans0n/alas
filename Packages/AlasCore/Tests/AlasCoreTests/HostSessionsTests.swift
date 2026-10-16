@@ -86,7 +86,7 @@ struct HostSessionsTests {
     }
 
     /// An answer that reaches no agent is not reported as given: a session
-    /// shown here but not connected cannot pass it on.
+    /// shown here but not driven by this instance cannot pass it on.
     @Test func answersWithNoAgentToReceiveThemAreRefused() async throws {
         let fixture = try Fixture()
         defer { fixture.tearDown() }
@@ -97,8 +97,8 @@ struct HostSessionsTests {
             questions: [ACPQuestion(id: "q", prompt: "Which?", options: [ACPQuestionOption(id: "a", label: "A")], allowMultiple: false)]
         ))
 
-        #expect(throws: SessionRefusal.notPending) {
-            try fixture.host.sessions.answerQuestion(
+        await #expect(throws: SessionRefusal.notWriter) {
+            try await fixture.host.sessions.answerQuestion(
                 session.id, requestID: .number(3), answers: [ACPQuestionAnswer(questionId: "q", selectedOptionIds: ["a"])], caller: .app
             )
         }
@@ -118,8 +118,9 @@ struct HostSessionsTests {
         #expect(fixture.core.sessionManagers[created.owner] == nil)
     }
 
-    /// A setting the session drops because another instance took it over
-    /// while the lease was being confirmed is reported, not acknowledged.
+    /// After another instance takes the session over, whatever this one still
+    /// holds is refused: a setting the session drops, and an answer that would
+    /// resume the agent beside the new writer.
     @Test func settingsLostToATakeoverAreRefused() async throws {
         let fixture = try Fixture()
         defer { fixture.tearDown() }
@@ -127,6 +128,16 @@ struct HostSessionsTests {
         let id = try await sessions.create(.worktree(fixture.ref), agentID: "gemini", caller: .app).id
         try await eventually { await sessions.list().first { $0.id == id }?.isWriter == true }
         let manager = try #require(fixture.core.sessionManagers.values.first)
+        fixture.agent.emitPermission(id: .number(9), params: ACPPermissionRequestParams(
+            sessionId: "agent-1",
+            toolCall: ACPPermissionToolCall(
+                toolCallId: "call-2", title: "Write", kind: nil, status: nil,
+                content: nil, locations: nil, rawInput: nil, rawOutput: nil
+            ),
+            options: [ACPPermissionOption(optionId: "allow", name: "Allow", kind: "allow_once")]
+        ))
+        try await eventually { await manager.liveSession(for: id)?.transcript.pendingPermission != nil }
+        let pending = try #require(manager.liveSession(for: id)?.transcript.pendingPermission)
 
         // Another instance takes the lease while this one still believes it holds it.
         let store = ACPSessionPersistence(path: fixture.sessionsDatabase.path)
@@ -137,6 +148,11 @@ struct HostSessionsTests {
         )
         #expect(manager.isWriter(for: id), "the takeover is not observed yet")
 
+        await #expect(throws: SessionRefusal.notWriter) {
+            try await sessions.answerPermission(id, requestID: pending.id, optionID: "allow", caller: .app)
+        }
+        // Standing down cancels the request; the answer never reaches the agent.
+        #expect(fixture.agent.permissionResponses[.number(9)]?.outcome != .selected(optionId: "allow"))
         await #expect(throws: SessionRefusal.notWriter) {
             try await sessions.setModel(id, modelID: "fast", caller: .app)
         }

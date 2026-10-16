@@ -87,6 +87,11 @@ public enum ACPRequestAnswers {
     /// order, or nil unless every question has a selection of its own options
     /// only, and only one where the question allows one.
     public static func question(_ pending: ACPSession.PendingQuestion, answers: [ACPQuestionAnswer]) -> ACPQuestionResponse? {
+        // One answer per question asked, and none for a question it did not ask.
+        let answered = answers.map(\.questionId)
+        guard answered.count == Set(answered).count,
+              Set(answered) == Set(pending.params.questions.map(\.id))
+        else { return nil }
         let selectionByQuestion = Dictionary(
             answers.map { ($0.questionId, Set($0.selectedOptionIds)) },
             uniquingKeysWith: { $1 }

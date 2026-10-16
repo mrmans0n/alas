@@ -24,4 +24,21 @@ struct ACPRequestAnswersTests {
         let response = ACPRequestAnswers.question(pending, answers: [ACPQuestionAnswer(questionId: "q", selectedOptionIds: selected)])
         #expect((response != nil) == accepted)
     }
+
+    /// An answer covers exactly the questions asked: none missing, none extra,
+    /// none twice.
+    @Test(arguments: [
+        (["q"], true),
+        (["q", "extra"], false),
+        (["q", "q"], false),
+        ([], false),
+    ])
+    func answersCoverExactlyTheQuestionsAsked(_ questionIDs: [String], _ accepted: Bool) {
+        let pending = ACPSession.PendingQuestion(id: .number(1), params: ACPQuestionRequestParams(
+            toolCallId: "call", title: nil,
+            questions: [ACPQuestion(id: "q", prompt: "Which?", options: [ACPQuestionOption(id: "a", label: "A")], allowMultiple: false)]
+        ))
+        let answers = questionIDs.map { ACPQuestionAnswer(questionId: $0, selectedOptionIds: ["a"]) }
+        #expect((ACPRequestAnswers.question(pending, answers: answers) != nil) == accepted)
+    }
 }

@@ -177,7 +177,7 @@ extension SessionsAPI {
         caller: HostCaller
     ) async throws {
         caller.log("sessions.answerPermission", sessionID)
-        let manager = try liveManager(for: sessionID)
+        let manager = try await answeringManager(for: sessionID)
         guard let pending = manager.liveSession(for: sessionID)?.transcript.pendingPermission, pending.id == requestID,
               let policy = manager.permissionPolicy(for: sessionID)
         else { throw SessionRefusal.notPending }
@@ -190,9 +190,9 @@ extension SessionsAPI {
     }
 
     /// Answers the session's pending question `requestID`.
-    public func answerQuestion(_ sessionID: String, requestID: JSONRPCID, answers: [ACPQuestionAnswer], caller: HostCaller) throws {
+    public func answerQuestion(_ sessionID: String, requestID: JSONRPCID, answers: [ACPQuestionAnswer], caller: HostCaller) async throws {
         caller.log("sessions.answerQuestion", sessionID)
-        let manager = try liveManager(for: sessionID)
+        let manager = try await answeringManager(for: sessionID)
         guard let session = manager.liveSession(for: sessionID),
               let pending = ACPRequestAnswers.pendingQuestion(in: session), pending.id == requestID
         else { throw SessionRefusal.notPending }
@@ -201,9 +201,9 @@ extension SessionsAPI {
     }
 
     /// Answers the session's pending plan `requestID`.
-    public func respondToPlan(_ sessionID: String, requestID: JSONRPCID, action: ACPRequestAnswers.PlanAction, caller: HostCaller) throws {
+    public func respondToPlan(_ sessionID: String, requestID: JSONRPCID, action: ACPRequestAnswers.PlanAction, caller: HostCaller) async throws {
         caller.log("sessions.respondToPlan", sessionID)
-        let manager = try liveManager(for: sessionID)
+        let manager = try await answeringManager(for: sessionID)
         guard let pending = manager.liveSession(for: sessionID)?.transcript.pendingPlan, pending.id == requestID else {
             throw SessionRefusal.notPending
         }
@@ -217,9 +217,9 @@ extension SessionsAPI {
         requestID: UUID,
         answer: ACPRequestAnswers.UserInputAnswer,
         caller: HostCaller
-    ) throws {
+    ) async throws {
         caller.log("sessions.respondToUserInput", sessionID)
-        let manager = try liveManager(for: sessionID)
+        let manager = try await answeringManager(for: sessionID)
         guard let pending = manager.liveSession(for: sessionID)?.transcript.pendingUserInputs.first,
               pending.id == requestID, case .elicitation = pending.source
         else { throw SessionRefusal.notPending }
@@ -244,6 +244,15 @@ extension SessionsAPI {
         guard let manager = core.sessionManagers.values.first(where: { $0.liveSession(for: sessionID) != nil }) else {
             throw SessionRefusal.notFound
         }
+        return manager
+    }
+
+    /// The live session's manager, once the store confirms this instance
+    /// still drives it: an answer resumes the agent, which must not act
+    /// beside a writer that took the session over.
+    private func answeringManager(for sessionID: String) async throws -> ACPSessionManager {
+        let manager = try liveManager(for: sessionID)
+        guard await manager.confirmsWriterLease(for: sessionID) else { throw SessionRefusal.notWriter }
         return manager
     }
 
