@@ -23,13 +23,28 @@ public struct HostTranscriptMessage: Codable, Equatable, Sendable {
     public var kind: String
     /// The store's JSON payload for `kind`.
     public var payload: String
+    /// For a tool call, whether the payload holds only the start of its
+    /// output, which the store keeps whole: nil when it holds all of it.
+    public var truncated: Bool?
+
+    public init(index: Int, stableID: String, kind: String, payload: String, truncated: Bool? = nil) {
+        self.index = index
+        self.stableID = stableID
+        self.kind = kind
+        self.payload = payload
+        self.truncated = truncated
+    }
 }
 
 extension HostTranscriptMessage {
     /// `message` at `index`, in the session store's encoding.
     @MainActor init?(_ message: ACPMessage, at index: Int) {
         guard let payload = try? ACPMessageCodec.encode(message) else { return nil }
-        self.init(index: index, stableID: message.stableId, kind: message.kind, payload: String(decoding: payload, as: UTF8.self))
+        let truncated: Bool? = if case .toolCall(let call) = message, call.isContentTruncated { true } else { nil }
+        self.init(
+            index: index, stableID: message.stableId, kind: message.kind,
+            payload: String(decoding: payload, as: UTF8.self), truncated: truncated
+        )
     }
 }
 

@@ -143,6 +143,16 @@ struct HostSessionsTests {
         }
         #expect(received.deltas(of: other.id).isEmpty)
 
+        // A tool call that holds only the start of its output says so: the
+        // store's encoding cannot.
+        var call = ACPMessage.ToolCall(
+            toolCallId: "t", title: "read", status: "completed", content: String(repeating: "x", count: 50_000), preview: "x")
+        call.truncateForOffWindow()
+        manager.liveSession(for: id)?.transcript.messages.append(.toolCall(call))
+        try await eventually {
+            await received.deltas(of: id).contains { $0.messages.contains { $0.kind == "tool_call" && $0.truncated == true } }
+        }
+
         // A second follower resumes from where the first got to.
         let resumed = fixture.host.subscribe()
         let resumedEvents = Collected(resumed)
