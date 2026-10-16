@@ -173,6 +173,35 @@ struct HostSessionsTests {
         #expect(manager.liveSession(for: other.id) != nil)
         idle.unfollow(other.id)
         #expect(manager.liveSession(for: other.id) == nil)
+        // An evicted session can be loaded again.
+        await manager.flushAllPersistence()
+        try await sessions.load(other.id)
+        #expect(manager.liveSession(for: other.id) != nil)
+
+        // Older messages come a page at a time.
+        let count = try #require(manager.liveSession(for: id)).transcript.messages.count
+        let page = try sessions.transcriptPage(id, before: count, limit: 2)
+        #expect(page.messages.map(\.index) == [count - 2, count - 1])
+        #expect(page.messageCount == count)
+    }
+
+    /// A follower hears what the session is set to besides its transcript,
+    /// and again when that changes.
+    @Test func followingStreamsTheSessionState() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let sessions = fixture.host.sessions
+        let id = try await sessions.create(.worktree(fixture.ref), agentID: "gemini", caller: .app).id
+        try await eventually { await sessions.list().first { $0.id == id }?.isWriter == true }
+        let subscription = fixture.host.subscribe()
+        let received = Collected(subscription)
+        try subscription.follow(id)
+        try await eventually { await received.states(of: id).last?.isWriter == true }
+        #expect(received.states(of: id).last?.config.autoRunEnabled == false)
+
+        try await sessions.setAutoRun(id, enabled: true, caller: .app)
+        try await eventually { await received.states(of: id).last?.config.autoRunEnabled == true }
+        subscription.cancel()
     }
 
     /// A host socket client creates a session against a scripted agent,
@@ -545,6 +574,10 @@ private final class Collected {
                 self?.events += batch
             }
         }
+    }
+
+    func states(of id: String) -> [HostSessionState] {
+        events.compactMap { if case .sessionState(_, id, let state) = $0 { state } else { nil } }
     }
 
     func deltas(of id: String) -> [HostTranscriptDelta] {

@@ -515,7 +515,7 @@ public final class RemoteSessionGateway {
             case .projectChanged, .projectRemoved, .resync:
                 return (true, true, true)
             case .workspaceCheckoutChanged, .workspaceCheckoutRemoved, .runChanged, .runRemoved,
-                 .transcript, .pendingRequest, .pendingRequestResolved:
+                 .transcript, .pendingRequest, .pendingRequestResolved, .sessionState:
                 break
             }
         }

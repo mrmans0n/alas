@@ -64,6 +64,11 @@ struct HostProtocolTests {
                 toolCallId: "t", name: "Plan", overview: "", plan: "Do it", todos: [], isProject: false, phases: []
             ))),
             .pendingRequestResolved(owner: .worktree("w"), id: "s", requestID: .userInput(UUID(uuidString: "6F9619FF-8B86-D011-B42D-00CF4FC964FF")!)),
+            .sessionState(owner: .worktree("w"), id: "s", state: HostSessionState(
+                isWriter: true, hasCancellableBackgroundWork: false,
+                config: RemoteSessionConfig(sessionId: "s", models: [], modes: [], currentModel: nil, currentMode: nil, autoRunEnabled: true, acceptsImages: false),
+                queue: []
+            )),
             .resync,
         ], cursor: HostCursor(generation: UUID(uuidString: "6F9619FF-8B86-D011-B42D-00CF4FC964FF")!, sequence: 7)),
     ])

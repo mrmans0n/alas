@@ -166,6 +166,44 @@ extension SessionsAPI {
         }
     }
 
+    /// Loads a listed session so it can be followed: a stored one is read
+    /// back from its store, the latest messages first. Loading takes no
+    /// lease; following or driving it is a separate step.
+    public func load(_ sessionID: String) async throws {
+        guard let manager = rowManager(for: sessionID) else { throw SessionRefusal.notFound }
+        _ = manager.placeholderSession(id: sessionID)
+        await manager.hydrateIfNeeded(id: sessionID)
+        guard manager.liveSession(for: sessionID) != nil else { throw SessionRefusal.notFound }
+    }
+
+    /// A tool call's full output, which a loaded transcript keeps only for
+    /// its newest messages.
+    public func fullToolCallContent(_ sessionID: String, toolCallID: String) async -> String? {
+        guard let manager = try? liveManager(for: sessionID) else { return nil }
+        return await manager.reloadFullToolCallContent(sessionId: sessionID, toolCallId: toolCallID)
+    }
+
+    /// The visual aid `visualID` in the loaded session's transcript.
+    public func visualAid(_ sessionID: String, id visualID: UUID) -> ACPVisualAid? {
+        (try? liveManager(for: sessionID))?.liveSession(for: sessionID)?.transcript.visualAid(id: visualID)
+    }
+
+    /// Up to `limit` messages before `index` in the loaded session's
+    /// transcript, oldest first, at the revision they were read.
+    public func transcriptPage(_ sessionID: String, before index: Int, limit: Int) throws -> HostTranscriptPage {
+        guard let transcript = try liveManager(for: sessionID).liveSession(for: sessionID)?.transcript else {
+            throw SessionRefusal.notFound
+        }
+        let messages = transcript.messages
+        let upper = min(max(index, 0), messages.count)
+        let lower = max(0, upper - max(limit, 0))
+        return HostTranscriptPage(
+            revision: TranscriptRevision(epoch: transcript.changeLog.epoch, version: transcript.changeLog.latestVersion),
+            messages: (lower ..< upper).compactMap { HostTranscriptMessage(messages[$0], at: $0) },
+            messageCount: messages.count
+        )
+    }
+
     /// Whether this instance drives the loaded session `sessionID`.
     public func isWriter(_ sessionID: String) -> Bool {
         (try? writerManager(for: sessionID)) != nil
