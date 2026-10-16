@@ -71,7 +71,12 @@ struct ReviewFeedbackAgentSender {
                             completion(.failure(ReviewFeedbackAgentSendError.rejected))
                             return
                         }
-                        await Self.deliver(delivery, appState: appState, sessionID: opened.sessionID, owner: opened.owner, completion: completion)
+                        await Self.deliver(delivery, appState: appState, sessionID: opened.sessionID, owner: opened.owner) { result in
+                            if case .failure = result {
+                                Self.keepAsDraft(delivery, appState: appState, sessionID: opened.sessionID)
+                            }
+                            completion(result)
+                        }
                     }
                 case .existingSession(let targetWorktreeID, let sessionID, _):
                     let owner = Self.sessionOwner(appState: appState, worktreeID: targetWorktreeID, sessionID: sessionID)
@@ -99,6 +104,17 @@ struct ReviewFeedbackAgentSender {
                 }
             }
         )
+    }
+
+    /// A new chat that refuses the turn (its agent needs sign-in or setup)
+    /// would otherwise sit empty: the feedback goes to its composer instead,
+    /// to send once the agent is ready.
+    private static func keepAsDraft(_ delivery: ReviewFeedbackDelivery, appState: AppState, sessionID: String) {
+        guard let manager = appState.acpManager(forSession: sessionID),
+              let session = manager.liveSession(for: sessionID),
+              session.composerDraft.isEmpty
+        else { return }
+        manager.persistComposerDraft(ACPComposerDraft(segments: [.text(delivery.text)]), for: session)
     }
 
     /// Opens a chat for the review to go out in right away, in the focused
