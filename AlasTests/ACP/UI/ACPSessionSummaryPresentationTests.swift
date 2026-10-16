@@ -107,6 +107,23 @@ struct ACPSessionSummaryPresentationTests {
     }
 
     @Test(arguments: [
+        (false, .loading, .cancel),
+        (true, .loading, .cancel),
+        (false, .idle, .summarize),
+        (false, .result(partialSummary), .summarize),
+        // A shown card already has the cached result; a click must regenerate.
+        (true, .result(partialSummary), .refresh),
+        (true, .failed("Generation failed", previous: nil), .refresh),
+    ] as [(Bool, SessionSummaryCoordinator.Phase, ACPSessionSummaryPresentation.ControlAction)])
+    func controlClickRefreshesAShownCard(
+        _ cardShown: Bool,
+        _ phase: SessionSummaryCoordinator.Phase,
+        _ expected: ACPSessionSummaryPresentation.ControlAction
+    ) {
+        #expect(ACPSessionSummaryPresentation.controlAction(cardShown: cardShown, phase: phase) == expected)
+    }
+
+    @Test(arguments: [
         (.ready, .ready, .ready, .ready),
         // Relaunch: history is loaded but the agent is still connecting.
         (.ready, .spawning, .checking, .waiting),

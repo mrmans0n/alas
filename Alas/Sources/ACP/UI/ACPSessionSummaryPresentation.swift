@@ -73,6 +73,26 @@ struct ACPSessionSummaryPresentation: Equatable {
         }
     }
 
+    /// What a click on the toolbar control does.
+    enum ControlAction: Equatable, Sendable {
+        case cancel
+        /// Shows the cached result when there is one.
+        case summarize
+        /// Regenerates, bypassing caches: the card already shows a result.
+        case refresh
+    }
+
+    static func controlAction(
+        cardShown: Bool,
+        phase: SessionSummaryCoordinator.Phase
+    ) -> ControlAction {
+        switch phase {
+        case .loading: .cancel
+        case .result, .failed: cardShown ? .refresh : .summarize
+        case .idle: .summarize
+        }
+    }
+
     /// A card exists only while a request owns it (`cardMode`). Recap failures
     /// never reach `.failed`: the coordinator clears the card instead.
     static func cardContent(

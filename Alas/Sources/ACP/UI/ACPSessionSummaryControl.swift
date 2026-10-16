@@ -55,11 +55,14 @@ struct ACPSessionSummaryControl: View {
 
     private func control(presentation: ACPSessionSummaryPresentation) -> some View {
         Button {
-            if coordinator.phase == .loading {
+            // The inline recap card above the composer shows the result.
+            switch ACPSessionSummaryPresentation.controlAction(cardShown: cardIsShown, phase: coordinator.phase) {
+            case .cancel:
                 coordinator.cancelPresentation()
-            } else {
-                // The inline recap card above the composer shows the result.
+            case .summarize:
                 Task { await coordinator.summary(for: session, mode: .manual) }
+            case .refresh:
+                Task { await coordinator.refresh(session, mode: .manual) }
             }
         } label: {
             HStack(spacing: 5) {

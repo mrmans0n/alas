@@ -34,7 +34,7 @@ struct ACPSessionRecapCard: View {
 
     private func card(_ content: ACPSessionSummaryPresentation.CardContent) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            header
+            header(content)
             switch content {
             case .hidden:
                 EmptyView()
@@ -95,7 +95,7 @@ struct ACPSessionRecapCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var header: some View {
+    private func header(_ content: ACPSessionSummaryPresentation.CardContent) -> some View {
         HStack(spacing: 6) {
             Image(systemName: "text.quote")
                 .font(.system(size: 10))
@@ -106,6 +106,18 @@ struct ACPSessionRecapCard: View {
                 .foregroundStyle(theme.color("accent"))
                 .accessibilityAddTraits(.isHeader)
             Spacer(minLength: 0)
+            if Self.offersRefresh(content) {
+                Button {
+                    Task { await coordinator.refresh(session, mode: .manual) }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 10))
+                        .foregroundStyle(theme.color("fg-faint"))
+                }
+                .buttonStyle(.plain)
+                .help("Refresh")
+                .accessibilityLabel("Refresh recap")
+            }
             Button {
                 coordinator.dismissCard()
             } label: {
@@ -135,6 +147,13 @@ struct ACPSessionRecapCard: View {
         }
         .foregroundStyle(theme.color("fg-muted"))
         .accessibilityElement(children: .combine)
+    }
+
+    private static func offersRefresh(_ content: ACPSessionSummaryPresentation.CardContent) -> Bool {
+        switch content {
+        case .sections, .failed: true
+        case .hidden, .loading: false
+        }
     }
 
     private static func announcement(for content: ACPSessionSummaryPresentation.CardContent) -> String? {

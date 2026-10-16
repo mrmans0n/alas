@@ -153,8 +153,10 @@ private struct ACPManagedTabView: View {
             .onAppear {
                 manager.retainSession(id: sessionId)
                 manager.markSessionVisible(id: sessionId)
+                manager.markChatVisible(id: sessionId)
             }
             .onDisappear {
+                manager.unmarkChatVisible(id: sessionId)
                 manager.unmarkSessionVisible(id: sessionId)
                 manager.releaseSession(id: sessionId)
             }

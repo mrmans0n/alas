@@ -186,7 +186,7 @@ struct ACPSessionManagerRetentionTests {
         #expect(reopened.promptSuggestions == suggestions)
     }
 
-    @Test("a tab shown before its session loads is seen and announced when the session arrives")
+    @Test("a chat shown before its session loads is seen and announced when the session arrives")
     func visibleBeforeLoadAnnouncesOnArrival() throws {
         let mgr = makeManager()
         let id = mgr.createSession(agentId: "claude").id
@@ -203,6 +203,9 @@ struct ACPSessionManagerRetentionTests {
         defer { arrivals.cancel() }
 
         mgr.markSessionVisible(id: id)
+        // A visible surface alone (e.g. a visual-aid tab) is not the chat.
+        #expect(!mgr.seenTracker.isSeen(id))
+        mgr.markChatVisible(id: id)
         #expect(mgr.seenTracker.isSeen(id))
         _ = try #require(mgr.placeholderSession(id: id))
 
@@ -213,8 +216,8 @@ struct ACPSessionManagerRetentionTests {
     func hidingPersistsLastSeen() async throws {
         let mgr = makeManager()
         let id = mgr.createSession(agentId: "claude").id
-        mgr.markSessionVisible(id: id)
-        mgr.unmarkSessionVisible(id: id)
+        mgr.markChatVisible(id: id)
+        mgr.unmarkChatVisible(id: id)
 
         await mgr.flushPersistence()
 

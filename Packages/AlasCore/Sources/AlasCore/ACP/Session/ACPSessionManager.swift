@@ -1581,7 +1581,11 @@ public final class ACPSessionManager: ChangeTracking {
     /// session without making its transcript visible; mirror polling uses
     /// this narrower signal to back off when the ACP tab is not on screen.
     private var visibleSessionCounts: [ACPSession.ID: Int] = [:]
-    /// Whether each session is seen (tab visible and app active). The app
+    /// Per-session count of on-screen chat surfaces. Narrower than
+    /// `visibleSessionCounts`: a visual-aid tab keeps the mirror hot but does
+    /// not show the conversation, so only the chat drives `seenTracker`.
+    private var chatVisibleCounts: [ACPSession.ID: Int] = [:]
+    /// Whether each session is seen (chat visible and app active). The app
     /// owns `onEvent` and the real app-active state; the manager persists
     /// `last_seen_at` whenever a session becomes unseen.
     public let seenTracker = SessionSeenTracker(now: Date.init, appActive: true)
@@ -3075,6 +3079,7 @@ public final class ACPSessionManager: ChangeTracking {
         mirrorMessageSnapshots.removeValue(forKey: id)
         sessionRefCounts.removeValue(forKey: id)
         visibleSessionCounts.removeValue(forKey: id)
+        chatVisibleCounts.removeValue(forKey: id)
         seenTracker.setVisible(false, sessionId: id)
         transcriptScrollMemory.removeValue(forKey: id)
         pendingModel.removeValue(forKey: id)
@@ -3142,6 +3147,7 @@ public final class ACPSessionManager: ChangeTracking {
         mirrorMessageSnapshots.removeValue(forKey: id)
         sessionRefCounts.removeValue(forKey: id)
         visibleSessionCounts.removeValue(forKey: id)
+        chatVisibleCounts.removeValue(forKey: id)
         seenTracker.setVisible(false, sessionId: id)
         transcriptScrollMemory.removeValue(forKey: id)
         pendingModel.removeValue(forKey: id)
@@ -3172,7 +3178,6 @@ public final class ACPSessionManager: ChangeTracking {
         let wasHidden = (visibleSessionCounts[id] ?? 0) == 0
         visibleSessionCounts[id, default: 0] += 1
         if wasHidden {
-            seenTracker.setVisible(true, sessionId: id)
             sessions[id]?.nextPromptVisibilityChanged.send(true)
             wakeVisibleMirror(sessionId: id)
         }
@@ -3183,10 +3188,32 @@ public final class ACPSessionManager: ChangeTracking {
         let next = current - 1
         if next == 0 {
             visibleSessionCounts.removeValue(forKey: id)
-            seenTracker.setVisible(false, sessionId: id)
             sessions[id]?.nextPromptVisibilityChanged.send(false)
         } else {
             visibleSessionCounts[id] = next
+        }
+    }
+
+    /// Marks the chat transcript for `id` as on screen. Only this signal
+    /// makes a session "seen"; `markSessionVisible` also covers surfaces
+    /// such as visual-aid tabs that do not show the conversation. Like
+    /// `markSessionVisible`, counts are kept before the session loads.
+    public func markChatVisible(id: ACPSession.ID) {
+        let wasHidden = (chatVisibleCounts[id] ?? 0) == 0
+        chatVisibleCounts[id, default: 0] += 1
+        if wasHidden {
+            seenTracker.setVisible(true, sessionId: id)
+        }
+    }
+
+    public func unmarkChatVisible(id: ACPSession.ID) {
+        guard let current = chatVisibleCounts[id], current > 0 else { return }
+        let next = current - 1
+        if next == 0 {
+            chatVisibleCounts.removeValue(forKey: id)
+            seenTracker.setVisible(false, sessionId: id)
+        } else {
+            chatVisibleCounts[id] = next
         }
     }
 
@@ -3276,6 +3303,7 @@ public final class ACPSessionManager: ChangeTracking {
         session.transcript.discardRenderState()
         sessions[id] = nil
         visibleSessionCounts.removeValue(forKey: id)
+        chatVisibleCounts.removeValue(forKey: id)
         seenTracker.setVisible(false, sessionId: id)
     }
 
