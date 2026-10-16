@@ -11,6 +11,19 @@ public enum ACPAuthTerminalLaunchError: LocalizedError, Equatable, Sendable {
     }
 }
 
+/// Identity of the run record that owns a script invocation, available before user code runs.
+public struct RunScriptExecutionIdentity: Sendable {
+    public let runID: String
+    public let worktreeID: String
+    public let projectID: String
+
+    public init(runID: String, worktreeID: String, projectID: String) {
+        self.runID = runID
+        self.worktreeID = worktreeID
+        self.projectID = projectID
+    }
+}
+
 /// Builds the shell text a run executes, in a terminal or headless.
 public enum RunScriptCommand {
     /// Composes the startup-script suffix for a run: explicit `cd` (the
@@ -23,15 +36,22 @@ public enum RunScriptCommand {
         branch: String,
         projectName: String,
         repoRoot: String,
-        capturePaths: RunScriptCapturePaths? = nil
+        capturePaths: RunScriptCapturePaths? = nil,
+        executionIdentity: RunScriptExecutionIdentity? = nil
     ) throws -> String {
         let cwd = script.cwd.map { worktreeRoot.appendingPathComponent($0).path } ?? worktreeRoot.path
-        let env = [
+        var env = [
             "ALAS_WORKTREE_ROOT": worktreeRoot.path,
             "ALAS_REPO_ROOT": repoRoot,
             "ALAS_BRANCH": branch,
             "ALAS_PROJECT_NAME": projectName,
         ]
+        if let executionIdentity {
+            env["ALAS_RUN_ID"] = executionIdentity.runID
+            env["ALAS_RUN_SCRIPT_KEY"] = script.key
+            env["ALAS_WORKTREE_ID"] = executionIdentity.worktreeID
+            env["ALAS_PROJECT_ID"] = executionIdentity.projectID
+        }
         let command: String
         let args: [String]
         if script.isExecutable {

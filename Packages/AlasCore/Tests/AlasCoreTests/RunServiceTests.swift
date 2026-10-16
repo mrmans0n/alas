@@ -5,6 +5,31 @@ import Testing
 @MainActor
 struct RunServiceTests {
     @Test(.timeLimit(.minutes(1)))
+    func launchedScriptReceivesItsExactRunIdentity() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-run-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let scriptURL = root.appendingPathComponent("identity's script.sh")
+        try #"printf '%s\n' "$ALAS_RUN_ID" "$ALAS_RUN_SCRIPT_KEY" "$ALAS_WORKTREE_ID" "$ALAS_PROJECT_ID" > identity"#
+            .write(to: scriptURL, atomically: true, encoding: .utf8)
+        let script = RunScript(
+            scope: .repo, fileName: scriptURL.lastPathComponent, fileURL: scriptURL,
+            displayName: "Identity", onExit: .close, cwd: nil, isExecutable: false
+        )
+        let worktree = Worktree(
+            id: "worktree's id", projectId: "project's id", name: "main", branch: "main", path: root,
+            status: .clean, lastActivity: Date()
+        )
+        let project = ProjectConfig(id: "project's id", name: "p", path: root.path, color: "blue", addedAt: Date())
+        for _ in 0..<2 {
+            let runID = UUID().uuidString
+            _ = try await RunService().run(script, in: worktree, project: project, runID: runID)
+            let received = try String(contentsOf: root.appendingPathComponent("identity"), encoding: .utf8)
+            #expect(received == "\(runID)\n\(script.key)\n\(worktree.id)\n\(project.id)\n")
+        }
+    }
+
+    @Test(.timeLimit(.minutes(1)))
     func failsInsteadOfWaitingWhenTheShellExitsWithoutPublishingCompletion() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-run-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
