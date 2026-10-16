@@ -1231,11 +1231,14 @@ public final class RemoteSessionGateway {
         default: .once
         }
         guard let answer = ACPRequestAnswers.permission(pending, optionId: optionId, scope: scope) else { return }
+        // Dismissed before answering: once the agent has the answer it may
+        // park its next request, under the same placeholder id, while the
+        // decision is still being recorded, and that one must stay up.
+        lastPermissionReq[sessionId] = nil
+        send(.permissionResolved(sessionId: sessionId, requestId: requestId))
         await policy.userDecided(
             scopeKey: answer.scopeKey, optionId: answer.optionId, decision: answer.decision, persistScope: answer.persistScope
         )
-        lastPermissionReq[sessionId] = nil
-        send(.permissionResolved(sessionId: sessionId, requestId: requestId))
     }
 
     private func handleVisualAidResponse(
