@@ -672,12 +672,14 @@ public final class ACPSessionDiscoveryModel {
             guard generation == filterGeneration else { return }
             if replaceSessionsOnNextLoad {
                 sessions = page
+                notePageRows(page)
                 replaceSessionsOnNextLoad = false
                 paginationError = nil
                 return
             }
             var known = Set(sessions.map(\.remoteSessionId))
             sessions.append(contentsOf: page.filter { known.insert($0.remoteSessionId).inserted })
+            notePageRows(page)
             paginationError = nil
         } catch {
             paginationError = error.localizedDescription
@@ -717,6 +719,7 @@ public final class ACPSessionDiscoveryModel {
             handle.commit(filter: newFilter, cursor: page.cursor)
             appliedFilter = newFilter
             sessions = page.rows
+            notePageRows(page.rows)
             firstPageIds = Set(page.rows.map(\.remoteSessionId))
             replaceSessionsOnNextLoad = false
             paginationError = nil
@@ -741,6 +744,7 @@ public final class ACPSessionDiscoveryModel {
               generation == filterGeneration, listedFilter == appliedFilter, filterLoadsInFlight == 0,
               actions == localActionGeneration
         else { return }
+        notePageRows(page.rows)
         sessions = ACPSessionBrowserReducer.reconciling(
             firstPage: page.rows,
             hasMorePages: page.cursor != nil,
@@ -781,6 +785,7 @@ public final class ACPSessionDiscoveryModel {
                 // A page read meanwhile may show the stored, now undone title:
                 // drop such pages and show the original title again.
                 localActionGeneration += 1
+                lastLocalAction[session.remoteSessionId] = localActionGeneration
                 if var current = sessions.first(where: { $0.remoteSessionId == session.remoteSessionId }) {
                     current.title = session.title
                     applyLiveChanges(changed: [current], removed: [])
@@ -817,6 +822,12 @@ public final class ACPSessionDiscoveryModel {
         // Like a pushed change: a list page read before the archive must not
         // bring the row back.
         applyLiveChanges(changed: [updated], removed: [])
+    }
+
+    /// A committed page is at least as new as the live rows cached before
+    /// it; changes buffered meanwhile are replayed after it and win again.
+    private func notePageRows(_ rows: [ACPDiscoveredSession]) {
+        for row in rows { latestLiveRows[row.remoteSessionId] = row }
     }
 
     private func applyLiveChanges(changed: [ACPDiscoveredSession], removed: [String]) {
