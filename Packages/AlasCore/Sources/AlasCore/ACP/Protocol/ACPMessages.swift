@@ -378,6 +378,11 @@ public struct ACPInitializeResult: Codable, Equatable, Sendable {
         meta?.systemPrompt?.append == true && (meta?.systemPrompt?.version ?? 0) >= 1
     }
 
+    /// The largest append, in UTF-8 bytes, the adapter accepts, when it says.
+    public var systemPromptAppendMaxBytes: Int? {
+        supportsSystemPromptAppend ? meta?.systemPrompt?.maxBytes : nil
+    }
+
     public init(
         protocolVersion: Int,
         agentCapabilities: ACPAgentCapabilities?,
@@ -433,6 +438,7 @@ public struct ACPInitializeResult: Codable, Equatable, Sendable {
         public struct SystemPromptCapability: Codable, Equatable, Sendable {
             public let version: Int?
             public let append: Bool?
+            public let maxBytes: Int?
         }
 
         public struct Steering: Codable, Equatable, Sendable {

@@ -6709,7 +6709,8 @@ extension ACPSessionManager {
             connection.sessionInstructions = ACPSessionInstructionsPolicy.append(
                 agentID: session.agentId,
                 captured: sessionInstructions,
-                advertisesAppend: initialized.supportsSystemPromptAppend
+                advertisesAppend: initialized.supportsSystemPromptAppend,
+                maxBytes: initialized.systemPromptAppendMaxBytes
             )
             session.backgroundTaskStopSupported = initialized.supportsAsyncTasks
             session.sessionCapabilities = initialized.sessionCapabilities

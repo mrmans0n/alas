@@ -61,6 +61,8 @@ public struct ACPInitializeOutcome: Equatable, Sendable {
     public let supportsContextBreakdown: Bool
     /// The adapter advertised `_meta.systemPrompt.append` (codex-acp).
     public let supportsSystemPromptAppend: Bool
+    /// The advertised append limit in UTF-8 bytes, if any.
+    public let systemPromptAppendMaxBytes: Int?
     /// The adapter's self-reported name/version, when it sent `agentInfo`.
     public let agentInfo: ACPImplementationInfo?
 
@@ -78,7 +80,8 @@ public struct ACPInitializeOutcome: Equatable, Sendable {
         supportsSteering: Bool = false,
         supportsAsyncTasks: Bool = false,
         supportsContextBreakdown: Bool = false,
-        supportsSystemPromptAppend: Bool = false
+        supportsSystemPromptAppend: Bool = false,
+        systemPromptAppendMaxBytes: Int? = nil
     ) {
         self.promptCapabilities = promptCapabilities
         self.authMethods = authMethods
@@ -94,6 +97,7 @@ public struct ACPInitializeOutcome: Equatable, Sendable {
         self.supportsAsyncTasks = supportsAsyncTasks
         self.supportsContextBreakdown = supportsContextBreakdown
         self.supportsSystemPromptAppend = supportsSystemPromptAppend
+        self.systemPromptAppendMaxBytes = systemPromptAppendMaxBytes
     }
 }
 
@@ -205,7 +209,8 @@ public final class ACPConnection: @unchecked Sendable {
             supportsSteering: result.supportsSteering,
             supportsAsyncTasks: result.meta?.asyncTasks?.supportsStop == true,
             supportsContextBreakdown: result.supportsContextBreakdown,
-            supportsSystemPromptAppend: result.supportsSystemPromptAppend
+            supportsSystemPromptAppend: result.supportsSystemPromptAppend,
+            systemPromptAppendMaxBytes: result.systemPromptAppendMaxBytes
         )
     }
 

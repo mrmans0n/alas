@@ -48,7 +48,9 @@ private struct ReplicaMetadata: Codable {
     let currentMode: String?
     let configOptionValues: [String: ACPConfigValue]
     let nativeSubagentsDisabled: Bool?
-    /// Optional so metadata from a Mac that predates session instructions still decodes.
+    /// Optional so metadata from a Mac that predates session instructions
+    /// still decodes. Applying nil keeps the stored value: the column is
+    /// write-once, so nil only means the publisher did not know the field.
     let sessionInstructions: String?
     let promptSuggestions: [ACPPromptSuggestion]?
     let autoRun: Bool
@@ -469,7 +471,7 @@ extension ACPSessionStore {
             // Replica metadata is authoritative even for fields preserved by local upserts.
             let authStatus = try m.authStatus.map { String(decoding: try JSONEncoder().encode($0), as: UTF8.self) }
             let usageLimit = try m.usageLimit.map { String(decoding: try JSONEncoder().encode($0), as: UTF8.self) }
-            try db.exec("UPDATE sessions SET context_recovery_pending=?,mcp_preamble_pending=?,mcp_preamble_sent=?,usage_limit=?,direct_turn_in_flight=?,auth_status=?,native_subagents_disabled=?,session_instructions=?,created_at=? WHERE id=?", bindings: [m.contextRecoveryPending ? 1 : 0, m.mcpPreamblePending, m.mcpPreambleSent ? 1 : 0, usageLimit, (m.directTurnInFlight ?? false) ? 1 : 0, authStatus, m.nativeSubagentsDisabled.map { $0 ? 1 : 0 }, m.sessionInstructions, m.createdAt, sessionId])
+            try db.exec("UPDATE sessions SET context_recovery_pending=?,mcp_preamble_pending=?,mcp_preamble_sent=?,usage_limit=?,direct_turn_in_flight=?,auth_status=?,native_subagents_disabled=?,session_instructions=COALESCE(?,session_instructions),created_at=? WHERE id=?", bindings: [m.contextRecoveryPending ? 1 : 0, m.mcpPreamblePending, m.mcpPreambleSent ? 1 : 0, usageLimit, (m.directTurnInFlight ?? false) ? 1 : 0, authStatus, m.nativeSubagentsDisabled.map { $0 ? 1 : 0 }, m.sessionInstructions, m.createdAt, sessionId])
         case "message", "subagent":
             let relationKey = kind + ":" + key
             guard let payload else {

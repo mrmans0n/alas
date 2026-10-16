@@ -34,9 +34,17 @@ public enum ACPSessionInstructionsPolicy {
     }
 
     /// The append to send for a session of `agentID` whose captured
-    /// instructions are `captured`, or nil to send none.
-    public static func append(agentID: String, captured: String?, advertisesAppend: Bool) -> String? {
+    /// instructions are `captured`, or nil to send none. Text over the
+    /// adapter's advertised `maxBytes` is withheld: the adapter would reject
+    /// every session request carrying it, so the session could never attach.
+    public static func append(
+        agentID: String,
+        captured: String?,
+        advertisesAppend: Bool,
+        maxBytes: Int? = nil
+    ) -> String? {
         guard let captured = normalized(captured) else { return nil }
+        if let maxBytes, captured.utf8.count > maxBytes { return nil }
         switch agentID {
         case ACPManagedAdapterDescriptor.claude.agentID:
             return captured

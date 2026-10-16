@@ -62,6 +62,9 @@ struct ACPConnectionTests {
         // codex-acp 2.2.2-alas.2's advertisement.
         ("codex", #"{"systemPrompt":{"version":1,"append":true,"clear":true,"maxBytes":262144}}"#, "Review migrations.", "Review migrations."),
         ("codex", #"{}"#, "Review migrations.", nil),
+        // Over the advertised limit the adapter would reject every session request.
+        ("codex", #"{"systemPrompt":{"version":1,"append":true,"maxBytes":18}}"#, "Review migrations.", "Review migrations."),
+        ("codex", #"{"systemPrompt":{"version":1,"append":true,"maxBytes":17}}"#, "Review migrations.", nil),
         ("codex", #"{"systemPrompt":{"version":1,"append":"true"}}"#, "Review migrations.", nil),
         ("codex", #"{"systemPrompt":{"append":true}}"#, "Review migrations.", nil),
         ("codex", #"{"jetbrains":{"air":{"version":1,"capabilities":["customInstructions"]}}}"#, "Review migrations.", nil),
@@ -80,7 +83,8 @@ struct ACPConnectionTests {
         #expect(ACPSessionInstructionsPolicy.append(
             agentID: agentID,
             captured: captured,
-            advertisesAppend: initialized.supportsSystemPromptAppend
+            advertisesAppend: initialized.supportsSystemPromptAppend,
+            maxBytes: initialized.systemPromptAppendMaxBytes
         ) == sent)
     }
 
