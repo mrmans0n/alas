@@ -25,6 +25,8 @@ public final class RemoteServer {
     nonisolated public let pairing: RemotePairingService
     private let assets: RemoteWebAssets
     private let provider: RemoteSessionsProvider
+    /// The app's windows, which each gateway takes tab requests to.
+    @_spi(AppHost) public weak var presenter: RemoteSessionPresenter?
     private var accessPolicy: RemoteAccessPolicy
     private var originPolicy: RemoteOriginPolicy
     private let identityProvider: @MainActor () -> RemoteServerIdentity
@@ -290,10 +292,12 @@ public final class RemoteServer {
                         sendTracked(.console(event), onWritten)
                     }
                 }
-                return RemoteSessionGateway(
+                let gateway = RemoteSessionGateway(
                     provider: provider, federation: federation, consoleLink: consoleLink,
                     caller: .remotePeer(deviceID: channel.deviceId), sendTracked: channel.sendTracked,
                     send: channel.send)
+                gateway.presenter = self?.presenter
+                return gateway
             },
             makeHello: { RemoteServerMessage.hello(identity()) },
             identityProof: proveIdentity,

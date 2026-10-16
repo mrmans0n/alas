@@ -1,3 +1,4 @@
+@_spi(AppHost) import AlasCore
 import AppKit
 import Foundation
 import Observation
@@ -888,6 +889,7 @@ final class AppState {
             }
             configurePairingApprovals(server: server)
             server.federation = remoteFederation
+            server.presenter = self
             do {
                 try server.start(port: config.remote.preferredPort, loopbackOnly: config.remote.listensOnLoopbackOnly)
                 remoteServer = server
@@ -15251,6 +15253,9 @@ private struct RemoteSessionListInputs: Equatable {
     var status: WorktreeDirtyState
     var diff: WorktreeDiffStats?
 }
+
+/// Remote tab requests open and close tabs in this window, as the tab bar does.
+extension AppState: RemoteSessionPresenter {}
 
 extension AppState: RemoteSessionsProvider {
     var eventHost: AlasHost? { host }
