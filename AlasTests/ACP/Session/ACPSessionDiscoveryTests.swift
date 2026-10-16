@@ -1197,6 +1197,87 @@ struct ACPSessionDiscoveryTests {
     }
 
     @MainActor
+    @Test("a rename made during an older read keeps the newer data a later page brought")
+    func renamePatchOverNewerPage() async throws {
+        let store = try temporaryStore()
+        let client = indexClient()
+        let gate = AsyncStream<Void>.makeStream()
+        let reconcileStarted = AsyncStream<Void>.makeStream()
+        var lists = 0
+        client.scriptAsync(method: "session/list") { request in
+            lists += 1
+            if lists == 3 {
+                reconcileStarted.continuation.yield()
+                for await _ in gate.stream { break }
+            }
+            let linked = (request.params as? ACPSessionListParams)?.meta?.sessionIndex.list.includeWorktrees == true
+            return try JSONEncoder().encode(ACPSessionListResult(sessions: [
+                .init(sessionId: "s", cwd: "/tmp/wt", title: "Agent title",
+                      index: .init(archived: false, model: linked ? "newer-model" : "older-model")),
+            ]))
+        }
+        client.script(method: "_session/rename") { _ in Data("{}".utf8) }
+        let model = ACPSessionDiscoveryModel()
+        await model.start(manager: manager(store: store, client: client), agentId: "claude", worktreeResolver: Self.projectResolver)
+        let reconcile = Task { await model.reconcile() }
+        for await _ in reconcileStarted.stream { break }
+        try await model.rename(try #require(model.sessions.first), to: "Renamed") { _, _ in nil }
+        try await model.setFilter(.init(includeLinkedWorktrees: true))
+        gate.continuation.yield()
+        await reconcile.value
+        #expect(model.sessions.first?.title == "Renamed")
+        #expect(model.sessions.first?.index?.model == "newer-model")
+        await model.stop()
+    }
+
+    @MainActor
+    @Test("a cleanup-retry row comes back after a filter page that left it out")
+    func retryRowAfterFilterPage() async throws {
+        let store = try temporaryStore()
+        try store.upsertSession(row(id: "local-a", remoteSessionId: "a", title: "A", origin: .agentImported))
+        let client = indexClient()
+        let gate = AsyncStream<Void>.makeStream()
+        let pageStarted = AsyncStream<Void>.makeStream()
+        var deleted = false
+        var holdFilterPage = true
+        client.scriptAsync(method: "session/list") { request in
+            // Only the first linked-scope read is held; the filter load reads
+            // again after the delete.
+            if (request.params as? ACPSessionListParams)?.meta?.sessionIndex.list.includeWorktrees == true,
+               deleted, holdFilterPage {
+                holdFilterPage = false
+                pageStarted.continuation.yield()
+                for await _ in gate.stream { break }
+            }
+            let b = ACPAgentSessionInfo(sessionId: "b", cwd: "/tmp/wt", index: .init(archived: false))
+            let a = ACPAgentSessionInfo(sessionId: "a", cwd: "/tmp/wt", index: .init(archived: false))
+            return try JSONEncoder().encode(ACPSessionListResult(sessions: deleted ? [b] : [a, b]))
+        }
+        client.script(method: "session/delete") { _ in
+            deleted = true
+            return Data("{}".utf8)
+        }
+        let manager = manager(store: store, client: client)
+        let model = ACPSessionDiscoveryModel()
+        await model.start(manager: manager, agentId: "claude") { cwd in
+            Self.projectResolver(cwd).map { .init(worktreeId: $0.worktreeId, persistence: manager.persistence) }
+        }
+        let target = try #require(model.sessions.first { $0.remoteSessionId == "a" })
+        #expect(target.localSessionId == "local-a")
+        try store.db.exec("CREATE TRIGGER fail_delete BEFORE DELETE ON sessions BEGIN SELECT RAISE(ABORT, 'no'); END")
+        deleted = true
+        let change = Task { try await model.setFilter(.init(includeLinkedWorktrees: true)) }
+        for await _ in pageStarted.stream { break }
+        await #expect(throws: (any Error).self) {
+            try await model.deleteAgentHistory(for: target, removeLocalHistory: true, manager: manager)
+        }
+        gate.continuation.yield()
+        try await change.value
+        #expect(model.sessions.contains { $0.remoteSessionId == "a" })
+        await model.stop()
+    }
+
+    @MainActor
     @Test("a Load more answering after a filter change neither shows its rows nor moves the cursor")
     func loadMoreAfterFilterChange() async throws {
         let store = try temporaryStore()

@@ -621,7 +621,20 @@ public final class ACPSessionDiscoveryModel {
     /// Live changes that arrived while a list read was in flight. They are
     /// applied at once and again when the last read finishes, so a page read
     /// before a change cannot undo it.
-    private var pendingChanges: [(changed: [ACPDiscoveredSession], removed: [String], stamp: ACPSessionBrowserStamp?)] = []
+    private var pendingChanges: [PendingChange] = []
+
+    /// A change waiting for the pending list reads to end.
+    private enum PendingChange {
+        /// Agent-reported rows and removals; `stamp` is nil for removals of
+        /// this browser's own deletions.
+        case live(changed: [ACPDiscoveredSession], removed: [String], stamp: ACPSessionBrowserStamp?)
+        /// A local action's effect, applied to the row as it is at replay
+        /// time so data a later page brought is kept. `fallback` is used when
+        /// the row is not known at all.
+        case patch(id: String, fallback: ACPDiscoveredSession?, apply: (inout ACPDiscoveredSession) -> Void)
+        /// A cleanup-retry row, put back after a page that left it out.
+        case restore(ACPDiscoveredSession)
+    }
     /// Rows with a rename or archive request in flight.
     public private(set) var updatingSessionIds: Set<String> = []
     private var handle: ACPSessionDiscoveryHandle?
@@ -669,7 +682,7 @@ public final class ACPSessionDiscoveryModel {
             lastLocalAction[session.remoteSessionId] = localActionGeneration
             // The relist below shows the deletion; a list page read before it
             // must not bring the row back once that read finishes.
-            if listReadsInFlight > 0 { pendingChanges.append(([], [session.remoteSessionId], nil)) }
+            if listReadsInFlight > 0 { pendingChanges.append(.live(changed: [], removed: [session.remoteSessionId], stamp: nil)) }
         }
 
         try await refreshAfterDeletion()
@@ -680,14 +693,13 @@ public final class ACPSessionDiscoveryModel {
                 // Keep the row for a local-cleanup retry: drop the queued
                 // removal, and ignore later ones, until the retry succeeds.
                 cleanupRetryIds.insert(session.remoteSessionId)
-                pendingChanges.removeAll { $0.changed.isEmpty && $0.removed == [session.remoteSessionId] }
-                // Back only if it matches what the browser now lists.
-                if !sessions.contains(where: { $0.remoteSessionId == session.remoteSessionId }) {
-                    sessions = ACPSessionBrowserReducer.applying(
-                        changed: [session], removed: [], to: sessions, filter: appliedFilter,
-                        browsingWorktreeId: handle.browsingWorktreeId
-                    )
+                pendingChanges.removeAll {
+                    if case .live(let changed, let removed, nil) = $0 {
+                        return changed.isEmpty && removed == [session.remoteSessionId]
+                    }
+                    return false
                 }
+                restoreRetryRow(session)
                 throw error
             }
         }
@@ -707,10 +719,7 @@ public final class ACPSessionDiscoveryModel {
         handle?.forgetLocalCopy(localSessionId, of: session.remoteSessionId)
         // Replayed after any pending read, like the other local actions, so
         // an older page cannot bring the Alas copy back.
-        if var current = sessions.first(where: { $0.remoteSessionId == session.remoteSessionId }) {
-            current.localSessionId = nil
-            applyLiveChanges(changed: [current], removed: [])
-        }
+        applyLocalPatch(id: session.remoteSessionId) { $0.localSessionId = nil }
         try await refreshAfterDeletion()
     }
 
@@ -916,10 +925,8 @@ public final class ACPSessionDiscoveryModel {
                 // drop such pages and show the original title again.
                 localActionGeneration += 1
                 lastLocalAction[session.remoteSessionId] = localActionGeneration
-                if var current = sessions.first(where: { $0.remoteSessionId == session.remoteSessionId }) {
-                    current.title = session.title
-                    applyLiveChanges(changed: [current], removed: [])
-                }
+                let original = session.title
+                applyLocalPatch(id: session.remoteSessionId) { $0.title = original }
             }
             throw error
         }
@@ -927,10 +934,7 @@ public final class ACPSessionDiscoveryModel {
         lastLocalAction[session.remoteSessionId] = localActionGeneration
         // Patched on the row as it is now, and replayed after any pending
         // list read so an older page cannot bring the old title back.
-        if var updated = sessions.first(where: { $0.remoteSessionId == session.remoteSessionId }) {
-            updated.title = trimmed
-            applyLiveChanges(changed: [updated], removed: [])
-        }
+        applyLocalPatch(id: session.remoteSessionId) { $0.title = trimmed }
     }
 
     /// Archives or unarchives the agent's session. The Alas session, if any,
@@ -944,14 +948,10 @@ public final class ACPSessionDiscoveryModel {
         lastLocalAction[session.remoteSessionId] = localActionGeneration
         // Patch the newest version of the row: a live update (often the
         // archive notification itself) may have changed or moved it while
-        // the request ran.
-        var updated = latestLiveRows[session.remoteSessionId]
-            ?? sessions.first { $0.remoteSessionId == session.remoteSessionId }
-            ?? session
-        updated.index = (updated.index ?? .init()).with(archived: archived)
-        // Like a pushed change: a list page read before the archive must not
-        // bring the row back.
-        applyLiveChanges(changed: [updated], removed: [])
+        // the request ran. Replayed after any pending list read.
+        applyLocalPatch(id: session.remoteSessionId, fallback: session) {
+            $0.index = ($0.index ?? .init()).with(archived: archived)
+        }
     }
 
     /// A committed page is at least as new as the live rows cached before
@@ -974,10 +974,51 @@ public final class ACPSessionDiscoveryModel {
         let removed = removed.filter { !cleanupRetryIds.contains($0) }
         // Applied now so the listed rows stay current, and replayed after the
         // pending reads in case a page that predates the change lands later.
-        if listReadsInFlight > 0 { pendingChanges.append((changed, removed, stamp)) }
+        if listReadsInFlight > 0 { pendingChanges.append(.live(changed: changed, removed: removed, stamp: stamp)) }
         for row in changed { latestLiveRows[row.remoteSessionId] = row }
         sessions = ACPSessionBrowserReducer.applying(
             changed: changed, removed: removed, to: sessions, filter: appliedFilter,
+            browsingWorktreeId: handle.browsingWorktreeId
+        )
+    }
+
+    /// The newest known version of a session's row.
+    private func currentRow(_ id: String) -> ACPDiscoveredSession? {
+        latestLiveRows[id] ?? sessions.first { $0.remoteSessionId == id }
+    }
+
+    /// Applies a local action's effect to the row as it is now, and again
+    /// to the row as it is after the pending list reads.
+    private func applyLocalPatch(
+        id: String,
+        fallback: ACPDiscoveredSession? = nil,
+        _ apply: @escaping (inout ACPDiscoveredSession) -> Void
+    ) {
+        if listReadsInFlight > 0 { pendingChanges.append(.patch(id: id, fallback: fallback, apply: apply)) }
+        reducePatch(id: id, fallback: fallback, apply)
+    }
+
+    private func reducePatch(id: String, fallback: ACPDiscoveredSession?, _ apply: (inout ACPDiscoveredSession) -> Void) {
+        guard let handle, var row = currentRow(id) ?? fallback else { return }
+        apply(&row)
+        latestLiveRows[id] = row
+        sessions = ACPSessionBrowserReducer.applying(
+            changed: [row], removed: [], to: sessions, filter: appliedFilter,
+            browsingWorktreeId: handle.browsingWorktreeId
+        )
+    }
+
+    /// Puts a cleanup-retry row back if it matches what the browser lists,
+    /// now and after the pending list reads.
+    private func restoreRetryRow(_ row: ACPDiscoveredSession) {
+        if listReadsInFlight > 0 { pendingChanges.append(.restore(row)) }
+        reduceRestore(row)
+    }
+
+    private func reduceRestore(_ row: ACPDiscoveredSession) {
+        guard let handle, !sessions.contains(where: { $0.remoteSessionId == row.remoteSessionId }) else { return }
+        sessions = ACPSessionBrowserReducer.applying(
+            changed: [row], removed: [], to: sessions, filter: appliedFilter,
             browsingWorktreeId: handle.browsingWorktreeId
         )
     }
@@ -999,12 +1040,23 @@ public final class ACPSessionDiscoveryModel {
         let changes = pendingChanges
         pendingChanges = []
         for change in changes {
+            let (changedRows, removedIds, stamp): ([ACPDiscoveredSession], [String], ACPSessionBrowserStamp?)
+            switch change {
+            case .patch(let id, let fallback, let apply):
+                reducePatch(id: id, fallback: fallback, apply)
+                continue
+            case .restore(let row):
+                reduceRestore(row)
+                continue
+            case .live(let changed, let removed, let liveStamp):
+                (changedRows, removedIds, stamp) = (changed, removed, liveStamp)
+            }
             // A page that started after the change and showed a session is newer.
-            var (changed, removed) = change.stamp.map {
+            var (changed, removed) = stamp.map {
                 ACPSessionBrowserReducer.unsuperseded(
-                    changed: change.changed, removed: change.removed, stamp: $0, pageReadIndex: pageReadIndex
+                    changed: changedRows, removed: removedIds, stamp: $0, pageReadIndex: pageReadIndex
                 )
-            } ?? (change.changed, change.removed)
+            } ?? (changedRows, removedIds)
             removed.removeAll { cleanupRetryIds.contains($0) }
             // The page applied before the replay cached older rows.
             for row in changed { latestLiveRows[row.remoteSessionId] = row }
