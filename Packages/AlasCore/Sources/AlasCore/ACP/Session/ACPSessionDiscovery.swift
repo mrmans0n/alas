@@ -205,19 +205,21 @@ public enum ACPSessionBrowserReducer {
         return (changed.filter { current($0.remoteSessionId) }, removed.filter(current))
     }
 
-    /// Previous first-page rows a new first page lacks whose position the
-    /// order cannot tell: last activity equal to the page's oldest, or none
-    /// at all. The pages after the boundary are read to settle them.
-    public static func tiedCandidates(
+    /// Previous first-page rows a new first page lacks without proving them
+    /// gone: tied with or older than the page's oldest row, or undated. They
+    /// may have moved to a later page, so the pages after the boundary are
+    /// read to settle them.
+    public static func unsettledCandidates(
         firstPage: [ACPDiscoveredSession],
         previousFirstPage: Set<String>,
         rows: [ACPDiscoveredSession]
     ) -> Set<String> {
         let present = Set(firstPage.map(\.remoteSessionId))
         let oldest = firstPage.compactMap(\.lastActivity).min()
-        return Set(rows.filter {
-            previousFirstPage.contains($0.remoteSessionId) && !present.contains($0.remoteSessionId)
-                && ($0.lastActivity == nil || $0.lastActivity == oldest)
+        return Set(rows.filter { row in
+            guard previousFirstPage.contains(row.remoteSessionId), !present.contains(row.remoteSessionId) else { return false }
+            guard let oldest, let activity = row.lastActivity else { return true }
+            return activity <= oldest
         }.map(\.remoteSessionId))
     }
 
@@ -239,8 +241,8 @@ public enum ACPSessionBrowserReducer {
     /// that the new one lacks is gone (a missed removal) when the new page is
     /// the whole list, or when it is newer than the new page's oldest row;
     /// an older one may just have moved to the next page, so it stays.
-    /// `confirmedGone` holds tied rows that reading past the page boundary
-    /// did not find (see `tiedCandidates`).
+    /// `confirmedGone` holds rows that reading past the page boundary did not
+    /// find (see `unsettledCandidates`).
     public static func reconciling(
         firstPage: [ACPDiscoveredSession],
         hasMorePages: Bool,
@@ -861,17 +863,19 @@ public final class ACPSessionDiscoveryModel {
               generation == filterGeneration, listedFilter == appliedFilter, filterLoadsInFlight == 0,
               actions == localActionGeneration
         else { return }
-        // Tied rows: read past the boundary until the timestamps drop below
-        // the tie, so a deleted one is not kept forever.
+        // Rows the page lacks but cannot prove gone: read past the boundary
+        // until each is found or provably absent, so a missed deletion is
+        // not kept forever.
         var confirmedGone: Set<String> = []
-        let tied = ACPSessionBrowserReducer.tiedCandidates(
+        let candidates = ACPSessionBrowserReducer.unsettledCandidates(
             firstPage: page.rows, previousFirstPage: firstPageIds, rows: sessions
         )
-        if !tied.isEmpty, var cursor = page.cursor {
-            let tie = page.rows.compactMap(\.lastActivity).min()
-            // An undated candidate can be anywhere: only the list's end, or
-            // finding it, settles it. Dated ties settle at an older row.
-            let undated = sessions.contains { tied.contains($0.remoteSessionId) && $0.lastActivity == nil }
+        if !candidates.isEmpty, var cursor = page.cursor {
+            let candidateDates = sessions.filter { candidates.contains($0.remoteSessionId) }.map(\.lastActivity)
+            // Rows come newest first: once a row older than every candidate
+            // shows up, an unseen dated candidate is gone. An undated one can
+            // be anywhere, so only the list's end settles it.
+            let oldestCandidate = candidateDates.contains(nil) ? nil : candidateDates.compactMap { $0 }.min()
             var seen: Set<String> = []
             // Until settled or the list ends, however long; a cursor the
             // adapter repeats would never end, so it stops the scan.
@@ -879,9 +883,11 @@ public final class ACPSessionDiscoveryModel {
             while cursorsRead.insert(cursor).inserted {
                 guard let next = try? await handle.page(after: cursor, filter: listedFilter) else { break }
                 seen.formUnion(next.rows.map(\.remoteSessionId))
-                let pastTie = tie.map { tie in next.rows.contains { ($0.lastActivity ?? .distantFuture) < tie } } ?? false
-                if tied.isSubset(of: seen) || next.cursor == nil || (!undated && pastTie) {
-                    confirmedGone = tied.subtracting(seen)
+                let pastCandidates = oldestCandidate.map { oldest in
+                    next.rows.contains { ($0.lastActivity ?? .distantFuture) < oldest }
+                } ?? false
+                if candidates.isSubset(of: seen) || next.cursor == nil || pastCandidates {
+                    confirmedGone = candidates.subtracting(seen)
                     break
                 }
                 cursor = next.cursor!

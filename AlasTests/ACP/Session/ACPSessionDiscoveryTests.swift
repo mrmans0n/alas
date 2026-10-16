@@ -1201,6 +1201,34 @@ struct ACPSessionDiscoveryTests {
     }
 
     @MainActor
+    @Test("a deleted row pushed below the first page by newer activity is settled", arguments: [false, true])
+    func displacedRowSettled(stillListed: Bool) async throws {
+        let store = try temporaryStore()
+        let client = indexClient()
+        var reconciled = false
+        let row = Self.listedRow
+        client.script(method: "session/list") { request in
+            if (request.params as? ACPSessionListParams)?.cursor == "page-2" {
+                // "d" is on page 2 only if it was not deleted.
+                return try JSONEncoder().encode(ACPSessionListResult(sessions: (stillListed ? [row("d", "2026-10-16T08:00:00Z")] : [])
+                    + [row("older", "2026-10-16T07:00:00Z")]))
+            }
+            defer { reconciled = true }
+            // Newer sessions push "d" out of the first page.
+            return try JSONEncoder().encode(ACPSessionListResult(
+                sessions: reconciled
+                    ? [row("n1", "2026-10-16T12:00:00Z"), row("n2", "2026-10-16T11:00:00Z")]
+                    : [row("a", "2026-10-16T10:00:00Z"), row("d", "2026-10-16T08:00:00Z")],
+                nextCursor: "page-2"))
+        }
+        let model = ACPSessionDiscoveryModel()
+        await model.start(manager: manager(store: store, client: client), agentId: "claude")
+        await model.reconcile()
+        #expect(model.sessions.contains { $0.remoteSessionId == "d" } == stillListed)
+        await model.stop()
+    }
+
+    @MainActor
     @Test("an undated missing row is settled at the end of a long history")
     func undatedRowSettledAtLongHistoryEnd() async throws {
         let store = try temporaryStore()
