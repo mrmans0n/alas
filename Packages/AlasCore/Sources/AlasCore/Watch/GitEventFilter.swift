@@ -9,6 +9,7 @@ public enum GitEventCategory: Equatable, Sendable {
     case headChange(URL)          // worktree root whose HEAD just changed
     case revisionChange           // shared refs moved; tracked revisions may resolve differently
     case transientRevisionChange  // FETCH_HEAD changed; refs did not move
+    case stackMetadataChange      // gg/config.json changed; PR/MR mappings may differ
     case revisionAndTopologyChange
     case topologyChange           // .git/worktrees/ contents changed
     case other                    // unrelated event, caller decides
@@ -93,6 +94,12 @@ public enum GitEventFilter: Sendable {
         }
         if rel == "info/grafts" {
             return .revisionChange
+        }
+        // `gg sync` pushes (moving remote refs) before it creates PRs/MRs and
+        // records their numbers here at the very end, so the ref change alone
+        // reloads the stack too early to see a newly created PR/MR.
+        if rel == "gg/config.json" {
+            return .stackMetadataChange
         }
         if rel == "objects/info/alternates" {
             return .revisionChange

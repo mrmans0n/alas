@@ -18,16 +18,18 @@ private struct ProjectGitWatcherStreamBatch {
     var headFiles: Set<URL> = []
     var sawRevision = false
     var sawTransientRevision = false
+    var sawStackMetadata = false
     var sawTopology = false
 
     var hasChanges: Bool {
-        !headFiles.isEmpty || sawRevision || sawTransientRevision || sawTopology
+        !headFiles.isEmpty || sawRevision || sawTransientRevision || sawStackMetadata || sawTopology
     }
 
-    public init(headFiles: Set<URL> = [], sawRevision: Bool = false, sawTransientRevision: Bool = false, sawTopology: Bool = false) {
+    public init(headFiles: Set<URL> = [], sawRevision: Bool = false, sawTransientRevision: Bool = false, sawStackMetadata: Bool = false, sawTopology: Bool = false) {
         self.headFiles = headFiles
         self.sawRevision = sawRevision
         self.sawTransientRevision = sawTransientRevision
+        self.sawStackMetadata = sawStackMetadata
         self.sawTopology = sawTopology
     }
 }
@@ -297,6 +299,8 @@ public final class ProjectGitWatcher {
                 batch.sawRevision = true
             case .transientRevisionChange:
                 batch.sawTransientRevision = true
+            case .stackMetadataChange:
+                batch.sawStackMetadata = true
             case .revisionAndTopologyChange:
                 batch.sawRevision = true
                 batch.sawTopology = true
@@ -316,7 +320,7 @@ public final class ProjectGitWatcher {
         if batch.sawRevision || batch.sawTransientRevision {
             onRevisionChanged?()
         }
-        if batch.sawRevision {
+        if batch.sawRevision || batch.sawStackMetadata {
             onStackRevisionChanged?()
         }
         if batch.sawTopology {
