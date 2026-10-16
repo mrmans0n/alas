@@ -88,10 +88,16 @@ public enum ACPSessionIndexDates {
 public enum ACPSessionBrowserPaths {
     /// Adapters report agent-side paths: an SSH worktree's real path rather
     /// than its `/.alas-remote/<host>/…` id, and a local cwd with symlinks
-    /// resolved (`/private/var/…` for `/var/…`). Both sides are keyed that way.
-    public static func key(_ path: String) -> String {
+    /// resolved (`/private/var/…` for `/var/…`). Both sides are keyed that
+    /// way. `context` is the browsing worktree's path: under an SSH worktree
+    /// a plain path is the remote host's, so it is never resolved against
+    /// this Mac's file system.
+    public static func key(_ path: String, context: String) -> String {
         if let remote = RemotePath.split(path) {
             return URL(fileURLWithPath: remote.realPath).standardizedFileURL.path
+        }
+        if RemotePath.split(context) != nil {
+            return URL(fileURLWithPath: path).standardizedFileURL.path
         }
         return URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
     }
@@ -313,10 +319,10 @@ public final class ACPSessionDiscoveryHandle {
         self.connection = connection
         self.capabilities = capabilities
         self.sessionIndex = sessionIndex
-        let ownCWD = ACPSessionBrowserPaths.key(cwd)
+        let ownCWD = ACPSessionBrowserPaths.key(cwd, context: cwd)
         canListLinkedWorktrees = sessionIndex != nil && worktreeResolver != nil
         let own = ACPSessionBrowserTarget(worktreeId: worktreeId, persistence: persistence)
-        self.worktreeResolver = worktreeResolver ?? { ACPSessionBrowserPaths.key($0) == ownCWD ? own : nil }
+        self.worktreeResolver = worktreeResolver ?? { ACPSessionBrowserPaths.key($0, context: cwd) == ownCWD ? own : nil }
         self.onClosed = onClosed
     }
 

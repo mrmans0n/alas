@@ -14625,7 +14625,8 @@ final class AppState {
     /// store. A session store is opened only when its file exists, so
     /// browsing never creates one.
     func acpSessionBrowserResolver(for worktree: Worktree) -> @MainActor (String) -> ACPSessionBrowserTarget? {
-        func key(_ path: String) -> String { ACPSessionBrowserPaths.key(path) }
+        let context = worktree.path.path
+        func key(_ path: String) -> String { ACPSessionBrowserPaths.key(path, context: context) }
         var byPath: [String: String] = [:]
         for candidate in projectsManager.worktrees(projectId: worktree.projectId) where byPath[key(candidate.path.path)] == nil {
             byPath[key(candidate.path.path)] = candidate.id

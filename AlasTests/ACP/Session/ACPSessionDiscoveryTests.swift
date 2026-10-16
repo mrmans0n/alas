@@ -1116,14 +1116,17 @@ struct ACPSessionDiscoveryTests {
         await model.stop()
     }
 
-    @Test("a listed cwd matches an SSH worktree by its real path", arguments: [
-        ("/srv/repo-wt2", true),
-        ("/srv/repo-wt2/", true),
-        ("/srv/repo", false),
+    @Test("a listed cwd matches an SSH worktree by its real path, never resolved on this Mac", arguments: [
+        ("/srv/repo-wt2", "/srv/repo-wt2", true),
+        ("/srv/repo-wt2", "/srv/repo-wt2/", true),
+        ("/srv/repo-wt2", "/srv/repo", false),
+        // /var is a symlink on the Mac, not necessarily on the remote host.
+        ("/var/repo-wt2", "/var/repo-wt2", true),
     ])
-    func remoteBrowserPathKeys(listedCWD: String, matches: Bool) {
-        let worktreePath = RemotePath.virtual(host: "devbox", realPath: "/srv/repo-wt2")
-        #expect((ACPSessionBrowserPaths.key(worktreePath) == ACPSessionBrowserPaths.key(listedCWD)) == matches)
+    func remoteBrowserPathKeys(realPath: String, listedCWD: String, matches: Bool) {
+        let worktreePath = RemotePath.virtual(host: "devbox", realPath: realPath)
+        let key = { ACPSessionBrowserPaths.key($0, context: worktreePath) }
+        #expect((key(worktreePath) == key(listedCWD)) == matches)
     }
 
     @Test("a listed cwd with symlinks resolved matches the local worktree path")
@@ -1137,7 +1140,8 @@ struct ACPSessionDiscoveryTests {
             return String(cString: pointer)
         })
         #expect(resolved != directory.path)
-        #expect(ACPSessionBrowserPaths.key(directory.path) == ACPSessionBrowserPaths.key(resolved))
+        #expect(ACPSessionBrowserPaths.key(directory.path, context: directory.path)
+            == ACPSessionBrowserPaths.key(resolved, context: directory.path))
     }
 
     @Test("the highlight follows its session when live updates reorder the rows", arguments: [
@@ -1283,7 +1287,8 @@ struct ACPSessionDiscoveryTests {
     /// linked-worktree scope, and anything else is outside Alas.
     @MainActor
     private static func projectResolver(_ cwd: String) -> ACPSessionBrowserTarget? {
-        ACPSessionBrowserPaths.key(cwd) == ACPSessionBrowserPaths.key("/tmp/wt") ? .init(worktreeId: "wt", persistence: nil) : nil
+        ACPSessionBrowserPaths.key(cwd, context: "/tmp/wt") == ACPSessionBrowserPaths.key("/tmp/wt", context: "/tmp/wt")
+            ? .init(worktreeId: "wt", persistence: nil) : nil
     }
 
     /// An agent with the client-neutral session index and a list subscription.
