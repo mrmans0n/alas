@@ -35,34 +35,55 @@ public enum MCPRegistrationDecision: Sendable {
     /// before the warning instead of flashing it.
     public static let helloGrace: Duration = .seconds(35)
 
+    /// What an attach knows about the built-in server of an agent it adopted
+    /// from the broker.
+    public enum AdoptedAgentServer: Equatable, Sendable {
+        /// The startup RPC reaches the adapter, which receives this attach's
+        /// MCP configuration.
+        case configuredNow
+        /// The broker answered the startup RPC from its snapshot and the
+        /// agent was started with the server this attach configures.
+        case kept
+        /// The broker answered from its snapshot, and the agent was started
+        /// with another built-in server (or nothing records which): it never
+        /// receives this attach's configuration and may be calling an
+        /// address nothing listens on.
+        case outdated
+    }
+
+    /// - Parameter servedFromSnapshot: the broker already holds the remote
+    ///   session, so `session/new|load|resume` never reach the adapter.
+    /// - Parameter fingerprint: `BuiltInAlasMCP.agentFingerprint` of the
+    ///   server this attach configures; nil when it configures none, which
+    ///   leaves nothing to keep up to date.
+    public static func adoptedAgentServer(
+        servedFromSnapshot: Bool,
+        brokerGeneration: ACPBrokerGeneration?,
+        fingerprint: String?,
+        record: BuiltInMCPSessionState.AgentRecord?
+    ) -> AdoptedAgentServer {
+        guard servedFromSnapshot, let fingerprint else { return .configuredNow }
+        guard let brokerGeneration,
+              record == .init(brokerGeneration: brokerGeneration, fingerprint: fingerprint)
+        else { return .outdated }
+        return .kept
+    }
+
     /// Whether an attach keeps a built-in server the adopted agent is already
-    /// connected to, so it won't send a new hello. Only a broker-adopted agent
-    /// keeps its connections.
-    /// - stdio: the server lives under the agent. A hello recorded over
-    ///   another transport earlier in this app run means the previous attach
-    ///   used a different server, so this stdio one is new and must say hello.
-    /// - HTTP: when the app's supervisor reuses its running process (same URL
-    ///   and token), the adapter sees an unchanged session and keeps its
-    ///   connection without a new `initialize`, so the hello that process
-    ///   sent earlier in this app run proves it. A respawned process (after a
-    ///   failed attach or an app restart) has a new URL and token, so the
-    ///   adapter reconnects and the new process must say hello.
-    /// A previous attach in this app run that already found no server (a
-    /// reconnect after the warning) has nothing that could have survived, so
-    /// it keeps the fresh-launch rules and the warning.
+    /// connected to, so it won't send a new hello. Only an agent that still
+    /// runs the server this attach configures keeps it (stdio: its own child;
+    /// HTTP: the app's process at the same address). A previous attach in
+    /// this app run that already found no server has nothing that could have
+    /// survived, so it keeps the fresh-launch rules and the warning.
     public static func reattachesRunningServer(
         builtInTransport: MCPTransportKind?,
-        adoptedRunningAgent: Bool,
-        recordedHelloTransport: MCPTransportKind?,
-        reusedHTTPServer: Bool = false,
+        adoptedAgentServer: AdoptedAgentServer,
         previousAttachFoundNoServer: Bool = false
     ) -> Bool {
-        guard adoptedRunningAgent, !previousAttachFoundNoServer else { return false }
+        guard adoptedAgentServer == .kept, !previousAttachFoundNoServer else { return false }
         switch builtInTransport {
-        case .stdio:
-            return recordedHelloTransport == nil || recordedHelloTransport == .stdio
-        case .http:
-            return reusedHTTPServer && recordedHelloTransport == .http
+        case .stdio, .http:
+            return true
         case .sse, nil:
             return false
         }

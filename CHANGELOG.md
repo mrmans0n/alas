@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### 🐛 Fixes
+
+- Keep the built-in Alas MCP connected to agents that survive an Alas restart. With the HTTP transport, the server now comes back at the address the running agent already uses; an agent left with an outdated Alas MCP is restarted once idle instead of silently losing its Alas tools. HTTP servers now exit with the app, and ones leaked by earlier versions are cleaned up.
+
 ## [0.21.6] - 2026-10-16
 
 ### ✨ Features

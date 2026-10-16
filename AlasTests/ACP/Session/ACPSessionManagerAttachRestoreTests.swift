@@ -1959,6 +1959,80 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(row.acpBrokerAcknowledgedCursor == 4)
     }
 
+    @Test("an agent adopted with an outdated built-in MCP address is restarted with the current one")
+    func adoptedAgentWithOutdatedBuiltInMCPIsRestarted() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(.init(
+            id: "local-session-1",
+            agentId: "claude",
+            title: "Stored session",
+            titleSource: .placeholder,
+            remoteSessionId: "remote-old",
+            currentModel: nil,
+            currentMode: nil,
+            autoRun: false,
+            acpBrokerId: "broker-existing",
+            acpBrokerGeneration: 7,
+            acpBrokerAcknowledgedCursor: 4,
+            createdAt: 0,
+            updatedAt: 0,
+            lastOpenedAt: 0,
+            archived: false
+        ))
+        // The broker kept the agent and its remote session across an app
+        // restart, so `session/load` is answered from its snapshot.
+        let broker = ManagerBrokerService()
+        await broker.setSnapshotResults(
+            initializeResult: .object([
+                "protocolVersion": .number(1),
+                "agentCapabilities": .object(["loadSession": .bool(true)]),
+                "authMethods": .array([])
+            ]),
+            remoteSessionResult: .object([
+                "sessionId": .string("remote-restored"),
+                "availableModels": .array([]),
+                "availableModes": .array([]),
+                "promptSuggestions": .array([]),
+                "configOptions": .array([])
+            ])
+        )
+        func builtIn(port: Int) -> ACPMCPServer {
+            .http(name: "alas", url: "http://localhost:\(port)/mcp", headers: [])
+        }
+        // The agent was started against the previous app run's server.
+        let state = BuiltInMCPSessionState()
+        state.setAgentRecord(
+            .init(brokerGeneration: .init(rawValue: 7), fingerprint: BuiltInAlasMCP.agentFingerprint(of: builtIn(port: 5100))),
+            sessionId: "local-session-1"
+        )
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            brokerServiceFactory: { broker },
+            builtInMCPProvider: { _ in
+                .local(.init(
+                    server: builtIn(port: 5101),
+                    status: .init(id: BuiltInAlasMCP.statusId, name: "alas", transport: .http, disposition: .requested),
+                    isDelegated: false
+                ))
+            },
+            builtInMCPSessionState: state
+        )
+
+        let session = try #require(manager.placeholderSession(id: "local-session-1"))
+        await manager.hydrateIfNeeded(id: session.id)
+        await manager.attach(to: session.id, freshlyCreated: false)
+
+        // Restarting closes the adopted broker and attaches again.
+        try await waitUntilAsync {
+            let closed = await broker.closed.count
+            let opened = await broker.opened.count
+            return closed == 1 && opened == 2
+        }
+    }
+
     @Test("reopened session uses session/load, adopts its remote id, and does not reset the MCP preamble")
     func loadedSessionDoesNotResetPreamble() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())

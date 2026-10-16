@@ -247,6 +247,14 @@ public final class ACPSessionManager: ChangeTracking {
     /// `alas mcp --http` process. Not called on `closeSession` (a transient
     /// in-memory unload where a later reattach is expected).
     private let onSessionEnded: (@MainActor (ACPSession.ID) -> Void)?
+    /// Which built-in server each broker generation's agent was given, kept
+    /// across app launches so an attach that adopts a surviving agent can
+    /// tell whether it still reaches the server this attach configures.
+    private let builtInMCPSessionState: BuiltInMCPSessionState
+    /// Sessions whose adopted agent was restarted because it ran an outdated
+    /// built-in server. A restart that adopts the same agent again (its broker
+    /// would not close) must not loop; the next live startup clears the entry.
+    private var builtInMCPOutdatedAgentRestarts: Set<ACPSession.ID> = []
     /// Invoked once a session has loaded, and again when the agent updates
     /// its models or config options, with the normalized chip state. Feeds
     /// `ACPAgentModelCatalog` so a session configured before it exists can
@@ -1941,6 +1949,7 @@ public final class ACPSessionManager: ChangeTracking {
          builtInMCPHello: (@MainActor (String) -> MCPRegistrationRegistry.Record?)? = nil,
          clearMCPRegistration: (@MainActor (String) -> Void)? = nil,
          onSessionEnded: (@MainActor (ACPSession.ID) -> Void)? = nil,
+         builtInMCPSessionState: BuiltInMCPSessionState? = nil,
          onChipsObserved: (@MainActor (_ agentId: String, _ host: String?, _ chips: ACPChipState) -> Void)? = nil,
          ggMCPProvider: GGMCPProvider? = nil,
          ggPreambleProvider: GGPreambleProvider? = nil,
@@ -1986,6 +1995,7 @@ public final class ACPSessionManager: ChangeTracking {
         self.builtInMCPHello = builtInMCPHello
         self.clearMCPRegistration = clearMCPRegistration
         self.onSessionEnded = onSessionEnded
+        self.builtInMCPSessionState = builtInMCPSessionState ?? BuiltInMCPSessionState()
         self.onChipsObserved = onChipsObserved
         self.ggMCPProvider = ggMCPProvider
         self.ggPreambleProvider = ggPreambleProvider
@@ -3156,6 +3166,8 @@ public final class ACPSessionManager: ChangeTracking {
     private func forgetSession(id: ACPSession.ID) {
         killRemoteHelperACPProcIfPossible(sessionId: id)
         onSessionEnded?(id)
+        builtInMCPSessionState.forget(sessionId: id)
+        builtInMCPOutdatedAgentRestarts.remove(id)
         cancelAutoReconnect(sessionId: id)
         scheduledReconnectTasks.removeValue(forKey: id)?.task.cancel()
         cancelPendingDraftWrite(for: id)
@@ -7073,20 +7085,31 @@ extension ACPSessionManager {
                 return true
             }()
             let shouldTrackBuiltInRegistration = builtInMCP != nil && usesWireMCP
-            // A broker-adopted agent that was already running keeps the
-            // built-in server it connected to for an earlier attach: the stdio
-            // `alas mcp` it spawned (possibly before an app restart), or the
-            // app-supervised HTTP process the supervisor reused. That server
-            // said its one hello back then and won't again, so this attach
-            // must not demand a fresh one (see `MCPRegistrationDecision`).
+            // An agent adopted from its broker never receives this attach's
+            // MCP configuration: the broker answers the startup RPC from its
+            // snapshot. It keeps the built-in server it was started with — the
+            // stdio `alas mcp` it spawned, or the app's HTTP process at the
+            // address it was given, which the supervisor brings back after an
+            // app restart. That server said its one hello back then and won't
+            // again, so this attach must not demand a fresh one. An agent
+            // started with another server is outdated and gets restarted once
+            // idle (see `MCPRegistrationDecision`).
             let helloBeforeAttach = builtInMCPHello?(sessionId)
             let builtInToolScope = builtInMCP?.toolScope ?? .full
+            let brokerClient = connection.client as? ACPBrokerClient
+            let builtInAgentFingerprint = usesWireMCP
+                ? builtInMCP.map { BuiltInAlasMCP.agentFingerprint(of: $0.server) }
+                : nil
+            let adoptedAgentServer = MCPRegistrationDecision.adoptedAgentServer(
+                servedFromSnapshot: brokerClient?.servesRemoteSessionFromSnapshot == true,
+                brokerGeneration: brokerClient?.currentBrokerGeneration,
+                fingerprint: builtInAgentFingerprint,
+                record: builtInMCPSessionState.agentRecord(sessionId: sessionId)
+            )
             var reattachedToRunningServer = shouldTrackBuiltInRegistration
                 && MCPRegistrationDecision.reattachesRunningServer(
                     builtInTransport: builtInMCP?.status.transport,
-                    adoptedRunningAgent: (connection.client as? ACPBrokerClient)?.adoptedRunningAgent == true,
-                    recordedHelloTransport: helloBeforeAttach?.transport,
-                    reusedHTTPServer: builtInMCP?.reusesRunningServer == true,
+                    adoptedAgentServer: adoptedAgentServer,
                     previousAttachFoundNoServer: session.builtInMCPRegistration == .notRegistered
                 )
             session.builtInMCPReattachedToRunningServer = reattachedToRunningServer
@@ -7098,7 +7121,7 @@ extension ACPSessionManager {
             let mcpAttachStartedAt = ContinuousClock.now
             if shouldTrackBuiltInRegistration {
                 mcpRegistrationLogger.notice(
-                    "attach session=\(sessionId, privacy: .public) epoch=\(mcpRegistrationEpoch) transport=\(builtInMCP?.status.transport.rawValue ?? "none", privacy: .public) reattached=\(reattachedToRunningServer) helloBeforeAttach=\(helloBeforeAttach?.transport.rawValue ?? "none", privacy: .public)"
+                    "attach session=\(sessionId, privacy: .public) epoch=\(mcpRegistrationEpoch) transport=\(builtInMCP?.status.transport.rawValue ?? "none", privacy: .public) agentServer=\("\(adoptedAgentServer)", privacy: .public) reattached=\(reattachedToRunningServer) helloBeforeAttach=\(helloBeforeAttach?.transport.rawValue ?? "none", privacy: .public)"
                 )
             }
             // A hello recorded earlier in this app run by the same surviving
@@ -7867,6 +7890,17 @@ extension ACPSessionManager {
                 await connection.shutdown()
                 return
             }
+            // The adapter received this attach's MCP configuration: remember
+            // which built-in server this broker generation's agent runs, so a
+            // later attach that adopts it (after an app restart) can check it.
+            if adoptedAgentServer == .configuredNow,
+               let generation = brokerClient?.currentBrokerGeneration {
+                builtInMCPSessionState.setAgentRecord(
+                    builtInAgentFingerprint.map { .init(brokerGeneration: generation, fingerprint: $0) },
+                    sessionId: sessionId
+                )
+                builtInMCPOutdatedAgentRestarts.remove(sessionId)
+            }
             // Start the built-in MCP registration grace ONLY now — session
             // creation/restoration above has succeeded, which is when the
             // adapter actually received `wireMCPServers` and could spawn or
@@ -8347,6 +8381,25 @@ extension ACPSessionManager {
             }
             if completedRecovery {
                 runner.appendAndPersistSystemNotice("Agent reconnected.")
+            }
+            if adoptedAgentServer == .outdated {
+                if builtInMCPOutdatedAgentRestarts.insert(sessionId).inserted {
+                    mcpRegistrationLogger.notice(
+                        "outdated agent server session=\(sessionId, privacy: .public): restarting the agent once idle"
+                    )
+                    // Checked before the queue drains, so neither a queued
+                    // prompt nor a running turn ever reaches the outdated agent
+                    // only to be cut off by the restart.
+                    runner.restartAgentWhenIdle = { [weak self] in
+                        Task { @MainActor [weak self] in
+                            await self?.restartAgentWithOutdatedBuiltInMCP(sessionId: sessionId)
+                        }
+                    }
+                } else {
+                    mcpRegistrationLogger.notice(
+                        "outdated agent server session=\(sessionId, privacy: .public): still adopted after a restart; leaving it"
+                    )
+                }
             }
             if !shouldHoldQueueForRecovery || !sendTranscriptAsContext(sessionId: sessionId, agentName: nil) {
                 if !sendPendingQueueForceSend(sessionId: sessionId) {
@@ -9962,6 +10015,21 @@ extension ACPSessionManager {
 
     public func detach(sessionId: ACPSession.ID) async {
         try? await tearDownSession(sessionId: sessionId, closeRemote: false)
+    }
+
+    /// Replaces an adopted agent that runs an outdated built-in MCP server
+    /// with a fresh one, as the user's Reconnect does: detaching closes the
+    /// broker (and its agent), so the attach starts a new agent that receives
+    /// the current MCP configuration and restores the conversation. Retained
+    /// throughout, so a session no view holds is not evicted by the detach.
+    private func restartAgentWithOutdatedBuiltInMCP(sessionId: ACPSession.ID) async {
+        guard sessions[sessionId] != nil, runners[sessionId] != nil else { return }
+        retainSession(id: sessionId)
+        defer { releaseSession(id: sessionId) }
+        mcpRegistrationLogger.notice("restarting agent with outdated built-in MCP session=\(sessionId, privacy: .public)")
+        await detach(sessionId: sessionId)
+        guard sessions[sessionId] != nil else { return }
+        await attach(to: sessionId, freshlyCreated: false)
     }
 
     private func performRemoteSessionCreation(
