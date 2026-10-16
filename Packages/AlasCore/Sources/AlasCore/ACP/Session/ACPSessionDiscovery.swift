@@ -274,6 +274,10 @@ public final class ACPSessionDiscoveryHandle {
     private var hasLoadedPage = false
     private var closed = false
     private var subscriptionId: String?
+    /// Alas copies removed while browsing, by agent session id. A store read
+    /// that raced the removal still returns the removed id; a later import
+    /// gets a new one.
+    private var removedLocalCopies: [String: String] = [:]
     public private(set) var filter = ACPSessionBrowserFilter()
 
     /// Session index pages that hold no row for this browser but still have
@@ -372,7 +376,8 @@ public final class ACPSessionDiscoveryHandle {
         let target = worktreeResolver(info.cwd)
         let includeLinked = canListLinkedWorktrees && filter.includeLinkedWorktrees
         guard includeLinked || target?.worktreeId == worktreeId else { return nil }
-        let local = try? await target?.persistence?.loadSession(agentId: agentId, remoteSessionId: info.sessionId)
+        var local = try? await target?.persistence?.loadSession(agentId: agentId, remoteSessionId: info.sessionId)
+        if let id = local?.id, removedLocalCopies[info.sessionId] == id { local = nil }
         let remoteTitle = info.title?.trimmingCharacters(in: .whitespacesAndNewlines)
         let displayTitle = if let remoteTitle, !remoteTitle.isEmpty { remoteTitle } else { "Agent session" }
         return ACPDiscoveredSession(
@@ -391,6 +396,11 @@ public final class ACPSessionDiscoveryHandle {
     public func refresh() {
         nextCursor = nil
         hasLoadedPage = false
+    }
+
+    /// Rows built from now on never show `localSessionId` for `remoteSessionId`.
+    public func forgetLocalCopy(_ localSessionId: String, of remoteSessionId: String) {
+        removedLocalCopies[remoteSessionId] = localSessionId
     }
 
     public func deleteSession(remoteSessionId: String) async throws {
@@ -566,6 +576,7 @@ public final class ACPSessionDiscoveryModel {
         defer { finishDeletion(session.remoteSessionId) }
         try await manager.deletePersistedSession(id: localSessionId)
         localActionGeneration += 1
+        handle?.forgetLocalCopy(localSessionId, of: session.remoteSessionId)
         // Replayed after any pending read, like the other local actions, so
         // an older page cannot bring the Alas copy back.
         if var current = sessions.first(where: { $0.remoteSessionId == session.remoteSessionId }) {

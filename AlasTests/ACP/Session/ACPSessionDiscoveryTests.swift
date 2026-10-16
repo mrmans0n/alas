@@ -954,6 +954,38 @@ struct ACPSessionDiscoveryTests {
     }
 
     @MainActor
+    @Test("a live change read from the store before Remove from Alas does not bring the copy back")
+    func staleLiveChangeAfterLocalRemoval() async throws {
+        let store = try temporaryStore()
+        try store.upsertSession(row(id: "local-1", remoteSessionId: "remote-1", title: "Local", origin: .agentImported))
+        // The handle reads Alas copies from a store that still has the row,
+        // as a notification materialized before the removal would.
+        let staleURL = FileManager.default.temporaryDirectory.appendingPathComponent("acp-stale-\(UUID().uuidString).sqlite")
+        let stale = try ACPSessionStore(path: staleURL.path)
+        try stale.upsertSession(row(id: "local-1", remoteSessionId: "remote-1", title: "Local", origin: .agentImported))
+        let stalePersistence = ACPSessionPersistence(path: staleURL.path)
+        let client = indexClient()
+        client.script(method: "session/list") { _ in
+            try JSONEncoder().encode(ACPSessionListResult(sessions: [
+                .init(sessionId: "remote-1", cwd: "/tmp/wt", index: .init(archived: false)),
+            ]))
+        }
+        let manager = manager(store: store, client: client)
+        let model = ACPSessionDiscoveryModel()
+        await model.start(manager: manager, agentId: "claude") { cwd in
+            Self.projectResolver(cwd).map { .init(worktreeId: $0.worktreeId, persistence: stalePersistence) }
+        }
+        #expect(model.sessions.first?.localSessionId == "local-1")
+        try await model.removeLocalHistory(for: try #require(model.sessions.first), manager: manager)
+        client.emitSessionListChanges(.init(subscriptionId: "sub-1", sessions: [
+            .init(sessionId: "remote-1", cwd: "/tmp/wt", title: "Renamed elsewhere", index: .init(archived: false)),
+        ], removed: []))
+        #expect(await awaitCondition { model.sessions.first?.title == "Local" || model.sessions.first?.title == "Renamed elsewhere" })
+        #expect(model.sessions.first?.localSessionId == nil)
+        await model.stop()
+    }
+
+    @MainActor
     @Test("a Load more answering after a filter change neither shows its rows nor moves the cursor")
     func loadMoreAfterFilterChange() async throws {
         let store = try temporaryStore()
