@@ -383,7 +383,16 @@ extension ACPTranscriptCoreTextRowView {
         guard textSelection.map({ !$0.isEmpty }) ?? false else { return super.menu(for: event) }
         let menu = NSMenu()
         menu.addItem(withTitle: "Copy", action: #selector(copy(_:)), keyEquivalent: "")
+        if actions.quote != nil {
+            menu.addItem(withTitle: "Quote", action: #selector(quoteSelection(_:)), keyEquivalent: "")
+        }
         return menu
+    }
+
+    @objc func quoteSelection(_ sender: Any?) {
+        let text = selectedText()
+        guard ACPMessageQuote.canQuote(text) else { return }
+        actions.quote?(text)
     }
 
     func selectAllForTesting() {
@@ -614,9 +623,13 @@ extension ACPTranscriptCoreTextRowView {
 }
 
 extension ACPTranscriptCoreTextRowView: NSMenuItemValidation {
-    /// Copy only with something selected.
+    /// Copy and Quote only with something selected.
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        menuItem.action == #selector(copy(_:)) ? !selectedText().isEmpty : true
+        switch menuItem.action {
+        case #selector(copy(_:)): !selectedText().isEmpty
+        case #selector(quoteSelection(_:)): ACPMessageQuote.canQuote(selectedText())
+        default: true
+        }
     }
 }
 
