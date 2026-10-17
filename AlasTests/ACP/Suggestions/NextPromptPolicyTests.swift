@@ -37,6 +37,9 @@ struct NextPromptPolicyTests {
          "What arrives in a typical morning, and what do I want to do with each kind of email?"),
         ("Should I open a PR or keep iterating?", "Should I open a PR or keep iterating?"),
         ("Open a PR?", "Open a PR?"),
+        ("应该打开 PR 吗？", "应该打开 PR 吗？"),
+        ("I need one detail before configuring the workflow and deployment settings: Which environment should I target?",
+         "Which environment should I target?"),
         ("I can tailor this after learning more about your infrastructure and release process. Which deployment environment should I target?",
          "Which deployment environment should I target?")
     ])
@@ -52,6 +55,8 @@ struct NextPromptPolicyTests {
          "Open a PR with these changes and keep iterating on the parser later."),
         ("Should I keep the old config file for the migration?", "Yes, keep the old config file for now."),
         ("Open a PR?", "Open a PR."),
+        ("The strict mode catches malformed JSON; lenient mode accepts extras. Which parser mode should the regression test cover?",
+         "The strict mode should cover the parser regression test."),
         ("Which parser behavior should the regression test cover?",
          "The regression test should cover closing-question echo behavior.")
     ])

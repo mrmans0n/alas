@@ -114,42 +114,45 @@ public enum NextPromptPolicy: Sendable {
     /// Small models often answer an assistant's closing question by restating
     /// it. A restatement reuses most of the question's words and keeps its
     /// form: it is itself a question or, when longer than a few words, opens
-    /// like one of the question's clauses. A direct answer can share the words but not the form.
+    /// like the question or the request just before it. A direct answer can
+    /// share the words but not the form.
     private static func echoesClosingQuestion(_ text: String, assistant: String) -> Bool {
         let trailing = CharacterSet.whitespacesAndNewlines.union(.init(charactersIn: "*_`)\"'”’"))
-        let paragraph = (assistant
+        func isQuestion(_ value: String) -> Bool {
+            value.trimmingCharacters(in: trailing).last.map { "?？؟".contains($0) } ?? false
+        }
+        let paragraph = assistant
             .components(separatedBy: "\n\n")
-            .last { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? "")
-            .trimmingCharacters(in: trailing)
-        guard paragraph.hasSuffix("?") else { return false }
+            .last { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? ""
+        guard isQuestion(paragraph) else { return false }
         func words(_ value: String) -> [String] {
             value.lowercased()
                 .replacingOccurrences(of: "’", with: "'")
                 .components(separatedBy: CharacterSet.alphanumerics.union(.init(charactersIn: "'")).inverted)
                 .filter { !$0.isEmpty }
         }
-        func split(_ value: String, after delimiters: String) -> [String] {
-            value.replacingOccurrences(of: "([\(delimiters)])\\s+", with: "$1\n", options: .regularExpression)
-                .components(separatedBy: "\n")
-        }
         let reply = words(text)
         guard !reply.isEmpty else { return false }
-        func overlaps(_ span: String) -> Bool {
-            let asked = Set(words(span))
+        // Prose can precede the question in the same paragraph, so only the
+        // question clause and the request just before it count as the ask.
+        let clauses = paragraph
+            .replacingOccurrences(of: #"([.!?:;]\s+|[。！？؟；：]\s*)"#, with: "$1\n", options: .regularExpression)
+            .components(separatedBy: "\n")
+            .map(words)
+            .filter { !$0.isEmpty }
+        let ask = clauses.suffix(2)
+        func overlaps(_ span: [String]) -> Bool {
+            let asked = Set(span)
             guard !asked.isEmpty else { return false }
             let reused = Double(reply.filter(asked.contains).count) / Double(reply.count)
             let covered = Double(asked.intersection(reply).count) / Double(asked.count)
             return reused >= 0.6 && covered >= 0.5
         }
-        // Prose can precede the question in the same paragraph, and a
-        // restatement can span the question and the request before it.
-        let finalSentence = split(paragraph, after: ".!?").last ?? paragraph
-        guard overlaps(finalSentence) || overlaps(paragraph) else { return false }
-        if text.trimmingCharacters(in: trailing).hasSuffix("?") { return true }
+        guard overlaps(ask.last ?? []) || overlaps(ask.flatMap { $0 }) else { return false }
+        if isQuestion(text) { return true }
         // A short reply such as "Open a PR." naturally opens like the question.
         guard reply.count >= 4 else { return false }
-        let opening = Array(reply.prefix(2))
-        return split(paragraph, after: ".!?:;").contains { Array(words($0).prefix(2)) == opening }
+        return ask.contains { $0.prefix(2) == reply.prefix(2) }
     }
 
     private static func publicSecretUpload(_ text: String, user: String) -> Bool {
