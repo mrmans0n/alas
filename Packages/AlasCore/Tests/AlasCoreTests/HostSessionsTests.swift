@@ -213,6 +213,23 @@ struct HostSessionsTests {
         #expect(child.failureMessage?.contains(SessionsAPI.checkpointRecoveryReason) == true)
     }
 
+    /// A child waiting to start is admitted for its worktree as listed now:
+    /// one that moved to a remote project is refused an agent that runs
+    /// only locally, though the child was asked for under a local one.
+    @Test func aChildIsAdmittedForItsWorktreesCurrentProject() async throws {
+        let environment = RefusingEnvironment()
+        environment.localOnlyAgents = true
+        let fixture = try Fixture(environment: environment, projectHost: "build")
+        defer { fixture.tearDown() }
+        let listed = fixture.worktree
+        let stale = Worktree(
+            id: listed.id, projectId: "local", name: listed.name, branch: listed.branch,
+            path: listed.path, status: listed.status, lastActivity: listed.lastActivity
+        )
+
+        #expect(await fixture.host.sessions.refusal(toStart: "gemini", in: stale) == .agentUnavailable)
+    }
+
     /// A delegated session's summary names the session that delegated it.
     @Test func aDelegatedSessionsSummaryNamesItsParent() throws {
         let fixture = try Fixture()

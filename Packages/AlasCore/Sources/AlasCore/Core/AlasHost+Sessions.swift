@@ -102,6 +102,9 @@ extension SessionsAPI {
     /// Why a session for `agentID` cannot start in `worktree` now, as
     /// `create` checks it; nil when it can.
     func refusal(toStart agentID: String, in worktree: Worktree) async -> SessionRefusal? {
+        // As listed now, which the manager lookup also uses: the worktree
+        // can move to another project while a child waits to start.
+        let worktree = core.projectAndWorktree(withWorktreeId: worktree.id)?.worktree ?? worktree
         do {
             let (manager, agentHost) = try worktreeManager(worktree, agentID: agentID)
             try await admit(agentID, in: manager, worktree: worktree, agentHost: agentHost)
