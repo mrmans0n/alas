@@ -9,13 +9,15 @@ struct ACPTranscriptVisibleRow: Identifiable, Equatable {
     var id: String { stableId }
 
     /// Messages that never become a row: the toolbar pill renders plans, hidden background
-    /// tasks are not shown, and a visual aid's answer prompt is shown by its answered card.
+    /// tasks are not shown, a visual aid's answer prompt is shown by its answered card, and an
+    /// embedded visual's `visual_show` chip gives way to the visual itself.
     static func isHidden(_ message: ACPMessage) -> Bool {
         switch message {
         case .plan:
             true
         case .toolCall(let toolCall):
             ACPBackgroundTask(toolCall: toolCall)?.showInTranscript == false
+                || ACPToolCallPresentation.hidesVisualShowChip(toolCall)
         default:
             ACPVisualAidQuestionForm.isAnswerPrompt(message)
         }

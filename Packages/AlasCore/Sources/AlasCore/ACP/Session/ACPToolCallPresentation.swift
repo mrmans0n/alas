@@ -19,6 +19,33 @@ public struct ACPToolCallPresentation: Equatable, Sendable {
         isVisualShow(name: toolCall.nonEmptyName, title: toolCall.title)
     }
 
+    /// True for a finished `visual_show` call whose visual is embedded: the visual
+    /// flows straight out of the prose, so its tool chip is not shown. In-flight
+    /// and failed calls keep their chip, and so do cards. The tool call does not
+    /// carry the resolved presentation, so this applies `ACPVisualAid.resolvePresentation`
+    /// to the arguments in `rawInput`: either the arguments object itself (Claude's
+    /// adapter) or one nested under `"arguments"` or `"input"` (Codex's). Anything
+    /// unreadable, or a presentation this build does not know, keeps the chip.
+    public static func hidesVisualShowChip(_ toolCall: ACPMessage.ToolCall) -> Bool {
+        guard toolCall.status == "completed", isVisualShow(toolCall),
+              let rawInput = toolCall.rawInput,
+              let object = (try? JSONSerialization.jsonObject(with: Data(rawInput.utf8))) as? [String: Any]
+        else { return false }
+        let arguments = object["arguments"] as? [String: Any] ?? object["input"] as? [String: Any] ?? object
+        let requested: ACPVisualAid.Presentation?
+        switch arguments["presentation"] {
+        case nil, is NSNull:
+            requested = nil
+        case let value as String:
+            guard let presentation = ACPVisualAid.Presentation(rawValue: value) else { return false }
+            requested = presentation
+        default:
+            return false
+        }
+        let hasQuestion = arguments["question"] is [String: Any]
+        return ACPVisualAid.resolvePresentation(requested: requested, hasQuestion: hasQuestion) == .embedded
+    }
+
     /// The same match for fields that arrive outside a `ToolCall`, such as a
     /// permission request's tool call. A stable tool name decides on its own
     /// (any component of it may be the tool). The title is only consulted when

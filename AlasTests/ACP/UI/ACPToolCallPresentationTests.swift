@@ -132,6 +132,28 @@ struct ACPToolCallPresentationTests {
         #expect(presentation.style == .mcp)
     }
 
+    /// Claude's adapter sends the MCP arguments as rawInput; Codex's wraps them under `arguments`.
+    @Test("only a finished embedded visual_show hides its chip", arguments: [
+        ("mcp__alas__visual_show", "completed", #"{"title":"T","html":"<p>"}"#, true),
+        ("mcp__alas__visual_show", "completed",
+         #"{"server":"alas","tool":"visual_show","arguments":{"title":"T","html":"<p>"}}"#, true),
+        ("mcp__alas__visual_show", "completed",
+         #"{"server":"alas","tool":"visual_show","arguments":{"title":"T","html":"<p>","presentation":"card"}}"#, false),
+        ("mcp__alas__visual_show", "completed", #"{"title":"T","html":"<p>","presentation":"card"}"#, false),
+        ("mcp__alas__visual_show", "completed", #"{"title":"T","html":"<p>","presentation":"poster"}"#, false),
+        ("mcp__alas__visual_show", "completed",
+         #"{"title":"T","html":"<p>","presentation":"embedded","question":{"prompt":"P","options":[]}}"#, false),
+        ("mcp__alas__visual_show", "failed", #"{"title":"T","html":"<p>"}"#, false),
+        ("mcp__alas__visual_show", "in_progress", #"{"title":"T","html":"<p>"}"#, false),
+        ("mcp__alas__visual_show", "completed", nil, false),
+        ("mcp__alas__visual_show", "completed", "not json", false),
+        ("Bash", "completed", #"{"title":"T","html":"<p>"}"#, false),
+    ] as [(String, String, String?, Bool)])
+    func hidesVisualShowChip(name: String, status: String, rawInput: String?, hidden: Bool) {
+        let call = toolCall(title: name, status: status, rawInput: rawInput, name: name)
+        #expect(ACPToolCallPresentation.hidesVisualShowChip(call) == hidden)
+    }
+
     @Test("a named tool whose title merely mentions visual_show is not the visual tool", arguments: [
         ("rg visual_show Alas/", "Bash"),
         ("Read visual_show.md", "Read"),
@@ -327,6 +349,8 @@ struct ACPToolCallPresentationTests {
     private func toolCall(
         title: String,
         kind: String? = nil,
+        status: String = "completed",
+        rawInput: String? = nil,
         rawOutput: String? = nil,
         metadata: AnyCodable? = nil,
         assets: [ACPMessage.ToolCallAsset] = [],
@@ -336,7 +360,8 @@ struct ACPToolCallPresentationTests {
             toolCallId: UUID().uuidString,
             title: title,
             kind: kind,
-            status: "completed",
+            status: status,
+            rawInput: rawInput,
             rawOutput: rawOutput,
             metadata: metadata,
             assets: assets,

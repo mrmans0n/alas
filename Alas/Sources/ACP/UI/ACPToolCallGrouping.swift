@@ -180,6 +180,9 @@ enum ACPToolCallGrouping {
     /// share an activity group. Unknown statuses (e.g. a call awaiting
     /// permission), context compaction, subagents, file edits, and readable
     /// messages end the run so they remain visible outside the disclosure.
+    /// An embedded visual's hidden `visual_show` chip is not work either: the
+    /// completed-turn scan reads raw messages, and counting it would make it the
+    /// turn's last run and move the duration off the work the user can see.
     static func isCollapsible(_ message: ACPMessage) -> Bool {
         if case .thought = message { return true }
         guard case .toolCall(let toolCall) = message,
@@ -187,7 +190,8 @@ enum ACPToolCallGrouping {
                 || toolCall.status == "in_progress" || toolCall.status == "pending",
               ACPContextCompaction(toolCall: toolCall) == nil,
               ACPSubagentRowDescriptor(toolCall: toolCall) == nil,
-              ACPBackgroundTask(toolCall: toolCall) == nil
+              ACPBackgroundTask(toolCall: toolCall) == nil,
+              !ACPToolCallPresentation.hidesVisualShowChip(toolCall)
         else { return false }
         return true
     }
