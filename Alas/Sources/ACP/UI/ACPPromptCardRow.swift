@@ -6,6 +6,18 @@ import SwiftUI
 struct ACPPromptCardContext {
     var reviewComments: ReviewCommentStatusModel?
     var perform: @MainActor (ACPPromptCard.Action) -> Void
+    /// Alas commands the composer offers this session, badged in sent
+    /// messages like the agent's own.
+    var alasCommands: @MainActor () -> [ACPPromptSuggestion] = { [] }
+    /// The toolbar Ship pill's current state, shown when hovering a `/ship`
+    /// badge; nil where the session doesn't offer Ship.
+    var shipStatus: (@MainActor () -> ACPShipStatus?)? = nil
+}
+
+/// What the `/ship` hover card shows about the session's PR.
+struct ACPShipStatus {
+    let presentation: ShepherdPresentation
+    let branch: String
 }
 
 private struct ACPPromptCardContextKey: EnvironmentKey {

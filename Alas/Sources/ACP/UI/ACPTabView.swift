@@ -866,7 +866,23 @@ private struct ACPSessionView: View {
             upstreamReferences: manager.upstreamReferences.store(for: worktree.path),
             promptCardContext: ACPPromptCardContext(
                 reviewComments: .shared,
-                perform: { action in state.performPromptCardAction(action) }
+                perform: { action in state.performPromptCardAction(action) },
+                alasCommands: {
+                    // Mirrors the composer's list, so a sent `/btw` or `/ship`
+                    // the agent handled keeps the agent's badge.
+                    guard !isMirror, !session.readOnlyRestricted else { return [] }
+                    return [ACPAlasSlashCommand.btwSuggestion]
+                        + (offersShipCommand ? [ACPAlasSlashCommand.shipSuggestion] : [])
+                },
+                shipStatus: {
+                    // Mounted rows keep this closure, so read the worktree live.
+                    let worktree = state.worktree(withId: worktree.id) ?? worktree
+                    guard !isMirror, !session.readOnlyRestricted,
+                          state.offersShip(in: worktree, isWorkspaceCheckoutOwner: isWorkspaceCheckoutOwner)
+                    else { return nil }
+                    let context = ShepherdSessionContext(sessionID: sessionId, worktree: worktree, state: state)
+                    return ACPShipStatus(presentation: context.presentation, branch: worktree.branch)
+                }
             ),
             visualAidActions: .driven(by: manager, session: session, popOut: { visual in
                 let resolvedOwner = owner ?? .worktree(worktree.id)

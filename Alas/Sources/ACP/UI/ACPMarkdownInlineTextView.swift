@@ -68,6 +68,8 @@ struct ACPMarkdownInlineTextView: NSViewRepresentable {
             rendered, suggestions: context.environment.acpCommandSuggestions
         )
         (textView as? ACPMarkdownInlineNSTextView)?.hasCommandChips = commandChipCount > 0
+        (textView as? ACPMarkdownInlineNSTextView)?.commandHoverContext = commandChipCount > 0
+            ? (context.environment.acpPromptCardContext, theme) : nil
         let chipping = context.environment.acpUpstreamReferenceChipping
         // Only subscribe the paragraph to store revisions, and only install
         // its hover tracking area, when it actually holds a chip: most
@@ -262,6 +264,8 @@ extension NSAttributedString.Key {
 final class ACPMarkdownInlineNSTextView: NSTextView {
     private let pastedTextHover = ACPPastedTextHoverController()
     private let commandHover = ACPCommandChipHoverController()
+    /// What a command badge's hover card reads live, such as `/ship`'s PR state.
+    var commandHoverContext: (card: ACPPromptCardContext?, theme: Theme)?
     var hasCommandChips = false {
         didSet {
             // Any re-render replaces attachments and their metadata.
@@ -410,7 +414,10 @@ final class ACPMarkdownInlineNSTextView: NSTextView {
         )
         pastedTextHover.update(at: convert(event.locationInWindow, from: nil), in: self)
         if hasCommandChips, let hit = ACPTranscriptCommandChip.hit(at: convert(event.locationInWindow, from: nil), in: self) {
-            commandHover.scheduleShow(range: hit.range, suggestion: hit.suggestion, in: self)
+            commandHover.scheduleShow(
+                range: hit.range, suggestion: hit.suggestion, in: self,
+                context: commandHoverContext?.card, theme: commandHoverContext?.theme
+            )
         } else {
             commandHover.hide()
         }
