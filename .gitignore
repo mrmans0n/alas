@@ -33,3 +33,6 @@ zig-pkg/
 
 # Profiling artifacts
 default.profraw
+
+# A local test benchmark installation, bound to its checkout.
+.alas/test-benchmark-explorer/
