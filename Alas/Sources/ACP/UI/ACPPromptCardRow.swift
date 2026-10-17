@@ -75,9 +75,12 @@ struct PromptCardRow: View {
                     ForEach(Array(card.sections.enumerated()), id: \.offset) { _, section in
                         sectionView(section)
                     }
-                    footer
+                    if let action = card.action, let context { actionRow(action, context: context) }
+                    if showsInstruction { instruction }
                 }
             }
+            .contentShape(Rectangle())
+            .onTapGesture(perform: toggleInstruction)
             .background(theme.color("bg-2"))
             .clipShape(RoundedRectangle(cornerRadius: 10))
             .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(theme.color("line"), lineWidth: 0.75))
@@ -89,7 +92,20 @@ struct PromptCardRow: View {
 
     // MARK: Header and facts
 
+    /// A real button outside the queue, so keyboard and VoiceOver users can
+    /// reach the disclosure the rest of the card offers by click.
+    @ViewBuilder
     private var header: some View {
+        if isCompact {
+            headerContent
+        } else {
+            Button(action: toggleInstruction) { headerContent }
+                .buttonStyle(.plain)
+                .accessibilityValue(showsInstruction ? "Expanded" : "Collapsed")
+        }
+    }
+
+    private var headerContent: some View {
         let style = Self.style(for: card.origin)
         return HStack(spacing: 8) {
             Image(systemName: style.symbol)
@@ -105,10 +121,19 @@ struct PromptCardRow: View {
                 .foregroundStyle(theme.color("fg"))
                 .lineLimit(1)
                 .truncationMode(.tail)
+            if !isCompact {
+                Spacer(minLength: 6)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9))
+                    .foregroundStyle(theme.color("fg-faint"))
+                    .rotationEffect(.degrees(showsInstruction ? 180 : 0))
+                    .accessibilityHidden(true)
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
     }
 
@@ -237,38 +262,30 @@ struct PromptCardRow: View {
 
     // MARK: Footer
 
-    private var footer: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 14) {
-                if let action = card.action, let context {
-                    Button(Self.actionLabel(action)) { context.perform(action) }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(theme.color("accent"))
-                }
-                Spacer(minLength: 0)
-                Button {
-                    showsInstruction.toggle()
-                    onInstructionExpandedChange?(showsInstruction)
-                } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: showsInstruction ? "chevron.down" : "chevron.right")
-                            .font(.system(size: 9, weight: .medium))
-                        Text("Instruction sent to agent")
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(theme.color("fg-muted"))
-                .accessibilityValue(showsInstruction ? "Expanded" : "Collapsed")
-            }
+    /// The whole card discloses the exact instruction, like a tool card.
+    private func toggleInstruction() {
+        guard !isCompact else { return }
+        showsInstruction.toggle()
+        onInstructionExpandedChange?(showsInstruction)
+    }
+
+    private func actionRow(_ action: ACPPromptCard.Action, context: ACPPromptCardContext) -> some View {
+        Button(Self.actionLabel(action)) { context.perform(action) }
+            .buttonStyle(.plain)
             .font(.system(size: 11.5))
-            if showsInstruction {
-                ACPMarkdownText(raw: text, typography: typography.flatteningHeadings())
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 7)
-        .overlay(alignment: .top) { Rectangle().fill(theme.color("line")).frame(height: 0.75) }
+            .foregroundStyle(theme.color("accent"))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .overlay(alignment: .top) { Rectangle().fill(theme.color("line")).frame(height: 0.75) }
+    }
+
+    private var instruction: some View {
+        ACPMarkdownText(raw: text, typography: typography.flatteningHeadings())
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .overlay(alignment: .top) { Rectangle().fill(theme.color("line")).frame(height: 0.75) }
     }
 
     // MARK: Decisions
