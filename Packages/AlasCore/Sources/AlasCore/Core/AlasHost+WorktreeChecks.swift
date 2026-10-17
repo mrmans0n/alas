@@ -39,13 +39,7 @@ extension WorktreesAPI {
     /// default branch, else `main`, `master` or `trunk`, is used.
     public func prepareCreate(projectID: String, branch: String, base: String?, caller: HostCaller) async throws -> PreparedWorktreeCreation {
         caller.log("worktrees.prepareCreate", branch)
-        guard let project = core.projects.projects.first(where: { $0.id == projectID }) else {
-            throw WorktreeCheckRefusal.projectUnavailable
-        }
-        guard !project.isFolder else { throw WorktreeCheckRefusal.folderProject }
-        if case .invalid(let message) = GitNameValidator.validateBranchName(branch) {
-            throw WorktreeCheckRefusal.invalidBranch(message)
-        }
+        let project = try creatableProject(projectID, branch: branch)
         let prepared: (destination: URL, rendered: URL, exists: Bool)
         do {
             prepared = try await core.preparedCreationDestination(project: project, branch: branch)
@@ -65,6 +59,52 @@ extension WorktreesAPI {
         request.destinationAlreadyPrepared = true
         let shownPath = prepared.destination.isRemoteAlasPath ? RemotePath.display(prepared.destination.path) : prepared.rendered.path
         return PreparedWorktreeCreation(request: request, shownPath: shownPath)
+    }
+
+    /// The git project `projectID`, where a worktree for `branch` may be created.
+    func creatableProject(_ projectID: String, branch: String) throws -> ProjectConfig {
+        guard let project = core.projects.projects.first(where: { $0.id == projectID }) else {
+            throw WorktreeCheckRefusal.projectUnavailable
+        }
+        guard !project.isFolder else { throw WorktreeCheckRefusal.folderProject }
+        if case .invalid(let message) = GitNameValidator.validateBranchName(branch) {
+            throw WorktreeCheckRefusal.invalidBranch(message)
+        }
+        return project
+    }
+
+    /// `request` checked as `prepareCreate` checks it, with the default base
+    /// when it names none.
+    func checkedCreation(_ request: WorktreeCreateRequest) async throws -> WorktreeCreateRequest {
+        let project = try creatableProject(request.projectID, branch: request.branch)
+        var request = request
+        if !request.destinationAlreadyPrepared {
+            let exists: Bool
+            do {
+                exists = try await core.creationDestinationExists(request.destination, project: project)
+            } catch {
+                throw WorktreeCheckRefusal.destinationUnchecked(error.localizedDescription)
+            }
+            guard !exists else { throw WorktreeCheckRefusal.destinationTaken }
+        }
+        if request.base.isEmpty {
+            request.base = WorktreeBaseBranch.preferred(
+                availableBranches: (try? await core.branches(of: project)) ?? [],
+                configuredDefault: core.environment.configuration().worktrees.baseBranch
+            )
+        }
+        return request
+    }
+
+    /// Why `worktree` cannot be deleted before it is claimed: its Workspace
+    /// checkout, or, unless `force`, unsaved editor changes.
+    func deletionCheck(_ worktree: Worktree, force: Bool) throws {
+        if let refusal = core.environment.workspaceDeletionRefusal(for: worktree) {
+            throw WorktreeCheckRefusal.workspaceOwned(refusal)
+        }
+        if !force, core.environment.hasUnsavedEditorChanges(in: worktree) {
+            throw WorktreeCheckRefusal.unsavedChanges
+        }
     }
 
     /// Claims a worktree for a deletion, as `beginDelete(_:caller:)` does,

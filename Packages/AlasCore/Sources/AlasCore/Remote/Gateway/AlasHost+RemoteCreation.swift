@@ -187,7 +187,7 @@ extension AlasCoreContext {
     }
 
     /// Whether something already sits at `destination`, on the project's own host.
-    private func creationDestinationExists(_ destination: URL, project: ProjectConfig) async throws -> Bool {
+    func creationDestinationExists(_ destination: URL, project: ProjectConfig) async throws -> Bool {
         guard let host = project.host ?? RemoteHostRegistry.shared.host(forPath: project.path) else {
             return FileManager.default.fileExists(atPath: destination.path)
         }
