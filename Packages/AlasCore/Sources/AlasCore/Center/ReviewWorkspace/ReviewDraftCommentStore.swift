@@ -1,34 +1,34 @@
 import Foundation
 
-struct ReviewDraftCommentStore {
+public struct ReviewDraftCommentStore {
     private let store: any PersistenceStoreProtocol
     private let url: URL
 
-    init(store: any PersistenceStoreProtocol = PersistenceStore(), url: URL = Paths.reviewDraftCommentsFile) {
+    public init(store: any PersistenceStoreProtocol = PersistenceStore(), url: URL = Paths.reviewDraftCommentsFile) {
         self.store = store
         self.url = url
     }
 
-    func load(sessionID: ReviewDraftSessionID) throws -> [ReviewDraftComment] {
+    public func load(sessionID: ReviewDraftSessionID) throws -> [ReviewDraftComment] {
         let snapshot = try readSnapshot()
         return (snapshot.commentsBySessionID[sessionID.rawValue] ?? []).sorted(by: sortComments)
     }
 
-    func loadAll() throws -> [ReviewDraftComment] {
+    public func loadAll() throws -> [ReviewDraftComment] {
         let snapshot = try readSnapshot()
         return snapshot.commentsBySessionID.values.flatMap { $0 }.sorted(by: sortComments)
     }
 
-    func snapshot() throws -> ReviewDraftCommentStoreSnapshot {
+    public func snapshot() throws -> ReviewDraftCommentStoreSnapshot {
         let snapshot = try readSnapshot()
         return ReviewDraftCommentStoreSnapshot(commentsBySessionID: snapshot.commentsBySessionID)
     }
 
-    func restore(_ saved: ReviewDraftCommentStoreSnapshot) throws {
+    public func restore(_ saved: ReviewDraftCommentStoreSnapshot) throws {
         try store.write(Snapshot(commentsBySessionID: saved.commentsBySessionID), to: url)
     }
 
-    func find(commentID: String) throws -> ReviewDraftComment? {
+    public func find(commentID: String) throws -> ReviewDraftComment? {
         let snapshot = try readSnapshot()
         for comments in snapshot.commentsBySessionID.values {
             if let match = comments.first(where: { $0.id == commentID }) {
@@ -38,7 +38,7 @@ struct ReviewDraftCommentStore {
         return nil
     }
 
-    func save(_ comment: ReviewDraftComment) throws {
+    public func save(_ comment: ReviewDraftComment) throws {
         var snapshot = try readSnapshot()
         var comments = snapshot.commentsBySessionID[comment.sessionID.rawValue] ?? []
 
@@ -52,7 +52,7 @@ struct ReviewDraftCommentStore {
         try store.write(snapshot, to: url)
     }
 
-    func delete(commentID: String, sessionID: ReviewDraftSessionID) throws {
+    public func delete(commentID: String, sessionID: ReviewDraftSessionID) throws {
         var snapshot = try readSnapshot()
         var comments = snapshot.commentsBySessionID[sessionID.rawValue] ?? []
         comments.removeAll { $0.id == commentID }
@@ -66,13 +66,13 @@ struct ReviewDraftCommentStore {
         try store.write(snapshot, to: url)
     }
 
-    func delete(sessionID: ReviewDraftSessionID) throws {
+    public func delete(sessionID: ReviewDraftSessionID) throws {
         var snapshot = try readSnapshot()
         snapshot.commentsBySessionID.removeValue(forKey: sessionID.rawValue)
         try store.write(snapshot, to: url)
     }
 
-    func migrate(from sourceID: ReviewDraftSessionID, to targetID: ReviewDraftSessionID) throws {
+    public func migrate(from sourceID: ReviewDraftSessionID, to targetID: ReviewDraftSessionID) throws {
         guard sourceID != targetID else { return }
         var snapshot = try readSnapshot()
         let moved = snapshot.commentsBySessionID.removeValue(forKey: sourceID.rawValue) ?? []
@@ -121,10 +121,10 @@ struct ReviewDraftCommentStore {
     }
 
     private struct Snapshot: Codable, Equatable {
-        var commentsBySessionID: [String: [ReviewDraftComment]]
+        public var commentsBySessionID: [String: [ReviewDraftComment]]
     }
 }
 
-struct ReviewDraftCommentStoreSnapshot: Equatable {
+public struct ReviewDraftCommentStoreSnapshot: Equatable {
     fileprivate var commentsBySessionID: [String: [ReviewDraftComment]]
 }

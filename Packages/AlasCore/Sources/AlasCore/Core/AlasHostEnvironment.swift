@@ -88,6 +88,12 @@ public protocol AlasHostEnvironment: AnyObject {
     func workspaceDeletionRefusal(for worktree: Worktree) -> String?
     /// Whether an editor holds unsaved changes in `worktree`.
     func hasUnsavedEditorChanges(in worktree: Worktree) -> Bool
+    /// The path a renamed file had before, in a provider review, for the
+    /// providers that publish comments against it.
+    func providerReviewOriginalPath(_ session: ReviewDraftSessionID, path: String) async -> String?
+    /// An agent replied to a review comment on `worktree`, which raises
+    /// attention for the user.
+    func reviewReplyAdded(_ reply: ReviewCommentReply, to comment: ReviewDraftComment, in worktree: Worktree)
 }
 
 extension AlasHostEnvironment {
@@ -159,6 +165,10 @@ extension AlasHostEnvironment {
     public func workspaceDeletionRefusal(for worktree: Worktree) -> String? { nil }
 
     public func hasUnsavedEditorChanges(in worktree: Worktree) -> Bool { false }
+
+    public func providerReviewOriginalPath(_ session: ReviewDraftSessionID, path: String) async -> String? { nil }
+
+    public func reviewReplyAdded(_ reply: ReviewCommentReply, to comment: ReviewDraftComment, in worktree: Worktree) {}
 
     /// Ends the checkout's agent sessions, as a removal ends a worktree's.
     public func stopWorkspaceCheckoutSessions(_ checkout: WorkspaceCheckout, in core: AlasCoreContext) async throws {

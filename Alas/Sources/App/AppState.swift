@@ -1530,6 +1530,7 @@ final class AppState {
             await WorktreeStatusScanner.shared.scan(paths: paths)
         },
         attentionStore: AttentionStore? = nil,
+        reviewDrafts: ReviewDraftCommentStore = ReviewDraftCommentStore(),
         attentionNavigationEnvironment: AttentionNavigationEnvironment? = nil,
         harnessAttentionSettleInterval: TimeInterval = 1.5,
         localTextModelStore: LocalTextModelStore? = nil,
@@ -1609,7 +1610,8 @@ final class AppState {
             attentionStore: attentionStore,
             runCompletionWaiter: runScriptCompletionWaiter,
             environment: hostEnvironment,
-            runHostGrace: RunHostGrace(local: runScriptLocalMonitorGrace, any: runScriptMonitorGrace)
+            runHostGrace: RunHostGrace(local: runScriptLocalMonitorGrace, any: runScriptMonitorGrace),
+            reviewDrafts: reviewDrafts
         )
         self.hostEnvironment = hostEnvironment
         self.host = AlasHost(core: core)
@@ -7051,12 +7053,6 @@ final class AppState {
                 guard let self else { return .error("Alas is not available.") }
                 return await self.cliOpenReview(worktree: worktree, target: target)
             },
-            notifyReviewReplyAdded: { [weak self] worktree, comment, reply in
-                self?.observeReviewReplyAttention(worktree: worktree, comment: comment, reply: reply)
-            },
-            providerReviewOriginalPath: { [weak self] sessionID, relativePath in
-                await self?.reviewRequestOriginalPath(forDraftSessionID: sessionID, relativePath: relativePath) ?? nil
-            },
             workspaceCommand: { [weak self] command in
                 guard let self else { return .error("Alas is not available.") }
                 return await self.cliWorkspace(command)
@@ -11397,7 +11393,7 @@ final class AppState {
         NSApp.activate(ignoringOtherApps: true)
         return .text([
             "Opened review for '\(label)' in Alas.",
-            AlasActionService.jsonLine(["session_id": target.draftSessionID.rawValue]),
+            ReviewsAPI.jsonLine(["session_id": target.draftSessionID.rawValue]),
         ])
     }
 
@@ -14753,6 +14749,14 @@ class AppHostEnvironment: AlasHostEnvironment {
     }
 
     func workspaceDeletionRefusal(for worktree: Worktree) -> String? { app?.workspaceOwnershipDeletionRefusal(for: worktree) }
+
+    func providerReviewOriginalPath(_ session: ReviewDraftSessionID, path: String) async -> String? {
+        await app?.reviewRequestOriginalPath(forDraftSessionID: session, relativePath: path) ?? nil
+    }
+
+    func reviewReplyAdded(_ reply: ReviewCommentReply, to comment: ReviewDraftComment, in worktree: Worktree) {
+        app?.observeReviewReplyAttention(worktree: worktree, comment: comment, reply: reply)
+    }
 
     func hasUnsavedEditorChanges(in worktree: Worktree) -> Bool {
         app.map { !$0.dirtyTabGenerations(worktreeId: worktree.id).isEmpty } ?? false

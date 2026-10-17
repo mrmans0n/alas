@@ -464,7 +464,7 @@ struct AlasCLICommandRouterTests {
         store: ReviewDraftCommentStore,
         sessionStore: ReviewSessionStore? = nil,
         onChange: @escaping () -> Void = {},
-        gitStatus: @escaping (URL) async throws -> [ChangedFile] = { _ in [] },
+        gitStatus: @escaping @MainActor (URL) async throws -> [ChangedFile] = { _ in [] },
         providerReviewOriginalPath: @escaping (ReviewDraftSessionID, String) async -> String? = { _, _ in nil },
         visibleWorktrees: [Worktree]? = nil
     ) -> AlasCLICommandRouter {
@@ -473,15 +473,15 @@ struct AlasCLICommandRouterTests {
             host: AlasHost.routerFixture(
                 visibleWorktrees ?? [worktree],
                 hidden: (visibleWorktrees ?? [worktree]).contains { $0.id == worktree.id } ? [] : [worktree],
-                sessionWorktree: { $0 == "s1" ? worktree.id : nil }
+                sessionWorktree: { $0 == "s1" ? worktree.id : nil },
+                reviews: .init(
+                    drafts: store,
+                    sessions: sessionStore ?? ReviewSessionStore(url: FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).json")),
+                    gitStatus: gitStatus, originalPath: providerReviewOriginalPath, changed: onChange
+                )
             ),
             openRelativeFile: { _, _ in },
             openExternalFile: { _, _ in },
-            draftCommentStore: { store },
-            reviewSessionStore: { sessionStore ?? ReviewSessionStore(url: FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).json")) },
-            notifyReviewCommentsChanged: onChange,
-            gitStatus: gitStatus,
-            providerReviewOriginalPath: providerReviewOriginalPath,
             activateApp: {}
         )
     }
@@ -1034,13 +1034,13 @@ struct AlasCLICommandRouterTests {
     }
 
     @Test func worktreeRelativePathNormalizesAlreadyRelativePaths() {
-        #expect(AlasActionService.worktreeRelativePath("./Sources/App.swift", worktreeRoot: URL(fileURLWithPath: "/repo")) == "Sources/App.swift")
-        #expect(AlasActionService.worktreeRelativePath("Sources/../Sources/App.swift", worktreeRoot: URL(fileURLWithPath: "/repo")) == "Sources/App.swift")
-        #expect(AlasActionService.worktreeRelativePath("Sources//App.swift", worktreeRoot: URL(fileURLWithPath: "/repo")) == "Sources/App.swift")
-        #expect(AlasActionService.worktreeRelativePath("a.swift", worktreeRoot: URL(fileURLWithPath: "/repo")) == "a.swift")
+        #expect(ReviewsAPI.worktreeRelativePath("./Sources/App.swift", worktreeRoot: URL(fileURLWithPath: "/repo")) == "Sources/App.swift")
+        #expect(ReviewsAPI.worktreeRelativePath("Sources/../Sources/App.swift", worktreeRoot: URL(fileURLWithPath: "/repo")) == "Sources/App.swift")
+        #expect(ReviewsAPI.worktreeRelativePath("Sources//App.swift", worktreeRoot: URL(fileURLWithPath: "/repo")) == "Sources/App.swift")
+        #expect(ReviewsAPI.worktreeRelativePath("a.swift", worktreeRoot: URL(fileURLWithPath: "/repo")) == "a.swift")
         // A leading `..` can't climb above the (already worktree-relative)
         // root — it's dropped rather than followed.
-        #expect(AlasActionService.worktreeRelativePath("../a.swift", worktreeRoot: URL(fileURLWithPath: "/repo")) == "a.swift")
+        #expect(ReviewsAPI.worktreeRelativePath("../a.swift", worktreeRoot: URL(fileURLWithPath: "/repo")) == "a.swift")
     }
 
     @Test func worktreeRelativePathResolvesCaseVariantRootOnACaseInsensitiveVolume() throws {
@@ -1055,7 +1055,7 @@ struct AlasCLICommandRouterTests {
         let variantPath = variantRoot.appendingPathComponent("Sources/App.swift").path
 
         #expect(
-            AlasActionService.worktreeRelativePath(variantPath, worktreeRoot: realRoot)
+            ReviewsAPI.worktreeRelativePath(variantPath, worktreeRoot: realRoot)
                 == "Sources/App.swift"
         )
     }
@@ -1073,7 +1073,7 @@ struct AlasCLICommandRouterTests {
         let pathUnderSymlink = logicalRoot.appendingPathComponent("Sources/App.swift").path
 
         #expect(
-            AlasActionService.worktreeRelativePath(pathUnderSymlink, worktreeRoot: realRoot)
+            ReviewsAPI.worktreeRelativePath(pathUnderSymlink, worktreeRoot: realRoot)
                 == "Sources/App.swift"
         )
     }
@@ -1425,7 +1425,8 @@ extension AlasHost {
         hidden: [Worktree] = [],
         sessionWorktree: @escaping (String) -> String? = { _ in nil },
         sessionOwner: @escaping (String) -> SessionOwnerID? = { _ in nil },
-        harness: HarnessService = HarnessService()
+        harness: HarnessService = HarnessService(),
+        reviews: RouterReviews = RouterReviews()
     ) -> AlasHost {
         let projects = ProjectsManager(persistedProjects: Set((worktrees + hidden).map(\.projectId)).sorted().map {
             ProjectConfig(id: $0, name: $0, path: "/tmp/alas-router-\($0)", color: "blue", addedAt: .distantPast)
@@ -1434,14 +1435,37 @@ extension AlasHost {
         for worktree in hidden {
             projects.setWorktreeHidden(projectId: worktree.projectId, path: worktree.path, hidden: true)
         }
-        let terminals = RouterTerminals { sessionOwner($0) ?? sessionWorktree($0).map(SessionOwnerID.worktree) }
-        return AlasHost(core: AlasCoreContext(projects: projects, runHistoryStore: nil, environment: terminals, harness: harness))
+        let terminals = RouterTerminals(reviews: reviews) { sessionOwner($0) ?? sessionWorktree($0).map(SessionOwnerID.worktree) }
+        let core = AlasCoreContext(
+            projects: projects, runHistoryStore: nil, environment: terminals, harness: harness,
+            reviewDrafts: reviews.drafts, reviewSessions: reviews.sessions
+        )
+        core.reviewGitStatus = reviews.gitStatus
+        terminals.reviewChanges = core.reviewCommentChanges.observe(reviews.changed)
+        return AlasHost(core: core)
     }
 }
 
-/// Terminal sessions a router test stands in for.
+/// The review stores and hooks a router test reads and watches.
+struct RouterReviews {
+    var drafts = ReviewDraftCommentStore(url: FileManager.default.temporaryDirectory.appendingPathComponent("alas-router-\(UUID().uuidString)/drafts.json"))
+    var sessions = ReviewSessionStore(url: FileManager.default.temporaryDirectory.appendingPathComponent("alas-router-\(UUID().uuidString).json"))
+    var gitStatus: @MainActor (URL) async throws -> [ChangedFile] = { _ in [] }
+    var originalPath: (ReviewDraftSessionID, String) async -> String? = { _, _ in nil }
+    var changed: () -> Void = {}
+}
+
+/// Terminal sessions and review hooks a router test stands in for.
 private final class RouterTerminals: AlasHostEnvironment {
     let owner: (String) -> SessionOwnerID?
-    init(_ owner: @escaping (String) -> SessionOwnerID?) { self.owner = owner }
+    let reviews: RouterReviews
+    var reviewChanges: ChangeSubscription?
+    init(reviews: RouterReviews, _ owner: @escaping (String) -> SessionOwnerID?) {
+        self.reviews = reviews
+        self.owner = owner
+    }
     func terminalSessionOwner(_ sessionID: String) -> SessionOwnerID? { owner(sessionID) }
+    func providerReviewOriginalPath(_ session: ReviewDraftSessionID, path: String) async -> String? {
+        await reviews.originalPath(session, path)
+    }
 }

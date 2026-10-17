@@ -180,15 +180,8 @@ struct AttentionIntegrationTests {
         let store = ReviewDraftCommentStore(url: fixture.directory.appendingPathComponent("comments.json"))
         let comment = ReviewDraftComment(id: "comment", sessionID: .localChanges(worktreeID: target.id, worktreePath: target.path, scope: .all), fileID: DiffReviewFileID(namespace: "review", path: "a.swift"), path: "a.swift", originalPath: nil, side: .new, startLine: 1, endLine: nil, selectedText: nil, bodyMarkdown: "Fix", state: .active, createdAt: .distantPast, updatedAt: .distantPast)
         try store.save(comment)
-        var callbacks = 0
-        let service = AlasActionService(visibleWorktrees: { worktrees }, openRelativeFile: { _, _ in }, openExternalFile: { _, _ in }, draftCommentStore: { store }, reviewSessionStore: { ReviewSessionStore(url: fixture.directory.appendingPathComponent("sessions.json")) }, notifyReviewCommentsChanged: {}, notifyReviewReplyAdded: { worktree, updated, reply in
-            callbacks += 1
-            #expect(worktree.id == "two")
-            #expect((try? store.find(commentID: "comment"))?.allReplies.last?.id == reply.id)
-            fixture.state.observeReviewReplyAttention(worktree: worktree, comment: updated, reply: reply)
-        }, activateApp: {})
-        _ = service.reviewReply(origin: origin, commentID: comment.id, body: "Done", projectWorktrees: worktrees)
-        #expect(callbacks == 1)
+        _ = fixture.state.host.reviews.reply(origin: origin, commentID: comment.id, body: "Done", projectWorktrees: worktrees)
+        #expect(fixture.state.attentionStore.events.count == 1)
         let event = try #require(fixture.state.attentionStore.events.first)
         #expect(event.owner.legacyPath == "/repo/two")
         #expect(event.kind == .reviewReply)
@@ -206,12 +199,12 @@ struct AttentionIntegrationTests {
         #expect(fixture.state.attentionStore.document.observations[event.sourceKey]?.isActive == false)
         fixture.state.observeReviewReplyAttention(worktree: target, comment: updated, reply: try #require(updated.allReplies.last))
         #expect(fixture.state.attentionAggregation.unresolvedCount == 0)
-        _ = service.reviewResolve(origin: origin, commentID: comment.id, reply: "Resolved", reopen: false, projectWorktrees: worktrees)
-        #expect(callbacks == 2)
+        _ = fixture.state.host.reviews.resolve(origin: origin, commentID: comment.id, reply: "Resolved", reopen: false, projectWorktrees: worktrees)
+        #expect(fixture.state.attentionStore.events.count == 2)
         #expect(fixture.state.attentionStore.events.count == 2)
         #expect(fixture.state.attentionStore.events.last?.body == "Resolved")
-        _ = service.reviewReply(origin: origin, commentID: "missing", body: "No", projectWorktrees: worktrees)
-        #expect(callbacks == 2)
+        _ = fixture.state.host.reviews.reply(origin: origin, commentID: "missing", body: "No", projectWorktrees: worktrees)
+        #expect(fixture.state.attentionStore.events.count == 2)
     }
 
     private func review(decision: ReviewDecision = .approved, upstreamAhead: Int = 0, needsPush: Bool = false) -> ReviewLoopSnapshot {
@@ -227,7 +220,11 @@ struct AttentionIntegrationTests {
         init(host: String? = nil) throws {
             directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            state = AppState(store: TestPersistenceStore(), attentionStore: AttentionStore(url: directory.appendingPathComponent("events.json")))
+            state = AppState(
+                store: TestPersistenceStore(),
+                attentionStore: AttentionStore(url: directory.appendingPathComponent("events.json")),
+                reviewDrafts: ReviewDraftCommentStore(url: directory.appendingPathComponent("comments.json"))
+            )
             var project = ProjectConfig(id: "project", name: "Project", path: "/repo", color: "blue", addedAt: Date())
             project.host = host
             state.projectsManager = ProjectsManager(persistedProjects: [project])

@@ -3,12 +3,12 @@ import Foundation
 /// The agent-facing JSON shape of a review comment, as returned by the
 /// `review_comments` CLI/MCP command. Snake_cased on the wire via
 /// `jsonLine`'s key strategy.
-struct ReviewCommentWireDTO: Codable, Equatable {
-    struct Author: Codable, Equatable {
-        var kind: String
-        var name: String?
+public struct ReviewCommentWireDTO: Codable, Equatable {
+    public struct Author: Codable, Equatable {
+        public var kind: String
+        public var name: String?
 
-        init(_ author: ReviewDraftCommentAuthor) {
+        public init(_ author: ReviewDraftCommentAuthor) {
             switch author {
             case .user:
                 kind = "user"
@@ -20,29 +20,29 @@ struct ReviewCommentWireDTO: Codable, Equatable {
         }
     }
 
-    struct Reply: Codable, Equatable {
-        var id: String
-        var author: Author
-        var body: String
-        var createdAt: String
+    public struct Reply: Codable, Equatable {
+        public var id: String
+        public var author: Author
+        public var body: String
+        public var createdAt: String
     }
 
-    var id: String
-    var sessionId: String
-    var path: String
-    var anchorKind: String
-    var startLine: Int?
-    var endLine: Int?
-    var side: String
-    var xPercent: Double?
-    var yPercent: Double?
-    var state: String
-    var author: Author
-    var body: String
-    var selectedText: String?
-    var replies: [Reply]
+    public var id: String
+    public var sessionId: String
+    public var path: String
+    public var anchorKind: String
+    public var startLine: Int?
+    public var endLine: Int?
+    public var side: String
+    public var xPercent: Double?
+    public var yPercent: Double?
+    public var state: String
+    public var author: Author
+    public var body: String
+    public var selectedText: String?
+    public var replies: [Reply]
 
-    init(_ comment: ReviewDraftComment) {
+    public init(_ comment: ReviewDraftComment) {
         id = comment.id
         sessionId = comment.sessionID.rawValue
         path = comment.path
@@ -87,7 +87,7 @@ struct ReviewCommentWireDTO: Codable, Equatable {
 
     /// One deterministic (sorted-keys, snake_case) JSON line for CLI/MCP
     /// text output.
-    static func jsonLine<T: Encodable>(_ value: T) -> String {
+    public static func jsonLine<T: Encodable>(_ value: T) -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         encoder.keyEncodingStrategy = .convertToSnakeCase

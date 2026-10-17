@@ -72,6 +72,14 @@ public final class AlasCoreContext {
     /// The one coordinator of delegated sessions. It keeps which deliveries
     /// are in flight, so a host has exactly one.
     @ObservationIgnored public private(set) lazy var orchestration = makeOrchestrationCoordinator()
+    /// Review comments drafted on a worktree's changes, and the review
+    /// sessions they belong to.
+    @ObservationIgnored public let reviewDrafts: ReviewDraftCommentStore
+    @ObservationIgnored public let reviewSessions: ReviewSessionStore
+    /// Sent when review comments change outside a review's own view.
+    @ObservationIgnored public let reviewCommentChanges = ChangeSignal<Void>()
+    /// Test hook that replaces reading a worktree's Git status for reviews.
+    @_spi(Testing) @ObservationIgnored public var reviewGitStatus: (@MainActor (URL) async throws -> [ChangedFile])?
     /// Each delegated session's parent, by child id. Observed: the app draws
     /// children under their parents from it.
     public internal(set) var delegatedSessionParents: [String: String] = [:] {
@@ -109,7 +117,9 @@ public final class AlasCoreContext {
         environment: any AlasHostEnvironment = HeadlessHostEnvironment(),
         runHostGrace: RunHostGrace = RunHostGrace(),
         harness: HarnessService = HarnessService(),
-        orchestrationPersistence: ACPOrchestrationPersistence = ACPOrchestrationPersistence()
+        orchestrationPersistence: ACPOrchestrationPersistence = ACPOrchestrationPersistence(),
+        reviewDrafts: ReviewDraftCommentStore = ReviewDraftCommentStore(),
+        reviewSessions: ReviewSessionStore = ReviewSessionStore()
     ) {
         self.projects = projects
         self.runs = runs
@@ -120,6 +130,8 @@ public final class AlasCoreContext {
         self.attention = AttentionIntake(store: attentionStore ?? AttentionStore())
         self.harness = harness
         self.orchestrationPersistence = orchestrationPersistence
+        self.reviewDrafts = reviewDrafts
+        self.reviewSessions = reviewSessions
         self.localTextModelStore = localTextModelStore
         self.localTextOverride = localText
         self.workspaceStore = workspaceStore
