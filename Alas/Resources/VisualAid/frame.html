@@ -1,13 +1,16 @@
 <!DOCTYPE html>
-<html>
+<html class="{{HTML_CLASS}}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 {{HEAD}}
 <style>
-  :root { color-scheme: light dark; font: 13px -apple-system, system-ui, sans-serif; }
+  :root { color-scheme: light dark; }
   html, body { margin: 0; }
-  body { padding: 16px; color: var(--alas-text, CanvasText); background: var(--alas-background, Canvas); line-height: 1.45; }
+  body { font: var(--alas-font-size, 13px) var(--alas-font-sans, -apple-system, system-ui, sans-serif); color: var(--alas-text, CanvasText); line-height: 1.45; }
+  .alas-card body { padding: 16px; background: var(--alas-background, Canvas); }
+  .alas-embedded, .alas-embedded body { background: transparent; }
+  .alas-embedded body { padding: 0; }
   h2 { font-size: 17px; margin: 0 0 4px; }
   h3 { font-size: 14px; margin: 0 0 4px; }
   .subtitle { color: var(--alas-dim, GrayText); margin: 0 0 14px; }

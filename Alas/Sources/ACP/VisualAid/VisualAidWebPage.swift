@@ -48,6 +48,7 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
 
     init(
         visualID: UUID, html: String, theme: Theme, locksNetworkAfterLoad: Bool,
+        presentation: ACPVisualAid.Presentation = .card,
         networkLockDeadline: Duration = VisualAidWebPolicy.networkLockDeadline
     ) {
         self.locksNetworkAfterLoad = locksNetworkAfterLoad
@@ -61,7 +62,8 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
             document: VisualAidWebPolicy.document(
                 html: html,
                 themeVariables: variables,
-                frameTemplate: VisualAidFrameTemplate.html
+                frameTemplate: VisualAidFrameTemplate.html,
+                presentation: presentation
             )
         )
         let configuration = WKWebViewConfiguration()

@@ -9,7 +9,7 @@ private let visualHost = "6f0c2d4e-8b1a-4c3d-9e5f-1a2b3c4d5e6f"
 
 struct VisualAidWebPolicyTests {
     private static let id = UUID(uuidString: "6F0C2D4E-8B1A-4C3D-9E5F-1A2B3C4D5E6F")!
-    private static let template = "<html><head>{{HEAD}}</head><body>{{CONTENT}}</body></html>"
+    private static let template = "<html class=\"{{HTML_CLASS}}\"><head>{{HEAD}}</head><body>{{CONTENT}}</body></html>"
 
     @Test(arguments: [
         ("alas-visual://\(visualHost)/", 200),
@@ -134,10 +134,44 @@ struct VisualAidWebPolicyTests {
     @Test("fragments go inside the template verbatim, placeholders included")
     func fragmentAssembly() {
         let html = "<p>{{CONTENT}} and {{HEAD}}</p>"
-        let document = String(decoding: VisualAidWebPolicy.document(html: html, themeVariables: ["--alas-text": "red"], frameTemplate: Self.template), as: UTF8.self)
+        let document = String(decoding: VisualAidWebPolicy.document(html: html, themeVariables: ["--alas-text": "red"], frameTemplate: Self.template, presentation: .card), as: UTF8.self)
         #expect(document.contains("<body><p>{{CONTENT}} and {{HEAD}}</p></body>"))
         #expect(document.contains("--alas-text: red;"))
         #expect(document.contains(VisualAidWebPolicy.contentSecurityPolicy))
+    }
+
+    @Test("the frame carries the presentation class and never rewrites agent HTML", arguments: [
+        (ACPVisualAid.Presentation.embedded, "alas-embedded"), (.card, "alas-card"),
+    ])
+    func fragmentGetsPresentationClass(presentation: ACPVisualAid.Presentation, expected: String) {
+        let document = String(decoding: VisualAidWebPolicy.document(
+            html: "<p>{{HTML_CLASS}}</p>", themeVariables: [:], frameTemplate: Self.template, presentation: presentation), as: UTF8.self)
+        #expect(document.contains(#"<html class="\#(expected)">"#))
+        #expect(document.contains("<body><p>{{HTML_CLASS}}</p></body>"))
+    }
+
+    @Test("a full document is identical for either presentation", arguments: [ACPVisualAid.Presentation.embedded, .card])
+    func fullDocumentIgnoresPresentation(presentation: ACPVisualAid.Presentation) {
+        let html = "<!DOCTYPE html><html><body>b</body></html>"
+        #expect(VisualAidWebPolicy.document(
+            html: html, themeVariables: [:], frameTemplate: Self.template, presentation: presentation) == Data(html.utf8))
+    }
+
+    @Test("content height clamps per presentation", arguments: [
+        (ACPVisualAid.Presentation.card, CGFloat(5000), CGFloat(720)),
+        (.embedded, 5000, 2000), (.embedded, 900, 900), (.embedded, 10, 120),
+    ])
+    func contentHeightClamps(presentation: ACPVisualAid.Presentation, content: CGFloat, expected: CGFloat) {
+        #expect(VisualAidWebPolicy.contentHeight(forContentHeight: content, presentation: presentation) == expected)
+    }
+
+    @Test("a font family cannot break out of its declaration")
+    func layoutVariablesSanitizeTheFamily() throws {
+        let variables = VisualAidWebPolicy.layoutVariables(fontFamily: #"Evil"; } body { x"#, fontSize: 14.5)
+        let sans = try #require(variables["--alas-font-sans"])
+        #expect(!sans.contains(";") && !sans.contains("{") && !sans.contains("}"))
+        #expect(sans.filter { $0 == "\"" }.count == 2)
+        #expect(variables["--alas-font-size"] == "14.5px")
     }
 
     @Test("a full document is returned unchanged", arguments: [
@@ -150,7 +184,7 @@ struct VisualAidWebPolicyTests {
         "<html><body><script>const tag = '<head>';</script></body></html>",
     ])
     func fullDocumentIsReturnedUnchanged(html: String) {
-        let document = VisualAidWebPolicy.document(html: html, themeVariables: ["--alas-text": "red"], frameTemplate: Self.template)
+        let document = VisualAidWebPolicy.document(html: html, themeVariables: ["--alas-text": "red"], frameTemplate: Self.template, presentation: .card)
         #expect(document == Data(html.utf8))
     }
 
