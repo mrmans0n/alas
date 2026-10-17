@@ -66,6 +66,11 @@ struct AlasCLICommandRouter {
         )
     }
 
+    /// The one-line reply to `visual_show`; the MCP bridge reads `presentation` to word its result.
+    static func visualShowReply(id: UUID, presentation: ACPVisualAid.Presentation) -> String {
+        #"{"visual_id":"\#(id.uuidString)","presentation":"\#(presentation.rawValue)"}"#
+    }
+
     func handle(_ request: AlasCLIRequest) async -> AlasCLIResponse {
         let service = self.service
         let callers = host.callers
@@ -98,7 +103,7 @@ struct AlasCLICommandRouter {
             )
             do {
                 try await host.sessions.showVisualAid(visual, in: sessionId, caller: caller)
-                return .text([#"{"visual_id":"\#(visual.id.uuidString)","presentation":"\#(resolved.rawValue)"}"#])
+                return .text([Self.visualShowReply(id: visual.id, presentation: resolved)])
             } catch {
                 return .error("This session can't show visuals right now.")
             }

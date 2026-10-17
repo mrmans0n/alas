@@ -1370,6 +1370,15 @@ struct AlasCLICommandRouterTests {
         #expect(commands == [.list, .focus(checkoutID: checkoutID, memberID: memberID)])
     }
 
+    @Test(arguments: [ACPVisualAid.Presentation.embedded, .card])
+    func visualShowReplyIsJSONNamingTheResolvedPresentation(presentation: ACPVisualAid.Presentation) throws {
+        let id = UUID()
+        let reply = AlasCLICommandRouter.visualShowReply(id: id, presentation: presentation)
+
+        let object = try #require(JSONSerialization.jsonObject(with: Data(reply.utf8)) as? [String: String])
+        #expect(object == ["visual_id": id.uuidString, "presentation": presentation.rawValue])
+    }
+
     @Test func visualShowRequiresAnACPSession() async {
         let worktree = Self.worktree(branch: "main", path: "/tmp/repo", projectId: "p1")
         let router = AlasCLICommandRouter(

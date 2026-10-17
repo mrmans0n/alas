@@ -1197,6 +1197,28 @@ mod tests {
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     #[test]
+    fn visual_show_request_carries_presentation_only_when_set() {
+        let request = |presentation: Option<&str>| {
+            build_request(
+                &Command::VisualShow {
+                    title: "T".into(),
+                    html: "<p>".into(),
+                    question: None,
+                    presentation: presentation.map(String::from),
+                },
+                None,
+                None,
+            )
+            .params
+        };
+        assert_eq!(
+            request(Some("card")),
+            Some(serde_json::json!({ "title": "T", "html": "<p>", "presentation": "card" }))
+        );
+        assert_eq!(request(None), Some(serde_json::json!({ "title": "T", "html": "<p>" })));
+    }
+
+    #[test]
     fn visual_show_request_carries_the_question_in_params() {
         let request = build_request(
             &Command::VisualShow {

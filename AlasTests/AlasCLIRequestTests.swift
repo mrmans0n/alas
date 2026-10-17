@@ -415,7 +415,7 @@ struct AlasCLIRequestTests {
         (#","presentation":"card""#, .card),
     ])
     func visualShowCarriesTheRequestedPresentation(extra: String, expected: ACPVisualAid.Presentation?) throws {
-        let json = #"{"v":1,"kind":"cli","command":"visual_show","session_id":"acp-1","params":{"title":"T","html":"<p>x</p>"# + extra + #"}}"#
+        let json = ##"{"v":1,"kind":"cli","command":"visual_show","session_id":"acp-1","params":{"title":"T","html":"<p>x</p>"\##(extra)}}"##
 
         let request = try AlasCLIRequest.decode(from: Data(json.utf8))
 
@@ -439,7 +439,7 @@ struct AlasCLIRequestTests {
         #""presentation":"banner""#,
     ])
     func visualShowOutsideTheContractIsMalformed(extra: String) {
-        let json = #"{"v":1,"kind":"cli","command":"visual_show","session_id":"acp-1","params":{"title":"T","html":"<p>","# + extra + #"}}"#
+        let json = ##"{"v":1,"kind":"cli","command":"visual_show","session_id":"acp-1","params":{"title":"T","html":"<p>",\##(extra)}}"##
         #expect(throws: AlasCLIRequestError.malformed) {
             try AlasCLIRequest.decode(from: Data(json.utf8))
         }
