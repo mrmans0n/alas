@@ -188,6 +188,13 @@ extension SessionsAPI {
         return await manager.reloadFullToolCallContent(sessionId: sessionID, toolCallId: toolCallID)
     }
 
+    /// Adds `visual` to the transcript of session `sessionID`, which this
+    /// instance must drive.
+    public func showVisualAid(_ visual: ACPVisualAid, in sessionID: String, caller: HostCaller) async throws {
+        caller.log("sessions.showVisualAid", sessionID)
+        guard try await writerManager(for: sessionID).showVisualAid(visual, in: sessionID) else { throw SessionRefusal.notWriter }
+    }
+
     /// The visual aid `visualID` in the loaded session's transcript.
     public func visualAid(_ sessionID: String, id visualID: UUID) -> ACPVisualAid? {
         (try? liveManager(for: sessionID))?.liveSession(for: sessionID)?.transcript.visualAid(id: visualID)

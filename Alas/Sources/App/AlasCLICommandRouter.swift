@@ -28,21 +28,6 @@ struct AlasCLICommandRouter {
     var now: () -> Date = Date.init
     var gitStatus: (URL) async throws -> [ChangedFile] = { try await GitService().status(worktreePath: $0) }
     var providerReviewOriginalPath: (ReviewDraftSessionID, String) async -> String? = { _, _ in nil }
-    var listDelegationAgents: (ACPOrchestrationSessionOrigin, String?) async -> AlasCLIResponse = { _, _ in
-        .error("Session orchestration is not available yet.")
-    }
-    var listDelegatedSessions: (ACPOrchestrationSessionOrigin) async -> AlasCLIResponse = { _ in
-        .error("Session orchestration is not available yet.")
-    }
-    var createDelegatedSession: (ACPOrchestrationSessionOrigin, ACPDelegatedSessionNewRequest) async -> AlasCLIResponse = { _, _ in
-        .error("Session orchestration is not available yet.")
-    }
-    var sendDelegatedSessionMessage: (ACPOrchestrationSessionOrigin, ACPDelegatedSessionMessageRequest) async -> AlasCLIResponse = { _, _ in
-        .error("Session orchestration is not available yet.")
-    }
-    var performDelegatedSessionAction: (ACPOrchestrationSessionOrigin, ACPDelegatedSessionAction) async -> AlasCLIResponse = { _, _ in
-        .error("Session orchestration is not available yet.")
-    }
     var workspaceCommand: (AlasCLIRequest.WorkspaceCommand) async -> AlasCLIResponse = { _ in
         .error("Workspace automation is not available yet.")
     }
@@ -50,9 +35,6 @@ struct AlasCLICommandRouter {
         .error("Preview automation is not available.")
     }
     var activateApp: () -> Void
-    var showVisualAid: (String, ACPVisualAid) async -> AlasCLIResponse = { _, _ in
-        .error("Visual aids are not available yet.")
-    }
     var prCreate: (String, String, PRCreateParams) async -> AlasCLIResponse = { _, _, _ in
         .error("The PR shepherd is not available yet.")
     }
@@ -80,11 +62,6 @@ struct AlasCLICommandRouter {
             now: now,
             gitStatus: gitStatus,
             providerReviewOriginalPath: providerReviewOriginalPath,
-            listDelegationAgents: listDelegationAgents,
-            listDelegatedSessions: listDelegatedSessions,
-            createDelegatedSession: createDelegatedSession,
-            sendDelegatedSessionMessage: sendDelegatedSessionMessage,
-            performDelegatedSessionAction: performDelegatedSessionAction,
             activateApp: activateApp
         )
     }
@@ -114,12 +91,16 @@ struct AlasCLICommandRouter {
             guard let sessionId = request.sessionId, callers.acpOrigin(ofSession: sessionId) != nil else {
                 return .error("visual_show is only available to ACP agent sessions")
             }
-            return await showVisualAid(sessionId, ACPVisualAid(
-                id: UUID(), title: title, html: html, question: question, answer: nil, createdAt: Date()
-            ))
+            let visual = ACPVisualAid(id: UUID(), title: title, html: html, question: question, answer: nil, createdAt: Date())
+            do {
+                try await host.sessions.showVisualAid(visual, in: sessionId, caller: caller)
+                return .text([#"{"visual_id":"\#(visual.id.uuidString)"}"#])
+            } catch {
+                return .error("This session can't show visuals right now.")
+            }
         case .agentList, .sessionList, .sessionNew, .sessionSend, .sessionAction:
             guard let sessionId = request.sessionId,
-                  let acpOrigin = callers.acpOrigin(ofSession: sessionId) else {
+                  callers.acpOrigin(ofSession: sessionId) != nil else {
                 return .error("session commands require an originating ACP session")
             }
             // Anchor worktree selectors on the caller's host, like the origin path below.
@@ -128,9 +109,9 @@ struct AlasCLICommandRouter {
 
             switch request.command {
             case .agentList(let worktree):
-                return await service.agentList(origin: acpOrigin, worktree: worktree)
+                return await host.delegation.agents(worktree: worktree, caller: caller)
             case .sessionList:
-                return await service.sessionList(origin: acpOrigin)
+                return await host.delegation.list(caller: caller)
             case .sessionNew(let prompt, let agentID, let worktree, let model, let reasoning, let role):
                 let target: ACPDelegatedSessionWorktreeTarget
                 switch worktree {
@@ -141,26 +122,22 @@ struct AlasCLICommandRouter {
                 case .new(let branch, let base):
                     target = .new(branch: branch, base: base)
                 }
-                return await service.sessionNew(
-                    origin: acpOrigin,
-                    request: ACPDelegatedSessionNewRequest(
+                return await host.delegation.create(
+                    ACPDelegatedSessionNewRequest(
                         prompt: prompt,
                         agentId: agentID,
                         worktree: target,
                         modelSelection: ACPDelegatedModelSelection(model: model, reasoning: reasoning),
                         role: role
-                    )
+                    ),
+                    caller: caller
                 )
             case .sessionSend(let sessionID, let prompt):
-                return await service.sessionSend(
-                    origin: acpOrigin,
-                    request: ACPDelegatedSessionMessageRequest(
-                        targetSessionId: sessionID,
-                        prompt: prompt
-                    )
+                return await host.delegation.send(
+                    ACPDelegatedSessionMessageRequest(targetSessionId: sessionID, prompt: prompt), caller: caller
                 )
             case .sessionAction(let action):
-                return await service.sessionAction(origin: acpOrigin, action: action)
+                return await host.delegation.perform(action, caller: caller)
             default:
                 preconditionFailure("Session command switch must be exhaustive")
             }

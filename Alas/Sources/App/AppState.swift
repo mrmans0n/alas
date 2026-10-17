@@ -7025,7 +7025,6 @@ final class AppState {
     var acpOrchestration: ACPSessionOrchestrationCoordinator { core.orchestration }
 
     func makeCLICommandRouter() -> AlasCLICommandRouter {
-        let orchestration = acpOrchestration
         let callers = host.callers
         return AlasCLICommandRouter(
             host: host,
@@ -7103,21 +7102,6 @@ final class AppState {
             providerReviewOriginalPath: { [weak self] sessionID, relativePath in
                 await self?.reviewRequestOriginalPath(forDraftSessionID: sessionID, relativePath: relativePath) ?? nil
             },
-            listDelegationAgents: { origin, worktree in
-                await orchestration.discoverAgents(origin: origin, worktree: worktree)
-            },
-            listDelegatedSessions: { origin in
-                await orchestration.list(origin: origin)
-            },
-            createDelegatedSession: { origin, request in
-                await orchestration.create(origin: origin, request: request)
-            },
-            sendDelegatedSessionMessage: { origin, request in
-                await orchestration.send(origin: origin, request: request)
-            },
-            performDelegatedSessionAction: { origin, action in
-                await orchestration.perform(origin: origin, action)
-            },
             workspaceCommand: { [weak self] command in
                 guard let self else { return .error("Alas is not available.") }
                 return await self.cliWorkspace(command)
@@ -7139,15 +7123,6 @@ final class AppState {
             },
             activateApp: {
                 NSApp.activate(ignoringOtherApps: true)
-            },
-            showVisualAid: { [weak self] sessionID, visual in
-                guard let self else { return .error("Alas is not available.") }
-                guard let owner = callers.owner(ofSession: sessionID),
-                      self.isAuthorizedACPSessionWriter(sessionID: sessionID, owner: owner),
-                      let manager = self.acpManager(forSession: sessionID),
-                      await manager.showVisualAid(visual, in: sessionID)
-                else { return .error("This session can't show visuals right now.") }
-                return .text([#"{"visual_id":"\#(visual.id.uuidString)"}"#])
             },
             prCreate: { [weak self] sessionID, worktreeID, params in
                 guard let self else { return .error("Alas is not available.") }
