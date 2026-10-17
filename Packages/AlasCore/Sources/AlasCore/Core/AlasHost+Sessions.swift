@@ -121,7 +121,7 @@ extension SessionsAPI {
             }
         }
         guard let row = manager.sessionRows.first(where: { $0.id == session.id }) else { throw SessionRefusal.notFound }
-        return Self.summary(of: row, in: manager)
+        return Self.summary(of: row, in: manager, parent: core.delegatedSessionParents[row.id])
     }
 
     /// Sends a prompt as the session's next user turn and waits for that

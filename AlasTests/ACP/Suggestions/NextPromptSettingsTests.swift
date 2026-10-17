@@ -4,6 +4,7 @@ import Foundation
 import Synchronization
 import Testing
 @testable import Alas
+@_spi(AppHost) import AlasCore
 
 @Suite(.serialized)
 @MainActor
@@ -212,7 +213,7 @@ struct NextPromptSettingsTests {
         let child = manager.createSession(id: UUID().uuidString, agentId: "test")
         parent.agentState = .ready
         child.agentState = .ready
-        state.rememberDelegatedSessionParent(childID: child.id, parentID: parent.id)
+        state.core.rememberDelegatedSessionParent(childID: child.id, parentID: parent.id)
         state.nextPromptOwner = owner
         state.nextPromptSessionID = parent.id
         state.nextPromptActiveIncarnation = parent.incarnation

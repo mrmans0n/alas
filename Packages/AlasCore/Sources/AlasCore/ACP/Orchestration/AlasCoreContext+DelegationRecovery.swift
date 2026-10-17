@@ -59,7 +59,7 @@ extension AlasCoreContext {
                     updatedAt: Int64(Date().timeIntervalSince1970)
                 )
             }
-            environment.delegatedSessionParentChanged(childID: record.childSessionId, parentID: record.parentSessionId)
+            rememberDelegatedSessionParent(childID: record.childSessionId, parentID: record.parentSessionId)
             let sessionAlreadyPersisted = await manager.persistedSessionRow(id: record.childSessionId) != nil
             if sessionAlreadyPersisted {
                 _ = manager.placeholderSession(id: record.childSessionId)
@@ -199,7 +199,7 @@ extension AlasCoreContext {
             )
             return
         }
-        environment.delegatedSessionParentChanged(childID: childId, parentID: record.parentSessionId)
+        rememberDelegatedSessionParent(childID: childId, parentID: record.parentSessionId)
         await manager.hydrateIfNeeded(id: childId)
         // The attach repoints the child's socket link once it holds the
         // session's lease (the env providers run after lease acquisition).
@@ -244,7 +244,7 @@ extension AlasCoreContext {
         for sessionId in targetSessionIds {
             let childRecord = try? await orchestrationPersistence.parent(childSessionId: sessionId)
             if let childRecord {
-                environment.delegatedSessionParentChanged(childID: childRecord.childSessionId, parentID: childRecord.parentSessionId)
+                rememberDelegatedSessionParent(childID: childRecord.childSessionId, parentID: childRecord.parentSessionId)
             }
             guard let manager = await acpManagerForPersistedSession(
                 sessionId: sessionId,

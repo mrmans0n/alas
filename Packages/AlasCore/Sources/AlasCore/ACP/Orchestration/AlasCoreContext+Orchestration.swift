@@ -96,13 +96,33 @@ extension AlasCoreContext {
                     )
                 },
                 rememberParent: { [weak self] childID, parentID in
-                    self?.environment.delegatedSessionParentChanged(childID: childID, parentID: parentID)
+                    self?.rememberDelegatedSessionParent(childID: childID, parentID: parentID)
                 },
                 autoRunDefault: { [weak self] in self?.environment.configuration().harness.acpAutoRunByDefault ?? false },
                 notifyChanged: {},
                 admitsNewSessions: { [weak self] worktree in self?.projects.admitsNewWork(in: worktree) ?? false }
             )
         )
+    }
+
+    @_spi(AppHost) public func rememberDelegatedSessionParent(childID: String, parentID: String) {
+        delegatedSessionParents[childID] = parentID
+    }
+
+    /// The parent that delegated `sessionID`, from memory or its persisted
+    /// delegation record.
+    @_spi(AppHost) public func delegatedParentSessionID(for sessionID: String) async -> String? {
+        if let parent = delegatedSessionParents[sessionID] { return parent }
+        return try? await orchestrationPersistence.parent(childSessionId: sessionID)?.parentSessionId
+    }
+
+    /// Backfills the links completed in earlier runs. Without this the map
+    /// only holds delegations this run created or recovered, and restored
+    /// history loses its hierarchy.
+    @_spi(AppHost) public func loadDelegatedSessionParents() async {
+        guard let links = try? await orchestrationPersistence.delegationParents() else { return }
+        // Live entries win: they may describe a delegation still being written.
+        delegatedSessionParents = links.merging(delegatedSessionParents) { _, live in live }
     }
 
     /// Where agents for `worktree` run: on its project's host, or here.

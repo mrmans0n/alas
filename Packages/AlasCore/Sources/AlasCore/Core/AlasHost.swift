@@ -357,6 +357,8 @@ public struct HostSessionSummary: Codable, Equatable, Sendable {
     public var streamingState: ACPSession.StreamingState?
     /// Whether this instance holds the session's writer lease.
     public var isWriter: Bool
+    /// The session that delegated this one, for a delegated session.
+    public var parentID: String?
 }
 
 @MainActor
@@ -366,11 +368,13 @@ public struct SessionsAPI {
     /// The sessions that are not archived, in each owner's recent order.
     public func list() -> [HostSessionSummary] {
         core.sessionManagers.values.flatMap { manager in
-            manager.sessionRows.compactMap { row in row.archived ? nil : Self.summary(of: row, in: manager) }
+            manager.sessionRows.compactMap { row in
+                row.archived ? nil : Self.summary(of: row, in: manager, parent: core.delegatedSessionParents[row.id])
+            }
         }
     }
 
-    static func summary(of row: ACPSessionRow, in manager: ACPSessionManager) -> HostSessionSummary {
+    static func summary(of row: ACPSessionRow, in manager: ACPSessionManager, parent: String?) -> HostSessionSummary {
         let liveRemoteID = manager.liveSession(for: row.id)?.remoteSessionId?.trimmingCharacters(in: .whitespacesAndNewlines)
         return HostSessionSummary(
             owner: manager.owner,
@@ -382,7 +386,8 @@ public struct SessionsAPI {
             updatedAt: row.updatedAt,
             lastOpenedAt: row.lastOpenedAt,
             streamingState: manager.runners[row.id]?.session.transcript.streamingState,
-            isWriter: manager.isWriter(for: row.id)
+            isWriter: manager.isWriter(for: row.id),
+            parentID: parent
         )
     }
 }
