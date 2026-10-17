@@ -37,6 +37,7 @@ struct NextPromptPolicyTests {
          "What arrives in a typical morning, and what do I want to do with each kind of email?"),
         ("Should I open a PR or keep iterating?", "Should I open a PR or keep iterating?"),
         ("Open a PR?", "Open a PR?"),
+        ("Which environment should we target?", "Could you tell me which environment should we target?"),
         ("应该打开 PR 吗？", "应该打开 PR 吗？"),
         ("你想使用严格模式还是宽松模式？", "你希望采用严格模式还是宽松模式？"),
         ("I need one detail before configuring the workflow and deployment settings: Which environment should I target?",

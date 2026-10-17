@@ -153,6 +153,9 @@ public enum NextPromptPolicy: Sendable {
             return covered(span) >= 0.5
                 && Double(reply.filter(asked.contains).count) / Double(reply.count) >= 0.6
         }
+        // A question that carries nearly all of the closing question is an
+        // echo even behind a lead-in such as "Could you tell me".
+        if isQuestion(text), covered(ask.last ?? []) >= 0.8 { return true }
         guard overlaps(ask.last ?? []) || overlaps(ask.flatMap { $0 }) else { return false }
         if isQuestion(text) { return true }
         // An answer such as "Open a PR now." can open like the question but
