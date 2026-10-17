@@ -392,6 +392,35 @@ struct HostSessionsTests {
         #expect(await !client.events.contains { if case .sessionState = $0 { true } else { false } })
     }
 
+    /// A socket client learns what the host serves, and receives session
+    /// state only once it accepts it.
+    @Test func aSocketClientOptsIntoSessionState() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let socketDirectory = URL(fileURLWithPath: "/tmp/alas-host-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: socketDirectory) }
+        let path = socketDirectory.appendingPathComponent("host.sock").path
+        let socket = try #require(HostSocketServer(path: path, server: HostProtocolServer(host: fixture.host)))
+        defer { socket.stop() }
+        let client = try SocketClient(path: path)
+        defer { client.close() }
+
+        #expect(try await client.request(.capabilities) == .capabilities(capabilities: HostProtocolCapability.served))
+        guard case .snapshot(let snapshot) = try await client.request(.snapshot) else {
+            Issue.record("expected a snapshot")
+            return
+        }
+        #expect(try await client.request(.subscribeAccepting(after: snapshot.cursor, events: ["sessionState"])) == .subscribed)
+        guard case .session(let created) = try await client.request(.createSession(
+            target: .worktree(fixture.ref), agentID: "gemini", modelID: nil, autoRun: false
+        )) else {
+            Issue.record("expected the created session")
+            return
+        }
+        #expect(try await client.request(.followSession(sessionID: created.id, from: nil)) == .done)
+        try await client.waitForEvent { if case .sessionState(_, created.id, _) = $0 { true } else { false } }
+    }
+
     @Test func answersWithNoAgentToReceiveThemAreRefused() async throws {
         let fixture = try Fixture()
         defer { fixture.tearDown() }

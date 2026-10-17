@@ -30,6 +30,10 @@ struct HostProtocolTests {
         HostClientMessage(id: 11, request: .answerQuestion(sessionID: "s", requestID: .number(3), answers: [ACPQuestionAnswer(questionId: "q", selectedOptionIds: ["a"])])),
         HostClientMessage(id: 12, request: .respondToUserInput(sessionID: "s", requestID: UUID(uuidString: "6F9619FF-8B86-D011-B42D-00CF4FC964FF")!, answer: .cancel)),
         HostClientMessage(id: 13, request: .followSession(sessionID: "s", from: TranscriptRevision(epoch: 2, version: 40))),
+        HostClientMessage(id: 14, request: .followWorktree(worktreeID: "w")),
+        HostClientMessage(id: 15, request: .subscribeAccepting(
+            after: HostCursor(generation: UUID(uuidString: "6F9619FF-8B86-D011-B42D-00CF4FC964FF")!, sequence: 42), events: ["sessionState"]
+        )),
     ])
     func clientMessagesRoundTrip(_ message: HostClientMessage) throws {
         #expect(try JSONDecoder().decode(HostClientMessage.self, from: JSONEncoder().encode(message)) == message)
@@ -49,6 +53,7 @@ struct HostProtocolTests {
         .response(id: 4, result: .failure(error: .workspace(error: .checkoutNotFound))),
         .response(id: 5, result: .session(session: session)),
         .response(id: 6, result: .failure(error: .session(refusal: .ownerUnavailable(reason: "busy")))),
+        .response(id: 7, result: .capabilities(capabilities: ["host.v1", "host.events.v1"])),
         .events(events: [
             .worktreeChanged(WorktreeSnapshot(worktree: worktree, operation: .deleting, isArchived: false)),
             .worktreeRemoved(projectID: "p", worktreeID: worktree.id),

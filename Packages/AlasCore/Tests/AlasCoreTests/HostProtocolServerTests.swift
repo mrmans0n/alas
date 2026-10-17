@@ -167,6 +167,22 @@ struct HostProtocolServerTests {
         #expect(client.messages == [.response(id: message.id, result: .failure(error: error))])
     }
 
+    /// Only a listed worktree can be followed: an unknown id would keep a
+    /// review refresh waking with no removal to ever end it.
+    @Test func onlyListedWorktreesCanBeFollowed() async throws {
+        let fixture = try Fixture()
+        let client = Client()
+        let connection = fixture.server.connect(caller: .localUser(uid: 501), send: client.receive)
+        defer { connection.close() }
+        let snapshot = try await fixture.host.snapshot()
+        await connection.receive(HostClientMessage(id: 1, request: .subscribe(after: snapshot.cursor)))
+        await connection.receive(HostClientMessage(id: 2, request: .followWorktree(worktreeID: "/srv/missing")))
+        await connection.receive(HostClientMessage(id: 3, request: .followWorktree(worktreeID: fixture.worktree.id)))
+
+        #expect(client.messages.contains(.response(id: 2, result: .failure(error: .notFound(what: "worktree /srv/missing")))))
+        #expect(client.messages.contains(.response(id: 3, result: .done)))
+    }
+
     /// Archiving stopped everything in a worktree; a run does not start
     /// there again, including one archived while its scripts were found.
     @Test(arguments: [false, true])
