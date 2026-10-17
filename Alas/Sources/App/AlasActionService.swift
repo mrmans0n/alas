@@ -30,9 +30,6 @@ struct AlasActionService {
     var now: () -> Date = Date.init
     var gitStatus: (URL) async throws -> [ChangedFile] = { try await GitService().status(worktreePath: $0) }
     var providerReviewOriginalPath: (ReviewDraftSessionID, String) async -> String? = { _, _ in nil }
-    var notifySession: (String?, SessionOwnerID?, Worktree, String, String?, AlasCLINotifyLevel) -> AlasCLIResponse = { _, _, _, _, _, _ in
-        .error("Notifications from the terminal are not available yet.")
-    }
     var listDelegationAgents: (ACPOrchestrationSessionOrigin, String?) async -> AlasCLIResponse = { _, _ in
         .error("Session orchestration is not available yet.")
     }
@@ -114,17 +111,6 @@ struct AlasActionService {
         case .ambiguous(let labels):
             return .error("ambiguous worktree \"\(target)\"; matches: \(labels.joined(separator: ", "))")
         }
-    }
-
-    func notify(
-        sessionId: String?,
-        owner: SessionOwnerID?,
-        origin: Worktree,
-        body: String,
-        title: String?,
-        level: AlasCLINotifyLevel
-    ) -> AlasCLIResponse {
-        notifySession(sessionId, owner, origin, body, title, level)
     }
 
     func agentList(origin: ACPOrchestrationSessionOrigin, worktree: String?) async -> AlasCLIResponse {

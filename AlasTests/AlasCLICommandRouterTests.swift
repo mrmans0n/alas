@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import UserNotifications
 @testable import Alas
 @_spi(Testing) import AlasCore
 
@@ -47,15 +48,13 @@ struct AlasCLICommandRouterTests {
             id: "wt1", projectId: "p1", name: "main", branch: "main",
             path: root, status: .clean, lastActivity: Date()
         )
-        var captured: (sessionId: String?, owner: SessionOwnerID?, worktreeId: String, body: String, title: String?, level: AlasCLINotifyLevel)?
+        let harness = HarnessService()
+        var posted: [UNNotificationRequest] = []
+        harness.notifications.notificationAdder = { posted.append($0) }
         let router = AlasCLICommandRouter(
-            host: AlasHost.routerFixture([worktree], sessionWorktree: { $0 == "acp-1" ? "wt1" : nil }),
+            host: AlasHost.routerFixture([worktree], sessionWorktree: { $0 == "acp-1" ? "wt1" : nil }, harness: harness),
             openRelativeFile: { _, _ in },
             openExternalFile: { _, _ in },
-            notifySession: { sessionId, owner, origin, body, title, level in
-                captured = (sessionId, owner, origin.id, body, title, level)
-                return .ok
-            },
             activateApp: {}
         )
 
@@ -67,12 +66,13 @@ struct AlasCLICommandRouterTests {
         ))
 
         #expect(response == .ok)
-        #expect(captured?.sessionId == "acp-1")
-        #expect(captured?.owner == .worktree("wt1"))
-        #expect(captured?.worktreeId == "wt1")
-        #expect(captured?.body == "Blocked")
-        #expect(captured?.title == "Need input")
-        #expect(captured?.level == .attention)
+        let content = try #require(posted.first).content
+        #expect(content.title == "Need input")
+        #expect(content.body == "Blocked")
+        #expect(content.userInfo["sessionId"] as? String == "acp-1")
+        #expect(content.userInfo["worktreeId"] as? String == "wt1")
+        #expect(content.userInfo["sessionOwnerWorktreeId"] as? String == "wt1")
+        #expect(harness.activityBySession["acp-1"]?.state == .awaitingInput)
     }
 
     @Test func checkoutOwnedNotifyDoesNotRequireRepositoryTarget() async throws {
@@ -80,15 +80,13 @@ struct AlasCLICommandRouterTests {
             UUID(uuidString: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")!,
             .local
         )
-        var captured: (sessionId: String, owner: SessionOwnerID, body: String)?
+        let harness = HarnessService()
+        var posted: [UNNotificationRequest] = []
+        harness.notifications.notificationAdder = { posted.append($0) }
         let router = AlasCLICommandRouter(
-            host: AlasHost.routerFixture([], sessionOwner: { $0 == "checkout-leaf" ? checkoutOwner : nil }),
+            host: AlasHost.routerFixture([], sessionOwner: { $0 == "checkout-leaf" ? checkoutOwner : nil }, harness: harness),
             openRelativeFile: { _, _ in },
             openExternalFile: { _, _ in },
-            notifyOwnedSession: { sessionId, owner, body, _, _ in
-                captured = (sessionId, owner, body)
-                return .ok
-            },
             activateApp: {}
         )
 
@@ -100,9 +98,11 @@ struct AlasCLICommandRouterTests {
         ))
 
         #expect(response == .ok)
-        #expect(captured?.sessionId == "checkout-leaf")
-        #expect(captured?.owner == checkoutOwner)
-        #expect(captured?.body == "Blocked")
+        let content = try #require(posted.first).content
+        #expect(content.body == "Blocked")
+        #expect(content.userInfo["sessionId"] as? String == "checkout-leaf")
+        #expect(content.userInfo["worktreeId"] == nil)
+        #expect(content.userInfo["sessionOwnerCheckoutId"] as? String == "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA")
     }
 
     @Test func resolvesOriginFromSymlinkedWorktreeRootCwd() async throws {
@@ -1424,7 +1424,8 @@ extension AlasHost {
         _ worktrees: [Worktree],
         hidden: [Worktree] = [],
         sessionWorktree: @escaping (String) -> String? = { _ in nil },
-        sessionOwner: @escaping (String) -> SessionOwnerID? = { _ in nil }
+        sessionOwner: @escaping (String) -> SessionOwnerID? = { _ in nil },
+        harness: HarnessService = HarnessService()
     ) -> AlasHost {
         let projects = ProjectsManager(persistedProjects: Set((worktrees + hidden).map(\.projectId)).sorted().map {
             ProjectConfig(id: $0, name: $0, path: "/tmp/alas-router-\($0)", color: "blue", addedAt: .distantPast)
@@ -1434,7 +1435,7 @@ extension AlasHost {
             projects.setWorktreeHidden(projectId: worktree.projectId, path: worktree.path, hidden: true)
         }
         let terminals = RouterTerminals { sessionOwner($0) ?? sessionWorktree($0).map(SessionOwnerID.worktree) }
-        return AlasHost(core: AlasCoreContext(projects: projects, runHistoryStore: nil, environment: terminals))
+        return AlasHost(core: AlasCoreContext(projects: projects, runHistoryStore: nil, environment: terminals, harness: harness))
     }
 }
 

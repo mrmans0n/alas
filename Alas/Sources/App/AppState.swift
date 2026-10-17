@@ -582,7 +582,7 @@ final class AppState {
     @ObservationIgnored
     private let automaticCheckpointService = WorktreeCheckpointService()
     let rightPaneStore = RightPaneStore()
-    let harness = HarnessService()
+    var harness: HarnessService { core.harness }
     /// Settle window before a harness awaiting/permission transition reaches
     /// the attention store, so flapping states never flash the sidebar badge.
     @ObservationIgnored
@@ -7489,27 +7489,6 @@ final class AppState {
             providerReviewOriginalPath: { [weak self] sessionID, relativePath in
                 await self?.reviewRequestOriginalPath(forDraftSessionID: sessionID, relativePath: relativePath) ?? nil
             },
-            notifySession: { [weak self] sessionId, owner, origin, body, title, level in
-                guard let self else { return .error("Alas is not available.") }
-                return self.cliNotify(
-                    sessionId: sessionId,
-                    owner: owner,
-                    origin: origin,
-                    body: body,
-                    title: title,
-                    level: level
-                )
-            },
-            notifyOwnedSession: { [weak self] sessionId, owner, body, title, level in
-                guard let self else { return .error("Alas is not available.") }
-                return self.cliNotifyOwned(
-                    sessionId: sessionId,
-                    owner: owner,
-                    body: body,
-                    title: title,
-                    level: level
-                )
-            },
             listDelegationAgents: { origin, worktree in
                 await orchestration.discoverAgents(origin: origin, worktree: worktree)
             },
@@ -7627,71 +7606,6 @@ final class AppState {
     private func jsonLine<T: Encodable>(_ value: T) throws -> AlasCLIResponse {
         let data = try JSONEncoder.workspaceAutomation.encode(value)
         return .text([String(data: data, encoding: .utf8) ?? "{}"])
-    }
-
-    private func cliNotify(
-        sessionId: String?,
-        owner: SessionOwnerID?,
-        origin: Worktree,
-        body: String,
-        title: String?,
-        level: AlasCLINotifyLevel
-    ) -> AlasCLIResponse {
-        guard let resolved = projectAndWorktree(withWorktreeId: origin.id) else {
-            return .error("Unknown worktree.")
-        }
-        let notificationSessionId = sessionId ?? origin.id
-        let agent = agentKindForNotifySession(sessionId) ?? .codex
-        harness.notifications.notifyAlas(
-            body: body,
-            title: title,
-            agent: agent,
-            projectId: resolved.project.id,
-            worktreeId: resolved.worktree.id,
-            sessionId: notificationSessionId,
-            owner: owner
-        )
-        if level == .attention, let sessionId {
-            harness.setExternalActivity(sessionId: sessionId, owner: owner, agent: agent, state: .awaitingInput, body: body, requiresUserInput: true)
-        }
-        return .ok
-    }
-
-    private func cliNotifyOwned(
-        sessionId: String,
-        owner: SessionOwnerID,
-        body: String,
-        title: String?,
-        level: AlasCLINotifyLevel
-    ) -> AlasCLIResponse {
-        let agent = agentKindForNotifySession(sessionId) ?? .codex
-        harness.notifications.notifyAlas(
-            body: body,
-            title: title,
-            agent: agent,
-            sessionId: sessionId,
-            owner: owner
-        )
-        if level == .attention {
-            harness.setExternalActivity(sessionId: sessionId, owner: owner, agent: agent, state: .awaitingInput, body: body, requiresUserInput: true)
-        }
-        return .ok
-    }
-
-    private func agentKindForNotifySession(_ sessionId: String?) -> AgentKind? {
-        guard let sessionId else { return nil }
-        if let activity = harness.activityBySession[sessionId] {
-            return activity.agent
-        }
-        if let harnessKind = harness.activeHarnessBySession[sessionId] ?? harness.harnessBySession[sessionId] {
-            return harnessKind.asAgentKind
-        }
-        for manager in acpManagers.values {
-            if let session = manager.liveSession(for: sessionId) {
-                return ACPHarnessBridge.agentKind(for: session.agentId)
-            }
-        }
-        return nil
     }
 
     /// Activate a specific harness session: bring the app to front, select

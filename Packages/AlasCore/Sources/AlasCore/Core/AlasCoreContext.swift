@@ -64,6 +64,9 @@ public final class AlasCoreContext {
 
     /// Attention items and the gate observations pass through to reach them.
     public let attention: AttentionIntake
+    /// Agents' activity as their hooks and sessions report it, and the
+    /// notifications that report it to the user.
+    @ObservationIgnored public let harness: HarnessService
 
     /// Launches claimed and still starting, by run slot.
     @ObservationIgnored var pendingRunLaunches: [RunSlotKey: PendingRunLaunch] = [:]
@@ -94,7 +97,8 @@ public final class AlasCoreContext {
         runCompletionWaiter: @escaping RunCompletionWaiter = { try await RunScriptCompletionMonitor.wait(for: $0) },
         makeSessionManager: @escaping @MainActor (SessionOwnerID, Worktree) -> ACPSessionManager = AlasCoreContext.defaultSessionManager,
         environment: any AlasHostEnvironment = HeadlessHostEnvironment(),
-        runHostGrace: RunHostGrace = RunHostGrace()
+        runHostGrace: RunHostGrace = RunHostGrace(),
+        harness: HarnessService = HarnessService()
     ) {
         self.projects = projects
         self.runs = runs
@@ -103,6 +107,7 @@ public final class AlasCoreContext {
         self.runCompletionWaiter = runCompletionWaiter
         self.runHistory = RunHistory(store: runHistoryStore)
         self.attention = AttentionIntake(store: attentionStore ?? AttentionStore())
+        self.harness = harness
         self.localTextModelStore = localTextModelStore
         self.localTextOverride = localText
         self.workspaceStore = workspaceStore
