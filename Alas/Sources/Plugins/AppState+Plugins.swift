@@ -135,9 +135,10 @@ extension AppState {
                 guard let self, (self.projectsManager.worktreesByProject[project.id] ?? []).contains(where: {
                     self.acpManager(forWorktreeId: $0.id)?.liveSession(for: id) != nil
                 }) else { return "unknown session \(id)" }
-                // Answered once the session accepted or refused the prompt (no writer lease, signed out, …).
+                // Answered once the prompt was delivered or refused (no writer lease, signed out, a failed
+                // send), as `onResult` answered before.
                 do {
-                    _ = try await self.host.sessions.submit(id, prompt: text, caller: .app)
+                    try await self.host.sessions.send(id, prompt: text, caller: .app)
                     return nil
                 } catch {
                     return "the session did not accept the prompt"
