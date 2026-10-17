@@ -424,6 +424,11 @@ extension AlasGhostty {
         @objc func decreaseFontSize(_ sender: Any?) { runBindingAction("decrease_font_size:1") }
         @objc func resetFontSize(_ sender: Any?)    { runBindingAction("reset_font_size") }
 
+        /// Sets this surface's font size in points; nil restores the configured size.
+        func setFontSize(_ points: Float?) {
+            runBindingAction(points.map { "set_font_size:\($0)" } ?? "reset_font_size")
+        }
+
         private func runBindingAction(_ action: String) {
             guard let surface = cSurface else { return }
             action.withCString { ptr in
@@ -709,8 +714,17 @@ extension AlasGhostty {
             ghostty_surface_mouse_pos(surface, -1, -1, mods)
         }
 
+        /// Axes whose scroll-wheel gestures pan an enclosing scroll view
+        /// instead of the terminal's scrollback.
+        var enclosingScrollAxes: (horizontal: Bool, vertical: Bool) = (false, false)
+
         override func scrollWheel(with event: NSEvent) {
             guard let surface = cSurface else { return }
+            let horizontal = abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY)
+            if horizontal ? enclosingScrollAxes.horizontal : enclosingScrollAxes.vertical {
+                super.scrollWheel(with: event)
+                return
+            }
 
             var dx = event.scrollingDeltaX
             var dy = event.scrollingDeltaY

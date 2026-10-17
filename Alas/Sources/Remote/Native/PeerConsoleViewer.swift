@@ -92,6 +92,26 @@ struct PeerConsoleWriteGate {
     }
 }
 
+/// Sizing math for showing the host's grid in a local pane.
+enum PeerConsoleLayout {
+    /// Smallest font Fit will choose; below it the grid scrolls instead.
+    static let minimumFitFontSize: Float = 6
+
+    /// The host grid in points, plus one cell of slack for Ghostty's padding.
+    static func extent(rows: Int, columns: Int, cell: CGSize) -> CGSize {
+        CGSize(width: CGFloat(columns + 1) * cell.width, height: CGFloat(rows + 1) * cell.height)
+    }
+
+    /// The font size, in half points, at which the host grid fits `pane`,
+    /// given the cell size at `base`. Never larger than `base`.
+    static func fitFontSize(base: Float, baseCell: CGSize, rows: Int, columns: Int, pane: CGSize) -> Float {
+        let needed = extent(rows: rows, columns: columns, cell: baseCell)
+        let scale = min(pane.width / needed.width, pane.height / needed.height, 1)
+        let size = (base * Float(scale) * 2).rounded(.down) / 2
+        return max(minimumFitFontSize, size)
+    }
+}
+
 /// Turns bytes the viewer's surface wrote into `input` requests.
 ///
 /// Nothing is forwarded unless this attachment holds the lease: view mode
@@ -290,6 +310,10 @@ final class PeerConsoleViewer {
     /// The local surface's cell size in points, refreshed whenever its grid
     /// changes (window placement, font zoom) so the view re-fits the grid.
     private(set) var cellSize: CGSize?
+    /// Shrinks the local font so the host grid fits the pane.
+    private(set) var fitsToPane = false
+    @ObservationIgnored private var pane: CGSize?
+    @ObservationIgnored private var baseFontSize: Float = 13
 
     @ObservationIgnored private(set) var surface: AlasGhostty.SurfaceView?
     @ObservationIgnored private var bridge: PeerConsoleBridge?
@@ -346,6 +370,7 @@ final class PeerConsoleViewer {
             self.rows = rows
             self.columns = columns
             apply(control)
+            refit()
             gridChanged()
         case .snapshot(_, let sequence, _, let data):
             order.snapshot(sequence: sequence)
@@ -366,6 +391,7 @@ final class PeerConsoleViewer {
         case .geometry(_, let rows, let columns):
             self.rows = rows
             self.columns = columns
+            refit()
             gridChanged()
         case .detached(_, let reason):
             end(Self.message(for: reason), notifyHost: false)
@@ -419,8 +445,45 @@ final class PeerConsoleViewer {
         }
     }
 
+    /// The host grid in points at the local font, once the surface has metrics.
+    var gridExtent: CGSize? {
+        guard let rows, let columns, let cellSize else { return nil }
+        return PeerConsoleLayout.extent(rows: rows, columns: columns, cell: cellSize)
+    }
+
+    /// The pane showing the console, or the configured font, changed size.
+    func layout(pane: CGSize, baseFontSize: Float) {
+        guard pane != self.pane || baseFontSize != self.baseFontSize else { return }
+        self.pane = pane
+        self.baseFontSize = baseFontSize
+        refit()
+        gridChanged()
+    }
+
+    func setFitsToPane(_ fits: Bool) {
+        guard fits != fitsToPane else { return }
+        fitsToPane = fits
+        if fits { refit() } else { surface?.setFontSize(nil) }
+        gridChanged()
+    }
+
+    /// Ghostty applies font changes synchronously, so the configured size's
+    /// cell can be read back before the fitted size replaces it.
+    private func refit() {
+        guard fitsToPane, let surface, let rows, let columns, let pane else { return }
+        surface.setFontSize(nil)
+        guard let baseCell = surface.cellSize else { return }
+        surface.setFontSize(PeerConsoleLayout.fitFontSize(
+            base: baseFontSize, baseCell: baseCell, rows: rows, columns: columns, pane: pane
+        ))
+    }
+
     private func gridChanged() {
         if let size = surface?.cellSize, size != cellSize { cellSize = size }
+        // Pan the pane, not the scrollback, along an axis the grid overflows.
+        if let surface, let extent = gridExtent, let pane {
+            surface.enclosingScrollAxes = (extent.width > pane.width, extent.height > pane.height)
+        }
         guard let rows, let columns, let grid = surface?.gridSize else { return }
         let fits = grid.rows >= rows && grid.columns >= columns
         if let data = writeGate.gridChanged(surfaceFits: fits) { writeToSurface(data) }

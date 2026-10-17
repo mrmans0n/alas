@@ -414,6 +414,7 @@ struct RootView: View {
         } else if let consoles = client.consoles, let viewer = consoles.viewer {
             NativePeerConsoleView(
                 viewer: viewer,
+                baseFontSize: Float(state.config.terminal.fontSize),
                 onReconnect: { consoles.reconnect() }
             )
             .id(viewer.attachmentId)

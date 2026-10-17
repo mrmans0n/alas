@@ -277,6 +277,22 @@ import Testing
     }
 }
 
+@Suite struct PeerConsoleLayoutTests {
+    /// An 80×24 grid of 8×16 cells at 13pt needs 648×400 points.
+    @Test(arguments: [
+        (CGSize(width: 1000, height: 1000), Float(13)),   // never grows past the configured size
+        (CGSize(width: 486, height: 1000), Float(9.5)),   // narrower axis wins, snapped down to a half point
+        (CGSize(width: 1000, height: 200), Float(6.5)),
+        (CGSize(width: 100, height: 100), Float(6)),      // floor; the grid scrolls instead
+    ])
+    func fitFontSizeFitsTheGridInThePane(pane: CGSize, expected: Float) {
+        let size = PeerConsoleLayout.fitFontSize(
+            base: 13, baseCell: CGSize(width: 8, height: 16), rows: 24, columns: 80, pane: pane
+        )
+        #expect(size == expected)
+    }
+}
+
 @Suite struct PeerConsoleInputRelayTests {
     private func control(_ owner: PeerConsoleControl.Owner, _ generation: Int) -> PeerConsoleControl {
         PeerConsoleControl(owner: owner, generation: generation, change: .current)
