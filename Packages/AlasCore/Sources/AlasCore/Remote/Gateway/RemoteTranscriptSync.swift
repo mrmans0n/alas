@@ -27,7 +27,10 @@ public final class RemoteTranscriptSync {
     public var epoch = 0           // transcript epoch the client knows
     public var revision = 0        // per-connection outgoing delta counter
     public var sentBackgroundWorkCancellable = false
-    public var sentSupersededBackgroundRows: Set<Int> = []
+    /// Rows the last send carried as hidden markers (superseded background
+    /// tasks, embedded visuals' `visual_show` calls); a delta re-sends any
+    /// row whose hidden state flipped since.
+    public var sentHiddenRows: Set<Int> = []
     /// Bumped every time `sendSnapshot` runs, regardless of whether `epoch`
     /// itself changed. A same-epoch snapshot (e.g. from `takeOver` or a
     /// client resubscribe with no intervening structural change) still

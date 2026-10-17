@@ -809,8 +809,8 @@ public final class RemoteSessionGateway {
         // later generation meanwhile read fresher state, so this one is dropped.
         state.generation += 1
         let capturedGeneration = state.generation
-        let superseded = Self.supersededBackgroundRows(in: state.messages)
-        let wire = await wireTail(id: id, state: state, indices: state.messages.keys.sorted(), superseded: superseded)
+        let hidden = Self.hiddenRows(in: state.messages)
+        let wire = await wireTail(id: id, state: state, indices: state.messages.keys.sorted(), hidden: hidden)
         // A resubscribe or takeover that followed again meanwhile replaced
         // this state, and its own snapshot is the current one.
         guard state.generation == capturedGeneration, syncStates[id] === state else { return }
@@ -818,7 +818,7 @@ public final class RemoteSessionGateway {
         state.revision = 0
         state.snapshotSent = true
         state.sentBackgroundWorkCancellable = cancellable
-        state.sentSupersededBackgroundRows = superseded
+        state.sentHiddenRows = hidden
         send(.transcriptSnapshot(sessionId: id,
                                  streamingState: Self.stateString(state.streamingState),
                                  canDrive: canDrive(state, id: id),
@@ -859,12 +859,13 @@ public final class RemoteSessionGateway {
                               hasCancellableBackgroundWork: cancellable))
     }
 
-    /// Sends the messages the follow reported changed, and the background
-    /// task rows a newer snapshot of the same task retired.
+    /// Sends the messages the follow reported changed, and the rows whose
+    /// hidden state flipped: a background task row a newer snapshot retired,
+    /// or a `visual_show` call its embedded visual now stands in for.
     private func sendDelta(id: String, state: RemoteTranscriptSync, changed: [Int]) async {
         guard state.snapshotSent else { return }
-        let superseded = Self.supersededBackgroundRows(in: state.messages)
-        let indices = Set(changed).union(superseded.symmetricDifference(state.sentSupersededBackgroundRows))
+        let hidden = Self.hiddenRows(in: state.messages)
+        let indices = Set(changed).union(hidden.symmetricDifference(state.sentHiddenRows))
             .filter { state.messages[$0] != nil }
             .sorted()
         guard !indices.isEmpty else {
@@ -884,9 +885,9 @@ public final class RemoteSessionGateway {
         for index in indices {
             if case .toolCall(let call)? = state.messages[index] { state.invalidateToolContent(call.toolCallId) }
         }
-        let batches = await wireBatches(id: id, state: state, indices: indices, superseded: superseded)
+        let batches = await wireBatches(id: id, state: state, indices: indices, hidden: hidden)
         guard state.generation == capturedGeneration, syncStates[id] === state else { return }
-        state.sentSupersededBackgroundRows = superseded
+        state.sentHiddenRows = hidden
         let cancellable = state.sessionState?.hasCancellableBackgroundWork ?? false
         // Sent without suspension, each frame with the next revision.
         for wire in batches {
@@ -933,13 +934,13 @@ public final class RemoteSessionGateway {
     /// Build the newest contiguous suffix that fits. Older rows remain
     /// reachable through fetchOlder instead of disappearing from history.
     private func wireTail(
-        id: String, state: RemoteTranscriptSync, indices: [Int], superseded: Set<Int>? = nil
+        id: String, state: RemoteTranscriptSync, indices: [Int], hidden: Set<Int>? = nil
     ) async -> [RemoteWireMessage] {
-        let superseded = superseded ?? Self.supersededBackgroundRows(in: state.messages)
+        let hidden = hidden ?? Self.hiddenRows(in: state.messages)
         var wire: [RemoteWireMessage] = []
         var remaining = RemoteTranscriptSync.payloadBudget(sessionId: id)
         for index in indices.reversed() {
-            guard let row = await wireMessage(id: id, state: state, index: index, superseded: superseded.contains(index)) else { continue }
+            guard let row = await wireMessage(id: id, state: state, index: index, hidden: hidden.contains(index)) else { continue }
             guard row.byteCount + 1 <= remaining else { break }
             remaining -= row.byteCount + 1
             wire.append(row.message)
@@ -949,14 +950,14 @@ public final class RemoteSessionGateway {
     }
 
     private func wireBatches(
-        id: String, state: RemoteTranscriptSync, indices: [Int], superseded: Set<Int>
+        id: String, state: RemoteTranscriptSync, indices: [Int], hidden: Set<Int>
     ) async -> [[RemoteWireMessage]] {
         let budget = RemoteTranscriptSync.payloadBudget(sessionId: id)
         var batches: [[RemoteWireMessage]] = []
         var batch: [RemoteWireMessage] = []
         var remaining = budget
         for index in indices {
-            guard let row = await wireMessage(id: id, state: state, index: index, superseded: superseded.contains(index)) else { continue }
+            guard let row = await wireMessage(id: id, state: state, index: index, hidden: hidden.contains(index)) else { continue }
             if row.byteCount + 1 > remaining {
                 batches.append(batch)
                 batch = []
@@ -970,13 +971,13 @@ public final class RemoteSessionGateway {
     }
 
     private func wireMessage(
-        id: String, state: RemoteTranscriptSync, index: Int, superseded: Bool
+        id: String, state: RemoteTranscriptSync, index: Int, hidden: Bool
     ) async -> (message: RemoteWireMessage, byteCount: Int)? {
         // Re-read across awaits: a reset can replace what the gateway holds;
         // the caller's generation check discards the stale serialization.
         guard let message = state.messages[index] else { return nil }
         // A visual aid's answer prompt stays a positional marker: the phone's card shows the answer.
-        if superseded || ACPVisualAidQuestionForm.isAnswerPrompt(message) {
+        if hidden || ACPVisualAidQuestionForm.isAnswerPrompt(message) {
             return RemoteWireMessage(stableId: "m\(index)", kind: message.kind, text: nil, json: nil,
                                      index: index, isHidden: true)
                 .boundedForTransport(maximumBytes: RemoteTranscriptSync.maxMessageBytes)
@@ -987,19 +988,39 @@ public final class RemoteSessionGateway {
         ).boundedForTransport(maximumBytes: RemoteTranscriptSync.maxMessageBytes)
     }
 
-    /// Inspect every message the gateway holds so an older page cannot revive
-    /// a task superseded outside that page. Keep positional IDs and paging cursors.
-    private static func supersededBackgroundRows(in messages: [Int: ACPMessage]) -> Set<Int> {
+    /// Rows sent as positional markers: background task rows a newer snapshot
+    /// of the same task retired, and the `visual_show` calls whose embedded
+    /// visual stands in for their chip. Inspect every message the gateway holds
+    /// so an older page cannot revive a row hidden by something outside that
+    /// page. Keep positional IDs and paging cursors.
+    private static func hiddenRows(in messages: [Int: ACPMessage]) -> Set<Int> {
+        let ordered = messages.sorted(by: { $0.key < $1.key })
+        return supersededBackgroundRows(in: ordered)
+            .union(embeddedVisualShowRows(in: ordered))
+    }
+
+    private static func supersededBackgroundRows(in ordered: [(key: Int, value: ACPMessage)]) -> Set<Int> {
         var latest: [String: Int] = [:]
         var backgroundIds: Set<String> = []
-        for (index, message) in messages.sorted(by: { $0.key < $1.key }) {
+        for (index, message) in ordered {
             guard case .toolCall(let call) = message else { continue }
             latest[call.toolCallId] = index
             if ACPBackgroundTask(toolCall: call) != nil { backgroundIds.insert(call.toolCallId) }
         }
-        return Set(messages.compactMap { index, message in
+        return Set(ordered.compactMap { index, message in
             guard case .toolCall(let call) = message, backgroundIds.contains(call.toolCallId),
                   latest[call.toolCallId] != index else { return nil }
+            return index
+        })
+    }
+
+    /// The local transcript hides these chips the same way; the phone and peer
+    /// Macs drop a hidden row.
+    private static func embeddedVisualShowRows(in ordered: [(key: Int, value: ACPMessage)]) -> Set<Int> {
+        let ids = ACPToolCallPresentation.hiddenVisualShowToolCallIds(in: ordered.map(\.value))
+        guard !ids.isEmpty else { return [] }
+        return Set(ordered.compactMap { index, message in
+            guard case .toolCall(let call) = message, ids.contains(call.toolCallId) else { return nil }
             return index
         })
     }

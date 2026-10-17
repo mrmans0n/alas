@@ -116,11 +116,14 @@ public struct RemoteVisualAid: Codable, Equatable, Sendable {
     public let html: String
     public let question: Question?
     public let answer: Answer?
+    /// `"embedded"` or `"card"`, from `ACPVisualAid.Presentation`.
+    public let presentation: String
 
     public init(_ visual: ACPVisualAid) {
         id = visual.id.uuidString
         title = visual.title
         html = visual.html
+        presentation = visual.presentation.rawValue
         question = visual.question.map { question in
             Question(
                 prompt: question.prompt,
@@ -135,6 +138,21 @@ public struct RemoteVisualAid: Codable, Equatable, Sendable {
         case nil:
             answer = nil
         }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, title, html, question, answer, presentation
+    }
+
+    /// A row from a Mac that predates `presentation` reads as a card.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        title = try c.decode(String.self, forKey: .title)
+        html = try c.decode(String.self, forKey: .html)
+        question = try c.decodeIfPresent(Question.self, forKey: .question)
+        answer = try c.decodeIfPresent(Answer.self, forKey: .answer)
+        presentation = try c.decodeIfPresent(String.self, forKey: .presentation) ?? ACPVisualAid.Presentation.card.rawValue
     }
 }
 
