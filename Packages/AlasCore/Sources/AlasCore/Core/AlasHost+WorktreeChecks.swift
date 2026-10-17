@@ -79,8 +79,12 @@ extension WorktreesAPI {
         let project = try creatableProject(request.projectID, branch: request.branch)
         var request = request
         if !request.destinationAlreadyPrepared {
+            // Checked where it is created, which on a remote host can be
+            // another path than the one asked for.
             let exists: Bool
             do {
+                request.destination = try await core.preparedDestination(request.destination, project: project)
+                request.destinationAlreadyPrepared = true
                 exists = try await core.creationDestinationExists(request.destination, project: project)
             } catch {
                 throw WorktreeCheckRefusal.destinationUnchecked(error.localizedDescription)

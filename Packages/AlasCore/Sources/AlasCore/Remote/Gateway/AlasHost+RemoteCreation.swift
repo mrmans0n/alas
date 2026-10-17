@@ -177,13 +177,18 @@ extension AlasCoreContext {
             repoName: project.name,
             branch: branch
         )
-        let repoPath = URL(fileURLWithPath: project.path)
-        let destination = if let worktreeDestinationPreparer {
-            try await worktreeDestinationPreparer(repoPath, rendered)
-        } else {
-            try await WorktreeLifecycle.preparedCreateWorktreeDestination(repoPath: repoPath, destination: rendered)
-        }
+        let destination = try await preparedDestination(rendered, project: project)
         return (destination, rendered, try await creationDestinationExists(destination, project: project))
+    }
+
+    /// `destination` as a worktree of `project` is created at it: on a
+    /// remote host, rewritten to that host's home.
+    func preparedDestination(_ destination: URL, project: ProjectConfig) async throws -> URL {
+        let repoPath = URL(fileURLWithPath: project.path)
+        if let worktreeDestinationPreparer {
+            return try await worktreeDestinationPreparer(repoPath, destination)
+        }
+        return try await WorktreeLifecycle.preparedCreateWorktreeDestination(repoPath: repoPath, destination: destination)
     }
 
     /// Whether something already sits at `destination`, on the project's own host.
