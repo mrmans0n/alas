@@ -104,7 +104,9 @@ extension SessionsAPI {
     func refusal(toStart agentID: String, in worktree: Worktree) async -> SessionRefusal? {
         // As listed now, which the manager lookup also uses: the worktree
         // can move to another project while a child waits to start.
-        let worktree = core.projectAndWorktree(withWorktreeId: worktree.id)?.worktree ?? worktree
+        guard let worktree = core.projectAndWorktree(withWorktreeId: worktree.id)?.worktree else {
+            return .ownerUnavailable(reason: "The worktree is not listed, or is archived.")
+        }
         do {
             let (manager, agentHost) = try worktreeManager(worktree, agentID: agentID)
             try await admit(agentID, in: manager, worktree: worktree, agentHost: agentHost)
@@ -142,6 +144,11 @@ extension SessionsAPI {
             throw SessionRefusal.ownerUnavailable(reason: Self.checkpointRecoveryReason)
         }
         if let worktree {
+            // Still its project's: it can have moved to another one, with
+            // another host and agents, while the recovery check waited.
+            guard core.projects.worktrees(projectId: worktree.projectId).contains(where: { $0.id == worktree.id }) else {
+                throw SessionRefusal.ownerUnavailable(reason: "The worktree is not listed, or is archived.")
+            }
             guard core.projects.admitsNewWork(in: worktree),
                   !core.projects.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path)
             else { throw SessionRefusal.ownerUnavailable(reason: "Another operation holds the worktree.") }
