@@ -432,9 +432,9 @@ extension AlasGhostty {
             onUserFontZoom?()
         }
 
-        /// Sets this surface's font size in points; nil restores the configured size.
-        func setFontSize(_ points: Float?) {
-            runBindingAction(points.map { "set_font_size:\($0)" } ?? "reset_font_size")
+        /// Sets this surface's font size in points.
+        func setFontSize(_ points: Float) {
+            runBindingAction("set_font_size:\(points)")
         }
 
         private func runBindingAction(_ action: String) {

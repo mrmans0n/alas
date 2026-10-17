@@ -475,15 +475,16 @@ final class PeerConsoleViewer {
     func setFitsToPane(_ fits: Bool) {
         guard fits != fitsToPane else { return }
         fitsToPane = fits
-        if fits { refit() } else { surface?.setFontSize(nil) }
+        if fits { refit() } else { surface?.setFontSize(baseFontSize) }
         gridChanged()
     }
 
-    /// Ghostty applies font changes synchronously, so the configured size's
-    /// cell can be read back before the fitted size replaces it.
+    /// Ghostty applies font changes synchronously, so the base size's cell
+    /// can be read back before the fitted size replaces it. The base is set
+    /// explicitly: the surface keeps the font configured when it was created.
     private func refit() {
         guard fitsToPane, let surface, let rows, let columns, let pane else { return }
-        surface.setFontSize(nil)
+        surface.setFontSize(baseFontSize)
         guard let baseCell = surface.cellSize else { return }
         surface.setFontSize(PeerConsoleLayout.fitFontSize(
             base: baseFontSize, baseCell: baseCell, rows: rows, columns: columns, pane: pane
