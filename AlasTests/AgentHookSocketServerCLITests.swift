@@ -261,7 +261,7 @@ struct AgentHookSocketServerCLITests {
 
         #expect(object["ok"] as? Bool == true)
         let request = await holder.current()
-        guard case .visualShow(_, let delivered, _)? = request?.command else {
+        guard case .visualShow(_, let delivered, _, _)? = request?.command else {
             Issue.record("expected visualShow command, got \(String(describing: request?.command))")
             return
         }

@@ -237,6 +237,8 @@ pub enum Command {
         title: String,
         html: String,
         question: Option<VisualQuestion>,
+        /// `"embedded"` or `"card"`; the app picks the default when absent.
+        presentation: Option<String>,
     },
     /// One page of a direct parent's, child's, or this session's fork transcript. The
     /// app applies its defaults to omitted bounds.
@@ -641,7 +643,7 @@ pub fn build_request(
             r.params = Some(serde_json::json!({ "session_id": session_id, "prompt": prompt }));
             r
         }
-        Command::VisualShow { title, html, question } => {
+        Command::VisualShow { title, html, question, presentation } => {
             let mut r = Request::new("visual_show");
             let mut params = serde_json::json!({ "title": title, "html": html });
             if let Some(question) = question {
@@ -654,6 +656,9 @@ pub fn build_request(
                         .collect::<Vec<_>>(),
                     "allow_multiple": question.allow_multiple,
                 });
+            }
+            if let Some(presentation) = presentation {
+                params["presentation"] = serde_json::json!(presentation);
             }
             r.params = Some(params);
             r
@@ -1205,6 +1210,7 @@ mod tests {
                     ],
                     allow_multiple: true,
                 }),
+                presentation: None,
             },
             Some("acp-1".into()),
             Some("/wt".into()),

@@ -1378,7 +1378,7 @@ struct AlasCLICommandRouterTests {
             openExternalFile: { _, _ in },
             activateApp: {}
         )
-        let command = AlasCLIRequest.Command.visualShow(title: "T", html: "<p>", question: nil)
+        let command = AlasCLIRequest.Command.visualShow(title: "T", html: "<p>", question: nil, presentation: nil)
 
         let terminal = await router.handle(.init(version: 1, sessionId: "terminal-1", cwd: nil, command: command))
         let directory = await router.handle(.init(version: 1, sessionId: nil, cwd: worktree.path.path, command: command))

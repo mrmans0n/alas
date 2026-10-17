@@ -404,8 +404,22 @@ struct AlasCLIRequestTests {
 
         #expect(request.command == .visualShow(
             title: "Layouts", html: "<h2>Pick</h2>",
-            question: .init(prompt: "Which?", options: [.init(id: "a", label: "One"), .init(id: "b", label: "Two")], allowMultiple: true)
+            question: .init(prompt: "Which?", options: [.init(id: "a", label: "One"), .init(id: "b", label: "Two")], allowMultiple: true),
+            presentation: nil
         ))
+    }
+
+    @Test(arguments: [
+        (#""#, ACPVisualAid.Presentation?.none),
+        (#","presentation":"embedded""#, .embedded),
+        (#","presentation":"card""#, .card),
+    ])
+    func visualShowCarriesTheRequestedPresentation(extra: String, expected: ACPVisualAid.Presentation?) throws {
+        let json = #"{"v":1,"kind":"cli","command":"visual_show","session_id":"acp-1","params":{"title":"T","html":"<p>x</p>"# + extra + #"}}"#
+
+        let request = try AlasCLIRequest.decode(from: Data(json.utf8))
+
+        #expect(request.command == .visualShow(title: "T", html: "<p>x</p>", question: nil, presentation: expected))
     }
 
     @Test func visualShowTrimsTextFieldsButKeepsHTMLVerbatim() throws {
@@ -415,12 +429,17 @@ struct AlasCLIRequestTests {
 
         #expect(request.command == .visualShow(
             title: "T", html: "\n <p>x</p> \n",
-            question: .init(prompt: "Q", options: [.init(id: "a", label: "One"), .init(id: "b", label: "Two")], allowMultiple: false)
+            question: .init(prompt: "Q", options: [.init(id: "a", label: "One"), .init(id: "b", label: "Two")], allowMultiple: false),
+            presentation: nil
         ))
     }
 
-    @Test func visualShowOutsideTheContractIsMalformed() {
-        let json = #"{"v":1,"kind":"cli","command":"visual_show","session_id":"acp-1","params":{"title":"T","html":"<p>","question":{"prompt":"Q","options":[{"id":"a","label":"One"}]}}}"#
+    @Test(arguments: [
+        #""question":{"prompt":"Q","options":[{"id":"a","label":"One"}]}"#,
+        #""presentation":"banner""#,
+    ])
+    func visualShowOutsideTheContractIsMalformed(extra: String) {
+        let json = #"{"v":1,"kind":"cli","command":"visual_show","session_id":"acp-1","params":{"title":"T","html":"<p>","# + extra + #"}}"#
         #expect(throws: AlasCLIRequestError.malformed) {
             try AlasCLIRequest.decode(from: Data(json.utf8))
         }
