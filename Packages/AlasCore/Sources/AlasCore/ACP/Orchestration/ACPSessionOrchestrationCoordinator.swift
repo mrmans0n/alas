@@ -80,8 +80,10 @@ public final class ACPSessionOrchestrationCoordinator {
         public let referencedSessionLocation: (_ sessionId: String, _ projectId: String) async -> SessionLocation?
         public let manager: (Worktree) -> ACPSessionManager?
         /// Why a child session of `agentID` cannot start in the worktree now,
-        /// as any new session there is refused; nil when it can.
-        public let admitChild: (_ worktree: Worktree, _ agentID: String) async -> String?
+        /// as any new session there is refused; nil when it can. Main-actor
+        /// isolated, so nothing runs between its last check and the child's
+        /// creation.
+        public let admitChild: @MainActor (_ worktree: Worktree, _ agentID: String) async -> String?
         public let newWorktreeDestination: (String, String) -> URL?
         /// Creates the worktree for `(projectId, branch, base)`. The last
         /// argument records the prepared destination on the delegation and
@@ -121,7 +123,7 @@ public final class ACPSessionOrchestrationCoordinator {
             autoRunDefault: @escaping () -> Bool,
             notifyChanged: @escaping () -> Void,
             pause: @escaping (Duration) async -> Void = { try? await Task.sleep(for: $0) },
-            admitChild: @escaping (_ worktree: Worktree, _ agentID: String) async -> String? = { _, _ in nil }
+            admitChild: @escaping @MainActor (_ worktree: Worktree, _ agentID: String) async -> String? = { _, _ in nil }
         ) {
             self.admitChild = admitChild
             self.persistence = persistence

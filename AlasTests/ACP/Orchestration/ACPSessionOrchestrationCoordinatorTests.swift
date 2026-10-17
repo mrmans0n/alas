@@ -586,7 +586,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
     }
 
     private func makeAdmissionFixture(
-        admitChild: @escaping (_ worktree: Worktree, _ agentID: String) async -> String?
+        admitChild: @escaping @MainActor (_ worktree: Worktree, _ agentID: String) async -> String?
     ) throws -> AdmissionFixture {
         let directory = FileManager.default.temporaryDirectory
         let fixture = AdmissionFixture(
