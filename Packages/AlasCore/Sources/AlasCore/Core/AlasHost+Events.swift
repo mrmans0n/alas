@@ -33,7 +33,8 @@ public enum HostEvent: Codable, Equatable, Sendable {
     case pendingRequest(owner: SessionOwnerID, id: String, request: HostPendingRequest)
     /// A followed session's request was answered or withdrawn.
     case pendingRequestResolved(owner: SessionOwnerID, id: String, requestID: HostPendingRequestID)
-    /// A followed session's state besides its transcript changed.
+    /// A followed session's state besides its transcript changed. Sent over
+    /// the host protocol only to clients that accept `sessionState`.
     case sessionState(owner: SessionOwnerID, id: String, state: HostSessionState)
     /// Changes were missed: read a new snapshot and subscribe after its cursor.
     case resync
@@ -490,5 +491,14 @@ final class HostEventSource {
             events.append(removed(key))
         }
         return events
+    }
+}
+
+extension HostEvent {
+    /// The kind a host protocol client must accept to receive this event,
+    /// for the kinds a version 1 client cannot decode; nil for the rest.
+    var optInKind: String? {
+        if case .sessionState = self { return "sessionState" }
+        return nil
     }
 }

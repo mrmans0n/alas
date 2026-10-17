@@ -71,6 +71,17 @@ public enum HostRequest: Codable, Equatable, Sendable {
     /// follows nothing until asked.
     case followSession(sessionID: String, from: TranscriptRevision?)
     case unfollowSession(sessionID: String)
+    /// Keeps the worktree's review status refreshed while the connection's
+    /// subscription follows it (`host.worktrees.follow.v1`).
+    case followWorktree(worktreeID: String)
+    case unfollowWorktree(worktreeID: String)
+    /// The optional features this host serves, for clients without Remote's
+    /// `hello`. A host before them cannot decode it and answers
+    /// `invalidRequest`, which a client takes as no extensions.
+    case capabilities
+    /// Subscribes as `subscribe` does, also sending the event kinds in
+    /// `events` that a version 1 client cannot decode (`host.events.v1`).
+    case subscribeAccepting(after: HostCursor, events: [String])
 }
 
 public enum HostServerMessage: Codable, Equatable, Sendable {
@@ -93,6 +104,7 @@ public enum HostResponse: Codable, Equatable, Sendable {
     case workspaceCheckout(checkout: WorkspaceCheckoutSnapshot)
     case runStart(start: RunStart)
     case session(session: HostSessionSummary)
+    case capabilities(capabilities: [String])
     case failure(error: HostError)
 }
 

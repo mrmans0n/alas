@@ -59,9 +59,17 @@ public final class HostProtocolConnection {
     /// Answers one message. Requests are independent: a client may send the
     /// next before this one is answered, and matches answers by id.
     public func receive(_ message: HostClientMessage) async {
-        if message.version == HostProtocolVersion.current, case .subscribe(let cursor) = message.request {
-            await subscribe(after: cursor, id: message.id)
-            return
+        if message.version == HostProtocolVersion.current {
+            switch message.request {
+            case .subscribe(let cursor):
+                await subscribe(after: cursor, accepting: [], id: message.id)
+                return
+            case .subscribeAccepting(let cursor, let events):
+                await subscribe(after: cursor, accepting: Set(events), id: message.id)
+                return
+            default:
+                break
+            }
         }
         let result: HostResponse
         if message.version != HostProtocolVersion.current {
@@ -91,13 +99,13 @@ public final class HostProtocolConnection {
     /// Replaces the subscription, and forwards its events only once the
     /// client has been told it subscribed, unless another request replaced
     /// or ended it meanwhile.
-    private func subscribe(after cursor: HostCursor, id: Int) async {
+    private func subscribe(after cursor: HostCursor, accepting: Set<String>, id: Int) async {
         close()
         let next = host.subscribe(after: cursor)
         subscription = next
         await enqueue(.response(id: id, result: .subscribed))
         guard subscription === next else { return }
-        follow(next)
+        follow(next, accepting: accepting)
     }
 
     /// Ends the connection's subscription. The transport calls it when the
@@ -111,8 +119,8 @@ public final class HostProtocolConnection {
         switch request {
         case .snapshot:
             return .snapshot(snapshot: try await host.snapshot())
-        case .subscribe:
-            // Handled before a response is built; see `subscribe(after:id:)`.
+        case .subscribe, .subscribeAccepting:
+            // Handled before a response is built; see `subscribe(after:accepting:id:)`.
             return .subscribed
         case .unsubscribe:
             close()
@@ -208,6 +216,12 @@ public final class HostProtocolConnection {
             try subscribed().follow(id, from: revision)
         case .unfollowSession(let id):
             try subscribed().unfollow(id)
+        case .followWorktree(let id):
+            try subscribed().followWorktree(id)
+        case .unfollowWorktree(let id):
+            try subscribed().unfollowWorktree(id)
+        case .capabilities:
+            return .capabilities(capabilities: HostProtocolCapability.served)
         }
         return .done
     }
@@ -221,13 +235,13 @@ public final class HostProtocolConnection {
     }
 
     /// Forwards the subscription's batches until it ends or another replaces it.
-    private func follow(_ next: HostSubscription) {
+    private func follow(_ next: HostSubscription, accepting: Set<String>) {
         Task { @MainActor [weak self] in
             while let events = await next.next() {
                 guard let self else { return }
-                // Session state serves in-process followers; clients of the
-                // released protocol cannot decode it, and none reads it yet.
-                let sent = events.filter { if case .sessionState = $0 { false } else { true } }
+                // Events a version 1 client cannot decode go only to the
+                // clients that accepted their kind.
+                let sent = events.filter { event in event.optInKind.map(accepting.contains) ?? true }
                 guard !sent.isEmpty else { continue }
                 await enqueue(.events(events: sent, cursor: next.cursor), from: next)
             }
