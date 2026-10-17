@@ -10,6 +10,29 @@ extension SessionsAPI {
         }
     }
 
+    /// The agent a new session of `projectID` in `worktreeRoot` starts when
+    /// none is named: the project's own, else the repository's enabled
+    /// default (local projects only), else the global one. Nil when that
+    /// agent cannot run on the project's host.
+    public func defaultAgent(projectID: String, worktreeRoot: URL) -> String? {
+        let project = core.projects.projects.first { $0.id == projectID }
+        let scripts = project?.startupScripts ?? .defaults
+        var repoDefault: String?
+        if project?.host == nil,
+           let candidate = core.repoConfigStore.config(worktreeRoot: worktreeRoot)?.defaultAgent,
+           core.environment.agent(id: candidate)?.isEnabled == true {
+            repoDefault = candidate
+        }
+        let resolved = scripts.defaultAgentID(
+            repoDefaultAgent: repoDefault,
+            globalAgentID: core.environment.configuration().agents.worktreeAutoLaunch.agentId
+        )
+        if project?.host != nil, let resolved, core.environment.agent(id: resolved)?.canRunOnRemoteHost == false {
+            return nil
+        }
+        return resolved
+    }
+
     /// The text of the latest agent message in loaded session `sessionID`,
     /// of `owner` when given (ids are not unique across owners); nil when it
     /// has none or is not loaded.

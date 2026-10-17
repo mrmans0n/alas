@@ -78,6 +78,16 @@ public final class AlasCoreContext {
     @ObservationIgnored public let reviewSessions: ReviewSessionStore
     /// Sent when review comments change outside a review's own view.
     @ObservationIgnored public let reviewCommentChanges = ChangeSignal<Void>()
+    /// Whether a new worktree's destination is taken, on the project's own
+    /// host. Replaceable so tests can stand in for that host.
+    @ObservationIgnored public var worktreeDestinationExistence: @Sendable (URL, String?) async -> ScheduledWorktreeDestination.PathState = {
+        await ScheduledWorktreeDestination.existence(of: $0, onHost: $1)
+    }
+    /// One per project: a free-name creation holds it from picking a free
+    /// name until the worktree exists, so the next pick sees it.
+    @ObservationIgnored var freeNameGates: [String: SerialGate] = [:]
+    /// Each repository's `.alas/config.json`, read once per change.
+    @ObservationIgnored public let repoConfigStore = RepoConfigStore()
     /// Agents' turns and usage limits, as usage views and plugins read them.
     @ObservationIgnored public let usageHistory: UsageHistoryStore?
     /// Each worktree's pull request and checks, by worktree id, kept while

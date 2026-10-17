@@ -1,9 +1,5 @@
 import Foundation
 
-struct WorktreeCreationFailure: Error, Equatable, Sendable {
-    let message: String
-}
-
 enum WorktreeCreationCompletion {
     @MainActor
     static func wait(
