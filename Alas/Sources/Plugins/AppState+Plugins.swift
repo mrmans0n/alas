@@ -6,6 +6,7 @@ extension AppState {
         let manager = PluginManager(
             projects: { [weak self] in self?.projects ?? [] },
             actions: { [weak self] project in self?.pluginHostActions(for: project) ?? .inert })
+        manager.reviewListenersChanged = { [weak self] projectIDs in self?.followPluginReviews(in: projectIDs) }
         pluginManager = manager
         await manager.reload()
         // So the attention inbox can list available updates without Settings having been opened. Not if plugins
@@ -22,6 +23,21 @@ extension AppState {
         } else if let manager = pluginManager {
             pluginManager = nil
             await manager.shutdown()
+        }
+    }
+
+    /// Follows the review status of every worktree of `projectIDs`, and stops
+    /// following the projects no plugin listens in anymore.
+    private func followPluginReviews(in projectIDs: Set<String>) {
+        for (projectID, subscription) in pluginReviewFollows where !projectIDs.contains(projectID) {
+            subscription.cancel()
+            pluginReviewFollows[projectID] = nil
+        }
+        for projectID in projectIDs {
+            let subscription = pluginReviewFollows[projectID] ?? host.subscribe()
+            pluginReviewFollows[projectID] = subscription
+            // Following is idempotent; a worktree created since starts here.
+            for worktree in host.worktrees.list(projectID: projectID) { subscription.followWorktree(worktree.worktree.id) }
         }
     }
 

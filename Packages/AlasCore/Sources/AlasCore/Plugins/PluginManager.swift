@@ -70,6 +70,10 @@ public final class PluginManager {
     @ObservationIgnored private let approvals: PluginApprovalStore
     @ObservationIgnored private let projects: () -> [ProjectConfig]
     @ObservationIgnored private let actions: (ProjectConfig) -> PluginHostActions
+    /// Told, each time events are checked, which projects have an active
+    /// plugin listening for `review.changed`, whose review status is then
+    /// kept refreshed. Told none once plugins stop.
+    @ObservationIgnored public var reviewListenersChanged: ((Set<String>) -> Void)?
     @ObservationIgnored private var snapshotTask: Task<Void, Never>?
     @ObservationIgnored private var tickTask: Task<Void, Never>?
     @ObservationIgnored private var isShutDown = false
@@ -442,6 +446,7 @@ public final class PluginManager {
         catalog.cancel()
         await serialized {
             self.isShutDown = true
+            self.reviewListenersChanged?([])
             self.snapshotTask?.cancel()
             self.tickTask?.cancel()
             await self.stopHosts { _ in true }
@@ -556,6 +561,9 @@ public final class PluginManager {
 
     private func pushChangedSnapshots() async {
         let projectsByID = Dictionary(projects().map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        reviewListenersChanged?(Set(hostsByKey.compactMap { key, host in
+            host.state == .active && host.manifest.events.contains(.reviewChanged) ? key.projectID : nil
+        }))
         for (key, host) in hostsByKey where host.state == .active
             && (host.grants.contains(.workspaceRead) || host.receivesEvents) {
             guard let project = projectsByID[key.projectID] else { continue }
