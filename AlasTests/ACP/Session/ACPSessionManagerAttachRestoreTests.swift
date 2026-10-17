@@ -1346,8 +1346,12 @@ struct ACPSessionManagerAttachRestoreTests {
         defer {
             Task { await provenanceGate.release() }
         }
+        // Set on the main actor once the dispatch resumes past the gate; the
+        // runner then refuses the stopped dispatch before it awaits anything.
+        let dispatchResumed = MainActorFlag()
         oldRunner.queueDispatchProvenancePersistedForTesting = { _ in
             await provenanceGate.enterAndWait()
+            dispatchResumed.isSet = true
         }
         oldRunner.flushQueueIfIdle()
         try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
@@ -1358,7 +1362,7 @@ struct ACPSessionManagerAttachRestoreTests {
 
         await manager.detach(sessionId: session.id)
         await provenanceGate.release()
-        try await Task.sleep(for: .milliseconds(50))
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) { dispatchResumed.isSet }
 
         #expect(session.queue.first?.status == .pending)
         #expect(session.queue.first?.dispatchedBrokerGeneration == nil)
@@ -6647,6 +6651,11 @@ struct ACPSessionManagerAttachRestoreTests {
             ))
         }
     }
+
+@MainActor
+private final class MainActorFlag {
+    var isSet = false
+}
 
 private actor AttachPhaseGate {
         private var entered = false
