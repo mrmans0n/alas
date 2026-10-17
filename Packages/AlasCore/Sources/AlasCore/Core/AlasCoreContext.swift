@@ -78,6 +78,8 @@ public final class AlasCoreContext {
     @ObservationIgnored public let reviewSessions: ReviewSessionStore
     /// Sent when review comments change outside a review's own view.
     @ObservationIgnored public let reviewCommentChanges = ChangeSignal<Void>()
+    /// Agents' turns and usage limits, as usage views and plugins read them.
+    @ObservationIgnored public let usageHistory: UsageHistoryStore?
     /// Each worktree's pull request and checks, by worktree id, kept while
     /// the host runs so every reader sees the one state.
     @ObservationIgnored public internal(set) var reviewLoops: [String: ReviewLoopState] = [:]
@@ -132,7 +134,8 @@ public final class AlasCoreContext {
         harness: HarnessService = HarnessService(),
         orchestrationPersistence: ACPOrchestrationPersistence = ACPOrchestrationPersistence(),
         reviewDrafts: ReviewDraftCommentStore = ReviewDraftCommentStore(),
-        reviewSessions: ReviewSessionStore = ReviewSessionStore()
+        reviewSessions: ReviewSessionStore = ReviewSessionStore(),
+        usageHistory: UsageHistoryStore? = nil
     ) {
         self.projects = projects
         self.runs = runs
@@ -145,6 +148,7 @@ public final class AlasCoreContext {
         self.orchestrationPersistence = orchestrationPersistence
         self.reviewDrafts = reviewDrafts
         self.reviewSessions = reviewSessions
+        self.usageHistory = usageHistory
         self.localTextModelStore = localTextModelStore
         self.localTextOverride = localText
         self.workspaceStore = workspaceStore
