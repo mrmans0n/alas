@@ -1358,7 +1358,11 @@ struct ACPSessionManagerAttachRestoreTests {
 
         await manager.detach(sessionId: session.id)
         await provenanceGate.release()
-        try await Task.sleep(for: .milliseconds(50))
+        // The released dispatch settles the prompt back to pending on its own time.
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            session.queue.first?.dispatchedBrokerGeneration == nil
+                && (try? store.loadQueue(sessionId: session.id).first?.dispatchedBrokerGeneration) == .some(nil)
+        }
 
         #expect(session.queue.first?.status == .pending)
         #expect(session.queue.first?.dispatchedBrokerGeneration == nil)
