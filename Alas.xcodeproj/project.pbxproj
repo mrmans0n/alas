@@ -9,7 +9,6 @@
 /* Begin PBXBuildFile section */
 		0002CD0916DDDAA9ACC89C12 /* CheckpointTestRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87A4D51E84CA952506A66F9B /* CheckpointTestRepository.swift */; };
 		0081FC8497ADEC2FF4EF7D25 /* GGActionEventsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A25C83033616FE27526C945 /* GGActionEventsTests.swift */; };
-		00D95534280A5CED2356D06D /* AlasCLIWorktreeResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 457858DB2CF0B558A1A490BC /* AlasCLIWorktreeResolver.swift */; };
 		00ED86F7E72AFBF6C8DD69C7 /* GitInvocationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03A4B0CD519C39CCB197CBD4 /* GitInvocationTests.swift */; };
 		00EEC62AA3FD6F67FAFA08A4 /* DiffSplitCoreTextRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4B35B097CB56E77053B7802 /* DiffSplitCoreTextRowView.swift */; };
 		01568CB821D2E938C51BBCAB /* ACPHarnessBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A5A3E6B2F9AC2CBB1CDA78E /* ACPHarnessBridgeTests.swift */; };
@@ -2298,7 +2297,6 @@
 		451DF4DBFCB621DAF6B84D29 /* ProjectSettingsTabBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectSettingsTabBar.swift; sourceTree = "<group>"; };
 		45413FEBB779051893272FC7 /* CommitPrimaryAction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitPrimaryAction.swift; sourceTree = "<group>"; };
 		45513A6B9EAA4E9744502597 /* AppConfigShortcutsCodingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfigShortcutsCodingTests.swift; sourceTree = "<group>"; };
-		457858DB2CF0B558A1A490BC /* AlasCLIWorktreeResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasCLIWorktreeResolver.swift; sourceTree = "<group>"; };
 		458CE5FB9F4C19BE30643F39 /* ACPComposerDropRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPComposerDropRouter.swift; sourceTree = "<group>"; };
 		45952C734DFE7E7F02B047E7 /* ACPThumbnailImageCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPThumbnailImageCache.swift; sourceTree = "<group>"; };
 		45C396FB8AB5484B472DB7AE /* RenameFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RenameFeature.swift; sourceTree = "<group>"; };
@@ -6454,7 +6452,6 @@
 				0452819DD42784CF60D466A4 /* AlasApplicationDelegate.swift */,
 				1271747193D1594AEA596278 /* AlasCLICommandRouter.swift */,
 				430FCE70CDAB35CB0594CF44 /* AlasCLIReviewTargetResolver.swift */,
-				457858DB2CF0B558A1A490BC /* AlasCLIWorktreeResolver.swift */,
 				347C8B5B1EC7452174DB245F /* AlasCore+Combine.swift */,
 				F82F6946A682F86F58B7120B /* AlasCoreExports.swift */,
 				942B0DCA09E1297D9380C58C /* AppQuitAction.swift */,
@@ -6975,7 +6972,6 @@
 				5D3E7C2D040B58D0C9D1C0E8 /* AlasButton.swift in Sources */,
 				6AFE04B669CA654D7733F97E /* AlasCLICommandRouter.swift in Sources */,
 				DC8458FA4C5FCC854BB46B96 /* AlasCLIReviewTargetResolver.swift in Sources */,
-				00D95534280A5CED2356D06D /* AlasCLIWorktreeResolver.swift in Sources */,
 				DC70D5517AF107110723EC3D /* AlasCore+Combine.swift in Sources */,
 				D98DD9D4BE2AF6E9ABEB2401 /* AlasCoreExports.swift in Sources */,
 				861DC3733D8F7A5339C3489E /* AlasDropPayload.swift in Sources */,

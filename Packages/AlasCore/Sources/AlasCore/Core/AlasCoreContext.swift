@@ -67,6 +67,11 @@ public final class AlasCoreContext {
     /// Agents' activity as their hooks and sessions report it, and the
     /// notifications that report it to the user.
     @ObservationIgnored public let harness: HarnessService
+    /// Delegated sessions: who created whom, and the messages between them.
+    @ObservationIgnored public let orchestrationPersistence: ACPOrchestrationPersistence
+    /// The one coordinator of delegated sessions. It keeps which deliveries
+    /// are in flight, so a host has exactly one.
+    @ObservationIgnored public private(set) lazy var orchestration = makeOrchestrationCoordinator()
 
     /// Launches claimed and still starting, by run slot.
     @ObservationIgnored var pendingRunLaunches: [RunSlotKey: PendingRunLaunch] = [:]
@@ -98,7 +103,8 @@ public final class AlasCoreContext {
         makeSessionManager: @escaping @MainActor (SessionOwnerID, Worktree) -> ACPSessionManager = AlasCoreContext.defaultSessionManager,
         environment: any AlasHostEnvironment = HeadlessHostEnvironment(),
         runHostGrace: RunHostGrace = RunHostGrace(),
-        harness: HarnessService = HarnessService()
+        harness: HarnessService = HarnessService(),
+        orchestrationPersistence: ACPOrchestrationPersistence = ACPOrchestrationPersistence()
     ) {
         self.projects = projects
         self.runs = runs
@@ -108,6 +114,7 @@ public final class AlasCoreContext {
         self.runHistory = RunHistory(store: runHistoryStore)
         self.attention = AttentionIntake(store: attentionStore ?? AttentionStore())
         self.harness = harness
+        self.orchestrationPersistence = orchestrationPersistence
         self.localTextModelStore = localTextModelStore
         self.localTextOverride = localText
         self.workspaceStore = workspaceStore

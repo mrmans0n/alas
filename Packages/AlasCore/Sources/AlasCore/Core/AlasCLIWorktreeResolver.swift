@@ -1,13 +1,15 @@
 import Foundation
 
-enum AlasCLIWorktreeResolver {
-    enum Result: Equatable {
+/// Which worktree a CLI or delegation selector names: a path, a branch or
+/// name, a directory name, or a unique prefix of one.
+public enum AlasCLIWorktreeResolver {
+    public enum Result: Equatable, Sendable {
         case matched(Worktree)
         case missing(String)
         case ambiguous([String])
     }
 
-    static func rows(worktrees: [Worktree], currentWorktreeId: String) -> [String] {
+    public static func rows(worktrees: [Worktree], currentWorktreeId: String) -> [String] {
         let labels = worktrees.map(\.branch)
         let width = max(labels.map(\.count).max() ?? 0, 1) + 4
         return worktrees.map { worktree in
@@ -17,7 +19,7 @@ enum AlasCLIWorktreeResolver {
         }
     }
 
-    static func resolve(target: String, worktrees: [Worktree]) -> Result {
+    public static func resolve(target: String, worktrees: [Worktree]) -> Result {
         let trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return .missing(trimmed) }
 
