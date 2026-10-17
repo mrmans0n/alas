@@ -30,6 +30,30 @@ struct NextPromptPolicyTests {
         #expect(data.flatMap(NextPromptPolicy.parse) == emoji)
     }
 
+    @Test(arguments: [
+        ("Walk me through a typical morning with Fastmail's inbox — what arrives, and how I’d prioritize each type of email.", false),
+        ("What arrives in a typical morning, and what do I want to do with each kind of email?", false),
+        ("Mostly newsletters and receipts; archive those and keep only email from people.", true)
+    ])
+    func replyToAClosingQuestionCannotRestateIt(candidate: String, permitted: Bool) {
+        let turns = [NextPromptTurn(
+            user: "Help me design a Fastmail triage workflow.",
+            assistant: "I'll sketch the rules once I know your habits.\n\nMeanwhile: walk me through a typical morning with your inbox. What arrives, and what do you actually want to do with each kind of email?"
+        )]
+        #expect(NextPromptPolicy.permitsOutput(candidate, turns: turns) == permitted)
+    }
+
+    @Test(arguments: [
+        ("Want me to open a PR with these changes, or keep iterating on the parser first?",
+         "Open a PR with these changes and keep iterating on the parser later."),
+        ("Should I keep the old config file for the migration?",
+         "Yes, keep the old config file for now.")
+    ])
+    func answersThatReuseTheQuestionWordsStayAvailable(assistant: String, candidate: String) {
+        let turns = [NextPromptTurn(user: "Fix the parser.", assistant: assistant)]
+        #expect(NextPromptPolicy.permitsOutput(candidate, turns: turns))
+    }
+
     @Test func recognizedCredentialsAreRejectedButPlaceholdersPass() {
         let turns = [NextPromptTurn(user: "Diagnose auth", assistant: "I can help.")]
         let rejected = [
