@@ -99,7 +99,8 @@ struct AlasCLICommandRouter {
     func handle(_ request: AlasCLIRequest) async -> AlasCLIResponse {
         let service = self.service
         let callers = host.callers
-        let caller: HostCaller = request.sessionId.map { .session(id: $0) } ?? .cli
+        // Attributed to the session only once the host knows it.
+        let caller: HostCaller = request.sessionId.flatMap { id in callers.owner(ofSession: id).map { _ in .session(id: id) } } ?? .cli
         switch request.command {
         case .preview(let command):
             let owner: SessionOwnerID
