@@ -279,6 +279,15 @@ public struct WorktreesAPI {
         try await core.archiveWorktree(worktree, verifiesCheckout: verifiesCheckout)
     }
 
+    /// Reads project `projectID`'s worktrees from disk again, saving the
+    /// project list if they changed.
+    public func refresh(projectID: String, caller: HostCaller) async throws {
+        caller.log("worktrees.refresh", projectID)
+        if try await core.environment.refreshProjectWorktrees(projectID, in: core) {
+            try core.saveProjects()
+        }
+    }
+
     public func unarchive(path: URL, projectID: String, caller: HostCaller) throws {
         caller.log("worktrees.unarchive", path.path)
         try core.unarchiveWorktree(path: path, projectID: projectID)

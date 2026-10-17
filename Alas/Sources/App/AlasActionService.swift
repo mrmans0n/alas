@@ -1,8 +1,8 @@
 import Foundation
 
-/// Entrypoint-neutral facade over the app capabilities the CLI (and, later, an
-/// MCP bridge) drive. It speaks domain terms — worktrees, paths, targets — not
-/// wire types, so multiple front ends can reuse it.
+/// The presentation the CLI (and, later, an MCP bridge) drives: opening
+/// files and reviews and switching worktrees. Domain commands go to
+/// `AlasHost`; this only shows their results.
 @MainActor
 struct AlasActionService {
     var visibleWorktrees: () -> [Worktree]
@@ -11,12 +11,6 @@ struct AlasActionService {
     var openRelativeFileAtLines: (String, String, ClosedRange<Int>) -> Void = { _, _, _ in }
     var openExternalFileAtLines: (URL, String, ClosedRange<Int>) -> Void = { _, _, _ in }
     var focusWorktree: (Worktree) -> Void = { _ in }
-    var createWorktree: (Worktree, String, String?, HostCaller) async -> AlasCLIResponse = { _, _, _, _ in
-        .error("Creating worktrees from the terminal is not available yet.")
-    }
-    var deleteWorktreeAction: (Worktree, Bool, Bool, HostCaller) async -> AlasCLIResponse = { _, _, _, _ in
-        .error("Deleting worktrees from the terminal is not available yet.")
-    }
     var openReviewChanges: (Worktree) -> Void = { _ in }
     var openReview: (Worktree, String) async -> AlasCLIResponse = { _, _ in
         .error("Opening provider reviews from the terminal is not available yet.")
@@ -72,31 +66,12 @@ struct AlasActionService {
         return errors.isEmpty ? .ok : .error(errors.joined(separator: " "))
     }
 
-    func list(origin: Worktree, projectWorktrees: [Worktree]) -> AlasCLIResponse {
-        .text(AlasCLIWorktreeResolver.rows(worktrees: projectWorktrees, currentWorktreeId: origin.id))
-    }
-
     func `switch`(target: String, projectWorktrees: [Worktree]) -> AlasCLIResponse {
         switch AlasCLIWorktreeResolver.resolve(target: target, worktrees: projectWorktrees) {
         case .matched(let worktree):
             focusWorktree(worktree)
             activateApp()
             return .ok
-        case .missing(let target):
-            return .error("unknown worktree \"\(target)\"")
-        case .ambiguous(let labels):
-            return .error("ambiguous worktree \"\(target)\"; matches: \(labels.joined(separator: ", "))")
-        }
-    }
-
-    func new(origin: Worktree, branch: String, base: String?, caller: HostCaller) async -> AlasCLIResponse {
-        await createWorktree(origin, branch, base, caller)
-    }
-
-    func delete(target: String, projectWorktrees: [Worktree], force: Bool, keepBranch: Bool, caller: HostCaller) async -> AlasCLIResponse {
-        switch AlasCLIWorktreeResolver.resolve(target: target, worktrees: projectWorktrees) {
-        case .matched(let worktree):
-            return await deleteWorktreeAction(worktree, force, keepBranch, caller)
         case .missing(let target):
             return .error("unknown worktree \"\(target)\"")
         case .ambiguous(let labels):

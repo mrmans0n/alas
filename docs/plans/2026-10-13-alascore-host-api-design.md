@@ -273,6 +273,9 @@ Each phase is one or more independent PRs. It is done when its exit criterion ho
      - **Views keep their review stores.** The stores are stateless and read the same files, so `AppState`'s own reads use the core's instances and its `reviewCommentChanges` signal, while views that build a store keep doing so and keep listening for the notification the core still posts.
      - **The coordinator is split across three PRs:** the core builds it, then recovers delegations and delivers their messages, then keeps parent links (`HostSessionSummary.parentID`). Its app-only inputs (instance id, agent availability, delegated worktree creation, parent-link changes) are `AlasHostEnvironment` hooks.
      - **Review status** is refreshed only for followed worktrees. A plugin listening for `review.changed` follows the worktrees it asks about, and pays their polling.
+     - **Git status is a host read, not a snapshot field.** The plugin snapshot reads `worktrees.gitStatus(of:)` beside `worktrees.list(projectID:)`, because the plugin host runs in process; `WorktreeSnapshot` gains the field when a wire client needs it.
+     - **`reviews.open` resolves and saves; the presenter shows.** It turns a PR/MR number or URL, a range, a branch or a revision into a `ReviewSessionTarget`, saves its session (reusing the active one) and returns the record. The app opens the record's tab and focuses the worktree.
+     - **`workspace focus` refreshes through `worktrees.refresh(projectID:)`**, the environment's project refresh that creation and deletion already use, then saves the project list when it changed.
 8. **`alas-host`.** The executable target serving the host protocol, the data-directory lock and the hostless end-to-end test. *Exit:* CI boots `alas-host` and drives a worktree, a session and a run over the wire.
 
 Phases 1–3 change no external behavior and can start right away. Phase 5 is the first one users notice: lists update live instead of every 15 seconds.

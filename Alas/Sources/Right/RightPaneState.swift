@@ -2283,7 +2283,7 @@ final class RightPaneState: GGSplitCommitServicing {
                 return
             }
             Task { @MainActor in
-                let response = await appState.cliOpenProviderReview(
+                let response = await appState.cliOpenReview(
                     worktree: worktree,
                     target: url.absoluteString
                 )

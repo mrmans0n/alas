@@ -33,45 +33,6 @@ struct ReviewSessionLoadedContext {
     }
 }
 
-enum ReviewSessionLauncher {
-    @MainActor
-    @discardableResult
-    static func openOrFocus(
-        target: ReviewSessionTarget,
-        now: () -> Date = Date.init,
-        findActive: (ReviewSessionID) throws -> ReviewSessionRecord?,
-        save: (ReviewSessionRecord) throws -> Void,
-        open: (ReviewSessionRecord) -> Void,
-        onFailure: ((any Error) -> Void)? = nil
-    ) -> Bool {
-        do {
-            if var record = try findActive(target.id) {
-                if record.target != target {
-                    record.target = target
-                    record.updatedAt = now()
-                    try save(record)
-                }
-                open(record)
-                return true
-            }
-
-            let createdAt = now()
-            let record = ReviewSessionRecord(
-                id: target.id,
-                target: target,
-                createdAt: createdAt,
-                updatedAt: createdAt
-            )
-            try save(record)
-            open(record)
-            return true
-        } catch {
-            onFailure?(error)
-            return false
-        }
-    }
-}
-
 /// `@unchecked Sendable` is sound because these closures are nonisolated by
 /// type but built (in `.production`) from a `@MainActor` context; any
 /// actor-isolated state they capture (e.g. `AppState`) is only ever touched
