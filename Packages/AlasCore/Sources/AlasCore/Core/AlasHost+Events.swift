@@ -205,6 +205,10 @@ public final class HostSubscription {
 
     func receive(_ events: [HostEvent], through position: HostCursor) {
         guard !isCancelled, !events.isEmpty else { return }
+        // A removed worktree has no review status to keep refreshing.
+        for case .worktreeRemoved(_, let worktreeID) in events {
+            unfollowWorktree(worktreeID)
+        }
         pendingThrough = position
         if pending[.resync] == nil {
             for event in events {

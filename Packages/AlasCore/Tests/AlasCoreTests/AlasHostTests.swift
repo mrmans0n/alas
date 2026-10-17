@@ -96,6 +96,54 @@ struct AlasHostTests {
         #expect(projects.operationState(for: worktree) == nil)
     }
 
+    enum FollowEnd: CaseIterable {
+        /// The last subscription following the worktree goes away.
+        case lastFollowerCancels
+        /// The worktree is removed while still followed.
+        case worktreeRemoved
+    }
+
+    /// A followed worktree's review status is read again at every interval
+    /// while any subscription follows it, and the reads stop once the last
+    /// follower lets go or the worktree is removed.
+    @Test(arguments: FollowEnd.allCases)
+    func followedReviewStatusRefreshesUntilItsFollowEnds(_ end: FollowEnd) async throws {
+        let project = ProjectConfig(id: "p", name: "p", path: "/srv/repo", color: "blue", addedAt: .distantPast)
+        let projects = ProjectsManager(persistedProjects: [project])
+        let path = URL(fileURLWithPath: "/srv/feature")
+        let worktree = Worktree(
+            id: Worktree.makeId(path: path), projectId: "p", name: "feature", branch: "feature",
+            path: path, status: .clean, lastActivity: .distantPast
+        )
+        projects.insertOptimisticWorktree(worktree)
+        let core = AlasCoreContext(projects: projects, runHistoryStore: nil)
+        let probe = RefreshProbe()
+        core.reviewStatusRefresh = { probe.refreshed.append($0) }
+        core.reviewStatusPause = { _ in
+            await withCheckedContinuation { probe.ticks.append($0) }
+            probe.cancelledAtTick.append(Task.isCancelled)
+        }
+        let host = AlasHost(core: core)
+        let first = host.subscribe()
+        let second = host.subscribe()
+        first.followWorktree(worktree.id)
+        second.followWorktree(worktree.id)
+        first.unfollowWorktree(worktree.id)
+
+        try await eventually { @MainActor in probe.refreshed == [worktree.id] && probe.ticks.count == 1 }
+        probe.ticks.removeFirst().resume()
+        try await eventually { @MainActor in probe.refreshed.count == 2 && probe.ticks.count == 1 }
+
+        switch end {
+        case .lastFollowerCancels: second.cancel()
+        case .worktreeRemoved: projects.dropRemovedWorktree(id: worktree.id, projectId: "p")
+        }
+        try await eventually { @MainActor in core.reviewRefreshes[worktree.id] == nil }
+        probe.ticks.removeFirst().resume()
+        try await eventually { @MainActor in probe.cancelledAtTick == [false, true] }
+        #expect(probe.refreshed.count == 2)
+    }
+
     /// Changes made after a snapshot reach a subscriber holding its cursor,
     /// each with its latest state; what the snapshot already shows does not.
     @Test func subscribersSeeChangesAfterTheirSnapshot() async throws {
@@ -288,4 +336,13 @@ private final class CheckingEnvironment: AlasHostEnvironment {
 
     func workspaceDeletionRefusal(for worktree: Worktree) -> String? { workspaceRefusal }
     func hasUnsavedEditorChanges(in worktree: Worktree) -> Bool { unsavedEdits }
+}
+
+/// Records each review status read, and holds each wait between reads
+/// until the test resumes it.
+@MainActor
+private final class RefreshProbe {
+    var refreshed: [String] = []
+    var ticks: [CheckedContinuation<Void, Never>] = []
+    var cancelledAtTick: [Bool] = []
 }

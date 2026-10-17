@@ -85,6 +85,10 @@ public final class AlasCoreContext {
     /// refreshing the status of those with any.
     @ObservationIgnored var reviewFollowers: [String: Int] = [:]
     @ObservationIgnored var reviewRefreshes: [String: Task<Void, Never>] = [:]
+    /// Reads a followed worktree's review status; `refreshReviewStatus` unless a test replaces it.
+    @_spi(Testing) @ObservationIgnored public var reviewStatusRefresh: (@MainActor (String) async -> Void)?
+    /// Waits between two reads of a followed worktree's review status.
+    @_spi(Testing) @ObservationIgnored public var reviewStatusPause: @MainActor (Duration) async -> Void = { try? await Task.sleep(for: $0) }
     /// Test hook that replaces reading a worktree's Git status for reviews.
     @_spi(Testing) @ObservationIgnored public var reviewGitStatus: (@MainActor (URL) async throws -> [ChangedFile])?
     /// Each delegated session's parent, by child id. Observed: the app draws

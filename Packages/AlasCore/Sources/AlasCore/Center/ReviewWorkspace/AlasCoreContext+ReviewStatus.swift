@@ -11,10 +11,22 @@ extension AlasCoreContext {
         guard reviewFollowers[worktreeID] == 1 else { return }
         reviewRefreshes[worktreeID] = Task { @MainActor [weak self] in
             while !Task.isCancelled {
-                await self?.refreshReviewStatus(worktreeID)
-                try? await Task.sleep(for: Self.reviewStatusRefreshInterval)
+                // The context is not held while the loop waits.
+                guard let pause = await self?.refreshFollowedReviewStatus(worktreeID) else { return }
+                await pause(Self.reviewStatusRefreshInterval)
             }
         }
+    }
+
+    /// Reads worktree `worktreeID`'s review status once, and returns how to
+    /// wait for the next read.
+    private func refreshFollowedReviewStatus(_ worktreeID: String) async -> @MainActor (Duration) async -> Void {
+        if let reviewStatusRefresh {
+            await reviewStatusRefresh(worktreeID)
+        } else {
+            await refreshReviewStatus(worktreeID)
+        }
+        return reviewStatusPause
     }
 
     /// Drops a follower; the last one stops the refresh.
