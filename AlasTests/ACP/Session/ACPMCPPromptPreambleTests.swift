@@ -98,7 +98,7 @@ struct ACPMCPPromptPreambleTests {
         let text = try #require(ACPMCPPromptPreamble.text(
             builtInTools: .visualOnly, isDelegated: false, userServerNames: [], nativeSubagentsDisabled: true))
         #expect(text.contains("visual_show"))
-        for tool in ACPMCPPromptPreamble.builtInToolNames where tool.contains("_") {
+        for tool in ACPMCPPromptPreamble.builtInToolNames where tool.contains("_") && tool != "visual_show" {
             #expect(!text.contains(tool), "unexpected tool \(tool)")
         }
         #expect(!text.contains("`alas` CLI"))
