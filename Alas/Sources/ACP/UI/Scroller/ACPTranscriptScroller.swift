@@ -952,10 +952,12 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         ) -> [ACPTranscriptRenderRow] {
             let transcript = host.transcript
             let messages = transcript.messages
-            // One link pass per build, shared by the row filter and the fold.
+            // One link pass per build, shared by the row filter and the fold. It runs past the
+            // window's tail: a finished call at the tail whose visual lies just beyond it must not
+            // show a chip that vanishes as the tail steps forward.
             let head = min(transcript.visibleHead, messages.count)
             let tail = max(head, min(transcript.visibleTailBound, messages.count))
-            let hiddenToolCallIds = ACPToolCallPresentation.hiddenVisualShowToolCallIds(in: messages[head..<tail])
+            let hiddenToolCallIds = ACPToolCallPresentation.hiddenVisualShowToolCallIds(in: messages[head...])
             let rows = ACPTranscriptVisibleRow.rows(
                 messages: messages,
                 visibleHead: head,
