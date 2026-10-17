@@ -1152,7 +1152,7 @@ final class AppState {
         ACPLaunchCatalog.spec(for: agent.id) != nil
     }
 
-    private func loadAgentAvailabilityForDelegation(_ worktree: Worktree) async -> AgentAvailabilityState {
+    func loadAgentAvailabilityForDelegation(_ worktree: Worktree) async -> AgentAvailabilityState {
         await loadAgentAvailability(for: worktree, retryFailed: true)
         return agentAvailability(for: worktree)
     }
@@ -7273,142 +7273,7 @@ final class AppState {
     /// turn-completion hooks, and startup reconciliation all talk to one
     /// instance so outcome delivery has a single producer per instance.
     @ObservationIgnored
-    private(set) lazy var acpOrchestration: ACPSessionOrchestrationCoordinator = makeOrchestrationCoordinator()
-
-    private func makeOrchestrationCoordinator() -> ACPSessionOrchestrationCoordinator {
-        ACPSessionOrchestrationCoordinator(
-            environment: .init(
-                persistence: acpOrchestrationPersistence,
-                instanceId: instanceId,
-                now: { Int64(Date().timeIntervalSince1970) },
-                nowMillis: { Int64(Date().timeIntervalSince1970 * 1000) },
-                blockedRequestKeys: { [weak self] sessionId in
-                    guard let self,
-                          let (_, manager) = self.acpManagers.first(where: { _, manager in
-                              manager.liveSession(for: sessionId) != nil
-                          })
-                    else { return [] }
-                    return manager.blockedRequestKeys(for: sessionId)
-                },
-                escalationDelaySeconds: { [weak self] in
-                    self?.config.harness.acpDelegatedBlockerEscalationSeconds ?? 30
-                },
-                scheduleEscalationCheck: { delay, work in
-                    Task { @MainActor in
-                        try? await Task.sleep(for: .seconds(delay))
-                        await work()
-                    }
-                },
-                makeID: { UUID().uuidString },
-                worktree: { [weak self] id in self?.worktree(withId: id) },
-                existingWorktree: { [weak self] projectId, worktreeId in
-                    guard let self else { return nil }
-                    let worktrees = self.projectsManager.visibleWorktrees(projectId: projectId)
-                    if let exactID = worktrees.first(where: { $0.id == worktreeId }) {
-                        return exactID
-                    }
-                    if case .matched(let worktree) = AlasCLIWorktreeResolver.resolve(
-                        target: worktreeId,
-                        worktrees: worktrees
-                    ) {
-                        return worktree
-                    }
-                    return nil
-                },
-                configuredAgents: { [weak self] in
-                    guard let self else { return [] }
-                    let acpIDs = Set(ACPLaunchCatalog.specs.map(\.agentID))
-                    return AgentConfiguredCatalog.enabled(
-                        builtinState: self.config.agents.builtinState,
-                        customs: self.config.agents.userAgents
-                    ).map {
-                        ACPOrchestrationAgent(id: $0.id, isEnabled: true, isACPCapable: acpIDs.contains($0.id))
-                    }
-                },
-                availableAgents: { [weak self] _, worktree in
-                    guard let self else { return [] }
-                    let acpIDs = Set(ACPLaunchCatalog.specs.map(\.agentID))
-                    let agents = await self.loadAgentAvailabilityForDelegation(worktree).agents
-                    return agents.map {
-                        ACPOrchestrationAgent(id: $0.id, isEnabled: true, isACPCapable: acpIDs.contains($0.id))
-                    }
-                },
-                delegationAgents: { [weak self] _, worktree in
-                    guard let self else { return [] }
-                    let configured = AgentConfiguredCatalog.all(
-                        builtinState: self.config.agents.builtinState,
-                        customs: self.config.agents.userAgents
-                    )
-                    var availability = await self.loadAgentAvailabilityForDelegation(worktree)
-                    if case .local = self.agentExecutionTarget(for: worktree) {
-                        // The registry only refreshes on a rescan, so confirm
-                        // the binaries are still there. Keeping the registry
-                        // as a precondition means discovery never offers an
-                        // agent that `session_new` would still reject.
-                        let installed = await AgentDetector.scanCurrentEnvironment(agents: configured)
-                        availability = .available(availability.agents.filter { installed.contains($0.id) })
-                    }
-                    let catalog = self.acpModelCatalog
-                    return ACPSessionOrchestrationPolicy.delegationAgents(
-                        configured: configured,
-                        acpAgentIDs: Set(ACPLaunchCatalog.specs.map(\.agentID)),
-                        availability: availability,
-                        catalog: { (catalog.models(for: $0), catalog.launchReport(for: $0)) }
-                    )
-                },
-                launchModels: { [weak self] agentID, worktree in
-                    guard let self else { return nil }
-                    let host: String? = switch self.agentExecutionTarget(for: worktree) {
-                    case .local: nil
-                    case .ssh(let host): host
-                    }
-                    return self.acpModelCatalog.launchModels(for: agentID, host: host)
-                },
-                sessionLocation: { [weak self] sessionId in
-                    self?.core.acpSessionLocation(sessionId)
-                },
-                referencedSessionLocation: { [weak self] sessionId, projectId in
-                    await self?.acpReferencedSessionLocation(sessionId, projectId: projectId, loadingFullTranscript: true)
-                },
-                manager: { [weak self] worktree in self?.acpManager(for: worktree) },
-                newWorktreeDestination: { [weak self] projectId, branch in
-                    guard let self,
-                          let project = self.projects.first(where: { $0.id == projectId })
-                    else { return nil }
-                    return WorktreeLifecycle.delegatedWorktreeDestination(
-                        rendered: WorktreePathTemplateRenderer.render(
-                            template: self.config.worktrees.pathTemplate,
-                            worktreeRoot: self.config.worktrees.rootPath,
-                            repoName: project.name,
-                            branch: branch
-                        ),
-                        projectPath: project.path
-                    )
-                },
-                createWorktree: { [weak self] projectId, branch, base, recordDestination in
-                    guard let self else {
-                        return .failure(.init(message: "Alas is not available."))
-                    }
-                    return await self.createDelegatedWorktree(
-                        projectId: projectId,
-                        branch: branch,
-                        base: base,
-                        recordDestination: recordDestination
-                    )
-                },
-                rememberParent: { [weak self] childID, parentID in
-                    self?.rememberDelegatedSessionParent(childID: childID, parentID: parentID)
-                },
-                autoRunDefault: { [weak self] in
-                    self?.config.harness.acpAutoRunByDefault ?? false
-                },
-                notifyChanged: { },
-                admitsNewSessions: { [weak self] worktree in
-                    self?.projectsManager.admitsNewWork(in: worktree) ?? false
-                }
-            )
-        )
-    }
+    var acpOrchestration: ACPSessionOrchestrationCoordinator { core.orchestration }
 
     func makeCLICommandRouter() -> AlasCLICommandRouter {
         let orchestration = acpOrchestration
@@ -12304,7 +12169,7 @@ final class AppState {
     private var acpManagerProjectIds: [SessionOwnerID: String] = [:]
 
     @ObservationIgnored
-    private let acpOrchestrationPersistence = ACPOrchestrationPersistence()
+    private var acpOrchestrationPersistence: ACPOrchestrationPersistence { core.orchestrationPersistence }
 
     /// Observed, not `@ObservationIgnored`: the agent sidebar reads this to
     /// draw delegated children under their parent, so a newly recorded link
@@ -12714,33 +12579,7 @@ final class AppState {
     func acpReferencedSessionLocation(
         _ sessionId: String, projectId: String, loadingFullTranscript: Bool
     ) async -> ACPSessionOrchestrationCoordinator.SessionLocation? {
-        for (worktree, manager) in await core.acpProjectManagers(projectId: projectId, loadingRecentRows: false) {
-            // Check both the store, which another instance may have archived
-            // since this one cached the row, and the cached row. Queued local
-            // writes land first, so a just-created session is in the store
-            // and a local archive is in both.
-            await manager.flushPersistence()
-            guard let stored = try? await manager.persistence.loadSession(id: sessionId), !stored.archived,
-                  let cached = await manager.persistedSessionRow(id: sessionId), !cached.archived,
-                  manager.placeholderSession(id: sessionId) != nil
-            else { continue }
-            manager.retainSession(id: sessionId)
-            let release: () -> Void = { [weak manager] in manager?.releaseSession(id: sessionId) }
-            await manager.hydrateIfNeeded(id: sessionId)
-            if loadingFullTranscript { await manager.awaitBackfill(id: sessionId) }
-            guard manager.liveSession(for: sessionId) != nil else {
-                release()
-                return nil
-            }
-            return .init(
-                origin: ACPOrchestrationSessionOrigin(
-                    sessionId: sessionId, projectId: worktree.projectId, worktreeId: worktree.id
-                ),
-                manager: manager,
-                release: release
-            )
-        }
-        return nil
+        await core.acpReferencedSessionLocation(sessionId, projectID: projectId, loadingFullTranscript: loadingFullTranscript)
     }
 
     /// What a prompt in `projectId` carries in place of an attached session.
@@ -15266,6 +15105,24 @@ class AppHostEnvironment: AlasHostEnvironment {
     func workspaceCheckout(id: UUID) -> WorkspaceCheckout? { app?.workspacesManager.checkout(id: id) }
 
     var workspaceRemoteTransport: WorkspaceRemoteTransport { app?.workspaceRemoteTransport ?? WorkspaceRemoteTransport() }
+
+    var instanceID: String { app?.instanceId ?? "" }
+
+    func agentAvailability(in worktree: Worktree, core: AlasCoreContext) async -> AgentAvailabilityState {
+        await app?.loadAgentAvailabilityForDelegation(worktree) ?? .available([])
+    }
+
+    func createDelegatedWorktree(
+        projectID: String, branch: String, base: String?,
+        recordDestination: @MainActor (URL) async throws -> Void, in core: AlasCoreContext
+    ) async -> Result<Worktree, ACPSessionOrchestrationCoordinator.WorktreeCreationError> {
+        guard let app else { return .failure(.init(message: "Alas is not available.")) }
+        return await app.createDelegatedWorktree(projectId: projectID, branch: branch, base: base, recordDestination: recordDestination)
+    }
+
+    func delegatedSessionParentChanged(childID: String, parentID: String) {
+        app?.rememberDelegatedSessionParent(childID: childID, parentID: parentID)
+    }
     var repoHookLoader = RepoHookLoader()
     var repoHookPrompter: RepoHookPrompter = .skipping
     var worktreeCleanupLauncher: AppState.WorktreeCleanupLauncher = { try WorktreeTrashCleaner.launch($0) }

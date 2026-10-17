@@ -65,6 +65,21 @@ public protocol AlasHostEnvironment: AnyObject {
     func workspaceCheckout(id: UUID) -> WorkspaceCheckout?
     /// How commands reach a remote checkout's host.
     var workspaceRemoteTransport: WorkspaceRemoteTransport { get }
+    /// Which instance of the host this is: session leases and delegations
+    /// are claimed in its name.
+    var instanceID: String { get }
+    /// The agents that can run in `worktree`, on its project's host, as of a
+    /// fresh check.
+    func agentAvailability(in worktree: Worktree, core: AlasCoreContext) async -> AgentAvailabilityState
+    /// Creates a worktree for a delegated session without changing what the
+    /// user is looking at, recording its prepared destination through
+    /// `recordDestination` before anything is created.
+    func createDelegatedWorktree(
+        projectID: String, branch: String, base: String?,
+        recordDestination: @MainActor (URL) async throws -> Void, in core: AlasCoreContext
+    ) async -> Result<Worktree, ACPSessionOrchestrationCoordinator.WorktreeCreationError>
+    /// A delegated session `childID` now has parent `parentID`.
+    func delegatedSessionParentChanged(childID: String, parentID: String)
 }
 
 extension AlasHostEnvironment {
@@ -113,6 +128,21 @@ extension AlasHostEnvironment {
 
     public var workspaceRemoteTransport: WorkspaceRemoteTransport { WorkspaceRemoteTransport() }
 
+    public var instanceID: String { HostInstance.id }
+
+    public func agentAvailability(in worktree: Worktree, core: AlasCoreContext) async -> AgentAvailabilityState {
+        .available(enabledAgents())
+    }
+
+    public func createDelegatedWorktree(
+        projectID: String, branch: String, base: String?,
+        recordDestination: @MainActor (URL) async throws -> Void, in core: AlasCoreContext
+    ) async -> Result<Worktree, ACPSessionOrchestrationCoordinator.WorktreeCreationError> {
+        .failure(.init(message: "This host does not create worktrees for delegated sessions."))
+    }
+
+    public func delegatedSessionParentChanged(childID: String, parentID: String) {}
+
     /// Ends the checkout's agent sessions, as a removal ends a worktree's.
     public func stopWorkspaceCheckoutSessions(_ checkout: WorkspaceCheckout, in core: AlasCoreContext) async throws {
         await core.disposeSessionManager(owner: .workspaceCheckout(checkout.id, checkout.executionLocation))
@@ -158,4 +188,9 @@ public final class HeadlessHostEnvironment: AlasHostEnvironment {
     public let fileIndex = FileIndex()
 
     public init() {}
+}
+
+/// This process, as a host instance; one that keeps its own id says so.
+enum HostInstance {
+    static let id = UUID().uuidString
 }
