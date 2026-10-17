@@ -276,7 +276,7 @@ final class AppState {
     /// tab functional when Application Support cannot be opened.
     var runHistoryStore: RunHistoryStore? { core.runHistory.store }
     /// Token, cost and usage-limit history of every agent turn; nil when Application Support cannot be opened.
-    @ObservationIgnored let usageHistory: UsageHistoryStore?
+    var usageHistory: UsageHistoryStore? { core.usageHistory }
     /// Records each session's turns in completion order.
     @ObservationIgnored let usageRecording = KeyedSerialQueue()
     /// Worktrees whose branch is being named from their first chat prompt.
@@ -1588,7 +1588,6 @@ final class AppState {
         self.worktreeStatusScan = worktreeStatusScan
         self.projectGitWatcherFactory = projectGitWatcherFactory
         self.ggStackCache = ggStackCache
-        self.usageHistory = usageHistory
         self.acpModelCatalog = acpModelCatalog ?? ACPAgentModelCatalog(store: store)
         let workspaceBridge = workspaceSpacePersistenceBridge ?? WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore)
         self.workspacesManager = workspacesManager ?? WorkspacesManager(bridge: workspaceBridge)
@@ -1614,7 +1613,8 @@ final class AppState {
             runCompletionWaiter: runScriptCompletionWaiter,
             environment: hostEnvironment,
             runHostGrace: RunHostGrace(local: runScriptLocalMonitorGrace, any: runScriptMonitorGrace),
-            reviewDrafts: reviewDrafts
+            reviewDrafts: reviewDrafts,
+            usageHistory: usageHistory
         )
         self.hostEnvironment = hostEnvironment
         self.host = AlasHost(core: core)

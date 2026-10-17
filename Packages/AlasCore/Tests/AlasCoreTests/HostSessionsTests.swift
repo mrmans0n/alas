@@ -271,6 +271,26 @@ struct HostSessionsTests {
         if change == .removed { #expect(fixture.core.sessionManagers.isEmpty) }
     }
 
+    /// A session id can repeat across owners: a read scoped to one owner
+    /// gets that owner's session only.
+    @Test func ownerScopedReadsReachOnlyThatOwnersSession() throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let path = fixture.root.appendingPathComponent("other")
+        let other = Worktree(
+            id: Worktree.makeId(path: path), projectId: "p", name: "other", branch: "other",
+            path: path, status: .clean, lastActivity: .distantPast
+        )
+        fixture.core.projects.insertOptimisticWorktree(other)
+        for (worktree, reply) in [(fixture.worktree, "mine"), (other, "theirs")] {
+            let session = try fixture.core.sessionManager(for: worktree).createSession(id: "same", agentId: "gemini", autoRunDefault: false)
+            session.transcript.messages = [.agent(id: UUID(), messageId: nil, StreamingText(reply))]
+        }
+
+        #expect(fixture.host.sessions.lastAgentReply("same", owner: .worktree(fixture.worktree.id)) == "mine")
+        #expect(fixture.host.sessions.lastAgentReply("same", owner: .worktree(other.id)) == "theirs")
+    }
+
     /// A delegated session's summary names the session that delegated it.
     @Test func aDelegatedSessionsSummaryNamesItsParent() throws {
         let fixture = try Fixture()
