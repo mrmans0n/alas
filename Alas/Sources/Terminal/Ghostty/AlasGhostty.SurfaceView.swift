@@ -420,9 +420,22 @@ extension AlasGhostty {
         // action straight to Ghostty's named binding action so behavior matches
         // pressing the shortcut directly inside the surface.
 
-        @objc func increaseFontSize(_ sender: Any?) { runBindingAction("increase_font_size:1") }
-        @objc func decreaseFontSize(_ sender: Any?) { runBindingAction("decrease_font_size:1") }
-        @objc func resetFontSize(_ sender: Any?)    { runBindingAction("reset_font_size") }
+        @objc func increaseFontSize(_ sender: Any?) { zoomFont("increase_font_size:1") }
+        @objc func decreaseFontSize(_ sender: Any?) { zoomFont("decrease_font_size:1") }
+        @objc func resetFontSize(_ sender: Any?)    { zoomFont("reset_font_size") }
+
+        /// Fires after the user zooms the font from the menu or its shortcuts.
+        var onUserFontZoom: (() -> Void)?
+
+        private func zoomFont(_ action: String) {
+            runBindingAction(action)
+            onUserFontZoom?()
+        }
+
+        /// Sets this surface's font size in points.
+        func setFontSize(_ points: Float) {
+            runBindingAction("set_font_size:\(points)")
+        }
 
         private func runBindingAction(_ action: String) {
             guard let surface = cSurface else { return }
@@ -709,8 +722,17 @@ extension AlasGhostty {
             ghostty_surface_mouse_pos(surface, -1, -1, mods)
         }
 
+        /// Axes whose scroll-wheel gestures pan an enclosing scroll view
+        /// instead of the terminal's scrollback.
+        var enclosingScrollAxes: (horizontal: Bool, vertical: Bool) = (false, false)
+
         override func scrollWheel(with event: NSEvent) {
             guard let surface = cSurface else { return }
+            let horizontal = abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY)
+            if horizontal ? enclosingScrollAxes.horizontal : enclosingScrollAxes.vertical {
+                super.scrollWheel(with: event)
+                return
+            }
 
             var dx = event.scrollingDeltaX
             var dy = event.scrollingDeltaY

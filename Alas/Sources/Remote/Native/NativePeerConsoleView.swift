@@ -2,9 +2,11 @@ import SwiftUI
 
 /// A paired Mac's console. The host owns the terminal's rows and columns, so
 /// the surface is sized to that grid and scrolls inside the pane instead of
-/// asking the host to resize.
+/// asking the host to resize, unless Fit shrinks the local font to fit.
 struct NativePeerConsoleView: View {
     let viewer: PeerConsoleViewer
+    /// The terminal font size from settings, which Fit scales down from.
+    let baseFontSize: Float
     let onReconnect: () -> Void
     @Environment(\.theme) private var theme
 
@@ -17,7 +19,7 @@ struct NativePeerConsoleView: View {
                     Group {
                         // Cell metrics exist once the surface is in a window,
                         // so it fills the pane until the grid can be sized.
-                        if let extent = gridExtent {
+                        if let extent = viewer.gridExtent {
                             ScrollView([.horizontal, .vertical]) {
                                 GhosttyHost(surface: surface)
                                     .frame(width: extent.width, height: extent.height)
@@ -33,16 +35,10 @@ struct NativePeerConsoleView: View {
                 status
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { viewer.layout(pane: $0) }
+            .onChange(of: baseFontSize, initial: true) { viewer.setBaseFontSize(baseFontSize) }
         }
         .background(theme.color("bg-1"))
-    }
-
-    /// The host grid in points, plus one cell of slack for Ghostty's padding.
-    private var gridExtent: CGSize? {
-        guard let rows = viewer.rows, let columns = viewer.columns, let cell = viewer.cellSize else {
-            return nil
-        }
-        return CGSize(width: CGFloat(columns + 1) * cell.width, height: CGFloat(rows + 1) * cell.height)
     }
 
     /// Control of the host's terminal. Title and peer live in the tab strip.
@@ -55,6 +51,10 @@ struct NativePeerConsoleView: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 0)
+            Toggle("Fit", isOn: Binding(get: { viewer.fitsToPane }, set: { viewer.setFitsToPane($0) }))
+                .toggleStyle(.button)
+                .controlSize(.small)
+                .help("Shrink the font so the host's terminal fits this pane")
             Text(controlLabel)
                 .font(.system(size: 11))
                 .foregroundColor(theme.color(viewer.isControlling ? "accent" : "fg-muted"))
