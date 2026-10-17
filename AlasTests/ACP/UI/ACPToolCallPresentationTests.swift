@@ -132,26 +132,59 @@ struct ACPToolCallPresentationTests {
         #expect(presentation.style == .mcp)
     }
 
-    /// Claude's adapter sends the MCP arguments as rawInput; Codex's wraps them under `arguments`.
-    @Test("only a finished embedded visual_show hides its chip", arguments: [
-        ("mcp__alas__visual_show", "completed", #"{"title":"T","html":"<p>"}"#, true),
-        ("mcp__alas__visual_show", "completed",
-         #"{"server":"alas","tool":"visual_show","arguments":{"title":"T","html":"<p>"}}"#, true),
-        ("mcp__alas__visual_show", "completed",
-         #"{"server":"alas","tool":"visual_show","arguments":{"title":"T","html":"<p>","presentation":"card"}}"#, false),
-        ("mcp__alas__visual_show", "completed", #"{"title":"T","html":"<p>","presentation":"card"}"#, false),
-        ("mcp__alas__visual_show", "completed", #"{"title":"T","html":"<p>","presentation":"poster"}"#, false),
-        ("mcp__alas__visual_show", "completed",
-         #"{"title":"T","html":"<p>","presentation":"embedded","question":{"prompt":"P","options":[]}}"#, false),
-        ("mcp__alas__visual_show", "failed", #"{"title":"T","html":"<p>"}"#, false),
-        ("mcp__alas__visual_show", "in_progress", #"{"title":"T","html":"<p>"}"#, false),
-        ("mcp__alas__visual_show", "completed", nil, false),
-        ("mcp__alas__visual_show", "completed", "not json", false),
-        ("Bash", "completed", #"{"title":"T","html":"<p>"}"#, false),
-    ] as [(String, String, String?, Bool)])
-    func hidesVisualShowChip(name: String, status: String, rawInput: String?, hidden: Bool) {
-        let call = toolCall(title: name, status: status, rawInput: rawInput, name: name)
-        #expect(ACPToolCallPresentation.hidesVisualShowChip(call) == hidden)
+    /// Each case is a message sequence: `call(id, status)` is a `visual_show` call,
+    /// `visual(presentation)` a visual row, `bash` an ordinary call, `user` a prompt.
+    enum Step: Sendable {
+        case user, bash
+        case call(String, String)
+        case visual(ACPVisualAid.Presentation)
+        case legacyVisual
+    }
+
+    @Test("only a finished call followed by an embedded visual hides its chip", arguments: [
+        ([.call("a", "completed"), .visual(.embedded)], ["a"]),
+        ([.call("a", "completed"), .visual(.card)], []),
+        ([.call("a", "completed"), .legacyVisual], []),
+        ([.call("a", "failed"), .visual(.embedded)], []),
+        ([.call("a", "in_progress"), .visual(.embedded)], []),
+        ([.call("a", "completed"), .visual(.card), .call("b", "completed"), .bash, .visual(.embedded)], ["b"]),
+        ([.call("a", "completed"), .user, .visual(.embedded)], []),
+        ([.bash, .visual(.embedded)], []),
+    ] as [([Step], Set<String>)])
+    func hiddenVisualShowToolCallIds(steps: [Step], hidden: Set<String>) throws {
+        let messages: [ACPMessage] = try steps.map { step -> ACPMessage in
+            switch step {
+            case .user:
+                return .user(id: UUID(), messageId: nil, text: "Go", attachments: [])
+            case .bash:
+                return .toolCall(toolCall(title: "ls", name: "Bash"))
+            case .call(let id, let status):
+                return .toolCall(.init(
+                    toolCallId: id, title: "mcp__alas__visual_show", status: status,
+                    name: "mcp__alas__visual_show"))
+            case .visual(let presentation):
+                return .visualAid(ACPVisualAid(
+                    id: UUID(), title: "T", html: "<p>", question: nil, presentation: presentation,
+                    createdAt: Date()))
+            case .legacyVisual:
+                // Stored before `presentation` existed: decodes as a card.
+                let json = #"{"id":"\#(UUID().uuidString)","title":"T","html":"<p>","createdAt":0}"#
+                return .visualAid(try JSONDecoder().decode(ACPVisualAid.self, from: Data(json.utf8)))
+            }
+        }
+        #expect(ACPToolCallPresentation.hiddenVisualShowToolCallIds(in: messages) == hidden)
+    }
+
+    @Test("a call's latest snapshot decides whether it is hidden")
+    func latestSnapshotDecides() {
+        func call(_ status: String) -> ACPMessage {
+            .toolCall(.init(
+                toolCallId: "a", title: "mcp__alas__visual_show", status: status, name: "mcp__alas__visual_show"))
+        }
+        let visual = ACPMessage.visualAid(ACPVisualAid(
+            id: UUID(), title: "T", html: "<p>", question: nil, presentation: .embedded, createdAt: Date()))
+        #expect(ACPToolCallPresentation.hiddenVisualShowToolCallIds(in: [call("in_progress"), visual, call("completed")]) == ["a"])
+        #expect(ACPToolCallPresentation.hiddenVisualShowToolCallIds(in: [call("completed"), visual, call("failed")]) == [])
     }
 
     @Test("a named tool whose title merely mentions visual_show is not the visual tool", arguments: [
@@ -349,8 +382,6 @@ struct ACPToolCallPresentationTests {
     private func toolCall(
         title: String,
         kind: String? = nil,
-        status: String = "completed",
-        rawInput: String? = nil,
         rawOutput: String? = nil,
         metadata: AnyCodable? = nil,
         assets: [ACPMessage.ToolCallAsset] = [],
@@ -360,8 +391,7 @@ struct ACPToolCallPresentationTests {
             toolCallId: UUID().uuidString,
             title: title,
             kind: kind,
-            status: status,
-            rawInput: rawInput,
+            status: "completed",
             rawOutput: rawOutput,
             metadata: metadata,
             assets: assets,

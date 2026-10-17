@@ -230,7 +230,7 @@ struct ACPToolCallGroupingTests {
             agent("note", "Here is a diagram", phase: .finalAnswer),
             .toolCall(.init(
                 toolCallId: "v", title: "mcp__alas__visual_show", status: "completed",
-                rawInput: #"{"title":"T","html":"<p>"}"#, name: "mcp__alas__visual_show")),
+                name: "mcp__alas__visual_show")),
             .visualAid(ACPVisualAid(
                 id: UUID(), title: "T", html: "<p>", question: nil, presentation: .embedded,
                 answer: nil, createdAt: Date())),
