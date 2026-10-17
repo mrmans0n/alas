@@ -4629,42 +4629,17 @@ final class AppState {
     static let folderWorktreeCreationMessage = "Folder projects are not git repositories and cannot create worktrees."
 
     func cliCreateWorktree(origin: Worktree, branch: String, base: String?, caller: HostCaller = .cli) async -> AlasCLIResponse {
-        guard let project = projects.first(where: { $0.id == origin.projectId }) else {
-            return .error("The current worktree's project is no longer available.")
-        }
-        guard !project.isFolder else { return .error(Self.folderWorktreeCreationMessage) }
-        switch GitNameValidator.validateBranchName(branch) {
-        case .valid:
-            break
-        case .invalid(let message):
-            return .error("invalid branch name: \(message)")
-        }
-
-        let destination: URL
-        let shownPath: String
+        let prepared: PreparedWorktreeCreation
         do {
-            let prepared = try await core.preparedCreationDestination(project: project, branch: branch)
-            guard !prepared.exists else { return .error("A worktree already exists at this path.") }
-            destination = prepared.destination
-            // Local output keeps the configured path as typed; a remote one
-            // shows where it lands on its host.
-            shownPath = destination.isRemoteAlasPath ? RemotePath.display(destination.path) : prepared.rendered.path
+            prepared = try await host.worktrees.prepareCreate(projectID: origin.projectId, branch: branch, base: base, caller: caller)
         } catch {
-            return .error("Could not check the worktree destination: \(error.localizedDescription)")
+            return .error(error.localizedDescription)
         }
-        let resolvedBase: String
-        if let base {
-            resolvedBase = base
-        } else {
-            let availableBranches = (try? await GitService().branches(at: URL(fileURLWithPath: project.path))) ?? []
-            resolvedBase = NewWorktreeDialog.preferredBaseBranch(
-                availableBranches: availableBranches,
-                configuredDefault: config.worktrees.baseBranch
-            )
-        }
-
+        let destination = prepared.request.destination
+        let resolvedBase = prepared.request.base
+        let shownPath = prepared.shownPath
         let id = await createWorktree(
-            projectId: project.id,
+            projectId: origin.projectId,
             base: resolvedBase,
             branch: branch,
             destination: destination,
@@ -4725,38 +4700,18 @@ final class AppState {
         base: String?,
         recordDestination: @MainActor (URL) async throws -> Void
     ) async -> Result<Worktree, ACPSessionOrchestrationCoordinator.WorktreeCreationError> {
-        guard let project = projects.first(where: { $0.id == projectId }) else {
-            return .failure(.init(message: "The project is no longer available."))
-        }
-        guard !project.isFolder else { return .failure(.init(message: Self.folderWorktreeCreationMessage)) }
-        switch GitNameValidator.validateBranchName(branch) {
-        case .valid:
-            break
-        case .invalid(let message):
-            return .failure(.init(message: "invalid branch name: \(message)"))
-        }
-        let destination: URL
+        let prepared: PreparedWorktreeCreation
         do {
-            let prepared = try await core.preparedCreationDestination(project: project, branch: branch)
-            guard !prepared.exists else { return .failure(.init(message: "A worktree already exists at this path.")) }
-            destination = prepared.destination
+            prepared = try await host.worktrees.prepareCreate(projectID: projectId, branch: branch, base: base, caller: .cli)
         } catch {
-            return .failure(.init(message: "Could not check the worktree destination: \(error.localizedDescription)"))
+            return .failure(.init(message: error.localizedDescription))
         }
+        let destination = prepared.request.destination
+        let selectedBase = prepared.request.base
         do {
             try await recordDestination(destination)
         } catch {
             return .failure(.init(message: "Could not record the worktree destination."))
-        }
-        let selectedBase: String
-        if let base {
-            selectedBase = base
-        } else {
-            let branches = (try? await GitService().branches(at: URL(fileURLWithPath: project.path))) ?? []
-            selectedBase = NewWorktreeDialog.preferredBaseBranch(
-                availableBranches: branches,
-                configuredDefault: config.worktrees.baseBranch
-            )
         }
         let result = await createWorktreeAndWait(
             projectId: projectId,
@@ -6408,7 +6363,7 @@ final class AppState {
 
     /// Runs `operation` with `acknowledged` as the only unsaved edits the
     /// quiesce step may discard in `worktree`; anything dirtied since refuses.
-    private func withAcknowledgedDirtyTabs<Value>(
+    fileprivate func withAcknowledgedDirtyTabs<Value>(
         _ acknowledged: [TabID: Int],
         for worktree: Worktree,
         _ operation: () async throws -> Value
@@ -6565,7 +6520,7 @@ final class AppState {
     /// gets a fixed sentinel generation, since there is no live edit counter
     /// to read until the tab is opened; a snapshot's content can't change on
     /// its own, so this stays stable as long as the tab remains unopened.
-    private func dirtyTabGenerations(worktreeId: String) -> [TabID: Int] {
+    func dirtyTabGenerations(worktreeId: String) -> [TabID: Int] {
         Dictionary(uniqueKeysWithValues: dirtyEditorTabIds(worktreeId: worktreeId).map {
             ($0, tabs.peekBuffer(tabId: $0)?.editGeneration ?? -1)
         })
@@ -10334,7 +10289,7 @@ final class AppState {
     /// deletes it — going through the plain worktree path leaves the
     /// checkout record behind pointing at a "missing" member with no hint
     /// that the checkout, not the worktree, is what needs attention.
-    private func workspaceOwnershipDeletionRefusal(for worktree: Worktree) -> String? {
+    func workspaceOwnershipDeletionRefusal(for worktree: Worktree) -> String? {
         guard workspacesManager.canMutate else {
             return "Workspace Checkout ownership could not be verified. Try again once Workspace storage is available."
         }
@@ -11211,26 +11166,13 @@ final class AppState {
         default:
             break
         }
-        if let refusal = workspaceOwnershipDeletionRefusal(for: worktree) {
-            return .error(refusal)
-        }
-        // Claimed before any `await`: the checks below yield to other
-        // main-actor work, and an unclaimed gap would admit new sessions.
         let claim: UUID
         do {
-            claim = try host.worktrees.beginDelete(worktree, caller: caller)
+            claim = try await host.worktrees.beginDelete(worktree, force: force, caller: caller)
         } catch {
             return .error(error.localizedDescription)
         }
-        guard await !checkpointWorktreeRemovalDisabledAfterDiscovery(worktree) else {
-            host.worktrees.releaseClaim(claim, for: worktree)
-            return .error(Self.checkpointRecoveryBlocksWorktreeRemovalMessage)
-        }
         let dirty = dirtyTabGenerations(worktreeId: worktree.id)
-        if !dirty.isEmpty && !force {
-            host.worktrees.releaseClaim(claim, for: worktree)
-            return .error("worktree has unsaved editor changes; save them or rerun with --force to delete")
-        }
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
             host.worktrees.releaseClaim(claim, for: worktree)
             return .error("Could not find the project for this worktree.")
@@ -14809,6 +14751,12 @@ class AppHostEnvironment: AlasHostEnvironment {
     func delegatedSessionParentsChanged() {
         app?.nextPromptCoordinator.invalidateAll()
     }
+
+    func workspaceDeletionRefusal(for worktree: Worktree) -> String? { app?.workspaceOwnershipDeletionRefusal(for: worktree) }
+
+    func hasUnsavedEditorChanges(in worktree: Worktree) -> Bool {
+        app.map { !$0.dirtyTabGenerations(worktreeId: worktree.id).isEmpty } ?? false
+    }
     var repoHookLoader = RepoHookLoader()
     var repoHookPrompter: RepoHookPrompter = .skipping
     var worktreeCleanupLauncher: AppState.WorktreeCleanupLauncher = { try WorktreeTrashCleaner.launch($0) }
@@ -14817,6 +14765,14 @@ class AppHostEnvironment: AlasHostEnvironment {
 
     func quiesceWorktree(_ worktree: Worktree, in core: AlasCoreContext) async throws {
         try await app?.quiesceWorktreeForRemoval(worktree)
+    }
+
+    /// With nothing acknowledged, any unsaved edit refuses as the editors close.
+    func quiesceWorktree(_ worktree: Worktree, refusingUnsavedEdits: Bool, in core: AlasCoreContext) async throws {
+        guard refusingUnsavedEdits, let app else { return try await quiesceWorktree(worktree, in: core) }
+        try await app.withAcknowledgedDirtyTabs([:], for: worktree) {
+            try await quiesceWorktree(worktree, in: core)
+        }
     }
 
     func checkpointRecoveryBlocksRemoval(_ worktree: Worktree) async -> Bool {

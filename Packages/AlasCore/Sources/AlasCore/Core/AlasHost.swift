@@ -215,7 +215,7 @@ public struct WorktreesAPI {
     /// Creates a worktree and waits for it, scripts and refresh included.
     public func create(_ request: WorktreeCreateRequest, caller: HostCaller) async throws -> Worktree {
         caller.log("worktrees.create", request.destination.path)
-        return try await core.createWorktree(request)
+        return try await core.createWorktree(try await checkedCreation(request))
     }
 
     /// Lists the new worktree at once, claimed while it is created, for
@@ -235,6 +235,7 @@ public struct WorktreesAPI {
     /// checkout, the main checkout, or one another operation holds.
     public func delete(_ worktree: Worktree, force: Bool = false, deleteBranchIfMerged: Bool = false, caller: HostCaller) async throws {
         caller.log("worktrees.delete", worktree.path.path)
+        try deletionCheck(worktree, force: force)
         try await core.deleteWorktree(worktree, force: force, deleteBranchIfMerged: deleteBranchIfMerged)
     }
 

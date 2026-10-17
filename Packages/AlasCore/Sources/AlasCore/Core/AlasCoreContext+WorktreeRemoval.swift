@@ -17,6 +17,9 @@ private let removalLogger = Logger(subsystem: "io.nlopez.alas", category: "Workt
     /// Checked under the project mutation gate right before removal. A reason
     /// skips the removal.
     public var revalidate: @MainActor @Sendable () async -> String?
+    /// Refuse, as the editors close, any unsaved change; see
+    /// `WorktreeDeleteOptions.refusesUnsavedEdits`.
+    public var refusesUnsavedEdits = false
 
     public init(
         worktree: Worktree,
@@ -75,6 +78,10 @@ public struct WorktreeDeleteOptions: Sendable {
     /// More checks right before removal, under the project mutation gate.
     /// A reason skips the deletion.
     public var revalidate: @MainActor @Sendable () async -> String? = { nil }
+    /// Nobody confirmed discarding unsaved editor changes: one made while
+    /// the deletion runs refuses it as the editors close, rather than being
+    /// discarded with them.
+    public var refusesUnsavedEdits = false
 
     public init() {}
 }
@@ -118,7 +125,7 @@ extension AlasCoreContext {
         // Nothing may keep using the checkout while its files go.
         await stopProcessRuns(worktreeID: worktree.id)
         do {
-            try await environment.quiesceWorktree(worktree, in: self)
+            try await environment.quiesceWorktree(worktree, refusingUnsavedEdits: request.refusesUnsavedEdits, in: self)
         } catch {
             return .failed("Could not stop everything using the worktree: \(error.localizedDescription)")
         }
@@ -403,6 +410,7 @@ extension AlasCoreContext {
         options.recordsSkips = false
         options.refreshesProject = false
         options.revalidate = { Self.checkoutChange(worktree, lineageID: lineageID) }
+        options.refusesUnsavedEdits = !force
         switch await deleteWorktree(worktree, claim: claim, options: options) {
         case .deleted, .deletedButNotSaved:
             try await finishDeletions([(worktree, claim)])
@@ -491,7 +499,7 @@ extension AlasCoreContext {
         }
         projects.updateClaim(claim, to: .deleting(projectId: project.id), for: worktree)
 
-        let result = await removeWorktree(WorktreeRemovalRequest(
+        var removal = WorktreeRemovalRequest(
             worktree: worktree,
             repoPath: URL(fileURLWithPath: project.path),
             force: options.force,
@@ -507,7 +515,9 @@ extension AlasCoreContext {
                 }
                 return ownership
             }
-        ))
+        )
+        removal.refusesUnsavedEdits = options.refusesUnsavedEdits
+        let result = await removeWorktree(removal)
         switch result {
         case .removed:
             if options.refreshesProject {

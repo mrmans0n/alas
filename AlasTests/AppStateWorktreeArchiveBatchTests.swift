@@ -77,6 +77,30 @@ struct AppStateWorktreeArchiveBatchTests {
         #expect(fixture.state.tabs.tabs(forWorktree: target.id).contains { $0.id == tab.id })
     }
 
+    /// A host-verb delete that nobody confirmed edits for refuses an edit
+    /// made while it stops the worktree, rather than closing its editor.
+    @Test func hostDeleteRefusesEditsMadeWhileItRuns() async throws {
+        let environment = EditingBeforeQuiesce()
+        let fixture = try await makeCleanupFixture(worktreeCount: 2, hostEnvironment: environment)
+        defer { fixture.cleanUpAfterTest() }
+        let target = fixture.worktrees[1]
+        // Ignored, so the checkout stays clean and the delete reaches the quiesce.
+        let exclude = URL(fileURLWithPath: fixture.project.path).appendingPathComponent(".git/info/exclude")
+        try FileManager.default.createDirectory(at: exclude.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "notes.txt\n".write(to: exclude, atomically: true, encoding: .utf8)
+        try "disk\n".write(to: target.path.appendingPathComponent("notes.txt"), atomically: true, encoding: .utf8)
+        let tab = fixture.state.tabs.appendEditor(worktreeId: target.id, title: "notes.txt", relativePath: "notes.txt")
+        let buffer = fixture.state.tabs.buffer(worktreeId: target.id, tabId: tab.id, worktreeRoot: target.path, relativePath: "notes.txt")
+        await buffer.awaitLoadForTesting()
+        environment.edit = { buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "later ") }
+
+        await #expect(throws: (any Error).self) {
+            try await fixture.state.host.worktrees.delete(target, caller: .localUser(uid: 501))
+        }
+        #expect(fixture.state.tabs.tabs(forWorktree: target.id).contains { $0.id == tab.id })
+        #expect(FileManager.default.fileExists(atPath: target.path.path))
+    }
+
     @Test func archiveRoundTripRestoresTheWorktree() async throws {
         let fixture = try await makeCleanupFixture(worktreeCount: 2)
         defer { fixture.cleanUpAfterTest() }

@@ -31,6 +31,71 @@ struct AlasHostTests {
         #expect(host.worktrees.list(includingArchived: true).first { $0.worktree.id == archived.id }?.isArchived == true)
     }
 
+    enum VerbCheck: CaseIterable {
+        case createWithInvalidBranch
+        /// The remote path it is created at is taken, though the one asked
+        /// for is free.
+        case createAtATakenRemoteDestination
+        case deleteWorkspaceOwned
+        case deleteWithUnsavedEdits
+    }
+
+    /// The create and delete verbs check what every caller would, whatever
+    /// the transport: nothing is listed or claimed for a refused request.
+    @Test(arguments: VerbCheck.allCases)
+    func worktreeVerbsRefuseWhatTheirChecksRefuse(_ check: VerbCheck) async throws {
+        var project = ProjectConfig(id: "p", name: "p", path: "/srv/repo", color: "blue", addedAt: .distantPast)
+        if check == .createAtATakenRemoteDestination { project.host = "alas-test.invalid" }
+        let projects = ProjectsManager(persistedProjects: [project])
+        let path = URL(fileURLWithPath: "/srv/feature")
+        let worktree = Worktree(
+            id: Worktree.makeId(path: path), projectId: "p", name: "feature", branch: "feature",
+            path: path, status: .clean, lastActivity: .distantPast, lineageID: "listed"
+        )
+        projects.insertOptimisticWorktree(worktree)
+        let environment = CheckingEnvironment()
+        let core = AlasCoreContext(projects: projects, runHistoryStore: nil, environment: environment)
+        let host = AlasHost(core: core)
+        let refusal: WorktreeCheckRefusal
+        switch check {
+        case .createAtATakenRemoteDestination:
+            core.worktreeDestinationPreparer = { _, destination in
+                URL(fileURLWithPath: destination.path.replacingOccurrences(of: "/Users/local", with: "/home/remote"))
+            }
+            core.remoteCommandRunner = { _, _, command in
+                ProcessResult(exitCode: command.contains("/home/remote/new") ? 0 : 1, stdout: "", stderr: "")
+            }
+            refusal = .destinationTaken
+            await #expect(throws: refusal) {
+                try await host.worktrees.create(
+                    WorktreeCreateRequest(projectID: "p", base: "main", branch: "new", destination: URL(fileURLWithPath: "/Users/local/new")),
+                    caller: .localUser(uid: 501)
+                )
+            }
+        case .createWithInvalidBranch:
+            refusal = .invalidBranch("")
+            await #expect(throws: WorktreeCheckRefusal.self) {
+                try await host.worktrees.create(
+                    WorktreeCreateRequest(projectID: "p", base: "main", branch: "bad..name", destination: URL(fileURLWithPath: "/srv/new")),
+                    caller: .localUser(uid: 501)
+                )
+            }
+        case .deleteWorkspaceOwned:
+            environment.workspaceRefusal = "A Workspace checkout manages this worktree."
+            refusal = .workspaceOwned("A Workspace checkout manages this worktree.")
+        case .deleteWithUnsavedEdits:
+            environment.unsavedEdits = true
+            refusal = .unsavedChanges
+        }
+        if check != .createWithInvalidBranch, check != .createAtATakenRemoteDestination {
+            await #expect(throws: refusal) {
+                try await host.worktrees.delete(worktree, caller: .localUser(uid: 501))
+            }
+        }
+        #expect(projects.worktrees(projectId: "p") == [worktree])
+        #expect(projects.operationState(for: worktree) == nil)
+    }
+
     /// Changes made after a snapshot reach a subscriber holding its cursor,
     /// each with its latest state; what the snapshot already shows does not.
     @Test func subscribersSeeChangesAfterTheirSnapshot() async throws {
@@ -213,4 +278,14 @@ private final class SwitchingEnvironment: AlasHostEnvironment {
     func quiesceWorktree(_ worktree: Worktree, in core: AlasCoreContext) async throws {
         await onQuiesce(worktree)
     }
+}
+
+/// Refuses deletions as the app's Workspace checkouts and editors would.
+@MainActor
+private final class CheckingEnvironment: AlasHostEnvironment {
+    var workspaceRefusal: String?
+    var unsavedEdits = false
+
+    func workspaceDeletionRefusal(for worktree: Worktree) -> String? { workspaceRefusal }
+    func hasUnsavedEditorChanges(in worktree: Worktree) -> Bool { unsavedEdits }
 }
