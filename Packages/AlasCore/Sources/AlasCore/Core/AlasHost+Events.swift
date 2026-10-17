@@ -371,6 +371,10 @@ final class HostEventSource {
         projects = currentProjects
 
         let currentWorktrees = Self.keyed(WorktreesAPI(core: core).list(includingArchived: true))
+        // One restored or created again at the path starts from a fresh read, not this one's last status.
+        for (key, old) in worktrees where currentWorktrees[key] == nil || (currentWorktrees[key]?.isArchived == true && !old.isArchived) {
+            core.forgetReviewStatus(old.worktree.id)
+        }
         events += Self.diff(old: worktrees, new: currentWorktrees, changed: HostEvent.worktreeChanged) { key in
             guard case let .worktree(projectID, worktreeID) = key else { return .resync }
             return .worktreeRemoved(projectID: projectID, worktreeID: worktreeID)

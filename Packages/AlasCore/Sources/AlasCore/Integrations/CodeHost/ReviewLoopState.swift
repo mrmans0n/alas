@@ -59,6 +59,12 @@ public final class ReviewLoopState {
     public func updateBaseBranch(_ branch: String) {
         guard branch != baseBranch else { return }
         baseBranch = branch
+        forget()
+    }
+
+    /// Drops what was last read, and any read in flight, so the next one
+    /// starts fresh.
+    public func forget() {
         refreshGeneration += 1
         isRefreshing = false
         snapshot = nil

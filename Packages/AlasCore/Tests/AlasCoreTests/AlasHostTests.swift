@@ -111,6 +111,37 @@ struct AlasHostTests {
         #expect(core.reviewLoop(for: worktree, baseBranch: "trunk").currentBaseBranch == "trunk")
     }
 
+    /// A worktree removed or archived forgets its review status, so one
+    /// restored or created again at its path is not shown the old one.
+    @Test(arguments: [false, true])
+    func reviewStatusIsForgottenWhenItsWorktreeLeaves(archived: Bool) async throws {
+        let project = ProjectConfig(id: "p", name: "p", path: "/srv/repo", color: "blue", addedAt: .distantPast)
+        let projects = ProjectsManager(persistedProjects: [project])
+        let path = URL(fileURLWithPath: "/srv/feature")
+        let worktree = Worktree(
+            id: Worktree.makeId(path: path), projectId: "p", name: "feature", branch: "feature",
+            path: path, status: .clean, lastActivity: .distantPast
+        )
+        projects.insertOptimisticWorktree(worktree)
+        let host = AlasHost(core: AlasCoreContext(projects: projects, runHistoryStore: nil))
+        let subscription = host.subscribe()
+        defer { subscription.cancel() }
+        // No remotes, so the read is local only.
+        await host.core.reviewLoop(for: worktree, baseBranch: "main").refresh(local: ReviewLoopLocalState(
+            branchName: "feature", headSHA: "abc", baseBranch: "main", hasWorkingTreeChanges: false,
+            hasStagedChanges: false, aheadCommitCount: 1, hasUpstream: false, needsPush: true
+        ), remotes: [])
+        #expect(host.reviews.status(of: worktree.id) != nil)
+
+        if archived {
+            projects.setWorktreeHidden(projectId: "p", path: path, hidden: true)
+        } else {
+            projects.dropRemovedWorktree(id: worktree.id, projectId: "p")
+        }
+
+        try await eventually { @MainActor in host.reviews.status(of: worktree.id) == nil }
+    }
+
     enum FollowEnd: CaseIterable {
         /// The last subscription following the worktree goes away.
         case lastFollowerCancels

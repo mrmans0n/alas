@@ -29,6 +29,12 @@ extension AlasCoreContext {
         return reviewStatusPause
     }
 
+    /// Forgets worktree `worktreeID`'s review status, as it is removed or
+    /// archived. The loop stays: a right pane may still hold it.
+    func forgetReviewStatus(_ worktreeID: String) {
+        reviewLoops[worktreeID]?.forget()
+    }
+
     /// Drops a follower; the last one stops the refresh.
     func unfollowReviewStatus(_ worktreeID: String) {
         guard let count = reviewFollowers[worktreeID] else { return }
@@ -48,6 +54,8 @@ extension AlasCoreContext {
         let loop = reviewLoop(for: worktree, baseBranch: environment.configuration().worktrees.baseBranch)
         let git = GitService()
         let path = worktree.path
+        // Read once: a base changed while the probes run is the next refresh's.
+        let baseBranch = loop.currentBaseBranch
         do {
             async let branch = git.currentBranch(worktreePath: path)
             async let head = git.revParseHEAD(worktreePath: path)
@@ -55,14 +63,14 @@ extension AlasCoreContext {
             async let upstream = try? git.resolveUpstreamRef(worktreePath: path)
             async let needsPush = (try? git.needsPush(worktreePath: path)) ?? true
             async let upstreamAhead = (try? git.upstreamAheadCommitCount(worktreePath: path)) ?? 0
-            async let ahead = try? git.branchCommitCount(worktreePath: path, baseBranch: loop.currentBaseBranch)
+            async let ahead = try? git.branchCommitCount(worktreePath: path, baseBranch: baseBranch)
             async let remotes = git.remotes(worktreePath: path)
             let resolvedUpstream = await upstream
             let files = try await changes
             let local = ReviewLoopLocalState(
                 branchName: try await branch,
                 headSHA: try await head,
-                baseBranch: loop.currentBaseBranch,
+                baseBranch: baseBranch,
                 hasWorkingTreeChanges: !files.isEmpty,
                 hasStagedChanges: files.contains { $0.stage == .staged },
                 aheadCommitCount: await ahead?.count ?? 0,
