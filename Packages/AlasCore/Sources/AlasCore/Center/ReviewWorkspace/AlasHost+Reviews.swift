@@ -11,7 +11,13 @@ extension AlasCoreContext {
     /// `baseBranch` as the branch its review targets.
     // ponytail: kept until the host stops; drop a worktree's entry when it is removed if memory matters.
     public func reviewLoop(for worktree: Worktree, baseBranch: String) -> ReviewLoopState {
-        if let existing = reviewLoops[worktree.id] { return existing }
+        defer { reviewLoopConfiguredBases[worktree.id] = baseBranch }
+        if let existing = reviewLoops[worktree.id] {
+            // A new configured base replaces the loop's, a pick in the pane
+            // included, as the pane resets its own on a settings change.
+            if reviewLoopConfiguredBases[worktree.id] != baseBranch { existing.updateBaseBranch(baseBranch) }
+            return existing
+        }
         let loop = ReviewLoopState(worktreePath: worktree.path, baseBranch: baseBranch)
         reviewLoops[worktree.id] = loop
         return loop

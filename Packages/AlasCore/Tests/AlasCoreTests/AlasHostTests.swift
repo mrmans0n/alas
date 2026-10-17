@@ -96,6 +96,103 @@ struct AlasHostTests {
         #expect(projects.operationState(for: worktree) == nil)
     }
 
+    /// A worktree's review loop keeps a base picked in its pane while the
+    /// configured base stays, and takes a new configured base when settings
+    /// change it, so background refreshes do not query the old one.
+    @Test func reviewLoopFollowsTheConfiguredBaseBranch() {
+        let core = AlasCoreContext(projects: ProjectsManager(persistedProjects: []), runHistoryStore: nil)
+        let worktree = Worktree(
+            id: "w", projectId: "p", name: "feature", branch: "feature",
+            path: URL(fileURLWithPath: "/srv/feature"), status: .clean, lastActivity: .distantPast
+        )
+        core.reviewLoop(for: worktree, baseBranch: "main").updateBaseBranch("release")
+
+        #expect(core.reviewLoop(for: worktree, baseBranch: "main").currentBaseBranch == "release")
+        #expect(core.reviewLoop(for: worktree, baseBranch: "trunk").currentBaseBranch == "trunk")
+    }
+
+    /// A worktree removed or archived forgets its review status, so one
+    /// restored or created again at its path is not shown the old one.
+    @Test(arguments: [false, true])
+    func reviewStatusIsForgottenWhenItsWorktreeLeaves(archived: Bool) async throws {
+        let project = ProjectConfig(id: "p", name: "p", path: "/srv/repo", color: "blue", addedAt: .distantPast)
+        let projects = ProjectsManager(persistedProjects: [project])
+        let path = URL(fileURLWithPath: "/srv/feature")
+        let worktree = Worktree(
+            id: Worktree.makeId(path: path), projectId: "p", name: "feature", branch: "feature",
+            path: path, status: .clean, lastActivity: .distantPast
+        )
+        projects.insertOptimisticWorktree(worktree)
+        let host = AlasHost(core: AlasCoreContext(projects: projects, runHistoryStore: nil))
+        let subscription = host.subscribe()
+        defer { subscription.cancel() }
+        // No remotes, so the read is local only.
+        await host.core.reviewLoop(for: worktree, baseBranch: "main").refresh(local: ReviewLoopLocalState(
+            branchName: "feature", headSHA: "abc", baseBranch: "main", hasWorkingTreeChanges: false,
+            hasStagedChanges: false, aheadCommitCount: 1, hasUpstream: false, needsPush: true
+        ), remotes: [])
+        #expect(host.reviews.status(of: worktree.id) != nil)
+
+        if archived {
+            projects.setWorktreeHidden(projectId: "p", path: path, hidden: true)
+        } else {
+            projects.dropRemovedWorktree(id: worktree.id, projectId: "p")
+        }
+
+        try await eventually { @MainActor in host.reviews.status(of: worktree.id) == nil }
+    }
+
+    enum FollowEnd: CaseIterable {
+        /// The last subscription following the worktree goes away.
+        case lastFollowerCancels
+        /// The worktree is removed while still followed.
+        case worktreeRemoved
+        /// The last follower's set of worktrees no longer includes it.
+        case leftOutOfTheFollowedSet
+    }
+
+    /// A followed worktree's review status is read again at every interval
+    /// while any subscription follows it, and the reads stop once the last
+    /// follower lets go of it or the worktree is removed.
+    @Test(arguments: FollowEnd.allCases)
+    func followedReviewStatusRefreshesUntilItsFollowEnds(_ end: FollowEnd) async throws {
+        let project = ProjectConfig(id: "p", name: "p", path: "/srv/repo", color: "blue", addedAt: .distantPast)
+        let projects = ProjectsManager(persistedProjects: [project])
+        let path = URL(fileURLWithPath: "/srv/feature")
+        let worktree = Worktree(
+            id: Worktree.makeId(path: path), projectId: "p", name: "feature", branch: "feature",
+            path: path, status: .clean, lastActivity: .distantPast
+        )
+        projects.insertOptimisticWorktree(worktree)
+        let core = AlasCoreContext(projects: projects, runHistoryStore: nil)
+        let probe = RefreshProbe()
+        core.reviewStatusRefresh = { probe.refreshed.append($0) }
+        core.reviewStatusPause = { _ in
+            await withCheckedContinuation { probe.ticks.append($0) }
+            probe.cancelledAtTick.append(Task.isCancelled)
+        }
+        let host = AlasHost(core: core)
+        let first = host.subscribe()
+        let second = host.subscribe()
+        first.followWorktree(worktree.id)
+        second.followWorktree(worktree.id)
+        first.unfollowWorktree(worktree.id)
+
+        try await eventually { @MainActor in probe.refreshed == [worktree.id] && probe.ticks.count == 1 }
+        probe.ticks.removeFirst().resume()
+        try await eventually { @MainActor in probe.refreshed.count == 2 && probe.ticks.count == 1 }
+
+        switch end {
+        case .lastFollowerCancels: second.cancel()
+        case .worktreeRemoved: projects.dropRemovedWorktree(id: worktree.id, projectId: "p")
+        case .leftOutOfTheFollowedSet: second.followWorktrees(exactly: [])
+        }
+        try await eventually { @MainActor in core.reviewRefreshes[worktree.id] == nil }
+        probe.ticks.removeFirst().resume()
+        try await eventually { @MainActor in probe.cancelledAtTick == [false, true] }
+        #expect(probe.refreshed.count == 2)
+    }
+
     /// Changes made after a snapshot reach a subscriber holding its cursor,
     /// each with its latest state; what the snapshot already shows does not.
     @Test func subscribersSeeChangesAfterTheirSnapshot() async throws {
@@ -288,4 +385,13 @@ private final class CheckingEnvironment: AlasHostEnvironment {
 
     func workspaceDeletionRefusal(for worktree: Worktree) -> String? { workspaceRefusal }
     func hasUnsavedEditorChanges(in worktree: Worktree) -> Bool { unsavedEdits }
+}
+
+/// Records each review status read, and holds each wait between reads
+/// until the test resumes it.
+@MainActor
+private final class RefreshProbe {
+    var refreshed: [String] = []
+    var ticks: [CheckedContinuation<Void, Never>] = []
+    var cancelledAtTick: [Bool] = []
 }

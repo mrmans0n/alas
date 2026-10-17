@@ -70,6 +70,10 @@ public final class PluginManager {
     @ObservationIgnored private let approvals: PluginApprovalStore
     @ObservationIgnored private let projects: () -> [ProjectConfig]
     @ObservationIgnored private let actions: (ProjectConfig) -> PluginHostActions
+    /// Told, each time events are checked, which projects have an active
+    /// plugin listening for `review.changed`, whose review status is then
+    /// kept refreshed. Told none once plugins stop.
+    @ObservationIgnored public var reviewListenersChanged: ((Set<String>) -> Void)?
     @ObservationIgnored private var snapshotTask: Task<Void, Never>?
     @ObservationIgnored private var tickTask: Task<Void, Never>?
     @ObservationIgnored private var isShutDown = false
@@ -442,6 +446,7 @@ public final class PluginManager {
         catalog.cancel()
         await serialized {
             self.isShutDown = true
+            self.reviewListenersChanged?([])
             self.snapshotTask?.cancel()
             self.tickTask?.cancel()
             await self.stopHosts { _ in true }
@@ -555,7 +560,14 @@ public final class PluginManager {
     }
 
     private func pushChangedSnapshots() async {
+        // A pass that resumes while shutdown stops the hosts must not follow their projects again.
+        guard !isShutDown else { return }
         let projectsByID = Dictionary(projects().map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        reviewListenersChanged?(Set(hostsByKey.compactMap { key, host in
+            // Only a plugin granted review reads gets `review.changed`, so only it starts the polling.
+            host.state == .active && host.manifest.events.contains(.reviewChanged) && host.grants.contains(.reviewRead)
+                ? key.projectID : nil
+        }))
         for (key, host) in hostsByKey where host.state == .active
             && (host.grants.contains(.workspaceRead) || host.receivesEvents) {
             guard let project = projectsByID[key.projectID] else { continue }
@@ -567,6 +579,7 @@ public final class PluginManager {
                 runs: subscribed.isDisjoint(with: [.runStarted, .runFinished]) ? [] : scoped.runs(),
                 reviews: subscribed.contains(.reviewChanged) ? scoped.reviews() : [])
             state.seenRuns = (previous?.seenRuns ?? []).union(state.runs.map(\.run))
+            state.unloadedReviews = state.unloadedReviews(after: previous)
             guard state != previous else { continue }
             // The first state after a start is the baseline, so a restart does not replay every session or run.
             if let previous { await host.events(state.events(since: previous)) }

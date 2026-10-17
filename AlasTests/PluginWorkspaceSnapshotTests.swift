@@ -6,7 +6,8 @@ private func state(
     _ worktrees: [(String, Int?, Bool)] = [("w", 1, false)],
     runs: [PluginRunState] = [],
     reviews: [PluginReviewState] = [],
-    seenRuns: Set<String> = []
+    seenRuns: Set<String> = [],
+    unloadedReviews: Set<String> = []
 ) -> PluginEventState {
     PluginEventState(
         workspace: PluginWorkspaceSnapshot(worktrees: worktrees.map { id, files, current in
@@ -14,7 +15,7 @@ private func state(
                 id: id, branch: id, current: current,
                 dirty: files.map { PluginWorkspaceSnapshot.Dirty(files: $0, conflicts: 0) }, sessions: [])
         }),
-        runs: runs, reviews: reviews, seenRuns: seenRuns)
+        runs: runs, reviews: reviews, seenRuns: seenRuns, unloadedReviews: unloadedReviews)
 }
 
 private func run(_ id: String, _ outcome: RunOutcome?) -> PluginRunState {
@@ -22,6 +23,19 @@ private func run(_ id: String, _ outcome: RunOutcome?) -> PluginRunState {
 }
 
 struct PluginWorkspaceSnapshotTests {
+    /// The baseline waits on every listed worktree's first review status; later states keep waiting only on
+    /// those still listed and still without one.
+    @Test(arguments: [
+        (nil, state([("w", 1, false), ("x", 1, false)], reviews: [PluginReviewState(worktree: "x", state: "none")]), Set(["w"])),
+        (state(unloadedReviews: ["w", "gone"]), state(), Set(["w"])),
+        (state(unloadedReviews: ["w"]), state(reviews: [PluginReviewState(worktree: "w", state: "none")]), Set<String>()),
+    ] as [(PluginEventState?, PluginEventState, Set<String>)])
+    func unloadedReviewsNarrowToListedWorktreesWithoutAStatus(
+        _ previous: PluginEventState?, _ current: PluginEventState, _ expected: Set<String>
+    ) {
+        #expect(current.unloadedReviews(after: previous) == expected)
+    }
+
     @Test func mapsWorktreesAndSessionsToTheWireShape() throws {
         func worktree(_ id: String, _ branch: String) -> Worktree {
             Worktree(id: id, projectId: "p", name: branch, branch: branch,
@@ -108,6 +122,10 @@ struct PluginWorkspaceSnapshotTests {
         StateCase(
             before: state(), after: state(reviews: [PluginReviewState(worktree: "w", state: "none")]),
             events: ["review.changed:w:none::"]),
+        // Listed at the start before its status was read: the first status is its baseline.
+        StateCase(
+            before: state(unloadedReviews: ["w"]), after: state(reviews: [PluginReviewState(worktree: "w", state: "open", number: 7)]),
+            events: []),
         StateCase(
             before: state(reviews: [PluginReviewState(worktree: "w", state: "open", number: 7, checks: .init(passed: 1, failed: 0, pending: 1))]),
             after: state(reviews: [PluginReviewState(worktree: "w", state: "open", number: 7, checks: .init(passed: 1, failed: 1, pending: 0))]),

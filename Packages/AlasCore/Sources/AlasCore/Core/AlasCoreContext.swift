@@ -81,6 +81,16 @@ public final class AlasCoreContext {
     /// Each worktree's pull request and checks, by worktree id, kept while
     /// the host runs so every reader sees the one state.
     @ObservationIgnored public internal(set) var reviewLoops: [String: ReviewLoopState] = [:]
+    /// How many followers each worktree's review status has, and the task
+    /// refreshing the status of those with any.
+    @ObservationIgnored var reviewFollowers: [String: Int] = [:]
+    @ObservationIgnored var reviewRefreshes: [String: Task<Void, Never>] = [:]
+    /// The configured base branch each review loop last took.
+    @ObservationIgnored var reviewLoopConfiguredBases: [String: String] = [:]
+    /// Reads a followed worktree's review status; `refreshReviewStatus` unless a test replaces it.
+    @_spi(Testing) @ObservationIgnored public var reviewStatusRefresh: (@MainActor (String) async -> Void)?
+    /// Waits between two reads of a followed worktree's review status.
+    @_spi(Testing) @ObservationIgnored public var reviewStatusPause: @MainActor (Duration) async -> Void = { try? await Task.sleep(for: $0) }
     /// Test hook that replaces reading a worktree's Git status for reviews.
     @_spi(Testing) @ObservationIgnored public var reviewGitStatus: (@MainActor (URL) async throws -> [ChangedFile])?
     /// Each delegated session's parent, by child id. Observed: the app draws

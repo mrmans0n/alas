@@ -363,6 +363,9 @@ final class AppState {
     private(set) var workspaceRecoveryError: WorkspaceRecoveryState?
     /// Exists only while `config.pluginsEnabled` is on.
     var pluginManager: PluginManager?
+    /// For each project a plugin listens for `review.changed` in, the host
+    /// subscription that follows its worktrees' review status.
+    @ObservationIgnored var pluginReviewFollows: [String: HostSubscription] = [:]
     var workspaceNavigationState = WorkspaceNavigationState()
     @ObservationIgnored private var workspaceSpaceCheckpointTask: Task<Void, Never>?
     @ObservationIgnored private var worktreeStatusRescanTask: Task<Void, Never>?

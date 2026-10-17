@@ -96,6 +96,8 @@ public final class HostSubscription {
     private let onCancel: (HostSubscription) -> Void
     private let liveSession: (String) -> (SessionOwnerID, ACPSession, ACPSessionManager)?
     private var followed: [String: FollowedSession] = [:]
+    private let reviewFollows: (follow: (String) -> Void, unfollow: (String) -> Void)
+    private var followedWorktrees: Set<String> = []
     private var wakeScheduled = false
     /// The log position the pending events reach.
     private var pendingThrough: HostCursor
@@ -107,8 +109,10 @@ public final class HostSubscription {
         after cursor: HostCursor,
         pendingLimit: Int,
         liveSession: @escaping (String) -> (SessionOwnerID, ACPSession, ACPSessionManager)? = { _ in nil },
+        reviewFollows: (follow: (String) -> Void, unfollow: (String) -> Void) = ({ _ in }, { _ in }),
         onCancel: @escaping (HostSubscription) -> Void
     ) {
+        self.reviewFollows = reviewFollows
         self.cursor = cursor
         pendingThrough = cursor
         self.pendingLimit = pendingLimit
@@ -150,8 +154,27 @@ public final class HostSubscription {
         followed.removeValue(forKey: sessionID)?.release()
     }
 
-    /// Stops the subscription and releases every followed session; a
-    /// pending `next()` returns nil.
+    /// Keeps worktree `worktreeID`'s review status refreshed while this
+    /// subscription follows it, with every other follower of the worktree.
+    public func followWorktree(_ worktreeID: String) {
+        guard !isCancelled, followedWorktrees.insert(worktreeID).inserted else { return }
+        reviewFollows.follow(worktreeID)
+    }
+
+    public func unfollowWorktree(_ worktreeID: String) {
+        guard followedWorktrees.remove(worktreeID) != nil else { return }
+        reviewFollows.unfollow(worktreeID)
+    }
+
+    /// Follows exactly `worktreeIDs`: starts on the new ones and stops on
+    /// those no longer among them.
+    public func followWorktrees(exactly worktreeIDs: Set<String>) {
+        followedWorktrees.subtracting(worktreeIDs).forEach(unfollowWorktree)
+        worktreeIDs.forEach(followWorktree)
+    }
+
+    /// Stops the subscription and releases every followed session and
+    /// worktree; a pending `next()` returns nil.
     public func cancel() {
         guard !isCancelled else { return }
         isCancelled = true
@@ -159,12 +182,15 @@ public final class HostSubscription {
         pendingKeys.removeAll()
         followed.values.forEach { $0.release() }
         followed.removeAll()
+        followedWorktrees.forEach(reviewFollows.unfollow)
+        followedWorktrees.removeAll()
         wake()
         onCancel(self)
     }
 
     isolated deinit {
         followed.values.forEach { $0.release() }
+        followedWorktrees.forEach(reviewFollows.unfollow)
     }
 
     /// Transcript signals fire before the change is stored, so the reader
@@ -186,6 +212,10 @@ public final class HostSubscription {
 
     func receive(_ events: [HostEvent], through position: HostCursor) {
         guard !isCancelled, !events.isEmpty else { return }
+        // A removed worktree has no review status to keep refreshing.
+        for case .worktreeRemoved(_, let worktreeID) in events {
+            unfollowWorktree(worktreeID)
+        }
         pendingThrough = position
         if pending[.resync] == nil {
             for event in events {
@@ -226,6 +256,8 @@ final class HostEventLog {
     private let pendingLimit: Int
     /// Finds a loaded session for subscriptions to follow.
     var liveSession: (String) -> (SessionOwnerID, ACPSession, ACPSessionManager)? = { _ in nil }
+    /// Counts a subscription's follow of a worktree's review status.
+    var reviewFollows: (follow: (String) -> Void, unfollow: (String) -> Void) = ({ _ in }, { _ in })
 
     init(retention: Int = 1024, pendingLimit: Int = 512) {
         self.retention = retention
@@ -251,7 +283,9 @@ final class HostEventLog {
     /// retained first, or `.resync` when some have been dropped or the
     /// cursor is not one of this log's.
     func subscribe(after: HostCursor) -> HostSubscription {
-        let subscription = HostSubscription(after: after, pendingLimit: pendingLimit, liveSession: liveSession) { [weak self] in
+        let subscription = HostSubscription(
+            after: after, pendingLimit: pendingLimit, liveSession: liveSession, reviewFollows: reviewFollows
+        ) { [weak self] in
             self?.subscriptions.removeValue(forKey: ObjectIdentifier($0))
         }
         subscriptions[ObjectIdentifier(subscription)] = WeakSubscription(subscription: subscription)
@@ -311,6 +345,10 @@ final class HostEventSource {
             }
             return nil
         }
+        log.reviewFollows = (
+            follow: { [weak core] in core?.followReviewStatus($0) },
+            unfollow: { [weak core] in core?.unfollowReviewStatus($0) }
+        )
         observeInMemoryState()
         renewSessionSignals()
         let store = core.workspaceStore
@@ -333,6 +371,10 @@ final class HostEventSource {
         projects = currentProjects
 
         let currentWorktrees = Self.keyed(WorktreesAPI(core: core).list(includingArchived: true))
+        // One restored or created again at the path starts from a fresh read, not this one's last status.
+        for (key, old) in worktrees where currentWorktrees[key] == nil || (currentWorktrees[key]?.isArchived == true && !old.isArchived) {
+            core.forgetReviewStatus(old.worktree.id)
+        }
         events += Self.diff(old: worktrees, new: currentWorktrees, changed: HostEvent.worktreeChanged) { key in
             guard case let .worktree(projectID, worktreeID) = key else { return .resync }
             return .worktreeRemoved(projectID: projectID, worktreeID: worktreeID)
