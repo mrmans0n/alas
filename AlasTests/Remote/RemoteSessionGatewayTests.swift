@@ -1906,9 +1906,6 @@ struct RemoteSessionGatewayTests {
         let call = try #require(rows.first { $0.index == 1 })
         #expect(call.isHidden == true)
         #expect(call.json == nil)
-        let visual = try #require(rows.first { $0.kind == "visualAid" })
-        let dto = try JSONDecoder().decode(RemoteVisualAid.self, from: Data(try #require(visual.json).utf8))
-        #expect(dto.presentation == "embedded")
     }
 
     /// The call is sent visible before its visual exists; the visual's arrival

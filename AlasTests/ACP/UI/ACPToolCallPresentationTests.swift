@@ -150,6 +150,9 @@ struct ACPToolCallPresentationTests {
         ([.call("a", "completed"), .visual(.card), .call("b", "completed"), .bash, .visual(.embedded)], ["b"]),
         ([.call("a", "completed"), .user, .visual(.embedded)], []),
         ([.bash, .visual(.embedded)], []),
+        // A repeated call id is judged by its latest snapshot.
+        ([.call("a", "in_progress"), .visual(.embedded), .call("a", "completed")], ["a"]),
+        ([.call("a", "completed"), .visual(.embedded), .call("a", "failed")], []),
     ] as [([Step], Set<String>)])
     func hiddenVisualShowToolCallIds(steps: [Step], hidden: Set<String>) throws {
         let messages: [ACPMessage] = try steps.map { step -> ACPMessage in
@@ -173,18 +176,6 @@ struct ACPToolCallPresentationTests {
             }
         }
         #expect(ACPToolCallPresentation.hiddenVisualShowToolCallIds(in: messages) == hidden)
-    }
-
-    @Test("a call's latest snapshot decides whether it is hidden")
-    func latestSnapshotDecides() {
-        func call(_ status: String) -> ACPMessage {
-            .toolCall(.init(
-                toolCallId: "a", title: "mcp__alas__visual_show", status: status, name: "mcp__alas__visual_show"))
-        }
-        let visual = ACPMessage.visualAid(ACPVisualAid(
-            id: UUID(), title: "T", html: "<p>", question: nil, presentation: .embedded, createdAt: Date()))
-        #expect(ACPToolCallPresentation.hiddenVisualShowToolCallIds(in: [call("in_progress"), visual, call("completed")]) == ["a"])
-        #expect(ACPToolCallPresentation.hiddenVisualShowToolCallIds(in: [call("completed"), visual, call("failed")]) == [])
     }
 
     @Test("a named tool whose title merely mentions visual_show is not the visual tool", arguments: [

@@ -150,13 +150,6 @@ struct VisualAidWebPolicyTests {
         #expect(document.contains("<body><p>{{HTML_CLASS}}</p></body>"))
     }
 
-    @Test("a full document is identical for either presentation", arguments: [ACPVisualAid.Presentation.embedded, .card])
-    func fullDocumentIgnoresPresentation(presentation: ACPVisualAid.Presentation) {
-        let html = "<!DOCTYPE html><html><body>b</body></html>"
-        #expect(VisualAidWebPolicy.document(
-            html: html, themeVariables: [:], frameTemplate: Self.template, presentation: presentation) == Data(html.utf8))
-    }
-
     @Test("content height clamps per presentation", arguments: [
         (ACPVisualAid.Presentation.card, CGFloat(5000), CGFloat(720)),
         (.embedded, 5000, 2000), (.embedded, 900, 900), (.embedded, 10, 120),
@@ -190,8 +183,10 @@ struct VisualAidWebPolicyTests {
         "<html><body><script>const tag = '<head>';</script></body></html>",
     ])
     func fullDocumentIsReturnedUnchanged(html: String) {
-        let document = VisualAidWebPolicy.document(html: html, themeVariables: ["--alas-text": "red"], frameTemplate: Self.template, presentation: .card)
-        #expect(document == Data(html.utf8))
+        for presentation in [ACPVisualAid.Presentation.embedded, .card] {
+            let document = VisualAidWebPolicy.document(html: html, themeVariables: ["--alas-text": "red"], frameTemplate: Self.template, presentation: presentation)
+            #expect(document == Data(html.utf8), "\(presentation)")
+        }
     }
 
     @Test("the sandbox never allows connections or form posts")
