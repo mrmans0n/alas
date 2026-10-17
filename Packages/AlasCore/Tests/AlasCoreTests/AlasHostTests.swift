@@ -96,6 +96,21 @@ struct AlasHostTests {
         #expect(projects.operationState(for: worktree) == nil)
     }
 
+    /// A worktree's review loop keeps a base picked in its pane while the
+    /// configured base stays, and takes a new configured base when settings
+    /// change it, so background refreshes do not query the old one.
+    @Test func reviewLoopFollowsTheConfiguredBaseBranch() {
+        let core = AlasCoreContext(projects: ProjectsManager(persistedProjects: []), runHistoryStore: nil)
+        let worktree = Worktree(
+            id: "w", projectId: "p", name: "feature", branch: "feature",
+            path: URL(fileURLWithPath: "/srv/feature"), status: .clean, lastActivity: .distantPast
+        )
+        core.reviewLoop(for: worktree, baseBranch: "main").updateBaseBranch("release")
+
+        #expect(core.reviewLoop(for: worktree, baseBranch: "main").currentBaseBranch == "release")
+        #expect(core.reviewLoop(for: worktree, baseBranch: "trunk").currentBaseBranch == "trunk")
+    }
+
     enum FollowEnd: CaseIterable {
         /// The last subscription following the worktree goes away.
         case lastFollowerCancels

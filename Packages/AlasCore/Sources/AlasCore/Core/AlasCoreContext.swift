@@ -85,6 +85,8 @@ public final class AlasCoreContext {
     /// refreshing the status of those with any.
     @ObservationIgnored var reviewFollowers: [String: Int] = [:]
     @ObservationIgnored var reviewRefreshes: [String: Task<Void, Never>] = [:]
+    /// The configured base branch each review loop last took.
+    @ObservationIgnored var reviewLoopConfiguredBases: [String: String] = [:]
     /// Reads a followed worktree's review status; `refreshReviewStatus` unless a test replaces it.
     @_spi(Testing) @ObservationIgnored public var reviewStatusRefresh: (@MainActor (String) async -> Void)?
     /// Waits between two reads of a followed worktree's review status.
