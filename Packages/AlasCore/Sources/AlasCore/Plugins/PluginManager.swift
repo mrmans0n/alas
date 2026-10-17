@@ -560,6 +560,8 @@ public final class PluginManager {
     }
 
     private func pushChangedSnapshots() async {
+        // A pass that resumes while shutdown stops the hosts must not follow their projects again.
+        guard !isShutDown else { return }
         let projectsByID = Dictionary(projects().map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         reviewListenersChanged?(Set(hostsByKey.compactMap { key, host in
             host.state == .active && host.manifest.events.contains(.reviewChanged) ? key.projectID : nil
