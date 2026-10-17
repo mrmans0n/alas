@@ -353,7 +353,7 @@ final class AppState {
     var spacesManager: SpacesManager
     var workspacesManager: WorkspacesManager
     private var workspaceStore: WorkspaceStore { core.workspaceStore }
-    @ObservationIgnored private let workspaceRemoteTransport: WorkspaceRemoteTransport
+    @ObservationIgnored let workspaceRemoteTransport: WorkspaceRemoteTransport
     @ObservationIgnored private let checkpointWriterLeases = CheckpointWriterLeaseStore()
     /// Session candidates for each peer-viewed session's `@` picker, loaded
     /// when the picker opens and reused while its query changes.
@@ -688,6 +688,9 @@ final class AppState {
     /// Observable so a pane drawn before it existed still shows peer control.
     var _peerConsoleHost: PeerConsoleHost?
     /// Last queued remote tab action per session id; see `serializedSessionTabAction`.
+    /// Stands in for the terminal registry in tests that route CLI commands
+    /// from a terminal session without building one.
+    @ObservationIgnored var terminalSessionOwnerOverride: ((String) -> SessionOwnerID?)?
     @ObservationIgnored var remoteSessionTabActionTails: [String: (token: UUID, done: Task<Void, Never>)] = [:]
     @ObservationIgnored private let remoteKeepAwake = RemoteKeepAwakeController()
     /// Last bind/start failure, surfaced by the Settings pane. Nil when the
@@ -4876,7 +4879,7 @@ final class AppState {
     @MainActor
     static let folderWorktreeCreationMessage = "Folder projects are not git repositories and cannot create worktrees."
 
-    func cliCreateWorktree(origin: Worktree, branch: String, base: String?) async -> AlasCLIResponse {
+    func cliCreateWorktree(origin: Worktree, branch: String, base: String?, caller: HostCaller = .cli) async -> AlasCLIResponse {
         guard let project = projects.first(where: { $0.id == origin.projectId }) else {
             return .error("The current worktree's project is no longer available.")
         }
@@ -4919,7 +4922,7 @@ final class AppState {
             runStartup: true,
             launchSurface: .none,
             destinationAlreadyPrepared: true,
-            caller: .cli
+            caller: caller
         )
         guard !id.isEmpty else {
             return .error("A worktree already exists at this path.")
@@ -7073,33 +7076,22 @@ final class AppState {
 
     @MainActor
     private func handleCLIRequest(_ request: AlasCLIRequest) async -> AlasCLIResponse {
-        let router = makeCLICommandRouter(sessionWorktreeLookup: { [weak self] sessionId in
-            if let s = self?.terminal.registry.session(for: sessionId) {
-                return s.worktreeId
-            }
-            // Fall back to persisted-tab scan so `alas open` etc.
-            // still resolve a worktree for zmx-persisted leaves
-            // whose `TerminalSession` hasn't been restored yet.
-            if let worktreeId = self?.persistedLeafLocation(leafId: sessionId)?.worktreeId {
-                return worktreeId
-            }
-            return self?.worktreeIdForLiveACPSession(sessionId)
-        }, sessionOwnerLookup: { [weak self] sessionId in
-            self?.sessionOwnerForCLI(sessionId)
-        })
-        return await router.handle(request)
+        await makeCLICommandRouter().handle(request)
     }
 
-    private func sessionOwnerForCLI(_ sessionId: String) -> SessionOwnerID? {
+    /// The owner of terminal session `sessionId`. A zmx-persisted leaf whose
+    /// `TerminalSession` has not been restored yet is found in its tab, so
+    /// `alas open` and hooks still resolve it.
+    func terminalSessionOwner(_ sessionId: String) -> SessionOwnerID? {
+        if let terminalSessionOwnerOverride { return terminalSessionOwnerOverride(sessionId) }
         if let session = terminal.registry.session(for: sessionId) {
             return session.owner
         }
-        if let owner = persistedLeafOwner(leafId: sessionId) {
-            return owner
-        }
-        return acpManagers.first { _, manager in
-            manager.liveSession(for: sessionId) != nil
-        }?.key
+        return persistedLeafOwner(leafId: sessionId)
+    }
+
+    private func sessionOwnerForCLI(_ sessionId: String) -> SessionOwnerID? {
+        host.callers.owner(ofSession: sessionId)
     }
 
     func harnessSessionLocation(sessionId: String) -> (projectId: String, worktreeId: String)? {
@@ -7123,12 +7115,6 @@ final class AppState {
             let workspaceId = workspacesManager.checkout(id: checkoutId)?.workspaceID?.uuidString ?? ""
             return (projectId: workspaceId, worktreeId: owner.storageKey)
         }
-    }
-
-    private func worktreeIdForLiveACPSession(_ sessionId: String) -> String? {
-        acpManagers.first { _, manager in
-            manager.liveSession(for: sessionId) != nil
-        }?.key.worktreeID
     }
 
     /// Linear scan of persisted terminal tabs for the (projectId, worktreeId)
@@ -7379,7 +7365,7 @@ final class AppState {
                     return self.acpModelCatalog.launchModels(for: agentID, host: host)
                 },
                 sessionLocation: { [weak self] sessionId in
-                    self?.acpOrchestrationSessionLocation(sessionId: sessionId)
+                    self?.core.acpSessionLocation(sessionId)
                 },
                 referencedSessionLocation: { [weak self] sessionId, projectId in
                     await self?.acpReferencedSessionLocation(sessionId, projectId: projectId, loadingFullTranscript: true)
@@ -7424,27 +7410,11 @@ final class AppState {
         )
     }
 
-    func makeCLICommandRouter(
-        sessionWorktreeLookup: @escaping (String) -> String?,
-        sessionOwnerLookup: @escaping (String) -> SessionOwnerID? = { _ in nil }
-    ) -> AlasCLICommandRouter {
+    func makeCLICommandRouter() -> AlasCLICommandRouter {
         let orchestration = acpOrchestration
+        let callers = host.callers
         return AlasCLICommandRouter(
-            sessionWorktreeId: sessionWorktreeLookup,
-            sessionOwner: sessionOwnerLookup,
-            sessionCwdWorktree: { [weak self] sessionId, cwd in
-                guard let self else { return nil }
-                return await self.workspaceCheckoutWorktree(for: sessionOwnerLookup(sessionId), cwd: cwd)
-            },
-            resolveACPSessionOrigin: { [weak self] sessionId in
-                self?.acpOrchestrationSessionLocation(sessionId: sessionId)?.origin
-            },
-            originatingWorktree: { [weak self] worktreeId in
-                self?.worktree(withId: worktreeId)
-            },
-            visibleWorktrees: { [weak self] in
-                self?.host.worktrees.list().map(\.worktree) ?? []
-            },
+            host: host,
             openRelativeFile: { [weak self] relativePath, worktreeId in
                 self?.openFile(relativePath: relativePath, worktreeId: worktreeId)
             },
@@ -7496,13 +7466,13 @@ final class AppState {
             focusWorktree: { [weak self] worktree in
                 self?.focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
             },
-            createWorktree: { [weak self] origin, branch, base in
+            createWorktree: { [weak self] origin, branch, base, caller in
                 guard let self else { return .error("Alas is not available.") }
-                return await self.cliCreateWorktree(origin: origin, branch: branch, base: base)
+                return await self.cliCreateWorktree(origin: origin, branch: branch, base: base, caller: caller)
             },
-            deleteWorktree: { [weak self] worktree, force, keepBranch in
+            deleteWorktree: { [weak self] worktree, force, keepBranch, caller in
                 guard let self else { return .error("Alas is not available.") }
-                return await self.cliDeleteWorktree(worktree, force: force, keepBranch: keepBranch)
+                return await self.cliDeleteWorktree(worktree, force: force, keepBranch: keepBranch, caller: caller)
             },
             openReviewChanges: { [weak self] worktree in
                 guard let self else { return }
@@ -7564,9 +7534,7 @@ final class AppState {
                 return await self.cliPreview(command, owner: owner, isAuthorized: { [weak self] in
                     guard let self, self.previewOwnerIsAvailable(owner) else { return false }
                     guard let sessionID else { return true }
-                    let currentOwner = sessionOwnerLookup(sessionID)
-                        ?? sessionWorktreeLookup(sessionID).map(SessionOwnerID.worktree)
-                    guard currentOwner == owner else { return false }
+                    guard callers.owner(ofSession: sessionID) == owner else { return false }
                     if self.session(for: sessionID) != nil {
                         return self.isAuthorizedACPWriter(sessionID: sessionID, owner: owner)
                     }
@@ -7581,7 +7549,7 @@ final class AppState {
             },
             showVisualAid: { [weak self] sessionID, visual in
                 guard let self else { return .error("Alas is not available.") }
-                guard let owner = sessionOwnerLookup(sessionID),
+                guard let owner = callers.owner(ofSession: sessionID),
                       self.isAuthorizedACPSessionWriter(sessionID: sessionID, owner: owner),
                       let manager = self.acpManager(forSession: sessionID),
                       await manager.showVisualAid(visual, in: sessionID)
@@ -10101,57 +10069,6 @@ final class AppState {
         return (checkout, member, worktree)
     }
 
-    private func workspaceCheckoutWorktree(for owner: SessionOwnerID?, cwd: String) async -> Worktree? {
-        guard case .workspaceCheckout(let checkoutID, let location) = owner,
-              let checkout = workspacesManager.checkout(id: checkoutID),
-              checkout.archivedAt == nil,
-              checkout.executionLocation.normalized == location.normalized
-        else { return nil }
-        let cwdPath: String
-        switch location.normalized {
-        case .local:
-            cwdPath = URL(fileURLWithPath: cwd).resolvingSymlinksInPath().standardizedFileURL.path
-        case .ssh(let host):
-            guard let resolved = await remotePhysicalPath(cwd, host: host) else { return nil }
-            cwdPath = resolved
-        }
-        for member in checkout.members where member.availability == .available {
-            let memberPath: String
-            switch location.normalized {
-            case .local:
-                memberPath = URL(fileURLWithPath: member.worktreePath).resolvingSymlinksInPath().standardizedFileURL.path
-            case .ssh(let host):
-                guard let resolved = await remotePhysicalPath(member.worktreePath, host: host) else { continue }
-                memberPath = resolved
-            }
-            guard cwdPath == memberPath || cwdPath.hasPrefix(memberPath + "/") else { continue }
-            guard let worktree = projectsManager.worktrees(projectId: member.projectID).first(where: {
-                let worktreePath: String
-                switch location.normalized {
-                case .local:
-                    worktreePath = $0.path.resolvingSymlinksInPath().standardizedFileURL.path
-                case .ssh:
-                    worktreePath = $0.path.standardizedFileURL.path
-                }
-                return worktreePath == memberPath
-            }) else { continue }
-            return worktree
-        }
-        return nil
-    }
-
-    private func remotePhysicalPath(_ path: String, host: String) async -> String? {
-        // A legacy project host that cannot form a virtual path never matches.
-        guard RemotePath.isValidHost(host) else { return nil }
-        let result = try? await workspaceRemoteTransport.run(
-            host: host,
-            command: "cd \(SSHCommand.shellQuote(RemotePath.realPath(path))) 2>/dev/null && pwd -P"
-        )
-        guard result?.exitCode == 0 else { return nil }
-        let resolved = result?.stdout.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return resolved.isEmpty ? nil : RemotePath.virtual(host: host, realPath: resolved)
-    }
-
     private func acpQuestionNotificationBody(from params: ACPQuestionRequestParams) -> String? {
         if let title = params.title?.trimmingCharacters(in: .whitespacesAndNewlines),
            !title.isEmpty {
@@ -11776,7 +11693,7 @@ final class AppState {
     }
 
     @MainActor
-    func cliDeleteWorktree(_ worktree: Worktree, force: Bool, keepBranch: Bool) async -> AlasCLIResponse {
+    func cliDeleteWorktree(_ worktree: Worktree, force: Bool, keepBranch: Bool, caller: HostCaller = .cli) async -> AlasCLIResponse {
         // Matched on project as well as id: a worktree id is its path, so a
         // prompt opened for a same-path checkout under another project is a
         // different worktree's prompt and must not be discarded here. The
@@ -11811,7 +11728,7 @@ final class AppState {
         // main-actor work, and an unclaimed gap would admit new sessions.
         let claim: UUID
         do {
-            claim = try host.worktrees.beginDelete(worktree, caller: .cli)
+            claim = try host.worktrees.beginDelete(worktree, caller: caller)
         } catch {
             return .error(error.localizedDescription)
         }
@@ -14256,23 +14173,6 @@ final class AppState {
         }
     }
 
-    private func acpOrchestrationSessionLocation(sessionId: String) -> ACPSessionOrchestrationCoordinator.SessionLocation? {
-        guard let (owner, manager) = acpManagers.first(where: { _, manager in
-            manager.liveSession(for: sessionId) != nil
-        }) else { return nil }
-        let origin: ACPOrchestrationSessionOrigin
-        if let worktreeID = owner.worktreeID, let worktree = worktree(withId: worktreeID) {
-            origin = .init(sessionId: sessionId, projectId: worktree.projectId, worktreeId: worktree.id)
-        } else if workspaceCheckout(for: owner) != nil {
-            // Checkout forks are read within their owner's store. This scope
-            // cannot resolve to a project worktree for delegation or control.
-            origin = .init(sessionId: sessionId, projectId: owner.storageKey, worktreeId: owner.storageKey)
-        } else {
-            return nil
-        }
-        return .init(origin: origin, manager: manager)
-    }
-
     /// Keeps a `/btw` side question as a regular forked session and opens it
     /// in a new tab next to its parent.
     func keepACPSideQuestion(worktree: Worktree, owner: SessionOwnerID?, parentID: ACPSession.ID) {
@@ -15446,6 +15346,12 @@ class AppHostEnvironment: AlasHostEnvironment {
     var fileIndex: FileIndex { app?.fileIndex ?? FileIndex() }
 
     func agent(id: String) -> AgentDefinition? { app?.agent(id: id) }
+
+    func terminalSessionOwner(_ sessionID: String) -> SessionOwnerID? { app?.terminalSessionOwner(sessionID) }
+
+    func workspaceCheckout(id: UUID) -> WorkspaceCheckout? { app?.workspacesManager.checkout(id: id) }
+
+    var workspaceRemoteTransport: WorkspaceRemoteTransport { app?.workspaceRemoteTransport ?? WorkspaceRemoteTransport() }
     var repoHookLoader = RepoHookLoader()
     var repoHookPrompter: RepoHookPrompter = .skipping
     var worktreeCleanupLauncher: AppState.WorktreeCleanupLauncher = { try WorktreeTrashCleaner.launch($0) }

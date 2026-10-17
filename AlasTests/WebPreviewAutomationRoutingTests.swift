@@ -11,8 +11,7 @@ struct WebPreviewAutomationRoutingTests {
         let checkout = SessionOwnerID.workspaceCheckout(UUID(), .ssh("devbox"))
         var routed: SessionOwnerID?
         let router = AlasCLICommandRouter(
-            sessionWorktreeId: { _ in nil }, sessionOwner: { $0 == "s" ? checkout : nil },
-            originatingWorktree: { _ in worktree }, visibleWorktrees: { [worktree] },
+            host: AlasHost.routerFixture([worktree], sessionOwner: { $0 == "s" ? checkout : nil }),
             openRelativeFile: { _, _ in }, openExternalFile: { _, _ in },
             previewCommand: { _, owner, _ in routed = owner
             return .ok }, activateApp: {}

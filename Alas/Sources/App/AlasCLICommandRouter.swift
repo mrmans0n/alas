@@ -2,21 +2,17 @@ import Foundation
 
 @MainActor
 struct AlasCLICommandRouter {
-    var sessionWorktreeId: (String) -> String?
-    var sessionOwner: (String) -> SessionOwnerID? = { _ in nil }
-    var sessionCwdWorktree: (String, String) async -> Worktree? = { _, _ in nil }
-    var resolveACPSessionOrigin: (String) -> ACPOrchestrationSessionOrigin? = { _ in nil }
-    var originatingWorktree: (String) -> Worktree?
-    var visibleWorktrees: () -> [Worktree]
+    /// Resolves who sent each command and serves the worktrees it acts on.
+    var host: AlasHost
     var openRelativeFile: (String, String) -> Void
     var openExternalFile: (URL, String) -> Void
     var openRelativeFileAtLines: (String, String, ClosedRange<Int>) -> Void = { _, _, _ in }
     var openExternalFileAtLines: (URL, String, ClosedRange<Int>) -> Void = { _, _, _ in }
     var focusWorktree: (Worktree) -> Void = { _ in }
-    var createWorktree: (Worktree, String, String?) async -> AlasCLIResponse = { _, _, _ in
+    var createWorktree: (Worktree, String, String?, HostCaller) async -> AlasCLIResponse = { _, _, _, _ in
         .error("Creating worktrees from the terminal is not available yet.")
     }
-    var deleteWorktree: (Worktree, Bool, Bool) async -> AlasCLIResponse = { _, _, _ in
+    var deleteWorktree: (Worktree, Bool, Bool, HostCaller) async -> AlasCLIResponse = { _, _, _, _ in
         .error("Deleting worktrees from the terminal is not available yet.")
     }
     var openReviewChanges: (Worktree) -> Void = { _ in }
@@ -73,7 +69,7 @@ struct AlasCLICommandRouter {
     /// Also used by plugins (`review/comment`), so they take the CLI's paths rather than a copy of them.
     var service: AlasActionService {
         AlasActionService(
-            visibleWorktrees: visibleWorktrees,
+            visibleWorktrees: { [host] in host.worktrees.list().map(\.worktree) },
             openRelativeFile: openRelativeFile,
             openExternalFile: openExternalFile,
             openRelativeFileAtLines: openRelativeFileAtLines,
@@ -102,18 +98,17 @@ struct AlasCLICommandRouter {
 
     func handle(_ request: AlasCLIRequest) async -> AlasCLIResponse {
         let service = self.service
+        let callers = host.callers
+        let caller: HostCaller = request.sessionId.map { .session(id: $0) } ?? .cli
         switch request.command {
         case .preview(let command):
             let owner: SessionOwnerID
             if let sessionID = request.sessionId {
-                if let resolved = sessionOwner(sessionID) {
-                    owner = resolved
-                } else if let id = sessionWorktreeId(sessionID), originatingWorktree(id) != nil {
-                    owner = .worktree(id)
-                } else {
+                guard let resolved = callers.owner(ofSession: sessionID) else {
                     return .error("Unknown Alas session. Preview commands cannot fall back to another owner.")
                 }
-            } else if let cwd = request.cwd, let worktree = service.resolveWorktree(forDirectory: cwd) {
+                owner = resolved
+            } else if let cwd = request.cwd, let worktree = callers.worktree(owning: cwd) {
                 owner = .worktree(worktree.id)
             } else {
                 return .error("not inside an Alas worktree")
@@ -122,7 +117,7 @@ struct AlasCLICommandRouter {
         case .workspace(let command):
             return await workspaceCommand(command)
         case .visualShow(let title, let html, let question):
-            guard let sessionId = request.sessionId, resolveACPSessionOrigin(sessionId) != nil else {
+            guard let sessionId = request.sessionId, callers.acpOrigin(ofSession: sessionId) != nil else {
                 return .error("visual_show is only available to ACP agent sessions")
             }
             return await showVisualAid(sessionId, ACPVisualAid(
@@ -130,11 +125,11 @@ struct AlasCLICommandRouter {
             ))
         case .agentList, .sessionList, .sessionNew, .sessionSend, .sessionAction:
             guard let sessionId = request.sessionId,
-                  let acpOrigin = resolveACPSessionOrigin(sessionId) else {
+                  let acpOrigin = callers.acpOrigin(ofSession: sessionId) else {
                 return .error("session commands require an originating ACP session")
             }
             // Anchor worktree selectors on the caller's host, like the origin path below.
-            let request = originatingWorktree(acpOrigin.worktreeId)
+            let request = await callers.worktree(ofSession: sessionId, cwd: nil)
                 .map { request.virtualizingPaths(like: $0.path.path) } ?? request
 
             switch request.command {
@@ -182,7 +177,7 @@ struct AlasCLICommandRouter {
         // Resolve the origin worktree: exact legacy session first, else cwd.
         // Checkout-owned terminal sessions intentionally do not collapse to a
         // synthetic worktree ID; their repository target is the current cwd.
-        let requestOwner = request.sessionId.flatMap(sessionOwner)
+        let requestOwner = request.sessionId.flatMap(callers.owner(ofSession:))
         if case .notify(let body, let title, let level) = request.command,
            let sessionId = request.sessionId,
            let owner = requestOwner,
@@ -200,19 +195,13 @@ struct AlasCLICommandRouter {
         let origin: Worktree
         let originOwner: SessionOwnerID?
         if let sessionId = request.sessionId,
-           let worktreeId = sessionWorktreeId(sessionId),
-           let resolved = originatingWorktree(worktreeId) {
+           let resolved = await callers.worktree(ofSession: sessionId, cwd: request.cwd) {
             origin = resolved
             originOwner = requestOwner ?? .worktree(resolved.id)
-        } else if let sessionId = request.sessionId,
-                  let cwd = request.cwd,
-                  let resolved = await sessionCwdWorktree(sessionId, cwd) {
-            origin = resolved
-            originOwner = requestOwner
         } else if let owner = requestOwner,
                   case .workspaceCheckout = owner {
             return .error("Unknown Alas terminal session.")
-        } else if let cwd = request.cwd, let resolved = service.resolveWorktree(forDirectory: cwd) {
+        } else if let cwd = request.cwd, let resolved = callers.worktree(owning: cwd) {
             origin = resolved
             originOwner = .worktree(resolved.id)
         } else if request.sessionId != nil {
@@ -249,9 +238,9 @@ struct AlasCLICommandRouter {
         case .worktree(.switch(let target)):
             return service.switch(target: target, projectWorktrees: projectWorktrees)
         case .worktree(.new(let branch, let base)):
-            return await service.new(origin: origin, branch: branch, base: base)
+            return await service.new(origin: origin, branch: branch, base: base, caller: caller)
         case .worktree(.delete(let target, let force, let keepBranch)):
-            return await service.delete(target: target, projectWorktrees: projectWorktrees, force: force, keepBranch: keepBranch)
+            return await service.delete(target: target, projectWorktrees: projectWorktrees, force: force, keepBranch: keepBranch, caller: caller)
         case .workspace, .preview:
             preconditionFailure("Workspace commands are handled before generic origin resolution")
         case .review(.localChanges(let worktreeOverride)):
@@ -295,12 +284,12 @@ struct AlasCLICommandRouter {
         case .visualShow:
             preconditionFailure("visual_show is handled before generic origin resolution")
         case .prCreate(let params):
-            guard let sessionId = request.sessionId, resolveACPSessionOrigin(sessionId) != nil else {
+            guard let sessionId = request.sessionId, callers.acpOrigin(ofSession: sessionId) != nil else {
                 return .error("pr_create is only available to ACP agent sessions.")
             }
             return await prCreate(sessionId, origin.id, params)
         case .prStatus:
-            guard let sessionId = request.sessionId, resolveACPSessionOrigin(sessionId) != nil else {
+            guard let sessionId = request.sessionId, callers.acpOrigin(ofSession: sessionId) != nil else {
                 return .error("pr_status is only available to ACP agent sessions.")
             }
             return await prStatus(sessionId, origin.id)

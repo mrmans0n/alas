@@ -39,9 +39,7 @@ struct AppStateRunRecordTests {
         let owner = SessionOwnerID.worktree(fixture.worktree.id)
         let manager = try #require(fixture.state.acpManager(for: fixture.worktree))
         let session = manager.createSession(id: "preview-caller-\(UUID())", agentId: "test")
-        let router = fixture.state.makeCLICommandRouter(
-            sessionWorktreeLookup: { _ in fixture.worktree.id }, sessionOwnerLookup: { _ in owner }
-        )
+        let router = fixture.state.makeCLICommandRouter()
         let request = AlasCLIRequest(version: 1, sessionId: session.id, cwd: nil, command: .preview(.init(action: .list)))
         let denied = await router.handle(request)
         guard case .error = denied else { Issue.record("Read-only session must be denied")

@@ -58,6 +58,13 @@ public protocol AlasHostEnvironment: AnyObject {
     var fileIndex: FileIndex { get }
     /// The configured agent `id`, enabled or not.
     func agent(id: String) -> AgentDefinition?
+    /// The owner of terminal session `id`, which only a host with terminals knows.
+    func terminalSessionOwner(_ sessionID: String) -> SessionOwnerID?
+    /// The Workspace checkout `id` as the host has it loaded; nil where it
+    /// keeps none loaded, which only callers in a checkout need.
+    func workspaceCheckout(id: UUID) -> WorkspaceCheckout?
+    /// How commands reach a remote checkout's host.
+    var workspaceRemoteTransport: WorkspaceRemoteTransport { get }
 }
 
 extension AlasHostEnvironment {
@@ -99,6 +106,12 @@ extension AlasHostEnvironment {
     public func agent(id: String) -> AgentDefinition? {
         AgentConfiguredCatalog.all(builtinState: AppConfig.defaults.agents.builtinState, customs: []).first { $0.id == id }
     }
+
+    public func terminalSessionOwner(_ sessionID: String) -> SessionOwnerID? { nil }
+
+    public func workspaceCheckout(id: UUID) -> WorkspaceCheckout? { nil }
+
+    public var workspaceRemoteTransport: WorkspaceRemoteTransport { WorkspaceRemoteTransport() }
 
     /// Ends the checkout's agent sessions, as a removal ends a worktree's.
     public func stopWorkspaceCheckoutSessions(_ checkout: WorkspaceCheckout, in core: AlasCoreContext) async throws {

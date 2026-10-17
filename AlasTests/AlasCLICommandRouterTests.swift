@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Alas
+@_spi(Testing) import AlasCore
 
 @MainActor
 struct AlasCLICommandRouterTests {
@@ -21,9 +22,7 @@ struct AlasCLICommandRouterTests {
         )
         var opened: [(worktreeId: String, relativePath: String)] = []
         let router = AlasCLICommandRouter(
-            sessionWorktreeId: { _ in "workspace-checkout-storage-key" },
-            originatingWorktree: { _ in nil },
-            visibleWorktrees: { [worktree] },
+            host: AlasHost.routerFixture([worktree], sessionWorktree: { _ in "workspace-checkout-storage-key" }),
             openRelativeFile: { relativePath, worktreeId in opened.append((worktreeId, relativePath)) },
             openExternalFile: { _, _ in Issue.record("expected relative open") },
             activateApp: {}
@@ -50,9 +49,7 @@ struct AlasCLICommandRouterTests {
         )
         var captured: (sessionId: String?, owner: SessionOwnerID?, worktreeId: String, body: String, title: String?, level: AlasCLINotifyLevel)?
         let router = AlasCLICommandRouter(
-            sessionWorktreeId: { $0 == "acp-1" ? "wt1" : nil },
-            originatingWorktree: { _ in worktree },
-            visibleWorktrees: { [worktree] },
+            host: AlasHost.routerFixture([worktree], sessionWorktree: { $0 == "acp-1" ? "wt1" : nil }),
             openRelativeFile: { _, _ in },
             openExternalFile: { _, _ in },
             notifySession: { sessionId, owner, origin, body, title, level in
@@ -85,11 +82,7 @@ struct AlasCLICommandRouterTests {
         )
         var captured: (sessionId: String, owner: SessionOwnerID, body: String)?
         let router = AlasCLICommandRouter(
-            sessionWorktreeId: { _ in nil },
-            sessionOwner: { $0 == "checkout-leaf" ? checkoutOwner : nil },
-            sessionCwdWorktree: { _, _ in nil },
-            originatingWorktree: { _ in nil },
-            visibleWorktrees: { [] },
+            host: AlasHost.routerFixture([], sessionOwner: { $0 == "checkout-leaf" ? checkoutOwner : nil }),
             openRelativeFile: { _, _ in },
             openExternalFile: { _, _ in },
             notifyOwnedSession: { sessionId, owner, body, _, _ in
@@ -121,9 +114,7 @@ struct AlasCLICommandRouterTests {
             path: realRoot, status: .clean, lastActivity: Date()
         )
         let router = AlasCLICommandRouter(
-            sessionWorktreeId: { _ in nil },
-            originatingWorktree: { _ in nil },
-            visibleWorktrees: { [worktree] },
+            host: AlasHost.routerFixture([worktree]),
             openRelativeFile: { _, _ in },
             openExternalFile: { _, _ in },
             activateApp: {}
@@ -140,9 +131,7 @@ struct AlasCLICommandRouterTests {
             path: root, status: .clean, lastActivity: Date()
         )
         let router = AlasCLICommandRouter(
-            sessionWorktreeId: { _ in nil },
-            originatingWorktree: { _ in nil },
-            visibleWorktrees: { [worktree] },
+            host: AlasHost.routerFixture([worktree]),
             openRelativeFile: { _, _ in },
             openExternalFile: { _, _ in },
             activateApp: {}
@@ -168,9 +157,7 @@ struct AlasCLICommandRouterTests {
             path: nestedRoot, status: .clean, lastActivity: Date()
         )
         let router = AlasCLICommandRouter(
-            sessionWorktreeId: { _ in nil },
-            originatingWorktree: { _ in nil },
-            visibleWorktrees: { [parent, nested] },
+            host: AlasHost.routerFixture([parent, nested]),
             openRelativeFile: { _, _ in },
             openExternalFile: { _, _ in },
             activateApp: {}
@@ -209,9 +196,7 @@ struct AlasCLICommandRouterTests {
         var opened: [(worktreeId: String, relativePath: String)] = []
 
         let router = AlasCLICommandRouter(
-            sessionWorktreeId: { _ in "parent" },
-            originatingWorktree: { _ in parent },
-            visibleWorktrees: { [parent, nested] },
+            host: AlasHost.routerFixture([parent, nested], sessionWorktree: { _ in "parent" }),
             openRelativeFile: { relativePath, worktreeId in opened.append((worktreeId, relativePath)) },
             openExternalFile: { _, _ in Issue.record("expected relative open") },
             activateApp: {}
@@ -239,9 +224,7 @@ struct AlasCLICommandRouterTests {
         var opened: [(worktreeId: String, relativePath: String)] = []
 
         let router = AlasCLICommandRouter(
-            sessionWorktreeId: { _ in "wt1" },
-            originatingWorktree: { _ in worktree },
-            visibleWorktrees: { [worktree] },
+            host: AlasHost.routerFixture([worktree], sessionWorktree: { _ in "wt1" }),
             openRelativeFile: { relativePath, worktreeId in opened.append((worktreeId, relativePath)) },
             openExternalFile: { _, _ in Issue.record("expected relative open") },
             activateApp: {}
@@ -271,9 +254,7 @@ struct AlasCLICommandRouterTests {
         var opened: [(worktreeId: String, relativePath: String)] = []
 
         let router = AlasCLICommandRouter(
-            sessionWorktreeId: { _ in "wt1" },
-            originatingWorktree: { _ in worktree },
-            visibleWorktrees: { [worktree] },
+            host: AlasHost.routerFixture([worktree], sessionWorktree: { _ in "wt1" }),
             openRelativeFile: { relativePath, worktreeId in opened.append((worktreeId, relativePath)) },
             openExternalFile: { _, _ in Issue.record("expected relative open") },
             activateApp: {}
@@ -300,9 +281,7 @@ struct AlasCLICommandRouterTests {
         var externalCount = 0
 
         let router = AlasCLICommandRouter(
-            sessionWorktreeId: { _ in "wt1" },
-            originatingWorktree: { _ in worktree },
-            visibleWorktrees: { [worktree] },
+            host: AlasHost.routerFixture([worktree], sessionWorktree: { _ in "wt1" }),
             openRelativeFile: { _, _ in Issue.record("must not treat sibling as in-worktree") },
             openExternalFile: { _, _ in externalCount += 1 },
             activateApp: {}
@@ -323,9 +302,7 @@ struct AlasCLICommandRouterTests {
         let missingPath = root.appendingPathComponent("missing.txt").path
 
         let router = AlasCLICommandRouter(
-            sessionWorktreeId: { _ in "wt1" },
-            originatingWorktree: { _ in worktree },
-            visibleWorktrees: { [worktree] },
+            host: AlasHost.routerFixture([worktree], sessionWorktree: { _ in "wt1" }),
             openRelativeFile: { _, _ in Issue.record("expected no opens") },
             openExternalFile: { _, _ in Issue.record("expected no opens") },
             activateApp: { Issue.record("expected no activation") }
@@ -353,9 +330,7 @@ struct AlasCLICommandRouterTests {
         var activationCount = 0
 
         let router = AlasCLICommandRouter(
-            sessionWorktreeId: { _ in "wt1" },
-            originatingWorktree: { _ in worktree },
-            visibleWorktrees: { [worktree] },
+            host: AlasHost.routerFixture([worktree], sessionWorktree: { _ in "wt1" }),
             openRelativeFile: { _, _ in },
             openExternalFile: { _, _ in },
             activateApp: { activationCount += 1 }
@@ -494,9 +469,12 @@ struct AlasCLICommandRouterTests {
         visibleWorktrees: [Worktree]? = nil
     ) -> AlasCLICommandRouter {
         AlasCLICommandRouter(
-            sessionWorktreeId: { $0 == "s1" ? worktree.id : nil },
-            originatingWorktree: { _ in worktree },
-            visibleWorktrees: { visibleWorktrees ?? [worktree] },
+            // The origin is still the session's worktree when it is hidden.
+            host: AlasHost.routerFixture(
+                visibleWorktrees ?? [worktree],
+                hidden: (visibleWorktrees ?? [worktree]).contains { $0.id == worktree.id } ? [] : [worktree],
+                sessionWorktree: { $0 == "s1" ? worktree.id : nil }
+            ),
             openRelativeFile: { _, _ in },
             openExternalFile: { _, _ in },
             draftCommentStore: { store },
@@ -1347,10 +1325,7 @@ struct AlasCLICommandRouterTests {
     @Test func sessionCommandsRequireAnOriginatingACPSession() async throws {
         let worktree = Self.worktree(branch: "main", path: "/tmp/repo", projectId: "p1")
         let router = AlasCLICommandRouter(
-            sessionWorktreeId: { $0 == "terminal-1" ? worktree.id : nil },
-            resolveACPSessionOrigin: { _ in nil },
-            originatingWorktree: { _ in worktree },
-            visibleWorktrees: { [worktree] },
+            host: AlasHost.routerFixture([worktree], sessionWorktree: { $0 == "terminal-1" ? worktree.id : nil }),
             openRelativeFile: { _, _ in },
             openExternalFile: { _, _ in },
             activateApp: {}
@@ -1377,9 +1352,7 @@ struct AlasCLICommandRouterTests {
         let memberID = UUID()
         var commands: [AlasCLIRequest.WorkspaceCommand] = []
         let router = AlasCLICommandRouter(
-            sessionWorktreeId: { _ in nil },
-            originatingWorktree: { _ in nil },
-            visibleWorktrees: { [] },
+            host: AlasHost.routerFixture([]),
             openRelativeFile: { _, _ in },
             openExternalFile: { _, _ in },
             workspaceCommand: { command in
@@ -1400,10 +1373,7 @@ struct AlasCLICommandRouterTests {
     @Test func visualShowRequiresAnACPSession() async {
         let worktree = Self.worktree(branch: "main", path: "/tmp/repo", projectId: "p1")
         let router = AlasCLICommandRouter(
-            sessionWorktreeId: { $0 == "terminal-1" ? worktree.id : nil },
-            resolveACPSessionOrigin: { _ in nil },
-            originatingWorktree: { _ in worktree },
-            visibleWorktrees: { [worktree] },
+            host: AlasHost.routerFixture([worktree], sessionWorktree: { $0 == "terminal-1" ? worktree.id : nil }),
             openRelativeFile: { _, _ in },
             openExternalFile: { _, _ in },
             activateApp: {}
@@ -1424,9 +1394,7 @@ struct AlasCLICommandRouterTests {
         openReview: @escaping (Worktree, String) async -> AlasCLIResponse = { _, _ in .ok }
     ) -> AlasCLICommandRouter {
         AlasCLICommandRouter(
-            sessionWorktreeId: { $0 == "s1" ? origin.id : nil },
-            originatingWorktree: { $0 == origin.id ? origin : nil },
-            visibleWorktrees: { visibleWorktrees },
+            host: AlasHost.routerFixture(visibleWorktrees, sessionWorktree: { $0 == "s1" ? origin.id : nil }),
             openRelativeFile: { _, _ in Issue.record("expected no relative file open") },
             openExternalFile: { _, _ in Issue.record("expected no external file open") },
             openReviewChanges: openReviewChanges,
@@ -1446,4 +1414,33 @@ struct AlasCLICommandRouterTests {
             lastActivity: Date()
         )
     }
+}
+
+extension AlasHost {
+    /// A host listing `worktrees` and keeping `hidden` unlisted, whose
+    /// terminal sessions belong to the worktree `sessionWorktree` names or
+    /// the owner `sessionOwner` names.
+    static func routerFixture(
+        _ worktrees: [Worktree],
+        hidden: [Worktree] = [],
+        sessionWorktree: @escaping (String) -> String? = { _ in nil },
+        sessionOwner: @escaping (String) -> SessionOwnerID? = { _ in nil }
+    ) -> AlasHost {
+        let projects = ProjectsManager(persistedProjects: Set((worktrees + hidden).map(\.projectId)).sorted().map {
+            ProjectConfig(id: $0, name: $0, path: "/tmp/alas-router-\($0)", color: "blue", addedAt: .distantPast)
+        })
+        (worktrees + hidden).forEach(projects.insertOptimisticWorktree)
+        for worktree in hidden {
+            projects.setWorktreeHidden(projectId: worktree.projectId, path: worktree.path, hidden: true)
+        }
+        let terminals = RouterTerminals { sessionOwner($0) ?? sessionWorktree($0).map(SessionOwnerID.worktree) }
+        return AlasHost(core: AlasCoreContext(projects: projects, runHistoryStore: nil, environment: terminals))
+    }
+}
+
+/// Terminal sessions a router test stands in for.
+private final class RouterTerminals: AlasHostEnvironment {
+    let owner: (String) -> SessionOwnerID?
+    init(_ owner: @escaping (String) -> SessionOwnerID?) { self.owner = owner }
+    func terminalSessionOwner(_ sessionID: String) -> SessionOwnerID? { owner(sessionID) }
 }
