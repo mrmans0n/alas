@@ -101,11 +101,13 @@ struct AlasHostTests {
         case lastFollowerCancels
         /// The worktree is removed while still followed.
         case worktreeRemoved
+        /// The last follower's set of worktrees no longer includes it.
+        case leftOutOfTheFollowedSet
     }
 
     /// A followed worktree's review status is read again at every interval
     /// while any subscription follows it, and the reads stop once the last
-    /// follower lets go or the worktree is removed.
+    /// follower lets go of it or the worktree is removed.
     @Test(arguments: FollowEnd.allCases)
     func followedReviewStatusRefreshesUntilItsFollowEnds(_ end: FollowEnd) async throws {
         let project = ProjectConfig(id: "p", name: "p", path: "/srv/repo", color: "blue", addedAt: .distantPast)
@@ -137,6 +139,7 @@ struct AlasHostTests {
         switch end {
         case .lastFollowerCancels: second.cancel()
         case .worktreeRemoved: projects.dropRemovedWorktree(id: worktree.id, projectId: "p")
+        case .leftOutOfTheFollowedSet: second.followWorktrees(exactly: [])
         }
         try await eventually { @MainActor in core.reviewRefreshes[worktree.id] == nil }
         probe.ticks.removeFirst().resume()

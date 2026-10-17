@@ -26,18 +26,26 @@ extension AppState {
         }
     }
 
-    /// Follows the review status of every worktree of `projectIDs`, and stops
-    /// following the projects no plugin listens in anymore.
+    /// Follows the review status of every listed, unarchived worktree of
+    /// `projectIDs` as they come, go and are archived, and stops following
+    /// the projects no plugin listens in anymore.
     private func followPluginReviews(in projectIDs: Set<String>) {
         for (projectID, subscription) in pluginReviewFollows where !projectIDs.contains(projectID) {
             subscription.cancel()
             pluginReviewFollows[projectID] = nil
         }
-        for projectID in projectIDs {
-            let subscription = pluginReviewFollows[projectID] ?? host.subscribe()
+        for projectID in projectIDs where pluginReviewFollows[projectID] == nil {
+            let subscription = host.subscribe()
             pluginReviewFollows[projectID] = subscription
-            // Following is idempotent; a worktree created since starts here.
-            for worktree in host.worktrees.list(projectID: projectID) { subscription.followWorktree(worktree.worktree.id) }
+            let follow = { [weak self, weak subscription] in
+                guard let self, let subscription else { return }
+                subscription.followWorktrees(exactly: Set(host.worktrees.list(projectID: projectID).map(\.worktree.id)))
+            }
+            follow()
+            // Every change batch may add, remove or archive a worktree; nil once cancelled.
+            Task { @MainActor in
+                while await subscription.next() != nil { follow() }
+            }
         }
     }
 

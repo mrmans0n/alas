@@ -166,6 +166,13 @@ public final class HostSubscription {
         reviewFollows.unfollow(worktreeID)
     }
 
+    /// Follows exactly `worktreeIDs`: starts on the new ones and stops on
+    /// those no longer among them.
+    public func followWorktrees(exactly worktreeIDs: Set<String>) {
+        followedWorktrees.subtracting(worktreeIDs).forEach(unfollowWorktree)
+        worktreeIDs.forEach(followWorktree)
+    }
+
     /// Stops the subscription and releases every followed session and
     /// worktree; a pending `next()` returns nil.
     public func cancel() {
