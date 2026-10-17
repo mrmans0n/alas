@@ -495,6 +495,8 @@ button.create-row.is-selected { background: color-mix(in oklab, var(--accent) 15
 
 /* Visual aids */
 .m-visual { align-self: stretch; padding: 0; background: var(--bg-2); border-radius: 12px; box-shadow: inset 0 0 0 0.5px var(--ring); overflow: hidden; white-space: normal; }
+.m-visual-embedded { background: transparent; border-radius: 0; box-shadow: none; }
+.m-visual-embedded .visual-answer { display: none; }   /* an embedded visual never carries a question */
 .visual-title { padding: 10px 12px; font-size: 13px; font-weight: 600; color: var(--fg); border-bottom: 0.5px solid var(--line); }
 .visual-host { min-height: 120px; display: flex; flex-direction: column; align-items: stretch; justify-content: center; }
 .visual-frame { display: block; width: 100%; border: 0; background: transparent; }

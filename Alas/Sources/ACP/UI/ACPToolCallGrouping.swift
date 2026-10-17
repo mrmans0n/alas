@@ -180,14 +180,19 @@ enum ACPToolCallGrouping {
     /// share an activity group. Unknown statuses (e.g. a call awaiting
     /// permission), context compaction, subagents, file edits, and readable
     /// messages end the run so they remain visible outside the disclosure.
-    static func isCollapsible(_ message: ACPMessage) -> Bool {
+    /// An embedded visual's hidden `visual_show` chip (`hiddenToolCallIds`) is not
+    /// work either: the completed-turn scan reads raw messages, and counting it
+    /// would make it the turn's last run and move the duration off the work the
+    /// user can see.
+    static func isCollapsible(_ message: ACPMessage, hiddenToolCallIds: Set<String> = []) -> Bool {
         if case .thought = message { return true }
         guard case .toolCall(let toolCall) = message,
               isFinished(status: toolCall.status)
                 || toolCall.status == "in_progress" || toolCall.status == "pending",
               ACPContextCompaction(toolCall: toolCall) == nil,
               ACPSubagentRowDescriptor(toolCall: toolCall) == nil,
-              ACPBackgroundTask(toolCall: toolCall) == nil
+              ACPBackgroundTask(toolCall: toolCall) == nil,
+              !hiddenToolCallIds.contains(toolCall.toolCallId)
         else { return false }
         return true
     }
@@ -199,22 +204,33 @@ enum ACPToolCallGrouping {
     /// `ACPTranscriptRenderRow`). Callers that memoize the result must
     /// include the expansion state in their cache key; `ACPVisibleRowsCache`
     /// does this via `ACPToolCallGroupExpansionSeeds.generation`.
+    ///
+    /// `hiddenToolCallIds` should be the set the rows were built with; when nil
+    /// it is linked over the rows' span.
     @MainActor
     static func fold(
         rows: [ACPTranscriptVisibleRow],
         messages: [ACPMessage],
         options: Options,
+        hiddenToolCallIds: Set<String>? = nil,
         messageCreatedAt: (Int) -> Date? = { _ in nil },
         isExpanded: (ACPTranscriptToolCallGroup) -> Bool = { _ in false },
         memberLimit: (ACPTranscriptToolCallGroup) -> Int? = { _ in nil }
     ) -> [ACPTranscriptRenderRow] {
         guard options.enabled else { return rows.map(ACPTranscriptRenderRow.message) }
 
+        let hiddenToolCallIds = hiddenToolCallIds ?? {
+            guard let first = rows.first?.index, let last = rows.last?.index,
+                  messages.indices.contains(first), messages.indices.contains(last), first <= last
+            else { return [] }
+            return ACPToolCallPresentation.hiddenVisualShowToolCallIds(in: messages[first...last])
+        }()
         let completedTurnKinds = completedTurnKinds(
             for: rows,
             in: messages,
             currentTurnAnswerIndex: options.currentTurnAnswerIndex,
             breakAfterIndex: options.breakAfterIndex,
+            hiddenToolCallIds: hiddenToolCallIds,
             messageCreatedAt: messageCreatedAt
         )
         // The last row only makes a live group when nothing readable follows
@@ -266,7 +282,8 @@ enum ACPToolCallGrouping {
         for row in rows {
             let kind = completedTurnKinds[row.index]
                 ?? (options.priorCurrentTurnCommentaryIndices.contains(row.index)
-                    || (messages.indices.contains(row.index) && isCollapsible(messages[row.index]))
+                    || (messages.indices.contains(row.index)
+                        && isCollapsible(messages[row.index], hiddenToolCallIds: hiddenToolCallIds))
                     ? .activity : nil)
             let collapsible = messages.indices.contains(row.index)
                 && kind != nil
@@ -304,6 +321,7 @@ enum ACPToolCallGrouping {
         in messages: [ACPMessage],
         currentTurnAnswerIndex: Int?,
         breakAfterIndex: Int?,
+        hiddenToolCallIds: Set<String>,
         messageCreatedAt: (Int) -> Date?
     ) -> [Int: ACPTranscriptToolCallGroup.Kind] {
         guard let firstVisible = rows.first?.index,
@@ -350,19 +368,19 @@ enum ACPToolCallGrouping {
             // recording every turn stays linear in the window.
             let lower = firstRow(after: user), upper = firstRow(after: answer - 1)
             guard lower < upper else { return }
-            let memberIndices = rows[lower..<upper].map(\.index).filter { isCompletedTurnWork(messages[$0]) }
+            let memberIndices = rows[lower..<upper].map(\.index).filter { isCompletedTurnWork(messages[$0], hiddenToolCallIds: hiddenToolCallIds) }
             guard !memberIndices.isEmpty else { return }
             // A turn can contain several runs separated by readable prose or
             // the fork divider. Show its total duration on the last run only.
             guard var lastRunStart = (user + 1..<answer).last(where: {
-                isCompletedTurnWork(messages[$0])
+                isCompletedTurnWork(messages[$0], hiddenToolCallIds: hiddenToolCallIds)
             }) else { return }
             while lastRunStart > user + 1 {
                 let previous = lastRunStart - 1
                 if previous == breakAfterIndex { break }
                 if case .plan = messages[previous] {
                     lastRunStart = previous
-                } else if isCompletedTurnWork(messages[previous]) {
+                } else if isCompletedTurnWork(messages[previous], hiddenToolCallIds: hiddenToolCallIds) {
                     lastRunStart = previous
                 } else {
                     break
@@ -402,8 +420,8 @@ enum ACPToolCallGrouping {
     }
 
     @MainActor
-    private static func isCompletedTurnWork(_ message: ACPMessage) -> Bool {
-        if isCollapsible(message) { return true }
+    private static func isCompletedTurnWork(_ message: ACPMessage, hiddenToolCallIds: Set<String>) -> Bool {
+        if isCollapsible(message, hiddenToolCallIds: hiddenToolCallIds) { return true }
         guard case .agent(_, _, let buffer) = message else { return false }
         return buffer.phase == .commentary
     }

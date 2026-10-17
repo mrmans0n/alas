@@ -3186,13 +3186,16 @@ function forgetVisualCard(visualId) {
 function renderVisualAid(m) {
   const visual = RemoteVisualAid.parseVisual(m.json);
   if (!visual) return el("div", "msg m-agent", m.text || "");   // an old or malformed row shows its title
-  const node = el("div", "msg m-visual");
+  // An embedded visual is part of the reply: no card chrome or title, only the page.
+  const presentation = RemoteVisualAid.presentationOf(visual);
+  const node = el("div", presentation === "embedded" ? "msg m-visual m-visual-embedded" : "msg m-visual");
   node.dataset.kind = "visualAid";
   node.dataset.visualId = visual.id;
   const host = el("div", "visual-host");
   const answer = el("div", "visual-answer");
-  node.append(el("div", "visual-title", visual.title), host, answer);
-  const card = { id: visual.id, node, host, answer, visual, frame: null, height: RemoteVisualAid.HEIGHT_MIN,
+  if (presentation === "embedded") node.append(host, answer);
+  else node.append(el("div", "visual-title", visual.title), host, answer);
+  const card = { id: visual.id, node, host, answer, visual, presentation, frame: null, height: RemoteVisualAid.HEIGHT_MIN,
                  selected: [], note: "", pending: false, submitted: false, requestId: null, paused: false, blocked: false, error: "", signature: "" };
   const draftKey = currentSession + ":" + visual.id;
   card.submitted = RemoteVisualAid.restoreSubmitted(visual, visualSubmitted.has(draftKey));
@@ -3237,7 +3240,7 @@ function mountVisualFrame(card) {
   let srcdoc;
   try {
     srcdoc = RemoteVisualAid.buildDocument(card.visual.html, card.id,
-      (source) => new DOMParser().parseFromString(source, "text/html"));
+      (source) => new DOMParser().parseFromString(source, "text/html"), card.presentation);
   } catch {
     showVisualPlaceholder(card, "Visual unavailable", false);
     return;
@@ -3316,7 +3319,7 @@ window.addEventListener("message", (event) => {
     blockVisualFrame(card, card.frame);
     return;
   }
-  const height = RemoteVisualAid.heightFromMessage(data, card.id, event.source, card.frame.contentWindow);
+  const height = RemoteVisualAid.heightFromMessage(data, card.id, event.source, card.frame.contentWindow, card.presentation);
   if (height === null) return;
   card.height = height;
   card.frame.style.height = height + "px";

@@ -186,7 +186,7 @@ fn handle_line_with_parent(
 fn initialize_result(parent_session_id: Option<&str>, scope: ToolScope) -> Value {
     let instructions = match parent_session_id {
         _ if scope == ToolScope::Visual => {
-            "Shows visuals to the user in Alas with visual_show. A visual may ask one optional question; the user's answer arrives as their next prompt, so end your turn after showing it."
+            "Shows visuals to the user in Alas with visual_show. Show a diagram, flow, comparison or chart as part of your reply when that explains better than prose. A visual may ask one optional question; the user's answer arrives as their next prompt, so end your turn after showing it."
         }
         Some(_) => {
             "Tools that drive the user's Alas workspace UI. This session was delegated by a parent session: it cannot create descendants. Report results and questions to the parent only with this server's session_send tool; do not use SendMessage, ListAgents, or any other messaging or agent tool for that."
@@ -287,7 +287,7 @@ fn all_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "visual_show",
-            "description": "Show the user an HTML visual aid inline in their Alas transcript: UI prototypes, layouts, diagrams, side-by-side comparisons. Use it when seeing beats reading; answer in text otherwise. `html` may be a fragment, which Alas wraps in a themed frame providing these classes: options/option (with letter and content children) for A/B/C choices, cards/card/card-image/card-body, mockup/mockup-header/mockup-body, split (side by side), pros-cons/pros/cons, mock-nav, mock-sidebar, mock-content, mock-button, mock-input, placeholder, subtitle, section, label. A document starting with <!DOCTYPE or <html is used as is. Scripts, styles, fonts and images may load from https CDNs; fetch, XHR and WebSockets are blocked. To ask the user to pick, pass `question` and put data-choice=\"<option id>\" on the matching elements: clicking one selects that option on a native card under the visual. The tool returns at once; the user's answer, if any, arrives as their next message, so end your turn after asking.",
+            "description": "Show the user an HTML visual inline in their Alas transcript. Use it when a diagram, flow, comparison, set of numbers or UI sketch says more than prose; answer in text otherwise. `presentation`: \"embedded\" (default) draws the page with no frame as part of your reply, on the transcript background at the width of your reply text; \"card\" puts it in a titled frame, better for UI prototypes and mockups to inspect. A visual with `question` is always a card. For embedded pages leave html, body and the outermost element without background, border, padding or a banner title; boxes that need a fill use var(--alas-card) with at least 12px padding and var(--alas-radius) corners, borders use var(--alas-border), highlights var(--alas-accent). Use these variables for every colour and font so the page follows the user's theme: --alas-text, --alas-dim, --alas-muted, --alas-accent, --alas-accent-soft, --alas-card, --alas-border, --alas-line, --alas-background, --alas-tone-info/success/warning/danger, --alas-chart-1 to 6, --alas-radius, --alas-font-sans, --alas-font-mono, --alas-font-size. Give charts fixed pixel heights, never 100vh. `html` may be a fragment, which Alas wraps in a themed frame providing these classes: options/option (with letter and content children) for A/B/C choices, cards/card/card-image/card-body, mockup/mockup-header/mockup-body, split (side by side), pros-cons/pros/cons, mock-nav, mock-sidebar, mock-content, mock-button, mock-input, placeholder, subtitle, section, label. A document starting with <!DOCTYPE or <html is used as is. Scripts, styles, fonts and images may load from https CDNs; fetch, XHR and WebSockets are blocked. To ask the user to pick, pass `question` and put data-choice=\"<option id>\" on the matching elements: clicking one selects that option on a native card under the visual. The tool returns at once; the user's answer, if any, arrives as their next message, so end your turn after asking.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -315,7 +315,8 @@ fn all_tool_definitions() -> Vec<Value> {
                             "allow_multiple": { "type": "boolean" }
                         },
                         "required": ["prompt", "options"]
-                    }
+                    },
+                    "presentation": { "type": "string", "enum": ["embedded", "card"], "description": "Default: embedded. Ignored when question is set (always a card)." }
                 },
                 "required": ["title", "html"]
             }
@@ -1249,7 +1250,12 @@ fn visual_show_command(args: &Value) -> Result<Command, String> {
         Some(value @ Value::Object(_)) => Some(visual_question(value)?),
         Some(_) => return Err("question must be an object".into()),
     };
-    Ok(Command::VisualShow { title, html, question })
+    let presentation = match args.get("presentation") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(value)) if value == "embedded" || value == "card" => Some(value.clone()),
+        Some(_) => return Err("presentation must be \"embedded\" or \"card\"".into()),
+    };
+    Ok(Command::VisualShow { title, html, question, presentation })
 }
 
 fn visual_question(value: &Value) -> Result<VisualQuestion, String> {
@@ -1513,11 +1519,23 @@ fn call_tool(
 }
 
 fn visual_show_result(lines: Option<&[String]>) -> Value {
-    let visual_id = lines
+    let reply = lines
         .and_then(|lines| lines.first())
-        .and_then(|line| serde_json::from_str::<Value>(line).ok())
+        .and_then(|line| serde_json::from_str::<Value>(line).ok());
+    let visual_id = reply
+        .as_ref()
         .and_then(|reply| reply.get("visual_id").and_then(Value::as_str).map(String::from));
+    let embedded = reply
+        .as_ref()
+        .and_then(|reply| reply.get("presentation").and_then(Value::as_str))
+        == Some("embedded");
     match visual_id {
+        Some(id) if embedded => text_result(
+            format!(
+                "Shown to the user as visual {id}, above your reply. Don't restate or describe it; reply with only what it doesn't already say."
+            ),
+            false,
+        ),
         Some(id) => text_result(
             format!(
                 "Shown to the user as visual {id}. Their selection, if any, arrives as their next message. End your turn unless you have more to show."
@@ -2545,6 +2563,7 @@ mod tests {
             &json!({
                 "title": " Layouts ",
                 "html": "  <h2>Pick</h2>\n",
+                "presentation": "card",
                 "question": {
                     "prompt": "Which?",
                     "options": [{ "id": "a", "label": "One" }, { "id": "b", "label": "Two" }],
@@ -2567,8 +2586,11 @@ mod tests {
                     ],
                     allow_multiple: true,
                 }),
+                presentation: Some("card".into()),
             }
         );
+        let omitted = command_for_tool("visual_show", &json!({ "title": "T", "html": "<p>" }), "/wt").unwrap();
+        assert!(matches!(omitted, Command::VisualShow { presentation: None, .. }));
     }
 
     #[test]
@@ -2585,29 +2607,40 @@ mod tests {
             json!({ "title": "T", "html": "<p>", "question": { "prompt": "Q", "options": duplicate } }),
             json!({ "title": "T", "html": "<p>", "question": { "prompt": "Q", "options": bad_id } }),
             json!({ "title": "T", "html": "<p>", "question": "Which?" }),
+            json!({ "title": "T", "html": "<p>", "presentation": "banner" }),
+            json!({ "title": "T", "html": "<p>", "presentation": 3 }),
         ];
         for args in cases {
-            assert!(command_for_tool("visual_show", &args, "/wt").is_err(), "accepted {args}");
+            let err = command_for_tool("visual_show", &args, "/wt").expect_err(&format!("accepted {args}"));
+            if args.get("presentation").is_some() {
+                assert!(err.contains("presentation must be \"embedded\" or \"card\""), "{err}");
+            }
         }
     }
 
     #[test]
     fn visual_show_result_reports_the_visual_id() {
-        let cmd = Command::VisualShow { title: "T".into(), html: "<p>".into(), question: None };
-        let result = tool_result(
-            &cmd,
-            Response {
-                ok: true,
-                lines: Some(vec![r#"{"visual_id":"ABC"}"#.into()]),
-                error: None,
-                exit_code: None,
-            },
-        );
-        assert_eq!(result["isError"], json!(false));
-        assert_eq!(
-            result["content"][0]["text"],
-            json!("Shown to the user as visual ABC. Their selection, if any, arrives as their next message. End your turn unless you have more to show.")
-        );
+        let old = "Shown to the user as visual ABC. Their selection, if any, arrives as their next message. End your turn unless you have more to show.";
+        let embedded = "Shown to the user as visual ABC, above your reply. Don't restate or describe it; reply with only what it doesn't already say.";
+        let cases = [
+            (r#"{"visual_id":"ABC"}"#, old),
+            (r#"{"visual_id":"ABC","presentation":"card"}"#, old),
+            (r#"{"visual_id":"ABC","presentation":"embedded"}"#, embedded),
+        ];
+        for (line, expected) in cases {
+            let cmd = Command::VisualShow {
+                title: "T".into(),
+                html: "<p>".into(),
+                question: None,
+                presentation: None,
+            };
+            let result = tool_result(
+                &cmd,
+                Response { ok: true, lines: Some(vec![line.into()]), error: None, exit_code: None },
+            );
+            assert_eq!(result["isError"], json!(false));
+            assert_eq!(result["content"][0]["text"], json!(expected), "{line}");
+        }
     }
 
     #[test]

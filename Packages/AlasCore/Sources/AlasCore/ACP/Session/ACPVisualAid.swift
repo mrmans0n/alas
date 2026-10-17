@@ -7,8 +7,16 @@ public struct ACPVisualAid: Codable, Equatable, Sendable {
     public let title: String
     public let html: String
     public let question: Question?
+    public let presentation: Presentation
     public var answer: Answer?
     public let createdAt: Date
+
+    /// How the visual is shown in the transcript: borderless inline content, or
+    /// a bordered card. A visual with a question is always a card.
+    public enum Presentation: String, Codable, Sendable {
+        case embedded
+        case card
+    }
 
     public struct Option: Codable, Equatable, Sendable {
         public let id: String
@@ -90,11 +98,37 @@ public struct ACPVisualAid: Codable, Equatable, Sendable {
         return text
     }
 
-    public init(id: UUID, title: String, html: String, question: Question?, answer: Answer? = nil, createdAt: Date) {
+    /// A question needs the card's controls, so it forces `.card`; otherwise
+    /// the request wins and defaults to `.embedded`.
+    public static func resolvePresentation(requested: Presentation?, hasQuestion: Bool) -> Presentation {
+        hasQuestion ? .card : (requested ?? .embedded)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, title, html, question, presentation, answer, createdAt
+    }
+
+    /// Visuals stored before `presentation` existed read back as cards.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        title = try c.decode(String.self, forKey: .title)
+        html = try c.decode(String.self, forKey: .html)
+        question = try c.decodeIfPresent(Question.self, forKey: .question)
+        presentation = try c.decodeIfPresent(Presentation.self, forKey: .presentation) ?? .card
+        answer = try c.decodeIfPresent(Answer.self, forKey: .answer)
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
+    }
+
+    public init(
+        id: UUID, title: String, html: String, question: Question?,
+        presentation: Presentation = .card, answer: Answer? = nil, createdAt: Date
+    ) {
         self.id = id
         self.title = title
         self.html = html
         self.question = question
+        self.presentation = presentation
         self.answer = answer
         self.createdAt = createdAt
     }

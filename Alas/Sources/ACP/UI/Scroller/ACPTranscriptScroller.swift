@@ -951,15 +951,25 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             expansionSeeds: ACPToolCallGroupExpansionSeeds? = nil
         ) -> [ACPTranscriptRenderRow] {
             let transcript = host.transcript
+            let messages = transcript.messages
+            // One link pass per build, shared by the row filter and the fold. It covers the whole
+            // transcript, like the target resolver and the remote gateway: past the tail so a chip
+            // does not vanish as the tail steps forward, and before the head so a visual whose call
+            // lies above the window cannot claim a different call inside it.
+            let head = min(transcript.visibleHead, messages.count)
+            let tail = max(head, min(transcript.visibleTailBound, messages.count))
+            let hiddenToolCallIds = ACPToolCallPresentation.hiddenVisualShowToolCallIds(in: messages)
             let rows = ACPTranscriptVisibleRow.rows(
-                messages: transcript.messages,
-                visibleHead: transcript.visibleHead,
-                visibleTail: transcript.visibleTailBound,
+                messages: messages,
+                visibleHead: head,
+                visibleTail: tail,
+                hiddenToolCallIds: hiddenToolCallIds,
                 stableId: { transcript.stableId(for: $0) }
             )
             return ACPToolCallGrouping.fold(
-                rows: rows, messages: transcript.messages,
+                rows: rows, messages: messages,
                 options: groupingOptions(host: host),
+                hiddenToolCallIds: hiddenToolCallIds,
                 messageCreatedAt: { transcript.createdAt(forMessageAt: $0) },
                 isExpanded: { group in expansionSeeds?.isExpanded(group) ?? false },
                 memberLimit: { group in expansionSeeds?.memberLimit(group) }
@@ -1702,7 +1712,10 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             }
             // Hidden messages never become rows; land on the nearest message that does.
             let messages = host.transcript.messages
-            func isHidden(_ index: Int) -> Bool { ACPTranscriptVisibleRow.isHidden(messages[index]) }
+            let hiddenToolCallIds = ACPToolCallPresentation.hiddenVisualShowToolCallIds(in: messages)
+            func isHidden(_ index: Int) -> Bool {
+                ACPTranscriptVisibleRow.isHidden(messages[index], hiddenToolCallIds: hiddenToolCallIds)
+            }
             if isHidden(localIndex) {
                 let original = localIndex
                 while localIndex < messages.count, isHidden(localIndex) { localIndex += 1 }

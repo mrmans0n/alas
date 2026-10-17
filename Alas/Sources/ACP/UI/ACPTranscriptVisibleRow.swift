@@ -9,28 +9,35 @@ struct ACPTranscriptVisibleRow: Identifiable, Equatable {
     var id: String { stableId }
 
     /// Messages that never become a row: the toolbar pill renders plans, hidden background
-    /// tasks are not shown, and a visual aid's answer prompt is shown by its answered card.
-    static func isHidden(_ message: ACPMessage) -> Bool {
+    /// tasks are not shown, a visual aid's answer prompt is shown by its answered card, and an
+    /// embedded visual's `visual_show` chip gives way to the visual itself. `hiddenToolCallIds`
+    /// comes from `ACPToolCallPresentation.hiddenVisualShowToolCallIds`, computed once per row build.
+    static func isHidden(_ message: ACPMessage, hiddenToolCallIds: Set<String> = []) -> Bool {
         switch message {
         case .plan:
             true
         case .toolCall(let toolCall):
             ACPBackgroundTask(toolCall: toolCall)?.showInTranscript == false
+                || hiddenToolCallIds.contains(toolCall.toolCallId)
         default:
             ACPVisualAidQuestionForm.isAnswerPrompt(message)
         }
     }
 
     /// Window-sliced, hidden-filtered row list. The slice bounds first-paint cost
-    /// on long transcripts; `isHidden` drops the messages that have no row.
+    /// on long transcripts; `isHidden` drops the messages that have no row. Embedded visuals' chips
+    /// are linked within the window unless the caller passes the set it also hands to the fold.
     static func rows(
         messages: [ACPMessage],
         visibleHead: Int,
         visibleTail: Int,
+        hiddenToolCallIds: Set<String>? = nil,
         stableId: (ACPMessage) -> String
     ) -> [ACPTranscriptVisibleRow] {
         let head = min(visibleHead, messages.count)
         let tail = max(head, min(visibleTail, messages.count))
+        let hiddenToolCallIds = hiddenToolCallIds
+            ?? ACPToolCallPresentation.hiddenVisualShowToolCallIds(in: messages[head..<tail])
         // Replayed history can contain several snapshots of the same message.
         // Match the lookup's last-snapshot policy so the tiler receives one row
         // per identity, without changing the stored transcript.
@@ -41,7 +48,7 @@ struct ACPTranscriptVisibleRow: Identifiable, Equatable {
             let id = stableId(message)
             guard seen.insert(id).inserted else { return nil }
             // A hidden latest snapshot still claims the id, so it supersedes earlier visible ones.
-            if isHidden(message) { return nil }
+            if isHidden(message, hiddenToolCallIds: hiddenToolCallIds) { return nil }
             return ACPTranscriptVisibleRow(index: index, stableId: id)
         }
         return rows.reversed()

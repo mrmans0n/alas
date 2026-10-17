@@ -120,6 +120,8 @@ struct ACPSideQuestionCard: View {
                 rows: rows,
                 messages: transcript.messages,
                 options: .init(enabled: true, isTurnActive: transcript.streamingState != .idle),
+                // This card shows no visuals, so every visual_show chip stays and folds as before.
+                hiddenToolCallIds: [],
                 isExpanded: { expandedActivityIDs.contains($0.id) }
             )
         }

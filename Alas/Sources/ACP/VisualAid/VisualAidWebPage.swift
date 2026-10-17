@@ -46,14 +46,18 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
     @ObservationIgnored private let documentThemeVariables: [String: String]?
     @ObservationIgnored private var themeVariables: [String: String]
 
+    /// `layoutVariables` (the transcript's font, from `VisualAidWebPolicy.layoutVariables`) travel with the
+    /// theme's colours: baked into a fragment's frame and pushed again by `applyTheme`.
     init(
-        visualID: UUID, html: String, theme: Theme, locksNetworkAfterLoad: Bool,
+        visualID: UUID, html: String, theme: Theme, layoutVariables: [String: String] = [:],
+        locksNetworkAfterLoad: Bool,
+        presentation: ACPVisualAid.Presentation = .card,
         networkLockDeadline: Duration = VisualAidWebPolicy.networkLockDeadline
     ) {
         self.locksNetworkAfterLoad = locksNetworkAfterLoad
         self.networkLockDeadline = networkLockDeadline
         self.visualID = visualID
-        let variables = PluginWebPolicy.cssVariables(theme)
+        let variables = Self.variables(theme: theme, layoutVariables: layoutVariables)
         documentThemeVariables = VisualAidWebPolicy.isFullDocument(html) ? nil : variables
         themeVariables = variables
         schemeHandler = VisualAidSchemeHandler(
@@ -61,7 +65,8 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
             document: VisualAidWebPolicy.document(
                 html: html,
                 themeVariables: variables,
-                frameTemplate: VisualAidFrameTemplate.html
+                frameTemplate: VisualAidFrameTemplate.html,
+                presentation: presentation
             )
         )
         let configuration = WKWebViewConfiguration()
@@ -82,6 +87,11 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
         webView.isInspectable = true
         #endif
         webView.allowsLinkPreview = false
+        if presentation == .embedded {
+            // Part of the reply, not a card: nothing opaque behind the page, before or after it loads.
+            webView.setValue(false, forKey: "drawsBackground")
+            webView.underPageBackgroundColor = .clear
+        }
         super.init()
         let controller = configuration.userContentController
         controller.addUserScript(WKUserScript(
@@ -229,10 +239,14 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
             in: nil, in: Self.bridgeWorld, completionHandler: nil)
     }
 
-    func applyTheme(_ theme: Theme) {
-        themeVariables = PluginWebPolicy.cssVariables(theme)
+    func applyTheme(_ theme: Theme, layoutVariables: [String: String] = [:]) {
+        themeVariables = Self.variables(theme: theme, layoutVariables: layoutVariables)
         guard !isClosed, status == .ready else { return }
         pushTheme()
+    }
+
+    private static func variables(theme: Theme, layoutVariables: [String: String]) -> [String: String] {
+        PluginWebPolicy.cssVariables(theme).merging(layoutVariables) { _, layout in layout }
     }
 
     private func pushTheme() {

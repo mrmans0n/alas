@@ -11,6 +11,7 @@ public enum VisualAidWebPolicy: Sendable {
     public static let bridgeHandlerName = "alasVisual"
     public static let minCardHeight: CGFloat = 120
     public static let maxCardHeight: CGFloat = 720
+    public static let maxEmbeddedHeight: CGFloat = 2000
     public static let maxLivePages = 4
 
     public static let contentSecurityPolicy =
@@ -104,12 +105,17 @@ public enum VisualAidWebPolicy: Sendable {
     /// variables. Full documents are served byte for byte: the scheme handler
     /// sends the CSP as an HTTP header, and the page pushes theme variables
     /// after load.
-    public static func document(html: String, themeVariables: [String: String], frameTemplate: String) -> Data {
+    public static func document(
+        html: String, themeVariables: [String: String], frameTemplate: String, presentation: ACPVisualAid.Presentation
+    ) -> Data {
         guard isFullDocument(html) else {
             let css = themeVariables.sorted { $0.key < $1.key }.map { "\($0.key): \($0.value);" }.joined(separator: " ")
             let head = #"<meta http-equiv="Content-Security-Policy" content="\#(contentSecurityPolicy)"><style>:root { \#(css) }</style>"#
             // Split rather than replace so the agent's HTML is never scanned for placeholders.
-            let parts = frameTemplate.replacingOccurrences(of: "{{HEAD}}", with: head).components(separatedBy: "{{CONTENT}}")
+            let htmlClass = presentation == .embedded ? "alas-embedded" : "alas-card"
+            let parts = frameTemplate
+                .replacingOccurrences(of: "{{HTML_CLASS}}", with: htmlClass)
+                .replacingOccurrences(of: "{{HEAD}}", with: head).components(separatedBy: "{{CONTENT}}")
             return Data((parts.first ?? "").appending(html).appending(parts.dropFirst().joined(separator: "{{CONTENT}}")).utf8)
         }
         return Data(html.utf8)
@@ -126,8 +132,27 @@ public enum VisualAidWebPolicy: Sendable {
     })();
     """
 
-    public static func cardHeight(forContentHeight height: CGFloat) -> CGFloat {
-        min(max(height, minCardHeight), maxCardHeight)
+    /// The height a visual's surface takes for the content it reports: cards cap at `maxCardHeight` and
+    /// scroll inside, embedded visuals grow with the transcript up to `maxEmbeddedHeight`.
+    public static func contentHeight(forContentHeight height: CGFloat, presentation: ACPVisualAid.Presentation) -> CGFloat {
+        let maximum = presentation == .embedded ? maxEmbeddedHeight : maxCardHeight
+        return min(max(height, minCardHeight), maximum)
+    }
+
+    /// Layout variables an embedded visual inherits from the app's UI font. The family is the user's own
+    /// setting but lands in a `<style>` block, so characters that could end the declaration are dropped.
+    /// An empty family (the system font) leaves just the system stack.
+    public static func layoutVariables(fontFamily: String, fontSize: CGFloat) -> [String: String] {
+        let unsafe: Set<Character> = ["\"", "\\", ";", "{", "}", "<"]
+        let family = String(fontFamily.filter { !unsafe.contains($0) && !$0.isNewline })
+            .trimmingCharacters(in: .whitespaces)
+        let systemStack = "-apple-system, system-ui, sans-serif"
+        return [
+            "--alas-font-sans": family.isEmpty ? systemStack : "\"\(family)\", \(systemStack)",
+            "--alas-font-mono": "ui-monospace, SFMono-Regular, Menlo, monospace",
+            "--alas-font-size": "\(fontSize)px",
+            "--alas-radius": "6px",
+        ]
     }
 
     /// Runs in the isolated bridge world at document end. Page scripts cannot

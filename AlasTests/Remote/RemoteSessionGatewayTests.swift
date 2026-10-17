@@ -1874,6 +1874,85 @@ struct RemoteSessionGatewayTests {
         #expect(dto.answer?.kind == "dismissed")
     }
 
+    private func makeVisualShowCall(status: String = "completed") -> ACPMessage {
+        .toolCall(.init(toolCallId: "show-1", title: "Show visual", status: status, name: "mcp__alas__visual_show"))
+    }
+
+    private func makeEmbeddableVisual(_ presentation: ACPVisualAid.Presentation) -> ACPVisualAid {
+        ACPVisualAid(id: UUID(), title: "Flow", html: "<p>flow</p>", question: nil,
+                     presentation: presentation, createdAt: Date(timeIntervalSince1970: 0))
+    }
+
+    @Test func embeddedVisualHidesItsVisualShowCallInTheSnapshot() async throws {
+        let provider = hosted.provider
+        _ = try hosted.session("s1", messages: [
+            .user(id: UUID(), messageId: nil, text: "show me", attachments: []),
+            makeVisualShowCall(),
+            .visualAid(makeEmbeddableVisual(.embedded)),
+        ])
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(app: provider) { sent.append($0) }
+        defer { gw.close() }
+        await gw.handle(.subscribe(sessionId: "s1"))
+        try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
+        guard case .transcriptSnapshot(_, _, _, let rows, _, _, _, _, _)? = sent.first(where: {
+            if case .transcriptSnapshot = $0 { return true }
+            return false
+        }) else {
+            Issue.record("expected a snapshot")
+            return
+        }
+        // A hidden marker carries the message's own kind (`tool_call`), so find it by position.
+        let call = try #require(rows.first { $0.index == 1 })
+        #expect(call.isHidden == true)
+        #expect(call.json == nil)
+    }
+
+    /// The call is sent visible before its visual exists; the visual's arrival
+    /// must re-send the call as hidden, or the phone keeps the chip.
+    @Test(arguments: [ACPVisualAid.Presentation.embedded, .card])
+    func visualArrivalResendsItsVisualShowCall(presentation: ACPVisualAid.Presentation) async throws {
+        let provider = hosted.provider
+        let s = try hosted.session("s1", messages: [
+            .user(id: UUID(), messageId: nil, text: "show me", attachments: []),
+            makeVisualShowCall(),
+        ])
+        var sent: [RemoteServerMessage] = []
+        var nextDelta: CheckedContinuation<RemoteServerMessage, Never>?
+        let gw = RemoteSessionGateway(app: provider) { frame in
+            sent.append(frame)
+            if case .transcriptDelta = frame, let waiter = nextDelta {
+                nextDelta = nil
+                waiter.resume(returning: frame)
+            }
+        }
+        defer { gw.close() }
+        await gw.handle(.subscribe(sessionId: "s1"))
+        try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
+
+        let frame = await withCheckedContinuation { nextDelta = $0
+            s.transcript.appendMessage(.visualAid(makeEmbeddableVisual(presentation))) }
+        guard case .transcriptDelta(_, _, _, let upserts, _, _, _) = frame else {
+            Issue.record("expected delta")
+            return
+        }
+        let call = upserts.first { $0.index == 1 }
+        if presentation == .embedded {
+            #expect(call?.isHidden == true)
+        } else {
+            #expect(call == nil, "a card visual's call is not re-sent")
+        }
+        let visual = try #require(upserts.first { $0.kind == "visualAid" })
+        let dto = try JSONDecoder().decode(RemoteVisualAid.self, from: Data(try #require(visual.json).utf8))
+        #expect(dto.presentation == presentation.rawValue)
+    }
+
+    @Test func visualAidDTOWithoutPresentationDecodesAsCard() throws {
+        let json = #"{"id":"6F0C2D4E-8B1A-4C3D-9E5F-1A2B3C4D5E6F","title":"T","html":"<p>x</p>"}"#
+        let dto = try JSONDecoder().decode(RemoteVisualAid.self, from: Data(json.utf8))
+        #expect(dto.presentation == "card")
+    }
+
     @Test func oversizedVisualBecomesTheTooLargeNoticeAtItsPosition() throws {
         var visual = makeVisual()
         visual = ACPVisualAid(id: visual.id, title: visual.title, html: String(repeating: "x", count: 5 * 1024 * 1024),

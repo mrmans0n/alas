@@ -39,7 +39,11 @@ private struct VisualAidManagedTabView: View {
                 transcript: session.transcript,
                 session: session,
                 tab: tab,
-                actions: .driven(by: manager, session: session, popOut: { _ in })
+                actions: .driven(by: manager, session: session, popOut: { _ in }),
+                typography: ACPChatTypography(
+                    fontFamily: state.config.agents.chatFontFamily,
+                    fontSize: state.config.agents.chatFontSize
+                )
             )
             .task {
                 await state.hydrateAndAttachACP(manager: manager, sessionId: tab.sessionId)
@@ -70,12 +74,14 @@ private struct VisualAidTabContent: View {
     let session: ACPSession
     let tab: VisualAidTabState
     let actions: ACPVisualAidActions
+    let typography: ACPChatTypography
 
     var body: some View {
         if let visual = transcript.visualAid(id: tab.visualId) {
             ACPVisualAidCard(
                 visual: visual, form: session.visualAidForm(for: visual),
-                sendStatus: session.visualAidSendStatus(for: visual.id), actions: actions, fillsHeight: true)
+                sendStatus: session.visualAidSendStatus(for: visual.id), actions: actions, fillsHeight: true,
+                typography: typography)
                 .padding(16)
         } else {
             VisualAidUnavailableView()

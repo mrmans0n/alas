@@ -331,7 +331,8 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
         case .visualAid(let visual):
             ACPVisualAidCard(
                 visual: visual, form: session.visualAidForm(for: visual),
-                sendStatus: session.visualAidSendStatus(for: visual.id), actions: visualAidActions)
+                sendStatus: session.visualAidSendStatus(for: visual.id), actions: visualAidActions,
+                typography: typography)
         }
     }
 

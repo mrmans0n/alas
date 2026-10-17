@@ -237,6 +237,8 @@ pub enum Command {
         title: String,
         html: String,
         question: Option<VisualQuestion>,
+        /// `"embedded"` or `"card"`; the app picks the default when absent.
+        presentation: Option<String>,
     },
     /// One page of a direct parent's, child's, or this session's fork transcript. The
     /// app applies its defaults to omitted bounds.
@@ -641,7 +643,7 @@ pub fn build_request(
             r.params = Some(serde_json::json!({ "session_id": session_id, "prompt": prompt }));
             r
         }
-        Command::VisualShow { title, html, question } => {
+        Command::VisualShow { title, html, question, presentation } => {
             let mut r = Request::new("visual_show");
             let mut params = serde_json::json!({ "title": title, "html": html });
             if let Some(question) = question {
@@ -654,6 +656,9 @@ pub fn build_request(
                         .collect::<Vec<_>>(),
                     "allow_multiple": question.allow_multiple,
                 });
+            }
+            if let Some(presentation) = presentation {
+                params["presentation"] = serde_json::json!(presentation);
             }
             r.params = Some(params);
             r
@@ -1192,6 +1197,28 @@ mod tests {
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     #[test]
+    fn visual_show_request_carries_presentation_only_when_set() {
+        let request = |presentation: Option<&str>| {
+            build_request(
+                &Command::VisualShow {
+                    title: "T".into(),
+                    html: "<p>".into(),
+                    question: None,
+                    presentation: presentation.map(String::from),
+                },
+                None,
+                None,
+            )
+            .params
+        };
+        assert_eq!(
+            request(Some("card")),
+            Some(serde_json::json!({ "title": "T", "html": "<p>", "presentation": "card" }))
+        );
+        assert_eq!(request(None), Some(serde_json::json!({ "title": "T", "html": "<p>" })));
+    }
+
+    #[test]
     fn visual_show_request_carries_the_question_in_params() {
         let request = build_request(
             &Command::VisualShow {
@@ -1205,6 +1232,7 @@ mod tests {
                     ],
                     allow_multiple: true,
                 }),
+                presentation: None,
             },
             Some("acp-1".into()),
             Some("/wt".into()),

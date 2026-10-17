@@ -32,6 +32,25 @@ struct ACPVisualAidTests {
         #expect((ACPVisualAid.validationFailure(title: title, html: html, question: question) == nil) == valid)
     }
 
+    @Test("presentation resolves from the request, and a question forces the card", arguments: [
+        (ACPVisualAid.Presentation?.none, false, ACPVisualAid.Presentation.embedded),
+        (.some(.embedded), false, .embedded),
+        (.some(.card), false, .card),
+        (.none, true, .card),
+        (.some(.embedded), true, .card),
+    ])
+    func presentationResolution(requested: ACPVisualAid.Presentation?, hasQuestion: Bool, expected: ACPVisualAid.Presentation) {
+        #expect(ACPVisualAid.resolvePresentation(requested: requested, hasQuestion: hasQuestion) == expected)
+    }
+
+    @Test("a stored visual without a presentation reads back as a card, and embedded round-trips")
+    func presentationDecodeFallback() throws {
+        let legacy = #"{"id":"6F1C1E0A-0000-4000-8000-000000000001","title":"T","html":"<p>","createdAt":0}"#
+        #expect(try JSONDecoder().decode(ACPVisualAid.self, from: Data(legacy.utf8)).presentation == .card)
+        let visual = ACPVisualAid(id: UUID(), title: "T", html: "<p>", question: nil, presentation: .embedded, createdAt: Date(timeIntervalSince1970: 0))
+        #expect(try JSONDecoder().decode(ACPVisualAid.self, from: JSONEncoder().encode(visual)) == visual)
+    }
+
     @Test("a page click selects only an exact option id", arguments: [
         ("b", true), ("B", false), (" b", false), ("z", false),
     ])

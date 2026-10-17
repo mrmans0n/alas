@@ -221,6 +221,26 @@ struct ACPToolCallGroupingTests {
         if !fork { #expect(ids(rows).contains("acp-agent:note")) }
     }
 
+    @Test("an embedded visual's hidden chip neither shows nor takes the turn's duration")
+    func embeddedVisualChipStaysOutOfTheTurn() {
+        let messages: [ACPMessage] = [
+            .user(id: UUID(), messageId: "u", text: "Explain", attachments: []),
+            tool("a"),
+            tool("a2"),
+            agent("note", "Here is a diagram", phase: .finalAnswer),
+            .toolCall(.init(
+                toolCallId: "v", title: "mcp__alas__visual_show", status: "completed",
+                name: "mcp__alas__visual_show")),
+            .visualAid(ACPVisualAid(
+                id: UUID(), title: "T", html: "<p>", question: nil, presentation: .embedded,
+                answer: nil, createdAt: Date())),
+            agent("answer", "Done", phase: .finalAnswer),
+        ]
+        let rows = fold(messages, currentTurnAnswerIndex: 6)
+        #expect(!ids(rows).contains(messages[4].stableId))
+        #expect(groups(rows).map(\.kind) == [.completedTurn(duration: nil)])
+    }
+
     @Test("a completed turn keeps blockers outside its work disclosure")
     func completedTurnKeepsBlockersVisible() {
         let user = ACPMessage.user(id: UUID(), messageId: "u1", text: "Fix it", attachments: [])

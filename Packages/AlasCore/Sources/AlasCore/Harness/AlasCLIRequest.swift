@@ -72,7 +72,7 @@ public struct AlasCLIRequest: Equatable, Sendable {
         )
         case sessionSend(sessionID: String, prompt: String)
         /// MCP-only: show a visual aid in the calling ACP session.
-        case visualShow(title: String, html: String, question: ACPVisualAid.Question?)
+        case visualShow(title: String, html: String, question: ACPVisualAid.Question?, presentation: ACPVisualAid.Presentation?)
         /// `session_read`, `session_search`, `session_wait`, `session_interrupt`.
         case sessionAction(ACPDelegatedSessionAction)
         /// MCP-only: push this worktree's branch, open its PR/MR (or adopt the
@@ -363,6 +363,7 @@ public struct AlasCLIRequest: Equatable, Sendable {
     }
 
     private struct VisualShowParams: Decodable {
+        var presentation: String?
         struct Option: Decodable {
             var id: String
             var label: String
@@ -712,7 +713,14 @@ public struct AlasCLIRequest: Equatable, Sendable {
             guard ACPVisualAid.validationFailure(title: title, html: params.html, question: question) == nil else {
                 throw AlasCLIRequestError.malformed
             }
-            command = .visualShow(title: title, html: params.html, question: question)
+            let presentation: ACPVisualAid.Presentation?
+            if let raw = params.presentation {
+                guard let parsed = ACPVisualAid.Presentation(rawValue: raw) else { throw AlasCLIRequestError.malformed }
+                presentation = parsed
+            } else {
+                presentation = nil
+            }
+            command = .visualShow(title: title, html: params.html, question: question, presentation: presentation)
         case "session_read":
             let params = try Self.decodeParams(SessionReadParams.self, from: data)
             if let offset = params.offset, offset < 0 { throw AlasCLIRequestError.malformed }
