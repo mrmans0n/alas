@@ -217,6 +217,11 @@ public final class HostProtocolConnection {
         case .unfollowSession(let id):
             try subscribed().unfollow(id)
         case .followWorktree(let id):
+            // Only a listed worktree: an unknown id would keep a refresh
+            // waking for nothing, with no removal to end it.
+            guard host.worktrees.list(includingArchived: true).contains(where: { $0.worktree.id == id }) else {
+                throw HostError.notFound(what: "worktree \(id)")
+            }
             try subscribed().followWorktree(id)
         case .unfollowWorktree(let id):
             try subscribed().unfollowWorktree(id)
