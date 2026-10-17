@@ -2,23 +2,38 @@ import Foundation
 
 /// Agent-facing JSON of the `pr_create` MCP tool. Snake_cased on the wire by
 /// `ReviewCommentWireDTO.jsonLine`'s key strategy.
-struct PRCreateResultWire: Encodable, Equatable, Sendable {
-    struct Shepherd: Encodable, Equatable, Sendable {
-        var autoFix: Bool
-        var autoMerge: Bool
+public struct PRCreateResultWire: Encodable, Equatable, Sendable {
+    public init(number: Int, url: String, provider: String, headSha: String, created: Bool, uncommittedChanges: Bool, shepherd: Shepherd) {
+        self.number = number
+        self.url = url
+        self.provider = provider
+        self.headSha = headSha
+        self.created = created
+        self.uncommittedChanges = uncommittedChanges
+        self.shepherd = shepherd
     }
 
-    var number: Int
-    var url: String
-    var provider: String
-    var headSha: String
-    var created: Bool
-    var uncommittedChanges: Bool
-    var shepherd: Shepherd
+    public struct Shepherd: Encodable, Equatable, Sendable {
+        public init(autoFix: Bool, autoMerge: Bool) {
+            self.autoFix = autoFix
+            self.autoMerge = autoMerge
+        }
+
+        public var autoFix: Bool
+        public var autoMerge: Bool
+    }
+
+    public var number: Int
+    public var url: String
+    public var provider: String
+    public var headSha: String
+    public var created: Bool
+    public var uncommittedChanges: Bool
+    public var shepherd: Shepherd
 }
 
 extension PRCreateResultWire {
-    init(request: ReviewRequest, headSHA: String, created: Bool, uncommittedChanges: Bool, record: ShepherdRecord) {
+    public init(request: ReviewRequest, headSHA: String, created: Bool, uncommittedChanges: Bool, record: ShepherdRecord) {
         self.init(
             number: request.number,
             url: request.url.absoluteString,
@@ -33,17 +48,28 @@ extension PRCreateResultWire {
 
 /// Agent-facing JSON of the `pr_status` MCP tool. Optional fields encode as
 /// explicit `null` so agents always see the same keys.
-struct PRStatusWire: Encodable, Equatable, Sendable {
-    struct FailingCheck: Encodable, Equatable, Sendable {
-        var name: String
-        var workflow: String?
-        var url: String?
+public struct PRStatusWire: Encodable, Equatable, Sendable {
+    public init(pullRequest: PullRequest?, shepherd: Shepherd?) {
+        self.pullRequest = pullRequest
+        self.shepherd = shepherd
+    }
 
-        enum CodingKeys: String, CodingKey {
+    public struct FailingCheck: Encodable, Equatable, Sendable {
+        public init(name: String, workflow: String?, url: String?) {
+            self.name = name
+            self.workflow = workflow
+            self.url = url
+        }
+
+        public var name: String
+        public var workflow: String?
+        public var url: String?
+
+        public enum CodingKeys: String, CodingKey {
             case name, workflow, url
         }
 
-        func encode(to encoder: Encoder) throws {
+        public func encode(to encoder: Encoder) throws {
             var container = encoder.container(keyedBy: CodingKeys.self)
             try container.encode(name, forKey: .name)
             try container.encode(workflow, forKey: .workflow)
@@ -51,28 +77,46 @@ struct PRStatusWire: Encodable, Equatable, Sendable {
         }
     }
 
-    struct Checks: Encodable, Equatable, Sendable {
-        var passed: Int
-        var failed: Int
-        var pending: Int
-        var skipped: Int
-        var failing: [FailingCheck]
+    public struct Checks: Encodable, Equatable, Sendable {
+        public init(passed: Int, failed: Int, pending: Int, skipped: Int, failing: [FailingCheck]) {
+            self.passed = passed
+            self.failed = failed
+            self.pending = pending
+            self.skipped = skipped
+            self.failing = failing
+        }
+
+        public var passed: Int
+        public var failed: Int
+        public var pending: Int
+        public var skipped: Int
+        public var failing: [FailingCheck]
     }
 
-    struct ThreadEntry: Encodable, Equatable, Sendable {
-        var id: String
-        var path: String?
-        var line: Int?
-        var author: String?
-        var trust: String
-        var body: String
-        var url: String?
+    public struct ThreadEntry: Encodable, Equatable, Sendable {
+        public init(id: String, path: String?, line: Int?, author: String?, trust: String, body: String, url: String?) {
+            self.id = id
+            self.path = path
+            self.line = line
+            self.author = author
+            self.trust = trust
+            self.body = body
+            self.url = url
+        }
 
-        enum CodingKeys: String, CodingKey {
+        public var id: String
+        public var path: String?
+        public var line: Int?
+        public var author: String?
+        public var trust: String
+        public var body: String
+        public var url: String?
+
+        public enum CodingKeys: String, CodingKey {
             case id, path, line, author, trust, body, url
         }
 
-        func encode(to encoder: Encoder) throws {
+        public func encode(to encoder: Encoder) throws {
             var container = encoder.container(keyedBy: CodingKeys.self)
             try container.encode(id, forKey: .id)
             try container.encode(path, forKey: .path)
@@ -84,22 +128,34 @@ struct PRStatusWire: Encodable, Equatable, Sendable {
         }
     }
 
-    struct PullRequest: Encodable, Equatable, Sendable {
-        var number: Int
-        var url: String
-        var state: String
-        var draft: Bool
-        var headSha: String?
-        var mergeState: String
-        var checks: Checks
-        var threads: [ThreadEntry]
-        var missingRequiredReviewers: [String]
+    public struct PullRequest: Encodable, Equatable, Sendable {
+        public init(number: Int, url: String, state: String, draft: Bool, headSha: String?, mergeState: String, checks: Checks, threads: [ThreadEntry], missingRequiredReviewers: [String]) {
+            self.number = number
+            self.url = url
+            self.state = state
+            self.draft = draft
+            self.headSha = headSha
+            self.mergeState = mergeState
+            self.checks = checks
+            self.threads = threads
+            self.missingRequiredReviewers = missingRequiredReviewers
+        }
 
-        enum CodingKeys: String, CodingKey {
+        public var number: Int
+        public var url: String
+        public var state: String
+        public var draft: Bool
+        public var headSha: String?
+        public var mergeState: String
+        public var checks: Checks
+        public var threads: [ThreadEntry]
+        public var missingRequiredReviewers: [String]
+
+        public enum CodingKeys: String, CodingKey {
             case number, url, state, draft, headSha, mergeState, checks, threads, missingRequiredReviewers
         }
 
-        func encode(to encoder: Encoder) throws {
+        public func encode(to encoder: Encoder) throws {
             var container = encoder.container(keyedBy: CodingKeys.self)
             try container.encode(number, forKey: .number)
             try container.encode(url, forKey: .url)
@@ -113,22 +169,30 @@ struct PRStatusWire: Encodable, Equatable, Sendable {
         }
     }
 
-    struct Shepherd: Encodable, Equatable, Sendable {
-        var phase: String
-        var autoFix: Bool
-        var autoMerge: Bool
-        var fixAttempts: Int
-        var rulesSource: String
+    public struct Shepherd: Encodable, Equatable, Sendable {
+        public init(phase: String, autoFix: Bool, autoMerge: Bool, fixAttempts: Int, rulesSource: String) {
+            self.phase = phase
+            self.autoFix = autoFix
+            self.autoMerge = autoMerge
+            self.fixAttempts = fixAttempts
+            self.rulesSource = rulesSource
+        }
+
+        public var phase: String
+        public var autoFix: Bool
+        public var autoMerge: Bool
+        public var fixAttempts: Int
+        public var rulesSource: String
     }
 
-    var pullRequest: PullRequest?
-    var shepherd: Shepherd?
+    public var pullRequest: PullRequest?
+    public var shepherd: Shepherd?
 
-    enum CodingKeys: String, CodingKey {
+    public enum CodingKeys: String, CodingKey {
         case pullRequest, shepherd
     }
 
-    func encode(to encoder: Encoder) throws {
+    public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(pullRequest, forKey: .pullRequest)
         try container.encode(shepherd, forKey: .shepherd)
@@ -141,7 +205,7 @@ extension PRStatusWire.PullRequest {
     /// once: cancelled counts as failed, unknown as pending. A nil
     /// `headReviewers` (not fetched, or the fetch failed) lists every required
     /// reviewer as missing, matching the merge gate's fail-closed rule.
-    init(request: ReviewRequest, rules: ShepherdRules, headReviewers: Set<String>?) {
+    public init(request: ReviewRequest, rules: ShepherdRules, headReviewers: Set<String>?) {
         let failing = request.checks.filter { $0.bucket == .fail || $0.bucket == .cancel }
         self.init(
             number: request.number,
@@ -175,7 +239,7 @@ extension PRStatusWire.PullRequest {
 }
 
 extension PRStatusWire.Shepherd {
-    init(record: ShepherdRecord, rules: ShepherdRules) {
+    public init(record: ShepherdRecord, rules: ShepherdRules) {
         self.init(
             phase: Self.wireName(record.phase),
             autoFix: record.autoFix,
@@ -185,7 +249,7 @@ extension PRStatusWire.Shepherd {
         )
     }
 
-    static func wireName(_ phase: ShepherdPhase) -> String {
+    public static func wireName(_ phase: ShepherdPhase) -> String {
         switch phase {
         case .watching: "watching"
         case .fixing: "fixing"
@@ -199,7 +263,7 @@ extension PRStatusWire.Shepherd {
         }
     }
 
-    static func wireName(_ source: ShepherdRules.Source) -> String {
+    public static func wireName(_ source: ShepherdRules.Source) -> String {
         switch source {
         case .localFile: "local_file"
         case .repoFile: "repo_file"

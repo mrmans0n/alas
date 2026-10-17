@@ -49,6 +49,17 @@ extension SessionsAPI {
 }
 
 extension WorktreesAPI {
+    /// The worktree's Git status as last scanned: its changed files and
+    /// conflicts.
+    public func gitStatus(of worktree: Worktree) -> WorktreeDirtyState {
+        WorktreeStatusStore.shared.status(forPath: worktree.path.path)
+    }
+
+    /// Whether `worktree` is its project's main checkout.
+    public func isMain(_ worktree: Worktree) -> Bool {
+        core.projects.projects.first { $0.id == worktree.projectId }.map { core.projects.isMain(worktree, in: $0) } ?? false
+    }
+
     /// Where worktree `worktreeID` of `projectID` lives: on this Mac, or on
     /// its SSH host at a real path there.
     public func location(of worktreeID: String, projectID: String) -> PluginWorktreeLocation? {

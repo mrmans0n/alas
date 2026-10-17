@@ -311,7 +311,6 @@ final class AppState {
     @ObservationIgnored var attentionAliasRetryNotBefore: Date?
     /// The `pr_create` running per worktree. A concurrent call waits for it
     /// instead of pushing or opening a second request.
-    @ObservationIgnored var prCreateTasks: [String: Task<AlasCLIResponse, Never>] = [:]
     /// Decides when scheduled runs start. Execution is delegated back here so
     /// a scheduled run is a manual run with a different trigger.
     var runScheduler: RunScheduler { core.runScheduler }
@@ -7054,21 +7053,6 @@ final class AppState {
             },
             activateApp: {
                 NSApp.activate(ignoringOtherApps: true)
-            },
-            prCreate: { [weak self] sessionID, worktreeID, params in
-                guard let self else { return .error("Alas is not available.") }
-                return await self.cliPRCreate(
-                    sessionID: sessionID,
-                    worktreeID: worktreeID,
-                    title: params.title,
-                    body: params.body,
-                    draft: params.draft,
-                    base: params.base
-                )
-            },
-            prStatus: { [weak self] sessionID, worktreeID in
-                guard let self else { return .error("Alas is not available.") }
-                return await self.cliPRStatus(sessionID: sessionID, worktreeID: worktreeID)
             }
         )
     }

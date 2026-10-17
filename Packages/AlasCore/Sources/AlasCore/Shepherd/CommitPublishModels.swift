@@ -3,16 +3,18 @@ import Observation
 
 @Observable
 @MainActor
-final class CommitPublishAmendProbeLoader {
+public final class CommitPublishAmendProbeLoader {
+    public init() {}
+
     private var key: String?
     private var generation = 0
     private var state: CommitPublishAmendProbe = .loading
 
-    func result(for key: String) -> CommitPublishAmendProbe {
+    public func result(for key: String) -> CommitPublishAmendProbe {
         self.key == key ? state : .loading
     }
 
-    func load(key: String, operation: () async throws -> HeadPublicationState) async {
+    public func load(key: String, operation: () async throws -> HeadPublicationState) async {
         generation += 1
         let requestGeneration = generation
         self.key = key
@@ -28,17 +30,17 @@ final class CommitPublishAmendProbeLoader {
     }
 }
 
-enum CommitPublishAmendProbe: Equatable, Sendable {
+public enum CommitPublishAmendProbe: Equatable, Sendable {
     case loading
     case notPublished
     case published
     case failed(String)
 
-    init(_ state: HeadPublicationState) {
+    public init(_ state: HeadPublicationState) {
         self = state == .published ? .published : .notPublished
     }
 
-    var disabledReason: String? {
+    public var disabledReason: String? {
         switch self {
         case .loading: "Checking whether HEAD is published."
         case .notPublished: nil
@@ -48,20 +50,28 @@ enum CommitPublishAmendProbe: Equatable, Sendable {
     }
 }
 
-struct CommitPublishAvailability: Equatable, Sendable {
-    let label: String
-    let detail: String
-    let disabledReason: String?
-    let showsDraftToggle: Bool
-    var reviewRequestLabel: String = "PR"
+public struct CommitPublishAvailability: Equatable, Sendable {
+    public init(label: String, detail: String, disabledReason: String?, showsDraftToggle: Bool, reviewRequestLabel: String = "PR") {
+        self.label = label
+        self.detail = detail
+        self.disabledReason = disabledReason
+        self.showsDraftToggle = showsDraftToggle
+        self.reviewRequestLabel = reviewRequestLabel
+    }
 
-    var isEnabled: Bool { disabledReason == nil }
+    public let label: String
+    public let detail: String
+    public let disabledReason: String?
+    public let showsDraftToggle: Bool
+    public var reviewRequestLabel: String = "PR"
 
-    static func gg(disabledReason: String? = nil) -> Self {
+    public var isEnabled: Bool { disabledReason == nil }
+
+    public static func gg(disabledReason: String? = nil) -> Self {
         Self(label: "Commit & sync", detail: "Sync stack", disabledReason: disabledReason, showsDraftToggle: false)
     }
 
-    static func review(
+    public static func review(
         snapshot: ReviewLoopSnapshot?,
         supportedRemote: CodeHostRemote? = nil,
         isRefreshing: Bool = false,
@@ -122,27 +132,33 @@ struct CommitPublishAvailability: Equatable, Sendable {
     }
 }
 
-struct CommitPublishPresentation: Sendable {
-    struct Action: Equatable, Sendable {
-        let label: String
-        let disabledReason: String?
-        let detail: String
+public struct CommitPublishPresentation: Sendable {
+    public struct Action: Equatable, Sendable {
+        public init(label: String, disabledReason: String?, detail: String) {
+            self.label = label
+            self.disabledReason = disabledReason
+            self.detail = detail
+        }
 
-        var isEnabled: Bool { disabledReason == nil }
-        var help: String { disabledReason ?? detail }
+        public let label: String
+        public let disabledReason: String?
+        public let detail: String
+
+        public var isEnabled: Bool { disabledReason == nil }
+        public var help: String { disabledReason ?? detail }
     }
 
-    let commit: Action
-    let publish: Action?
-    let preferredActionPosition: CommitComposerActionPosition
-    let activityText: String?
-    let draftToggleLabel: String?
-    let draftToggleHelp: String
-    let draftToggleEnabled: Bool
-    let editorDisabled: Bool
-    let mutationsDisabled: Bool
+    public let commit: Action
+    public let publish: Action?
+    public let preferredActionPosition: CommitComposerActionPosition
+    public let activityText: String?
+    public let draftToggleLabel: String?
+    public let draftToggleHelp: String
+    public let draftToggleEnabled: Bool
+    public let editorDisabled: Bool
+    public let mutationsDisabled: Bool
 
-    init(
+    public init(
         subject: String,
         hasStaged: Bool,
         amend: Bool = false,
@@ -193,17 +209,17 @@ struct CommitPublishPresentation: Sendable {
     }
 }
 
-enum DraftCommitPreferredAction: String, Codable, Equatable, Sendable {
+public enum DraftCommitPreferredAction: String, Codable, Equatable, Sendable {
     case commit
     case publish
 }
 
-enum CommitPublishPhase: String, Codable, Equatable, Sendable {
+public enum CommitPublishPhase: String, Codable, Equatable, Sendable {
     case push
     case createReviewRequest
     case sync
 
-    func retryLabel(reviewRequestLabel: String) -> String {
+    public func retryLabel(reviewRequestLabel: String) -> String {
         switch self {
         case .push: "Retry push"
         case .createReviewRequest: "Retry create \(reviewRequestLabel)"
@@ -212,31 +228,52 @@ enum CommitPublishPhase: String, Codable, Equatable, Sendable {
     }
 }
 
-struct CommitPublishReviewTarget: Codable, Equatable, Sendable {
-    let provider: CodeHostKind
-    let host: String
-    let owner: String
-    let repository: String
-    let repositorySlug: String
-    let remoteName: String
-    let webURL: URL
-    let branch: String
-    var expectedHeadSHA: String? = nil
-    var upstreamBranch: String?
-    let headOwner: String?
-    let baseBranch: String
-    let reviewRequestExisted: Bool
-    let createAsDraft: Bool
-    var pushURL: String? = nil
-    var pushURLs: [String]? = nil
-    var pushRemoteName: String? = nil
+public struct CommitPublishReviewTarget: Codable, Equatable, Sendable {
+    public init(provider: CodeHostKind, host: String, owner: String, repository: String, repositorySlug: String, remoteName: String, webURL: URL, branch: String, expectedHeadSHA: String? = nil, upstreamBranch: String?, headOwner: String?, baseBranch: String, reviewRequestExisted: Bool, createAsDraft: Bool, pushURL: String? = nil, pushURLs: [String]? = nil, pushRemoteName: String? = nil, shepherdSessionID: String? = nil) {
+        self.provider = provider
+        self.host = host
+        self.owner = owner
+        self.repository = repository
+        self.repositorySlug = repositorySlug
+        self.remoteName = remoteName
+        self.webURL = webURL
+        self.branch = branch
+        self.expectedHeadSHA = expectedHeadSHA
+        self.upstreamBranch = upstreamBranch
+        self.headOwner = headOwner
+        self.baseBranch = baseBranch
+        self.reviewRequestExisted = reviewRequestExisted
+        self.createAsDraft = createAsDraft
+        self.pushURL = pushURL
+        self.pushURLs = pushURLs
+        self.pushRemoteName = pushRemoteName
+        self.shepherdSessionID = shepherdSessionID
+    }
+
+    public let provider: CodeHostKind
+    public let host: String
+    public let owner: String
+    public let repository: String
+    public let repositorySlug: String
+    public let remoteName: String
+    public let webURL: URL
+    public let branch: String
+    public var expectedHeadSHA: String? = nil
+    public var upstreamBranch: String?
+    public let headOwner: String?
+    public let baseBranch: String
+    public let reviewRequestExisted: Bool
+    public let createAsDraft: Bool
+    public var pushURL: String? = nil
+    public var pushURLs: [String]? = nil
+    public var pushRemoteName: String? = nil
     /// The session picked in "Shepherd with" for the request this publish
     /// creates. Kept in the checkpoint so a resumed publish still binds it.
-    var shepherdSessionID: String? = nil
+    public var shepherdSessionID: String? = nil
 
-    var capturedPushURLs: [String] { pushURLs ?? pushURL.map { [$0] } ?? [] }
+    public var capturedPushURLs: [String] { pushURLs ?? pushURL.map { [$0] } ?? [] }
 
-    var remote: CodeHostRemote {
+    public var remote: CodeHostRemote {
         CodeHostRemote(
             kind: provider,
             host: host,
@@ -248,7 +285,7 @@ struct CommitPublishReviewTarget: Codable, Equatable, Sendable {
     }
 
     @MainActor
-    static func capture(
+    public static func capture(
         snapshot: ReviewLoopSnapshot,
         createAsDraft: Bool,
         runGit: ([String]) async throws -> ProcessResult
@@ -320,7 +357,7 @@ struct CommitPublishReviewTarget: Codable, Equatable, Sendable {
     }
 }
 
-enum CommitPublishDestination: Codable, Equatable, Sendable {
+public enum CommitPublishDestination: Codable, Equatable, Sendable {
     case review(CommitPublishReviewTarget)
     case gg(GGStackTargetIdentity? = nil)
 
@@ -332,7 +369,7 @@ enum CommitPublishDestination: Codable, Equatable, Sendable {
         case value = "_0"
     }
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         if container.contains(.review) {
             let review = try container.nestedContainer(keyedBy: AssociatedValueKeys.self, forKey: .review)
@@ -345,7 +382,7 @@ enum CommitPublishDestination: Codable, Equatable, Sendable {
         }
     }
 
-    func encode(to encoder: Encoder) throws {
+    public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
         case .review(let target):
@@ -358,18 +395,18 @@ enum CommitPublishDestination: Codable, Equatable, Sendable {
     }
 }
 
-struct CommitPublishCheckpoint: Codable, Equatable, Sendable {
-    let commitSHA: String
-    let baseRef: String
-    let commitTitle: String
-    let subject: String
-    let body: String
-    let destination: CommitPublishDestination
-    var nextPhase: CommitPublishPhase
-    var ggRecoveryOperationID: String?
-    var createdReviewURL: URL?
+public struct CommitPublishCheckpoint: Codable, Equatable, Sendable {
+    public let commitSHA: String
+    public let baseRef: String
+    public let commitTitle: String
+    public let subject: String
+    public let body: String
+    public let destination: CommitPublishDestination
+    public var nextPhase: CommitPublishPhase
+    public var ggRecoveryOperationID: String?
+    public var createdReviewURL: URL?
 
-    init(
+    public init(
         commitSHA: String,
         baseRef: String,
         commitTitle: String,
@@ -394,7 +431,7 @@ struct CommitPublishCheckpoint: Codable, Equatable, Sendable {
         case commitSHA, baseRef, commitTitle, subject, body, destination, nextPhase, ggRecoveryOperationID, createdReviewURL
     }
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         commitSHA = try container.decode(String.self, forKey: .commitSHA)
         baseRef = try container.decode(String.self, forKey: .baseRef)

@@ -1,36 +1,44 @@
 import Foundation
 import Observation
 
-struct CommitPublishCreatedCommit: Equatable, Sendable {
-    let commitSHA: String
-    let comparisonBase: String
-    let editorTitle: String
+public struct CommitPublishCreatedCommit: Equatable, Sendable {
+    public init(commitSHA: String, comparisonBase: String, editorTitle: String) {
+        self.commitSHA = commitSHA
+        self.comparisonBase = comparisonBase
+        self.editorTitle = editorTitle
+    }
+
+    public let commitSHA: String
+    public let comparisonBase: String
+    public let editorTitle: String
 }
 
 @MainActor
-final class CommitPublishSyncExecutionMarker {
-    private(set) var started = false
+public final class CommitPublishSyncExecutionMarker {
+    public init() {}
 
-    func markStarted() {
+    public private(set) var started = false
+
+    public func markStarted() {
         started = true
     }
 }
 
 @MainActor
 @Observable
-final class CommitPublishSession {
-    private(set) var checkpoint: CommitPublishCheckpoint?
+public final class CommitPublishSession {
+    public private(set) var checkpoint: CommitPublishCheckpoint?
     private var activeRunID: UUID?
-    private(set) var lastError: Error?
+    public private(set) var lastError: Error?
     private var workflow: CommitPublishWorkflow?
     @ObservationIgnored private var task: Task<Void, Never>?
     private let onCheckpointChange: (CommitPublishCheckpoint?) throws -> Void
     private let onCompletion: (CommitPublishCheckpoint) throws -> Void
 
-    var activity: CommitPublishActivity { workflow?.activity ?? .idle }
-    var isRunning: Bool { activeRunID != nil }
+    public var activity: CommitPublishActivity { workflow?.activity ?? .idle }
+    public var isRunning: Bool { activeRunID != nil }
 
-    init(
+    public init(
         checkpoint: CommitPublishCheckpoint?,
         onCheckpointChange: @escaping (CommitPublishCheckpoint?) throws -> Void,
         onCompletion: @escaping (CommitPublishCheckpoint) throws -> Void
@@ -40,10 +48,10 @@ final class CommitPublishSession {
         self.onCompletion = onCompletion
     }
 
-    func clearError() { lastError = nil }
+    public func clearError() { lastError = nil }
 
     @discardableResult
-    func run(
+    public func run(
         subject: String,
         body: String,
         amend: Bool,
@@ -97,7 +105,7 @@ final class CommitPublishSession {
         task = nil
     }
 
-    func abandonCheckpoint() -> Bool {
+    public func abandonCheckpoint() -> Bool {
         guard !isRunning else { return false }
         checkpoint = nil
         lastError = nil
@@ -108,29 +116,67 @@ final class CommitPublishSession {
 }
 
 @MainActor
-struct CommitPublishOperations {
-    var validateReviewTarget: (_ target: CommitPublishReviewTarget) async throws -> Void = { _ in }
-    var validateGGTarget: (_ target: GGStackTargetIdentity) async throws -> Void = { _ in }
-    var createCommit: (_ subject: String, _ body: String, _ amend: Bool) async throws -> CommitPublishCreatedCommit
-    var currentHeadSHA: () async throws -> String
-    var remoteBranchContainsCommit: (_ target: CommitPublishReviewTarget, _ commitSHA: String) async throws -> Bool
-    var push: (_ target: CommitPublishReviewTarget, _ commitSHA: String) async throws -> Void
-    var configureUpstreamTracking: (_ target: CommitPublishReviewTarget) async throws -> Void = { _ in }
-    var currentReviewRequestExists: (_ target: CommitPublishReviewTarget) async throws -> Bool
-    var currentReviewRequestURL: (_ target: CommitPublishReviewTarget) async throws -> URL?
-    var createReviewRequest: (_ target: CommitPublishReviewTarget, _ subject: String, _ body: String) async throws -> URL
-    var syncGG: (_ execution: CommitPublishSyncExecutionMarker) async throws -> Void
-    var syncGGForTarget: (_ target: GGStackTargetIdentity, _ execution: CommitPublishSyncExecutionMarker) async throws -> Void = { _, _ in }
-    var currentGGRecoveryOperationID: () async throws -> String? = { nil }
-    var validateGGRecoveryHead: (_ operationID: String, _ headSHA: String) async throws -> Void = { _, _ in
+public struct CommitPublishOperations {
+    public var validateReviewTarget: (_ target: CommitPublishReviewTarget) async throws -> Void = { _ in }
+    public var validateGGTarget: (_ target: GGStackTargetIdentity) async throws -> Void = { _ in }
+    public var createCommit: (_ subject: String, _ body: String, _ amend: Bool) async throws -> CommitPublishCreatedCommit
+    public var currentHeadSHA: () async throws -> String
+    public var remoteBranchContainsCommit: (_ target: CommitPublishReviewTarget, _ commitSHA: String) async throws -> Bool
+    public var push: (_ target: CommitPublishReviewTarget, _ commitSHA: String) async throws -> Void
+    public var configureUpstreamTracking: (_ target: CommitPublishReviewTarget) async throws -> Void = { _ in }
+    public var currentReviewRequestExists: (_ target: CommitPublishReviewTarget) async throws -> Bool
+    public var currentReviewRequestURL: (_ target: CommitPublishReviewTarget) async throws -> URL?
+    public var createReviewRequest: (_ target: CommitPublishReviewTarget, _ subject: String, _ body: String) async throws -> URL
+    public var syncGG: (_ execution: CommitPublishSyncExecutionMarker) async throws -> Void
+    public var syncGGForTarget: (_ target: GGStackTargetIdentity, _ execution: CommitPublishSyncExecutionMarker) async throws -> Void = { _, _ in }
+    public var currentGGRecoveryOperationID: () async throws -> String? = { nil }
+    public var validateGGRecoveryHead: (_ operationID: String, _ headSHA: String) async throws -> Void = { _, _ in
         throw GGMutationError.staleConfirmation
     }
-    var refreshAfterCompletion: () async -> Void
+    public var refreshAfterCompletion: () async -> Void
     /// Binds the request a publish created to the target's shepherd session.
     /// Runs after `refreshAfterCompletion`, so the review state is fresh.
-    var shepherdCreatedRequest: (_ url: URL, _ sessionID: String) async -> Void = { _, _ in }
+    public var shepherdCreatedRequest: (_ url: URL, _ sessionID: String) async -> Void = { _, _ in }
 
-    static func live(
+    public init(
+        validateReviewTarget: @escaping (_ target: CommitPublishReviewTarget) async throws -> Void = { _ in },
+        validateGGTarget: @escaping (_ target: GGStackTargetIdentity) async throws -> Void = { _ in },
+        createCommit: @escaping (_ subject: String, _ body: String, _ amend: Bool) async throws -> CommitPublishCreatedCommit,
+        currentHeadSHA: @escaping () async throws -> String,
+        remoteBranchContainsCommit: @escaping (_ target: CommitPublishReviewTarget, _ commitSHA: String) async throws -> Bool,
+        push: @escaping (_ target: CommitPublishReviewTarget, _ commitSHA: String) async throws -> Void,
+        configureUpstreamTracking: @escaping (_ target: CommitPublishReviewTarget) async throws -> Void = { _ in },
+        currentReviewRequestExists: @escaping (_ target: CommitPublishReviewTarget) async throws -> Bool,
+        currentReviewRequestURL: @escaping (_ target: CommitPublishReviewTarget) async throws -> URL?,
+        createReviewRequest: @escaping (_ target: CommitPublishReviewTarget, _ subject: String, _ body: String) async throws -> URL,
+        syncGG: @escaping (_ execution: CommitPublishSyncExecutionMarker) async throws -> Void,
+        syncGGForTarget: @escaping (_ target: GGStackTargetIdentity, _ execution: CommitPublishSyncExecutionMarker) async throws -> Void = { _, _ in },
+        currentGGRecoveryOperationID: @escaping () async throws -> String? = { nil },
+        validateGGRecoveryHead: @escaping (_ operationID: String, _ headSHA: String) async throws -> Void = { _, _ in
+            throw GGMutationError.staleConfirmation
+        },
+        refreshAfterCompletion: @escaping () async -> Void,
+        shepherdCreatedRequest: @escaping (_ url: URL, _ sessionID: String) async -> Void = { _, _ in }
+    ) {
+        self.validateReviewTarget = validateReviewTarget
+        self.validateGGTarget = validateGGTarget
+        self.createCommit = createCommit
+        self.currentHeadSHA = currentHeadSHA
+        self.remoteBranchContainsCommit = remoteBranchContainsCommit
+        self.push = push
+        self.configureUpstreamTracking = configureUpstreamTracking
+        self.currentReviewRequestExists = currentReviewRequestExists
+        self.currentReviewRequestURL = currentReviewRequestURL
+        self.createReviewRequest = createReviewRequest
+        self.syncGG = syncGG
+        self.syncGGForTarget = syncGGForTarget
+        self.currentGGRecoveryOperationID = currentGGRecoveryOperationID
+        self.validateGGRecoveryHead = validateGGRecoveryHead
+        self.refreshAfterCompletion = refreshAfterCompletion
+        self.shepherdCreatedRequest = shepherdCreatedRequest
+    }
+
+    public static func live(
         worktreePath: URL,
         reviewLoop: ReviewLoopState,
         comparisonBase: String?,
@@ -258,14 +304,14 @@ struct CommitPublishOperations {
     }
 }
 
-enum CommitPublishActivity: Equatable {
+public enum CommitPublishActivity: Equatable {
     case idle
     case committing
     case pushing
     case creatingReviewRequest
     case syncing
 
-    func actionLabel(reviewRequestLabel: String) -> String? {
+    public func actionLabel(reviewRequestLabel: String) -> String? {
         switch self {
         case .idle: nil
         case .committing: "Committing..."
@@ -276,7 +322,7 @@ enum CommitPublishActivity: Equatable {
     }
 }
 
-enum CommitPublishWorkflowError: LocalizedError, Equatable {
+public enum CommitPublishWorkflowError: LocalizedError, Equatable {
     case branchMismatch(expected: String, actual: String)
     case headMismatch(expected: String, actual: String)
     case invalidDestination(phase: CommitPublishPhase)
@@ -286,7 +332,7 @@ enum CommitPublishWorkflowError: LocalizedError, Equatable {
     case publishedAmend
     case reviewURLUnavailable
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .branchMismatch:
             return "The current branch changed before publishing could begin."
@@ -310,15 +356,15 @@ enum CommitPublishWorkflowError: LocalizedError, Equatable {
 
 @MainActor
 @Observable
-final class CommitPublishWorkflow {
+public final class CommitPublishWorkflow {
     private let operations: CommitPublishOperations
     private let onCheckpointChange: (CommitPublishCheckpoint?) throws -> Void
 
-    private(set) var activity: CommitPublishActivity = .idle
-    private(set) var lastError: Error?
+    public private(set) var activity: CommitPublishActivity = .idle
+    public private(set) var lastError: Error?
     private var activeRunID: UUID?
 
-    init(
+    public init(
         operations: CommitPublishOperations,
         onCheckpointChange: @escaping (CommitPublishCheckpoint?) throws -> Void
     ) {
@@ -326,7 +372,7 @@ final class CommitPublishWorkflow {
         self.onCheckpointChange = onCheckpointChange
     }
 
-    func start(
+    public func start(
         subject: String,
         body: String,
         amend: Bool,
@@ -376,7 +422,7 @@ final class CommitPublishWorkflow {
         }
     }
 
-    func resume(_ checkpoint: CommitPublishCheckpoint) async {
+    public func resume(_ checkpoint: CommitPublishCheckpoint) async {
         guard let runID = beginRun() else { return }
         defer { endRun(runID) }
 
@@ -558,7 +604,7 @@ final class CommitPublishWorkflow {
 }
 
 private extension CommitPublishCheckpoint {
-    func reconcilingGGRecoveryHead(_ commitSHA: String) -> Self? {
+    public func reconcilingGGRecoveryHead(_ commitSHA: String) -> Self? {
         guard nextPhase == .sync,
               ggRecoveryOperationID != nil,
               case .gg = destination
@@ -568,7 +614,7 @@ private extension CommitPublishCheckpoint {
         return checkpoint
     }
 
-    func resolvingGGCommitSHA(_ commitSHA: String) -> Self {
+    public func resolvingGGCommitSHA(_ commitSHA: String) -> Self {
         var destination = destination
         if case .gg(var target) = destination {
             target?.expectedHeadSHA = commitSHA
@@ -587,7 +633,7 @@ private extension CommitPublishCheckpoint {
 }
 
 private extension Error {
-    var isGGPausedConflict: Bool {
+    public var isGGPausedConflict: Bool {
         guard let error = self as? GGServiceError else { return false }
         if case .pausedConflict = error { return true }
         return false

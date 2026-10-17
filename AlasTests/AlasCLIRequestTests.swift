@@ -515,7 +515,7 @@ struct AlasCLIRequestTests {
         ("feature", nil, nil),
     ] as [(String, String?, String?)])
     func prCreateKeepsOnlyASameNamedUpstream(branch: String, upstream: String?, kept: String?) {
-        #expect(AppState.prCreateUpstreamToKeep(branch: branch, upstream: upstream) == kept)
+        #expect(AlasCoreContext.prCreateUpstreamToKeep(branch: branch, upstream: upstream) == kept)
     }
 
     /// An open request on a differently named upstream is adopted, not
@@ -534,7 +534,7 @@ struct AlasCLIRequestTests {
             hasUpstream: upstream != nil, upstreamRemoteName: upstream.map { _ in "origin" },
             upstreamBranchName: upstream, needsPush: true
         )
-        #expect(AppState.prCreateLookupBranches(local) == expected)
+        #expect(AlasCoreContext.prCreateLookupBranches(local) == expected)
     }
 
     /// A remote branch with commits the worktree lacks blocks `pr_create`,
@@ -554,7 +554,7 @@ struct AlasCLIRequestTests {
             hasUpstream: true, upstreamRemoteName: "origin", upstreamBranchName: upstream,
             upstreamAheadCommitCount: upstreamAhead, needsPush: needsPush
         )
-        let blocker = AppState.prCreateBranchBlocker(local, baseBranch: "main")
+        let blocker = AlasCoreContext.prCreateBranchBlocker(local, baseBranch: "main")
         #expect((blocker?.contains("has commits this worktree doesn't") ?? false) == blocked)
     }
 
@@ -563,7 +563,7 @@ struct AlasCLIRequestTests {
     /// commits block instead of being silently left out.
     @MainActor
     @Test(arguments: [
-        ("feature", CodeHostKind.github, true, AppState.PRCreateAdoption.publishThenBind),
+        ("feature", CodeHostKind.github, true, AlasCoreContext.PRCreateAdoption.publishThenBind),
         ("feature", .github, false, .publishThenBind),
         ("review-feature", .github, false, .bind),
         ("review-feature", .github, true, .blocked(
@@ -574,9 +574,9 @@ struct AlasCLIRequestTests {
             "feature tracks review-feature, which has open MR !42. Push your commits to review-feature "
                 + "or stop tracking it (`git branch --unset-upstream`), then call pr_create again."
         )),
-    ] as [(String, CodeHostKind, Bool, AppState.PRCreateAdoption)])
+    ] as [(String, CodeHostKind, Bool, AlasCoreContext.PRCreateAdoption)])
     func prCreatePublishesBeforeAdoptingAnOpenRequest(
-        headRefName: String, kind: CodeHostKind, needsPush: Bool, expected: AppState.PRCreateAdoption
+        headRefName: String, kind: CodeHostKind, needsPush: Bool, expected: AlasCoreContext.PRCreateAdoption
     ) {
         let local = ReviewLoopLocalState(
             branchName: "feature", headSHA: "a3f9c1e", baseBranch: "main",
@@ -584,7 +584,7 @@ struct AlasCLIRequestTests {
             hasUpstream: true, upstreamRemoteName: "origin",
             upstreamBranchName: "review-feature", needsPush: needsPush
         )
-        #expect(AppState.prCreateAdoption(headRefName: headRefName, number: 42, kind: kind, local: local) == expected)
+        #expect(AlasCoreContext.prCreateAdoption(headRefName: headRefName, number: 42, kind: kind, local: local) == expected)
     }
 
     private struct ProbeParams: Decodable, Equatable {

@@ -7,13 +7,13 @@ private struct PRShepherdCLIError: Error {
 
 /// MCP `pr_create` and `pr_status`. The router has already resolved the
 /// calling ACP session and its worktree, and rejected Workspace checkout owners.
-extension AppState {
+extension AlasCoreContext {
     /// Pushes the exact HEAD, opens the PR/MR (or adopts the open one for this
     /// branch), and binds the shepherd to the calling session. Calls for one
     /// worktree run one at a time: a call made while another runs waits for
     /// it, then runs the whole publish path itself, so its own HEAD is pushed
     /// before the request the first call opened is adopted.
-    func cliPRCreate(
+    func createPR(
         sessionID: String,
         worktreeID: String,
         title: String,
@@ -56,7 +56,7 @@ extension AppState {
 
     /// Fresh status of the PR/MR bound to the calling session, else of the
     /// worktree branch's PR/MR.
-    func cliPRStatus(sessionID: String, worktreeID: String) async -> AlasCLIResponse {
+    func prStatus(sessionID: String, worktreeID: String) async -> AlasCLIResponse {
         do {
             let status = try await shepherdedPRStatus(sessionID: sessionID, worktreeID: worktreeID)
             return .text([ReviewCommentWireDTO.jsonLine(status)])
@@ -301,7 +301,7 @@ extension AppState {
     private func bindPRShepherd(sessionID: String, worktreeID: String, request: ReviewRequest) async -> ShepherdRecord {
         let current = reviewShepherd.records[ShepherdRecordID(worktreeID: worktreeID, request: request)]
             .flatMap { $0.sessionID == sessionID ? $0 : nil }
-        let defaults = config.changes.shepherd
+        let defaults = environment.configuration().changes.shepherd
         return await reviewShepherd.bind(
             sessionID: sessionID,
             worktreeID: worktreeID,
@@ -315,7 +315,7 @@ extension AppState {
 
     /// `base` without a leading `<remote>/` that names a configured remote,
     /// so `origin/main` and `main` are one base for the push-safety checks.
-    static func normalizedBaseBranch(_ base: String, remoteNames: Set<String>) -> String {
+    public static func normalizedBaseBranch(_ base: String, remoteNames: Set<String>) -> String {
         guard let remote = remoteNames.filter({ base.hasPrefix($0 + "/") }).max(by: { $0.count < $1.count }),
               base.count > remote.count + 1
         else { return base }
@@ -323,7 +323,7 @@ extension AppState {
     }
 
     /// `baseBranch` must already be normalized (`normalizedBaseBranch`).
-    static func prCreateBranchBlocker(_ local: ReviewLoopLocalState, baseBranch: String) -> String? {
+    public static func prCreateBranchBlocker(_ local: ReviewLoopLocalState, baseBranch: String) -> String? {
         if local.branchName.isEmpty {
             return "HEAD is detached. Check out a branch before opening a pull request."
         }
@@ -347,20 +347,20 @@ extension AppState {
     /// The upstream `pr_create` may push to: only one named like the local
     /// branch. Any other upstream (a worktree created from `origin/main`, say)
     /// is dropped, so the push goes to `refs/heads/<branch>`.
-    static func prCreateUpstreamToKeep(branch: String, upstream: String?) -> String? {
+    public static func prCreateUpstreamToKeep(branch: String, upstream: String?) -> String? {
         upstream == branch ? upstream : nil
     }
 
     /// Branch names searched for an open request before creating one: the
     /// local branch, and a differently named upstream unless it is the base.
-    static func prCreateLookupBranches(_ local: ReviewLoopLocalState) -> [String] {
+    public static func prCreateLookupBranches(_ local: ReviewLoopLocalState) -> [String] {
         guard let upstream = local.upstreamBranchName, !upstream.isEmpty,
               upstream != local.branchName, upstream != local.baseBranch
         else { return [local.branchName] }
         return [local.branchName, upstream]
     }
 
-    enum PRCreateAdoption: Equatable {
+    public enum PRCreateAdoption: Equatable, Sendable {
         /// Run the exact-SHA push first, then bind the open request.
         case publishThenBind
         case bind
@@ -371,7 +371,7 @@ extension AppState {
     /// One on this branch gets the pending HEAD pushed first; one on a
     /// differently named upstream is never pushed to, so unpushed commits there
     /// block rather than report a request that lacks them.
-    static func prCreateAdoption(
+    public static func prCreateAdoption(
         headRefName: String, number: Int, kind: CodeHostKind, local: ReviewLoopLocalState
     ) -> PRCreateAdoption {
         if headRefName == local.branchName { return .publishThenBind }
@@ -384,14 +384,14 @@ extension AppState {
         )
     }
 
-    static func prProviderSetupProblem(_ snapshot: ReviewLoopSnapshot) -> String? {
+    public static func prProviderSetupProblem(_ snapshot: ReviewLoopSnapshot) -> String? {
         guard let remote = snapshot.remote else { return nil }
         if !snapshot.providerAvailable { return prProviderSetupMessage(kind: remote.kind, isInstalled: false) }
         if !snapshot.providerAuthenticated { return prProviderSetupMessage(kind: remote.kind, isInstalled: true) }
         return nil
     }
 
-    static func prProviderErrorMessage(_ error: CodeHostProviderError, kind: CodeHostKind) -> String {
+    public static func prProviderErrorMessage(_ error: CodeHostProviderError, kind: CodeHostKind) -> String {
         switch error {
         case .cliMissing: prProviderSetupMessage(kind: kind, isInstalled: false)
         case .unauthenticated: prProviderSetupMessage(kind: kind, isInstalled: true)
@@ -399,7 +399,7 @@ extension AppState {
         }
     }
 
-    static func prProviderSetupMessage(kind: CodeHostKind, isInstalled: Bool) -> String {
+    public static func prProviderSetupMessage(kind: CodeHostKind, isInstalled: Bool) -> String {
         let cli = switch kind {
         case .github: "gh"
         case .gitlab: "glab"
@@ -410,7 +410,30 @@ extension AppState {
         return "\(kind.displayName) CLI (\(cli)) is not installed. Install it with `brew install \(cli)`, then run `\(cli) auth login`."
     }
 
-    static func prShepherdErrorMessage(_ error: Error) -> String {
+    public static func prShepherdErrorMessage(_ error: Error) -> String {
         (error as? PRShepherdCLIError)?.message ?? error.localizedDescription
+    }
+}
+
+extension AlasHost {
+    /// Pull and merge requests an agent opens for its worktree, and the
+    /// shepherd that watches them.
+    public var prs: PRsAPI { PRsAPI(core: core) }
+}
+
+@MainActor
+public struct PRsAPI {
+    let core: AlasCoreContext
+
+    /// Pushes the exact HEAD of `worktreeID`, opens its PR/MR or adopts the
+    /// open one for its branch, and binds the shepherd to session `sessionID`.
+    public func create(sessionID: String, worktreeID: String, title: String, body: String, draft: Bool, base: String?) async -> AlasCLIResponse {
+        await core.createPR(sessionID: sessionID, worktreeID: worktreeID, title: title, body: body, draft: draft, base: base)
+    }
+
+    /// Fresh status of the PR/MR bound to session `sessionID`, else of the
+    /// worktree branch's.
+    public func status(sessionID: String, worktreeID: String) async -> AlasCLIResponse {
+        await core.prStatus(sessionID: sessionID, worktreeID: worktreeID)
     }
 }
