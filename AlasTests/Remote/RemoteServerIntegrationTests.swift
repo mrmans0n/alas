@@ -617,19 +617,17 @@ struct RemoteServerIntegrationTests {
         let received = collect(task)
 
         try await task.send(.data(JSONEncoder().encode(RemoteClientMessage.subscribe(sessionId: s.id))))
+        // Older rows are served only to a subscriber that has its snapshot.
+        try await waitUntil("the subscribe snapshot arrives") { received.snapshotCount == 1 }
         try await task.send(.data(JSONEncoder().encode(
             RemoteClientMessage.fetchOlder(sessionId: s.id, beforeIndex: 10, limit: 90))))
-        for _ in 0..<100 where provider.fullToolCallContentCallCount == 0 {
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
+        // The fetch must hold the drive queue before the takeover joins it.
+        try await waitUntil("the fetch reads full content") { provider.fullToolCallContentCallCount > 0 }
         try await task.send(.data(JSONEncoder().encode(RemoteClientMessage.takeOver(sessionId: s.id))))
         try await task.send(.data(JSONEncoder().encode(RemoteClientMessage.stop(sessionId: s.id))))
 
         // Wait past stop's bounded wait so it takes the timeout path.
-        for _ in 0..<150 where !received.stopped(s.id) {
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
-        #expect(received.stopped(s.id))
+        try await waitUntil("the stop is answered") { received.stopped(s.id) }
         // Only the subscribe snapshot: a takeover would have pushed another.
         #expect(received.snapshotCount == 1)
 
@@ -1447,6 +1445,16 @@ struct RemoteServerIntegrationTests {
             defer { lock.unlock() }
             data.append(chunk)
             return data
+        }
+    }
+
+    /// Polls `condition` until it holds, failing the test at the deadline:
+    /// a loaded runner can take far longer than a fixed number of polls.
+    private func waitUntil(_ what: String, seconds: Double = 10, _ condition: () -> Bool) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(seconds))
+        while !condition() {
+            try #require(ContinuousClock.now < deadline, "timed out waiting until \(what)")
+            try await Task.sleep(for: .milliseconds(20))
         }
     }
 }
