@@ -234,6 +234,9 @@ public struct PluginEventState: Equatable, Sendable {
     /// Every run id seen so far, so a run that comes back (a failed launch rolling the record back to it) is not
     /// reported again. ponytail: grows by one id per run for the life of the host.
     public var seenRuns: Set<String> = []
+    /// Worktrees listed since the baseline whose review status has not been read yet: the first status read for
+    /// one is its baseline, not a change, so a restart does not report every review.
+    public var unloadedReviews: Set<String> = []
 
     /// What changed since `old`. Polls are half a second apart, so that is how often a worktree's `git.changed`
     /// can fire; a dirty count that is first learned (the scan finishing) is not a change.
@@ -287,6 +290,7 @@ public struct PluginEventState: Equatable, Sendable {
         }
         let reviewsBefore = Dictionary(old.reviews.map { ($0.worktree, $0) }, uniquingKeysWith: { first, _ in first })
         for review in reviews where reviewsBefore[review.worktree] != review {
+            if reviewsBefore[review.worktree] == nil, old.unloadedReviews.contains(review.worktree) { continue }
             events.append(PluginEventMessage(event: .reviewChanged, params: PluginEventParams(
                 worktree: review.worktree, state: review.state, number: review.number, checks: review.checks)))
         }
@@ -296,11 +300,18 @@ public struct PluginEventState: Equatable, Sendable {
         return events
     }
 
-    public init(workspace: PluginWorkspaceSnapshot, runs: [PluginRunState] = [], reviews: [PluginReviewState] = [], seenRuns: Set<String> = []) {
+    public init(
+        workspace: PluginWorkspaceSnapshot,
+        runs: [PluginRunState] = [],
+        reviews: [PluginReviewState] = [],
+        seenRuns: Set<String> = [],
+        unloadedReviews: Set<String> = []
+    ) {
         self.workspace = workspace
         self.runs = runs
         self.reviews = reviews
         self.seenRuns = seenRuns
+        self.unloadedReviews = unloadedReviews
     }
 }
 
