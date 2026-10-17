@@ -109,10 +109,8 @@ extension AppState {
             reviews: { [weak self] in
                 guard let self else { return [] }
                 return (self.projectsManager.worktreesByProject[project.id] ?? []).compactMap { worktree in
-                    // ponytail: only worktrees whose right pane has loaded its review loop; the loop runs per pane.
-                    guard let snapshot = self.rightPaneStore.activeState(worktreeId: worktree.id)?.reviewLoop.snapshot else {
-                        return nil
-                    }
+                    // ponytail: only worktrees something has loaded the review status of, as an open pane does.
+                    guard let snapshot = self.host.reviews.status(of: worktree.id) else { return nil }
                     return PluginReviewState(snapshot: snapshot, worktree: worktree.id)
                 }
             },

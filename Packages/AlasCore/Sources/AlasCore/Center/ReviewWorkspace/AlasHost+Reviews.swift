@@ -7,6 +7,16 @@ extension AlasHost {
 }
 
 extension AlasCoreContext {
+    /// The review status of `worktree`, created on first use with
+    /// `baseBranch` as the branch its review targets.
+    // ponytail: kept until the host stops; drop a worktree's entry when it is removed if memory matters.
+    public func reviewLoop(for worktree: Worktree, baseBranch: String) -> ReviewLoopState {
+        if let existing = reviewLoops[worktree.id] { return existing }
+        let loop = ReviewLoopState(worktreePath: worktree.path, baseBranch: baseBranch)
+        reviewLoops[worktree.id] = loop
+        return loop
+    }
+
     /// Tells every view showing review comments that they changed.
     public func reviewCommentsDidChange() {
         reviewCommentChanges.send()
@@ -20,6 +30,12 @@ extension AlasCoreContext {
 @MainActor
 public struct ReviewsAPI {
     let core: AlasCoreContext
+
+    /// The pull request and checks last seen for worktree `worktreeID`; nil
+    /// until something has loaded them.
+    public func status(of worktreeID: String) -> ReviewLoopSnapshot? {
+        core.reviewLoops[worktreeID]?.snapshot
+    }
 
     private func gitStatus(_ worktreePath: URL) async throws -> [ChangedFile] {
         if let hook = core.reviewGitStatus { return try await hook(worktreePath) }

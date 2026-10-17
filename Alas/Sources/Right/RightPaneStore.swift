@@ -185,7 +185,11 @@ final class RightPaneStore {
             // refreshes with different base refs.
             let isFolder = appState?.isFolderWorktree(worktree) ?? false
             let shouldDeferInitialRefresh = rawDefault != baseBranch && !isFolder
-            let new = RightPaneState(worktree: worktree, baseBranch: baseBranch, isFolder: isFolder)
+            // The review status is the host's, which outlives the pane.
+            let new = RightPaneState(
+                worktree: worktree, baseBranch: baseBranch, isFolder: isFolder,
+                reviewLoop: appState?.core.reviewLoop(for: worktree, baseBranch: baseBranch)
+            )
             // The commits comparison starts from the effective default, while
             // the review loop keeps the configured base branch for PR actions.
             new.baseBranch = rawDefault
