@@ -72,6 +72,11 @@ public final class AlasCoreContext {
     /// The one coordinator of delegated sessions. It keeps which deliveries
     /// are in flight, so a host has exactly one.
     @ObservationIgnored public private(set) lazy var orchestration = makeOrchestrationCoordinator()
+    /// Each delegated session's parent, by child id. Observed: the app draws
+    /// children under their parents from it.
+    public internal(set) var delegatedSessionParents: [String: String] = [:] {
+        didSet { if delegatedSessionParents != oldValue { environment.delegatedSessionParentsChanged() } }
+    }
 
     /// Launches claimed and still starting, by run slot.
     @ObservationIgnored var pendingRunLaunches: [RunSlotKey: PendingRunLaunch] = [:]

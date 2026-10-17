@@ -78,8 +78,8 @@ public protocol AlasHostEnvironment: AnyObject {
         projectID: String, branch: String, base: String?,
         recordDestination: @MainActor (URL) async throws -> Void, in core: AlasCoreContext
     ) async -> Result<Worktree, ACPSessionOrchestrationCoordinator.WorktreeCreationError>
-    /// A delegated session `childID` now has parent `parentID`.
-    func delegatedSessionParentChanged(childID: String, parentID: String)
+    /// A delegated session's parent was recorded or loaded.
+    func delegatedSessionParentsChanged()
 }
 
 extension AlasHostEnvironment {
@@ -141,7 +141,7 @@ extension AlasHostEnvironment {
         .failure(.init(message: "This host does not create worktrees for delegated sessions."))
     }
 
-    public func delegatedSessionParentChanged(childID: String, parentID: String) {}
+    public func delegatedSessionParentsChanged() {}
 
     /// Ends the checkout's agent sessions, as a removal ends a worktree's.
     public func stopWorkspaceCheckoutSessions(_ checkout: WorkspaceCheckout, in core: AlasCoreContext) async throws {

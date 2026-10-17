@@ -2135,7 +2135,7 @@ final class AppState {
         sweepOrphanZmxSessions(worktreeIds: allWorktreeIds)
         reconcileAttention(observations: currentAttentionObservations)
         Task { [weak self] in
-            await self?.loadDelegatedSessionParents()
+            await self?.core.loadDelegatedSessionParents()
             await self?.core.recoverDelegations()
         }
         Task { @MainActor [weak self] in
@@ -11907,24 +11907,14 @@ final class AppState {
     @ObservationIgnored
     private var acpOrchestrationPersistence: ACPOrchestrationPersistence { core.orchestrationPersistence }
 
-    /// Observed, not `@ObservationIgnored`: the agent sidebar reads this to
-    /// draw delegated children under their parent, so a newly recorded link
-    /// has to invalidate the view.
-    private(set) var delegatedSessionParents: [String: String] = [:] {
-        willSet {
-            if newValue != delegatedSessionParents { nextPromptCoordinator.invalidateAll() }
-        }
-    }
-
-    func rememberDelegatedSessionParent(childID: String, parentID: String) {
-        delegatedSessionParents[childID] = parentID
-    }
+    /// Each delegated session's parent, as the core records it. The agent
+    /// sidebar draws delegated children under their parent from it.
+    var delegatedSessionParents: [String: String] { core.delegatedSessionParents }
 
     /// The parent that delegated `sessionId`, from memory or the persisted
     /// delegation record.
     func delegatedParentSessionID(for sessionId: String) async -> String? {
-        if let parent = delegatedSessionParents[sessionId] { return parent }
-        return try? await acpOrchestrationPersistence.parent(childSessionId: sessionId)?.parentSessionId
+        await core.delegatedParentSessionID(for: sessionId)
     }
 
     func nextPromptHasDelegatedWork(parentID: String) -> Bool {
@@ -11936,15 +11926,6 @@ final class AppState {
                  child.pendingQueuePersistenceCount > 0 || child.subagents.values.contains { $0.isRunning })
             }
         }
-    }
-
-    /// Backfills the links completed in earlier runs. Without this the map only
-    /// ever holds delegations this launch created or recovered, and restored
-    /// history loses its hierarchy.
-    private func loadDelegatedSessionParents() async {
-        guard let links = try? await acpOrchestrationPersistence.delegationParents() else { return }
-        // Live entries win: they may describe a delegation still being written.
-        delegatedSessionParents = links.merging(delegatedSessionParents) { _, live in live }
     }
 
     /// Force-flush every per-session debounced composer-draft write across
@@ -12550,7 +12531,7 @@ final class AppState {
                     .appendingPathComponent(TerminalCLIInjection.executableName).path
                 let parentSessionId = await self.delegatedParentSessionID(for: sessionId)
                 if let parentSessionId {
-                    self.rememberDelegatedSessionParent(childID: sessionId, parentID: parentSessionId)
+                    self.core.rememberDelegatedSessionParent(childID: sessionId, parentID: parentSessionId)
                 }
                 let configuredServers: [ProjectMCPServer] = {
                     guard let project = self.projects.first(where: { $0.id == worktree.projectId }) else {
@@ -14850,8 +14831,8 @@ class AppHostEnvironment: AlasHostEnvironment {
         return await app.createDelegatedWorktree(projectId: projectID, branch: branch, base: base, recordDestination: recordDestination)
     }
 
-    func delegatedSessionParentChanged(childID: String, parentID: String) {
-        app?.rememberDelegatedSessionParent(childID: childID, parentID: parentID)
+    func delegatedSessionParentsChanged() {
+        app?.nextPromptCoordinator.invalidateAll()
     }
     var repoHookLoader = RepoHookLoader()
     var repoHookPrompter: RepoHookPrompter = .skipping

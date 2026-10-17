@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@_spi(Testing) @testable import AlasCore
+@_spi(Testing) @_spi(AppHost) @testable import AlasCore
 
 @MainActor
 struct HostSessionsTests {
@@ -193,6 +193,21 @@ struct HostSessionsTests {
         let page = try sessions.transcriptPage(id, before: count, limit: 2)
         #expect(page.messages.map(\.index) == [count - 2, count - 1])
         #expect(page.messageCount == count)
+    }
+
+    /// A delegated session's summary names the session that delegated it.
+    @Test func aDelegatedSessionsSummaryNamesItsParent() throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let manager = try fixture.core.sessionManager(for: fixture.worktree)
+        let parent = manager.createSession(agentId: "gemini")
+        let child = manager.createSession(agentId: "gemini")
+
+        fixture.core.rememberDelegatedSessionParent(childID: child.id, parentID: parent.id)
+
+        let summaries = fixture.host.sessions.list()
+        #expect(summaries.first { $0.id == child.id }?.parentID == parent.id)
+        #expect(summaries.first { $0.id == parent.id }?.parentID == nil)
     }
 
     /// A listed session whose stored transcript cannot be read back, here

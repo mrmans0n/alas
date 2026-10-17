@@ -381,6 +381,7 @@ final class HostEventSource {
             _ = core.projects.worktreeOperationStates
             _ = core.runRecords
             _ = core.sessionManagers
+            _ = core.delegatedSessionParents
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 self?.observeInMemoryState()
