@@ -14761,6 +14761,10 @@ class AppHostEnvironment: AlasHostEnvironment {
         app?.observeReviewReplyAttention(worktree: worktree, comment: comment, reply: reply)
     }
 
+    func runConsoleIsHidden(scriptKey: String, worktreeID: String) -> Bool? {
+        app?.scriptTab(scriptKey: scriptKey, worktreeID: worktreeID).map(\.isHiddenRunTab)
+    }
+
     func hasUnsavedEditorChanges(in worktree: Worktree) -> Bool {
         app.map { !$0.dirtyTabGenerations(worktreeId: worktree.id).isEmpty } ?? false
     }

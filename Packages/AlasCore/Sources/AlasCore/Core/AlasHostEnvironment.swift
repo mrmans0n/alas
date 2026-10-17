@@ -94,6 +94,9 @@ public protocol AlasHostEnvironment: AnyObject {
     /// An agent replied to a review comment on `worktree`, which raises
     /// attention for the user.
     func reviewReplyAdded(_ reply: ReviewCommentReply, to comment: ReviewDraftComment, in worktree: Worktree)
+    /// Whether script `scriptKey`'s run console is hidden in `worktreeID`;
+    /// nil when no console of it is open.
+    func runConsoleIsHidden(scriptKey: String, worktreeID: String) -> Bool?
 }
 
 extension AlasHostEnvironment {
@@ -169,6 +172,8 @@ extension AlasHostEnvironment {
     public func providerReviewOriginalPath(_ session: ReviewDraftSessionID, path: String) async -> String? { nil }
 
     public func reviewReplyAdded(_ reply: ReviewCommentReply, to comment: ReviewDraftComment, in worktree: Worktree) {}
+
+    public func runConsoleIsHidden(scriptKey: String, worktreeID: String) -> Bool? { nil }
 
     /// Ends the checkout's agent sessions, as a removal ends a worktree's.
     public func stopWorkspaceCheckoutSessions(_ checkout: WorkspaceCheckout, in core: AlasCoreContext) async throws {
