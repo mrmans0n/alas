@@ -564,7 +564,9 @@ public final class PluginManager {
         guard !isShutDown else { return }
         let projectsByID = Dictionary(projects().map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         reviewListenersChanged?(Set(hostsByKey.compactMap { key, host in
-            host.state == .active && host.manifest.events.contains(.reviewChanged) ? key.projectID : nil
+            // Only a plugin granted review reads gets `review.changed`, so only it starts the polling.
+            host.state == .active && host.manifest.events.contains(.reviewChanged) && host.grants.contains(.reviewRead)
+                ? key.projectID : nil
         }))
         for (key, host) in hostsByKey where host.state == .active
             && (host.grants.contains(.workspaceRead) || host.receivesEvents) {
