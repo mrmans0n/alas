@@ -78,6 +78,9 @@ public final class AlasCoreContext {
     @ObservationIgnored public let reviewSessions: ReviewSessionStore
     /// Sent when review comments change outside a review's own view.
     @ObservationIgnored public let reviewCommentChanges = ChangeSignal<Void>()
+    /// Each worktree's pull request and checks, by worktree id, kept while
+    /// the host runs so every reader sees the one state.
+    @ObservationIgnored public internal(set) var reviewLoops: [String: ReviewLoopState] = [:]
     /// Test hook that replaces reading a worktree's Git status for reviews.
     @_spi(Testing) @ObservationIgnored public var reviewGitStatus: (@MainActor (URL) async throws -> [ChangedFile])?
     /// Each delegated session's parent, by child id. Observed: the app draws

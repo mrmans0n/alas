@@ -606,7 +606,8 @@ final class RightPaneState: GGSplitCommitServicing {
         baseBranch: String,
         isFolder: Bool = false,
         ggLandingStore: GGLandingStore = .shared,
-        checkpointService: any WorktreeCheckpointServicing = WorktreeCheckpointService()
+        checkpointService: any WorktreeCheckpointServicing = WorktreeCheckpointService(),
+        reviewLoop: ReviewLoopState? = nil
     ) {
         self.worktree = worktree
         self.isFolder = isFolder
@@ -614,7 +615,7 @@ final class RightPaneState: GGSplitCommitServicing {
         self.ggLandingStore = ggLandingStore
         self.baseBranch = baseBranch
         self.currentBranch = worktree.branch
-        self.reviewLoop = ReviewLoopState(worktreePath: worktree.path, baseBranch: baseBranch)
+        self.reviewLoop = reviewLoop ?? ReviewLoopState(worktreePath: worktree.path, baseBranch: baseBranch)
         self.mergeOp = MergeOperationState(worktreePath: worktree.path, gitService: GitService())
         self.watcher = WorktreeWatcher(path: worktree.path, watchesGitDir: !isFolder)
         activeTab = defaultTab
