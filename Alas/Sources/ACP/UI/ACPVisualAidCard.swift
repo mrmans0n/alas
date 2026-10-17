@@ -180,7 +180,7 @@ struct ACPVisualAidCard: View {
             surface
                 .frame(height: fillsHeight ? nil : VisualAidWebPolicy.contentHeight(
                     forContentHeight: page?.contentHeight ?? VisualAidWebPolicy.minCardHeight,
-                    presentation: visual.presentation))
+                    presentation: .card))
                 .frame(maxHeight: fillsHeight ? .infinity : nil)
             if let question = visual.question {
                 Divider()
@@ -308,7 +308,7 @@ struct ACPVisualAidCard: View {
         guard page == nil else { return }
         let page = VisualAidWebPage(
             visualID: visual.id, html: visual.html, theme: theme, layoutVariables: layoutVariables,
-            locksNetworkAfterLoad: visual.question != nil, presentation: visual.presentation)
+            locksNetworkAfterLoad: visual.question != nil, presentation: isEmbedded ? .embedded : .card)
         self.page = page
         paused = false
         installChoiceHandler()

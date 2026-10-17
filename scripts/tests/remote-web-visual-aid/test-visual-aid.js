@@ -371,7 +371,10 @@ assert.throws(() => V.buildDocument("<p>x</p>", "</script><script>", () => stubD
   assert.match(rule(".alas-embedded body"), /padding: 0/);
   assert.match(rule(".alas-card body"), /padding: 14px/);
   assert.match(rule(".alas-card body"), /background: var\(--alas-background\)/);
-  assert.doesNotMatch(rule("body"), /padding|background/, "the shared body rule leaves both to the presentation");
+  assert.doesNotMatch(rule("body"), /padding|background|font/, "the shared body rule leaves these to the presentation");
+  // Cards keep the fixed root font (so rem is unchanged); only embedded visuals follow the chat font.
+  assert.match(V.FRAME_CSS, /:root \{[^}]*font: 14px -apple-system/);
+  assert.match(rule(".alas-embedded body"), /font: var\(--alas-font-size\) var\(--alas-font-sans\); line-height: 1\.45/);
 }
 
 console.log("visual-aid tests passed");

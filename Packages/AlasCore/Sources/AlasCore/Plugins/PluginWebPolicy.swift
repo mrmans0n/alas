@@ -103,7 +103,7 @@ public enum PluginWebPolicy: Sendable {
         ("--alas-card", "bg-2"), ("--alas-border", "line-soft"), ("--alas-muted", "fg-faint"),
         ("--alas-accent-soft", "accent-soft"),
         ("--alas-chart-1", "accent"), ("--alas-chart-2", "info"), ("--alas-chart-3", "add"),
-        ("--alas-chart-4", "warn"), ("--alas-chart-5", "del"), ("--alas-chart-6", "accent-2"),
+        ("--alas-chart-4", "warn"), ("--alas-chart-5", "del"), ("--alas-chart-6", "goal"),
     ]
 
     public static func shell(pluginID: String, imageHosts: [String] = [], variables: [String: String]) -> Data {
