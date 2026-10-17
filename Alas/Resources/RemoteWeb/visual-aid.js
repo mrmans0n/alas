@@ -15,11 +15,20 @@
   const UUID = /^[0-9a-fA-F-]{36}$/;
 
   // Mirrors Alas/Resources/VisualAid/frame.html; RemoteWebAssetTests checks every class selector is present.
+  // The variables are the Mac's dark theme (cool-slate) and its layout variables, fixed: the phone gets no
+  // theme push. test-visual-aid.js checks every variable the Mac defines is here.
   const FRAME_CSS = `
-  :root { color-scheme: dark; font: 14px -apple-system, system-ui, sans-serif;
+  :root { color-scheme: dark; font: var(--alas-font-size) var(--alas-font-sans);
     --alas-text: oklch(0.94 0.012 220); --alas-dim: oklch(0.64 0.014 220); --alas-accent: oklch(0.74 0.11 195);
     --alas-background: oklch(0.215 0.013 245); --alas-line: oklch(1 0 0 / 0.14);
-    --alas-tone-success: oklch(0.78 0.14 155); --alas-tone-danger: oklch(0.72 0.16 25); }
+    --alas-tone-success: oklch(0.78 0.14 155); --alas-tone-danger: oklch(0.72 0.16 25);
+    --alas-tone-warning: oklch(0.80 0.13 65); --alas-tone-info: oklch(0.76 0.11 230);
+    --alas-card: oklch(0.275 0.020 220); --alas-border: oklch(0.32 0.020 220 / 0.35); --alas-muted: oklch(0.50 0.014 220);
+    --alas-accent-soft: oklch(0.74 0.11 195 / 0.18);
+    --alas-chart-1: oklch(0.74 0.11 195); --alas-chart-2: oklch(0.76 0.11 230); --alas-chart-3: oklch(0.78 0.14 155);
+    --alas-chart-4: oklch(0.80 0.13 65); --alas-chart-5: oklch(0.72 0.16 25); --alas-chart-6: oklch(0.74 0.11 165);
+    --alas-radius: 6px; --alas-font-sans: -apple-system, system-ui, sans-serif;
+    --alas-font-mono: ui-monospace, SFMono-Regular, Menlo, monospace; --alas-font-size: 14px; }
   html, body { margin: 0; }
   body { color: var(--alas-text); line-height: 1.45; }
   .alas-card body { padding: 14px; background: var(--alas-background); }

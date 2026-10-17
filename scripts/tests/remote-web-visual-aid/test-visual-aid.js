@@ -340,6 +340,19 @@ assert.ok(inserted[2].textContent.includes(JSON.stringify(ID)), "the bridge scri
 }
 assert.throws(() => V.buildDocument("<p>x</p>", "</script><script>", () => stubDoc(true)));
 
+// Every variable the Mac gives a visual (theme tokens and layout variables) is defined for phone visuals too:
+// agents use them without fallbacks.
+{
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const core = path.join(__dirname, "../../../Packages/AlasCore/Sources/AlasCore");
+  const macVariables = new Set(["Plugins/PluginWebPolicy.swift", "ACP/VisualAid/VisualAidWebPolicy.swift"]
+    .flatMap((file) => [...fs.readFileSync(path.join(core, file), "utf8").matchAll(/"(--alas-[a-z0-9-]+)"/g)].map((m) => m[1])));
+  assert.ok(macVariables.has("--alas-chart-6") && macVariables.has("--alas-font-sans"), "the Mac lists were found");
+  const root = /:root\s*\{([^}]*)\}/.exec(V.FRAME_CSS)[1];
+  for (const name of macVariables) assert.match(root, new RegExp(name + ":"), name);
+}
+
 // The fragment wrapper carries the presentation as frame.html's root class; a missing one is a card.
 {
   const sourceFor = (html, presentation) => {

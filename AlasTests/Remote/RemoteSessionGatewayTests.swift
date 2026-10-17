@@ -1902,7 +1902,8 @@ struct RemoteSessionGatewayTests {
             Issue.record("expected a snapshot")
             return
         }
-        let call = try #require(rows.first { $0.kind == "toolCall" })
+        // A hidden marker carries the message's own kind (`tool_call`), so find it by position.
+        let call = try #require(rows.first { $0.index == 1 })
         #expect(call.isHidden == true)
         #expect(call.json == nil)
         let visual = try #require(rows.first { $0.kind == "visualAid" })
