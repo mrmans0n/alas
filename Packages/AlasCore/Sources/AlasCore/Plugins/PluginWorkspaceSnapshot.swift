@@ -238,6 +238,14 @@ public struct PluginEventState: Equatable, Sendable {
     /// one is its baseline, not a change, so a restart does not report every review.
     public var unloadedReviews: Set<String> = []
 
+    /// The worktrees still waiting for their first review status once this state follows `previous`: at the
+    /// baseline every listed one, since statuses are read after a start; later those of `previous` still listed,
+    /// so a worktree removed and created again at the same path reports its first status.
+    public func unloadedReviews(after previous: PluginEventState?) -> Set<String> {
+        let listed = Set(workspace.worktrees.map(\.id))
+        return (previous.map { $0.unloadedReviews.intersection(listed) } ?? listed).subtracting(reviews.map(\.worktree))
+    }
+
     /// What changed since `old`. Polls are half a second apart, so that is how often a worktree's `git.changed`
     /// can fire; a dirty count that is first learned (the scan finishing) is not a change.
     public func events(since old: PluginEventState) -> [PluginEventMessage] {

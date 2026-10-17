@@ -579,9 +579,7 @@ public final class PluginManager {
                 runs: subscribed.isDisjoint(with: [.runStarted, .runFinished]) ? [] : scoped.runs(),
                 reviews: subscribed.contains(.reviewChanged) ? scoped.reviews() : [])
             state.seenRuns = (previous?.seenRuns ?? []).union(state.runs.map(\.run))
-            // Statuses are read after a start, so the baseline's worktrees wait for their first one.
-            state.unloadedReviews = (previous?.unloadedReviews ?? Set(state.workspace.worktrees.map(\.id)))
-                .subtracting(state.reviews.map(\.worktree))
+            state.unloadedReviews = state.unloadedReviews(after: previous)
             guard state != previous else { continue }
             // The first state after a start is the baseline, so a restart does not replay every session or run.
             if let previous { await host.events(state.events(since: previous)) }
