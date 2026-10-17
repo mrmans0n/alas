@@ -78,11 +78,7 @@ extension AlasCoreContext {
                 referencedSessionLocation: { [weak self] sessionID, projectID in
                     await self?.acpReferencedSessionLocation(sessionID, projectID: projectID, loadingFullTranscript: true)
                 },
-                manager: { [weak self] worktree in
-                    guard let self else { return nil }
-                    // A manager busy with an operation stays, as the app's own lookup keeps it.
-                    return (try? environment.sessionManager(for: worktree, in: self)) ?? sessionManagers[.worktree(worktree.id)]
-                },
+                manager: { [weak self] worktree in self?.orchestrationManager(for: worktree) },
                 newWorktreeDestination: { [weak self] projectID, branch in
                     guard let self, let project = projects.projects.first(where: { $0.id == projectID }) else { return nil }
                     let worktrees = environment.configuration().worktrees
