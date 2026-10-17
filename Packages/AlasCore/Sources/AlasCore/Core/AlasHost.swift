@@ -82,6 +82,9 @@ public enum HostCaller: Equatable, Sendable {
     case app
     /// A CLI or MCP command the app received on its command socket.
     case cli
+    /// A CLI or MCP command the app received from session `id`, an agent's
+    /// or a terminal's.
+    case session(id: String)
     /// A client of the host socket, as the socket reported its peer.
     case localUser(uid: UInt32)
     /// A paired Remote peer, by the device id it authenticated as.

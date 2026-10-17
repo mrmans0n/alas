@@ -146,7 +146,7 @@ extension AppState {
                 guard let self else { return "Alas is shutting down" }
                 guard let worktree = self.projectsManager.worktreesByProject[project.id]?.first(where: { $0.id == comment.worktree })
                 else { return "unknown worktree \(comment.worktree)" }
-                let response = await self.makeCLICommandRouter(sessionWorktreeLookup: { _ in nil }).service.reviewCommentAdd(
+                let response = await self.makeCLICommandRouter().service.reviewCommentAdd(
                     origin: worktree, path: comment.path, startLine: comment.line, endLine: nil, side: nil,
                     body: comment.body, sessionID: nil, projectWorktrees: [worktree], author: .agent(name: author))
                 switch response {

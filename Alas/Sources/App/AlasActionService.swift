@@ -5,21 +5,16 @@ import Foundation
 /// wire types, so multiple front ends can reuse it.
 @MainActor
 struct AlasActionService {
-    struct FileIdentity: Equatable {
-        let systemNumber: UInt64
-        let fileNumber: UInt64
-    }
-
     var visibleWorktrees: () -> [Worktree]
     var openRelativeFile: (String, String) -> Void
     var openExternalFile: (URL, String) -> Void
     var openRelativeFileAtLines: (String, String, ClosedRange<Int>) -> Void = { _, _, _ in }
     var openExternalFileAtLines: (URL, String, ClosedRange<Int>) -> Void = { _, _, _ in }
     var focusWorktree: (Worktree) -> Void = { _ in }
-    var createWorktree: (Worktree, String, String?) async -> AlasCLIResponse = { _, _, _ in
+    var createWorktree: (Worktree, String, String?, HostCaller) async -> AlasCLIResponse = { _, _, _, _ in
         .error("Creating worktrees from the terminal is not available yet.")
     }
-    var deleteWorktreeAction: (Worktree, Bool, Bool) async -> AlasCLIResponse = { _, _, _ in
+    var deleteWorktreeAction: (Worktree, Bool, Bool, HostCaller) async -> AlasCLIResponse = { _, _, _, _ in
         .error("Deleting worktrees from the terminal is not available yet.")
     }
     var openReviewChanges: (Worktree) -> Void = { _ in }
@@ -55,30 +50,6 @@ struct AlasActionService {
     }
     var activateApp: () -> Void
 
-    /// Worktree owning `directory`: the worktree rooted exactly at
-    /// `directory` itself, or else the worktree the directory sits inside of
-    /// (most-specific match wins).
-    ///
-    /// The exact-root check runs first: a directory that is itself the root
-    /// of a nested worktree (a worktree whose root lives inside a parent
-    /// worktree's tree) must resolve to that nested worktree, not to the
-    /// parent it happens to be a strictly-deeper descendant of.
-    func resolveWorktree(forDirectory directory: String) -> Worktree? {
-        let url = URL(fileURLWithPath: directory).standardizedFileURL
-        // `cwd` comes from the CLI's logical `$PWD`, which preserves symlinks,
-        // so the directory may itself be a symlink to a worktree root. Resolve
-        // symlinks on both sides before comparing file identities, otherwise a
-        // command run from a symlinked checkout root reports "not inside an
-        // Alas worktree".
-        if let directoryIdentity = Self.fileIdentity(at: url.resolvingSymlinksInPath().path),
-           let exactMatch = visibleWorktrees().first(where: { worktree in
-               Self.fileIdentity(at: worktree.path.resolvingSymlinksInPath().path) == directoryIdentity
-           }) {
-            return exactMatch
-        }
-        return containingWorktree(for: url)?.worktree
-    }
-
     func open(paths: [String], fallbackWorktreeId: String) -> AlasCLIResponse {
         open(paths: paths, fallbackWorktreeId: fallbackWorktreeId, lineRange: nil)
     }
@@ -109,7 +80,7 @@ struct AlasActionService {
                 errors.append("\(url.path) is a directory.")
                 continue
             }
-            if let match = containingWorktree(for: url) {
+            if let match = WorktreePaths.containing(url, in: visibleWorktrees()) {
                 if let lineRange {
                     openRelativeFileAtLines(match.relativePath, match.worktree.id, lineRange)
                 } else {
@@ -185,14 +156,14 @@ struct AlasActionService {
         await performDelegatedSessionAction(origin, action)
     }
 
-    func new(origin: Worktree, branch: String, base: String?) async -> AlasCLIResponse {
-        await createWorktree(origin, branch, base)
+    func new(origin: Worktree, branch: String, base: String?, caller: HostCaller) async -> AlasCLIResponse {
+        await createWorktree(origin, branch, base, caller)
     }
 
-    func delete(target: String, projectWorktrees: [Worktree], force: Bool, keepBranch: Bool) async -> AlasCLIResponse {
+    func delete(target: String, projectWorktrees: [Worktree], force: Bool, keepBranch: Bool, caller: HostCaller) async -> AlasCLIResponse {
         switch AlasCLIWorktreeResolver.resolve(target: target, worktrees: projectWorktrees) {
         case .matched(let worktree):
-            return await deleteWorktreeAction(worktree, force, keepBranch)
+            return await deleteWorktreeAction(worktree, force, keepBranch, caller)
         case .missing(let target):
             return .error("unknown worktree \"\(target)\"")
         case .ambiguous(let labels):
@@ -516,11 +487,11 @@ struct AlasActionService {
     }
 
     private static func fileSystemRelativePath(_ url: URL, worktreeRoot: URL) -> String? {
-        guard let rootIdentity = fileIdentity(at: worktreeRoot.path) else { return nil }
+        guard let rootIdentity = WorktreePaths.fileIdentity(at: worktreeRoot.path) else { return nil }
         var ancestor = url.deletingLastPathComponent()
         var relativeComponents = [url.lastPathComponent]
         while ancestor.path != "/" {
-            if fileIdentity(at: ancestor.path) == rootIdentity {
+            if WorktreePaths.fileIdentity(at: ancestor.path) == rootIdentity {
                 return relativeComponents.reversed().joined(separator: "/")
             }
             relativeComponents.append(ancestor.lastPathComponent)
@@ -701,74 +672,6 @@ struct AlasActionService {
         }
         notifyReviewCommentsChanged()
         return .ok
-    }
-
-    // MARK: - Worktree matching (moved verbatim from AlasCLICommandRouter)
-
-    private func containingWorktree(for url: URL) -> (worktree: Worktree, relativePath: String)? {
-        var bestMatch: (worktree: Worktree, relativePath: String, rootComponentCount: Int)?
-        for worktree in visibleWorktrees() {
-            let rootURL = worktree.path.standardizedFileURL
-            guard let match = Self.relativePathAndDepth(for: url, in: rootURL) else { continue }
-            if let currentBest = bestMatch,
-               match.rootComponentCount <= currentBest.rootComponentCount {
-                continue
-            }
-            bestMatch = (worktree, match.relativePath, match.rootComponentCount)
-        }
-        guard let bestMatch else { return nil }
-        return (bestMatch.worktree, bestMatch.relativePath)
-    }
-
-    /// Widened from `private` to `nonisolated static` so `AlasCLIWorktreeResolver`
-    /// (a stateless enum with no `AlasActionService` instance to call
-    /// `visibleWorktrees()` on) can reuse the same containing-worktree lookup
-    /// logic against its own `worktrees: [Worktree]` parameter.
-    nonisolated static func relativePathAndDepth(for url: URL, in rootURL: URL) -> (relativePath: String, rootComponentCount: Int)? {
-        if let match = relativePathAndDepth(
-            targetComponents: url.standardizedFileURL.pathComponents,
-            rootComponents: rootURL.pathComponents
-        ) {
-            return match
-        }
-
-        return relativePathAndDepth(
-            targetComponents: url.resolvingSymlinksInPath().standardizedFileURL.pathComponents,
-            rootComponents: rootURL.resolvingSymlinksInPath().standardizedFileURL.pathComponents
-        ) ?? fileSystemRelativePathAndDepth(for: url, in: rootURL)
-    }
-
-    nonisolated static func relativePathAndDepth(
-        targetComponents: [String],
-        rootComponents: [String]
-    ) -> (relativePath: String, rootComponentCount: Int)? {
-        guard targetComponents.count > rootComponents.count,
-              Array(targetComponents.prefix(rootComponents.count)) == rootComponents else { return nil }
-        let relative = targetComponents.dropFirst(rootComponents.count).joined(separator: "/")
-        guard !relative.isEmpty else { return nil }
-        return (relative, rootComponents.count)
-    }
-
-    private nonisolated static func fileSystemRelativePathAndDepth(for url: URL, in rootURL: URL) -> (relativePath: String, rootComponentCount: Int)? {
-        guard let rootIdentity = Self.fileIdentity(at: rootURL.path) else { return nil }
-        var ancestor = url.deletingLastPathComponent()
-        var relativeComponents = [url.lastPathComponent]
-
-        while ancestor.path != "/" {
-            if Self.fileIdentity(at: ancestor.path) == rootIdentity {
-                return (relativeComponents.reversed().joined(separator: "/"), rootURL.pathComponents.count)
-            }
-            relativeComponents.append(ancestor.lastPathComponent)
-            ancestor.deleteLastPathComponent()
-        }
-        return nil
-    }
-
-    nonisolated static func fileIdentity(at path: String) -> FileIdentity? {
-        guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
-              let systemNumber = attributes[.systemNumber] as? NSNumber,
-              let fileNumber = attributes[.systemFileNumber] as? NSNumber else { return nil }
-        return FileIdentity(systemNumber: systemNumber.uint64Value, fileNumber: fileNumber.uint64Value)
     }
 
     private func fileExists(at url: URL) -> Bool {
