@@ -141,11 +141,14 @@ public enum VisualAidWebPolicy: Sendable {
 
     /// Layout variables an embedded visual inherits from the app's UI font. The family is the user's own
     /// setting but lands in a `<style>` block, so characters that could end the declaration are dropped.
+    /// An empty family (the system font) leaves just the system stack.
     public static func layoutVariables(fontFamily: String, fontSize: CGFloat) -> [String: String] {
         let unsafe: Set<Character> = ["\"", "\\", ";", "{", "}", "<"]
         let family = String(fontFamily.filter { !unsafe.contains($0) && !$0.isNewline })
+            .trimmingCharacters(in: .whitespaces)
+        let systemStack = "-apple-system, system-ui, sans-serif"
         return [
-            "--alas-font-sans": "\"\(family)\", -apple-system, system-ui, sans-serif",
+            "--alas-font-sans": family.isEmpty ? systemStack : "\"\(family)\", \(systemStack)",
             "--alas-font-mono": "ui-monospace, SFMono-Regular, Menlo, monospace",
             "--alas-font-size": "\(fontSize)px",
             "--alas-radius": "6px",

@@ -174,6 +174,12 @@ struct VisualAidWebPolicyTests {
         #expect(variables["--alas-font-size"] == "14.5px")
     }
 
+    @Test("an empty font family leaves just the system stack", arguments: ["", "  ", #"";{}"#])
+    func layoutVariablesWithoutAFamily(family: String) {
+        let variables = VisualAidWebPolicy.layoutVariables(fontFamily: family, fontSize: 13.5)
+        #expect(variables["--alas-font-sans"] == "-apple-system, system-ui, sans-serif")
+    }
+
     @Test("a full document is returned unchanged", arguments: [
         "<!DOCTYPE html><html><HEAD lang=\"x\"><title>t</title></HEAD><body>b</body></html>",
         "<html><body>b</body></html>",
