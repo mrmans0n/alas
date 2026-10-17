@@ -1118,10 +1118,6 @@ public final class ACPSessionOrchestrationCoordinator {
     }
 
     private func startPersistedChild(childID: String, prompt: String, worktree: Worktree) async {
-        guard let manager = environment.manager(worktree) else {
-            await markChildFailed(childSessionId: childID, message: "Could not create ACP session manager.")
-            return
-        }
         let record: ACPDelegationRecord?
         do {
             record = try await environment.persistence.delegation(childSessionId: childID)
@@ -1161,6 +1157,12 @@ public final class ACPSessionOrchestrationCoordinator {
         // child is admitted as any new session would be.
         if let refusal = await environment.admitChild(worktree, record.agentId) {
             await markChildFailed(childSessionId: childID, message: refusal)
+            return
+        }
+        // Looked up after admission, which can replace the worktree's
+        // manager when its project changed.
+        guard let manager = environment.manager(worktree) else {
+            await markChildFailed(childSessionId: childID, message: "Could not create ACP session manager.")
             return
         }
         if manager.liveSession(for: childID) == nil {
