@@ -6363,7 +6363,7 @@ final class AppState {
 
     /// Runs `operation` with `acknowledged` as the only unsaved edits the
     /// quiesce step may discard in `worktree`; anything dirtied since refuses.
-    private func withAcknowledgedDirtyTabs<Value>(
+    fileprivate func withAcknowledgedDirtyTabs<Value>(
         _ acknowledged: [TabID: Int],
         for worktree: Worktree,
         _ operation: () async throws -> Value
@@ -14765,6 +14765,14 @@ class AppHostEnvironment: AlasHostEnvironment {
 
     func quiesceWorktree(_ worktree: Worktree, in core: AlasCoreContext) async throws {
         try await app?.quiesceWorktreeForRemoval(worktree)
+    }
+
+    /// With nothing acknowledged, any unsaved edit refuses as the editors close.
+    func quiesceWorktree(_ worktree: Worktree, refusingUnsavedEdits: Bool, in core: AlasCoreContext) async throws {
+        guard refusingUnsavedEdits, let app else { return try await quiesceWorktree(worktree, in: core) }
+        try await app.withAcknowledgedDirtyTabs([:], for: worktree) {
+            try await quiesceWorktree(worktree, in: core)
+        }
     }
 
     func checkpointRecoveryBlocksRemoval(_ worktree: Worktree) async -> Bool {

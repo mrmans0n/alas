@@ -11,6 +11,9 @@ public protocol AlasHostEnvironment: AnyObject {
     /// sessions by default. The app also kills its terminals, waiting for
     /// them, and closes its tabs. Throwing refuses the operation.
     func quiesceWorktree(_ worktree: Worktree, in core: AlasCoreContext) async throws
+    /// Quiesces as above; with `refusingUnsavedEdits`, refuses (throws)
+    /// when an editor holds an unsaved change as it would close.
+    func quiesceWorktree(_ worktree: Worktree, refusingUnsavedEdits: Bool, in core: AlasCoreContext) async throws
     /// Whether an interrupted checkpoint restore must be recovered before the
     /// worktree can be removed.
     func checkpointRecoveryBlocksRemoval(_ worktree: Worktree) async -> Bool
@@ -88,6 +91,11 @@ public protocol AlasHostEnvironment: AnyObject {
 }
 
 extension AlasHostEnvironment {
+    /// A host with no editors has no unsaved changes to refuse.
+    public func quiesceWorktree(_ worktree: Worktree, refusingUnsavedEdits: Bool, in core: AlasCoreContext) async throws {
+        try await quiesceWorktree(worktree, in: core)
+    }
+
     public func quiesceWorktree(_ worktree: Worktree, in core: AlasCoreContext) async throws {
         await core.disposeSessionManager(owner: .worktree(worktree.id))
     }
