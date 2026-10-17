@@ -3,6 +3,7 @@ import Foundation
 import Network
 import Synchronization
 @testable import Alas
+@_spi(Testing) import AlasCore
 
 @MainActor
 struct RemoteServerIntegrationTests {
@@ -21,6 +22,10 @@ struct RemoteServerIntegrationTests {
                              provider: RemoteSessionsProvider = FakeSessionsProvider()) async throws -> (RemoteServer, UInt16) {
         let assets = RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory()))
         let server = RemoteServer(pairing: pairing, assets: assets, provider: provider)
+        // The fake's reads, which tests hold back to pin ordering.
+        if let fake = provider as? FakeSessionsProvider {
+            server.configureGateway = { $0.hostCalls = fake.hostCalls }
+        }
         try server.start(port: 0)
         for _ in 0..<50 where server.port == nil {
             try await Task.sleep(nanoseconds: 20_000_000)
@@ -120,17 +125,21 @@ struct RemoteServerIntegrationTests {
 
     @Test func pairThenWebSocketSubscribeReceivesSnapshot() async throws {
         // Provider with one session containing one agent message.
-        let provider = FakeSessionsProvider()
-        let mgr = try makeManager()
+        let fixture = try GatewayHostFixture()
+        let provider = fixture.provider
+        let mgr = try fixture.core.sessionManager(for: fixture.worktree)
         let s = mgr.createSession(agentId: "claude")
         let transcriptText = String(repeating: "hello-remote: the agent is reading the workspace and reporting its changes.\n", count: 2_000)
         s.transcript.messages = [.agent(id: UUID(), StreamingText(transcriptText))]
-        provider.sessions[s.id] = s
         provider.summaries = [RemoteSessionSummary(id: s.id, title: "T", agentId: "claude", status: "idle", canDrive: false)]
 
         let assets = RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory()))
         let pairing = RemotePairingService(store: InMemoryDeviceStore())
         let server = RemoteServer(pairing: pairing, assets: assets, provider: provider)
+        // The fake's reads, which tests hold back to pin ordering.
+        if let fake = provider as? FakeSessionsProvider {
+            server.configureGateway = { $0.hostCalls = fake.hostCalls }
+        }
         try server.start(port: 0)
 
         // Wait for port assignment.
@@ -358,10 +367,10 @@ struct RemoteServerIntegrationTests {
     }
 
     @Test func stopBypassesBlockedOrderedQueue() async throws {
-        let provider = FakeSessionsProvider()
-        let mgr = try makeManager()
+        let fixture = try GatewayHostFixture()
+        let provider = fixture.provider
+        let mgr = try fixture.core.sessionManager(for: fixture.worktree)
         let s = mgr.createSession(agentId: "claude")
-        provider.sessions[s.id] = s
         provider.pauseSessionSummaries = true            // blocks the ordered chain
         let pairing = RemotePairingService(store: InMemoryDeviceStore())
         let (server, port) = try await startServer(pairing: pairing, provider: provider)
@@ -399,22 +408,21 @@ struct RemoteServerIntegrationTests {
     // already in flight — otherwise stop can overtake it, find no active
     // turn to cancel, and the queued action proceeds anyway right after the
     // user pressed Stop.
-    @Test func stopWaitsForPrecedingTakeOverBeforeRunning() async throws {
-        let provider = FakeSessionsProvider()
-        let mgr = try makeManager()
+    @Test func stopWaitsForPrecedingDriveActionBeforeRunning() async throws {
+        let fixture = try GatewayHostFixture()
+        let provider = fixture.provider
+        let mgr = try fixture.core.sessionManager(for: fixture.worktree)
         let s = mgr.createSession(agentId: "claude")
-        // The snapshot a takeover pushes fetches this tool call's full
-        // content, which suspends inside the gateway's own await chain.
-        var toolCall = ACPMessage.ToolCall(
-            toolCallId: "old", title: "read", status: "completed",
-            content: String(repeating: "abcdef0123456789", count: 400), preview: "abcdef")
-        toolCall.truncateForOffWindow()
-        s.transcript.messages = [.toolCall(toolCall)]
-        provider.sessions[s.id] = s
-        provider.fullToolCallContents["\(s.id)|old"] = "full content"
-        provider.pauseFullToolCallContentOnCall = 1
+        if !mgr.isWriter(for: s.id) { #expect(await mgr.acquireWriterLease(sessionId: s.id)) }
         let pairing = RemotePairingService(store: InMemoryDeviceStore())
         let (server, port) = try await startServer(pairing: pairing, provider: provider)
+        // A prompt's mentions resolve before it is sent: holding that back
+        // keeps the drive action in flight inside the gateway.
+        let drive = HeldDriveAction()
+        server.configureGateway = { gateway in
+            gateway.hostCalls = provider.hostCalls
+            gateway.hostCalls.mentionAttachments = { _, _ in await drive.hold() }
+        }
 
         let code = pairing.beginPairing()
         var pairReq = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/pair")!)
@@ -429,17 +437,20 @@ struct RemoteServerIntegrationTests {
         task.resume()
         let received = collect(task)
 
-        try await task.send(.data(JSONEncoder().encode(RemoteClientMessage.takeOver(sessionId: s.id))))
-        for _ in 0..<100 where provider.fullToolCallContentCallCount == 0 {
+        try await task.send(.data(JSONEncoder().encode(RemoteClientMessage.sendPrompt(
+            sessionId: s.id, text: "@notes", attachments: [], intent: "auto",
+            mentions: [RemoteMention(kind: RemoteMention.file, value: "notes.md", name: "notes.md")]))))
+        for _ in 0..<100 where !drive.isHeld {
             try await Task.sleep(nanoseconds: 20_000_000)
         }
+        #expect(drive.isHeld)
         try await task.send(.data(JSONEncoder().encode(RemoteClientMessage.stop(sessionId: s.id))))
 
-        // Stop must NOT run while the preceding takeOver is still suspended.
+        // Stop must NOT run while the preceding drive action is still suspended.
         try await Task.sleep(nanoseconds: 200_000_000)
-        #expect(!received.stopped(s.id), "stop must wait for the preceding takeOver to land first")
+        #expect(!received.stopped(s.id), "stop must wait for the preceding drive action to land first")
 
-        provider.resumeFullToolCallContent("full content")
+        drive.release()
         for _ in 0..<100 where !received.stopped(s.id) {
             try await Task.sleep(nanoseconds: 20_000_000)
         }
@@ -455,8 +466,9 @@ struct RemoteServerIntegrationTests {
     // queue latency the fast lane exists to fix would reappear whenever a
     // client scrolls up and then presses Stop.
     @Test func stopBypassesBlockedNonDriveFetchOlder() async throws {
-        let provider = FakeSessionsProvider()
-        let mgr = try makeManager()
+        let fixture = try GatewayHostFixture()
+        let provider = fixture.provider
+        let mgr = try fixture.core.sessionManager(for: fixture.worktree)
         let s = mgr.createSession(agentId: "claude")
         var toolCall = ACPMessage.ToolCall(
             toolCallId: "old", title: "read", status: "completed",
@@ -468,7 +480,6 @@ struct RemoteServerIntegrationTests {
         s.transcript.messages = [.toolCall(toolCall)] + (0..<99).map {
             .user(id: UUID(), messageId: "u\($0)", text: "msg \($0)", attachments: [])
         }
-        provider.sessions[s.id] = s
         provider.fullToolCallContents["\(s.id)|old"] = "full content"
         provider.pauseFullToolCallContentOnCall = 1   // suspends inside the gateway's own await chain
         let pairing = RemotePairingService(store: InMemoryDeviceStore())
@@ -514,8 +525,9 @@ struct RemoteServerIntegrationTests {
     // lane exists to prevent. Stop must give up waiting after a bounded
     // interval and act as an emergency brake regardless.
     @Test func stopIsBoundedWhenDriveActionIsQueuedBehindStuckReadWork() async throws {
-        let provider = FakeSessionsProvider()
-        let mgr = try makeManager()
+        let fixture = try GatewayHostFixture()
+        let provider = fixture.provider
+        let mgr = try fixture.core.sessionManager(for: fixture.worktree)
         let s = mgr.createSession(agentId: "claude")
         var toolCall = ACPMessage.ToolCall(
             toolCallId: "old", title: "read", status: "completed",
@@ -524,7 +536,6 @@ struct RemoteServerIntegrationTests {
         s.transcript.messages = [.toolCall(toolCall)] + (0..<99).map {
             .user(id: UUID(), messageId: "u\($0)", text: "msg \($0)", attachments: [])
         }
-        provider.sessions[s.id] = s
         provider.fullToolCallContents["\(s.id)|old"] = "full content"
         // Never resumed in this test — simulates a genuinely stuck read.
         provider.pauseFullToolCallContentOnCall = 1
@@ -578,8 +589,9 @@ struct RemoteServerIntegrationTests {
     // emergency brake. A timed-out stop must cancel the queued drive action
     // so it never actually executes once unblocked.
     @Test func stopTimeoutCancelsQueuedDriveActionSoItNeverRuns() async throws {
-        let provider = FakeSessionsProvider()
-        let mgr = try makeManager()
+        let fixture = try GatewayHostFixture()
+        let provider = fixture.provider
+        let mgr = try fixture.core.sessionManager(for: fixture.worktree)
         let s = mgr.createSession(agentId: "claude")
         var toolCall = ACPMessage.ToolCall(
             toolCallId: "old", title: "read", status: "completed",
@@ -588,7 +600,6 @@ struct RemoteServerIntegrationTests {
         s.transcript.messages = [.toolCall(toolCall)] + (0..<99).map {
             .user(id: UUID(), messageId: "u\($0)", text: "msg \($0)", attachments: [])
         }
-        provider.sessions[s.id] = s
         provider.fullToolCallContents["\(s.id)|old"] = "full content"
         provider.pauseFullToolCallContentOnCall = 1
         let pairing = RemotePairingService(store: InMemoryDeviceStore())
@@ -753,16 +764,20 @@ struct RemoteServerIntegrationTests {
     }
 
     @Test func revokingDeviceDropsLiveWebSocket() async throws {
-        let provider = FakeSessionsProvider()
-        let mgr = try makeManager()
+        let fixture = try GatewayHostFixture()
+        let provider = fixture.provider
+        let mgr = try fixture.core.sessionManager(for: fixture.worktree)
         let s = mgr.createSession(agentId: "claude")
         s.transcript.messages = [.agent(id: UUID(), StreamingText("hello-remote"))]
-        provider.sessions[s.id] = s
         provider.summaries = [RemoteSessionSummary(id: s.id, title: "T", agentId: "claude", status: "idle", canDrive: false)]
 
         let assets = RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory()))
         let pairing = RemotePairingService(store: InMemoryDeviceStore())
         let server = RemoteServer(pairing: pairing, assets: assets, provider: provider)
+        // The fake's reads, which tests hold back to pin ordering.
+        if let fake = provider as? FakeSessionsProvider {
+            server.configureGateway = { $0.hostCalls = fake.hostCalls }
+        }
         try server.start(port: 0)
         for _ in 0..<50 where server.port == nil {
             try await Task.sleep(nanoseconds: 20_000_000)
@@ -813,10 +828,10 @@ struct RemoteServerIntegrationTests {
     }
 
     @Test func connectedDeviceCountsReflectAuthenticatedWebSockets() async throws {
-        let provider = FakeSessionsProvider()
-        let mgr = try makeManager()
+        let fixture = try GatewayHostFixture()
+        let provider = fixture.provider
+        let mgr = try fixture.core.sessionManager(for: fixture.worktree)
         let s = mgr.createSession(agentId: "claude")
-        provider.sessions[s.id] = s
 
         let pairing = RemotePairingService(store: InMemoryDeviceStore())
         let server = RemoteServer(
@@ -1531,4 +1546,22 @@ private final class ReceivedMessages {
     func stopped(_ id: String) -> Bool { all.contains(.stopPending(sessionId: id)) }
 
     var snapshotCount: Int { all.filter { if case .transcriptSnapshot = $0 { true } else { false } }.count }
+}
+
+/// A drive action a test holds in flight until it lets it go.
+@MainActor
+private final class HeldDriveAction {
+    private(set) var isHeld = false
+    private var waiter: CheckedContinuation<Void, Never>?
+
+    func hold() async -> [ACPMessage.Attachment]? {
+        isHeld = true
+        await withCheckedContinuation { waiter = $0 }
+        return []
+    }
+
+    func release() {
+        waiter?.resume()
+        waiter = nil
+    }
 }

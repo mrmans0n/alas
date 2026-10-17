@@ -52,14 +52,18 @@ final class GatewayHostFixture {
 
     var manager: ACPSessionManager? { core.sessionManagers.values.first }
 
-    /// A session this instance drives, connected to the agent. The fake
-    /// serves the gateway's reads of it until those move to the host too.
+    /// A loaded session `id` with no agent, holding `messages`.
+    func session(_ id: String = "s1", messages: [ACPMessage] = []) throws -> ACPSession {
+        let session = try core.sessionManager(for: worktree).createSession(id: id, agentId: "claude")
+        session.transcript.messages = messages
+        return session
+    }
+
+    /// A session this instance drives, connected to the agent.
     func drivenSession() async throws -> String {
         let ref = WorktreeRef(projectID: "p", path: worktree.path.path)
         let id = try await host.sessions.create(.worktree(ref), agentID: "gemini", caller: .app).id
         try await until { self.host.sessions.isWriter(id) && self.manager?.liveSession(for: id)?.agentState == .ready }
-        provider.sessions[id] = manager?.liveSession(for: id)
-        provider.writers.insert(id)
         return id
     }
 
@@ -83,6 +87,12 @@ final class GatewayHostFixture {
         }
     }
 
+    /// The first form request a client was sent, once one is.
+    func firstElicitation(in sent: @MainActor () -> [RemoteServerMessage]) async throws -> RemoteElicitationPayload {
+        try await until { sent().contains { if case .elicitationRequest = $0 { true } else { false } } }
+        return try #require(sent().compactMap { if case .elicitationRequest(_, let payload) = $0 { payload } else { nil } }.first)
+    }
+
     func until(_ condition: @MainActor () -> Bool) async throws {
         let deadline = ContinuousClock.now + .seconds(10)
         while !condition() {
@@ -94,9 +104,14 @@ final class GatewayHostFixture {
         }
     }
 
+    isolated deinit {
+        tearDown()
+    }
+
     func tearDown() {
         core.sessionManagers.values.forEach { $0.shutdownBackgroundTasks() }
         try? FileManager.default.removeItem(at: Paths.acpAttachmentsDir(forWorktreeId: worktree.id))
-        try? FileManager.default.removeItem(at: root)
+        // The session store stays open until its managers go, so its folder,
+        // under the system's temporary directory, is left to the system.
     }
 }

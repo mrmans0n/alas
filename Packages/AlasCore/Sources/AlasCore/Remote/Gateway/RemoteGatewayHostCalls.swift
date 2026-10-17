@@ -18,6 +18,9 @@ import Foundation
     /// The prompt attachments for a client's mentions, or nil when one does
     /// not resolve inside the session's project.
     public var mentionAttachments: @MainActor (_ mentions: [RemoteMention], _ sessionID: String) async -> [ACPMessage.Attachment]?
+    /// A tool call's full output, which a loaded transcript keeps only for
+    /// its newest messages.
+    public var fullToolCallContent: @MainActor (_ sessionID: String, _ toolCallID: String) async -> String?
 
     public init(
         worktrees: @escaping @MainActor () async -> [RemoteWorktreeOption],
@@ -35,7 +38,8 @@ import Foundation
             -> (mentions: [RemoteMention], sessions: [ACPSessionMentionCandidate]) = { _, _, _ in ([], []) },
         mentionAttachments: @escaping @MainActor (_ mentions: [RemoteMention], _ sessionID: String) async -> [ACPMessage.Attachment]? = { mentions, _ in
             mentions.isEmpty ? [] : nil
-        }
+        },
+        fullToolCallContent: @escaping @MainActor (_ sessionID: String, _ toolCallID: String) async -> String? = { _, _ in nil }
     ) {
         self.worktrees = worktrees
         self.projects = projects
@@ -46,6 +50,7 @@ import Foundation
         self.inspection = inspection
         self.mentionCandidates = mentionCandidates
         self.mentionAttachments = mentionAttachments
+        self.fullToolCallContent = fullToolCallContent
     }
 
     /// The host's lists and creations; empty and refused without a host.
@@ -78,6 +83,9 @@ import Foundation
             },
             mentionAttachments: { [weak core] mentions, sessionID in
                 await core?.remoteMentionAttachments(mentions, sessionId: sessionID) ?? (mentions.isEmpty ? [] : nil)
+            },
+            fullToolCallContent: { [weak host] sessionID, toolCallID in
+                await host?.sessions.fullToolCallContent(sessionID, toolCallID: toolCallID)
             }
         )
     }
