@@ -17,7 +17,8 @@ public struct NotificationPlatform: Sendable {
 
 public final class NotificationService {
     public let delegate = NotificationDelegate()
-    private let center = UNUserNotificationCenter.current()
+    /// Looked up when used: a process without an app bundle has no center.
+    private var center: UNUserNotificationCenter { .current() }
     private var enabled: Bool = true
     public var notificationAdder: (UNNotificationRequest) -> Void
     public var awaitingPingPlayer: () -> Void = { NotificationPlatform.shared.playAwaitingPing() }

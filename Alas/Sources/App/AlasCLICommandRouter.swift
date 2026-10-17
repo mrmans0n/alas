@@ -28,12 +28,6 @@ struct AlasCLICommandRouter {
     var now: () -> Date = Date.init
     var gitStatus: (URL) async throws -> [ChangedFile] = { try await GitService().status(worktreePath: $0) }
     var providerReviewOriginalPath: (ReviewDraftSessionID, String) async -> String? = { _, _ in nil }
-    var notifySession: (String?, SessionOwnerID?, Worktree, String, String?, AlasCLINotifyLevel) -> AlasCLIResponse = { _, _, _, _, _, _ in
-        .error("Notifications from the terminal are not available yet.")
-    }
-    var notifyOwnedSession: (String, SessionOwnerID, String, String?, AlasCLINotifyLevel) -> AlasCLIResponse = { _, _, _, _, _ in
-        .error("Notifications from the terminal are not available yet.")
-    }
     var listDelegationAgents: (ACPOrchestrationSessionOrigin, String?) async -> AlasCLIResponse = { _, _ in
         .error("Session orchestration is not available yet.")
     }
@@ -86,7 +80,6 @@ struct AlasCLICommandRouter {
             now: now,
             gitStatus: gitStatus,
             providerReviewOriginalPath: providerReviewOriginalPath,
-            notifySession: notifySession,
             listDelegationAgents: listDelegationAgents,
             listDelegatedSessions: listDelegatedSessions,
             createDelegatedSession: createDelegatedSession,
@@ -183,7 +176,7 @@ struct AlasCLICommandRouter {
            let sessionId = request.sessionId,
            let owner = requestOwner,
            case .workspaceCheckout = owner {
-            return notifyOwnedSession(sessionId, owner, body, title, level)
+            return notify(body, title: title, level: level, from: .checkoutSession(sessionId, owner: owner), caller: caller)
         }
         switch request.command {
         case .prCreate, .prStatus:
@@ -226,13 +219,9 @@ struct AlasCLICommandRouter {
                 fallbackWorktreeId: origin.id
             )
         case .notify(let body, let title, let level):
-            return service.notify(
-                sessionId: request.sessionId,
-                owner: originOwner,
-                origin: origin,
-                body: body,
-                title: title,
-                level: level
+            return notify(
+                body, title: title, level: level,
+                from: .worktree(origin, sessionID: request.sessionId, owner: originOwner), caller: caller
             )
         case .worktree(.list):
             return service.list(origin: origin, projectWorktrees: projectWorktrees)
@@ -294,6 +283,15 @@ struct AlasCLICommandRouter {
                 return .error("pr_status is only available to ACP agent sessions.")
             }
             return await prStatus(sessionId, origin.id)
+        }
+    }
+
+    private func notify(_ body: String, title: String?, level: AlasCLINotifyLevel, from source: NoticeSource, caller: HostCaller) -> AlasCLIResponse {
+        do {
+            try host.attention.notify(body, title: title, needsInput: level == .attention, from: source, caller: caller)
+            return .ok
+        } catch {
+            return .error("Unknown worktree.")
         }
     }
 }

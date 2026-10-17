@@ -42,3 +42,22 @@ public enum AgentKind: String, CaseIterable, Sendable, Codable, Identifiable {
         }
     }
 }
+
+extension AgentKind {
+    /// The harness kind of ACP agent `id`, sourced from `AgentBuiltins.catalog`.
+    /// Unknown ids fall back to `.claude`: badges are drawn from state, not
+    /// from the agent, and click-through works from the session id alone.
+    public init(acpAgentID id: String) {
+        self = switch id {
+        case "codex": .codex
+        case "cursor-agent": .cursor
+        case "gemini": .gemini
+        case "antigravity": .antigravity
+        case "opencode": .opencode
+        case "pi": .pi
+        case "omp": .omp
+        case "copilot": .copilot
+        default: .claude
+        }
+    }
+}

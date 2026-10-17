@@ -156,23 +156,5 @@ final class ACPHarnessBridge {
         acknowledgeSessionInteraction(session.owner, session.id)
     }
 
-    /// Map the ACP `agentId` string (free-form, sourced from
-    /// `AgentBuiltins.catalog`) to `AgentKind`. Unknown ids fall back to
-    /// `.claude` — badge rendering is state-driven, not agent-driven, so
-    /// the only consumer of `agent` is the click-activation path which
-    /// works purely off `sessionId`.
-    static func agentKind(for agentId: String) -> AgentKind {
-        switch agentId {
-        case "claude":       return .claude
-        case "codex":        return .codex
-        case "cursor-agent": return .cursor
-        case "gemini":       return .gemini
-        case "antigravity":  return .antigravity
-        case "opencode":     return .opencode
-        case "pi":           return .pi
-        case "omp":          return .omp
-        case "copilot":      return .copilot
-        default:             return .claude
-        }
-    }
+    static func agentKind(for agentId: String) -> AgentKind { AgentKind(acpAgentID: agentId) }
 }
