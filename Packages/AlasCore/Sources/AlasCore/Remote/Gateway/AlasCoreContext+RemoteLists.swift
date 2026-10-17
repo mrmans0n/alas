@@ -121,7 +121,7 @@ extension AlasCoreContext {
         )
     }
 
-    static let folderWorktreeCreationMessage = "Folder projects are not git repositories and cannot create worktrees."
+    nonisolated static let folderWorktreeCreationMessage = "Folder projects are not git repositories and cannot create worktrees."
 }
 
 /// The branch a new worktree starts from when the user picks none.

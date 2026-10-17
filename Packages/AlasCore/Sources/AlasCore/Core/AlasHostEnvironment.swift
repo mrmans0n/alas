@@ -80,6 +80,11 @@ public protocol AlasHostEnvironment: AnyObject {
     ) async -> Result<Worktree, ACPSessionOrchestrationCoordinator.WorktreeCreationError>
     /// A delegated session's parent was recorded or loaded.
     func delegatedSessionParentsChanged()
+    /// Why a Workspace checkout keeps `worktree` from being deleted on its
+    /// own; nil when none does.
+    func workspaceDeletionRefusal(for worktree: Worktree) -> String?
+    /// Whether an editor holds unsaved changes in `worktree`.
+    func hasUnsavedEditorChanges(in worktree: Worktree) -> Bool
 }
 
 extension AlasHostEnvironment {
@@ -142,6 +147,10 @@ extension AlasHostEnvironment {
     }
 
     public func delegatedSessionParentsChanged() {}
+
+    public func workspaceDeletionRefusal(for worktree: Worktree) -> String? { nil }
+
+    public func hasUnsavedEditorChanges(in worktree: Worktree) -> Bool { false }
 
     /// Ends the checkout's agent sessions, as a removal ends a worktree's.
     public func stopWorkspaceCheckoutSessions(_ checkout: WorkspaceCheckout, in core: AlasCoreContext) async throws {
