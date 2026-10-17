@@ -872,7 +872,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 toggleExpanded: toggleExpanded,
                 openURL: { url in openLink(host: host, url) },
                 showsActionsPermanently: snapshot.showsActionsPermanently,
-                requestRespec: snapshot.requestRespec
+                requestRespec: snapshot.requestRespec,
+                quote: host.onQuote
             )
         }
 

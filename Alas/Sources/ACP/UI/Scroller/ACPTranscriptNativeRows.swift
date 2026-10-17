@@ -117,6 +117,9 @@ enum ACPTranscriptNativeRows {
         /// Rebuilds the row specs on a later main-actor turn, for a row whose
         /// content can no longer be drawn natively.
         var requestRespec: @MainActor () -> Void = {}
+        /// Quotes selected text into the composer; nil hides "Quote" from
+        /// the selection menu.
+        var quote: ((String) -> Void)?
 
         static var inert: Actions {
             Actions(menu: nil, toggleExpanded: nil, openURL: { _ in }, showsActionsPermanently: false)
