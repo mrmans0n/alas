@@ -56,6 +56,9 @@ extension AlasCoreContext {
         let path = worktree.path
         // Read once: a base changed while the probes run is the next refresh's.
         let baseBranch = loop.currentBaseBranch
+        // Begun before the probes, so a base change or a forget while they
+        // run discards what they read.
+        let inspection = loop.beginLocalInspection()
         do {
             async let branch = git.currentBranch(worktreePath: path)
             async let head = git.revParseHEAD(worktreePath: path)
@@ -80,9 +83,12 @@ extension AlasCoreContext {
                 upstreamAheadCommitCount: await upstreamAhead,
                 needsPush: await needsPush
             )
-            await loop.refresh(local: local, remotes: try await remotes)
+            let resolvedRemotes = try await remotes
+            guard let attempt = loop.beginLocalRefresh(from: inspection, local: local) else { return }
+            await loop.refresh(attempt, remotes: resolvedRemotes)
         } catch {
             // The next round reads it again.
+            loop.cancelLocalRefresh(inspection)
         }
     }
 }
