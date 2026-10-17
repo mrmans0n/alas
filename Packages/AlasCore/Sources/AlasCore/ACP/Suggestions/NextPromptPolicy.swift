@@ -113,8 +113,8 @@ public enum NextPromptPolicy: Sendable {
 
     /// Small models often answer an assistant's closing question by restating
     /// it. A restatement reuses most of the question's words and keeps its
-    /// form: it is itself a question or opens like one of the question's
-    /// clauses. A direct answer can share the words but not the form.
+    /// form: it is itself a question or, when longer than a few words, opens
+    /// like one of the question's clauses. A direct answer can share the words but not the form.
     private static func echoesClosingQuestion(_ text: String, assistant: String) -> Bool {
         let trailing = CharacterSet.whitespacesAndNewlines.union(.init(charactersIn: "*_`)\"'”’"))
         let paragraph = (assistant
@@ -133,7 +133,7 @@ public enum NextPromptPolicy: Sendable {
                 .components(separatedBy: "\n")
         }
         let reply = words(text)
-        guard reply.count >= 4 else { return false }
+        guard !reply.isEmpty else { return false }
         func overlaps(_ span: String) -> Bool {
             let asked = Set(words(span))
             guard !asked.isEmpty else { return false }
@@ -146,6 +146,8 @@ public enum NextPromptPolicy: Sendable {
         let finalSentence = split(paragraph, after: ".!?").last ?? paragraph
         guard overlaps(finalSentence) || overlaps(paragraph) else { return false }
         if text.trimmingCharacters(in: trailing).hasSuffix("?") { return true }
+        // A short reply such as "Open a PR." naturally opens like the question.
+        guard reply.count >= 4 else { return false }
         let opening = Array(reply.prefix(2))
         return split(paragraph, after: ".!?:;").contains { Array(words($0).prefix(2)) == opening }
     }
