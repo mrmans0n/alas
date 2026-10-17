@@ -109,7 +109,11 @@ struct PromptCardRow: View {
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)
-        .accessibilityAction(named: showsInstruction ? "Hide instruction" : "Show instruction", toggleInstruction)
+        .accessibilityActions {
+            if !isCompact {
+                Button(showsInstruction ? "Hide instruction" : "Show instruction", action: toggleInstruction)
+            }
+        }
     }
 
     private var facts: some View {
