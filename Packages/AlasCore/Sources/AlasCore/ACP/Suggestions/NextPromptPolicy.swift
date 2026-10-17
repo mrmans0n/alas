@@ -114,8 +114,8 @@ public enum NextPromptPolicy: Sendable {
     /// Small models often answer an assistant's closing question by restating
     /// it. A restatement reuses most of the question's words and keeps its
     /// form: it is itself a question or, when longer than a few words, opens
-    /// like the question or the request just before it. A direct answer can
-    /// share the words but not the form.
+    /// like the question or the request just before it and reproduces nearly
+    /// all of that clause. A direct answer can share the words but not the form.
     private static func echoesClosingQuestion(_ text: String, assistant: String) -> Bool {
         let trailing = CharacterSet.whitespacesAndNewlines.union(.init(charactersIn: "*_`)\"'”’"))
         func isQuestion(_ value: String) -> Bool {
@@ -125,9 +125,12 @@ public enum NextPromptPolicy: Sendable {
             .components(separatedBy: "\n\n")
             .last { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? ""
         guard isQuestion(paragraph) else { return false }
+        // Scripts written without spaces count each character as a word.
         func words(_ value: String) -> [String] {
             value.lowercased()
                 .replacingOccurrences(of: "’", with: "'")
+                .replacingOccurrences(of: #"([\p{Han}\p{Hiragana}\p{Katakana}])"#, with: " $1 ",
+                                      options: .regularExpression)
                 .components(separatedBy: CharacterSet.alphanumerics.union(.init(charactersIn: "'")).inverted)
                 .filter { !$0.isEmpty }
         }
@@ -141,18 +144,21 @@ public enum NextPromptPolicy: Sendable {
             .map(words)
             .filter { !$0.isEmpty }
         let ask = clauses.suffix(2)
+        func covered(_ span: [String]) -> Double {
+            let asked = Set(span)
+            return asked.isEmpty ? 0 : Double(asked.intersection(reply).count) / Double(asked.count)
+        }
         func overlaps(_ span: [String]) -> Bool {
             let asked = Set(span)
-            guard !asked.isEmpty else { return false }
-            let reused = Double(reply.filter(asked.contains).count) / Double(reply.count)
-            let covered = Double(asked.intersection(reply).count) / Double(asked.count)
-            return reused >= 0.6 && covered >= 0.5
+            return covered(span) >= 0.5
+                && Double(reply.filter(asked.contains).count) / Double(reply.count) >= 0.6
         }
         guard overlaps(ask.last ?? []) || overlaps(ask.flatMap { $0 }) else { return false }
         if isQuestion(text) { return true }
-        // A short reply such as "Open a PR." naturally opens like the question.
+        // An answer such as "Open a PR now." can open like the question but
+        // picks one alternative instead of reproducing the whole clause.
         guard reply.count >= 4 else { return false }
-        return ask.contains { $0.prefix(2) == reply.prefix(2) }
+        return ask.contains { $0.prefix(2) == reply.prefix(2) && covered($0) >= 0.8 }
     }
 
     private static func publicSecretUpload(_ text: String, user: String) -> Bool {
