@@ -10,7 +10,7 @@ extension AppState {
         case .reviewSession(let target):
             guard let resolved = projectAndWorktree(withWorktreeId: target.worktreeID) else { return }
             focusGlobalWorktree(id: resolved.worktree.id, projectId: resolved.project.id)
-            let store = ReviewSessionStore()
+            let store = core.reviewSessions
             ReviewSessionLauncher.openOrFocus(
                 target: target,
                 findActive: { try store.findActive(targetID: $0) },
