@@ -19,15 +19,6 @@ struct AlasCLICommandRouter {
     var openReview: (Worktree, String) async -> AlasCLIResponse = { _, _ in
         .error("Opening provider reviews from the terminal is not available yet.")
     }
-    var draftCommentStore: () -> ReviewDraftCommentStore = { ReviewDraftCommentStore() }
-    var reviewSessionStore: () -> ReviewSessionStore = { ReviewSessionStore() }
-    var notifyReviewCommentsChanged: () -> Void = {
-        NotificationCenter.default.post(name: .alasReviewDraftCommentsDidChangeExternally, object: nil)
-    }
-    var notifyReviewReplyAdded: (Worktree, ReviewDraftComment, ReviewCommentReply) -> Void = { _, _, _ in }
-    var now: () -> Date = Date.init
-    var gitStatus: (URL) async throws -> [ChangedFile] = { try await GitService().status(worktreePath: $0) }
-    var providerReviewOriginalPath: (ReviewDraftSessionID, String) async -> String? = { _, _ in nil }
     var workspaceCommand: (AlasCLIRequest.WorkspaceCommand) async -> AlasCLIResponse = { _ in
         .error("Workspace automation is not available yet.")
     }
@@ -55,13 +46,6 @@ struct AlasCLICommandRouter {
             deleteWorktreeAction: deleteWorktree,
             openReviewChanges: openReviewChanges,
             openReview: openReview,
-            draftCommentStore: draftCommentStore,
-            reviewSessionStore: reviewSessionStore,
-            notifyReviewCommentsChanged: notifyReviewCommentsChanged,
-            notifyReviewReplyAdded: notifyReviewReplyAdded,
-            now: now,
-            gitStatus: gitStatus,
-            providerReviewOriginalPath: providerReviewOriginalPath,
             activateApp: activateApp
         )
     }
@@ -225,24 +209,24 @@ struct AlasCLICommandRouter {
                 return .error(error.message)
             }
         case .review(.comments(let sessionID, let state)):
-            return service.reviewComments(
+            return host.reviews.comments(
                 origin: origin, sessionID: sessionID, filter: state, projectWorktrees: projectWorktrees
             )
         case .review(.reply(let commentID, let body)):
-            return service.reviewReply(
+            return host.reviews.reply(
                 origin: origin, commentID: commentID, body: body, projectWorktrees: projectWorktrees
             )
         case .review(.resolve(let commentID, let reply, let reopen)):
-            return service.reviewResolve(
+            return host.reviews.resolve(
                 origin: origin, commentID: commentID, reply: reply, reopen: reopen, projectWorktrees: projectWorktrees
             )
         case .review(.commentAdd(let path, let startLine, let endLine, let side, let body, let sessionID)):
-            return await service.reviewCommentAdd(
+            return await host.reviews.addComment(
                 origin: origin, path: path, startLine: startLine, endLine: endLine,
                 side: side, body: body, sessionID: sessionID, projectWorktrees: projectWorktrees
             )
         case .review(.finish(let sessionID, let verdict, let summary)):
-            return service.reviewFinish(
+            return host.reviews.finish(
                 origin: origin, sessionID: sessionID, verdict: verdict, summary: summary,
                 projectWorktrees: projectWorktrees
             )

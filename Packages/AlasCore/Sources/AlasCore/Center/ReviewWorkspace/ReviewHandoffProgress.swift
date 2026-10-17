@@ -3,7 +3,7 @@ import Foundation
 extension Notification.Name {
     /// Posted after the CLI/MCP bridge mutates review draft comments so
     /// open review panes reload their controllers.
-    static let alasReviewDraftCommentsDidChangeExternally =
+    public static let alasReviewDraftCommentsDidChangeExternally =
         Notification.Name("alasReviewDraftCommentsDidChangeExternally")
 }
 
@@ -15,9 +15,9 @@ extension Notification.Name {
 /// left alone either way (its individual handoffs can still flip), since
 /// archiving is a terminal, user-chosen state this recomputation shouldn't
 /// resurrect.
-enum ReviewHandoffProgress {
+public enum ReviewHandoffProgress {
     /// Returns the updated record when anything changed, else nil.
-    static func recomputingAddressed(
+    public static func recomputingAddressed(
         record: ReviewSessionRecord,
         isResolved: (String) -> Bool,
         now: Date
@@ -60,7 +60,7 @@ enum ReviewHandoffProgress {
     /// belonging to `worktreeID`. Shared by the CLI/MCP `review_resolve`
     /// path and the UI's Resolve action, so both keep handoff/session
     /// status consistent the same way.
-    static func recomputeAndPersist(
+    public static func recomputeAndPersist(
         worktreeID: String,
         sessionStore: ReviewSessionStore,
         isResolved: (String) -> Bool,
