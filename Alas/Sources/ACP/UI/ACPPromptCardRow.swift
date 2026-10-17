@@ -80,7 +80,20 @@ struct PromptCardRow: View {
 
     // MARK: Header and facts
 
+    /// A real button outside the queue, so keyboard and VoiceOver users can
+    /// reach the disclosure the rest of the card offers by click.
+    @ViewBuilder
     private var header: some View {
+        if isCompact {
+            headerContent
+        } else {
+            Button(action: toggleInstruction) { headerContent }
+                .buttonStyle(.plain)
+                .accessibilityValue(showsInstruction ? "Expanded" : "Collapsed")
+        }
+    }
+
+    private var headerContent: some View {
         let style = Self.style(for: card.origin)
         return HStack(spacing: 8) {
             Image(systemName: style.symbol)
@@ -108,12 +121,8 @@ struct PromptCardRow: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
-        .accessibilityActions {
-            if !isCompact {
-                Button(showsInstruction ? "Hide instruction" : "Show instruction", action: toggleInstruction)
-            }
-        }
     }
 
     private var facts: some View {
