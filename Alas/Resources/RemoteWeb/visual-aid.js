@@ -8,6 +8,8 @@
   // Never add allow-same-origin: the page keeps its bearer token in localStorage and /ws is same-origin.
   const SANDBOX = "allow-scripts";
   const HEIGHT_MIN = 120, HEIGHT_MAX = 720, NOTE_MAX = 2000, MAX_LIVE_FRAMES = 3;
+  // The Mac lets an embedded visual grow to 2000pt; the phone keeps its own limit when that is lower.
+  const EMBEDDED_HEIGHT_MAX = Math.min(HEIGHT_MAX, 2000);
   const FAILED_TEXT = "Couldn't send your answer. Try again.";
   const BLOCKED_TEXT = "Visual blocked: it tried to leave the page.";
   const UUID = /^[0-9a-fA-F-]{36}$/;
@@ -19,7 +21,10 @@
     --alas-background: oklch(0.215 0.013 245); --alas-line: oklch(1 0 0 / 0.14);
     --alas-tone-success: oklch(0.78 0.14 155); --alas-tone-danger: oklch(0.72 0.16 25); }
   html, body { margin: 0; }
-  body { padding: 14px; color: var(--alas-text); background: var(--alas-background); line-height: 1.45; }
+  body { color: var(--alas-text); line-height: 1.45; }
+  .alas-card body { padding: 14px; background: var(--alas-background); }
+  .alas-embedded, .alas-embedded body { background: transparent; }
+  .alas-embedded body { padding: 0; }
   h2 { font-size: 17px; margin: 0 0 4px; }
   h3 { font-size: 14px; margin: 0 0 4px; }
   .subtitle { color: var(--alas-dim); margin: 0 0 14px; }
@@ -106,11 +111,20 @@
     return out + ">";
   }
 
-  function buildDocument(html, id, parse) {
+  // A visual from a Mac that predates presentations, or with anything unexpected, is a card. So is one with a
+  // question: its answer controls belong to a card.
+  function presentationOf(visual) {
+    return !!visual && visual.presentation === "embedded" && visual.question == null ? "embedded" : "card";
+  }
+
+  // Fragments are wrapped like frame.html, with the presentation as the root class. Full documents are the
+  // agent's own and stay as written, as on the Mac.
+  function buildDocument(html, id, parse, presentation) {
     if (!UUID.test(id)) throw new Error("invalid visual id");
+    const rootClass = presentation === "embedded" ? "alas-embedded" : "alas-card";
     const source = isFullDocument(html)
       ? html
-      : `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>${FRAME_CSS}</style></head><body>${html}</body></html>`;
+      : `<!DOCTYPE html><html class="${rootClass}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>${FRAME_CSS}</style></head><body>${html}</body></html>`;
     const doc = parse(source);
     let head = doc.head;
     if (!head) {
@@ -152,15 +166,16 @@
     return v;
   }
 
-  function clampHeight(value) {
+  function clampHeight(value, presentation) {
     if (typeof value !== "number" || !Number.isFinite(value)) return null;
-    return Math.min(Math.max(Math.ceil(value), HEIGHT_MIN), HEIGHT_MAX);
+    const max = presentation === "embedded" ? EMBEDDED_HEIGHT_MAX : HEIGHT_MAX;
+    return Math.min(Math.max(Math.ceil(value), HEIGHT_MIN), max);
   }
 
   // Only the card's own window may size it, and only for its own id.
-  function heightFromMessage(data, expectedId, source, expectedSource) {
+  function heightFromMessage(data, expectedId, source, expectedSource, presentation) {
     if (!data || data.alasVisual !== true || data.id !== expectedId || source !== expectedSource) return null;
-    return clampHeight(data.height);
+    return clampHeight(data.height, presentation);
   }
 
   // The source document is unloading because it navigated itself. Same trust rule as heightFromMessage.
@@ -337,8 +352,8 @@
   }
 
   globalThis.RemoteVisualAid = {
-    CSP, SANDBOX, HEIGHT_MIN, HEIGHT_MAX, NOTE_MAX, MAX_LIVE_FRAMES, FAILED_TEXT, BLOCKED_TEXT, FRAME_CSS,
-    isFullDocument, buildDocument, parseVisual, clampHeight, heightFromMessage, toggleSelection, noteLength, canSubmit,
+    CSP, SANDBOX, HEIGHT_MIN, HEIGHT_MAX, EMBEDDED_HEIGHT_MAX, NOTE_MAX, MAX_LIVE_FRAMES, FAILED_TEXT, BLOCKED_TEXT, FRAME_CSS,
+    isFullDocument, presentationOf, buildDocument, parseVisual, clampHeight, heightFromMessage, toggleSelection, noteLength, canSubmit,
     buildResponse, answerView, rejectionText, admitFrame, touchFrame, releaseFrame, nextCardState, shouldMount, trimNote, guardFrameNavigation, stashDraft, restoreDraft, restoreSubmitted,
     shouldSwallowLinkClick, applyRejection, newRequestId, navigationFromMessage,
   };

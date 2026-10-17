@@ -48,6 +48,13 @@ assert.equal(V.clampHeight(300.4), 301);
 assert.equal(V.clampHeight(99999), 720);
 assert.equal(V.clampHeight("nope"), null);
 assert.equal(V.clampHeight(NaN), null);
+assert.equal(V.clampHeight(99999, "embedded"), Math.min(V.HEIGHT_MAX, 2000), "embedded caps at the smaller of the phone's and the Mac's max");
+
+// Presentation: only an explicit, question-free "embedded" drops the card.
+assert.equal(V.presentationOf({ presentation: "embedded" }), "embedded");
+for (const v of [{}, { presentation: "card" }, { presentation: "weird" }, { presentation: "embedded", question: question() }, null]) {
+  assert.equal(V.presentationOf(v), "card", JSON.stringify(v));
+}
 const win = {};
 const other = {};
 assert.equal(V.heightFromMessage({ alasVisual: true, id: ID, height: 300 }, ID, win, win), 300);
@@ -332,5 +339,26 @@ assert.ok(inserted[2].textContent.includes(JSON.stringify(ID)), "the bridge scri
   assert.ok(inserted.indexOf(inserted[2]) < inserted.length, "the bridge is prepended ahead of agent content");
 }
 assert.throws(() => V.buildDocument("<p>x</p>", "</script><script>", () => stubDoc(true)));
+
+// The fragment wrapper carries the presentation as frame.html's root class; a missing one is a card.
+{
+  const sourceFor = (html, presentation) => {
+    let source = null;
+    V.buildDocument(html, ID, (s) => { source = s; return stubDoc(true); }, presentation);
+    return source;
+  };
+  assert.ok(sourceFor("<p>x</p>", "embedded").includes('<html class="alas-embedded">'));
+  for (const p of ["card", undefined, "weird"]) {
+    assert.ok(sourceFor("<p>x</p>", p).includes('<html class="alas-card">'), String(p));
+  }
+  assert.equal(sourceFor("<!doctype html><p>own</p>", "embedded"), "<!doctype html><p>own</p>", "a full document stays as written");
+  const rules = new Map([...V.FRAME_CSS.matchAll(/([^{}]+)\{([^}]*)\}/g)].map((m) => [m[1].trim(), m[2]]));
+  const rule = (selector) => rules.get(selector) || "";
+  assert.match(rule(".alas-embedded, .alas-embedded body"), /background: transparent/);
+  assert.match(rule(".alas-embedded body"), /padding: 0/);
+  assert.match(rule(".alas-card body"), /padding: 14px/);
+  assert.match(rule(".alas-card body"), /background: var\(--alas-background\)/);
+  assert.doesNotMatch(rule("body"), /padding|background/, "the shared body rule leaves both to the presentation");
+}
 
 console.log("visual-aid tests passed");
