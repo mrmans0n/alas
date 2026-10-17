@@ -267,6 +267,7 @@ Each phase is one or more independent PRs. It is done when its exit criterion ho
    - *Decided (7):*
      - **Plugin snapshot sessions** keep the sidebar's terminal agents: the host lists ACP sessions, and the presenter adds the terminal rows the snapshot shows today.
      - **Delegated children** are created through `SessionsAPI.create`, so they are refused where any session is (a disabled agent, checkpoint recovery, a busy owner). The coordinator skips those checks today.
+     - **New host events stay in process.** The events Phase 7 adds (review comment changes, review status, parent links) serve in-process followers only, as `sessionState` does: `HostProtocolServer` leaves them out of the frames it sends, because a released `host.v1` client cannot decode a new `HostEvent` case and would lose the batch. A wire client gets them once a capability it advertises says it can decode them.
      - **Review status** is refreshed only for followed worktrees. A plugin listening for `review.changed` follows the worktrees it asks about, and pays their polling.
 8. **`alas-host`.** The executable target serving the host protocol, the data-directory lock and the hostless end-to-end test. *Exit:* CI boots `alas-host` and drives a worktree, a session and a run over the wire.
 
