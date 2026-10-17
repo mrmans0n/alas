@@ -106,7 +106,7 @@ extension AppState {
             },
             openTarget: { [weak self] target, worktree in
                 guard let self else { return }
-                let store = ReviewSessionStore()
+                let store = core.reviewSessions
                 ReviewSessionLauncher.openOrFocus(
                     target: target,
                     findActive: { try store.findActive(targetID: $0) },

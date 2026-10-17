@@ -5644,7 +5644,7 @@ final class AppState {
         case .commit(let state):
             return state.revision.tracked?.target.ggID
         case .reviewSession(let state):
-            let record = try? ReviewSessionStore().load(id: state.sessionID)
+            let record = try? core.reviewSessions.load(id: state.sessionID)
             if case .trackedCommit(let revision) = record?.target.payload {
                 return revision.target.ggID
             }
@@ -5695,7 +5695,7 @@ final class AppState {
         case .commit(let state):
             return state.sha
         case .reviewSession(let state):
-            let record = try? ReviewSessionStore().load(id: state.sessionID)
+            let record = try? core.reviewSessions.load(id: state.sessionID)
             switch record?.target.payload {
             case .commit(let sha):
                 return sha
@@ -5866,7 +5866,7 @@ final class AppState {
         sessionID: ReviewSessionID,
         revision: TrackedRevision
     ) {
-        let store = ReviewSessionStore()
+        let store = core.reviewSessions
         guard let record = try? store.load(id: sessionID),
               let result = TrackedRevisionRetargeter.follow(
                   record: record,
@@ -5878,7 +5878,7 @@ final class AppState {
         if let existing = try? store.findActive(targetID: result.record.target.id, excluding: record.id) {
             let merged = mergedReviewSession(existing: existing, source: result.record)
             do {
-                let draftStore = ReviewDraftCommentStore()
+                let draftStore = core.reviewDrafts
                 let draftSnapshot = try draftStore.snapshot()
                 try draftStore.migrate(from: result.oldDraftSessionID, to: existing.target.draftSessionID)
                 do {
@@ -5893,7 +5893,7 @@ final class AppState {
                 Self.showWarningAlert(title: "Could Not Update Review Target", message: error.localizedDescription)
                 return
             }
-            NotificationCenter.default.post(name: .alasReviewDraftCommentsDidChangeExternally, object: nil)
+            core.reviewCommentsDidChange()
             bumpReviewSessionRetargetGeneration(sessionID: merged.id)
             let tab = tabs.openOrFocusReviewSession(worktreeId: worktreeID, record: merged)
             activateWorktreeCenterTab(worktreeId: worktreeID, tabId: tab.id)
@@ -5903,7 +5903,7 @@ final class AppState {
     }
 
     private func stopFollowingReviewSession(worktreeID: String, tabID: TabID, sessionID: ReviewSessionID) {
-        let store = ReviewSessionStore()
+        let store = core.reviewSessions
         guard let record = try? store.load(id: sessionID),
               let result = TrackedRevisionRetargeter.stop(
                   record: record,
@@ -5914,7 +5914,7 @@ final class AppState {
         if let existing = try? store.findActive(targetID: result.record.target.id, excluding: record.id) {
             let merged = mergedReviewSession(existing: existing, source: result.record)
             do {
-                let draftStore = ReviewDraftCommentStore()
+                let draftStore = core.reviewDrafts
                 let draftSnapshot = try draftStore.snapshot()
                 try draftStore.migrate(from: result.oldDraftSessionID, to: existing.target.draftSessionID)
                 do {
@@ -5929,7 +5929,7 @@ final class AppState {
                 Self.showWarningAlert(title: "Could Not Update Review Target", message: error.localizedDescription)
                 return
             }
-            NotificationCenter.default.post(name: .alasReviewDraftCommentsDidChangeExternally, object: nil)
+            core.reviewCommentsDidChange()
             bumpReviewSessionRetargetGeneration(sessionID: merged.id)
             let tab = tabs.openOrFocusReviewSession(worktreeId: worktreeID, record: merged)
             activateWorktreeCenterTab(worktreeId: worktreeID, tabId: tab.id)
@@ -5939,7 +5939,7 @@ final class AppState {
     }
 
     private func acceptTrackedReviewSessionCheckout(worktreeID: String, tabID: TabID, sessionID: ReviewSessionID) {
-        let store = ReviewSessionStore()
+        let store = core.reviewSessions
         guard let record = try? store.load(id: sessionID),
               case .trackedCommit(let revision) = record.target.payload,
               let accepted = revision.preparingPendingCheckoutAcceptance(),
@@ -5962,14 +5962,14 @@ final class AppState {
         worktreeID: String,
         tabID: TabID
     ) {
-        let sessionStore = ReviewSessionStore()
+        let sessionStore = core.reviewSessions
         var savedRecord = false
         let previousOldRecord = try? sessionStore.load(id: result.oldRecordID)
         let previousNewRecord = try? sessionStore.load(id: result.record.id)
         do {
             try sessionStore.replace(id: result.oldRecordID, with: result.record)
             savedRecord = true
-            try ReviewDraftCommentStore().migrate(from: result.oldDraftSessionID, to: result.newDraftSessionID)
+            try core.reviewDrafts.migrate(from: result.oldDraftSessionID, to: result.newDraftSessionID)
             _ = tabs.updateReviewSession(worktreeId: worktreeID, tabId: tabID) {
                 $0.retarget(to: result.record)
             }
@@ -11377,7 +11377,7 @@ final class AppState {
         target: ReviewSessionTarget,
         label: String
     ) -> AlasCLIResponse {
-        let store = ReviewSessionStore()
+        let store = core.reviewSessions
         let opened = ReviewSessionLauncher.openOrFocus(
             target: target,
             findActive: { try store.findActive(targetID: $0) },
@@ -11439,7 +11439,7 @@ final class AppState {
             // origin worktree via `worktree(withId:)`, which includes hidden
             // worktrees, so a comment filed from a hidden worktree must still
             // find its session record here.
-            let sessionStore = ReviewSessionStore()
+            let sessionStore = core.reviewSessions
             let allWorktrees = projects.flatMap { projectsManager.worktrees(projectId: $0.id) }
             var record: ReviewSessionRecord?
             for worktree in allWorktrees where sessionID.isFor(worktreeID: worktree.id) {
