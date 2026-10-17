@@ -30,21 +30,6 @@ struct AlasActionService {
     var now: () -> Date = Date.init
     var gitStatus: (URL) async throws -> [ChangedFile] = { try await GitService().status(worktreePath: $0) }
     var providerReviewOriginalPath: (ReviewDraftSessionID, String) async -> String? = { _, _ in nil }
-    var listDelegationAgents: (ACPOrchestrationSessionOrigin, String?) async -> AlasCLIResponse = { _, _ in
-        .error("Session orchestration is not available yet.")
-    }
-    var listDelegatedSessions: (ACPOrchestrationSessionOrigin) async -> AlasCLIResponse = { _ in
-        .error("Session orchestration is not available yet.")
-    }
-    var createDelegatedSession: (ACPOrchestrationSessionOrigin, ACPDelegatedSessionNewRequest) async -> AlasCLIResponse = { _, _ in
-        .error("Session orchestration is not available yet.")
-    }
-    var sendDelegatedSessionMessage: (ACPOrchestrationSessionOrigin, ACPDelegatedSessionMessageRequest) async -> AlasCLIResponse = { _, _ in
-        .error("Session orchestration is not available yet.")
-    }
-    var performDelegatedSessionAction: (ACPOrchestrationSessionOrigin, ACPDelegatedSessionAction) async -> AlasCLIResponse = { _, _ in
-        .error("Session orchestration is not available yet.")
-    }
     var activateApp: () -> Void
 
     func open(paths: [String], fallbackWorktreeId: String) -> AlasCLIResponse {
@@ -111,35 +96,6 @@ struct AlasActionService {
         case .ambiguous(let labels):
             return .error("ambiguous worktree \"\(target)\"; matches: \(labels.joined(separator: ", "))")
         }
-    }
-
-    func agentList(origin: ACPOrchestrationSessionOrigin, worktree: String?) async -> AlasCLIResponse {
-        await listDelegationAgents(origin, worktree)
-    }
-
-    func sessionList(origin: ACPOrchestrationSessionOrigin) async -> AlasCLIResponse {
-        await listDelegatedSessions(origin)
-    }
-
-    func sessionNew(
-        origin: ACPOrchestrationSessionOrigin,
-        request: ACPDelegatedSessionNewRequest
-    ) async -> AlasCLIResponse {
-        await createDelegatedSession(origin, request)
-    }
-
-    func sessionSend(
-        origin: ACPOrchestrationSessionOrigin,
-        request: ACPDelegatedSessionMessageRequest
-    ) async -> AlasCLIResponse {
-        await sendDelegatedSessionMessage(origin, request)
-    }
-
-    func sessionAction(
-        origin: ACPOrchestrationSessionOrigin,
-        action: ACPDelegatedSessionAction
-    ) async -> AlasCLIResponse {
-        await performDelegatedSessionAction(origin, action)
     }
 
     func new(origin: Worktree, branch: String, base: String?, caller: HostCaller) async -> AlasCLIResponse {
