@@ -35,9 +35,8 @@ struct NativePeerConsoleView: View {
                 status
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
-                viewer.layout(pane: size, baseFontSize: baseFontSize)
-            }
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { viewer.layout(pane: $0) }
+            .onChange(of: baseFontSize, initial: true) { viewer.setBaseFontSize(baseFontSize) }
         }
         .background(theme.color("bg-1"))
     }

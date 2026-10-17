@@ -360,6 +360,11 @@ final class PeerConsoleViewer {
         }
         surface.setReadOnly(true)
         surface.onGridSizeChange = { [weak self] _, _ in self?.gridChanged() }
+        // A manual zoom wins over Fit.
+        surface.onUserFontZoom = { [weak self] in
+            self?.fitsToPane = false
+            self?.gridChanged()
+        }
         send(.attach(consoleId: consoleId, attachmentId: attachmentId, scrollbackRows: scrollbackRows))
     }
 
@@ -451,11 +456,18 @@ final class PeerConsoleViewer {
         return PeerConsoleLayout.extent(rows: rows, columns: columns, cell: cellSize)
     }
 
-    /// The pane showing the console, or the configured font, changed size.
-    func layout(pane: CGSize, baseFontSize: Float) {
-        guard pane != self.pane || baseFontSize != self.baseFontSize else { return }
+    /// The pane showing the console changed size.
+    func layout(pane: CGSize) {
+        guard pane != self.pane else { return }
         self.pane = pane
-        self.baseFontSize = baseFontSize
+        refit()
+        gridChanged()
+    }
+
+    /// The configured terminal font size, which Fit scales down from.
+    func setBaseFontSize(_ size: Float) {
+        guard size != baseFontSize else { return }
+        baseFontSize = size
         refit()
         gridChanged()
     }

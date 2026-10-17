@@ -420,9 +420,17 @@ extension AlasGhostty {
         // action straight to Ghostty's named binding action so behavior matches
         // pressing the shortcut directly inside the surface.
 
-        @objc func increaseFontSize(_ sender: Any?) { runBindingAction("increase_font_size:1") }
-        @objc func decreaseFontSize(_ sender: Any?) { runBindingAction("decrease_font_size:1") }
-        @objc func resetFontSize(_ sender: Any?)    { runBindingAction("reset_font_size") }
+        @objc func increaseFontSize(_ sender: Any?) { zoomFont("increase_font_size:1") }
+        @objc func decreaseFontSize(_ sender: Any?) { zoomFont("decrease_font_size:1") }
+        @objc func resetFontSize(_ sender: Any?)    { zoomFont("reset_font_size") }
+
+        /// Fires after the user zooms the font from the menu or its shortcuts.
+        var onUserFontZoom: (() -> Void)?
+
+        private func zoomFont(_ action: String) {
+            runBindingAction(action)
+            onUserFontZoom?()
+        }
 
         /// Sets this surface's font size in points; nil restores the configured size.
         func setFontSize(_ points: Float?) {
