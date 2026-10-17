@@ -866,7 +866,12 @@ private struct ACPSessionView: View {
             upstreamReferences: manager.upstreamReferences.store(for: worktree.path),
             promptCardContext: ACPPromptCardContext(
                 reviewComments: .shared,
-                perform: { action in state.performPromptCardAction(action) }
+                perform: { action in state.performPromptCardAction(action) },
+                shipStatus: {
+                    guard offersShipCommand else { return nil }
+                    let context = ShepherdSessionContext(sessionID: sessionId, worktree: worktree, state: state)
+                    return ACPShipStatus(presentation: context.presentation, branch: worktree.branch)
+                }
             ),
             visualAidActions: .driven(by: manager, session: session, popOut: { visual in
                 let resolvedOwner = owner ?? .worktree(worktree.id)

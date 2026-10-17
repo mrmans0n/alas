@@ -521,9 +521,12 @@ private final class ACPCommandChipCell: NSTextAttachmentCell {
 
 // MARK: - Hover card
 
-/// Name, argument hint, and full description of a slash command.
+/// Name, argument hint, and full description of a slash command, plus the
+/// session's PR state for `/ship`.
 struct ACPCommandHoverCard: View {
     let suggestion: ACPPromptSuggestion
+    var shipStatus: ACPShipStatus? = nil
+    @Environment(\.theme) private var theme
 
     static func hasDetails(_ suggestion: ACPPromptSuggestion) -> Bool {
         !(suggestion.description ?? "").isEmpty || !(suggestion.hint ?? "").isEmpty
@@ -549,9 +552,38 @@ struct ACPCommandHoverCard: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.top, 2)
             }
+            if let shipStatus {
+                Divider().padding(.vertical, 4)
+                shipLine(shipStatus)
+            }
         }
         .padding(12)
         .frame(width: 340, alignment: .leading)
+    }
+
+    /// The toolbar Ship pill's symbol and tooltip, or the branch Ship would
+    /// open a PR for.
+    private func shipLine(_ status: ACPShipStatus) -> some View {
+        let badge = status.presentation.badge
+        return HStack(spacing: 5) {
+            Image(systemName: badge.symbolName)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(badge.color(theme: theme))
+            if let number = status.presentation.number {
+                Text(number)
+                    .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+                Text("· \(status.presentation.phaseLine)")
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("No PR yet for")
+                    .foregroundStyle(.secondary)
+                Text(status.branch)
+                    .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+            }
+        }
+        .font(.system(size: 12))
+        .lineLimit(1)
+        .truncationMode(.middle)
     }
 }
 
@@ -562,7 +594,13 @@ final class ACPCommandChipHoverController {
     private var showWork: DispatchWorkItem?
     private var target: NSRange?
 
-    func scheduleShow(range: NSRange, suggestion: ACPPromptSuggestion, in textView: NSTextView) {
+    func scheduleShow(
+        range: NSRange,
+        suggestion: ACPPromptSuggestion,
+        in textView: NSTextView,
+        context: ACPPromptCardContext? = nil,
+        theme: Theme? = nil
+    ) {
         guard target != range else { return }
         hide()
         guard ACPCommandHoverCard.hasDetails(suggestion) else { return }
@@ -571,7 +609,8 @@ final class ACPCommandChipHoverController {
             guard let self, let textView, self.target == range,
                   let anchor = (textView as? ACPNSTextView)?.imageChipAnchorRect(for: range)
                     ?? textView.upstreamReferenceAnchorRect(for: range) else { return }
-            let hosting = NSHostingController(rootView: ACPCommandHoverCard(suggestion: suggestion))
+            let card = ACPCommandHoverCard(suggestion: suggestion, shipStatus: context?.shipStatus(for: suggestion))
+            let hosting = NSHostingController(rootView: card.environment(\.theme, theme ?? EnvironmentValues().theme))
             let popover = NSPopover()
             popover.behavior = .transient
             popover.animates = false
@@ -599,6 +638,7 @@ struct ACPCommandPill: View {
     let suggestion: ACPPromptSuggestion
     @State private var isHovering = false
     @State private var showsCard = false
+    @Environment(\.acpPromptCardContext) private var context
 
     private var isAlas: Bool { ACPAlasSlashCommand.isAlasCommand(suggestion) }
     var body: some View {
@@ -642,8 +682,17 @@ struct ACPCommandPill: View {
             if !Task.isCancelled { showsCard = true }
         }
         .popover(isPresented: $showsCard, arrowEdge: .bottom) {
-            ACPCommandHoverCard(suggestion: suggestion)
+            ACPCommandHoverCard(suggestion: suggestion, shipStatus: context?.shipStatus(for: suggestion))
         }
+    }
+}
+
+extension ACPPromptCardContext {
+    /// Read when the card opens, so it shows the PR state of that moment.
+    @MainActor
+    func shipStatus(for suggestion: ACPPromptSuggestion) -> ACPShipStatus? {
+        guard suggestion == ACPAlasSlashCommand.shipSuggestion else { return nil }
+        return shipStatus?()
     }
 }
 
@@ -682,7 +731,15 @@ struct ACPUserMessageText: View {
         self.typography = typography
         self.session = session
         self.chipsAbsolutePaths = chipsAbsolutePaths
-        _suggestions = State(initialValue: session.promptSuggestions)
+        _suggestions = State(initialValue: Self.suggestions(agent: session.promptSuggestions))
+    }
+
+    /// Alas's own commands badge too: the composer chipped them, and a
+    /// mid-message `/ship` reaches the agent as text either way.
+    private static func suggestions(agent: [ACPPromptSuggestion]) -> [ACPPromptSuggestion] {
+        ACPAlasSlashCommand.suggestions(
+            alas: [ACPAlasSlashCommand.btwSuggestion, ACPAlasSlashCommand.shipSuggestion], agent: agent
+        )
     }
 
     var body: some View {
@@ -692,7 +749,7 @@ struct ACPUserMessageText: View {
             .environment(\.acpPastedTextContents, pasted)
             .environment(\.acpUpstreamReferenceChipping, chipping)
             .environment(\.acpAbsolutePathChipping, chipsAbsolutePaths)
-            .onReceive(session.$promptSuggestions) { latest in
+            .onReceive(session.$promptSuggestions.map(Self.suggestions(agent:))) { latest in
                 if latest != suggestions { suggestions = latest }
             }
             .onReceive(upstreamReferences?.$remote.eraseToAnyPublisher()
