@@ -963,9 +963,9 @@ final class TabsManager {
     }
 
     @discardableResult
-    func append(acpSession state: ACPSessionTabState, to owner: SessionOwnerID) -> Tab {
+    func append(acpSession state: ACPSessionTabState, to owner: SessionOwnerID, activate: Bool = true) -> Tab {
         let tab = Tab.acpSession(state)
-        append(tab, to: owner.storageKey)
+        append(tab, to: owner.storageKey, activate: activate)
         return tab
     }
 

@@ -4,7 +4,9 @@ import Foundation
 @_spi(Testing) @_spi(AppHost) import AlasCore
 
 @MainActor
-final class FakeSessionsProvider: RemoteSessionsProvider, RemoteSessionPresenter, RemoteWorktreeInspecting {
+/// The app around a gateway: the host it serves, the lists and reads it
+/// answers, and the windows it presents in.
+final class FakeRemoteApp: RemoteSessionPresenter, RemoteWorktreeInspecting {
     var summaries: [RemoteSessionSummary] = []
     var worktrees: [RemoteWorktreeOption] = []
     var projects: [RemoteProjectOption] = []
@@ -39,7 +41,10 @@ final class FakeSessionsProvider: RemoteSessionsProvider, RemoteSessionPresenter
         comparisonMode: AppConfig.Changes.ChangesComparisonMode?
     )] = []
     var fileContentsRequests: [(sessionId: String, path: String)] = []
-    var eventHost: AlasHost?
+    var host: AlasHost?
+    var sessionListChanges: ChangeSignal<Void>?
+    var peerConsoleHost: PeerConsoleHost? { nil }
+    func sessionTabIndex(_ id: String, owner: SessionOwnerID) -> Int? { nil }
     var fullToolCallContents: [String: String] = [:]
     var fullToolCallContentCallCount = 0
     var sessionSummariesCallCount = 0
@@ -233,6 +238,7 @@ final class FakeSessionsProvider: RemoteSessionsProvider, RemoteSessionPresenter
     /// The lists and creations this fake serves, as a gateway asks for them.
     var hostCalls: RemoteGatewayHostCalls {
         RemoteGatewayHostCalls(
+            sessionSummaries: { _ in await self.sessionSummaries() },
             worktrees: { await self.remoteWorktrees() },
             projects: { await self.remoteProjects() },
             branches: { await self.remoteBranches(projectId: $0) },
@@ -310,6 +316,27 @@ final class FakeSessionsProvider: RemoteSessionsProvider, RemoteSessionPresenter
 }
 
 #if DEBUG
+extension RemoteSessionGateway {
+    /// A gateway on `app`'s host that lists `app`'s sessions and presents
+    /// through it.
+    convenience init(
+        app: FakeRemoteApp, federation: FederatedSessionsProvider? = nil, caller: HostCaller? = nil,
+        send: @escaping (RemoteServerMessage) -> Void
+    ) {
+        self.init(host: app.host, federation: federation, caller: caller, send: send)
+        hostCalls.sessionSummaries = { _ in await app.sessionSummaries() }
+        presenter = app
+    }
+}
+
+extension RemoteServer {
+    /// Lists `app`'s sessions and presents through it, as the app does.
+    func present(_ app: FakeRemoteApp) {
+        presenter = app
+        configureGateway = { $0.hostCalls.sessionSummaries = { _ in await app.sessionSummaries() } }
+    }
+}
+
 extension ACPQuestionRequestParams {
     /// Test factory: a single question with two options.
     static func stub(title: String? = "Pick one") -> ACPQuestionRequestParams {
@@ -493,7 +520,7 @@ struct RemoteSessionGatewayTests {
         defer { fixture.tearDown() }
         let id = try await fixture.drivenSession()
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: fixture.provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: fixture.provider) { sent.append($0) }
         gw.presenter = fixture.provider
         defer { gw.close() }
 
@@ -549,7 +576,7 @@ struct RemoteSessionGatewayTests {
         let plain = session.queue[0].id
         let mentioning = session.queue[1].id
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: fixture.provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: fixture.provider) { sent.append($0) }
         defer { gw.close() }
 
         await gw.handle(.queueEdit(sessionId: id, itemId: plain.uuidString))
@@ -574,7 +601,7 @@ struct RemoteSessionGatewayTests {
             fixture.agent.script(method: "session/prompt") { _ in throw ACPClientError.notRunning }
         }
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: fixture.provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: fixture.provider) { sent.append($0) }
         defer { gw.close() }
         let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
 
@@ -592,7 +619,7 @@ struct RemoteSessionGatewayTests {
         defer { fixture.tearDown() }
         let id = try await fixture.drivenSession()
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: fixture.provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: fixture.provider) { sent.append($0) }
         defer { gw.close() }
         let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
         let image = RemoteAttachment(name: "a.png", mimeType: "image/png", dataBase64: png)
@@ -638,21 +665,21 @@ struct RemoteSessionGatewayTests {
 
     @Test func consoleAttachIsRefusedWithoutAnAuthenticatedPeerLink() async {
         // Browsers get no console link, so the host is never consulted.
-        let provider = FakeSessionsProvider()
+        let provider = FakeRemoteApp()
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: provider) { sent.append($0) }
         await gw.handle(.console(.attach(consoleId: "c", attachmentId: "a", scrollbackRows: 0)))
         #expect(sent == [.console(.detached(attachmentId: "a", reason: .unauthorized))])
     }
 
     @Test func listProjectsDropsSupersededPausedResponse() async {
-        let provider = FakeSessionsProvider()
+        let provider = FakeRemoteApp()
         let oldProjects = [RemoteProjectOption(id: "project-old", name: "Old")]
         let newProjects = [RemoteProjectOption(id: "project-new", name: "New")]
         provider.projects = oldProjects
         provider.pauseRemoteProjects = true
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: provider) { sent.append($0) }
         gw.hostCalls = provider.hostCalls
 
         await gw.handle(.listProjects)
@@ -672,7 +699,7 @@ struct RemoteSessionGatewayTests {
     }
 
     @Test func listBranchesDropsSupersededPausedResponse() async {
-        let provider = FakeSessionsProvider()
+        let provider = FakeRemoteApp()
         provider.branchResults["project-old"] = .success(
             branches: ["main", "feature/old"],
             preferredBase: "main"
@@ -680,7 +707,7 @@ struct RemoteSessionGatewayTests {
         provider.branchResults["project-new"] = .failure("Could not load branches.")
         provider.pauseRemoteBranches = true
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: provider) { sent.append($0) }
         gw.hostCalls = provider.hostCalls
 
         await gw.handle(.listBranches(projectId: "project-old"))
@@ -700,11 +727,11 @@ struct RemoteSessionGatewayTests {
     }
 
     @Test func closeCancelsPendingProjectListRefresh() async {
-        let provider = FakeSessionsProvider()
+        let provider = FakeRemoteApp()
         provider.projects = [RemoteProjectOption(id: "project-1", name: "Alas")]
         provider.pauseRemoteProjects = true
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: provider) { sent.append($0) }
         gw.hostCalls = provider.hostCalls
 
         await gw.handle(.listProjects)
@@ -718,11 +745,11 @@ struct RemoteSessionGatewayTests {
     }
 
     @Test func closeCancelsPendingBranchListRefresh() async {
-        let provider = FakeSessionsProvider()
+        let provider = FakeRemoteApp()
         provider.branchResults["project-1"] = .success(branches: ["main"], preferredBase: "main")
         provider.pauseRemoteBranches = true
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: provider) { sent.append($0) }
         gw.hostCalls = provider.hostCalls
 
         await gw.handle(.listBranches(projectId: "project-1"))
@@ -740,9 +767,9 @@ struct RemoteSessionGatewayTests {
     @Test func hostChangesPushTheListsTheClientFollows() async throws {
         let project = ProjectConfig(id: "p", name: "p", path: "/srv/repo", color: "blue", addedAt: .distantPast)
         let projects = ProjectsManager(persistedProjects: [project])
-        let provider = FakeSessionsProvider()
-        provider.eventHost = AlasHost(core: AlasCoreContext(projects: projects, runHistoryStore: nil))
-        let gw = RemoteSessionGateway(provider: provider) { _ in }
+        let provider = FakeRemoteApp()
+        provider.host = AlasHost(core: AlasCoreContext(projects: projects, runHistoryStore: nil))
+        let gw = RemoteSessionGateway(app: provider) { _ in }
         gw.hostCalls = provider.hostCalls
         defer { gw.close() }
         await gw.handle(.listWorktrees)
@@ -775,11 +802,11 @@ struct RemoteSessionGatewayTests {
     @Test(arguments: [true, false])
     func hostMessagesAreServedOnlyForAnAuthenticatedCaller(authenticated: Bool) async throws {
         let projects = ProjectsManager(persistedProjects: [])
-        let provider = FakeSessionsProvider()
-        provider.eventHost = AlasHost(core: AlasCoreContext(projects: projects, runHistoryStore: nil))
+        let provider = FakeRemoteApp()
+        provider.host = AlasHost(core: AlasCoreContext(projects: projects, runHistoryStore: nil))
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(
-            provider: provider, caller: authenticated ? .remotePeer(deviceID: "phone") : nil
+            app: provider, caller: authenticated ? .remotePeer(deviceID: "phone") : nil
         ) { sent.append($0) }
         defer { gw.close() }
 
@@ -795,7 +822,7 @@ struct RemoteSessionGatewayTests {
     }
 
     @Test func createWorktreeSessionEmitsCreatedSessionAndRefreshesLists() async {
-        let provider = FakeSessionsProvider()
+        let provider = FakeRemoteApp()
         let summary = RemoteSessionSummary(
             id: "session-1",
             title: "Feature remote",
@@ -822,7 +849,7 @@ struct RemoteSessionGatewayTests {
             )
         ]
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider, caller: .remotePeer(deviceID: "phone")) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: provider, caller: .remotePeer(deviceID: "phone")) { sent.append($0) }
         gw.hostCalls = provider.hostCalls
 
         await gw.handle(.createWorktreeSession(
@@ -849,14 +876,14 @@ struct RemoteSessionGatewayTests {
     }
 
     @Test func createWorktreeSessionEmitsWorktreeFailureWithoutRefreshingLists() async {
-        let provider = FakeSessionsProvider()
+        let provider = FakeRemoteApp()
         provider.createWorktreeSessionResult = .failure(
             stage: .worktree,
             message: "Could not create worktree.",
             worktreeId: nil
         )
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: provider) { sent.append($0) }
         gw.hostCalls = provider.hostCalls
 
         await gw.handle(.createWorktreeSession(
@@ -878,7 +905,7 @@ struct RemoteSessionGatewayTests {
     }
 
     @Test func createWorktreeSessionEmitsSessionFailureAndRefreshesWorktrees() async {
-        let provider = FakeSessionsProvider()
+        let provider = FakeRemoteApp()
         provider.createWorktreeSessionResult = .failure(
             stage: .session,
             message: "Worktree created, but the session could not be created.",
@@ -901,7 +928,7 @@ struct RemoteSessionGatewayTests {
             )
         ]
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: provider) { sent.append($0) }
         gw.hostCalls = provider.hostCalls
 
         await gw.handle(.createWorktreeSession(
@@ -924,12 +951,12 @@ struct RemoteSessionGatewayTests {
     }
 
     @Test func createSessionEmitsCreatedSession() async {
-        let provider = FakeSessionsProvider()
+        let provider = FakeRemoteApp()
         let summary = RemoteSessionSummary(id: "s1", title: "New session", agentId: "claude", status: "idle", canDrive: true)
         provider.summaries = [summary]
         provider.createResults["wt1|claude"] = .success(summary)
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: provider) { sent.append($0) }
         gw.hostCalls = provider.hostCalls
 
         await gw.handle(.createSession(worktreeId: "wt1", agentId: "claude"))
@@ -953,7 +980,7 @@ struct RemoteSessionGatewayTests {
         provider.pauseSessionSummaries = true
         _ = try makeSessionWithAgentText("hello")
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: provider) { sent.append($0) }
 
         var listHandleReturned = false
         let listTask = Task { @MainActor in
@@ -988,7 +1015,7 @@ struct RemoteSessionGatewayTests {
     }
 
     @Test func listWorktreesDoesNotBlockFollowingStop() async {
-        let provider = FakeSessionsProvider()
+        let provider = FakeRemoteApp()
         provider.worktrees = [
             RemoteWorktreeOption(
                 id: "wt1",
@@ -1007,7 +1034,7 @@ struct RemoteSessionGatewayTests {
         ]
         provider.pauseRemoteWorktrees = true
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: provider) { sent.append($0) }
         gw.hostCalls = provider.hostCalls
 
         var listHandleReturned = false
@@ -1076,7 +1103,7 @@ struct RemoteSessionGatewayTests {
         if path != "delta" { session.transcript.appendMessage(latest) }
         var sent: [RemoteServerMessage] = []
         var nextDelta: CheckedContinuation<RemoteServerMessage, Never>?
-        let gw = RemoteSessionGateway(provider: provider) { frame in
+        let gw = RemoteSessionGateway(app: provider) { frame in
             sent.append(frame)
             if case .transcriptDelta = frame, let waiter = nextDelta {
                 nextDelta = nil
@@ -1126,7 +1153,7 @@ struct RemoteSessionGatewayTests {
         session.applyBackgroundTask(.init(sessionUpdate: "async_task_spawned", asyncTaskId: "job", canStop: true), ownerSessionId: "s1")
         var sent: [RemoteServerMessage] = []
         var nextDelta: CheckedContinuation<RemoteServerMessage, Never>?
-        let gateway = RemoteSessionGateway(provider: provider) {
+        let gateway = RemoteSessionGateway(app: provider) {
             sent.append($0)
             if case .transcriptDelta = $0, let continuation = nextDelta {
                 nextDelta = nil
@@ -1167,7 +1194,7 @@ struct RemoteSessionGatewayTests {
         session.transcript.messages = [.toolCall(toolCall)]
         provider.fullToolCallContents["s1|old"] = fullContent
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: provider) { sent.append($0) }
         gw.hostCalls.fullToolCallContent = { await provider.fullToolCallContent(sessionId: $0, toolCallId: $1) }
 
         await gw.handle(.subscribe(sessionId: "s1"))
@@ -1194,7 +1221,7 @@ struct RemoteSessionGatewayTests {
     @Test func permissionsAreAnsweredByTheAgentsRequestId() async throws {
         let id = try await hosted.drivenSession()
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: hosted.provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: hosted.provider) { sent.append($0) }
         defer { gw.close() }
         await gw.handle(.subscribe(sessionId: id))
         try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
@@ -1236,7 +1263,7 @@ struct RemoteSessionGatewayTests {
     @Test func followingAgainDismissesSurfacedRequestsBeforeResurfacingThem() async throws {
         let id = try await hosted.drivenSession()
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: hosted.provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: hosted.provider) { sent.append($0) }
         defer { gw.close() }
         await gw.handle(.subscribe(sessionId: id))
         hosted.agent.emitPermission(id: .number(7), params: .stub())
@@ -1276,7 +1303,7 @@ struct RemoteSessionGatewayTests {
             ] as [String: AnyCodable])
         )
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: hosted.provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: hosted.provider) { sent.append($0) }
         defer { gw.close() }
         await gw.handle(.subscribe(sessionId: id))
         try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
@@ -1304,7 +1331,7 @@ struct RemoteSessionGatewayTests {
         let s = try makeSessionWithAgentText("x")
         s.transcript.pendingQuestion = .init(id: .number(0), params: .stub())
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: provider) { sent.append($0) }
         await gw.handle(.subscribe(sessionId: "s1"))
         try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
         let req = sent.compactMap { msg -> RemoteQuestionPayload? in
@@ -1327,7 +1354,7 @@ struct RemoteSessionGatewayTests {
     @Test func questionAnswerReachesTheAgent() async throws {
         let id = try await hosted.drivenSession()
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: hosted.provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: hosted.provider) { sent.append($0) }
         defer { gw.close() }
         await gw.handle(.subscribe(sessionId: id))
         try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
@@ -1348,7 +1375,7 @@ struct RemoteSessionGatewayTests {
         let session = try makeSessionWithAgentText("x")
         session.transcript.pendingPlan = .init(id: .string("plan-1"), params: .stub())
         var sent: [RemoteServerMessage] = []
-        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gateway = RemoteSessionGateway(app: provider) { sent.append($0) }
 
         await gateway.handle(.subscribe(sessionId: "s1"))
         try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
@@ -1374,7 +1401,7 @@ struct RemoteSessionGatewayTests {
     @Test func planResponseReachesTheAgent() async throws {
         let id = try await hosted.drivenSession()
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: hosted.provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: hosted.provider) { sent.append($0) }
         defer { gw.close() }
         await gw.handle(.subscribe(sessionId: id))
         try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
@@ -1390,7 +1417,7 @@ struct RemoteSessionGatewayTests {
     @Test func stalePlanResponseIsNoOp() async throws {
         let id = try await hosted.drivenSession()
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: hosted.provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: hosted.provider) { sent.append($0) }
         defer { gw.close() }
         await gw.handle(.subscribe(sessionId: id))
         try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
@@ -1404,7 +1431,7 @@ struct RemoteSessionGatewayTests {
     func invalidQuestionAnswerIsNoOp(_ testCase: InvalidQuestionAnswerCase) async throws {
         let id = try await hosted.drivenSession()
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: hosted.provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: hosted.provider) { sent.append($0) }
         defer { gw.close() }
         await gw.handle(.subscribe(sessionId: id))
         try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
@@ -1436,7 +1463,7 @@ struct RemoteSessionGatewayTests {
             """#.utf8)
         )
         var sent: [RemoteServerMessage] = []
-        let gateway = RemoteSessionGateway(provider: hosted.provider) { sent.append($0) }
+        let gateway = RemoteSessionGateway(app: hosted.provider) { sent.append($0) }
         defer { gateway.close() }
         await gateway.handle(.subscribe(sessionId: id))
         try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
@@ -1486,7 +1513,7 @@ struct RemoteSessionGatewayTests {
         session.transcript.pendingUserInputs = [cursor, elicitation]
         session.transcript.pendingQuestion = .init(id: .number(1), params: cursorParams)
         var sent: [RemoteServerMessage] = []
-        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gateway = RemoteSessionGateway(app: provider) { sent.append($0) }
 
         await gateway.handle(.subscribe(sessionId: "s1"))
         try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
@@ -1505,7 +1532,7 @@ struct RemoteSessionGatewayTests {
     func elicitationAcceptIsValidatedAgainstTheRequestedSchema(_ testCase: ElicitationValidationCase) async throws {
         let id = try await hosted.drivenSession()
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: hosted.provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: hosted.provider) { sent.append($0) }
         defer { gw.close() }
         await gw.handle(.subscribe(sessionId: id))
         try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
@@ -1530,7 +1557,7 @@ struct RemoteSessionGatewayTests {
         let provider = hosted.provider
         let s = try makeSessionWithAgentText("hello")
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: provider) { sent.append($0) }
         await gw.handle(.subscribe(sessionId: "s1"))
         try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
         gw.close()
@@ -1541,11 +1568,11 @@ struct RemoteSessionGatewayTests {
     }
 
     @Test func closeCancelsPendingSessionListRefresh() async {
-        let provider = FakeSessionsProvider()
+        let provider = FakeRemoteApp()
         provider.summaries = [RemoteSessionSummary(id: "s1", title: "T", agentId: "claude", status: "idle", canDrive: false)]
         provider.pauseSessionSummaries = true
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: provider) { sent.append($0) }
 
         await gw.handle(.listSessions)
         for _ in 0..<10 {
@@ -1564,10 +1591,10 @@ struct RemoteSessionGatewayTests {
     }
 
     @Test func overlongMentionQueriesGetNoRows() async {
-        let provider = FakeSessionsProvider()
+        let provider = FakeRemoteApp()
         provider.mentionCandidates = [RemoteMention(kind: RemoteMention.file, value: "a", name: "a")]
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: provider) { sent.append($0) }
         gw.hostCalls = provider.hostCalls
         let long = String(repeating: "a", count: RemoteSessionGateway.maxMentionQueryLength + 1)
         await gw.handle(.searchMentions(sessionId: "s1", query: long))
@@ -1589,7 +1616,7 @@ struct RemoteSessionGatewayTests {
             await manager.releaseWriterLease(sessionId: "s1")
         }
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: hosted.provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: hosted.provider) { sent.append($0) }
         defer { gw.close() }
         await gw.handle(.subscribe(sessionId: "s1"))
         try await hosted.until { sent.contains { if case .sessionConfig = $0 { true } else { false } } }
@@ -1601,10 +1628,10 @@ struct RemoteSessionGatewayTests {
     }
 
     @Test func sessionTabActionsRefreshTheListOnSuccessAndReportFailure() async {
-        let provider = FakeSessionsProvider()
+        let provider = FakeRemoteApp()
         provider.summaries = [RemoteSessionSummary(id: "s1", title: "S", agentId: "claude", status: "idle", canDrive: false)]
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: provider) { sent.append($0) }
         gw.presenter = provider
 
         await gw.handle(.openSessionTab(sessionId: "s1"))
@@ -1621,9 +1648,9 @@ struct RemoteSessionGatewayTests {
     }
 
     @Test func renameSessionIgnoresEmptyTitle() async {
-        let provider = FakeSessionsProvider()
+        let provider = FakeRemoteApp()
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: provider) { sent.append($0) }
 
         await gw.handle(.renameSession(sessionId: "s1", title: " \n\t "))
         await Task.yield()
@@ -1637,7 +1664,7 @@ struct RemoteSessionGatewayTests {
         let s = try makeSessionWithAgentText("hi")
         s.availableModels = [.init(id: "opus", name: "Opus", description: nil)]
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: provider) { sent.append($0) }
         await gw.handle(.subscribe(sessionId: "s1"))
         try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
         sent.removeAll()
@@ -1730,7 +1757,7 @@ struct RemoteSessionGatewayTests {
             toolCallContent: [.content(.text("<h2>secret</h2>"))],
             metadata: meta, allowOptionMetadata: meta, toolName: "mcp__alas__visual_show")
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: hosted.provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: hosted.provider) { sent.append($0) }
         defer { gw.close() }
         await gw.handle(.subscribe(sessionId: id))
         try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
@@ -1767,7 +1794,7 @@ struct RemoteSessionGatewayTests {
         session.transcript.messages = [.toolCall(toolCall)]
         provider.fullToolCallContents["s1|old"] = html
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: provider) { sent.append($0) }
         gw.hostCalls.fullToolCallContent = { await provider.fullToolCallContent(sessionId: $0, toolCallId: $1) }
 
         await gw.handle(.subscribe(sessionId: "s1"))
@@ -1790,7 +1817,7 @@ struct RemoteSessionGatewayTests {
         let provider = hosted.provider
         let s = try makeSessionWithAgentText("Hello")
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: provider) { sent.append($0) }
         await gw.handle(.subscribe(sessionId: "s1"))
         try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
         guard case .agent(_, _, let buffer) = s.transcript.messages[0] else {
@@ -1816,7 +1843,7 @@ struct RemoteSessionGatewayTests {
         s.transcript.appendMessage(.visualAid(visual))
         var sent: [RemoteServerMessage] = []
         var nextDelta: CheckedContinuation<RemoteServerMessage, Never>?
-        let gw = RemoteSessionGateway(provider: provider) { frame in
+        let gw = RemoteSessionGateway(app: provider) { frame in
             sent.append(frame)
             if case .transcriptDelta = frame, let waiter = nextDelta {
                 nextDelta = nil
@@ -1905,7 +1932,7 @@ struct RemoteSessionGatewayTests {
         let (s, visual) = try makeVisualSession(allowMultiple: allowMultiple)
         if isWriter { #expect(try await makeManager().acquireWriterLease(sessionId: "s1")) }
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: provider) { sent.append($0) }
         await gw.handle(.visualAidResponse(sessionId: "s1", visualId: visual.id.uuidString, action: action,
                                            selectedOptionIds: ids, note: note, requestId: "req-1"))
         #expect(visualRejection(sent) == reason)
@@ -1918,7 +1945,7 @@ struct RemoteSessionGatewayTests {
         let (s, visual) = try makeVisualSession(allowMultiple: false)
         #expect(try await makeManager().acquireWriterLease(sessionId: "s1"))
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: provider) { sent.append($0) }
         let id = String(repeating: "r", count: length)
         await gw.handle(.visualAidResponse(sessionId: "s1", visualId: visual.id.uuidString, action: "wave",
                                            selectedOptionIds: ["a"], note: nil, requestId: id))
@@ -1930,7 +1957,7 @@ struct RemoteSessionGatewayTests {
         let provider = hosted.provider
         let (s, visual) = try makeVisualSession(allowMultiple: false)
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: provider) { sent.append($0) }
         await gw.handle(.visualAidResponse(sessionId: "s1", visualId: visual.id.uuidString, action: "answer",
                                            selectedOptionIds: ["a"], note: nil))
         #expect(visualRejection(sent) == "notWriter")
@@ -1983,7 +2010,7 @@ struct RemoteSessionGatewayTests {
         let (s, visual) = try makeVisualSession(allowMultiple: false)
         #expect(try await makeManager().acquireWriterLease(sessionId: "s1"))
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: provider) { sent.append($0) }
         await gw.handle(.visualAidResponse(sessionId: "s1", visualId: UUID().uuidString, action: "dismiss", selectedOptionIds: [], note: nil))
         #expect(visualRejection(sent) == "notFound")
         sent.removeAll()
@@ -2001,7 +2028,7 @@ struct RemoteSessionGatewayTests {
         let (s, visual) = try makeVisualSession(allowMultiple: false)
         #expect(try await makeManager().acquireWriterLease(sessionId: "s1"))
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: provider) { sent.append($0) }
         await gw.handle(.visualAidResponse(sessionId: "s1", visualId: visual.id.uuidString, action: "answer",
                                            selectedOptionIds: ["a"], note: nil))
         #expect(visualRejection(sent) == "failed")
@@ -2082,7 +2109,7 @@ struct RemoteSessionGatewayTests {
         defer { fixture.tearDown() }
         let id = try await fixture.drivenSession()
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: fixture.provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: fixture.provider) { sent.append($0) }
         defer { gw.close() }
         await gw.handle(.sendPrompt(sessionId: id, text: "x", attachments: batch.attachments, intent: "auto"))
         #expect(sent.contains(.promptRejected(sessionId: id)))
@@ -2134,7 +2161,7 @@ struct RemoteSessionGatewayTests {
                 newText: String(repeating: "new\n", count: 100_000)))
         ]
         var sent: [RemoteServerMessage] = []
-        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gateway = RemoteSessionGateway(app: provider) { sent.append($0) }
         defer { gateway.close() }
 
         await gateway.handle(.subscribe(sessionId: "s1"))
@@ -2155,7 +2182,7 @@ struct RemoteSessionGatewayTests {
         let originals = largeFileEdits()
         session.transcript.messages = originals
         var sent: [RemoteServerMessage] = []
-        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gateway = RemoteSessionGateway(app: provider) { sent.append($0) }
         defer { gateway.close() }
         await gateway.handle(.subscribe(sessionId: "s1"))
         try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
@@ -2189,7 +2216,7 @@ struct RemoteSessionGatewayTests {
             newText: String(repeating: "x", count: 5 * 1024 * 1024)))
         session.transcript.messages.insert(original, at: 0)
         var sent: [RemoteServerMessage] = []
-        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gateway = RemoteSessionGateway(app: provider) { sent.append($0) }
         defer { gateway.close() }
         await gateway.handle(.subscribe(sessionId: "s1"))
         try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
@@ -2213,7 +2240,7 @@ struct RemoteSessionGatewayTests {
         let provider = hosted.provider
         let session = try makeSessionWithUserMessages(1)
         let (stream, continuation) = AsyncStream<RemoteServerMessage>.makeStream()
-        let gateway = RemoteSessionGateway(provider: provider) { continuation.yield($0) }
+        let gateway = RemoteSessionGateway(app: provider) { continuation.yield($0) }
         defer {
             gateway.close()
             continuation.finish()
@@ -2256,7 +2283,7 @@ struct RemoteSessionGatewayTests {
         let provider = hosted.provider
         let s = try makeSessionWithUserMessages(200)
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: provider) { sent.append($0) }
         await gw.handle(.subscribe(sessionId: "s1"))
         try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
         guard case .transcriptSnapshot(_, _, _, let msgs, let first, let total, _, let revision, _)? = sent.first else {
@@ -2275,7 +2302,7 @@ struct RemoteSessionGatewayTests {
         let provider = hosted.provider
         let s = try makeSessionWithUserMessages(50)
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: provider) { sent.append($0) }
         await gw.handle(.subscribe(sessionId: "s1"))
         try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
         sent.removeAll()
@@ -2294,7 +2321,7 @@ struct RemoteSessionGatewayTests {
         let provider = hosted.provider
         let s = try makeSessionWithUserMessages(10)
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: provider) { sent.append($0) }
         await gw.handle(.subscribe(sessionId: "s1"))
         try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
         guard case .transcriptSnapshot(_, _, _, _, _, _, let epoch0, _, _)? = sent.first else {
@@ -2319,7 +2346,7 @@ struct RemoteSessionGatewayTests {
         let provider = hosted.provider
         let s = try makeSessionWithUserMessages(200)
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: provider) { sent.append($0) }
         await gw.handle(.subscribe(sessionId: "s1"))
         try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
         sent.removeAll()
@@ -2347,7 +2374,7 @@ struct RemoteSessionGatewayTests {
         let provider = hosted.provider
         _ = try makeSessionWithUserMessages(5)
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: provider) { sent.append($0) }
         await gw.handle(.fetchOlder(sessionId: "s1", beforeIndex: 5, limit: 5))
         #expect(sent.isEmpty)
     }
@@ -2363,7 +2390,7 @@ struct RemoteSessionGatewayTests {
         session.transcript.messages = [.toolCall(toolCall), .agent(id: UUID(), StreamingText("tail"))]
         provider.fullToolCallContents["s1|old"] = fullContent
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: provider) { sent.append($0) }
         gw.hostCalls.fullToolCallContent = { await provider.fullToolCallContent(sessionId: $0, toolCallId: $1) }
         await gw.handle(.subscribe(sessionId: "s1"))
         try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
@@ -2377,7 +2404,7 @@ struct RemoteSessionGatewayTests {
     @Test func resubscribeDoesNotLeakTrackingRetains() async throws {
         let provider = hosted.provider
         let s = try makeSessionWithUserMessages(3)
-        let gw = RemoteSessionGateway(provider: provider) { _ in }
+        let gw = RemoteSessionGateway(app: provider) { _ in }
         await gw.handle(.subscribe(sessionId: "s1"))
         await gw.handle(.subscribe(sessionId: "s1"))   // client resync
         await gw.handle(.unsubscribe(sessionId: "s1"))
@@ -2405,7 +2432,7 @@ struct RemoteSessionGatewayTests {
         }
         provider.fullToolCallContents["s1|old"] = fullContent
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: provider) { sent.append($0) }
         gw.hostCalls.fullToolCallContent = { await provider.fullToolCallContent(sessionId: $0, toolCallId: $1) }
         gw.hostCalls = provider.hostCalls
 
@@ -2449,7 +2476,7 @@ struct RemoteSessionGatewayTests {
         let session = try hosted.session(messages: [.toolCall(toolCall), .user(id: UUID(), messageId: "u0", text: "msg 0", attachments: [])])
         provider.fullToolCallContents["s1|old"] = fullContent
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: provider) { sent.append($0) }
         gw.hostCalls = provider.hostCalls
         defer { gw.close() }
         await gw.handle(.subscribe(sessionId: "s1"))
@@ -2501,7 +2528,7 @@ struct RemoteSessionGatewayTests {
         }
         provider.fullToolCallContents["s1|old"] = fullContent
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: provider) { sent.append($0) }
         gw.hostCalls.fullToolCallContent = { await provider.fullToolCallContent(sessionId: $0, toolCallId: $1) }
         gw.hostCalls = provider.hostCalls
 
@@ -2578,7 +2605,7 @@ struct RemoteSessionGatewayTests {
         }
         provider.fullToolCallContents["s1|old"] = fullContent
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: provider) { sent.append($0) }
         gw.hostCalls.fullToolCallContent = { await provider.fullToolCallContent(sessionId: $0, toolCallId: $1) }
         gw.hostCalls = provider.hostCalls
 
@@ -2637,7 +2664,7 @@ struct RemoteSessionGatewayTests {
         })
         provider.fullToolCallContents["s1|old"] = fullContent
         var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gw = RemoteSessionGateway(app: provider) { sent.append($0) }
         gw.hostCalls = provider.hostCalls
         defer { gw.close() }
         await gw.handle(.subscribe(sessionId: "s1"))
@@ -2668,7 +2695,7 @@ struct RemoteSessionGatewayTests {
         let id = "s1"
         _ = try makeSessionWithAgentText("x")
         var sent: [RemoteServerMessage] = []
-        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gateway = RemoteSessionGateway(app: provider) { sent.append($0) }
 
         // First subscribe (e.g. one browser tab) populates lastQueue[id] with
         // the same (empty) snapshot a second subscribe would compute — without
@@ -2696,7 +2723,7 @@ struct RemoteSessionGatewayTests {
         let id = "s1"
         let session = try makeSessionWithAgentText("x")
         var sent: [RemoteServerMessage] = []
-        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gateway = RemoteSessionGateway(app: provider) { sent.append($0) }
         await gateway.handle(.subscribe(sessionId: id))
         try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
         sent.removeAll()
@@ -2724,7 +2751,7 @@ struct RemoteSessionGatewayTests {
         let id = "s1"
         let session = try makeSessionWithAgentText("x")
         var sent: [RemoteServerMessage] = []
-        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gateway = RemoteSessionGateway(app: provider) { sent.append($0) }
         await gateway.handle(.subscribe(sessionId: id))
         try await hosted.until { sent.contains { if case .transcriptSnapshot = $0 { true } else { false } } }
 
@@ -2743,14 +2770,14 @@ struct RemoteSessionGatewayTests {
     }
 
     @Test func listChangesSendsChangeListFromTheProvider() async {
-        let provider = FakeSessionsProvider()
+        let provider = FakeRemoteApp()
         let file = RemoteChangedFile(
             path: "a.txt", status: "M", add: 2, del: 1, conflict: nil, renameFrom: nil)
         provider.changeListResult = .success(
             comparisonRef: "origin/main", metricsAvailable: true, files: [file], staged: [file], unstaged: [],
             commits: [], truncated: false)
         var sent: [RemoteServerMessage] = []
-        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gateway = RemoteSessionGateway(app: provider) { sent.append($0) }
         gateway.hostCalls = provider.hostCalls
 
         await gateway.handle(.listChanges(sessionId: "s1", comparisonMode: .branchUpstream))
@@ -2763,13 +2790,13 @@ struct RemoteSessionGatewayTests {
     }
 
     @Test func fileDiffSendsHunksAndFailures() async {
-        let provider = FakeSessionsProvider()
+        let provider = FakeRemoteApp()
         let hunk = RemoteDiffHunk(
             header: "@@ -1 +1,2 @@", oldStart: 1, newStart: 1,
             lines: [RemoteDiffLine(kind: "add", text: "new", oldNumber: nil, newNumber: 2)])
         provider.fileDiffResult = .success(hunks: [hunk], truncated: true)
         var sent: [RemoteServerMessage] = []
-        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gateway = RemoteSessionGateway(app: provider) { sent.append($0) }
         gateway.hostCalls = provider.hostCalls
 
         await gateway.handle(.fileDiff(
@@ -2792,14 +2819,14 @@ struct RemoteSessionGatewayTests {
     }
 
     @Test func listFilesAndReadFileSendTreeAndContents() async {
-        let provider = FakeSessionsProvider()
+        let provider = FakeRemoteApp()
         let node = RemoteFileNode(
             name: "src", path: "src", kind: "dir", badge: nil,
             childrenState: "notLoaded", isSubmodule: false)
         provider.fileTreeResult = .success(nodes: [node], truncated: false)
         provider.fileContentsResult = .success(text: "# Alas\n", truncated: false)
         var sent: [RemoteServerMessage] = []
-        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gateway = RemoteSessionGateway(app: provider) { sent.append($0) }
         gateway.hostCalls = provider.hostCalls
 
         await gateway.handle(.listFiles(
@@ -2817,11 +2844,11 @@ struct RemoteSessionGatewayTests {
     }
 
     @Test func duplicateInFlightRequestsForTheSamePathAreDropped() async {
-        let provider = FakeSessionsProvider()
+        let provider = FakeRemoteApp()
         provider.fileDiffResult = .success(hunks: [], truncated: false)
         provider.pauseFileDiff = true
         var sent: [RemoteServerMessage] = []
-        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gateway = RemoteSessionGateway(app: provider) { sent.append($0) }
         gateway.hostCalls = provider.hostCalls
 
         async let first: Void = gateway.handle(.fileDiff(sessionId: "s1", path: "a.txt", stage: nil))
@@ -2838,12 +2865,12 @@ struct RemoteSessionGatewayTests {
     }
 
     @Test func sessionListMergesLocalAndPeerRows() async {
-        let provider = FakeSessionsProvider()
+        let provider = FakeRemoteApp()
         provider.summaries = [RemoteSessionSummary(id: "local", title: "L", agentId: "claude", status: "idle", canDrive: true)]
         let links = FederatedSessionsProviderTests.FakeLinks()
         let federation = FederatedSessionsProvider(links: links)
         var out: [RemoteServerMessage] = []
-        let gateway = RemoteSessionGateway(provider: provider, federation: federation) { out.append($0) }
+        let gateway = RemoteSessionGateway(app: provider, federation: federation) { out.append($0) }
         links.goOnline("srv-b", name: "Mac B")
         links.receive(.sessionList(sessions: [
             RemoteSessionSummary(id: "s1", title: "B1", agentId: "claude", status: "idle", canDrive: false)
@@ -2864,10 +2891,10 @@ struct RemoteSessionGatewayTests {
     }
 
     @Test func closingTheGatewayUnsubscribesUpstream() async {
-        let provider = FakeSessionsProvider()
+        let provider = FakeRemoteApp()
         let links = FederatedSessionsProviderTests.FakeLinks()
         let federation = FederatedSessionsProvider(links: links)
-        let gateway = RemoteSessionGateway(provider: provider, federation: federation) { _ in }
+        let gateway = RemoteSessionGateway(app: provider, federation: federation) { _ in }
         links.goOnline("srv-b", name: "Mac B")
         await gateway.handle(.subscribe(sessionId: "srv-b:s1"))
         gateway.close()
@@ -2875,9 +2902,9 @@ struct RemoteSessionGatewayTests {
     }
 
     @Test func aGatewayWithoutFederationTreatsPrefixedIdsAsLocal() async {
-        let provider = FakeSessionsProvider()
+        let provider = FakeRemoteApp()
         var out: [RemoteServerMessage] = []
-        let gateway = RemoteSessionGateway(provider: provider) { out.append($0) }
+        let gateway = RemoteSessionGateway(app: provider) { out.append($0) }
         await gateway.handle(.subscribe(sessionId: "srv-b:s1"))
         #expect(out == [.sessionClosed(sessionId: "srv-b:s1")])
     }

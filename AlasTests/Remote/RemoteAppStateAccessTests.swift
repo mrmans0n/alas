@@ -2539,3 +2539,10 @@ struct RemoteAppStateAccessTests {
         try? FileManager.default.removeItem(at: URL(fileURLWithPath: db.path + "-shm"))
     }
 }
+
+extension AppState {
+    /// The session list a Remote client of this app sees.
+    func sessionSummaries() async -> [RemoteSessionSummary] {
+        await RemoteGatewayHostCalls.host(host).sessionSummaries { self.sessionTabIndex($0, owner: $1) }
+    }
+}

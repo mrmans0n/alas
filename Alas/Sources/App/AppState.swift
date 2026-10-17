@@ -241,7 +241,7 @@ final class AppState {
     /// event: a session tab opening, closing or moving, or the Git status of
     /// a worktree with sessions. Followed from its first read.
     @ObservationIgnored private var remoteSessionListChanges: ChangeSignal<Void>?
-    @ObservationIgnored private var remoteSessionListInputs: [String: RemoteSessionListInputs] = [:]
+    @ObservationIgnored private var remoteSessionListInputs: [SessionOwnerID: RemoteSessionListInputs] = [:]
     var projectsManager: ProjectsManager {
         get { core.projects }
         set { core.projects = newValue }
@@ -839,7 +839,7 @@ final class AppState {
             let server = RemoteServer(
                 pairing: remotePairing,
                 assets: assets,
-                provider: self,
+                host: host,
                 accessPolicy: makeRemoteAccessPolicy(),
                 originPolicy: makeRemoteOriginPolicy(),
                 diagnostics: { [weak self] port in
@@ -14429,7 +14429,7 @@ final class AppState {
         // removed or its manager torn down (Close All), while this one was suspended.
         guard self.worktree(withId: worktree.id) != nil,
               acpManagers[.worktree(worktree.id)] === mgr,
-              openACPSessionTabIndex(worktreeId: worktree.id, sessionId: sessionId) == nil else { return }
+              sessionTabIndex(sessionId, owner: .worktree(worktree.id)) == nil else { return }
         let state = ACPSessionTabState(sessionId: sessionId, title: title)
         tabs.append(acpSession: state, to: worktree.id, activate: activate)
     }
@@ -14437,7 +14437,9 @@ final class AppState {
     /// Reopen a persisted ACP session inside a typed session-owner bucket.
     /// Checkout-owned sessions must not fall back to Repository Focus because
     /// their database, tabs, and lifecycle are tied to the checkout owner.
-    func openExistingACPSession(sessionId: ACPSession.ID, owner: SessionOwnerID) async {
+    /// `activate: false` (peer requests) neither focuses an existing tab nor
+    /// activates a new one.
+    func openExistingACPSession(sessionId: ACPSession.ID, owner: SessionOwnerID, activate: Bool = true) async {
         await awaitPendingACPDetach(owner: owner, sessionId: sessionId)
         guard let mgr = acpManager(for: owner) else { return }
         cancelRetainedACPSessionCleanup(owner: owner, sessionId: sessionId)
@@ -14448,6 +14450,7 @@ final class AppState {
             return nil
         }.first
         if let id = tabIdToFocus {
+            guard activate else { return }
             tabs.activate(owner: owner, tabId: id)
             if let selectedWorktreeId {
                 tabs.clearActiveTab(worktreeId: selectedWorktreeId)
@@ -14467,7 +14470,8 @@ final class AppState {
         await mgr.hydrateIfNeeded(id: sessionId)
         await deliverPendingDelegatedMessages(to: sessionId, manager: mgr)
         let state = ACPSessionTabState(sessionId: sessionId, title: title)
-        let tab = tabs.append(acpSession: state, to: owner)
+        let tab = tabs.append(acpSession: state, to: owner, activate: activate)
+        guard activate else { return }
         tabs.activate(owner: owner, tabId: tab.id)
         if let selectedWorktreeId {
             tabs.clearActiveTab(worktreeId: selectedWorktreeId)
@@ -15140,26 +15144,19 @@ private extension WorkspaceCheckoutMember {
     }
 }
 
-// MARK: - RemoteSessionsProvider
-//
-// Lives in this file (not a separate one) so it can reach the private
-// `acpManagers` dictionary. Aggregates across every live per-worktree manager;
-// worktrees not opened this run simply don't appear (documented v1 behavior).
-/// What the Remote session list shows of a worktree beyond host events.
+// MARK: - RemoteSessionPresenter
+
+/// What the Remote session list shows of a session owner beyond host events.
 private struct RemoteSessionListInputs: Equatable {
-    /// Each session tab by its position among all the worktree's tabs,
-    /// which is the `tabIndex` the list reports.
+    /// Each session tab by its position among all the owner's tabs, which is
+    /// the `tabIndex` the list reports.
     var sessionTabs: [Int: ACPSession.ID]
     var status: WorktreeDirtyState
     var diff: WorktreeDiffStats?
 }
 
 /// Remote tab requests open and close tabs in this window, as the tab bar does.
-extension AppState: RemoteSessionPresenter {}
-
-extension AppState: RemoteSessionsProvider {
-    var eventHost: AlasHost? { host }
-
+extension AppState: RemoteSessionPresenter {
     var sessionListChanges: ChangeSignal<Void>? {
         if let remoteSessionListChanges { return remoteSessionListChanges }
         let signal = ChangeSignal<Void>()
@@ -15168,18 +15165,25 @@ extension AppState: RemoteSessionsProvider {
         return signal
     }
 
-    /// Per worktree with sessions: where its session tabs are, and its Git status.
-    private func currentRemoteSessionListInputs() -> [String: RemoteSessionListInputs] {
+    func sessionTabIndex(_ id: String, owner: SessionOwnerID) -> Int? {
+        tabs.tabs(for: owner).firstIndex { tab in
+            if case .acpSession(let state) = tab { return state.sessionId == id }
+            return false
+        }
+    }
+
+    /// Per owner with sessions: where its session tabs are, and its Git status.
+    private func currentRemoteSessionListInputs() -> [SessionOwnerID: RemoteSessionListInputs] {
         let statuses = WorktreeStatusStore.shared
-        return Dictionary(acpManagers.values.map { manager in
-            (manager.worktreeId, RemoteSessionListInputs(
-                sessionTabs: tabs.tabs(forWorktree: manager.worktreeId).enumerated().reduce(into: [:]) { tabs, entry in
+        return Dictionary(uniqueKeysWithValues: acpManagers.map { owner, manager in
+            (owner, RemoteSessionListInputs(
+                sessionTabs: tabs.tabs(for: owner).enumerated().reduce(into: [:]) { tabs, entry in
                     if case .acpSession(let state) = entry.element { tabs[entry.offset] = state.sessionId }
                 },
                 status: statuses.status(forPath: manager.worktreePath),
                 diff: statuses.diffStats(forPath: manager.worktreePath)
             ))
-        }, uniquingKeysWith: { first, _ in first })
+        })
     }
 
     private func followRemoteSessionListInputs() {
@@ -15192,169 +15196,9 @@ extension AppState: RemoteSessionsProvider {
             remoteSessionListChanges?.send()
         }
     }
+}
 
-    func sessionSummaries() async -> [RemoteSessionSummary] {
-        var summariesByIdentity: [String: RemoteSessionSummaryCandidate] = [:]
-        var identities: [String] = []
-
-        for mgr in acpManagers.values {
-            let worktreeSummary: RemoteWorktreeSummary?
-            let projectId: String?
-            let worktreeId: String?
-            if let resolved = projectAndWorktree(withWorktreeId: mgr.worktreeId) {
-                projectId = resolved.project.id
-                worktreeId = mgr.worktreeId
-                worktreeSummary = await core.remoteWorktreeSummary(project: resolved.project, worktree: resolved.worktree)
-            } else {
-                projectId = nil
-                worktreeId = nil
-                worktreeSummary = nil
-            }
-
-            for row in mgr.sessionRows where !row.archived {
-                let liveSession = mgr.liveSession(for: row.id)
-                var effectiveRow = row
-                if let liveRemoteId = liveSession?.remoteSessionId?.trimmingCharacters(in: .whitespacesAndNewlines),
-                   !liveRemoteId.isEmpty {
-                    effectiveRow.remoteSessionId = liveRemoteId
-                }
-                let state = mgr.runners[row.id]?.session.transcript.streamingState
-                let candidate = RemoteSessionSummaryCandidate(
-                    row: effectiveRow,
-                    status: state.map(RemoteSessionGateway.stateString) ?? "idle",
-                    hasRunner: state != nil,
-                    tabIndex: openACPSessionTabIndex(worktreeId: mgr.worktreeId, sessionId: row.id),
-                    canDrive: mgr.isWriter(for: row.id),
-                    projectId: projectId,
-                    worktreeId: worktreeId,
-                    worktree: worktreeSummary
-                )
-                let identity = remoteSessionListIdentity(worktreeId: mgr.worktreeId, row: effectiveRow)
-                if let existing = summariesByIdentity[identity] {
-                    summariesByIdentity[identity] = existing.merging(candidate)
-                } else {
-                    identities.append(identity)
-                    summariesByIdentity[identity] = candidate
-                }
-            }
-        }
-        return identities.compactMap { summariesByIdentity[$0]?.summary }
-    }
-
-    private func openACPSessionTabIndex(worktreeId: String, sessionId: ACPSession.ID) -> Int? {
-        tabs.tabs(forWorktree: worktreeId).firstIndex { tab in
-            if case .acpSession(let state) = tab {
-                return state.sessionId == sessionId
-            }
-            return false
-        }
-    }
-
-    private func remoteSessionListIdentity(worktreeId: String, row: ACPSessionRow) -> String {
-        if let remoteSessionId = row.remoteSessionId?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !remoteSessionId.isEmpty {
-            return "\(worktreeId)\u{0}\(row.agentId)\u{0}\(remoteSessionId)"
-        }
-        return "\(worktreeId)\u{0}local:\(row.id)"
-    }
-
-    private struct RemoteSessionSummaryCandidate {
-        var operationalRow: ACPSessionRow
-        var displayRow: ACPSessionRow
-        var status: String
-        var hasRunner: Bool
-        var tabIndex: Int?
-        var canDrive: Bool
-        let projectId: String?
-        let worktreeId: String?
-        let worktree: RemoteWorktreeSummary?
-
-        init(
-            row: ACPSessionRow,
-            status: String,
-            hasRunner: Bool,
-            tabIndex: Int?,
-            canDrive: Bool,
-            projectId: String?,
-            worktreeId: String?,
-            worktree: RemoteWorktreeSummary?
-        ) {
-            self.operationalRow = row
-            self.displayRow = row
-            self.status = status
-            self.hasRunner = hasRunner
-            self.tabIndex = tabIndex
-            self.canDrive = canDrive
-            self.projectId = projectId
-            self.worktreeId = worktreeId
-            self.worktree = worktree
-        }
-
-        var isActive: Bool { tabIndex != nil }
-
-        var summary: RemoteSessionSummary {
-            RemoteSessionSummary(
-                id: operationalRow.id,
-                title: displayRow.title,
-                agentId: operationalRow.agentId,
-                status: status,
-                canDrive: canDrive,
-                isActive: isActive,
-                tabIndex: tabIndex,
-                projectId: projectId,
-                worktreeId: worktreeId,
-                updatedAt: displayRow.updatedAt,
-                worktree: worktree
-            )
-        }
-
-        func merging(_ other: RemoteSessionSummaryCandidate) -> RemoteSessionSummaryCandidate {
-            var merged = self
-            if other.isBetterOperationalRow(than: merged) {
-                merged.operationalRow = other.operationalRow
-                merged.status = other.status
-                merged.hasRunner = other.hasRunner
-                merged.tabIndex = other.tabIndex
-                merged.canDrive = other.canDrive
-            }
-            if Self.isBetterDisplayRow(other.displayRow, than: merged.displayRow) {
-                merged.displayRow = other.displayRow
-            }
-            return merged
-        }
-
-        private func isBetterOperationalRow(than other: RemoteSessionSummaryCandidate) -> Bool {
-            if canDrive != other.canDrive { return canDrive }
-            if hasRunner != other.hasRunner { return hasRunner }
-            if isActive != other.isActive { return isActive }
-            if operationalRow.lastOpenedAt != other.operationalRow.lastOpenedAt {
-                return operationalRow.lastOpenedAt > other.operationalRow.lastOpenedAt
-            }
-            return operationalRow.updatedAt > other.operationalRow.updatedAt
-        }
-
-        private static func isBetterDisplayRow(_ candidate: ACPSessionRow, than current: ACPSessionRow) -> Bool {
-            let candidateScore = displayTitleScore(candidate)
-            let currentScore = displayTitleScore(current)
-            if candidateScore != currentScore { return candidateScore > currentScore }
-            return candidate.updatedAt > current.updatedAt
-        }
-
-        private static func displayTitleScore(_ row: ACPSessionRow) -> Int {
-            let title = row.title.trimmingCharacters(in: .whitespacesAndNewlines)
-            let meaningfulTitle = !title.isEmpty && title != "New session"
-            let sourceScore: Int
-            switch row.titleSource {
-            case .manual: sourceScore = 5
-            case .provider, .generated: sourceScore = 4
-            case .local: sourceScore = 3
-            case .fallback: sourceScore = 2
-            case .placeholder: sourceScore = 1
-            }
-            return (meaningfulTitle ? 100 : 0) + sourceScore
-        }
-    }
-
+extension AppState {
     private func recordObservedChips(agentId: String, host: String?, chips: ACPChipState) {
         acpModelCatalog.record(
             agentID: agentId,
@@ -15448,14 +15292,14 @@ extension AppState: RemoteSessionsProvider {
     }
 
     private func openSessionTabNow(for id: String) async -> RemoteSessionTabActionResult {
-        let worktree: Worktree
-        switch remoteSessionTabWorktree(for: id) {
-        case .found(let found): worktree = found
+        let owner: SessionOwnerID
+        switch remoteSessionTabOwner(for: id) {
+        case .found(let found): owner = found
         case .failed(let message): return .failure(message)
         }
         // Already open is success, and must not focus the tab on the host.
-        if openACPSessionTabIndex(worktreeId: worktree.id, sessionId: id) != nil { return .success }
-        guard let manager = acpManager(for: worktree) else {
+        if sessionTabIndex(id, owner: owner) != nil { return .success }
+        guard let manager = acpManager(for: owner) else {
             return .failure("Could not open this session.")
         }
         // `sessionRows` can predate an archive or delete made by another Alas
@@ -15471,54 +15315,60 @@ extension AppState: RemoteSessionsProvider {
         guard let stored else { return .failure("This session is no longer available.") }
         if stored.archived { return .failure("This session is archived.") }
         // A peer's request must not switch the tab the host user is looking at.
-        await openExistingACPSession(sessionId: id, worktree: worktree, activate: false, storedTitle: stored.title)
-        guard openACPSessionTabIndex(worktreeId: worktree.id, sessionId: id) != nil else {
+        if let worktreeId = owner.worktreeID {
+            guard let worktree = worktree(withId: worktreeId) else {
+                return .failure("This session's worktree is no longer available.")
+            }
+            await openExistingACPSession(sessionId: id, worktree: worktree, activate: false, storedTitle: stored.title)
+        } else {
+            await openExistingACPSession(sessionId: id, owner: owner, activate: false)
+        }
+        guard sessionTabIndex(id, owner: owner) != nil else {
             return .failure("Could not open this session.")
         }
-        // Opening hydrated the transcript, but a tab in a worktree the host is
-        // not showing has no view to retain it. Balance that here so an idle
-        // session is evicted; the tab re-hydrates when it is shown.
+        // Opening hydrated the transcript, but a tab its owner is not showing
+        // has no view to retain it. Balance that here so an idle session is
+        // evicted; the tab re-hydrates when it is shown.
         manager.retainSession(id: id)
         manager.releaseSession(id: id)
         return .success
     }
 
     private func closeSessionTabNow(for id: String) -> RemoteSessionTabActionResult {
-        let worktree: Worktree
-        switch remoteSessionTabWorktree(for: id) {
-        case .found(let found): worktree = found
+        let owner: SessionOwnerID
+        switch remoteSessionTabOwner(for: id) {
+        case .found(let found): owner = found
         case .failed(let message): return .failure(message)
         }
-        let open = tabs.tabs(forWorktree: worktree.id).first { tab in
+        let open = tabs.tabs(for: owner).first { tab in
             if case .acpSession(let state) = tab { return state.sessionId == id }
             return false
         }
         guard let open else { return .success }
         // No confirmation here: the requesting Mac already asked its user.
-        closeTabRecordingHistory(worktreeId: worktree.id, projectId: worktree.projectId, tab: open)
+        if let worktreeId = owner.worktreeID {
+            closeTabRecordingHistory(worktreeId: worktreeId, projectId: worktree(withId: worktreeId)?.projectId, tab: open)
+        } else {
+            closeSharedSessionTab(owner: owner, tabID: open.id)
+        }
         return .success
     }
 
-    private enum RemoteSessionTabWorktree {
-        case found(Worktree)
+    private enum RemoteSessionTabOwner {
+        case found(SessionOwnerID)
         case failed(String)
     }
 
-    /// The worktree whose manager owns `id` as a live or unarchived recent session.
-    /// Peer tab actions only reach worktree tabs; checkout-owned sessions have
-    /// no worktree target, so they fail explicitly.
-    private func remoteSessionTabWorktree(for id: String) -> RemoteSessionTabWorktree {
+    /// The owner whose manager has `id` as a live or unarchived recent session.
+    private func remoteSessionTabOwner(for id: String) -> RemoteSessionTabOwner {
         for (owner, mgr) in acpManagers {
             let row = mgr.sessionRows.first { $0.id == id }
             guard row != nil || mgr.liveSession(for: id) != nil else { continue }
             if row?.archived == true { return .failed("This session is archived.") }
-            guard let worktreeId = owner.worktreeID else {
-                return .failed("Tabs for workspace checkout sessions can only be changed on their own Mac.")
-            }
-            guard let worktree = worktree(withId: worktreeId) else {
+            if let worktreeId = owner.worktreeID, worktree(withId: worktreeId) == nil {
                 return .failed("This session's worktree is no longer available.")
             }
-            return .found(worktree)
+            return .found(owner)
         }
         return .failed("This session is no longer available.")
     }

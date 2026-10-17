@@ -30,7 +30,7 @@ import Testing
     @Test func capabilityAdvertisementRequiresEnabledGatesAndPersistentKey() {
         let signer = RemoteIdentityKeyProvider(store: RemoteInMemorySecretStore())
         let server = RemoteServer(pairing: RemotePairingService(store: InMemoryDeviceStore()),
-            assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())), provider: FakeSessionsProvider(),
+            assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())), host: nil,
             diagnostics: { _ in
                 RemoteDiagnosticsSnapshot(appName: "Alas", port: nil, addresses: [], usesPlainHTTP: true,
                     pairedDeviceCount: 0, pairingApprovalVersion: 99)
@@ -53,7 +53,7 @@ import Testing
     @Test func unavailableSignerNeverAdvertisesApproval() {
         let signer = RemoteIdentityKeyProvider(store: UnavailableApprovalStore())
         let server = RemoteServer(pairing: RemotePairingService(store: InMemoryDeviceStore()),
-            assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())), provider: FakeSessionsProvider(),
+            assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())), host: nil,
             identity: { () -> RemoteServerIdentity in
                 RemoteServerIdentity(serverId: "receiver", name: "Mac")
             },

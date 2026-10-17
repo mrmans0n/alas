@@ -13,7 +13,7 @@ struct RemoteDiscoveryIntegrationTests {
         let server = RemoteServer(
             pairing: RemotePairingService(store: InMemoryDeviceStore()),
             assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),
-            provider: FakeSessionsProvider())
+            host: nil)
         try server.start(port: 0)
         for _ in 0..<50 where server.port == nil {
             try await Task.sleep(nanoseconds: 20_000_000)

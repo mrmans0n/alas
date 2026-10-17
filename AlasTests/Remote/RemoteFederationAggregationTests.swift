@@ -17,7 +17,7 @@ struct RemoteFederationAggregationTests {
     private enum TimeoutError: Error { case timedOut }
 
     /// One simulated Mac, wired the way `AppState` wires them — with its
-    /// `FakeSessionsProvider` kept so a test can plant sessions on it, and a
+    /// `FakeRemoteApp` kept so a test can plant sessions on it, and a
     /// `FederatedSessionsProvider` attached to the server once `peers` exists.
     @MainActor
     private final class Mac {
@@ -28,7 +28,7 @@ struct RemoteFederationAggregationTests {
         let peerStore = InMemoryPeerStore()
         /// The host this Mac serves its sessions from.
         let home: GatewayHostFixture
-        var provider: FakeSessionsProvider { home.provider }
+        var provider: FakeRemoteApp { home.provider }
         let server: RemoteServer
         private(set) var peers: RemotePeerManager!
         private(set) var federation: FederatedSessionsProvider!
@@ -46,12 +46,12 @@ struct RemoteFederationAggregationTests {
             self.server = RemoteServer(
                 pairing: pairing,
                 assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),
-                provider: provider,
+                host: provider.host,
                 identity: {
                     RemoteServerIdentity(serverId: serverId, name: name)
                 },
                 signer: signer)
-            server.presenter = provider
+            server.present(provider)
         }
 
         func start() async throws {

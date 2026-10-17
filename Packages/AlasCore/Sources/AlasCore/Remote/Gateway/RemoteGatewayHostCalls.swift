@@ -4,6 +4,9 @@ import Foundation
 /// serves and the sessions it creates. `host(_:caller:)` asks the host; tests
 /// substitute calls they can hold back to pin ordering.
 @_spi(Testing) public struct RemoteGatewayHostCalls {
+    /// The session list, given where the app shows each session's tab.
+    public var sessionSummaries: @MainActor (_ tabIndex: @MainActor (_ sessionID: String, _ owner: SessionOwnerID) -> Int?) async
+        -> [RemoteSessionSummary]
     public var worktrees: @MainActor () async -> [RemoteWorktreeOption]
     public var projects: @MainActor () async -> [RemoteProjectOption]
     public var branches: @MainActor (_ projectID: String) async -> RemoteBranchListResult
@@ -23,6 +26,8 @@ import Foundation
     public var fullToolCallContent: @MainActor (_ sessionID: String, _ toolCallID: String) async -> String?
 
     public init(
+        sessionSummaries: @escaping @MainActor (_ tabIndex: @MainActor (_ sessionID: String, _ owner: SessionOwnerID) -> Int?) async
+            -> [RemoteSessionSummary] = { _ in [] },
         worktrees: @escaping @MainActor () async -> [RemoteWorktreeOption],
         projects: @escaping @MainActor () async -> [RemoteProjectOption],
         branches: @escaping @MainActor (_ projectID: String) async -> RemoteBranchListResult,
@@ -41,6 +46,7 @@ import Foundation
         },
         fullToolCallContent: @escaping @MainActor (_ sessionID: String, _ toolCallID: String) async -> String? = { _, _ in nil }
     ) {
+        self.sessionSummaries = sessionSummaries
         self.worktrees = worktrees
         self.projects = projects
         self.branches = branches
@@ -64,6 +70,7 @@ import Foundation
         }
         let core = host.core
         return RemoteGatewayHostCalls(
+            sessionSummaries: { [weak core] tabIndex in await core?.remoteSessionSummaries(tabIndex: tabIndex) ?? [] },
             worktrees: { [weak core] in await core?.remoteWorktreeOptions() ?? [] },
             projects: { [weak core] in core?.remoteProjectOptions() ?? [] },
             branches: { [weak core] projectID in
