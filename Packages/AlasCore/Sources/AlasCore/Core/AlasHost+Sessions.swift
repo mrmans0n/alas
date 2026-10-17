@@ -61,20 +61,11 @@ extension SessionsAPI {
         var agentHost: String?
         switch target {
         case .worktree(let ref):
-            let listed = core.projects.worktrees(projectId: ref.projectID)
             let path = URL(fileURLWithPath: ref.path).standardizedFileURL.path
-            guard let worktree = listed.first(where: { $0.path.standardizedFileURL.path == path }),
-                  !core.projects.isWorktreeHidden(projectId: ref.projectID, path: worktree.path)
+            guard let worktree = core.projects.worktrees(projectId: ref.projectID).first(where: { $0.path.standardizedFileURL.path == path })
             else { throw SessionRefusal.ownerUnavailable(reason: "The worktree is not listed, or is archived.") }
-            let remoteHost = core.projects.projects.first { $0.id == ref.projectID }?.host
-            agentHost = remoteHost
-            guard core.environment.admitsAgent(agentID, remoteHost: remoteHost) else { throw SessionRefusal.agentUnavailable }
+            (manager, agentHost) = try worktreeManager(worktree, agentID: agentID)
             worktreeOwner = worktree
-            do {
-                manager = try core.environment.sessionManager(for: worktree, in: core)
-            } catch is AlasCoreContext.WorktreeOperationInProgress {
-                throw SessionRefusal.ownerUnavailable(reason: "Another operation holds the worktree.")
-            }
         case .workspaceCheckout(let id):
             let checkout = try await idleCheckout(id)
             agentHost = checkout.executionLocation.sshHost
@@ -87,23 +78,7 @@ extension SessionsAPI {
             manager = try await core.environment.sessionManager(forCheckout: checkout, in: core)
         }
         if case .workspaceCheckout(let id) = target { _ = try await idleCheckout(id) }
-        // A checkpoint restore being recovered keeps agents out of the owner.
-        // This is the last suspension before the session exists; what follows
-        // checks synchronously what may have changed while it waited: a
-        // checkout being archived or removed disposes its manager, and a
-        // worktree's claim stops it admitting work.
-        guard await !core.environment.checkpointRecoveryBlocksSessions(owner: manager.owner, in: core) else {
-            throw SessionRefusal.ownerUnavailable(reason: Self.checkpointRecoveryReason)
-        }
-        if let worktreeOwner {
-            guard core.projects.admitsNewWork(in: worktreeOwner),
-                  !core.projects.isWorktreeHidden(projectId: worktreeOwner.projectId, path: worktreeOwner.path)
-            else { throw SessionRefusal.ownerUnavailable(reason: "Another operation holds the worktree.") }
-        }
-        guard core.sessionManagers[manager.owner] === manager,
-              core.environment.admitsSessionCreation(owner: manager.owner, in: core)
-        else { throw SessionRefusal.ownerUnavailable(reason: "The session's owner was closed or claimed meanwhile.") }
-        guard core.environment.admitsAgent(agentID, remoteHost: agentHost) else { throw SessionRefusal.agentUnavailable }
+        try await admit(agentID, in: manager, worktree: worktreeOwner, agentHost: agentHost)
         let session = manager.createSession(agentId: agentID, autoRunDefault: autoRun)
         // Picked up by `attach`, so the first turn already runs on it.
         if let modelID { manager.pendingModel[session.id] = modelID }
@@ -122,6 +97,56 @@ extension SessionsAPI {
         }
         guard let row = manager.sessionRows.first(where: { $0.id == session.id }) else { throw SessionRefusal.notFound }
         return Self.summary(of: row, in: manager, parent: core.delegatedSessionParents[row.id])
+    }
+
+    /// Why a session for `agentID` cannot start in `worktree` now, as
+    /// `create` checks it; nil when it can.
+    func refusal(toStart agentID: String, in worktree: Worktree) async -> SessionRefusal? {
+        do {
+            let (manager, agentHost) = try worktreeManager(worktree, agentID: agentID)
+            try await admit(agentID, in: manager, worktree: worktree, agentHost: agentHost)
+            return nil
+        } catch let refusal as SessionRefusal {
+            return refusal
+        } catch {
+            return .ownerUnavailable(reason: "The worktree cannot host sessions now.")
+        }
+    }
+
+    /// The manager of a listed, unarchived worktree that admits `agentID`,
+    /// and the host the agent runs on.
+    private func worktreeManager(_ worktree: Worktree, agentID: String) throws -> (ACPSessionManager, agentHost: String?) {
+        guard !core.projects.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path) else {
+            throw SessionRefusal.ownerUnavailable(reason: "The worktree is not listed, or is archived.")
+        }
+        let remoteHost = core.projects.projects.first { $0.id == worktree.projectId }?.host
+        guard core.environment.admitsAgent(agentID, remoteHost: remoteHost) else { throw SessionRefusal.agentUnavailable }
+        do {
+            return (try core.environment.sessionManager(for: worktree, in: core), remoteHost)
+        } catch is AlasCoreContext.WorktreeOperationInProgress {
+            throw SessionRefusal.ownerUnavailable(reason: "Another operation holds the worktree.")
+        }
+    }
+
+    /// The checks a new session passes last, once nothing suspends after them.
+    private func admit(_ agentID: String, in manager: ACPSessionManager, worktree: Worktree?, agentHost: String?) async throws {
+        // A checkpoint restore being recovered keeps agents out of the owner.
+        // This is the last suspension before the session exists; what follows
+        // checks synchronously what may have changed while it waited: a
+        // checkout being archived or removed disposes its manager, and a
+        // worktree's claim stops it admitting work.
+        guard await !core.environment.checkpointRecoveryBlocksSessions(owner: manager.owner, in: core) else {
+            throw SessionRefusal.ownerUnavailable(reason: Self.checkpointRecoveryReason)
+        }
+        if let worktree {
+            guard core.projects.admitsNewWork(in: worktree),
+                  !core.projects.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path)
+            else { throw SessionRefusal.ownerUnavailable(reason: "Another operation holds the worktree.") }
+        }
+        guard core.sessionManagers[manager.owner] === manager,
+              core.environment.admitsSessionCreation(owner: manager.owner, in: core)
+        else { throw SessionRefusal.ownerUnavailable(reason: "The session's owner was closed or claimed meanwhile.") }
+        guard core.environment.admitsAgent(agentID, remoteHost: agentHost) else { throw SessionRefusal.agentUnavailable }
     }
 
     /// Sends a prompt as the session's next user turn and waits for that

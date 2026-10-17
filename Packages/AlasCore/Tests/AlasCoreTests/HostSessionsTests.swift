@@ -195,6 +195,24 @@ struct HostSessionsTests {
         #expect(page.messageCount == count)
     }
 
+    /// A delegated child is admitted as any new session is: while a
+    /// checkpoint restore is being recovered, it is refused.
+    @Test func aChildIsRefusedWhereANewSessionWouldBe() async throws {
+        let environment = RefusingEnvironment()
+        let fixture = try Fixture(environment: environment)
+        defer { fixture.tearDown() }
+        let parent = try await fixture.host.sessions.create(.worktree(fixture.ref), agentID: "gemini", caller: .app)
+        let origin = try #require(fixture.core.acpSessionLocation(parent.id)?.origin)
+        environment.recovering = true
+
+        _ = await fixture.core.orchestration.create(origin: origin, request: .init(prompt: "Go", agentId: "gemini", worktree: .current))
+
+        let persistence = fixture.core.orchestrationPersistence
+        try await eventually { (try? await persistence.children(parentSessionId: parent.id))?.first?.phase == .failed }
+        let child = try #require(try await persistence.children(parentSessionId: parent.id).first)
+        #expect(child.failureMessage?.contains(SessionsAPI.checkpointRecoveryReason) == true)
+    }
+
     /// A delegated session's summary names the session that delegated it.
     @Test func aDelegatedSessionsSummaryNamesItsParent() throws {
         let fixture = try Fixture()
@@ -585,7 +603,8 @@ struct HostSessionsTests {
                         connectionFactory: { _, _, _ in ACPConnection(client: agent) }
                     )
                 },
-                environment: environment
+                environment: environment,
+                orchestrationPersistence: ACPOrchestrationPersistence(path: root.appendingPathComponent("orchestration.sqlite").path)
             )
             host = AlasHost(core: core)
         }

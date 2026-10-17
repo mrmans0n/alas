@@ -100,7 +100,10 @@ extension AlasCoreContext {
                 },
                 autoRunDefault: { [weak self] in self?.environment.configuration().harness.acpAutoRunByDefault ?? false },
                 notifyChanged: {},
-                admitsNewSessions: { [weak self] worktree in self?.projects.admitsNewWork(in: worktree) ?? false }
+                admitChild: { [weak self] worktree, agentID in
+                    guard let self else { return "Alas is not available." }
+                    return await SessionsAPI(core: self).refusal(toStart: agentID, in: worktree).map(Self.childRefusalMessage)
+                }
             )
         )
     }
@@ -123,6 +126,15 @@ extension AlasCoreContext {
         guard let links = try? await orchestrationPersistence.delegationParents() else { return }
         // Live entries win: they may describe a delegation still being written.
         delegatedSessionParents = links.merging(delegatedSessionParents) { _, live in live }
+    }
+
+    /// What a parent hears when its child is refused as a new session.
+    static func childRefusalMessage(_ refusal: SessionRefusal) -> String {
+        switch refusal {
+        case .ownerUnavailable(let reason): "Wait for the current worktree operation to finish before starting sessions. \(reason)"
+        case .agentUnavailable: "The agent is not available in this worktree."
+        default: "Could not start the delegated session."
+        }
     }
 
     /// Where agents for `worktree` run: on its project's host, or here.

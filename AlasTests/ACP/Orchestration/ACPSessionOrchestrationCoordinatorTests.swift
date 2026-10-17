@@ -572,7 +572,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
             rememberParent: { _, _ in },
             autoRunDefault: { false },
             notifyChanged: {},
-            admitsNewSessions: { _ in false }
+            admitChild: { _, _ in "Wait for the current worktree operation to finish before starting sessions." }
         ))
 
         let response = await coordinator.create(

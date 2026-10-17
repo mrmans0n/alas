@@ -79,8 +79,9 @@ public final class ACPSessionOrchestrationCoordinator {
         /// is only consulted for sessions the user attached.
         public let referencedSessionLocation: (_ sessionId: String, _ projectId: String) async -> SessionLocation?
         public let manager: (Worktree) -> ACPSessionManager?
-        /// Whether new agent sessions may start in the worktree now.
-        public let admitsNewSessions: (Worktree) -> Bool
+        /// Why a child session of `agentID` cannot start in the worktree now,
+        /// as any new session there is refused; nil when it can.
+        public let admitChild: (_ worktree: Worktree, _ agentID: String) async -> String?
         public let newWorktreeDestination: (String, String) -> URL?
         /// Creates the worktree for `(projectId, branch, base)`. The last
         /// argument records the prepared destination on the delegation and
@@ -120,9 +121,9 @@ public final class ACPSessionOrchestrationCoordinator {
             autoRunDefault: @escaping () -> Bool,
             notifyChanged: @escaping () -> Void,
             pause: @escaping (Duration) async -> Void = { try? await Task.sleep(for: $0) },
-            admitsNewSessions: @escaping (Worktree) -> Bool = { _ in true }
+            admitChild: @escaping (_ worktree: Worktree, _ agentID: String) async -> String? = { _, _ in nil }
         ) {
-            self.admitsNewSessions = admitsNewSessions
+            self.admitChild = admitChild
             self.persistence = persistence
             self.instanceId = instanceId
             self.now = now
@@ -1156,12 +1157,10 @@ public final class ACPSessionOrchestrationCoordinator {
             phase: .starting,
             updatedAt: environment.now()
         )
-        // The awaits above can cross a delete claim on the worktree.
-        guard environment.admitsNewSessions(worktree) else {
-            await markChildFailed(
-                childSessionId: childID,
-                message: "Wait for the current worktree operation to finish before starting sessions."
-            )
+        // The awaits above can cross a delete claim on the worktree, and a
+        // child is admitted as any new session would be.
+        if let refusal = await environment.admitChild(worktree, record.agentId) {
+            await markChildFailed(childSessionId: childID, message: refusal)
             return
         }
         if manager.liveSession(for: childID) == nil {
