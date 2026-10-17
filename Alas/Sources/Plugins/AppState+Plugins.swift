@@ -85,7 +85,7 @@ extension AppState {
                         PluginWorkspaceSnapshot.SessionInput(row: $0).id == id
                     }) else { continue }
                     // Terminal sessions have no live ACP session and so no transcript.
-                    return self.host.sessions.lastAgentReply(id).map(PluginLastMessage.text) ?? .none
+                    return self.host.sessions.lastAgentReply(id, owner: .worktree(worktree.id)).map(PluginLastMessage.text) ?? .none
                 }
                 return .unknownSession
             },
@@ -132,13 +132,13 @@ extension AppState {
             },
             sendToSession: { [weak self] id, text in
                 // Only live agent sessions of this project's worktrees; terminal sessions take no prompts.
-                guard let self, (self.projectsManager.worktreesByProject[project.id] ?? []).contains(where: {
+                guard let self, let worktree = (self.projectsManager.worktreesByProject[project.id] ?? []).first(where: {
                     self.acpManager(forWorktreeId: $0.id)?.liveSession(for: id) != nil
                 }) else { return "unknown session \(id)" }
                 // Answered once the prompt was delivered or refused (no writer lease, signed out, a failed
-                // send), as `onResult` answered before.
+                // send), as `onResult` answered before; sent to the matched worktree's session only.
                 do {
-                    try await self.host.sessions.send(id, prompt: text, caller: .app)
+                    try await self.host.sessions.send(id, prompt: text, owner: .worktree(worktree.id), caller: .app)
                     return nil
                 } catch {
                     return "the session did not accept the prompt"

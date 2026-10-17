@@ -10,10 +10,11 @@ extension SessionsAPI {
         }
     }
 
-    /// The text of the latest agent message in loaded session `sessionID`;
-    /// nil when it has none or is not loaded.
-    public func lastAgentReply(_ sessionID: String) -> String? {
-        guard let messages = core.sessionManagers.values.lazy.compactMap({ $0.liveSession(for: sessionID) }).first?.transcript.messages
+    /// The text of the latest agent message in loaded session `sessionID`,
+    /// of `owner` when given (ids are not unique across owners); nil when it
+    /// has none or is not loaded.
+    public func lastAgentReply(_ sessionID: String, owner: SessionOwnerID? = nil) -> String? {
+        guard let messages = managers(of: owner).lazy.compactMap({ $0.liveSession(for: sessionID) }).first?.transcript.messages
         else { return nil }
         for message in messages.reversed() {
             guard case .agent(_, _, let text) = message else { continue }
