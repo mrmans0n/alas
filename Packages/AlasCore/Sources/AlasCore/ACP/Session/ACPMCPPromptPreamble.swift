@@ -60,7 +60,7 @@ public enum ACPMCPPromptPreamble: Sendable {
     /// AlasCLI/crates/alas/src/mcp.rs (its unit test asserts this order).
     /// Update both sides together.
     public static let builtInToolNames: [String] = [
-        "open", "notify",
+        "open", "notify", "visual_show",
         "agent_list", "session_list", "session_new", "session_send",
         "session_read", "session_search", "session_wait", "session_interrupt",
         "worktree_list", "worktree_switch", "worktree_new", "worktree_delete",
@@ -170,7 +170,8 @@ public enum ACPMCPPromptPreamble: Sendable {
         if builtInTools == .visualOnly {
             lines.append("The MCP server \"alas\" (built-in) provides only visual_show: it shows "
                 + "an HTML visual (a fragment or a full document, such as a diagram, comparison, "
-                + "or chart) in this session's transcript, optionally with a question. The "
+                + "or chart) in this session's transcript as part of your reply, optionally with a question; "
+                + "use it when that explains better than prose. The "
                 + "user's answer arrives as their next prompt. No other Alas tools are "
                 + "available in this session.")
         } else if builtInTools == .full {
@@ -187,7 +188,10 @@ public enum ACPMCPPromptPreamble: Sendable {
                 + "review_comment_add/review_finish, "
                 + "pr_create/pr_status (open a PR/MR for this worktree's branch and have Alas watch it "
                 + "until it merges; offer pr_create when you've finished a change the user will want "
-                + "reviewed, and call it only after the user agrees or asks), \(sessionTools)."
+                + "reviewed, and call it only after the user agrees or asks), "
+                + "visual_show (show a diagram, flow, comparison or chart inline in this transcript, "
+                + "as part of your reply; use it when that explains better than prose, before your final reply), "
+                + "\(sessionTools)."
             if isDelegated {
                 line += " This session was delegated by a parent session: it "
                     + "cannot create descendants. Report results and questions to "
