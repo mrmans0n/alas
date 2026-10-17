@@ -713,8 +713,9 @@ struct ACPUserMessageText: View {
     let session: ACPSession
     /// False for remote sessions, where a local existence check says nothing.
     let chipsAbsolutePaths: Bool
-    @State private var suggestions: [ACPPromptSuggestion]
+    @State private var agentSuggestions: [ACPPromptSuggestion]
     @Environment(\.acpUpstreamReferenceStore) private var upstreamReferences
+    @Environment(\.acpPromptCardContext) private var promptCardContext
     @State private var upstreamHost: CodeHostKind?
 
     init(
@@ -731,26 +732,21 @@ struct ACPUserMessageText: View {
         self.typography = typography
         self.session = session
         self.chipsAbsolutePaths = chipsAbsolutePaths
-        _suggestions = State(initialValue: Self.suggestions(agent: session.promptSuggestions))
-    }
-
-    /// Alas's own commands badge too: the composer chipped them, and a
-    /// mid-message `/ship` reaches the agent as text either way.
-    private static func suggestions(agent: [ACPPromptSuggestion]) -> [ACPPromptSuggestion] {
-        ACPAlasSlashCommand.suggestions(
-            alas: [ACPAlasSlashCommand.btwSuggestion, ACPAlasSlashCommand.shipSuggestion], agent: agent
-        )
+        _agentSuggestions = State(initialValue: session.promptSuggestions)
     }
 
     var body: some View {
         let pasted = ACPPastedTextContents(text: text, spans: pastedSpans)
-        content(pasted: pasted)
+        let suggestions = ACPAlasSlashCommand.suggestions(
+            alas: promptCardContext?.alasCommands() ?? [], agent: agentSuggestions
+        )
+        content(pasted: pasted, suggestions: suggestions)
             .environment(\.acpCommandSuggestions, suggestions)
             .environment(\.acpPastedTextContents, pasted)
             .environment(\.acpUpstreamReferenceChipping, chipping)
             .environment(\.acpAbsolutePathChipping, chipsAbsolutePaths)
-            .onReceive(session.$promptSuggestions.map(Self.suggestions(agent:))) { latest in
-                if latest != suggestions { suggestions = latest }
+            .onReceive(session.$promptSuggestions) { latest in
+                if latest != agentSuggestions { agentSuggestions = latest }
             }
             .onReceive(upstreamReferences?.$remote.eraseToAnyPublisher()
                 ?? Just<CodeHostRemote?>(nil).eraseToAnyPublisher()) { remote in
@@ -765,7 +761,7 @@ struct ACPUserMessageText: View {
     }
 
     @ViewBuilder
-    private func content(pasted: ACPPastedTextContents?) -> some View {
+    private func content(pasted: ACPPastedTextContents?, suggestions: [ACPPromptSuggestion]) -> some View {
         // A leading command counts only when the user typed it: a paste
         // that itself starts with `/command` renders as ordinary text.
         if let match = ACPSlashCommand.match(in: text, suggestions: suggestions),
