@@ -195,6 +195,82 @@ struct HostSessionsTests {
         #expect(page.messageCount == count)
     }
 
+    /// A delegated child is admitted as any new session is: while a
+    /// checkpoint restore is being recovered, it is refused.
+    @Test func aChildIsRefusedWhereANewSessionWouldBe() async throws {
+        let environment = RefusingEnvironment()
+        let fixture = try Fixture(environment: environment)
+        defer { fixture.tearDown() }
+        let parent = try await fixture.host.sessions.create(.worktree(fixture.ref), agentID: "gemini", caller: .app)
+        let origin = try #require(fixture.core.acpSessionLocation(parent.id)?.origin)
+        environment.recovering = true
+
+        _ = await fixture.core.orchestration.create(origin: origin, request: .init(prompt: "Go", agentId: "gemini", worktree: .current))
+
+        let persistence = fixture.core.orchestrationPersistence
+        try await eventually { (try? await persistence.children(parentSessionId: parent.id))?.first?.phase == .failed }
+        let child = try #require(try await persistence.children(parentSessionId: parent.id).first)
+        #expect(child.failureMessage?.contains(SessionsAPI.checkpointRecoveryReason) == true)
+    }
+
+    /// A child waiting to start is admitted for its worktree as listed now:
+    /// one that moved to a remote project is refused an agent that runs
+    /// only locally, though the child was asked for under a local one.
+    @Test func aChildIsAdmittedForItsWorktreesCurrentProject() async throws {
+        let environment = RefusingEnvironment()
+        environment.localOnlyAgents = true
+        let fixture = try Fixture(environment: environment, projectHost: "build")
+        defer { fixture.tearDown() }
+        let listed = fixture.worktree
+        let stale = Worktree(
+            id: listed.id, projectId: "local", name: listed.name, branch: listed.branch,
+            path: listed.path, status: listed.status, lastActivity: listed.lastActivity
+        )
+
+        #expect(await fixture.host.sessions.refusal(toStart: "gemini", in: stale) == .agentUnavailable)
+    }
+
+    enum ChildWorktreeChange: CaseIterable {
+        /// Removed before the child reached admission.
+        case removed
+        /// Moved to a remote project while admission waited on the
+        /// recovery check.
+        case movedDuringAdmission
+    }
+
+    /// A child is refused where its worktree is no longer its project's,
+    /// and no manager is created for a worktree that is gone.
+    @Test(arguments: ChildWorktreeChange.allCases)
+    func aChildIsRefusedWhenItsWorktreeLeavesItsProject(_ change: ChildWorktreeChange) async throws {
+        let environment = RefusingEnvironment()
+        environment.localOnlyAgents = true
+        var remote = ProjectConfig(id: "q", name: "q", path: "/tmp/q", color: "blue", addedAt: .distantPast)
+        remote.host = "build"
+        let fixture = try Fixture(environment: environment, otherProjects: [remote])
+        defer { fixture.tearDown() }
+        let worktree = fixture.worktree
+        let projects = fixture.core.projects
+        switch change {
+        case .removed:
+            projects.dropRemovedWorktree(id: worktree.id, projectId: "p")
+        case .movedDuringAdmission:
+            var moved = false
+            environment.duringRecoveryCheck = {
+                guard !moved else { return }
+                moved = true
+                projects.dropRemovedWorktree(id: worktree.id, projectId: "p")
+                projects.insertOptimisticWorktree(Worktree(
+                    id: worktree.id, projectId: "q", name: worktree.name, branch: worktree.branch,
+                    path: worktree.path, status: worktree.status, lastActivity: worktree.lastActivity
+                ))
+            }
+        }
+
+        #expect(await fixture.host.sessions.refusal(toStart: "gemini", in: worktree)
+            == .ownerUnavailable(reason: "The worktree is not listed, or is archived."))
+        if change == .removed { #expect(fixture.core.sessionManagers.isEmpty) }
+    }
+
     /// A delegated session's summary names the session that delegated it.
     @Test func aDelegatedSessionsSummaryNamesItsParent() throws {
         let fixture = try Fixture()
@@ -554,12 +630,16 @@ struct HostSessionsTests {
         var ref: WorktreeRef { WorktreeRef(projectID: "p", path: worktree.path.path) }
         var sessionsDatabase: URL { root.appendingPathComponent("sessions.sqlite") }
 
-        init(environment: any AlasHostEnvironment = HeadlessHostEnvironment(), projectHost: String? = nil) throws {
+        init(
+            environment: any AlasHostEnvironment = HeadlessHostEnvironment(),
+            projectHost: String? = nil,
+            otherProjects: [ProjectConfig] = []
+        ) throws {
             root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-sessions-\(UUID().uuidString)")
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             var project = ProjectConfig(id: "p", name: "p", path: root.path, color: "blue", addedAt: .distantPast)
             project.host = projectHost
-            let projects = ProjectsManager(persistedProjects: [project])
+            let projects = ProjectsManager(persistedProjects: [project] + otherProjects)
             let path = root.appendingPathComponent("feature")
             worktree = Worktree(
                 id: Worktree.makeId(path: path), projectId: "p", name: "feature", branch: "feature",
@@ -585,7 +665,8 @@ struct HostSessionsTests {
                         connectionFactory: { _, _, _ in ACPConnection(client: agent) }
                     )
                 },
-                environment: environment
+                environment: environment,
+                orchestrationPersistence: ACPOrchestrationPersistence(path: root.appendingPathComponent("orchestration.sqlite").path)
             )
             host = AlasHost(core: core)
         }

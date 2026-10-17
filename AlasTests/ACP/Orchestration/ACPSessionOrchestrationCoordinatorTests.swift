@@ -518,79 +518,118 @@ struct ACPSessionOrchestrationCoordinatorTests {
 
     @Test("a delegated child is not started in a worktree that stopped admitting sessions")
     func delegatedChildRespectsWorktreeAdmission() async throws {
-        let orchestrationPath = FileManager.default.temporaryDirectory
-            .appendingPathComponent("acp-orchestration-coordinator-\(UUID().uuidString).sqlite")
-            .path
-        let sessionPath = FileManager.default.temporaryDirectory
-            .appendingPathComponent("acp-orchestration-coordinator-session-\(UUID().uuidString).sqlite")
-            .path
-        let persistence = ACPOrchestrationPersistence(path: orchestrationPath)
-        let sessionStore = try ACPSessionStore(path: sessionPath)
-        let manager = ACPSessionManager(
-            worktreeId: "worktree",
-            worktreePath: "/tmp/worktree",
-            store: sessionStore,
-            setupEvaluator: { _ in .missing(reason: "Install Codex") }
+        let fixture = try makeAdmissionFixture { _, _ in
+            "Wait for the current worktree operation to finish before starting sessions."
+        }
+        await fixture.createChild()
+        let record = try await eventuallyLoadDelegation(
+            persistence: fixture.persistence, childSessionId: "child", matching: { $0.phase == .failed }
         )
-        _ = manager.createSession(id: "parent", agentId: "codex", autoRunDefault: false)
+        #expect(record.failureMessage == "Wait for the current worktree operation to finish before starting sessions.")
+        #expect(fixture.parentManager.liveSession(for: "child") == nil)
+    }
+
+    /// Admission can replace the worktree's manager (its project changed);
+    /// the child starts in the manager left after admission.
+    @Test
+    func delegatedChildStartsInTheManagerAdmissionLeaves() async throws {
+        var replacement: ACPSessionManager?
+        var fixture: AdmissionFixture!
+        fixture = try makeAdmissionFixture { _, _ in
+            replacement = fixture.makeManager()
+            fixture.current = replacement
+            return nil
+        }
+        await fixture.createChild()
+        _ = try await eventuallyLoadDelegation(
+            persistence: fixture.persistence, childSessionId: "child", matching: { $0.phase == .failed }
+        )
+        #expect(fixture.parentManager.liveSession(for: "child") == nil)
+        #expect(replacement?.liveSession(for: "child") != nil)
+    }
+
+    @MainActor
+    private final class AdmissionFixture {
+        let persistence: ACPOrchestrationPersistence
+        let sessionStore: ACPSessionStore
+        let parentManager: ACPSessionManager
+        var current: ACPSessionManager?
+        var coordinator: ACPSessionOrchestrationCoordinator!
+
+        init(persistence: ACPOrchestrationPersistence, sessionStore: ACPSessionStore) {
+            self.persistence = persistence
+            self.sessionStore = sessionStore
+            parentManager = ACPSessionManager(
+                worktreeId: "worktree", worktreePath: "/tmp/worktree", store: sessionStore,
+                setupEvaluator: { _ in .missing(reason: "Install Codex") }
+            )
+            current = parentManager
+        }
+
+        func makeManager() -> ACPSessionManager {
+            ACPSessionManager(
+                worktreeId: "worktree", worktreePath: "/tmp/worktree", store: sessionStore,
+                setupEvaluator: { _ in .missing(reason: "Install Codex") }
+            )
+        }
+
+        func createChild() async {
+            let response = await coordinator.create(
+                origin: .init(sessionId: "parent", projectId: "project", worktreeId: "worktree"),
+                request: .init(prompt: "Investigate the parser.", agentId: nil, worktree: .current)
+            )
+            guard case .text = response else {
+                Issue.record("Expected delegated session creation response")
+                return
+            }
+        }
+    }
+
+    private func makeAdmissionFixture(
+        admitChild: @escaping @MainActor (_ worktree: Worktree, _ agentID: String) async -> String?
+    ) throws -> AdmissionFixture {
+        let directory = FileManager.default.temporaryDirectory
+        let fixture = AdmissionFixture(
+            persistence: ACPOrchestrationPersistence(
+                path: directory.appendingPathComponent("acp-orchestration-coordinator-\(UUID().uuidString).sqlite").path
+            ),
+            sessionStore: try ACPSessionStore(
+                path: directory.appendingPathComponent("acp-orchestration-coordinator-session-\(UUID().uuidString).sqlite").path
+            )
+        )
+        _ = fixture.parentManager.createSession(id: "parent", agentId: "codex", autoRunDefault: false)
         let worktree = Worktree(
-            id: "worktree",
-            projectId: "project",
-            name: "main",
-            branch: "main",
-            path: URL(fileURLWithPath: "/tmp/worktree"),
-            status: .clean,
-            lastActivity: Date(timeIntervalSince1970: 0)
+            id: "worktree", projectId: "project", name: "main", branch: "main",
+            path: URL(fileURLWithPath: "/tmp/worktree"), status: .clean, lastActivity: Date(timeIntervalSince1970: 0)
         )
+        let codex = ACPOrchestrationAgent(id: "codex", isEnabled: true, isACPCapable: true)
         var sessionLocationCalls = 0
-        let coordinator = ACPSessionOrchestrationCoordinator(environment: .init(
-            persistence: persistence,
+        fixture.coordinator = ACPSessionOrchestrationCoordinator(environment: .init(
+            persistence: fixture.persistence,
             instanceId: "instance",
             now: { 100 },
             makeID: { "child" },
             worktree: { $0 == worktree.id ? worktree : nil },
             existingWorktree: { _, _ in nil },
-            configuredAgents: {
-                [ACPOrchestrationAgent(id: "codex", isEnabled: true, isACPCapable: true)]
-            },
-            availableAgents: { _, destination in
-                destination.id == worktree.id
-                    ? [ACPOrchestrationAgent(id: "codex", isEnabled: true, isACPCapable: true)]
-                    : []
-            },
-            sessionLocation: { sessionId in
+            configuredAgents: { [codex] },
+            availableAgents: { _, destination in destination.id == worktree.id ? [codex] : [] },
+            sessionLocation: { [weak fixture] sessionId in
                 sessionLocationCalls += 1
-                guard sessionLocationCalls == 1, sessionId == "parent" else { return nil }
+                guard let fixture, sessionLocationCalls == 1, sessionId == "parent" else { return nil }
                 return .init(
                     origin: .init(sessionId: "parent", projectId: "project", worktreeId: worktree.id),
-                    manager: manager
+                    manager: fixture.parentManager
                 )
             },
-            manager: { _ in manager },
+            manager: { [weak fixture] _ in fixture?.current },
             newWorktreeDestination: { _, _ in nil },
             createWorktree: { _, _, _, _ in .failure(.init(message: "unused")) },
             rememberParent: { _, _ in },
             autoRunDefault: { false },
             notifyChanged: {},
-            admitsNewSessions: { _ in false }
+            admitChild: admitChild
         ))
-
-        let response = await coordinator.create(
-            origin: .init(sessionId: "parent", projectId: "project", worktreeId: worktree.id),
-            request: .init(prompt: "Investigate the parser.", agentId: nil, worktree: .current)
-        )
-
-        guard case .text = response else {
-            Issue.record("Expected delegated session creation response")
-            return
-        }
-        let record = try await eventuallyLoadDelegation(
-            persistence: persistence,
-            childSessionId: "child",
-            matching: { $0.phase == .failed }
-        )
-        #expect(record.failureMessage == "Wait for the current worktree operation to finish before starting sessions.")
-        #expect(manager.liveSession(for: "child") == nil)
+        return fixture
     }
 
     private func makeModelSelectionFixture(
