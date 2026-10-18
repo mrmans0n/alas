@@ -223,10 +223,9 @@ struct AlasHostTests {
         #expect(await host.runs.output(of: "run-p2", projectID: "p1") == .unknownRun)
     }
 
-    /// A host booted on a data directory runs with that directory's
-    /// settings and projects: its base branch, its registry agent (enabled
-    /// and launchable) and its project list.
-    @Test func bootReadsTheDirectorysSettingsAndProjects() throws {
+    /// A headless host runs with its data directory's settings: its base
+    /// branch and its registry agent, enabled and launchable.
+    @Test func aHeadlessEnvironmentReadsItsDirectorysSettings() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("alas-boot-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer {
@@ -240,17 +239,22 @@ struct AlasHostTests {
             command: "/usr/bin/true", arguments: [], environment: [:], isEnabled: true
         )
         config.agents.registry = [agent]
-        let store = PersistenceStore()
-        try store.write(config, to: directory.appendingPathComponent("app.json"))
-        let project = ProjectConfig(id: "p", name: "p", path: "/srv/repo", color: "blue", addedAt: .distantPast)
-        try store.write(ProjectsFile(projects: [project]), to: directory.appendingPathComponent("projects.json"))
+        try PersistenceStore().write(config, to: directory.appendingPathComponent("app.json"))
 
-        let host = try AlasHost.boot(in: directory)
+        let environment = HeadlessHostEnvironment(loadingFrom: directory)
 
-        #expect(host.projects.list().map(\.id) == ["p"])
-        #expect(host.core.environment.configuration().worktrees.baseBranch == "trunk")
-        #expect(host.core.environment.enabledAgents().contains { $0.id == agent.agentDefinition.id })
+        #expect(environment.configuration().worktrees.baseBranch == "trunk")
+        #expect(environment.enabledAgents().contains { $0.id == agent.agentDefinition.id })
         #expect(ACPLaunchCatalog.spec(for: agent.agentDefinition.id) != nil)
+    }
+
+    /// A host serves only its own process's data directory, so no store
+    /// writes another profile's.
+    @Test func bootRefusesAnotherProcesssDirectory() {
+        let other = FileManager.default.temporaryDirectory.appendingPathComponent("alas-boot-\(UUID().uuidString)")
+        #expect(throws: HostBootRefusal.notThisProcesssDirectory(other)) {
+            _ = try AlasHost.boot(in: other)
+        }
     }
 
     /// Changes made after a snapshot reach a subscriber holding its cursor,

@@ -1,35 +1,54 @@
 import Foundation
 
+/// Why `AlasHost.boot(in:)` did not boot.
+public enum HostBootRefusal: Error, Equatable, LocalizedError {
+    /// A host serves only its own process's data directory: every store,
+    /// session database included, lives under `Paths.appSupportRoot`.
+    case notThisProcesssDirectory(URL)
+
+    public var errorDescription: String? {
+        switch self {
+        case .notThisProcesssDirectory(let url):
+            "\(url.path) is not this process's data directory; set ALAS_APP_SUPPORT_DIR to serve it."
+        }
+    }
+}
+
+extension HeadlessHostEnvironment {
+    /// The environment of data directory `directory`: its `app.json`, or the
+    /// defaults when it has none or cannot be read, as the app falls back.
+    /// Registry agents are published, since sessions look their launch spec
+    /// up by id.
+    public convenience init(loadingFrom directory: URL) {
+        let config = (try? PersistenceStore().readIfExists(AppConfig.self, from: directory.appendingPathComponent("app.json"))) ?? .defaults
+        ACPLaunchCatalog.publishRegistryAgents(config.agents.registry)
+        self.init(configuration: config)
+    }
+}
+
 extension AlasHost {
-    /// A host for the data directory `directory`, with nothing from the app:
-    /// its settings, projects, workspaces, run and usage history, delegations
-    /// and reviews are read from the directory's files, sessions run their
-    /// agents headlessly and scripts run as plain processes. The directory is
-    /// the profile's (`ALAS_APP_SUPPORT_DIR`); session databases stay under
-    /// `Paths`, which resolves the same root.
+    /// A host for this process's data directory, with nothing from the app:
+    /// its settings, projects, workspaces, run and usage history, delegations,
+    /// reviews and sessions are the directory's, agents run headlessly and
+    /// scripts run as plain processes. The directory is the profile's
+    /// (`ALAS_APP_SUPPORT_DIR`); any other is refused, because the stores
+    /// that resolve `Paths` would write the profile's instead.
     ///
-    /// Throws when the project list cannot be read. A missing or unreadable
-    /// `app.json` falls back to the defaults, as the app does.
+    /// Throws when the project list cannot be read.
     // ponytail: no startup migrations; the app runs them on launch, so a directory the app has not opened since an upgrade is read as-is.
     public static func boot(in directory: URL = Paths.appSupportRoot) throws -> AlasHost {
+        guard directory.standardizedFileURL.path == Paths.appSupportRoot.standardizedFileURL.path else {
+            throw HostBootRefusal.notThisProcesssDirectory(directory)
+        }
+        let environment = HeadlessHostEnvironment(loadingFrom: directory)
         let store = PersistenceStore()
-        let config = (try? store.readIfExists(AppConfig.self, from: directory.appendingPathComponent("app.json"))) ?? .defaults
-        // Sessions of registry agents look their launch spec up by id.
-        ACPLaunchCatalog.publishRegistryAgents(config.agents.registry)
-        let projectsFile = directory.appendingPathComponent("projects.json")
-        let projects = try store.readIfExists(ProjectsFile.self, from: projectsFile) ?? ProjectsFile(projects: [])
-        let core = AlasCoreContext(
+        let projects = try store.readIfExists(ProjectsFile.self, from: Paths.projectsFile) ?? ProjectsFile(projects: [])
+        // Every other store keeps its `Paths` default, which is this directory.
+        return AlasHost(core: AlasCoreContext(
             projects: ProjectsManager(persistedProjects: projects.projects),
             store: store,
-            projectsFile: projectsFile,
-            runHistoryStore: try? RunHistoryStore(path: directory.appendingPathComponent("run-history.sqlite").path),
-            workspaceStore: WorkspaceStore(store: store, url: directory.appendingPathComponent("workspaces.json")),
-            environment: HeadlessHostEnvironment(configuration: config),
-            orchestrationPersistence: ACPOrchestrationPersistence(path: directory.appendingPathComponent("acp-orchestration.sqlite").path),
-            reviewDrafts: ReviewDraftCommentStore(store: store, url: directory.appendingPathComponent("review-draft-comments.json")),
-            reviewSessions: ReviewSessionStore(store: store, url: directory.appendingPathComponent("review-sessions.json")),
-            usageHistory: try? UsageHistoryStore(path: directory.appendingPathComponent("usage-history.sqlite").path)
-        )
-        return AlasHost(core: core)
+            environment: environment,
+            usageHistory: try? UsageHistoryStore()
+        ))
     }
 }
