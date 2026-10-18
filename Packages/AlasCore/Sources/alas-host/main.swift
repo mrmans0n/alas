@@ -12,7 +12,8 @@ usage: alas-host
 Serves the Alas host protocol for the data directory ALAS_APP_SUPPORT_DIR
 (default: ~/Library/Application Support/Alas) on its local socket, and prints
 the socket path. When the profile enables Remote, also serves it on loopback
-and prints its address. Stops on SIGINT or SIGTERM.
+and prints its address, with the web client of the installed Alas.app or of
+ALAS_REMOTE_WEB_DIR. Stops on SIGINT or SIGTERM.
 
 `alas-host pair` asks the running host for a Remote pairing code, which a
 phone or browser redeems within two minutes, and prints it.
@@ -92,9 +93,18 @@ if config.remote.enabled {
     let pairing = RemotePairingService(store: FileDeviceStore())
     protocolServer.remotePairing = pairing
     let interfaces = RemoteNetwork.interfaces()
+    // The web client ships inside the app; without it, devices that already
+    // have a client still pair and connect.
+    let webClient = [
+        ProcessInfo.processInfo.environment["ALAS_REMOTE_WEB_DIR"].map { URL(fileURLWithPath: $0) },
+        URL(fileURLWithPath: "/Applications/Alas.app/Contents/Resources/RemoteWeb"),
+    ].compactMap { $0 }.first { FileManager.default.fileExists(atPath: $0.appendingPathComponent("index.html").path) }
+    if webClient == nil {
+        FileHandle.standardError.write(Data("alas-host: no web client found (set ALAS_REMOTE_WEB_DIR); serving pairing and the WebSocket only\n".utf8))
+    }
     let server = RemoteServer(
         pairing: pairing,
-        assets: RemoteWebAssets(root: URL(fileURLWithPath: "/dev/null")),
+        assets: RemoteWebAssets(root: webClient ?? URL(fileURLWithPath: "/dev/null")),
         host: host,
         accessPolicy: settings.accessPolicy(interfaces: interfaces, tailnetDNSName: nil),
         originPolicy: settings.originPolicy(interfaces: interfaces, tailnetDNSName: nil),
@@ -111,16 +121,20 @@ if config.remote.enabled {
         },
         identity: { RemoteServerIdentity(serverId: settings.serverId, name: settings.resolvedDisplayName) }
     )
-    var announced = false
+    // The port can change after the first: a listener that fails rebinds on
+    // an OS-assigned one, and the address and the proxy follow it.
+    var servedPort: UInt16?
     server.onPortChange = { port in
-        guard let port, !announced else { return }
-        announced = true
+        guard let port, port != servedPort else { return }
+        servedPort = port
         print("remote http://127.0.0.1:\(port)")
         fflush(stdout)
+        tailscaleServe?.stop()
+        tailscaleServe = nil
         Task { @MainActor in
             // The proxy's requests name the tailnet host, which the policy
             // must allow; a status that cannot be read leaves loopback only.
-            guard let status = try? await RemoteTailscale.status() else { return }
+            guard let status = try? await RemoteTailscale.status(), servedPort == port else { return }
             server.updateAccessPolicy(settings.accessPolicy(interfaces: interfaces, tailnetDNSName: status.dnsName))
             server.updateOriginPolicy(settings.originPolicy(interfaces: interfaces, tailnetDNSName: status.dnsName))
             guard settings.tailscaleServe, status.httpsEnabled, !isStopping,
