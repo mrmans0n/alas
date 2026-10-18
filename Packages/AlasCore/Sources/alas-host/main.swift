@@ -41,19 +41,22 @@ do {
     fail("cannot load \(Paths.appSupportRoot.path): \(error.localizedDescription)")
 }
 
-guard let socket = HostSocketServer(server: HostProtocolServer(host: host)) else {
+let protocolServer = HostProtocolServer(host: host)
+guard let socket = HostSocketServer(server: protocolServer) else {
     fail("cannot serve \(HostSocketServer.defaultPath()): another host serves it, or its directory is not this user's own")
 }
-print(socket.path)
-fflush(stdout)
 
-// Delivered on the main queue, so they run with the host's main actor.
+// Installed before the path is printed, so a stop sent as soon as the host
+// announces itself still ends its work. Delivered on the main queue, where
+// the host's main actor runs.
 var stopSignals: [DispatchSourceSignal] = []
 for signalNumber in [SIGINT, SIGTERM] {
     signal(signalNumber, SIG_IGN)
     let source = DispatchSource.makeSignalSource(signal: signalNumber, queue: .main)
     source.setEventHandler {
         MainActor.assumeIsolated {
+            // No request, on an open connection either, starts work teardown would miss.
+            protocolServer.close()
             socket.stop()
             Task { @MainActor in
                 await host.shutdown()
@@ -65,5 +68,8 @@ for signalNumber in [SIGINT, SIGTERM] {
     source.resume()
     stopSignals.append(source)
 }
+
+print(socket.path)
+fflush(stdout)
 
 dispatchMain()

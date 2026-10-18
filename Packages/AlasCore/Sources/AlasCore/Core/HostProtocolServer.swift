@@ -10,6 +10,9 @@ public final class HostProtocolServer {
 
     let host: AlasHost
     let discoverScripts: ScriptDiscovery
+    /// Set once the host stops serving: every connection, open ones
+    /// included, answers that it is stopping instead of serving a request.
+    public private(set) var isClosed = false
 
     public init(
         host: AlasHost,
@@ -27,7 +30,16 @@ public final class HostProtocolServer {
         caller: HostCaller,
         send: @escaping @MainActor (HostServerMessage) async -> Void
     ) -> HostProtocolConnection {
-        HostProtocolConnection(host: host, caller: caller, discoverScripts: discoverScripts, send: send)
+        HostProtocolConnection(
+            host: host, caller: caller, discoverScripts: discoverScripts,
+            isServerClosed: { [weak self] in self?.isClosed ?? true }, send: send
+        )
+    }
+
+    /// Stops serving requests, on every connection, before the host tears
+    /// down: none can start work that teardown would miss.
+    public func close() {
+        isClosed = true
     }
 }
 
@@ -36,6 +48,7 @@ public final class HostProtocolConnection {
     private let host: AlasHost
     private let caller: HostCaller
     private let discoverScripts: HostProtocolServer.ScriptDiscovery
+    private let isServerClosed: @MainActor () -> Bool
     private let send: @MainActor (HostServerMessage) async -> Void
     private var subscription: HostSubscription?
     /// The last message handed to the transport. Every send waits for the
@@ -48,17 +61,24 @@ public final class HostProtocolConnection {
         host: AlasHost,
         caller: HostCaller,
         discoverScripts: @escaping HostProtocolServer.ScriptDiscovery,
+        isServerClosed: @escaping @MainActor () -> Bool = { false },
         send: @escaping @MainActor (HostServerMessage) async -> Void
     ) {
         self.host = host
         self.caller = caller
         self.discoverScripts = discoverScripts
+        self.isServerClosed = isServerClosed
         self.send = send
     }
 
     /// Answers one message. Requests are independent: a client may send the
     /// next before this one is answered, and matches answers by id.
     public func receive(_ message: HostClientMessage) async {
+        guard !isServerClosed() else {
+            close()
+            await enqueue(.response(id: message.id, result: .failure(error: .failed(message: "The host is stopping."))))
+            return
+        }
         if message.version == HostProtocolVersion.current {
             switch message.request {
             case .subscribe(let cursor):

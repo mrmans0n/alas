@@ -183,6 +183,19 @@ struct HostProtocolServerTests {
         #expect(client.messages.contains(.response(id: 3, result: .done)))
     }
 
+    /// Once the host stops serving, a connection opened before it answers
+    /// that the host is stopping instead of serving the request.
+    @Test func aClosedServerServesNoRequestOnOpenConnections() async throws {
+        let fixture = try Fixture()
+        let client = Client()
+        let connection = fixture.server.connect(caller: .localUser(uid: 501), send: client.receive)
+
+        fixture.server.close()
+        await connection.receive(HostClientMessage(id: 1, request: .listSessions))
+
+        #expect(client.messages == [.response(id: 1, result: .failure(error: .failed(message: "The host is stopping.")))])
+    }
+
     /// Archiving stopped everything in a worktree; a run does not start
     /// there again, including one archived while its scripts were found.
     @Test(arguments: [false, true])

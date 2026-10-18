@@ -8,6 +8,8 @@ final class AlasHostProcess: @unchecked Sendable {
     private let lock = NSLock()
     private var out = Data()
     private var err = Data()
+    /// The pipes that reached end of file: their output is complete.
+    private var closedPipes = 0
 
     /// The `alas-host` that `swift test` built, in the package's build
     /// directory: `.build/debug` is the configuration it tests.
@@ -30,14 +32,24 @@ final class AlasHostProcess: @unchecked Sendable {
         process.standardOutput = stdout
         process.standardError = stderr
         stdout.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            self?.lock.withLock { self?.out.append(data) }
+            self?.read(handle) { $0.out.append($1) }
         }
         stderr.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            self?.lock.withLock { self?.err.append(data) }
+            self?.read(handle) { $0.err.append($1) }
         }
         try process.run()
+    }
+
+    private func read(_ handle: FileHandle, into append: (AlasHostProcess, Data) -> Void) {
+        let data = handle.availableData
+        lock.withLock {
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+                closedPipes += 1
+            } else {
+                append(self, data)
+            }
+        }
     }
 
     var output: String { lock.withLock { String(decoding: out, as: UTF8.self) } }
@@ -49,9 +61,10 @@ final class AlasHostProcess: @unchecked Sendable {
         return try #require(output.split(separator: "\n").first.map(String.init), "alas-host printed nothing: \(errorOutput)")
     }
 
-    /// Waits for the process to end, and returns its exit status.
+    /// Waits for the process to end and for all it printed, and returns
+    /// its exit status.
     func exitStatus() async throws -> Int32 {
-        try await eventually { [process] in !process.isRunning }
+        try await eventually { [self] in !process.isRunning && lock.withLock { closedPipes == 2 } }
         return process.terminationStatus
     }
 
