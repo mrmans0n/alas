@@ -7028,13 +7028,13 @@ final class AppState {
                 self.focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
                 _ = self.openReviewChangesTab(for: worktree)
             },
-            openReview: { [weak self] worktree, target in
+            openReview: { [weak self] worktree, target, caller in
                 guard let self else { return .error("Alas is not available.") }
-                return await self.cliOpenReview(worktree: worktree, target: target)
+                return await self.cliOpenReview(worktree: worktree, target: target, caller: caller)
             },
-            workspaceCommand: { [weak self] command in
+            workspaceCommand: { [weak self] command, caller in
                 guard let self else { return .error("Alas is not available.") }
-                return await self.cliWorkspace(command)
+                return await self.cliWorkspace(command, caller: caller)
             },
             previewCommand: { [weak self] command, owner, sessionID in
                 guard let self else { return .error("Alas is not available.") }
@@ -7057,7 +7057,7 @@ final class AppState {
         )
     }
 
-    private func cliWorkspace(_ command: AlasCLIRequest.WorkspaceCommand) async -> AlasCLIResponse {
+    private func cliWorkspace(_ command: AlasCLIRequest.WorkspaceCommand, caller: HostCaller) async -> AlasCLIResponse {
         let service = WorkspaceAutomationService(
             store: workspaceStore,
             refreshNavigation: { [weak self] in
@@ -7088,7 +7088,7 @@ final class AppState {
             case .focus(let checkoutID, let memberID):
                 let target = try await service.memberTarget(checkoutID: checkoutID, memberID: memberID)
                 await workspacesManager.refreshCheckoutSnapshots()
-                _ = try? await refreshProjectWorktrees(projectId: target.projectID)
+                try? await host.worktrees.refresh(projectID: target.projectID, caller: caller)
                 await workspacesManager.refreshCheckoutSnapshots()
                 selectWorkspaceCheckout(id: checkoutID)
                 focusWorkspaceCheckoutMember(id: memberID)
@@ -11173,216 +11173,21 @@ final class AppState {
         return .ok
     }
 
-    @MainActor
-    func cliOpenProviderReview(worktree: Worktree, target: String) async -> AlasCLIResponse {
-        guard let parsed = AlasCLIReviewTargetResolver.parse(target) else {
-            return .error("unsupported review URL")
+    /// Opens the review `alas review <target>` names: the host resolves and
+    /// saves it, and this shows its tab.
+    func cliOpenReview(worktree: Worktree, target: String, caller: HostCaller) async -> AlasCLIResponse {
+        switch await host.reviews.open(target, in: worktree, caller: caller) {
+        case .failure(let failure):
+            return .error(failure.message)
+        case .success(let opened):
+            _ = tabs.openOrFocusReviewSession(worktreeId: worktree.id, record: opened.record)
+            focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
+            NSApp.activate(ignoringOtherApps: true)
+            return .text([
+                "Opened review for '\(opened.label)' in Alas.",
+                ReviewsAPI.jsonLine(["session_id": opened.record.target.draftSessionID.rawValue]),
+            ])
         }
-
-        do {
-            let providerRegistry = CodeHostProviderRegistry.live()
-            let supportedRemotes = try await cliSupportedRemotes(for: worktree, registry: providerRegistry)
-            guard !supportedRemotes.isEmpty else {
-                return .error("no code host remote found for this worktree")
-            }
-
-            let remote: CodeHostRemote
-            let number: Int
-            switch parsed {
-            case .number(let value):
-                remote = supportedRemotes[0]
-                number = value
-            case .url(let host, let repositorySlug, let value):
-                guard let matchingRemote = supportedRemotes.first(where: {
-                    $0.host == host && $0.repositorySlug.lowercased() == repositorySlug.lowercased()
-                }) else {
-                    return .error("review URL does not match this worktree's remote")
-                }
-                remote = matchingRemote
-                number = value
-            case .range, .revision:
-                // Commit ranges and bare revisions are not routed through the
-                // provider path; wiring lands in a follow-up task.
-                return .error("commit ranges and revisions are not supported yet")
-            }
-
-            guard let provider = providerRegistry.provider(for: remote.kind) else {
-                return .error("\(remote.kind.displayName) is not supported yet.")
-            }
-            let request = try await provider.reviewRequest(remote: remote, number: number, cwd: worktree.path)
-            let reviewTarget = ReviewSessionTarget.reviewRequest(
-                worktreeID: worktree.id,
-                repositoryPath: worktree.path,
-                provider: request.provider,
-                host: request.remote.host,
-                repositorySlug: request.remote.repositorySlug,
-                number: request.number,
-                url: request.url,
-                title: request.title,
-                headSHA: request.headSHA
-            )
-            return openCLIReviewSession(worktree: worktree, target: reviewTarget, label: target)
-        } catch {
-            return .error(Self.describeCLIError(error))
-        }
-    }
-
-    @MainActor
-    func cliOpenReview(worktree: Worktree, target: String) async -> AlasCLIResponse {
-        guard let parsed = AlasCLIReviewTargetResolver.parse(target) else {
-            return .error(
-                "unsupported review target '\(target)' — expected a PR/MR number or URL, "
-                    + "a commit range (base..head or base...head), a branch, or a revision"
-            )
-        }
-        switch parsed {
-        case .number, .url:
-            return await cliOpenProviderReview(worktree: worktree, target: target)
-        case .range(let base, let head, let threeDot):
-            return await cliOpenRangeReview(worktree: worktree, base: base, head: head, threeDot: threeDot)
-        case .revision(let ref):
-            return await cliOpenRevisionReview(worktree: worktree, ref: ref)
-        }
-    }
-
-    @MainActor
-    private func cliOpenRangeReview(
-        worktree: Worktree,
-        base: String,
-        head: String,
-        threeDot: Bool
-    ) async -> AlasCLIResponse {
-        let git = GitService()
-        let baseSHA: String
-        let headSHA: String
-        do {
-            // Three-dot ranges compute a real merge base downstream and have
-            // no root-commit special case; two-dot ranges reuse the same
-            // empty-tree fallback the range diff loaders already rely on
-            // (`resolveTwoDotLeftTree`), so a root commit's "HEAD^..HEAD"
-            // resolves instead of failing before the review ever opens.
-            baseSHA = threeDot
-                ? try await git.resolveRevision(at: worktree.path, ref: base)
-                : try await git.resolveTwoDotLeftTree(worktreePath: worktree.path, base: base)
-        } catch {
-            return .error("could not resolve '\(base)' in worktree '\(worktree.branch)'")
-        }
-        do {
-            headSHA = try await git.resolveRevision(at: worktree.path, ref: head)
-        } catch {
-            return .error("could not resolve '\(head)' in worktree '\(worktree.branch)'")
-        }
-        let title = "Review \(base)\(threeDot ? "..." : "..")\(head)"
-        // Three-dot ranges diff from the merge base — exactly what the
-        // `.branch` target's loader does; two-dot ranges are plain range
-        // diffs via `.commitRange`.
-        let reviewTarget: ReviewSessionTarget = threeDot
-            ? .branch(worktreeID: worktree.id, repositoryPath: worktree.path, base: baseSHA, head: headSHA, title: title)
-            : .commitRange(worktreeID: worktree.id, repositoryPath: worktree.path, base: baseSHA, head: headSHA, title: title)
-        return openCLIReviewSession(worktree: worktree, target: reviewTarget, label: title)
-    }
-
-    @MainActor
-    private func cliOpenRevisionReview(worktree: Worktree, ref: String) async -> AlasCLIResponse {
-        let git = GitService()
-        let localBranches = (try? await git.localBranches(at: worktree.path)) ?? []
-        if localBranches.contains(ref) {
-            // The named branch is the HEAD; the repository's configured base
-            // branch is the BASE — this reviews "`ref`'s changes vs the
-            // base". The palette's branch picker (ReviewScopeSelection
-            // .target(for: .branch)) reviews the opposite direction ("my
-            // current HEAD vs the picked branch"). Both are intentional for
-            // their own entry point; do not "fix" one to match the other
-            // without an explicit design decision — see
-            // docs/superpowers/specs/2026-07-16-review-target-palette-design.md.
-            //
-            // Pinned to SHAs so the stored session survives branch movement.
-            let baseName = config.worktrees.baseBranch
-            do {
-                let headSHA = try await git.resolveRevision(at: worktree.path, ref: ref)
-                let baseSHA: String
-                if let originSHA = try? await git.resolveRevision(at: worktree.path, ref: "origin/\(baseName)") {
-                    baseSHA = originSHA
-                } else {
-                    baseSHA = try await git.resolveRevision(at: worktree.path, ref: baseName)
-                }
-                let title = "Review \(ref) against \(baseName)"
-                let reviewTarget = ReviewSessionTarget.branch(
-                    worktreeID: worktree.id,
-                    repositoryPath: worktree.path,
-                    base: baseSHA,
-                    head: headSHA,
-                    title: title
-                )
-                return openCLIReviewSession(worktree: worktree, target: reviewTarget, label: title)
-            } catch {
-                return .error("could not resolve base '\(baseName)' for branch '\(ref)'")
-            }
-        }
-        guard let sha = try? await git.resolveRevision(at: worktree.path, ref: ref) else {
-            return .error(
-                "could not resolve review target '\(ref)' in worktree '\(worktree.branch)' "
-                    + "(not a PR number/URL, local branch, or revision)"
-            )
-        }
-        let short = String(sha.prefix(7))
-        let reviewTarget = ReviewSessionTarget.commit(
-            worktreeID: worktree.id,
-            repositoryPath: worktree.path,
-            sha: sha,
-            title: "Review commit \(short)"
-        )
-        return openCLIReviewSession(worktree: worktree, target: reviewTarget, label: "commit \(short)")
-    }
-
-    @MainActor
-    private func openCLIReviewSession(
-        worktree: Worktree,
-        target: ReviewSessionTarget,
-        label: String
-    ) -> AlasCLIResponse {
-        let store = core.reviewSessions
-        let opened = ReviewSessionLauncher.openOrFocus(
-            target: target,
-            findActive: { try store.findActive(targetID: $0) },
-            save: { try store.save($0) },
-            open: { [weak self] record in
-                _ = self?.tabs.openOrFocusReviewSession(worktreeId: worktree.id, record: record)
-            }
-        )
-        guard opened else {
-            return .error("could not open review session")
-        }
-        focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
-        NSApp.activate(ignoringOtherApps: true)
-        return .text([
-            "Opened review for '\(label)' in Alas.",
-            ReviewsAPI.jsonLine(["session_id": target.draftSessionID.rawValue]),
-        ])
-    }
-
-    /// Supported code-host remotes for `worktree`, ordered with the preferred
-    /// remote (derived from the base branch) first. Shared by
-    /// `cliOpenProviderReview` and the review-comment original-path resolver.
-    private func cliSupportedRemotes(
-        for worktree: Worktree,
-        registry: CodeHostProviderRegistry
-    ) async throws -> [CodeHostRemote] {
-        let remotes = try await GitService().remotes(worktreePath: worktree.path)
-        let baseBranch = rightPaneStore.state(
-            for: worktree,
-            baseBranch: config.worktrees.baseBranch,
-            comparisonMode: config.changes.comparisonMode
-        ).baseBranch
-        let preferredRemoteName = CodeHostRemoteDetector.preferredRemoteName(
-            forBaseBranch: baseBranch,
-            remotes: remotes
-        )
-        return CodeHostRemoteDetector.detectAll(
-            from: remotes,
-            supportedKinds: registry.supportedKinds,
-            preferredRemoteName: preferredRemoteName
-        )
     }
 
     /// Resolves the pre-rename `originalPath` for `relativePath` in the
@@ -11418,7 +11223,7 @@ final class AppState {
             }
 
             let registry = CodeHostProviderRegistry.live()
-            let supportedRemotes = try await cliSupportedRemotes(for: worktree, registry: registry)
+            let supportedRemotes = try await core.supportedReviewRemotes(for: worktree, registry: registry)
             // Require the exact remote the session was opened against. Falling
             // back to a different remote would load that repository's PR/MR of
             // the same number and could stamp an `originalPath` from an
@@ -11436,15 +11241,6 @@ final class AppState {
         } catch {
             return nil
         }
-    }
-
-    nonisolated private static func describeCLIError(_ error: any Error) -> String {
-        if let localized = error as? LocalizedError,
-           let description = localized.errorDescription,
-           !description.isEmpty {
-            return description
-        }
-        return String(describing: error)
     }
 
     /// Deletes a worktree claimed by `host.worktrees.beginDelete` through the host,

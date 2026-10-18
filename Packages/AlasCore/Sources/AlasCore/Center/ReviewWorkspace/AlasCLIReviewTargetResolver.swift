@@ -1,7 +1,7 @@
 import Foundation
 
-enum AlasCLIReviewTargetResolver {
-    enum Target: Equatable {
+public enum AlasCLIReviewTargetResolver {
+    public enum Target: Equatable, Sendable {
         case number(Int)
         case url(host: String, repositorySlug: String, number: Int)
         case range(base: String, head: String, threeDot: Bool)
@@ -10,7 +10,7 @@ enum AlasCLIReviewTargetResolver {
         case revision(String)
     }
 
-    static func parse(_ raw: String) -> Target? {
+    public static func parse(_ raw: String) -> Target? {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         if let number = Int(trimmed) {

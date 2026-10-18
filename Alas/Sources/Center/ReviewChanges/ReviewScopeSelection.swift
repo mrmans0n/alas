@@ -36,7 +36,7 @@ enum ReviewScopeSelection {
         case .branch(let name):
             // The picked branch is the BASE; the current worktree HEAD is the
             // head — this reviews "my work on top of `name`". The CLI's
-            // `alas review <branch>` (AppState.cliOpenRevisionReview) reviews
+            // `alas review <branch>` (`ReviewsAPI.open`) reviews
             // the opposite direction ("`name`'s changes vs the configured
             // base branch"). Both are intentional for their own entry point;
             // do not "fix" one to match the other without an explicit design

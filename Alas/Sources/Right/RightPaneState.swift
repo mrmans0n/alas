@@ -2283,9 +2283,10 @@ final class RightPaneState: GGSplitCommitServicing {
                 return
             }
             Task { @MainActor in
-                let response = await appState.cliOpenProviderReview(
+                let response = await appState.cliOpenReview(
                     worktree: worktree,
-                    target: url.absoluteString
+                    target: url.absoluteString,
+                    caller: .app
                 )
                 if let message = Self.ggProviderReviewError(response) {
                     ggActionState.setError(message)

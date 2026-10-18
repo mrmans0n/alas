@@ -16,10 +16,10 @@ struct AlasCLICommandRouter {
         .error("Deleting worktrees from the terminal is not available yet.")
     }
     var openReviewChanges: (Worktree) -> Void = { _ in }
-    var openReview: (Worktree, String) async -> AlasCLIResponse = { _, _ in
+    var openReview: (Worktree, String, HostCaller) async -> AlasCLIResponse = { _, _, _ in
         .error("Opening provider reviews from the terminal is not available yet.")
     }
-    var workspaceCommand: (AlasCLIRequest.WorkspaceCommand) async -> AlasCLIResponse = { _ in
+    var workspaceCommand: (AlasCLIRequest.WorkspaceCommand, HostCaller) async -> AlasCLIResponse = { _, _ in
         .error("Workspace automation is not available yet.")
     }
     var previewCommand: (WebPreviewCommand, SessionOwnerID, String?) async -> AlasCLIResponse = { _, _, _ in
@@ -36,8 +36,6 @@ struct AlasCLICommandRouter {
             openRelativeFileAtLines: openRelativeFileAtLines,
             openExternalFileAtLines: openExternalFileAtLines,
             focusWorktree: focusWorktree,
-            createWorktree: createWorktree,
-            deleteWorktreeAction: deleteWorktree,
             openReviewChanges: openReviewChanges,
             openReview: openReview,
             activateApp: activateApp
@@ -69,7 +67,7 @@ struct AlasCLICommandRouter {
             }
             return await previewCommand(command, owner, request.sessionId)
         case .workspace(let command):
-            return await workspaceCommand(command)
+            return await workspaceCommand(command, caller)
         case .visualShow(let title, let html, let question, let presentation):
             guard let sessionId = request.sessionId, callers.acpOrigin(ofSession: sessionId) != nil else {
                 return .error("visual_show is only available to ACP agent sessions")
@@ -188,13 +186,20 @@ struct AlasCLICommandRouter {
                 from: .worktree(origin, sessionID: request.sessionId, owner: originOwner), caller: caller
             )
         case .worktree(.list):
-            return service.list(origin: origin, projectWorktrees: projectWorktrees)
+            return .text(AlasCLIWorktreeResolver.rows(worktrees: projectWorktrees, currentWorktreeId: origin.id))
         case .worktree(.switch(let target)):
             return service.switch(target: target, projectWorktrees: projectWorktrees)
         case .worktree(.new(let branch, let base)):
-            return await service.new(origin: origin, branch: branch, base: base, caller: caller)
+            return await createWorktree(origin, branch, base, caller)
         case .worktree(.delete(let target, let force, let keepBranch)):
-            return await service.delete(target: target, projectWorktrees: projectWorktrees, force: force, keepBranch: keepBranch, caller: caller)
+            switch AlasCLIWorktreeResolver.resolve(target: target, worktrees: projectWorktrees) {
+            case .matched(let worktree):
+                return await deleteWorktree(worktree, force, keepBranch, caller)
+            case .missing(let target):
+                return .error("unknown worktree \"\(target)\"")
+            case .ambiguous(let labels):
+                return .error("ambiguous worktree \"\(target)\"; matches: \(labels.joined(separator: ", "))")
+            }
         case .workspace, .preview:
             preconditionFailure("Workspace commands are handled before generic origin resolution")
         case .review(.localChanges(let worktreeOverride)):
@@ -207,7 +212,7 @@ struct AlasCLICommandRouter {
         case .review(.target(let target, let worktreeOverride)):
             switch service.reviewOrigin(origin: origin, override: worktreeOverride, projectWorktrees: projectWorktrees) {
             case .success(let reviewOrigin):
-                return await service.reviewTarget(origin: reviewOrigin, target: target)
+                return await service.reviewTarget(origin: reviewOrigin, target: target, caller: caller)
             case .failure(let error):
                 return .error(error.message)
             }

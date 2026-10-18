@@ -372,13 +372,15 @@ struct AlasCLICommandRouterTests {
         var localReviewedIn: Worktree?
         var targetReviewedIn: Worktree?
         var reviewedTarget: String?
+        var reviewCaller: HostCaller?
         let router = Self.router(
             origin: current,
             visibleWorktrees: [current, sibling],
             openReviewChanges: { localReviewedIn = $0 },
-            openReview: { worktree, target in
+            openReview: { worktree, target, caller in
                 targetReviewedIn = worktree
                 reviewedTarget = target
+                reviewCaller = caller
                 return .ok
             }
         )
@@ -396,6 +398,8 @@ struct AlasCLICommandRouterTests {
         #expect(localReviewedIn?.branch == "feature-x")
         #expect(targetReviewedIn?.branch == "feature-x")
         #expect(reviewedTarget == "main..HEAD")
+        // Opened as the session that asked, not as an unaffiliated CLI call.
+        #expect(reviewCaller == .session(id: "s1"))
     }
 
     @Test func reviewWithUnknownWorktreeOverrideErrors() async throws {
@@ -1351,23 +1355,28 @@ struct AlasCLICommandRouterTests {
         let checkoutID = UUID()
         let memberID = UUID()
         var commands: [AlasCLIRequest.WorkspaceCommand] = []
+        var callers: [HostCaller] = []
+        let worktree = Self.worktree(branch: "main", path: "/tmp/repo", projectId: "p1")
         let router = AlasCLICommandRouter(
-            host: AlasHost.routerFixture([]),
+            host: AlasHost.routerFixture([worktree], sessionWorktree: { $0 == "s1" ? worktree.id : nil }),
             openRelativeFile: { _, _ in },
             openExternalFile: { _, _ in },
-            workspaceCommand: { command in
+            workspaceCommand: { command, caller in
                 commands.append(command)
+                callers.append(caller)
                 return .text([#"{"version":1}"#])
             },
             activateApp: {}
         )
 
         let list = await router.handle(.init(version: 1, sessionId: nil, cwd: "/outside", command: .workspace(.list)))
-        let focus = await router.handle(.init(version: 1, sessionId: nil, cwd: "/outside", command: .workspace(.focus(checkoutID: checkoutID, memberID: memberID))))
+        let focus = await router.handle(.init(version: 1, sessionId: "s1", cwd: "/outside", command: .workspace(.focus(checkoutID: checkoutID, memberID: memberID))))
 
         #expect(list == .text([#"{"version":1}"#]))
         #expect(focus == .text([#"{"version":1}"#]))
         #expect(commands == [.list, .focus(checkoutID: checkoutID, memberID: memberID)])
+        // Each command acts as its own caller: a session's focus is the session's.
+        #expect(callers == [.cli, .session(id: "s1")])
     }
 
     @Test(arguments: [ACPVisualAid.Presentation.embedded, .card])
@@ -1400,7 +1409,7 @@ struct AlasCLICommandRouterTests {
         origin: Worktree,
         visibleWorktrees: [Worktree],
         openReviewChanges: @escaping (Worktree) -> Void = { _ in },
-        openReview: @escaping (Worktree, String) async -> AlasCLIResponse = { _, _ in .ok }
+        openReview: @escaping (Worktree, String, HostCaller) async -> AlasCLIResponse = { _, _, _ in .ok }
     ) -> AlasCLICommandRouter {
         AlasCLICommandRouter(
             host: AlasHost.routerFixture(visibleWorktrees, sessionWorktree: { $0 == "s1" ? origin.id : nil }),
