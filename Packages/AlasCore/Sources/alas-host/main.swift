@@ -11,7 +11,8 @@ usage: alas-host
 Serves the Alas host protocol for the data directory ALAS_APP_SUPPORT_DIR
 (default: ~/Library/Application Support/Alas) on its local socket, and prints
 the socket path. When the profile enables Remote, also serves it on loopback
-and prints its address. Stops on SIGINT or SIGTERM.
+and prints its address, with the web client of the installed Alas.app or of
+ALAS_REMOTE_WEB_DIR. Stops on SIGINT or SIGTERM.
 """
 
 func fail(_ message: String) -> Never {
@@ -69,9 +70,18 @@ if config.remote.enabled {
     let settings = config.remote
     let pairing = RemotePairingService(store: FileDeviceStore())
     let interfaces = RemoteNetwork.interfaces()
+    // The web client ships inside the app; without it, devices that already
+    // have a client still pair and connect.
+    let webClient = [
+        ProcessInfo.processInfo.environment["ALAS_REMOTE_WEB_DIR"].map { URL(fileURLWithPath: $0) },
+        URL(fileURLWithPath: "/Applications/Alas.app/Contents/Resources/RemoteWeb"),
+    ].compactMap { $0 }.first { FileManager.default.fileExists(atPath: $0.appendingPathComponent("index.html").path) }
+    if webClient == nil {
+        FileHandle.standardError.write(Data("alas-host: no web client found (set ALAS_REMOTE_WEB_DIR); serving pairing and the WebSocket only\n".utf8))
+    }
     let server = RemoteServer(
         pairing: pairing,
-        assets: RemoteWebAssets(root: URL(fileURLWithPath: "/dev/null")),
+        assets: RemoteWebAssets(root: webClient ?? URL(fileURLWithPath: "/dev/null")),
         host: host,
         accessPolicy: settings.accessPolicy(interfaces: interfaces, tailnetDNSName: nil),
         originPolicy: settings.originPolicy(interfaces: interfaces, tailnetDNSName: nil),
