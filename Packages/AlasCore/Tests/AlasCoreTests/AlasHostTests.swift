@@ -294,6 +294,46 @@ struct AlasHostTests {
         #expect(throws: HostStopping()) { try host.worktrees.unarchive(path: path, projectID: "p", caller: .cli) }
     }
 
+    /// Shutdown ends the review refreshes of followed worktrees, and waits
+    /// for one already reading rather than exiting under it.
+    @Test func shutdownWaitsForAReviewRefreshUnderway() async throws {
+        let project = ProjectConfig(id: "p", name: "p", path: "/srv/repo", color: "blue", addedAt: .distantPast)
+        let projects = ProjectsManager(persistedProjects: [project])
+        let path = URL(fileURLWithPath: "/srv/feature")
+        let worktree = Worktree(
+            id: Worktree.makeId(path: path), projectId: "p", name: "feature", branch: "feature",
+            path: path, status: .clean, lastActivity: .distantPast
+        )
+        projects.insertOptimisticWorktree(worktree)
+        let core = AlasCoreContext(projects: projects, runHistoryStore: nil)
+        let reading = AsyncStream<Void>.makeStream()
+        // A Git or code-host call does not end when its task is cancelled.
+        let probe = RefreshProbe()
+        var rounds = 0
+        core.reviewStatusRefresh = { _ in
+            rounds += 1
+            reading.continuation.yield()
+            await withCheckedContinuation { probe.ticks.append($0) }
+        }
+        let host = AlasHost(core: core)
+        let subscription = host.subscribe()
+        subscription.followWorktree(worktree.id)
+        for await _ in reading.stream { break }
+
+        var shutdownFinished = false
+        let shutdown = Task {
+            await host.shutdown()
+            shutdownFinished = true
+        }
+        for _ in 0..<50 { await Task.yield() }
+        #expect(!shutdownFinished)
+        probe.ticks.removeFirst().resume()
+        await shutdown.value
+
+        #expect(rounds == 1)
+        #expect(core.reviewRefreshes.isEmpty)
+    }
+
     /// Changes made after a snapshot reach a subscriber holding its cursor,
     /// each with its latest state; what the snapshot already shows does not.
     @Test func subscribersSeeChangesAfterTheirSnapshot() async throws {

@@ -72,6 +72,17 @@ extension AlasHost {
         for worktreeID in worktreeIDs {
             await core.stopProcessRuns(worktreeID: worktreeID)
         }
+        // Review refreshes of followed worktrees: none starts another round,
+        // and one already reading Git or the code host finishes first.
+        let refreshes = Array(core.reviewRefreshes.values)
+        core.reviewRefreshes.removeAll()
+        core.reviewFollowers.removeAll()
+        for refresh in refreshes {
+            refresh.cancel()
+        }
+        for refresh in refreshes {
+            await refresh.value
+        }
         // Every manager is marked disposed before the first await, so an
         // attachment scheduled just before cannot start in any of them.
         let managers = Array(core.sessionManagers.values)
