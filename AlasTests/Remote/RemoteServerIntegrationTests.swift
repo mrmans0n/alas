@@ -26,9 +26,7 @@ struct RemoteServerIntegrationTests {
         // The fake's reads, which tests hold back to pin ordering.
         server.configureGateway = { $0.hostCalls = provider.hostCalls }
         try server.start(port: 0)
-        for _ in 0..<50 where server.port == nil {
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
+        try await eventually("the server binds a port") { server.port != nil }
         return (server, try #require(server.port))
     }
 
@@ -141,9 +139,7 @@ struct RemoteServerIntegrationTests {
         try server.start(port: 0)
 
         // Wait for port assignment.
-        for _ in 0..<50 where server.port == nil {
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
+        try await eventually("the server binds a port") { server.port != nil }
         let port = try #require(server.port)
 
         // Pair: mint a code in-process (UI would show its QR), redeem via HTTP.
@@ -193,9 +189,7 @@ struct RemoteServerIntegrationTests {
         )
         try server.start(port: 0)
         defer { server.stop() }
-        for _ in 0..<50 where server.port == nil {
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
+        try await eventually("the server binds a port") { server.port != nil }
         let port = try #require(server.port)
 
         let task = URLSession.shared.webSocketTask(with: URL(string: "ws://127.0.0.1:\(port)/ws")!, protocols: [token])
@@ -216,9 +210,7 @@ struct RemoteServerIntegrationTests {
         )
         try server.start(port: 0)
         defer { server.stop() }
-        for _ in 0..<50 where server.port == nil {
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
+        try await eventually("the server binds a port") { server.port != nil }
         let port = try #require(server.port)
         let task = URLSession.shared.webSocketTask(with: URL(string: "ws://127.0.0.1:\(port)/ws")!, protocols: [token])
         task.resume()
@@ -391,10 +383,7 @@ struct RemoteServerIntegrationTests {
         try await task.send(.data(JSONEncoder().encode(RemoteClientMessage.listSessions)))   // parks the chain
         try await task.send(.data(JSONEncoder().encode(RemoteClientMessage.stop(sessionId: s.id))))
         // stop must land while listSessions is still parked on its continuation.
-        for _ in 0..<100 where !received.stopped(s.id) {
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
-        #expect(received.stopped(s.id))
+        try await eventually("the stop is answered") { received.stopped(s.id) }
 
         provider.resumeSessionSummaries()
         task.cancel(with: .goingAway, reason: nil)
@@ -438,10 +427,7 @@ struct RemoteServerIntegrationTests {
         try await task.send(.data(JSONEncoder().encode(RemoteClientMessage.sendPrompt(
             sessionId: s.id, text: "@notes", attachments: [], intent: "auto",
             mentions: [RemoteMention(kind: RemoteMention.file, value: "notes.md", name: "notes.md")]))))
-        for _ in 0..<100 where !drive.isHeld {
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
-        #expect(drive.isHeld)
+        try await eventually("the drive action is held") { drive.isHeld }
         try await task.send(.data(JSONEncoder().encode(RemoteClientMessage.stop(sessionId: s.id))))
 
         // Stop must NOT run while the preceding drive action is still suspended.
@@ -449,10 +435,7 @@ struct RemoteServerIntegrationTests {
         #expect(!received.stopped(s.id), "stop must wait for the preceding drive action to land first")
 
         drive.release()
-        for _ in 0..<100 where !received.stopped(s.id) {
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
-        #expect(received.stopped(s.id))
+        try await eventually("the stop is answered") { received.stopped(s.id) }
 
         task.cancel(with: .goingAway, reason: nil)
         server.stop()
@@ -497,18 +480,15 @@ struct RemoteServerIntegrationTests {
         let received = collect(task)
 
         try await task.send(.data(JSONEncoder().encode(RemoteClientMessage.subscribe(sessionId: s.id))))
+        // Older rows are served only to a subscriber that has its snapshot.
+        try await eventually("the subscribe snapshot arrives") { received.snapshotCount == 1 }
         try await task.send(.data(JSONEncoder().encode(
             RemoteClientMessage.fetchOlder(sessionId: s.id, beforeIndex: 10, limit: 90))))
-        for _ in 0..<100 where provider.fullToolCallContentCallCount == 0 {
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
+        try await eventually("the fetch reads full content") { provider.fullToolCallContentCallCount > 0 }
         try await task.send(.data(JSONEncoder().encode(RemoteClientMessage.stop(sessionId: s.id))))
 
         // stop must land while fetchOlder is still parked on its continuation.
-        for _ in 0..<100 where !received.stopped(s.id) {
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
-        #expect(received.stopped(s.id))
+        try await eventually("the stop is answered") { received.stopped(s.id) }
 
         provider.resumeFullToolCallContent("full content")
         task.cancel(with: .goingAway, reason: nil)
@@ -554,21 +534,18 @@ struct RemoteServerIntegrationTests {
         let received = collect(task)
 
         try await task.send(.data(JSONEncoder().encode(RemoteClientMessage.subscribe(sessionId: s.id))))
+        // Older rows are served only to a subscriber that has its snapshot.
+        try await eventually("the subscribe snapshot arrives") { received.snapshotCount == 1 }
         try await task.send(.data(JSONEncoder().encode(
             RemoteClientMessage.fetchOlder(sessionId: s.id, beforeIndex: 10, limit: 90))))
-        for _ in 0..<100 where provider.fullToolCallContentCallCount == 0 {
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
+        try await eventually("the fetch reads full content") { provider.fullToolCallContentCallCount > 0 }
         // Queue a drive action right behind the stuck fetchOlder, then stop.
         try await task.send(.data(JSONEncoder().encode(RemoteClientMessage.takeOver(sessionId: s.id))))
         try await task.send(.data(JSONEncoder().encode(RemoteClientMessage.stop(sessionId: s.id))))
 
         // Stop must land within the bounded wait even though fetchOlder (and
         // thus the queued takeOver behind it) never completes.
-        for _ in 0..<150 where !received.stopped(s.id) {
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
-        #expect(received.stopped(s.id))
+        try await eventually("the stop is answered") { received.stopped(s.id) }
         // The queued takeOver never got to run — proves stop didn't wait
         // for the full chain to actually resolve.
         // Only the subscribe snapshot: a takeover would have pushed another.
@@ -661,9 +638,7 @@ struct RemoteServerIntegrationTests {
             identity: { RemoteServerIdentity(serverId: "srv-a", name: "Mac A") }
         )
         try server.start(port: 0)
-        for _ in 0..<50 where server.port == nil {
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
+        try await eventually("the server binds a port") { server.port != nil }
         let port = try #require(server.port)
 
         let task = URLSession.shared.webSocketTask(
@@ -737,9 +712,7 @@ struct RemoteServerIntegrationTests {
         )
         try server.start(port: 0)
         defer { server.stop() }
-        for _ in 0..<50 where server.port == nil {
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
+        try await eventually("the server binds a port") { server.port != nil }
         let port = try #require(server.port)
 
         let wsURL = URL(string: "ws://127.0.0.1:\(port)/ws")!
@@ -774,9 +747,7 @@ struct RemoteServerIntegrationTests {
         // The fake's reads, which tests hold back to pin ordering.
         server.configureGateway = { $0.hostCalls = provider.hostCalls }
         try server.start(port: 0)
-        for _ in 0..<50 where server.port == nil {
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
+        try await eventually("the server binds a port") { server.port != nil }
         let port = try #require(server.port)
 
         // Pair + connect.
@@ -842,9 +813,7 @@ struct RemoteServerIntegrationTests {
         try server.start(port: 0)
         defer { server.stop() }
 
-        for _ in 0..<50 where server.port == nil {
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
+        try await eventually("the server binds a port") { server.port != nil }
         let port = try #require(server.port)
 
         let code = pairing.beginPairing()
@@ -871,15 +840,9 @@ struct RemoteServerIntegrationTests {
 
         server.disconnectDevice(deviceId)
 
-        var cleanedUp = false
-        for _ in 0..<50 {
-            if server.connectedDeviceCounts()[deviceId, default: 0] == 0 {
-                cleanedUp = true
-                break
-            }
-            try await Task.sleep(nanoseconds: 20_000_000)
+        try await eventually("connected-device counts clear after disconnect") {
+            server.connectedDeviceCounts()[deviceId, default: 0] == 0
         }
-        #expect(cleanedUp, "expected connected-device counts to clear after disconnect")
         #expect(publishedCounts.contains { $0.isEmpty }, "expected connected-device count callback to publish empty counts after disconnect")
 
         first.cancel(with: .goingAway, reason: nil)
@@ -991,9 +954,7 @@ struct RemoteServerIntegrationTests {
         try server.start(port: 0)
         defer { server.stop() }
 
-        for _ in 0..<50 where server.port == nil {
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
+        try await eventually("the server binds a port") { server.port != nil }
         let port = try #require(server.port)
 
         let (healthData, healthResponse) = try await URLSession.shared.data(
@@ -1139,9 +1100,7 @@ struct RemoteServerIntegrationTests {
         try server.start(port: 0)
         defer { server.stop() }
 
-        for _ in 0..<50 where server.port == nil {
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
+        try await eventually("the server binds a port") { server.port != nil }
         let port = try #require(server.port)
 
         let (data, resp) = try await URLSession.shared.data(
@@ -1166,9 +1125,7 @@ struct RemoteServerIntegrationTests {
         server.onPeerPaired = { sink.requests.append($0) }
         try server.start(port: 0)
         defer { server.stop() }
-        for _ in 0..<50 where server.port == nil {
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
+        try await eventually("the server binds a port") { server.port != nil }
         let port = try #require(server.port)
         let code = pairing.beginPairing()
         var req = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/pair")!)
@@ -1178,9 +1135,7 @@ struct RemoteServerIntegrationTests {
         #expect((response as? HTTPURLResponse)?.statusCode == 200)
         let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
         #expect(object["serverId"] as? String == "srv-a")
-        for _ in 0..<50 where sink.requests.isEmpty {
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
+        try await eventually("the peer pairing is forwarded") { !sink.requests.isEmpty }
         #expect(sink.requests.first?.peerServerId == "srv-b")
         #expect(sink.requests.first?.counterCode == "X")
     }
@@ -1205,9 +1160,7 @@ struct RemoteServerIntegrationTests {
         )
         try server.start(port: 0)
         defer { server.stop() }
-        for _ in 0..<50 where server.port == nil {
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
+        try await eventually("the server binds a port") { server.port != nil }
         let port = try #require(server.port)
         let wsURL = URL(string: "ws://127.0.0.1:\(port)/ws")!
         let task = URLSession.shared.webSocketTask(with: wsURL, protocols: [token])
