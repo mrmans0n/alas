@@ -223,6 +223,36 @@ struct AlasHostTests {
         #expect(await host.runs.output(of: "run-p2", projectID: "p1") == .unknownRun)
     }
 
+    /// A host booted on a data directory runs with that directory's
+    /// settings and projects: its base branch, its registry agent (enabled
+    /// and launchable) and its project list.
+    @Test func bootReadsTheDirectorysSettingsAndProjects() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("alas-boot-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+            ACPLaunchCatalog.publishRegistryAgents([])
+        }
+        var config = AppConfig.defaults
+        config.worktrees.baseBranch = "trunk"
+        let agent = ACPRegistryInstalledAgent(
+            registryID: "boot-fixture", displayName: "Fixture", version: "1",
+            command: "/usr/bin/true", arguments: [], environment: [:], isEnabled: true
+        )
+        config.agents.registry = [agent]
+        let store = PersistenceStore()
+        try store.write(config, to: directory.appendingPathComponent("app.json"))
+        let project = ProjectConfig(id: "p", name: "p", path: "/srv/repo", color: "blue", addedAt: .distantPast)
+        try store.write(ProjectsFile(projects: [project]), to: directory.appendingPathComponent("projects.json"))
+
+        let host = try AlasHost.boot(in: directory)
+
+        #expect(host.projects.list().map(\.id) == ["p"])
+        #expect(host.core.environment.configuration().worktrees.baseBranch == "trunk")
+        #expect(host.core.environment.enabledAgents().contains { $0.id == agent.agentDefinition.id })
+        #expect(ACPLaunchCatalog.spec(for: agent.agentDefinition.id) != nil)
+    }
+
     /// Changes made after a snapshot reach a subscriber holding its cursor,
     /// each with its latest state; what the snapshot already shows does not.
     @Test func subscribersSeeChangesAfterTheirSnapshot() async throws {
