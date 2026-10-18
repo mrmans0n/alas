@@ -25,6 +25,30 @@ struct AlasHostExecutableTests {
         _ = try DataDirectoryLock.acquire(in: directory)
     }
 
+    /// A profile with Remote enabled is served on loopback too, under the
+    /// server id the host saved to the profile.
+    @Test func aHostServesRemoteWhenItsProfileEnablesIt() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("alas-host-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var config = AppConfig.defaults
+        config.remote.enabled = true
+        let configFile = directory.appendingPathComponent("app.json")
+        try PersistenceStore().write(config, to: configFile)
+        let host = try AlasHostProcess(dataDirectory: directory)
+
+        _ = try await host.socketPath()
+        try await eventually { [host] in host.output.contains("remote ") || !host.process.isRunning }
+        let line = try #require(host.output.split(separator: "\n").first { $0.hasPrefix("remote ") }, "\(host.errorOutput)")
+        let address = try #require(URL(string: String(line.dropFirst("remote ".count))))
+        #expect(address.host == "127.0.0.1")
+        let (body, _) = try await URLSession.shared.data(from: address.appendingPathComponent("health"))
+        let health = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        let saved = try #require(try PersistenceStore().readIfExists(AppConfig.self, from: configFile))
+        #expect(!saved.remote.serverId.isEmpty)
+        #expect(health["serverId"] as? String == saved.remote.serverId)
+    }
+
     /// Hostless, over the wire: the built host serves a project, a worktree,
     /// a session with a scripted agent and a run, then stops and frees its
     /// data directory.
