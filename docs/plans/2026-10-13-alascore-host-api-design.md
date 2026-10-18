@@ -174,7 +174,7 @@ Sealing the whole package is out of scope. Many value types are rightly public.
 The host API is transport-free. One wire shape mirrors it, the **host protocol**: snapshot, events and verbs as messages, with its own version. It is carried two ways:
 
 - **Local Unix socket:** authorized by file permissions. This is what `alas-host` clients and local tools use.
-- **Remote server:** a versioned namespace on the paired TLS channel, for clients on other machines.
+- **Remote server:** a versioned namespace on the paired Remote channel (plain HTTP and WebSocket authenticated by pairing tokens, with HTTPS only behind `tailscale serve`), for clients on other machines.
 
 Two shapes sit on top of the host protocol:
 
@@ -284,8 +284,19 @@ Each phase is one or more independent PRs. It is done when its exit criterion ho
      4. **The hostless end-to-end test.** A core test builds a temporary data directory (a template git repository, an `app.json` naming a registry agent whose command is a fixture ACP agent script, and a run script), launches the built `alas-host` binary with `ALAS_APP_SUPPORT_DIR` pointing at it, and over the socket adds the project, creates a worktree, starts a session with the fixture agent and sends a prompt it answers, follows the transcript until the reply, starts the run and waits for its finished event and output, then sends SIGTERM and checks the lock is released. It runs in the existing `swift test --package-path Packages/AlasCore` CI step.
    - *Decided (8):*
      - **The app does not start against a running host.** When the data directory's lock is held, the app says which process holds it (the lock file records its pid) and quits, rather than attaching to the host, which the design rules out, or stopping it.
-     - **Phase 8 serves only the local socket.** Serving the host protocol over the Remote server headlessly needs pairing and TLS without the app's UI, and follows as its own step.
+     - **Phase 8 serves only the local socket.** Serving the host protocol over the Remote server headlessly needs pairing codes and the server's orchestration without the app's UI, and follows as Phase 9.
      - **The fixture agent is a script.** A small Python script speaking ACP over stdio (`initialize`, `session/new`, `session/prompt` answering with one agent message) is committed with the test, so the end-to-end test needs no network or npm adapters. `ACPMockClient` stays for in-process tests.
+
+9. **Remote from `alas-host`.** `alas-host` serves the host protocol over the Remote server when the profile enables Remote, so a phone or web client paired with a code drives a headless host as it drives the app. Mac peers do not connect to a headless host (Decided 9). *Exit:* a core test boots `alas-host` with Remote enabled on loopback, pairs a client with a code the host printed, and drives a session over the Remote channel.
+   - *Plan (9):* the Remote server, gateway, pairing, peer, federation and Bonjour types are already core and import no AppKit. A gateway already opens a `HostProtocolServer` on its first `host` message, and with no presenter it refuses tab actions and console attaches with a message. What is app-only is the orchestration in `AppState.syncRemoteServer()`, a few policy helpers over core `RemoteNetwork` functions, the pairing-code UI and the web client assets. The server is plain HTTP and WebSocket, with security from pairing tokens and the host and origin policies; HTTPS comes only from the `tailscale serve` child the app runs. One PR per step:
+     1. **Remote settings in core.** The access-policy, origin-policy, advertised-address and display-name helpers move from `AppState` onto `AppConfig.Remote`, beside the `RemoteNetwork` functions they wrap, and the app calls them there. The server lifecycle, federation and pairing approvals stay in the app: `alas-host` reads its settings once at boot and needs none of them. Keep-awake is already the core `RemoteKeepAwakeController`, which both drive.
+     2. **`alas-host` serves Remote.** When `config.remote.enabled`, `alas-host` builds a `RemoteServer` from those helpers after the socket, on loopback, with no presenter, signer, federation or Bonjour advertisement, and with the tailnet name from `RemoteTailscale.status()` in its access policy. When `config.remote.tailscaleServe` is on and the tailnet has HTTPS, it runs `RemoteTailscaleServeProcess` for the bound port, as the app does, and prints the tailnet address; it stops the proxy with the server, prints the Remote address beside the socket path, and stops it on SIGINT and SIGTERM before the host shuts down. Before it starts, it assigns and saves a server id when the profile has none (`ensureServerId()`), as the app does, so `hello` and `/pair` name the host. It serves the web client from the installed app's `Alas.app/Contents/Resources/RemoteWeb` (`ALAS_REMOTE_WEB_DIR` overrides it); without one it serves only the WebSocket, `POST /pair` and the host channel, and says so when it starts. It drives `RemoteKeepAwakeController` from `config.remote.keepAwake` while the server is bound, as the app does, so a Mac on external power does not idle-sleep under its clients.
+     3. **Pairing without UI.** `alas-host pair` mints a code with `beginPairing()` on the running host, asking over the local socket with a new `remotePairingCode` host request, and prints it with its expiry. The host answers it only for a `.localUser` caller and refuses it everywhere else, Remote's host channel included, so a paired device cannot mint a credential that outlives its own revocation; the end-to-end test checks the refusal. Mac peer approvals are refused headlessly.
+     4. **The end-to-end test.** The Phase 8 test's fixture with Remote enabled on loopback: it asks the host for a code with `alas-host pair`, redeems it over `POST /pair`, opens the WebSocket, receives the server's `hello` (checking its server id) and answers `helloAck`, and drives the fixture agent's session over the `host` channel.
+   - *Decided (9):*
+     - **A headless host has no peer identity.** Only another Mac challenges a Remote server for its Ed25519 identity proof (`helloAck`'s optional challenge); phones and the web client pair with codes and never ask. `alas-host` serves Remote without a signer, and with `RemoteServer.admitsPeers` off: a Mac can neither pair (a peer's code redeem is refused) nor open a socket, a Mac paired before keys were pinned included, whose record has no key for a missing proof to fail against. Sharing the app's key would need it outside the data-protection Keychain, which an unsigned executable cannot read, and a plaintext copy is what `RemoteKeychainSecretStore` deliberately deletes. Pairing records (`remote-devices.json`) and the server id (`app.json`) are files, so a phone paired with the app reconnects to a headless host on the same profile.
+     - **Headless serves loopback only.** A bare executable has no `NSLocalNetworkUsageDescription`, so macOS 15 and later would prompt or block LAN access and Bonjour. `alas-host` listens on loopback whatever `listensOnLoopbackOnly` says, does not advertise over Bonjour, and is reached from other devices through the `tailscale serve` proxy it runs itself or an SSH tunnel.
+     - **Codes only.** A headless host pairs with codes and refuses Mac peer approvals, which need a prompt, rather than approving them on its own.
 
 Phases 1–3 change no external behavior and can start right away. Phase 5 is the first one users notice: lists update live instead of every 15 seconds.
 
@@ -296,13 +307,13 @@ Phases 1–3 change no external behavior and can start right away. Phase 5 is th
 3. **`AlasHost` is the public entry point.** It is a new type. `AlasCoreContext` becomes the internal engine behind it and loses its public verbs as their callers move.
 4. **Session owners are uniform.** Every session verb takes the existing `SessionOwnerID` (`.worktree` or `.workspaceCheckout`), and authorization, attention and events treat both the same way. Its `.worktree` case carries only the id today; it gains the project, like `WorktreeRef`, so it is unambiguous for same-path checkouts across hosts. Phase 6 removes the Remote paths that refuse checkout-owned sessions today, because special-cased owners are where the lifecycle bugs of #1952 came from.
 
-5. **One host protocol, two transports (option C below).** Headless clients speak a host message set that mirrors `AlasHost`. It is served over a local Unix socket (file permissions) and over the Remote server's paired TLS channel as its own namespace. Remote's web-specific messages become a layer over host messages, and the CLI stays command-shaped over the same API in-process. This was chosen over the cheaper options for its clean shape and single streaming implementation, accepting the larger migration.
+5. **One host protocol, two transports (option C below).** Headless clients speak a host message set that mirrors `AlasHost`. It is served over a local Unix socket (file permissions) and over the Remote server's paired channel as its own namespace. Remote's web-specific messages become a layer over host messages, and the CLI stays command-shaped over the same API in-process. This was chosen over the cheaper options for its clean shape and single streaming implementation, accepting the larger migration.
 
 ### Client protocol options considered
 
 **A. Grow the Remote protocol into the host protocol.**
 - Pros:
-  - It exists and is in use: pairing, TLS, Tailscale and federation.
+  - It exists and is in use: pairing, Tailscale and federation.
   - It already streams transcripts as epoch/revision deltas and carries pending permission, question and plan requests.
   - Everything added for headless clients also reaches the web client and peers.
 - Cons:
@@ -322,7 +333,7 @@ Phases 1–3 change no external behavior and can start right away. Phase 5 is th
 **C. One host message set, two transports, with Remote layered on top.**
 - How it works:
   - The host protocol is B's message set.
-  - It is served over a local Unix socket (file permissions) and over the Remote server's paired TLS channel as its own namespace.
+  - It is served over a local Unix socket (file permissions) and over the Remote server's paired channel as its own namespace.
   - Remote's web-specific messages (tails, mentions, tab actions) become a thin layer over host messages.
   - The CLI stays command-shaped and calls the same API in-process.
 - Pros: A's security and transport plus B's clean shape, and one implementation of streaming.
