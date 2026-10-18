@@ -6,6 +6,7 @@ let package = Package(
     platforms: [.macOS(.v15)],
     products: [
         .library(name: "AlasCore", targets: ["AlasCore"]),
+        .executable(name: "alas-host", targets: ["alas-host"]),
     ],
     dependencies: [
         // Keep in step with the app's pin in project.yml.
@@ -17,6 +18,8 @@ let package = Package(
             dependencies: [.product(name: "SwiftTreeSitter", package: "swift-tree-sitter")],
             linkerSettings: [.linkedLibrary("sqlite3")]
         ),
-        .testTarget(name: "AlasCoreTests", dependencies: ["AlasCore"]),
+        .executableTarget(name: "alas-host", dependencies: ["AlasCore"]),
+        // Depends on alas-host so `swift test` builds the binary its end-to-end tests launch.
+        .testTarget(name: "AlasCoreTests", dependencies: ["AlasCore", "alas-host"]),
     ]
 )

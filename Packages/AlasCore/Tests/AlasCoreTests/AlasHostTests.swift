@@ -265,6 +265,116 @@ struct AlasHostTests {
         }
     }
 
+    /// Once shutdown begins, nothing new starts: a run, a prompt or a
+    /// worktree mutation a request was still on its way to is refused.
+    @Test func aHostShuttingDownStartsNothingNew() async throws {
+        let project = ProjectConfig(id: "p", name: "p", path: "/srv/repo", color: "blue", addedAt: .distantPast)
+        let projects = ProjectsManager(persistedProjects: [project])
+        let path = URL(fileURLWithPath: "/srv/feature")
+        let worktree = Worktree(
+            id: Worktree.makeId(path: path), projectId: "p", name: "feature", branch: "feature",
+            path: path, status: .clean, lastActivity: .distantPast
+        )
+        projects.insertOptimisticWorktree(worktree)
+        let host = AlasHost(core: AlasCoreContext(projects: projects, runHistoryStore: nil))
+        let script = RunScript(
+            scope: .repo, fileName: "dev.sh", fileURL: path.appendingPathComponent(".alas/scripts/dev.sh"),
+            displayName: "Dev", onExit: .close, cwd: nil, isExecutable: true
+        )
+
+        await host.shutdown()
+
+        #expect(host.runs.start(script, in: worktree, caller: .cli)
+            == .refused(title: "Host stopping", message: "The host is stopping and starts no new runs."))
+        await #expect(throws: SessionRefusal.ownerUnavailable(reason: "The host is stopping.")) {
+            _ = try await host.sessions.submit("any", prompt: "hi", caller: .cli)
+        }
+        // Worktree mutations too: nothing Git or a repository hook would run.
+        #expect(throws: HostStopping()) { _ = try host.worktrees.beginDelete(worktree, caller: .cli) }
+        #expect(throws: HostStopping()) { try host.worktrees.unarchive(path: path, projectID: "p", caller: .cli) }
+    }
+
+    /// Shutdown ends the review refreshes of followed worktrees, and waits
+    /// for one already reading rather than exiting under it.
+    @Test func shutdownWaitsForAReviewRefreshUnderway() async throws {
+        let project = ProjectConfig(id: "p", name: "p", path: "/srv/repo", color: "blue", addedAt: .distantPast)
+        let projects = ProjectsManager(persistedProjects: [project])
+        let path = URL(fileURLWithPath: "/srv/feature")
+        let worktree = Worktree(
+            id: Worktree.makeId(path: path), projectId: "p", name: "feature", branch: "feature",
+            path: path, status: .clean, lastActivity: .distantPast
+        )
+        projects.insertOptimisticWorktree(worktree)
+        let core = AlasCoreContext(projects: projects, runHistoryStore: nil)
+        let reading = AsyncStream<Void>.makeStream()
+        // A Git or code-host call does not end when its task is cancelled.
+        let probe = RefreshProbe()
+        var rounds = 0
+        core.reviewStatusRefresh = { _ in
+            rounds += 1
+            reading.continuation.yield()
+            await withCheckedContinuation { probe.ticks.append($0) }
+        }
+        let host = AlasHost(core: core)
+        let subscription = host.subscribe()
+        subscription.followWorktree(worktree.id)
+        for await _ in reading.stream { break }
+
+        var shutdownFinished = false
+        let shutdown = Task {
+            await host.shutdown()
+            shutdownFinished = true
+        }
+        for _ in 0..<50 { await Task.yield() }
+        #expect(!shutdownFinished)
+        probe.ticks.removeFirst().resume()
+        await shutdown.value
+
+        #expect(rounds == 1)
+        #expect(core.reviewRefreshes.isEmpty)
+    }
+
+    /// A run a client stopped whose process has not exited yet (a script
+    /// that delays its exit) is waited for at shutdown, not left behind.
+    @Test func shutdownWaitsForAStoppedRunStillEnding() async throws {
+        let project = ProjectConfig(id: "p", name: "p", path: "/srv/repo", color: "blue", addedAt: .distantPast)
+        let projects = ProjectsManager(persistedProjects: [project])
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("alas-stopping-\(UUID().uuidString)")
+        let scriptURL = path.appendingPathComponent(".alas/scripts/dev.sh")
+        try FileManager.default.createDirectory(at: scriptURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "#!/bin/sh\n".write(to: scriptURL, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: path) }
+        let worktree = Worktree(
+            id: Worktree.makeId(path: path), projectId: "p", name: "feature", branch: "feature",
+            path: path, status: .clean, lastActivity: .distantPast
+        )
+        projects.insertOptimisticWorktree(worktree)
+        let environment = RunHoldingEnvironment()
+        let host = AlasHost(core: AlasCoreContext(projects: projects, runHistoryStore: nil, environment: environment))
+        let script = RunScript(
+            scope: .repo, fileName: "dev.sh", fileURL: scriptURL,
+            displayName: "Dev", onExit: .close, cwd: nil, isExecutable: true
+        )
+        let start = host.runs.start(script, in: worktree, caller: .cli)
+        guard case .started = start else {
+            Issue.record("expected the run to start, got \(start)")
+            return
+        }
+        for await _ in environment.launcher.launched.stream { break }
+        host.runs.stop(scriptKey: script.key, in: worktree, caller: .cli)
+
+        var shutdownFinished = false
+        let shutdown = Task {
+            await host.shutdown()
+            shutdownFinished = true
+        }
+        for _ in 0..<50 { await Task.yield() }
+        #expect(!shutdownFinished)
+        environment.launcher.held.removeFirst().resume()
+        await shutdown.value
+        #expect(shutdownFinished)
+    }
+
     /// Changes made after a snapshot reach a subscriber holding its cursor,
     /// each with its latest state; what the snapshot already shows does not.
     @Test func subscribersSeeChangesAfterTheirSnapshot() async throws {
@@ -466,4 +576,28 @@ private final class RefreshProbe {
     var refreshed: [String] = []
     var ticks: [CheckedContinuation<Void, Never>] = []
     var cancelledAtTick: [Bool] = []
+}
+
+/// Launches runs whose process outlives its cancellation until the test
+/// lets it end, as a script that delays its exit does.
+@MainActor
+private final class HeldRunLauncher: RunLauncher {
+    let launched = AsyncStream<Void>.makeStream()
+    var held: [CheckedContinuation<Void, Never>] = []
+
+    func launch(_ request: RunLaunchRequest, in core: AlasCoreContext) async throws -> RunLaunch {
+        .process(Task { @MainActor in
+            self.launched.continuation.yield()
+            await withCheckedContinuation { self.held.append($0) }
+            return RunScriptCompletion(exitCode: 0, transcript: nil, truncated: false)
+        })
+    }
+
+    func runDidFinish(_ record: RunRecord, completion: RunScriptCompletion, script: RunScript, worktree: Worktree, sessionID: String?) {}
+}
+
+@MainActor
+private final class RunHoldingEnvironment: AlasHostEnvironment {
+    let launcher = HeldRunLauncher()
+    var runLauncher: any RunLauncher { launcher }
 }

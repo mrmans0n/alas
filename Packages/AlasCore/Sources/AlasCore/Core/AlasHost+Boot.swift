@@ -1,5 +1,10 @@
 import Foundation
 
+/// The host is stopping and starts nothing new.
+public struct HostStopping: Error, Equatable, LocalizedError {
+    public var errorDescription: String? { "The host is stopping." }
+}
+
 /// Why `AlasHost.boot(in:)` did not boot.
 public enum HostBootRefusal: Error, Equatable, LocalizedError {
     /// A host serves only its own process's data directory: every store,
@@ -51,5 +56,70 @@ extension AlasHost {
             environment: environment,
             usageHistory: try? UsageHistoryStore()
         ))
+    }
+}
+
+extension AlasHost {
+    /// Ends every run and agent session, for a host about to exit: runs,
+    /// launches still starting included, are stopped as a worktree's removal
+    /// stops them; each session's agent is detached and its process ended,
+    /// and every queued session write is flushed.
+    public func shutdown() async {
+        // First: a request still underway cannot start what this stops.
+        core.isStopping = true
+        let worktreeIDs = Set(core.processRuns.values.map(\.worktreeID))
+            .union(core.pendingRunLaunches.keys.map(\.worktreeID))
+        for worktreeID in worktreeIDs {
+            await core.stopProcessRuns(worktreeID: worktreeID)
+        }
+        // Runs stopped earlier, by a client or just above, whose process has
+        // not exited yet.
+        for stopping in Array(core.stoppingRuns.values) {
+            await stopping.value
+        }
+        // Review refreshes of followed worktrees: none starts another round,
+        // and one already reading Git or the code host finishes first.
+        let refreshes = Array(core.reviewRefreshes.values)
+        core.reviewRefreshes.removeAll()
+        core.reviewFollowers.removeAll()
+        for refresh in refreshes {
+            refresh.cancel()
+        }
+        for refresh in refreshes {
+            await refresh.value
+        }
+        // Every manager is marked disposed before the first await, so an
+        // attachment scheduled just before cannot start in any of them.
+        let managers = Array(core.sessionManagers.values)
+        core.sessionManagers.removeAll()
+        for manager in managers {
+            manager.flushPendingDraftWrites()
+            for runner in manager.runners.values {
+                runner.stop()
+            }
+            manager.prepareForDisposal()
+        }
+        for manager in managers {
+            await AlasCoreContext.finishDisposing(manager)
+            manager.shutdownBackgroundTasks()
+        }
+        // Requests still being served (their Git or SSH checks included) and
+        // worktree mutations already past their checks finish rather than
+        // being cut off at exit. Sessions are ended above, so a prompt waiting
+        // on its turn returns too.
+        // ponytail: bounded at a minute, so a hung hook cannot keep the host alive.
+        let deadline = ContinuousClock.now + .seconds(60)
+        // Failed rows keep their state for a retry; only work underway is waited on.
+        func workUnderway() -> Bool {
+            core.requestsUnderway > 0 || core.projects.operationStatesSnapshot().values.contains { state in
+                switch state {
+                case .creating, .deleting, .archiving: true
+                default: false
+                }
+            }
+        }
+        while workUnderway(), ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
     }
 }

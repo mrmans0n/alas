@@ -183,6 +183,71 @@ struct HostProtocolServerTests {
         #expect(client.messages.contains(.response(id: 3, result: .done)))
     }
 
+    /// A caller may keep only the connection, as the Remote gateway does:
+    /// it still serves after the server value is gone.
+    @Test func aConnectionServesAfterItsServerIsReleased() async throws {
+        let fixture = try Fixture()
+        let client = Client()
+        let connection = HostProtocolServer(host: fixture.host).connect(caller: .localUser(uid: 501), send: client.receive)
+
+        await connection.receive(HostClientMessage(id: 1, request: .listSessions))
+
+        #expect(client.messages == [.response(id: 1, result: .sessions(sessions: []))])
+    }
+
+    /// Once the host stops serving, a connection opened before it answers
+    /// that the host is stopping instead of serving the request.
+    @Test func aClosedServerServesNoRequestOnOpenConnections() async throws {
+        let fixture = try Fixture()
+        let client = Client()
+        let connection = fixture.server.connect(caller: .localUser(uid: 501), send: client.receive)
+
+        fixture.server.close()
+        await connection.receive(HostClientMessage(id: 1, request: .listSessions))
+
+        #expect(client.messages == [.response(id: 1, result: .failure(error: .failed(message: "The host is stopping.")))])
+    }
+
+    /// Shutdown waits for a request still being served (here held in its
+    /// script discovery, where a Git or SSH check would run) rather than
+    /// exiting under it; the request then finds the host stopping.
+    @Test func shutdownWaitsForARequestStillBeingServed() async throws {
+        let fixture = try Fixture()
+        let entered = AsyncStream<Void>.makeStream()
+        let release = AsyncStream<Void>.makeStream()
+        let server = HostProtocolServer(host: fixture.host) { _, _ in
+            entered.continuation.yield()
+            for await _ in release.stream { break }
+            return [RunScript(
+                scope: .repo, fileName: "dev.sh", fileURL: URL(fileURLWithPath: "/srv/feature/dev.sh"),
+                displayName: "Dev", onExit: .close, cwd: nil, isExecutable: true
+            )]
+        }
+        let client = Client()
+        let connection = server.connect(caller: .localUser(uid: 501), send: client.receive)
+        let request = Task { await connection.receive(HostClientMessage(id: 1, request: .startRun(
+            scriptKey: "repo:dev.sh", worktree: WorktreeRef(projectID: "p", path: fixture.worktree.path.path)
+        ))) }
+        for await _ in entered.stream { break }
+
+        var shutdownFinished = false
+        let shutdown = Task {
+            await fixture.host.shutdown()
+            shutdownFinished = true
+        }
+        // Shutdown is held while the request is served.
+        for _ in 0..<50 { await Task.yield() }
+        #expect(!shutdownFinished)
+        #expect(client.messages.isEmpty)
+        release.continuation.yield()
+        await request.value
+        await shutdown.value
+
+        #expect(client.messages == [.response(id: 1, result: .runStart(start: .refused(
+            title: "Host stopping", message: "The host is stopping and starts no new runs."
+        )))])
+    }
+
     /// Archiving stopped everything in a worktree; a run does not start
     /// there again, including one archived while its scripts were found.
     @Test(arguments: [false, true])

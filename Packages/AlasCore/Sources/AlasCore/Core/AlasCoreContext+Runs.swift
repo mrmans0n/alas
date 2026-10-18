@@ -132,6 +132,7 @@ extension AlasCoreContext {
         isHidden: Bool = false,
         onSettled: ((RunScriptSettlement) -> Void)? = nil
     ) -> RunStart {
+        guard !isStopping else { return Self.stoppingRefusal }
         let key = RunSlotKey(worktreeID: worktree.id, scriptKey: script.key)
         guard pendingRunLaunches[key] == nil else { return .alreadyStarting }
         // Global scripts live in local Application Support and are read by
@@ -247,6 +248,8 @@ extension AlasCoreContext {
         return .started(runID: runID)
     }
 
+    static let stoppingRefusal = RunStart.refused(title: "Host stopping", message: "The host is stopping and starts no new runs.")
+
     /// Stops whatever the script's slot holds, then starts it again.
     @discardableResult
     public func restartRun(
@@ -255,6 +258,7 @@ extension AlasCoreContext {
         isHidden: Bool = false,
         onSettled: ((RunScriptSettlement) -> Void)? = nil
     ) -> RunStart {
+        guard !isStopping else { return Self.stoppingRefusal }
         let key = RunSlotKey(worktreeID: worktree.id, scriptKey: script.key)
         let runID = runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.id
         if pendingRunLaunches[key] != nil
@@ -300,8 +304,20 @@ extension AlasCoreContext {
         }
         let capture = record.map { takeRunCapture(runID: $0.id) } ?? .unavailable
         finalizeRun(runRecords.markStopped(worktreeID: worktree.id, scriptKey: scriptKey, at: Date()), capture: capture)
-        process?.task.cancel()
+        if let task = process?.task {
+            task.cancel()
+            keepUntilEnded(task)
+        }
         launcher.endRunHost(scriptKey: scriptKey, worktreeID: worktree.id)
+    }
+
+    /// Keeps a stopped run's task in `stoppingRuns` until it has ended.
+    private func keepUntilEnded<T: Sendable, F: Error>(_ task: Task<T, F>) {
+        let id = UUID()
+        stoppingRuns[id] = Task { @MainActor [weak self] in
+            _ = await task.result
+            self?.stoppingRuns[id] = nil
+        }
     }
 
     /// Cancels launches still starting, in one worktree or everywhere.
@@ -546,7 +562,10 @@ extension AlasCoreContext {
     }
 
     private func settleStoppedLaunch(_ pending: PendingRunLaunch, worktreeID: String, scriptKey: String) {
-        pending.task?.cancel()
+        if let task = pending.task {
+            task.cancel()
+            keepUntilEnded(task)
+        }
         let finalized = runRecords.markStopped(worktreeID: worktreeID, scriptKey: scriptKey, at: Date())
         finalizeRun(finalized, capture: .unavailable)
         // The cancelled launch never reaches its own error path, so anyone
