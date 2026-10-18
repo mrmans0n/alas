@@ -21,8 +21,15 @@ struct AlasApp: App {
         } catch {
             let alert = NSAlert()
             alert.alertStyle = .critical
-            alert.messageText = "Alas is already running for this data directory"
-            alert.informativeText = "\(error.localizedDescription) Quit it, then open Alas again."
+            switch error {
+            case .held:
+                alert.messageText = "Alas is already running for this data directory"
+                alert.informativeText = "\(error.localizedDescription) Quit it, then open Alas again."
+            case .unavailable:
+                // No other process to quit: the directory itself is the problem.
+                alert.messageText = "Alas cannot use its data directory"
+                alert.informativeText = "\(error.localizedDescription) Check that \(Paths.appSupportRoot.path) is writable."
+            }
             alert.addButton(withTitle: "Quit")
             alert.runModal()
             exit(0)
