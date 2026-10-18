@@ -10,6 +10,25 @@ struct AlasApp: App {
 
     private static var isRunningUnitTests: Bool { AppState.isRunningUnitTests }
 
+    /// Held for the app's life; the kernel releases it when the app exits.
+    @MainActor private static var dataDirectoryLock: DataDirectoryLock?
+
+    /// Takes the data directory's lock, or says who holds it and quits:
+    /// the app never attaches to a running host nor stops it.
+    @MainActor private static func takeDataDirectoryLock() {
+        do {
+            dataDirectoryLock = try DataDirectoryLock.acquire()
+        } catch {
+            let alert = NSAlert()
+            alert.alertStyle = .critical
+            alert.messageText = "Alas is already running for this data directory"
+            alert.informativeText = "\(error.localizedDescription) Quit it, then open Alas again."
+            alert.addButton(withTitle: "Quit")
+            alert.runModal()
+            exit(0)
+        }
+    }
+
     init() {
         PlatformServices.install()
         // Applies the AppKit menu-crash workaround on the affected OS, and
@@ -18,6 +37,9 @@ struct AlasApp: App {
         if Self.isRunningUnitTests {
             _state = State(initialValue: AppState())
         } else {
+            // Before any state is read: one process writes a data directory
+            // at a time, and a running `alas-host` keeps it.
+            Self.takeDataDirectoryLock()
             try? WorkspaceEditJournal().cleanSuccessfulRecords(retaining: [])
             let recovery = StartupRecovery()
             _state = State(initialValue: AppState(
