@@ -44,8 +44,9 @@ extension AlasHost {
         let store = PersistenceStore()
         let projects = try store.readIfExists(ProjectsFile.self, from: Paths.projectsFile) ?? ProjectsFile(projects: [])
         // Every other store keeps its `Paths` default, which is this directory.
+        let ordering = environment.config.worktrees.defaultOrdering
         return AlasHost(core: AlasCoreContext(
-            projects: ProjectsManager(persistedProjects: projects.projects),
+            projects: ProjectsManager(persistedProjects: projects.projects, defaultOrdering: { ordering }),
             store: store,
             environment: environment,
             usageHistory: try? UsageHistoryStore()

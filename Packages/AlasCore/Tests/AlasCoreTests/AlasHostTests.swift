@@ -224,7 +224,8 @@ struct AlasHostTests {
     }
 
     /// A headless host runs with its data directory's settings: its base
-    /// branch and its registry agent, enabled and launchable.
+    /// branch and its registry agent, enabled, launchable and admitted, and
+    /// not one the profile turned off.
     @Test func aHeadlessEnvironmentReadsItsDirectorysSettings() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("alas-boot-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -238,7 +239,11 @@ struct AlasHostTests {
             registryID: "boot-fixture", displayName: "Fixture", version: "1",
             command: "/usr/bin/true", arguments: [], environment: [:], isEnabled: true
         )
-        config.agents.registry = [agent]
+        let disabled = ACPRegistryInstalledAgent(
+            registryID: "boot-disabled", displayName: "Off", version: "1",
+            command: "/usr/bin/true", arguments: [], environment: [:], isEnabled: false
+        )
+        config.agents.registry = [agent, disabled]
         try PersistenceStore().write(config, to: directory.appendingPathComponent("app.json"))
 
         let environment = HeadlessHostEnvironment(loadingFrom: directory)
@@ -246,6 +251,9 @@ struct AlasHostTests {
         #expect(environment.configuration().worktrees.baseBranch == "trunk")
         #expect(environment.enabledAgents().contains { $0.id == agent.agentDefinition.id })
         #expect(ACPLaunchCatalog.spec(for: agent.agentDefinition.id) != nil)
+        // A launch spec alone does not admit an agent the profile turned off.
+        #expect(environment.admitsAgent(agent.agentDefinition.id, remoteHost: nil))
+        #expect(!environment.admitsAgent(disabled.agentDefinition.id, remoteHost: nil))
     }
 
     /// A host serves only its own process's data directory, so no store
