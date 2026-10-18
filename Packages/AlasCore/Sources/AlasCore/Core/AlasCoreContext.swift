@@ -130,6 +130,9 @@ public final class AlasCoreContext {
     }
     /// Runs in a plain process the launcher started, by run ID.
     @ObservationIgnored var processRuns: [String: (worktreeID: String, projectID: String, scriptKey: String, task: Task<RunScriptCompletion, Error>)] = [:]
+    /// Runs and launches stopped but not yet ended: cancelling them returns
+    /// before their process exits, so shutdown waits on these.
+    @ObservationIgnored var stoppingRuns: [UUID: Task<Void, Never>] = [:]
     /// Why a run in a plain process ended without reporting, for `runScript`.
     @ObservationIgnored var processRunErrors: [String: any Error] = [:]
     /// How long a run outlives its host session before it is given up on.

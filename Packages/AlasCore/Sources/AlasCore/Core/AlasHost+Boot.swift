@@ -72,6 +72,11 @@ extension AlasHost {
         for worktreeID in worktreeIDs {
             await core.stopProcessRuns(worktreeID: worktreeID)
         }
+        // Runs stopped earlier, by a client or just above, whose process has
+        // not exited yet.
+        for stopping in Array(core.stoppingRuns.values) {
+            await stopping.value
+        }
         // Review refreshes of followed worktrees: none starts another round,
         // and one already reading Git or the code host finishes first.
         let refreshes = Array(core.reviewRefreshes.values)
