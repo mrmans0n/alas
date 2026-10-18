@@ -32,7 +32,9 @@ public final class HostProtocolServer {
     ) -> HostProtocolConnection {
         HostProtocolConnection(
             host: host, caller: caller, discoverScripts: discoverScripts,
-            isServerClosed: { [weak self] in self?.isClosed ?? true }, send: send
+            // Held by the connection: a caller may keep only the connection
+            // (the Remote gateway does), and the server keeps no connection.
+            isServerClosed: { [self] in isClosed }, send: send
         )
     }
 

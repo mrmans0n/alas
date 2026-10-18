@@ -183,6 +183,18 @@ struct HostProtocolServerTests {
         #expect(client.messages.contains(.response(id: 3, result: .done)))
     }
 
+    /// A caller may keep only the connection, as the Remote gateway does:
+    /// it still serves after the server value is gone.
+    @Test func aConnectionServesAfterItsServerIsReleased() async throws {
+        let fixture = try Fixture()
+        let client = Client()
+        let connection = HostProtocolServer(host: fixture.host).connect(caller: .localUser(uid: 501), send: client.receive)
+
+        await connection.receive(HostClientMessage(id: 1, request: .listSessions))
+
+        #expect(client.messages == [.response(id: 1, result: .sessions(sessions: []))])
+    }
+
     /// Once the host stops serving, a connection opened before it answers
     /// that the host is stopping instead of serving the request.
     @Test func aClosedServerServesNoRequestOnOpenConnections() async throws {
