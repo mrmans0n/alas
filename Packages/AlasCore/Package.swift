@@ -20,6 +20,6 @@ let package = Package(
         ),
         .executableTarget(name: "alas-host", dependencies: ["AlasCore"]),
         // Depends on alas-host so `swift test` builds the binary its end-to-end tests launch.
-        .testTarget(name: "AlasCoreTests", dependencies: ["AlasCore", "alas-host"]),
+        .testTarget(name: "AlasCoreTests", dependencies: ["AlasCore", "alas-host"], exclude: ["Fixtures"]),
     ]
 )

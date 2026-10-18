@@ -82,6 +82,9 @@ public enum HostRequest: Codable, Equatable, Sendable {
     /// Subscribes as `subscribe` does, also sending the event kinds in
     /// `events` that a version 1 client cannot decode (`host.events.v1`).
     case subscribeAccepting(after: HostCursor, events: [String])
+    /// What run `runID` of project `projectID` printed, once it finished
+    /// (`host.runs.output.v1`).
+    case runOutput(runID: String, projectID: String)
 }
 
 public enum HostServerMessage: Codable, Equatable, Sendable {
@@ -105,6 +108,7 @@ public enum HostResponse: Codable, Equatable, Sendable {
     case runStart(start: RunStart)
     case session(session: HostSessionSummary)
     case capabilities(capabilities: [String])
+    case runOutput(output: PluginRunOutput)
     case failure(error: HostError)
 }
 

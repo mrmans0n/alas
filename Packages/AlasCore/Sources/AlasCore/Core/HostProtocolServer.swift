@@ -253,6 +253,8 @@ public final class HostProtocolConnection {
             try subscribed().unfollowWorktree(id)
         case .capabilities:
             return .capabilities(capabilities: HostProtocolCapability.served)
+        case .runOutput(let runID, let projectID):
+            return .runOutput(output: await host.runs.output(of: runID, projectID: projectID))
         }
         return .done
     }
