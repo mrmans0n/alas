@@ -96,7 +96,6 @@ if config.remote.enabled {
     }
     let settings = config.remote
     let pairing = RemotePairingService(store: FileDeviceStore())
-    protocolServer.remotePairing = pairing
     let interfaces = RemoteNetwork.interfaces()
     // The web client ships inside the app; without it, devices that already
     // have a client still pair and connect.
@@ -133,6 +132,8 @@ if config.remote.enabled {
     server.onPortChange = { port in
         // Held only while the server is bound and the Mac is on external power.
         keepAwake.update(enabled: settings.keepAwake, serverRunning: port != nil)
+        // Codes only while `/pair` is there to redeem them.
+        protocolServer.remotePairing = port == nil ? nil : pairing
         guard let port, port != servedPort else { return }
         servedPort = port
         print("remote http://127.0.0.1:\(port)")
