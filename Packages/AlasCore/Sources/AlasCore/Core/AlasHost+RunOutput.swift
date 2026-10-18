@@ -1,9 +1,30 @@
 import Foundation
 
+/// What a finished run printed, as the host serves it.
+public enum HostRunOutput: Codable, Equatable, Sendable {
+    case unknownRun
+    case notFinished
+    /// The run finished but its output was not kept.
+    case unavailable
+    /// What it printed; `truncated` when only the tail past the history's
+    /// size limit was kept.
+    case text(String, truncated: Bool)
+
+    /// As plugins read it, without the truncation flag their API lacks.
+    public var plugin: PluginRunOutput {
+        switch self {
+        case .unknownRun: .unknownRun
+        case .notFinished: .notFinished
+        case .unavailable: .unavailable
+        case .text(let text, _): .text(text)
+        }
+    }
+}
+
 extension RunsAPI {
     /// What run `runID` printed, once it finished, if it ran in a worktree of
     /// `projectID`.
-    public func output(of runID: String, projectID: String) async -> PluginRunOutput {
+    public func output(of runID: String, projectID: String) async -> HostRunOutput {
         let worktreeIDs = Set(core.projects.worktrees(projectId: projectID).map(\.id))
         for worktreeID in worktreeIDs where core.runRecords.records(worktreeID: worktreeID).first(where: { $0.id == runID })?.status.isActive == true {
             return .notFinished
@@ -19,7 +40,7 @@ extension RunsAPI {
         }
         guard let entry, worktreeIDs.contains(entry.worktreeID) else { return .unknownRun }
         return switch entry.output {
-        case .available(let text, _): .text(text)
+        case .available(let text, let truncated): .text(text, truncated: truncated)
         case .unavailable: .unavailable
         }
     }

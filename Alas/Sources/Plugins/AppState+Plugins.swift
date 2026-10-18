@@ -153,7 +153,7 @@ extension AppState {
             },
             runOutput: { [weak self] runID in
                 guard let self else { return .unknownRun }
-                return await self.host.runs.output(of: runID, projectID: project.id)
+                return await self.host.runs.output(of: runID, projectID: project.id).plugin
             },
             addReviewComment: { [weak self] comment, author in
                 guard let self else { return "Alas is shutting down" }

@@ -1419,8 +1419,10 @@ public enum HostProtocolCapability: Sendable {
     /// Hosts that serve `subscribeAccepting`, and send the event kinds a
     /// client accepts beyond those every version 1 client decodes.
     public static let eventsV1 = "host.events.v1"
+    /// Hosts that serve `runOutput`.
+    public static let runsOutputV1 = "host.runs.output.v1"
     /// Everything this host serves of the host protocol.
-    public static let served = [v1, sessionsV1, worktreesFollowV1, eventsV1]
+    public static let served = [v1, sessionsV1, worktreesFollowV1, eventsV1, runsOutputV1]
 }
 
 /// Opening and closing host tabs from a peer. Older hosts drop unknown client
