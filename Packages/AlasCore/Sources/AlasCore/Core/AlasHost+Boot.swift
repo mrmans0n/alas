@@ -60,6 +60,8 @@ extension AlasHost {
     /// stops them; each session's agent is detached and its process ended,
     /// and every queued session write is flushed.
     public func shutdown() async {
+        // First: a request still underway cannot start what this stops.
+        core.isStopping = true
         let worktreeIDs = Set(core.processRuns.values.map(\.worktreeID))
             .union(core.pendingRunLaunches.keys.map(\.worktreeID))
         for worktreeID in worktreeIDs {

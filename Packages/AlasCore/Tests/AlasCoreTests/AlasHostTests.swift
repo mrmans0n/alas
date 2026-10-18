@@ -265,6 +265,32 @@ struct AlasHostTests {
         }
     }
 
+    /// Once shutdown begins, nothing new starts: a run or a prompt a request
+    /// was still on its way to is refused.
+    @Test func aHostShuttingDownStartsNothingNew() async throws {
+        let project = ProjectConfig(id: "p", name: "p", path: "/srv/repo", color: "blue", addedAt: .distantPast)
+        let projects = ProjectsManager(persistedProjects: [project])
+        let path = URL(fileURLWithPath: "/srv/feature")
+        let worktree = Worktree(
+            id: Worktree.makeId(path: path), projectId: "p", name: "feature", branch: "feature",
+            path: path, status: .clean, lastActivity: .distantPast
+        )
+        projects.insertOptimisticWorktree(worktree)
+        let host = AlasHost(core: AlasCoreContext(projects: projects, runHistoryStore: nil))
+        let script = RunScript(
+            scope: .repo, fileName: "dev.sh", fileURL: path.appendingPathComponent(".alas/scripts/dev.sh"),
+            displayName: "Dev", onExit: .close, cwd: nil, isExecutable: true
+        )
+
+        await host.shutdown()
+
+        #expect(host.runs.start(script, in: worktree, caller: .cli)
+            == .refused(title: "Host stopping", message: "The host is stopping and starts no new runs."))
+        await #expect(throws: SessionRefusal.ownerUnavailable(reason: "The host is stopping.")) {
+            _ = try await host.sessions.submit("any", prompt: "hi", caller: .cli)
+        }
+    }
+
     /// Changes made after a snapshot reach a subscriber holding its cursor,
     /// each with its latest state; what the snapshot already shows does not.
     @Test func subscribersSeeChangesAfterTheirSnapshot() async throws {

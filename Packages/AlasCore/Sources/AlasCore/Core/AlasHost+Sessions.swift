@@ -133,6 +133,8 @@ extension SessionsAPI {
         }
     }
 
+    static let stoppingReason = "The host is stopping."
+
     /// The checks a new session passes last, once nothing suspends after them.
     private func admit(_ agentID: String, in manager: ACPSessionManager, worktree: Worktree?, agentHost: String?) async throws {
         // A checkpoint restore being recovered keeps agents out of the owner.
@@ -153,6 +155,7 @@ extension SessionsAPI {
                   !core.projects.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path)
             else { throw SessionRefusal.ownerUnavailable(reason: "Another operation holds the worktree.") }
         }
+        guard !core.isStopping else { throw SessionRefusal.ownerUnavailable(reason: Self.stoppingReason) }
         guard core.sessionManagers[manager.owner] === manager,
               core.environment.admitsSessionCreation(owner: manager.owner, in: core)
         else { throw SessionRefusal.ownerUnavailable(reason: "The session's owner was closed or claimed meanwhile.") }
@@ -188,6 +191,7 @@ extension SessionsAPI {
         caller: HostCaller
     ) async throws -> Task<Bool, Never> {
         caller.log(steer ? "sessions.steer" : "sessions.send", sessionID)
+        guard !core.isStopping else { throw SessionRefusal.ownerUnavailable(reason: Self.stoppingReason) }
         let manager = try writerManager(for: sessionID, owner: owner)
         let (outcome, report) = AsyncStream<Bool>.makeStream()
         let submission = PromptSubmission()

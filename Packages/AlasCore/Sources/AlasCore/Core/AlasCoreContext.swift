@@ -115,6 +115,9 @@ public final class AlasCoreContext {
 
     /// Launches claimed and still starting, by run slot.
     @ObservationIgnored var pendingRunLaunches: [RunSlotKey: PendingRunLaunch] = [:]
+    /// Set once `AlasHost.shutdown()` begins: nothing new starts after it,
+    /// requests already underway included.
+    @ObservationIgnored var isStopping = false
     /// Runs in a plain process the launcher started, by run ID.
     @ObservationIgnored var processRuns: [String: (worktreeID: String, projectID: String, scriptKey: String, task: Task<RunScriptCompletion, Error>)] = [:]
     /// Why a run in a plain process ended without reporting, for `runScript`.

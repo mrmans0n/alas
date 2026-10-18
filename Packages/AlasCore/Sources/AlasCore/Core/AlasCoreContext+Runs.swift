@@ -132,6 +132,7 @@ extension AlasCoreContext {
         isHidden: Bool = false,
         onSettled: ((RunScriptSettlement) -> Void)? = nil
     ) -> RunStart {
+        guard !isStopping else { return Self.stoppingRefusal }
         let key = RunSlotKey(worktreeID: worktree.id, scriptKey: script.key)
         guard pendingRunLaunches[key] == nil else { return .alreadyStarting }
         // Global scripts live in local Application Support and are read by
@@ -247,6 +248,8 @@ extension AlasCoreContext {
         return .started(runID: runID)
     }
 
+    static let stoppingRefusal = RunStart.refused(title: "Host stopping", message: "The host is stopping and starts no new runs.")
+
     /// Stops whatever the script's slot holds, then starts it again.
     @discardableResult
     public func restartRun(
@@ -255,6 +258,7 @@ extension AlasCoreContext {
         isHidden: Bool = false,
         onSettled: ((RunScriptSettlement) -> Void)? = nil
     ) -> RunStart {
+        guard !isStopping else { return Self.stoppingRefusal }
         let key = RunSlotKey(worktreeID: worktree.id, scriptKey: script.key)
         let runID = runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.id
         if pendingRunLaunches[key] != nil
