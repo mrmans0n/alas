@@ -80,6 +80,7 @@ var isStopping = false
 // proof, and a headless host pairs with codes.
 var remote: RemoteServer?
 var tailscaleServe: RemoteTailscaleServeProcess?
+let keepAwake = RemoteKeepAwakeController()
 var config = (try? PersistenceStore().readIfExists(AppConfig.self, from: Paths.appConfigFile)) ?? .defaults
 if config.remote.enabled {
     if config.remote.ensureServerId() {
@@ -125,6 +126,8 @@ if config.remote.enabled {
     // an OS-assigned one, and the address and the proxy follow it.
     var servedPort: UInt16?
     server.onPortChange = { port in
+        // Held only while the server is bound and the Mac is on external power.
+        keepAwake.update(enabled: settings.keepAwake, serverRunning: port != nil)
         guard let port, port != servedPort else { return }
         servedPort = port
         print("remote http://127.0.0.1:\(port)")
@@ -174,6 +177,7 @@ for signalNumber in [SIGINT, SIGTERM] {
             socket.stop()
             tailscaleServe?.stop()
             remote?.stop()
+            keepAwake.update(enabled: false, serverRunning: false)
             Task { @MainActor in
                 await host.shutdown()
                 withExtendedLifetime(lock) {}
@@ -188,4 +192,9 @@ for signalNumber in [SIGINT, SIGTERM] {
 print(socket.path)
 fflush(stdout)
 
-dispatchMain()
+// The main run loop, not `dispatchMain()`: keep-awake follows power-source
+// changes through a run loop source. It serves the main queue too; the port
+// keeps it running with no other source attached.
+RunLoop.main.add(Port(), forMode: .default)
+RunLoop.main.run()
+fail("the main run loop stopped")
