@@ -248,7 +248,7 @@ final class AppState {
     }
     let worktreeUpstreamStatusStore = WorktreeUpstreamStatusStore()
     /// Repo-local `.alas/` config, read per worktree with its own change cache.
-    let repoConfigStore = RepoConfigStore()
+    var repoConfigStore: RepoConfigStore { core.repoConfigStore }
     let repoHookApprovalQueue = RepoHookApprovalQueue()
     var repoHookLoader: RepoHookLoader {
         get { hostEnvironment.repoHookLoader }
@@ -330,12 +330,10 @@ final class AppState {
     /// filesystem, which `FileManager` cannot see, so the question has to go
     /// to the host that will actually run `git worktree add`. Injectable so
     /// tests can stand in for that host.
-    @ObservationIgnored var scheduledDestinationExistence: @Sendable (URL, String?) async -> ScheduledWorktreeDestination.PathState = {
-        await ScheduledWorktreeDestination.existence(of: $0, onHost: $1)
+    var scheduledDestinationExistence: @Sendable (URL, String?) async -> ScheduledWorktreeDestination.PathState {
+        get { core.worktreeDestinationExistence }
+        set { core.worktreeDestinationExistence = newValue }
     }
-    /// One per project: `createWorktreeAtFreeDestination` holds it from picking a free name until
-    /// the worktree exists, so the next pick sees it.
-    @ObservationIgnored var worktreeCreationGates: [String: SerialGate] = [:]
     /// Waits until the agent launched in a terminal session is the one
     /// reading its input, so a scheduled prompt lands in the agent and not in
     /// the shell that is still starting it. Returns false on timeout. Nil
@@ -1430,7 +1428,7 @@ final class AppState {
     static let forceDeleteAlertMessage = "Git refused to remove this worktree — it may have uncommitted changes or be locked. Force delete will remove it and discard any uncommitted work."
 
     private static let checkpointRecoveryBlocksWorktreeRemovalMessage = WorktreeRemovalResult.checkpointRecoveryMessage
-    static let checkpointRecoveryBlocksACPMessage = "An interrupted checkpoint restore needs recovery before an agent session can start."
+    static let checkpointRecoveryBlocksACPMessage = SessionsAPI.checkpointRecoveryBlocksStartMessage
 
     /// Set when a worktree deletion stops because the tree is dirty and Git
     /// needs `--force`. The UI presents a confirmation dialog; confirming
@@ -5063,28 +5061,7 @@ final class AppState {
     /// agent), then the global default. SSH projects never resolve to a
     /// registry install that only exists on this Mac.
     func defaultAgentID(projectId: String, worktreeRoot: URL) -> String? {
-        let project = projects.first { $0.id == projectId }
-        let scripts = project?.startupScripts ?? .defaults
-        var repoDefault: String?
-        if project?.host == nil,
-           let repo = repoConfig(worktreeRoot: worktreeRoot),
-           let candidate = repo.defaultAgent {
-            if agentRegistry.agents.first(where: { $0.id == candidate })?.isEnabled == true {
-                repoDefault = candidate
-            } else {
-                Self.logger.debug(
-                    "Repo default agent \(candidate, privacy: .public) is unknown or disabled - falling through to the global default."
-                )
-            }
-        }
-        let resolved = scripts.defaultAgentID(
-            repoDefaultAgent: repoDefault,
-            globalAgentID: config.agents.worktreeAutoLaunch.agentId
-        )
-        if project?.host != nil, agent(id: resolved)?.canRunOnRemoteHost == false {
-            return nil
-        }
-        return resolved
+        host.sessions.defaultAgent(projectID: projectId, worktreeRoot: worktreeRoot)
     }
 
     private func agentBypassPermissionsEnabled(for project: ProjectConfig) -> Bool {
@@ -13300,68 +13277,9 @@ final class AppState {
         prompt: String?,
         promptCard: ACPPromptCard? = nil
     ) async throws -> ACPSession.ID {
-        guard await !checkpointACPAdmissionDisabledAfterDiscovery(worktreeId: worktree.id) else {
-            throw ACPWorktreeSessionBootstrapError(message: Self.checkpointRecoveryBlocksACPMessage)
-        }
-        // Every await below can cross a delete claim, so admission is
-        // rechecked right before a session is created or attached.
-        let operationInProgress = "Wait for the current worktree operation to finish before starting sessions."
-        guard projectsManager.admitsNewWork(in: worktree) else {
-            throw ACPWorktreeSessionBootstrapError(message: operationInProgress)
-        }
-        guard let manager = acpManager(for: worktree) else {
-            throw ACPWorktreeSessionBootstrapError(message: "Could not create ACP session manager.")
-        }
-        let bootstrapper = ACPWorktreeSessionBootstrapper(environment: .init(
-            sessionExists: { _, id in
-                await manager.persistedSessionRow(id: id) != nil
-            },
-            prepareSession: { _, id, agentId in
-                if manager.liveSession(for: id) != nil {
-                    await manager.hydrateIfNeeded(id: id)
-                    return
-                }
-                if await manager.persistedSessionRow(id: id) != nil,
-                   manager.placeholderSession(id: id) != nil {
-                    await manager.hydrateIfNeeded(id: id)
-                    return
-                }
-                guard self.projectsManager.admitsNewWork(in: worktree) else {
-                    throw ACPWorktreeSessionBootstrapError(message: operationInProgress)
-                }
-                _ = manager.createSession(
-                    id: id,
-                    agentId: agentId,
-                    autoRunDefault: self.config.harness.acpAutoRunByDefault
-                )
-            },
-            enqueuePrompt: { _, id, promptID, text in
-                // Queuing into an attached session would start its turn.
-                guard self.projectsManager.admitsNewWork(in: worktree) else { return false }
-                return await manager.enqueuePrompt(id: promptID, text: text, card: promptCard, into: id)
-            },
-            attach: { _, id, freshlyCreated in
-                guard await !self.checkpointACPAdmissionDisabledAfterDiscovery(worktreeId: worktree.id) else {
-                    manager.liveSession(for: id)?.lastError = Self.checkpointRecoveryBlocksACPMessage
-                    return
-                }
-                guard self.projectsManager.admitsNewWork(in: worktree) else {
-                    manager.liveSession(for: id)?.lastError = operationInProgress
-                    return
-                }
-                await manager.attach(to: id, freshlyCreated: freshlyCreated)
-            },
-            readyState: { _, id in
-                Self.acpBootstrapReadyState(for: manager.liveSession(for: id))
-            }
-        ))
-        return try await bootstrapper.start(.init(
-            worktreeId: worktree.id,
-            sessionID: sessionID,
-            agentId: agentID,
-            promptID: promptID,
-            prompt: prompt
-        ))
+        try await host.sessions.start(
+            sessionID, agentID: agentID, in: worktree, promptID: promptID, prompt: prompt, promptCard: promptCard, caller: .app
+        )
     }
 
     private func openPreparedWorktreeACPSession(
@@ -13369,85 +13287,16 @@ final class AppState {
         agentID: String,
         preparedPrompt: PreparedWorktreeACPPrompt
     ) async {
-        guard await !checkpointACPAdmissionDisabledAfterDiscovery(worktreeId: worktree.id) else { return }
-        guard !Self.blocksWorktreeSessionAdmission(
-            projectsManager.operationState(for: worktree)
-        ) else { return }
-        guard let manager = acpManager(for: worktree) else { return }
-        // The schedule that asked for this session can be removed while the
-        // admission checks above were suspended. Unlike the terminal path
-        // (whose PTY only receives a scheduled prompt after its own
-        // `Task.isCancelled` guards in `deliverScheduledPrompt`), the ACP
-        // route would otherwise create the session, persist a composer
-        // draft, enqueue the prompt, and attach the agent regardless,
-        // continuing to act on a worktree the user just deleted. Checked
-        // before any of that state is touched, not just before attach.
-        guard !Task.isCancelled else { return }
-        let session = manager.createSession(
-            id: preparedPrompt.sessionID,
-            agentId: agentID,
-            autoRunDefault: config.harness.acpAutoRunByDefault
-        )
-        // Picked up by `attach` before the queued prompt goes out, so the
-        // first message already runs on the requested model.
-        if let modelID = preparedPrompt.modelID {
-            manager.pendingModel[session.id] = modelID
+        await host.sessions.startPrepared(preparedPrompt, agentID: agentID, in: worktree, caller: .app) { session in
+            let tab = tabs.append(acpSession: ACPSessionTabState(sessionId: session.id, title: session.title), to: worktree.id)
+            if worktree.id == selectedWorktreeId {
+                activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tab.id)
+            } else {
+                // A background launch (scheduled run, plugin task) only picks the tab its worktree shows
+                // when opened; the center-tab path would also clear what the user is looking at now.
+                tabs.activate(worktreeId: worktree.id, tabId: tab.id)
+            }
         }
-        let queuedPrompt: String?
-        if preparedPrompt.text.isEmpty {
-            queuedPrompt = nil
-        } else if preparedPrompt.sendsAutomatically {
-            queuedPrompt = preparedPrompt.text
-        } else {
-            queuedPrompt = nil
-            manager.persistComposerDraft(ACPComposerDraft(segments: [.text(preparedPrompt.text)]), for: session)
-        }
-        let tab = tabs.append(
-            acpSession: ACPSessionTabState(
-                sessionId: preparedPrompt.sessionID,
-                title: session.title
-            ),
-            to: worktree.id
-        )
-        if worktree.id == selectedWorktreeId {
-            activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tab.id)
-        } else {
-            // A background launch (scheduled run, plugin task) only picks the tab its worktree shows
-            // when opened; the center-tab path would also clear what the user is looking at now.
-            tabs.activate(worktreeId: worktree.id, tabId: tab.id)
-        }
-        do {
-            _ = try await startACPSession(
-                worktree: worktree,
-                sessionID: preparedPrompt.sessionID,
-                agentID: agentID,
-                promptID: preparedPrompt.promptID,
-                prompt: queuedPrompt,
-                promptCard: preparedPrompt.card
-            )
-        } catch {
-            manager.liveSession(for: preparedPrompt.sessionID)?.lastError = error.localizedDescription
-        }
-        await manager.flushPersistence()
-    }
-
-    private static func acpBootstrapReadyState(for session: ACPSession?) -> ACPBootstrapReadyState {
-        guard let session else { return .failed("Could not start ACP session.") }
-        switch session.setupState {
-        case .needsSetup(let reason), .setupError(let reason):
-            return .needsSetup(reason)
-        case .needsAuth(_, let reason):
-            return .needsAuthentication(reason ?? "ACP session needs authentication.")
-        case .checking, .ready:
-            break
-        }
-        if case .ready = session.agentState {
-            return .ready
-        }
-        if case .failed(let reason) = session.agentState {
-            return .failed(reason)
-        }
-        return .failed("Could not start ACP session.")
     }
 
     func forkACPSession(

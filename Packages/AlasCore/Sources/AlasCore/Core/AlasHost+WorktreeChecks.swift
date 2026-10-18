@@ -1,5 +1,14 @@
 import Foundation
 
+/// Why a worktree a caller waited for was not created.
+public struct WorktreeCreationFailure: Error, Equatable, Sendable {
+    public let message: String
+
+    public init(message: String) {
+        self.message = message
+    }
+}
+
 /// A worktree creation checked and ready to start, and the path to show for it.
 public struct PreparedWorktreeCreation: Sendable {
     public var request: WorktreeCreateRequest
@@ -130,5 +139,65 @@ extension WorktreesAPI {
             throw WorktreeCheckRefusal.unsavedChanges
         }
         return claim
+    }
+}
+
+extension WorktreesAPI {
+    /// Runs `create` with a new worktree for `rendered` in `projectID`,
+    /// suffixed to the first branch and path no worktree takes yet, one at a
+    /// time per project so the next pick sees the worktree `create` made.
+    public func withFreeName<T>(
+        projectID: String,
+        rendered: String,
+        caller: HostCaller,
+        _ create: (PreparedWorktreeCreation) async -> Result<T, WorktreeCreationFailure>
+    ) async -> Result<T, WorktreeCreationFailure> {
+        caller.log("worktrees.withFreeName", rendered)
+        let gate = core.freeNameGates[projectID] ?? SerialGate()
+        core.freeNameGates[projectID] = gate
+        await gate.enter()
+        defer { gate.leave() }
+        guard let project = core.projects.projects.first(where: { $0.id == projectID }) else {
+            return .failure(.init(message: WorktreeCheckRefusal.projectUnavailable.localizedDescription))
+        }
+        guard !project.isFolder else { return .failure(.init(message: AlasCoreContext.folderWorktreeCreationMessage)) }
+        let repoPath = URL(fileURLWithPath: project.path)
+        let git = GitService()
+        // Local branches only: `WorktreeService.add` decides whether to reuse
+        // a branch from `refs/heads/<branch>`, and a remote-tracking
+        // `origin/nightly` with no local branch is still cut from the base.
+        let existingBranches = Set((try? await git.localBranches(at: repoPath)) ?? [])
+        let config = core.environment.configuration().worktrees
+        let probe = core.worktreeDestinationExistence
+        let host = project.host
+        let free = await ScheduledWorktreeDestination.firstFree(
+            rendered: rendered,
+            pathTemplate: config.pathTemplate,
+            worktreeRoot: config.rootPath,
+            repoName: project.name,
+            existingBranches: existingBranches,
+            pathState: { await probe($0, host) }
+        )
+        let branch: String
+        let destination: URL
+        switch free {
+        case let .free(freeBranch, freeDestination):
+            branch = freeBranch
+            destination = freeDestination
+        case .exhausted:
+            return .failure(.init(
+                message: "Could not find a free branch and worktree path for \(rendered); clean up old scheduled worktrees."
+            ))
+        case .undeterminable(let path):
+            return .failure(.init(message: "Could not check whether \(path.path) already exists on \(host ?? "this Mac")."))
+        }
+        let base = WorktreeBaseBranch.preferred(
+            availableBranches: (try? await core.branches(of: project)) ?? [],
+            configuredDefault: config.baseBranch
+        )
+        guard !Task.isCancelled else { return .failure(.init(message: "Cancelled before the worktree was created.")) }
+        let request = WorktreeCreateRequest(projectID: projectID, base: base, branch: branch, destination: destination)
+        let shown = destination.isRemoteAlasPath ? RemotePath.display(destination.path) : destination.path
+        return await create(PreparedWorktreeCreation(request: request, shownPath: shown))
     }
 }
