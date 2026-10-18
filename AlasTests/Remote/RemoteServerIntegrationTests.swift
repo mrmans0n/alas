@@ -544,8 +544,9 @@ struct RemoteServerIntegrationTests {
         try await task.send(.data(JSONEncoder().encode(RemoteClientMessage.stop(sessionId: s.id))))
 
         // Stop must land within the bounded wait even though fetchOlder (and
-        // thus the queued takeOver behind it) never completes.
-        try await eventually("the stop is answered") { received.stopped(s.id) }
+        // thus the queued takeOver behind it) never completes. The deadline
+        // is the emergency brake's promise, not just a timeout.
+        try await eventually("the stop is answered", within: .seconds(3)) { received.stopped(s.id) }
         // The queued takeOver never got to run — proves stop didn't wait
         // for the full chain to actually resolve.
         // Only the subscribe snapshot: a takeover would have pushed another.

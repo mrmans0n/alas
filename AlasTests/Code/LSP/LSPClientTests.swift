@@ -65,10 +65,10 @@ private func withTimeout<T: Sendable>(
     }
 }
 
-/// Polls `condition` on the main actor until it holds or five seconds pass.
+/// Polls `condition` on the main actor until it holds or `timeout` passes.
 @MainActor
-func eventually(_ description: String, _ condition: () -> Bool) async throws {
-    let deadline = ContinuousClock.now + .seconds(5)
+func eventually(_ description: String, within timeout: Duration = .seconds(5), _ condition: () -> Bool) async throws {
+    let deadline = ContinuousClock.now + timeout
     while ContinuousClock.now < deadline {
         if condition() { return }
         try await Task.sleep(for: .milliseconds(10))
