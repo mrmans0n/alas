@@ -53,3 +53,19 @@ extension AlasHost {
         ))
     }
 }
+
+extension AlasHost {
+    /// Ends every run and agent session, for a host about to exit: runs are
+    /// stopped as a worktree's removal stops them, and each session's agent
+    /// is detached and its process ended.
+    public func shutdown() async {
+        let worktreeIDs = Set(core.processRuns.values.map(\.worktreeID))
+        for worktreeID in worktreeIDs {
+            await core.stopProcessRuns(worktreeID: worktreeID)
+        }
+        for manager in core.sessionManagers.values {
+            await manager.disposeAllLiveSessions()
+            manager.shutdownBackgroundTasks()
+        }
+    }
+}
