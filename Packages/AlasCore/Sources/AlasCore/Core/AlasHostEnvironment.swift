@@ -218,8 +218,37 @@ extension AlasHostEnvironment {
 /// A host without a UI: every requirement keeps its default.
 public final class HeadlessHostEnvironment: AlasHostEnvironment {
     public let fileIndex = FileIndex()
+    /// The profile's settings, as its `app.json` has them; the defaults
+    /// when it has none.
+    public let config: AppConfig
 
-    public init() {}
+    public init(configuration: AppConfig = .defaults) {
+        config = configuration
+    }
+
+    public func configuration() -> AppConfig { config }
+
+    public func globalTerminalConfig() -> AppConfig.Terminal { config.terminal }
+
+    /// The configured agents that are turned on: built-ins in the profile's
+    /// state, then its own and its registry installs. A headless host does
+    /// not detect which built-ins are installed.
+    public func enabledAgents() -> [AgentDefinition] {
+        AgentConfiguredCatalog.enabled(builtinState: config.agents.builtinState, customs: config.agents.userAgents)
+    }
+
+    public func agent(id: String) -> AgentDefinition? {
+        AgentConfiguredCatalog.all(builtinState: config.agents.builtinState, customs: config.agents.userAgents).first { $0.id == id }
+    }
+
+    /// Only an agent the profile turned on, with a launch spec, and on a
+    /// remote host one that can run there, as the app admits agents.
+    public func admitsAgent(_ agentID: String, remoteHost: String?) -> Bool {
+        guard ACPLaunchCatalog.specs.contains(where: { $0.agentID == agentID }),
+              let agent = enabledAgents().first(where: { $0.id == agentID })
+        else { return false }
+        return remoteHost == nil || agent.canRunOnRemoteHost
+    }
 }
 
 /// This process, as a host instance; one that keeps its own id says so.
