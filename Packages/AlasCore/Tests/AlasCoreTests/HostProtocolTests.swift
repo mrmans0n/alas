@@ -35,6 +35,7 @@ struct HostProtocolTests {
             after: HostCursor(generation: UUID(uuidString: "6F9619FF-8B86-D011-B42D-00CF4FC964FF")!, sequence: 42), events: ["sessionState"]
         )),
         HostClientMessage(id: 16, request: .runOutput(runID: "r", projectID: "p")),
+        HostClientMessage(id: 17, request: .remotePairingCode),
     ])
     func clientMessagesRoundTrip(_ message: HostClientMessage) throws {
         #expect(try JSONDecoder().decode(HostClientMessage.self, from: JSONEncoder().encode(message)) == message)
@@ -57,6 +58,7 @@ struct HostProtocolTests {
         .response(id: 7, result: .capabilities(capabilities: ["host.v1", "host.events.v1"])),
         .response(id: 8, result: .runOutput(output: .text("hello\n", truncated: true))),
         .response(id: 9, result: .runOutput(output: .notFinished)),
+        .response(id: 10, result: .remotePairingCode(code: "ABC123", expiresAt: Date(timeIntervalSince1970: 1_800_000_000))),
         .events(events: [
             .worktreeChanged(WorktreeSnapshot(worktree: worktree, operation: .deleting, isArchived: false)),
             .worktreeRemoved(projectID: "p", worktreeID: worktree.id),

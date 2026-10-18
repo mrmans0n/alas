@@ -7,12 +7,16 @@ import Foundation
 
 let usage = """
 usage: alas-host
+       alas-host pair
 
 Serves the Alas host protocol for the data directory ALAS_APP_SUPPORT_DIR
 (default: ~/Library/Application Support/Alas) on its local socket, and prints
 the socket path. When the profile enables Remote, also serves it on loopback
 and prints its address, with the web client of the installed Alas.app or of
 ALAS_REMOTE_WEB_DIR. Stops on SIGINT or SIGTERM.
+
+`alas-host pair` asks the running host for a Remote pairing code, which a
+phone or browser redeems within two minutes, and prints it.
 """
 
 func fail(_ message: String) -> Never {
@@ -23,6 +27,28 @@ func fail(_ message: String) -> Never {
 if CommandLine.arguments.dropFirst().contains(where: { $0 == "--help" || $0 == "-h" }) {
     print(usage)
     exit(0)
+}
+if CommandLine.arguments.dropFirst().elementsEqual(["pair"]) {
+    let response: HostResponse
+    do {
+        response = try HostSocketServer.request(.remotePairingCode)
+    } catch {
+        fail("no host serves \(HostSocketServer.defaultPath()): \(error.localizedDescription)")
+    }
+    switch response {
+    case .remotePairingCode(let code, let expiresAt):
+        print(code)
+        FileHandle.standardError.write(Data("Valid until \(expiresAt.formatted(date: .omitted, time: .standard)).\n".utf8))
+        exit(0)
+    case .failure(.failed(let message)):
+        fail(message)
+    case .failure(.invalidRequest):
+        fail("the running host is older and does not mint Remote pairing codes")
+    case .failure(let error):
+        fail("\(error)")
+    default:
+        fail("the host does not mint Remote pairing codes")
+    }
 }
 if let unknown = CommandLine.arguments.dropFirst().first {
     fail("unknown argument \(unknown)\n\(usage)")
@@ -58,6 +84,7 @@ var isStopping = false
 // proof, and a headless host pairs with codes.
 var remote: RemoteServer?
 var tailscaleServe: RemoteTailscaleServeProcess?
+let keepAwake = RemoteKeepAwakeController()
 var config = (try? PersistenceStore().readIfExists(AppConfig.self, from: Paths.appConfigFile)) ?? .defaults
 if config.remote.enabled {
     if config.remote.ensureServerId() {
@@ -100,8 +127,13 @@ if config.remote.enabled {
     )
     // The port can change after the first: a listener that fails rebinds on
     // an OS-assigned one, and the address and the proxy follow it.
+    server.admitsPeers = false
     var servedPort: UInt16?
     server.onPortChange = { port in
+        // Held only while the server is bound and the Mac is on external power.
+        keepAwake.update(enabled: settings.keepAwake, serverRunning: port != nil)
+        // Codes only while `/pair` is there to redeem them.
+        protocolServer.remotePairing = port == nil ? nil : pairing
         guard let port, port != servedPort else { return }
         servedPort = port
         print("remote http://127.0.0.1:\(port)")
@@ -151,6 +183,7 @@ for signalNumber in [SIGINT, SIGTERM] {
             socket.stop()
             tailscaleServe?.stop()
             remote?.stop()
+            keepAwake.update(enabled: false, serverRunning: false)
             Task { @MainActor in
                 await host.shutdown()
                 withExtendedLifetime(lock) {}
@@ -165,4 +198,9 @@ for signalNumber in [SIGINT, SIGTERM] {
 print(socket.path)
 fflush(stdout)
 
-dispatchMain()
+// The main run loop, not `dispatchMain()`: keep-awake follows power-source
+// changes through a run loop source. It serves the main queue too; the port
+// keeps it running with no other source attached.
+RunLoop.main.add(Port(), forMode: .default)
+RunLoop.main.run()
+fail("the main run loop stopped")

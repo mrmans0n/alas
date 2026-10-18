@@ -132,6 +132,36 @@ public final class HostSocketServer: @unchecked Sendable {
         return withAddress(path) { Darwin.connect(fd, $0, $1) } == 0
     }
 
+    /// Sends one request to the host serving `path` and waits for its
+    /// answer, for a command-line client that asks once and exits.
+    public static func request(_ request: HostRequest, at path: String = defaultPath()) throws -> HostResponse {
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else { throw POSIXError(.EBADF) }
+        defer { close(fd) }
+        guard withAddress(path, { Darwin.connect(fd, $0, $1) }) == 0 else { throw POSIXError(.ECONNREFUSED) }
+        var line = try JSONEncoder().encode(HostClientMessage(id: 1, request: request))
+        line.append(UInt8(ascii: "\n"))
+        let written = line.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
+        guard written == line.count else { throw POSIXError(.EPIPE) }
+        var pending = Data()
+        var chunk = [UInt8](repeating: 0, count: 64 * 1024)
+        while true {
+            let count = read(fd, &chunk, chunk.count)
+            guard count > 0 else { throw POSIXError(.ECONNRESET) }
+            pending.append(contentsOf: chunk[0 ..< count])
+            while let newline = pending.firstIndex(of: UInt8(ascii: "\n")) {
+                let message = Data(pending[pending.startIndex ..< newline])
+                pending.removeSubrange(pending.startIndex ... newline)
+                // Id 0 is a host's answer to a message it could not decode,
+                // a request from a later version among them.
+                if case .response(let id, let result)? = try? JSONDecoder().decode(HostServerMessage.self, from: message),
+                   id == 1 || id == 0 {
+                    return result
+                }
+            }
+        }
+    }
+
     static func withAddress(_ path: String, _ body: (UnsafePointer<sockaddr>, socklen_t) -> Int32) -> Int32 {
         var address = sockaddr_un()
         address.sun_family = sa_family_t(AF_UNIX)

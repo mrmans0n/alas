@@ -85,6 +85,10 @@ public enum HostRequest: Codable, Equatable, Sendable {
     /// What run `runID` of project `projectID` printed, once it finished
     /// (`host.runs.output.v1`).
     case runOutput(runID: String, projectID: String)
+    /// A new code a device redeems at the Remote server's `POST /pair`, from
+    /// a host that serves Remote headlessly and to a local client only. A
+    /// host that serves no Remote, or the app, refuses it.
+    case remotePairingCode
 }
 
 public enum HostServerMessage: Codable, Equatable, Sendable {
@@ -109,6 +113,7 @@ public enum HostResponse: Codable, Equatable, Sendable {
     case session(session: HostSessionSummary)
     case capabilities(capabilities: [String])
     case runOutput(output: HostRunOutput)
+    case remotePairingCode(code: String, expiresAt: Date)
     case failure(error: HostError)
 }
 

@@ -89,6 +89,30 @@ struct HostSocketServerTests {
     func acceptFailuresEndTheLoopOnlyWhenTheSocketIsGone(_ code: Int32, _ outcome: HostSocketServer.AcceptFailure) {
         #expect(HostSocketServer.afterAcceptFailure(errno: code) == outcome)
     }
+
+    /// A host older than a request cannot decode it and answers under id 0;
+    /// a one-shot request returns that answer instead of waiting for id 1.
+    @Test(.timeLimit(.minutes(1))) func aOneShotRequestReturnsAnOlderHostsRefusal() async throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("h-\(UUID().uuidString.prefix(8)).sock").path
+        defer { unlink(path) }
+        let listener = socket(AF_UNIX, SOCK_STREAM, 0)
+        defer { close(listener) }
+        #expect(HostSocketServer.withAddress(path, { bind(listener, $0, $1) }) == 0)
+        #expect(listen(listener, 1) == 0)
+        let refusal = HostServerMessage.response(id: 0, result: .failure(error: .invalidRequest(reason: "unknown request")))
+        var reply = try JSONEncoder().encode(refusal)
+        reply.append(UInt8(ascii: "\n"))
+        Thread.detachNewThread { [reply] in
+            let client = accept(listener, nil, nil)
+            var byte: UInt8 = 0
+            while read(client, &byte, 1) == 1, byte != UInt8(ascii: "\n") {}
+            _ = reply.withUnsafeBytes { write(client, $0.baseAddress, $0.count) }
+            // Left open, as a host keeps the connection after a bad message.
+        }
+
+        let response = try await Task.detached { try HostSocketServer.request(.remotePairingCode, at: path) }.value
+        #expect(response == .failure(error: .invalidRequest(reason: "unknown request")))
+    }
 }
 
 /// A host whose checkpoint store has nothing to recover, so a removal does
