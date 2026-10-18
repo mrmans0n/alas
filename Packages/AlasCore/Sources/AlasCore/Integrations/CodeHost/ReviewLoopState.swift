@@ -279,7 +279,7 @@ public final class ReviewLoopState {
             snapshot = ReviewLoopSnapshot(
                 local: local,
                 remote: remote,
-                reviewRequest: nil,
+                reviewRequest: preservedReviewRequest(local: local, remote: remote),
                 providerAvailable: false,
                 providerAuthenticated: false,
                 providerCapabilities: .readOnly,
@@ -294,7 +294,7 @@ public final class ReviewLoopState {
             snapshot = ReviewLoopSnapshot(
                 local: local,
                 remote: remote,
-                reviewRequest: nil,
+                reviewRequest: preservedReviewRequest(local: local, remote: remote),
                 providerAvailable: true,
                 providerAuthenticated: false,
                 providerCapabilities: .readOnly,
@@ -335,7 +335,7 @@ public final class ReviewLoopState {
             guard isCurrentRefresh(generation) else { return }
             let message = Self.describe(error)
             lastError = message
-            let preservedRequest = preservedReviewRequestForError(local: local, remote: remote)
+            let preservedRequest = preservedReviewRequest(local: local, remote: remote)
             snapshot = ReviewLoopSnapshot(
                 local: local,
                 remote: remote,
@@ -602,12 +602,16 @@ public final class ReviewLoopState {
             ?? remotes.first { $0.direction == .fetch }
     }
 
-    private func preservedReviewRequestForError(
+    /// A provider outage (CLI missing, signed out, or a failed read) says
+    /// nothing about the review request, so keep the last one seen for this
+    /// branch and repository instead of reporting "no review request".
+    private func preservedReviewRequest(
         local: ReviewLoopLocalState,
         remote: CodeHostRemote
     ) -> ReviewRequest? {
         guard let snapshot,
               snapshot.local.branchName == local.branchName,
+              snapshot.local.baseBranch == local.baseBranch,
               Self.sameRepository(snapshot.remote, remote)
         else {
             return nil

@@ -517,6 +517,36 @@ struct ReviewLoopStateTests {
         #expect(state.snapshot?.reviewRequest?.checks == [check])
     }
 
+    @Test(arguments: [(available: false, authenticated: false), (available: true, authenticated: false)])
+    func providerOutageKeepsPreviousReviewRequestUntilProviderReportsNone(
+        available: Bool, authenticated: Bool
+    ) async throws {
+        let request = Self.makeReviewRequest(remote: Self.makeRemote(), checks: [])
+        let provider = FakeCodeHostProvider(kind: .github, request: request)
+        let state = ReviewLoopState(
+            worktreePath: URL(fileURLWithPath: "/tmp/alas-review-loop"),
+            baseBranch: "main",
+            providerRegistry: CodeHostProviderRegistry(providers: [.github: provider])
+        )
+        let local = Self.makeLocal(needsPush: false)
+        await state.refresh(local: local, remotes: [Self.makeGitHubRemote()])
+
+        provider.available = available
+        provider.authenticated = authenticated
+        await state.refresh(local: local, remotes: [Self.makeGitHubRemote()])
+
+        #expect(state.snapshot?.reviewRequest?.number == request.number)
+        #expect(state.snapshot?.providerAvailable == available)
+        #expect(state.snapshot?.providerAuthenticated == false)
+
+        provider.available = true
+        provider.authenticated = true
+        provider.request = nil
+        await state.refresh(local: local, remotes: [Self.makeGitHubRemote()])
+
+        #expect(state.snapshot?.reviewRequest == nil)
+    }
+
     @Test func providerErrorSetsBlockedActionAndErrorDetail() async throws {
         let provider = FakeCodeHostProvider(
             kind: .github,
