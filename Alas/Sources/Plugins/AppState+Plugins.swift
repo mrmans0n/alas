@@ -85,21 +85,13 @@ extension AppState {
                         PluginWorkspaceSnapshot.SessionInput(row: $0).id == id
                     }) else { continue }
                     // Terminal sessions have no live ACP session and so no transcript.
-                    let messages = self.acpManager(forWorktreeId: worktree.id)?.liveSession(for: id)?.transcript.messages ?? []
-                    for message in messages.reversed() {
-                        guard case .agent(_, _, let text) = message else { continue }
-                        let trimmed = text.value.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if !trimmed.isEmpty { return .text(trimmed) }
-                    }
-                    return .none
+                    return self.host.sessions.lastAgentReply(id, owner: .worktree(worktree.id)).map(PluginLastMessage.text) ?? .none
                 }
                 return .unknownSession
             },
             agents: { [weak self] in
                 guard let self else { return [] }
-                return self.enabledAgents(forProjectId: project.id)
-                    .filter { ACPLaunchCatalog.spec(for: $0.id) != nil }
-                    .map { PluginAgent(id: $0.id, name: $0.displayName) }
+                return self.host.sessions.agents(projectID: project.id).map { PluginAgent(id: $0.id, name: $0.displayName) }
             },
             startTask: { [weak self] request, completion in
                 // The host outlives project edits, so use the project as it is now: a rename
@@ -143,18 +135,14 @@ extension AppState {
                 guard let self, let worktree = (self.projectsManager.worktreesByProject[project.id] ?? []).first(where: {
                     self.acpManager(forWorktreeId: $0.id)?.liveSession(for: id) != nil
                 }) else { return "unknown session \(id)" }
-                // Answered once the session accepted or refused the prompt (no writer lease, signed out, …).
-                let accepted = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
-                    var resumed = false
-                    Task { @MainActor in
-                        await self.sendPrompt(for: id, worktreeID: worktree.id, text: text, attachments: [], onResult: { ok in
-                            guard !resumed else { return }
-                            resumed = true
-                            continuation.resume(returning: ok)
-                        })
-                    }
+                // Answered once the prompt was delivered or refused (no writer lease, signed out, a failed
+                // send), as `onResult` answered before; sent to the matched worktree's session only.
+                do {
+                    try await self.host.sessions.send(id, prompt: text, owner: .worktree(worktree.id), caller: .app)
+                    return nil
+                } catch {
+                    return "the session did not accept the prompt"
                 }
-                return accepted ? nil : "the session did not accept the prompt"
             },
             startRun: { [weak self] worktreeID, key in
                 guard let self else { return "Alas is shutting down" }
@@ -179,20 +167,10 @@ extension AppState {
                 case .ok, .text: return nil
                 }
             },
-            worktreeLocation: { [weak self] id in
-                guard let worktree = self?.projectsManager.worktreesByProject[project.id]?.first(where: { $0.id == id })
-                else { return nil }
-                if let host = RemoteHostRegistry.shared.host(forPath: worktree.path.path) {
-                    return .remote(host: host, root: RemotePath.realPath(worktree.path.path))
-                }
-                return .local(worktree.path)
-            },
-            usageHistory: usageHistory)
+            worktreeLocation: { [weak self] id in self?.host.worktrees.location(of: id, projectID: project.id) },
+            usageHistory: core.usageHistory)
     }
 
-    /// Starts a run script for a plugin the way the Run tab's start button does: a finished run, or one whose
-    /// terminal is still open after it ended, is restarted. Refuses one that is actively running rather than
-    /// focusing its terminal, which would move the user's selection.
     /// Starts a plugin task on the scheduled-run path: a new worktree, created without changing
     /// the selection, with an agent chat session that sends `request.prompt` straight away.
     /// Returns before any of that happens; `completion` is called once, later, with nil on

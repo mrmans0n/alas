@@ -161,8 +161,14 @@ extension SessionsAPI {
 
     /// Sends a prompt as the session's next user turn and waits for that
     /// turn to end. Only the session's writer can.
-    public func send(_ sessionID: String, prompt: String, attachments: [ACPMessage.Attachment] = [], caller: HostCaller) async throws {
-        guard try await submit(sessionID, prompt: prompt, attachments: attachments, caller: caller).value else {
+    public func send(
+        _ sessionID: String,
+        prompt: String,
+        attachments: [ACPMessage.Attachment] = [],
+        owner: SessionOwnerID? = nil,
+        caller: HostCaller
+    ) async throws {
+        guard try await submit(sessionID, prompt: prompt, attachments: attachments, owner: owner, caller: caller).value else {
             throw SessionRefusal.promptRejected
         }
     }
@@ -171,16 +177,18 @@ extension SessionsAPI {
     /// it is: the task reports whether it was delivered, when its turn ends.
     /// Refused with `promptRejected` before the prompt is recorded, so its
     /// attachments are the caller's to clean up. `steer` stops the running
-    /// turn and sends this prompt at once, keeping the queue.
+    /// turn and sends this prompt at once, keeping the queue. With `owner`,
+    /// only that owner's session: ids are not unique across owners.
     public func submit(
         _ sessionID: String,
         prompt: String,
         attachments: [ACPMessage.Attachment] = [],
         steer: Bool = false,
+        owner: SessionOwnerID? = nil,
         caller: HostCaller
     ) async throws -> Task<Bool, Never> {
         caller.log(steer ? "sessions.steer" : "sessions.send", sessionID)
-        let manager = try writerManager(for: sessionID)
+        let manager = try writerManager(for: sessionID, owner: owner)
         let (outcome, report) = AsyncStream<Bool>.makeStream()
         let submission = PromptSubmission()
         let onResult: @MainActor (Bool) -> Void = { delivered in
@@ -448,8 +456,14 @@ extension SessionsAPI {
     }
 
     /// The manager whose live session is `sessionID`.
-    private func liveManager(for sessionID: String) throws -> ACPSessionManager {
-        guard let manager = core.sessionManagers.values.first(where: { $0.liveSession(for: sessionID) != nil }) else {
+    /// The managers of `owner`, or every one without it.
+    func managers(of owner: SessionOwnerID?) -> [ACPSessionManager] {
+        guard let owner else { return Array(core.sessionManagers.values) }
+        return core.sessionManagers[owner].map { [$0] } ?? []
+    }
+
+    private func liveManager(for sessionID: String, owner: SessionOwnerID? = nil) throws -> ACPSessionManager {
+        guard let manager = managers(of: owner).first(where: { $0.liveSession(for: sessionID) != nil }) else {
             throw SessionRefusal.notFound
         }
         return manager
@@ -465,8 +479,8 @@ extension SessionsAPI {
     }
 
     /// The live session's manager, when this instance drives the session.
-    private func writerManager(for sessionID: String) throws -> ACPSessionManager {
-        let manager = try liveManager(for: sessionID)
+    private func writerManager(for sessionID: String, owner: SessionOwnerID? = nil) throws -> ACPSessionManager {
+        let manager = try liveManager(for: sessionID, owner: owner)
         guard manager.isWriter(for: sessionID) else { throw SessionRefusal.notWriter }
         return manager
     }
