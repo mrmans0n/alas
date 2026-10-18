@@ -55,7 +55,7 @@ struct HostProtocolTests {
         .response(id: 5, result: .session(session: session)),
         .response(id: 6, result: .failure(error: .session(refusal: .ownerUnavailable(reason: "busy")))),
         .response(id: 7, result: .capabilities(capabilities: ["host.v1", "host.events.v1"])),
-        .response(id: 8, result: .runOutput(output: .text("hello\n"))),
+        .response(id: 8, result: .runOutput(output: .text("hello\n", truncated: true))),
         .response(id: 9, result: .runOutput(output: .notFinished)),
         .events(events: [
             .worktreeChanged(WorktreeSnapshot(worktree: worktree, operation: .deleting, isArchived: false)),

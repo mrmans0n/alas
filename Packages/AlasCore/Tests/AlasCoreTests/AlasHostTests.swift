@@ -214,13 +214,15 @@ struct AlasHostTests {
                 id: "run-\(id)", scriptKey: "dev", scriptName: "dev", worktreeID: "w-\(id)", branch: "main",
                 target: RunExecutionTarget(host: nil, workingDirectory: root.path), endpoint: nil, outcome: .succeeded,
                 startedAt: Date(timeIntervalSince1970: 1), finishedAt: Date(timeIntervalSince1970: 2), portConflict: nil,
-                output: .available(text: "out \(id)\n", truncated: false)
+                output: .available(text: "out \(id)\n", truncated: id == "p2")
             ))
         }
         let host = AlasHost(core: AlasCoreContext(projects: projects, runHistoryStore: history))
 
-        #expect(await host.runs.output(of: "run-p1", projectID: "p1") == .text("out p1\n"))
+        #expect(await host.runs.output(of: "run-p1", projectID: "p1") == .text("out p1\n", truncated: false))
         #expect(await host.runs.output(of: "run-p2", projectID: "p1") == .unknownRun)
+        // Only a tail was kept: the reader is told.
+        #expect(await host.runs.output(of: "run-p2", projectID: "p2") == .text("out p2\n", truncated: true))
     }
 
     /// A headless host runs with its data directory's settings: its base

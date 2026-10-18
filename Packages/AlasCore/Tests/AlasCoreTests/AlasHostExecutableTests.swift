@@ -33,7 +33,8 @@ struct AlasHostExecutableTests {
         let dataDirectory = root.appendingPathComponent("data")
         let repo = root.appendingPathComponent("repo")
         defer { try? FileManager.default.removeItem(at: root) }
-        try makeRepository(at: repo)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try GitTemplate.repository(at: repo)
         let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .appendingPathComponent("Fixtures/acp_fixture_agent.py")
         var config = AppConfig.defaults
@@ -92,32 +93,10 @@ struct AlasHostExecutableTests {
             guard case .runChanged(let record) = event, record.id == runID, case .finished = record.status else { return false }
             return true
         }
-        #expect(try await client.request(.runOutput(runID: runID, projectID: project.id)) == .runOutput(output: .text("hello from run\n")))
+        #expect(try await client.request(.runOutput(runID: runID, projectID: project.id)) == .runOutput(output: .text("hello from run\n", truncated: false)))
 
         host.process.terminate()
         #expect(try await host.exitStatus() == 0)
         _ = try DataDirectoryLock.acquire(in: dataDirectory)
-    }
-
-    /// A repository on `main` with one commit and a run script.
-    private func makeRepository(at repo: URL) throws {
-        let scripts = repo.appendingPathComponent(RunScriptStore.repoScriptsRelativeDir)
-        try FileManager.default.createDirectory(at: scripts, withIntermediateDirectories: true)
-        let script = scripts.appendingPathComponent("hello.sh")
-        try "#!/bin/sh\necho hello from run\n".write(to: script, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
-        for arguments in [
-            ["init", "-q", "-b", "main"],
-            ["-c", "user.name=Test", "-c", "user.email=test@example.com", "add", "."],
-            ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-q", "-m", "initial"],
-        ] {
-            let git = Process()
-            git.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-            git.arguments = arguments
-            git.currentDirectoryURL = repo
-            try git.run()
-            git.waitUntilExit()
-            try #require(git.terminationStatus == 0, "git \(arguments.joined(separator: " ")) failed")
-        }
     }
 }

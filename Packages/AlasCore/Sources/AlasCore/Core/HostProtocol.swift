@@ -108,7 +108,7 @@ public enum HostResponse: Codable, Equatable, Sendable {
     case runStart(start: RunStart)
     case session(session: HostSessionSummary)
     case capabilities(capabilities: [String])
-    case runOutput(output: PluginRunOutput)
+    case runOutput(output: HostRunOutput)
     case failure(error: HostError)
 }
 

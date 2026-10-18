@@ -539,7 +539,7 @@ public struct PluginRunOutputParams: Decodable, Sendable {
     }
 }
 
-public enum PluginRunOutput: Codable, Equatable, Sendable {
+public enum PluginRunOutput: Equatable, Sendable {
     case unknownRun
     case notFinished
     /// The run finished but its output was not kept.
