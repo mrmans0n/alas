@@ -87,13 +87,14 @@ extension AlasHost {
             await AlasCoreContext.finishDisposing(manager)
             manager.shutdownBackgroundTasks()
         }
-        // A worktree mutation already past its checks (Git, repository
-        // scripts) finishes rather than being cut off at exit.
+        // A worktree mutation or a project add already past its checks (Git,
+        // SSH validation, repository scripts) finishes rather than being cut
+        // off at exit.
         // ponytail: bounded at a minute, so a hung hook cannot keep the host alive.
         let deadline = ContinuousClock.now + .seconds(60)
         // Failed rows keep their state for a retry; only work underway is waited on.
         func workUnderway() -> Bool {
-            core.projects.operationStatesSnapshot().values.contains { state in
+            core.projectAddsUnderway > 0 || core.projects.operationStatesSnapshot().values.contains { state in
                 switch state {
                 case .creating, .deleting, .archiving: true
                 default: false

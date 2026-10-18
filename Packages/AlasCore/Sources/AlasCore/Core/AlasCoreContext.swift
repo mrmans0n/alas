@@ -118,6 +118,9 @@ public final class AlasCoreContext {
     /// Set once `AlasHost.shutdown()` begins: nothing new starts after it,
     /// requests already underway included.
     @ObservationIgnored var isStopping = false
+    /// Projects being added, still validating their repository: shutdown
+    /// waits for them as for worktree operations.
+    @ObservationIgnored var projectAddsUnderway = 0
 
     /// Refuses work once the host is stopping, checked where the work would
     /// start, after a request's last suspension.
@@ -215,6 +218,8 @@ public final class AlasCoreContext {
         id: String = UUID().uuidString
     ) async throws -> ProjectConfig {
         try refuseIfStopping()
+        projectAddsUnderway += 1
+        defer { projectAddsUnderway -= 1 }
         guard !projects.projects.contains(where: { $0.id == id }) else {
             throw ProjectCreationError.projectAlreadyExists
         }

@@ -50,11 +50,15 @@ guard let socket = HostSocketServer(server: protocolServer) else {
 // announces itself still ends its work. Delivered on the main queue, where
 // the host's main actor runs.
 var stopSignals: [DispatchSourceSignal] = []
+// One shutdown: a second signal must not exit while the first still flushes.
+var isStopping = false
 for signalNumber in [SIGINT, SIGTERM] {
     signal(signalNumber, SIG_IGN)
     let source = DispatchSource.makeSignalSource(signal: signalNumber, queue: .main)
     source.setEventHandler {
         MainActor.assumeIsolated {
+            guard !isStopping else { return }
+            isStopping = true
             // No request, on an open connection either, starts work teardown would miss.
             protocolServer.close()
             socket.stop()
