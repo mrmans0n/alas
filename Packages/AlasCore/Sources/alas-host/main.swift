@@ -88,16 +88,20 @@ if config.remote.enabled {
         },
         identity: { RemoteServerIdentity(serverId: settings.serverId, name: settings.resolvedDisplayName) }
     )
-    var announced = false
+    // The port can change after the first: a listener that fails rebinds on
+    // an OS-assigned one, and the address and the proxy follow it.
+    var servedPort: UInt16?
     server.onPortChange = { port in
-        guard let port, !announced else { return }
-        announced = true
+        guard let port, port != servedPort else { return }
+        servedPort = port
         print("remote http://127.0.0.1:\(port)")
         fflush(stdout)
+        tailscaleServe?.stop()
+        tailscaleServe = nil
         Task { @MainActor in
             // The proxy's requests name the tailnet host, which the policy
             // must allow; a status that cannot be read leaves loopback only.
-            guard let status = try? await RemoteTailscale.status() else { return }
+            guard let status = try? await RemoteTailscale.status(), servedPort == port else { return }
             server.updateAccessPolicy(settings.accessPolicy(interfaces: interfaces, tailnetDNSName: status.dnsName))
             server.updateOriginPolicy(settings.originPolicy(interfaces: interfaces, tailnetDNSName: status.dnsName))
             guard settings.tailscaleServe, status.httpsEnabled, !isStopping,
