@@ -124,6 +124,7 @@ if config.remote.enabled {
     )
     // The port can change after the first: a listener that fails rebinds on
     // an OS-assigned one, and the address and the proxy follow it.
+    server.admitsPeers = false
     var servedPort: UInt16?
     server.onPortChange = { port in
         // Held only while the server is bound and the Mac is on external power.

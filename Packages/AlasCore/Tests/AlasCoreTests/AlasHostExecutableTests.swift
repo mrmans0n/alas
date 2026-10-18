@@ -27,7 +27,8 @@ struct AlasHostExecutableTests {
 
     /// With Remote enabled, a device pairs with a code the running host
     /// mints for its local user, and drives a session with the scripted
-    /// agent over the Remote channel. A paired device cannot mint codes.
+    /// agent over the Remote channel. A paired device cannot mint codes, and
+    /// a Mac paired earlier, with no key pinned, cannot connect.
     @Test func aDevicePairedWithAHeadlessHostDrivesASessionOverRemote() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-remote-\(UUID().uuidString)")
         let dataDirectory = root.appendingPathComponent("data")
@@ -46,6 +47,8 @@ struct AlasHostExecutableTests {
         config.agents.registry = [agent]
         let configFile = dataDirectory.appendingPathComponent("app.json")
         try PersistenceStore().write(config, to: configFile)
+        let earlierPairing = RemotePairingService(store: FileDeviceStore(url: dataDirectory.appendingPathComponent("remote-devices.json")))
+        let macToken = try earlierPairing.redeemPeer(code: earlierPairing.beginPairing(), deviceName: "Old Mac", peerServerId: "old-mac").token
         let host = try AlasHostProcess(dataDirectory: dataDirectory)
         _ = try await host.socketPath()
         try await eventually { [host] in host.output.contains("remote ") || !host.process.isRunning }
@@ -65,6 +68,10 @@ struct AlasHostExecutableTests {
         var components = try #require(URLComponents(url: address, resolvingAgainstBaseURL: false))
         components.scheme = "ws"
         components.path = "/ws"
+        let macSocket = URLSession.shared.webSocketTask(with: try #require(components.url), protocols: [macToken])
+        macSocket.resume()
+        defer { macSocket.cancel() }
+        #expect((try? await macSocket.receive()) == nil)
         let socket = URLSession.shared.webSocketTask(with: try #require(components.url), protocols: [token])
         socket.resume()
         defer { socket.cancel() }
