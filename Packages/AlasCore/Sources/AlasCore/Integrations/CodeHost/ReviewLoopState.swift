@@ -612,6 +612,10 @@ public final class ReviewLoopState {
         guard let snapshot,
               snapshot.local.branchName == local.branchName,
               snapshot.local.baseBranch == local.baseBranch,
+              // What the lookup searches by: a retargeted upstream or fork
+              // is another review, not this one.
+              snapshot.local.upstreamBranchName == local.upstreamBranchName,
+              snapshot.local.headRemoteOwner == local.headRemoteOwner,
               Self.sameRepository(snapshot.remote, remote)
         else {
             return nil
