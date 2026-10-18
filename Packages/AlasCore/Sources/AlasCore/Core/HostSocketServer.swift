@@ -152,7 +152,10 @@ public final class HostSocketServer: @unchecked Sendable {
             while let newline = pending.firstIndex(of: UInt8(ascii: "\n")) {
                 let message = Data(pending[pending.startIndex ..< newline])
                 pending.removeSubrange(pending.startIndex ... newline)
-                if case .response(1, let result)? = try? JSONDecoder().decode(HostServerMessage.self, from: message) {
+                // Id 0 is a host's answer to a message it could not decode,
+                // a request from a later version among them.
+                if case .response(let id, let result)? = try? JSONDecoder().decode(HostServerMessage.self, from: message),
+                   id == 1 || id == 0 {
                     return result
                 }
             }

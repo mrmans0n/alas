@@ -40,8 +40,12 @@ if CommandLine.arguments.dropFirst().elementsEqual(["pair"]) {
         print(code)
         FileHandle.standardError.write(Data("Valid until \(expiresAt.formatted(date: .omitted, time: .standard)).\n".utf8))
         exit(0)
+    case .failure(.failed(let message)):
+        fail(message)
+    case .failure(.invalidRequest):
+        fail("the running host is older and does not mint Remote pairing codes")
     case .failure(let error):
-        fail(error.localizedDescription)
+        fail("\(error)")
     default:
         fail("the host does not mint Remote pairing codes")
     }
