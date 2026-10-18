@@ -95,11 +95,15 @@ public final class HostProtocolConnection {
         if message.version != HostProtocolVersion.current {
             result = .failure(error: .unsupportedVersion(supported: HostProtocolVersion.current))
         } else {
+            // Counted while it is served, not while its answer is sent, for
+            // shutdown to wait on.
+            host.core.requestsUnderway += 1
             do {
                 result = try await respond(to: message.request)
             } catch {
                 result = .failure(error: Self.hostError(error))
             }
+            host.core.requestsUnderway -= 1
         }
         await enqueue(.response(id: message.id, result: result))
     }
