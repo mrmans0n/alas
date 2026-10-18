@@ -39,15 +39,31 @@ extension AlasHost {
     /// (`ALAS_APP_SUPPORT_DIR`); any other is refused, because the stores
     /// that resolve `Paths` would write the profile's instead.
     ///
+    /// It starts as the app does: legacy remote worktree ids are migrated
+    /// before anything loads, the login-shell PATH is resolved for git and
+    /// agents, and staged worktree trash and stale run files are swept.
+    ///
     /// Throws when the project list cannot be read.
-    // ponytail: no startup migrations; the app runs them on launch, so a directory the app has not opened since an upgrade is read as-is.
     public static func boot(in directory: URL = Paths.appSupportRoot) throws -> AlasHost {
         guard directory.standardizedFileURL.path == Paths.appSupportRoot.standardizedFileURL.path else {
             throw HostBootRefusal.notThisProcesssDirectory(directory)
         }
-        let environment = HeadlessHostEnvironment(loadingFrom: directory)
         let store = PersistenceStore()
-        let projects = try store.readIfExists(ProjectsFile.self, from: Paths.projectsFile) ?? ProjectsFile(projects: [])
+        var projects = try store.readIfExists(ProjectsFile.self, from: Paths.projectsFile) ?? ProjectsFile(projects: [])
+        var config = (try? store.readIfExists(AppConfig.self, from: Paths.appConfigFile)) ?? .defaults
+        var spaces = try? store.readIfExists(SpacesFile.self, from: Paths.spacesFile)
+        RemotePathMigration.complete(
+            projectsFile: &projects, config: &config, spaces: &spaces, saving: store,
+            migrateStores: { RemotePathMigration.migrate(idMap: $0, defaults: AlasProfile.userDefaults) }
+        )
+        ShellEnvResolver.shared.resolve()
+        let sweptProjects = projects.projects
+        Task.detached(priority: .utility) {
+            RunScriptCompletionMonitor.cleanupStaleLocalFiles()
+            WorktreeTrashCleaner.sweep(projects: sweptProjects)
+        }
+        ACPLaunchCatalog.publishRegistryAgents(config.agents.registry)
+        let environment = HeadlessHostEnvironment(configuration: config)
         // Every other store keeps its `Paths` default, which is this directory.
         let ordering = environment.config.worktrees.defaultOrdering
         return AlasHost(core: AlasCoreContext(
