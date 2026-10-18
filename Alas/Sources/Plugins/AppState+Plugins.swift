@@ -252,15 +252,15 @@ extension AppState {
     }
 
     private func pluginWorkspaceSnapshot(projectId: String) -> PluginWorkspaceSnapshot {
-        let worktrees = projectsManager.worktreesByProject[projectId] ?? []
-        let project = projects.first { $0.id == projectId }
+        let worktrees = host.worktrees
         return PluginWorkspaceSnapshot(
-            worktrees: worktrees.map { worktree in
+            worktrees: worktrees.list(projectID: projectId, includingArchived: true).map(\.worktree).map { worktree in
                 PluginWorkspaceSnapshot.WorktreeInput(
                     worktree: worktree,
-                    dirty: WorktreeStatusStore.shared.status(forPath: worktree.path.path),
+                    dirty: worktrees.gitStatus(of: worktree),
+                    // The sidebar's rows, terminal agents included: what the user sees of the worktree.
                     sessions: agentSidebarRollup(for: worktree).active.map(PluginWorkspaceSnapshot.SessionInput.init(row:)),
-                    isMain: project.map { projectsManager.isMain(worktree, in: $0) } ?? false)
+                    isMain: worktrees.isMain(worktree))
             },
             selectedWorktreeId: selectedWorktreeId)
     }

@@ -26,12 +26,6 @@ struct AlasCLICommandRouter {
         .error("Preview automation is not available.")
     }
     var activateApp: () -> Void
-    var prCreate: (String, String, PRCreateParams) async -> AlasCLIResponse = { _, _, _ in
-        .error("The PR shepherd is not available yet.")
-    }
-    var prStatus: (String, String) async -> AlasCLIResponse = { _, _ in
-        .error("The PR shepherd is not available yet.")
-    }
 
     /// Also used by plugins (`review/comment`), so they take the CLI's paths rather than a copy of them.
     var service: AlasActionService {
@@ -247,12 +241,14 @@ struct AlasCLICommandRouter {
             guard let sessionId = request.sessionId, callers.acpOrigin(ofSession: sessionId) != nil else {
                 return .error("pr_create is only available to ACP agent sessions.")
             }
-            return await prCreate(sessionId, origin.id, params)
+            return await host.prs.create(
+                sessionID: sessionId, worktreeID: origin.id, title: params.title, body: params.body, draft: params.draft, base: params.base
+            )
         case .prStatus:
             guard let sessionId = request.sessionId, callers.acpOrigin(ofSession: sessionId) != nil else {
                 return .error("pr_status is only available to ACP agent sessions.")
             }
-            return await prStatus(sessionId, origin.id)
+            return await host.prs.status(sessionID: sessionId, worktreeID: origin.id)
         }
     }
 

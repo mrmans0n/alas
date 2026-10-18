@@ -86,6 +86,8 @@ public final class AlasCoreContext {
     /// One per project: a free-name creation holds it from picking a free
     /// name until the worktree exists, so the next pick sees it.
     @ObservationIgnored var freeNameGates: [String: SerialGate] = [:]
+    /// The PR creation running for each worktree; one waits for another.
+    @ObservationIgnored var prCreateTasks: [String: Task<AlasCLIResponse, Never>] = [:]
     /// Each repository's `.alas/config.json`, read once per change.
     @ObservationIgnored public let repoConfigStore = RepoConfigStore()
     /// Agents' turns and usage limits, as usage views and plugins read them.

@@ -1,6 +1,6 @@
 import Foundation
 
-enum CommitComposerActionPosition: Sendable {
+public enum CommitComposerActionPosition: Sendable {
     case leading
     case trailing
 }
