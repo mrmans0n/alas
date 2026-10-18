@@ -19,7 +19,7 @@ struct AlasCLICommandRouter {
     var openReview: (Worktree, String, HostCaller) async -> AlasCLIResponse = { _, _, _ in
         .error("Opening provider reviews from the terminal is not available yet.")
     }
-    var workspaceCommand: (AlasCLIRequest.WorkspaceCommand) async -> AlasCLIResponse = { _ in
+    var workspaceCommand: (AlasCLIRequest.WorkspaceCommand, HostCaller) async -> AlasCLIResponse = { _, _ in
         .error("Workspace automation is not available yet.")
     }
     var previewCommand: (WebPreviewCommand, SessionOwnerID, String?) async -> AlasCLIResponse = { _, _, _ in
@@ -67,7 +67,7 @@ struct AlasCLICommandRouter {
             }
             return await previewCommand(command, owner, request.sessionId)
         case .workspace(let command):
-            return await workspaceCommand(command)
+            return await workspaceCommand(command, caller)
         case .visualShow(let title, let html, let question, let presentation):
             guard let sessionId = request.sessionId, callers.acpOrigin(ofSession: sessionId) != nil else {
                 return .error("visual_show is only available to ACP agent sessions")

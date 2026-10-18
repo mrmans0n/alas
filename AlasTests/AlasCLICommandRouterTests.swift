@@ -1355,23 +1355,28 @@ struct AlasCLICommandRouterTests {
         let checkoutID = UUID()
         let memberID = UUID()
         var commands: [AlasCLIRequest.WorkspaceCommand] = []
+        var callers: [HostCaller] = []
+        let worktree = Self.worktree(branch: "main", path: "/tmp/repo", projectId: "p1")
         let router = AlasCLICommandRouter(
-            host: AlasHost.routerFixture([]),
+            host: AlasHost.routerFixture([worktree], sessionWorktree: { $0 == "s1" ? worktree.id : nil }),
             openRelativeFile: { _, _ in },
             openExternalFile: { _, _ in },
-            workspaceCommand: { command in
+            workspaceCommand: { command, caller in
                 commands.append(command)
+                callers.append(caller)
                 return .text([#"{"version":1}"#])
             },
             activateApp: {}
         )
 
         let list = await router.handle(.init(version: 1, sessionId: nil, cwd: "/outside", command: .workspace(.list)))
-        let focus = await router.handle(.init(version: 1, sessionId: nil, cwd: "/outside", command: .workspace(.focus(checkoutID: checkoutID, memberID: memberID))))
+        let focus = await router.handle(.init(version: 1, sessionId: "s1", cwd: "/outside", command: .workspace(.focus(checkoutID: checkoutID, memberID: memberID))))
 
         #expect(list == .text([#"{"version":1}"#]))
         #expect(focus == .text([#"{"version":1}"#]))
         #expect(commands == [.list, .focus(checkoutID: checkoutID, memberID: memberID)])
+        // Each command acts as its own caller: a session's focus is the session's.
+        #expect(callers == [.cli, .session(id: "s1")])
     }
 
     @Test(arguments: [ACPVisualAid.Presentation.embedded, .card])

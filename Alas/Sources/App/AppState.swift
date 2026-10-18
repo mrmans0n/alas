@@ -7032,9 +7032,9 @@ final class AppState {
                 guard let self else { return .error("Alas is not available.") }
                 return await self.cliOpenReview(worktree: worktree, target: target, caller: caller)
             },
-            workspaceCommand: { [weak self] command in
+            workspaceCommand: { [weak self] command, caller in
                 guard let self else { return .error("Alas is not available.") }
-                return await self.cliWorkspace(command)
+                return await self.cliWorkspace(command, caller: caller)
             },
             previewCommand: { [weak self] command, owner, sessionID in
                 guard let self else { return .error("Alas is not available.") }
@@ -7057,7 +7057,7 @@ final class AppState {
         )
     }
 
-    private func cliWorkspace(_ command: AlasCLIRequest.WorkspaceCommand) async -> AlasCLIResponse {
+    private func cliWorkspace(_ command: AlasCLIRequest.WorkspaceCommand, caller: HostCaller) async -> AlasCLIResponse {
         let service = WorkspaceAutomationService(
             store: workspaceStore,
             refreshNavigation: { [weak self] in
@@ -7088,7 +7088,7 @@ final class AppState {
             case .focus(let checkoutID, let memberID):
                 let target = try await service.memberTarget(checkoutID: checkoutID, memberID: memberID)
                 await workspacesManager.refreshCheckoutSnapshots()
-                try? await host.worktrees.refresh(projectID: target.projectID, caller: .cli)
+                try? await host.worktrees.refresh(projectID: target.projectID, caller: caller)
                 await workspacesManager.refreshCheckoutSnapshots()
                 selectWorkspaceCheckout(id: checkoutID)
                 focusWorkspaceCheckoutMember(id: memberID)
