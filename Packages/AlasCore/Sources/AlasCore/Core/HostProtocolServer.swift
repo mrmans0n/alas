@@ -13,6 +13,9 @@ public final class HostProtocolServer {
     /// Set once the host stops serving: every connection, open ones
     /// included, answers that it is stopping instead of serving a request.
     public private(set) var isClosed = false
+    /// The pairing of the Remote server this host serves headlessly, which
+    /// mints codes for local clients; nil where the app shows codes itself.
+    public var remotePairing: RemotePairingService?
 
     public init(
         host: AlasHost,
@@ -34,7 +37,7 @@ public final class HostProtocolServer {
             host: host, caller: caller, discoverScripts: discoverScripts,
             // Held by the connection: a caller may keep only the connection
             // (the Remote gateway does), and the server keeps no connection.
-            isServerClosed: { [self] in isClosed }, send: send
+            isServerClosed: { [self] in isClosed }, remotePairing: { [self] in remotePairing }, send: send
         )
     }
 
@@ -51,6 +54,7 @@ public final class HostProtocolConnection {
     private let caller: HostCaller
     private let discoverScripts: HostProtocolServer.ScriptDiscovery
     private let isServerClosed: @MainActor () -> Bool
+    private let remotePairing: @MainActor () -> RemotePairingService?
     private let send: @MainActor (HostServerMessage) async -> Void
     private var subscription: HostSubscription?
     /// The last message handed to the transport. Every send waits for the
@@ -64,12 +68,14 @@ public final class HostProtocolConnection {
         caller: HostCaller,
         discoverScripts: @escaping HostProtocolServer.ScriptDiscovery,
         isServerClosed: @escaping @MainActor () -> Bool = { false },
+        remotePairing: @escaping @MainActor () -> RemotePairingService? = { nil },
         send: @escaping @MainActor (HostServerMessage) async -> Void
     ) {
         self.host = host
         self.caller = caller
         self.discoverScripts = discoverScripts
         self.isServerClosed = isServerClosed
+        self.remotePairing = remotePairing
         self.send = send
     }
 
@@ -255,6 +261,14 @@ public final class HostProtocolConnection {
             return .capabilities(capabilities: HostProtocolCapability.served)
         case .runOutput(let runID, let projectID):
             return .runOutput(output: await host.runs.output(of: runID, projectID: projectID))
+        case .remotePairingCode:
+            // A code admits a new device, so only the local user mints one:
+            // never a paired device over Remote's own host channel.
+            guard case .localUser = caller, let pairing = remotePairing() else {
+                throw HostError.failed(message: "This host does not mint Remote pairing codes.")
+            }
+            let code = pairing.beginPairing()
+            return .remotePairingCode(code: code, expiresAt: Date().addingTimeInterval(RemotePairingService.codeTTL))
         }
         return .done
     }

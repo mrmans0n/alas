@@ -7,11 +7,15 @@ import Foundation
 
 let usage = """
 usage: alas-host
+       alas-host pair
 
 Serves the Alas host protocol for the data directory ALAS_APP_SUPPORT_DIR
 (default: ~/Library/Application Support/Alas) on its local socket, and prints
 the socket path. When the profile enables Remote, also serves it on loopback
 and prints its address. Stops on SIGINT or SIGTERM.
+
+`alas-host pair` asks the running host for a Remote pairing code, which a
+phone or browser redeems within two minutes, and prints it.
 """
 
 func fail(_ message: String) -> Never {
@@ -22,6 +26,24 @@ func fail(_ message: String) -> Never {
 if CommandLine.arguments.dropFirst().contains(where: { $0 == "--help" || $0 == "-h" }) {
     print(usage)
     exit(0)
+}
+if CommandLine.arguments.dropFirst().elementsEqual(["pair"]) {
+    let response: HostResponse
+    do {
+        response = try HostSocketServer.request(.remotePairingCode)
+    } catch {
+        fail("no host serves \(HostSocketServer.defaultPath()): \(error.localizedDescription)")
+    }
+    switch response {
+    case .remotePairingCode(let code, let expiresAt):
+        print(code)
+        FileHandle.standardError.write(Data("Valid until \(expiresAt.formatted(date: .omitted, time: .standard)).\n".utf8))
+        exit(0)
+    case .failure(let error):
+        fail(error.localizedDescription)
+    default:
+        fail("the host does not mint Remote pairing codes")
+    }
 }
 if let unknown = CommandLine.arguments.dropFirst().first {
     fail("unknown argument \(unknown)\n\(usage)")
@@ -68,6 +90,7 @@ if config.remote.enabled {
     }
     let settings = config.remote
     let pairing = RemotePairingService(store: FileDeviceStore())
+    protocolServer.remotePairing = pairing
     let interfaces = RemoteNetwork.interfaces()
     let server = RemoteServer(
         pairing: pairing,
