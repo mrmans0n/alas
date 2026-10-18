@@ -6,6 +6,36 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.21.8] - 2026-10-18
+
+### ✨ Features
+
+- Render visual aids inline with agent replies, with chat typography, theme variables, and optional card presentation. Preserve existing cards in saved sessions (#2092).
+- Fit oversized peer consoles to the pane or pan across the host's terminal grid (#2083).
+- Quote selected transcript text into the composer, expand prompt cards to inspect their instructions, and show Alas command badges with live Ship status (#2075, #2077, #2076).
+- Open and close Workspace checkout session tabs remotely without changing the host's active tab (#2073).
+- Refresh review status for followed worktrees and add host-protocol worktree following, event opt-in, and capability discovery (#2093, #2095).
+
+### 🐛 Fixes
+
+- Reject next-prompt suggestions that repeat the agent's closing question (#2094).
+- Let the context breakdown popover expand without clipping its legend (#2069).
+- Clear hidden local sidebar highlights while viewing a peer worktree (#2068).
+- Preserve the last known review request during provider outages while continuing to show missing-CLI or authentication errors (#2107).
+
+### 🏗️ Internal
+
+- Move Remote mention lookup, session loading, transcript reads, and streaming into the shared host API (#2067, #2070, #2071).
+- Route CLI caller resolution, notifications, delegated-session commands, and worktree validation through the host (#2078, #2079, #2084, #2086).
+- Move delegation orchestration, recovery, message delivery, parent tracking, and session admission into AlasCore (#2080, #2081, #2082, #2085).
+- Centralize review stores, comments, status, and review opening in the host (#2088, #2089, #2090, #2102).
+- Route plugin runs, agent and session reads, task startup, PR shepherd commands, and snapshots through the host (#2098, #2099, #2100, #2101).
+- Add exclusive data-directory ownership, profile-based headless host boot, and the `alas-host` executable with socket and run-output protocol coverage (#2104, #2106, #2108, #2109).
+- Replace timing-sensitive test waits with explicit synchronization and fail clearly when integration waits time out (#2087, #2091, #2105).
+- Update tree-sitter-scala to 0.26.3 and libc to 0.2.191 (#2096, #2072).
+- Remove the accidentally tracked local benchmark installation (#2097).
+- Document the CLI, MCP, and plugin migration plan and standalone host phase (#2074, #2103).
+
 ## [0.21.7] - 2026-10-16
 
 ### ✨ Features
