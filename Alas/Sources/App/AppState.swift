@@ -7028,9 +7028,9 @@ final class AppState {
                 self.focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
                 _ = self.openReviewChangesTab(for: worktree)
             },
-            openReview: { [weak self] worktree, target in
+            openReview: { [weak self] worktree, target, caller in
                 guard let self else { return .error("Alas is not available.") }
-                return await self.cliOpenReview(worktree: worktree, target: target)
+                return await self.cliOpenReview(worktree: worktree, target: target, caller: caller)
             },
             workspaceCommand: { [weak self] command in
                 guard let self else { return .error("Alas is not available.") }
@@ -11175,8 +11175,8 @@ final class AppState {
 
     /// Opens the review `alas review <target>` names: the host resolves and
     /// saves it, and this shows its tab.
-    func cliOpenReview(worktree: Worktree, target: String) async -> AlasCLIResponse {
-        switch await host.reviews.open(target, in: worktree, caller: .cli) {
+    func cliOpenReview(worktree: Worktree, target: String, caller: HostCaller) async -> AlasCLIResponse {
+        switch await host.reviews.open(target, in: worktree, caller: caller) {
         case .failure(let failure):
             return .error(failure.message)
         case .success(let opened):

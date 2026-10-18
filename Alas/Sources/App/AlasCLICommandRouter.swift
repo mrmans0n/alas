@@ -16,7 +16,7 @@ struct AlasCLICommandRouter {
         .error("Deleting worktrees from the terminal is not available yet.")
     }
     var openReviewChanges: (Worktree) -> Void = { _ in }
-    var openReview: (Worktree, String) async -> AlasCLIResponse = { _, _ in
+    var openReview: (Worktree, String, HostCaller) async -> AlasCLIResponse = { _, _, _ in
         .error("Opening provider reviews from the terminal is not available yet.")
     }
     var workspaceCommand: (AlasCLIRequest.WorkspaceCommand) async -> AlasCLIResponse = { _ in
@@ -212,7 +212,7 @@ struct AlasCLICommandRouter {
         case .review(.target(let target, let worktreeOverride)):
             switch service.reviewOrigin(origin: origin, override: worktreeOverride, projectWorktrees: projectWorktrees) {
             case .success(let reviewOrigin):
-                return await service.reviewTarget(origin: reviewOrigin, target: target)
+                return await service.reviewTarget(origin: reviewOrigin, target: target, caller: caller)
             case .failure(let error):
                 return .error(error.message)
             }

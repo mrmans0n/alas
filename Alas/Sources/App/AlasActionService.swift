@@ -12,7 +12,7 @@ struct AlasActionService {
     var openExternalFileAtLines: (URL, String, ClosedRange<Int>) -> Void = { _, _, _ in }
     var focusWorktree: (Worktree) -> Void = { _ in }
     var openReviewChanges: (Worktree) -> Void = { _ in }
-    var openReview: (Worktree, String) async -> AlasCLIResponse = { _, _ in
+    var openReview: (Worktree, String, HostCaller) async -> AlasCLIResponse = { _, _, _ in
         .error("Opening provider reviews from the terminal is not available yet.")
     }
     var activateApp: () -> Void
@@ -93,8 +93,8 @@ struct AlasActionService {
         ])
     }
 
-    func reviewTarget(origin: Worktree, target: String) async -> AlasCLIResponse {
-        await openReview(origin, target)
+    func reviewTarget(origin: Worktree, target: String, caller: HostCaller) async -> AlasCLIResponse {
+        await openReview(origin, target, caller)
     }
 
     /// Failure detail for `reviewOrigin`: a single message describing why the
