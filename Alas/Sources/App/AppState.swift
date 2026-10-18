@@ -719,14 +719,10 @@ final class AppState {
         port: UInt16?,
         interfaces: [RemoteNetworkInterface]
     ) -> [RemoteAdvertisedAddress] {
-        guard let port else { return [] }
-        return RemoteNetwork.advertisedAddresses(
+        config.remote.advertisedAddresses(
             port: port,
             interfaces: interfaces,
-            allowedHosts: config.remote.allowedHosts,
-            preferredHost: config.remote.preferredAdvertisedHost,
-            tailnetHTTPSHost: remoteTailscaleServe == .serving(port: port) ? remoteTailscale?.dnsName : nil,
-            tailnetHTTPSOnly: config.remote.listensOnLoopbackOnly
+            tailnetHTTPSHost: port.flatMap { remoteTailscaleServe == .serving(port: $0) ? remoteTailscale?.dnsName : nil }
         )
     }
 
@@ -735,12 +731,7 @@ final class AppState {
     }
 
     private func makeRemoteAccessPolicy(interfaces: [RemoteNetworkInterface]) -> RemoteAccessPolicy {
-        let hosts = RemoteNetwork.allowedHostCandidates(
-            interfaces: interfaces,
-            allowedHosts: config.remote.allowedHosts,
-            tailnetDNSName: remoteTailscale?.dnsName
-        )
-        return RemoteAccessPolicy(allowedHosts: hosts)
+        config.remote.accessPolicy(interfaces: interfaces, tailnetDNSName: remoteTailscale?.dnsName)
     }
 
     private func makeRemoteAccessPolicy() -> RemoteAccessPolicy {
@@ -748,10 +739,7 @@ final class AppState {
     }
 
     private func makeRemoteOriginPolicy(interfaces: [RemoteNetworkInterface]) -> RemoteOriginPolicy {
-        RemoteOriginPolicy(
-            hostPolicy: makeRemoteAccessPolicy(interfaces: interfaces),
-            allowedOrigins: config.remote.allowedOrigins
-        )
+        config.remote.originPolicy(interfaces: interfaces, tailnetDNSName: remoteTailscale?.dnsName)
     }
 
     private func makeRemoteOriginPolicy() -> RemoteOriginPolicy {
@@ -760,11 +748,7 @@ final class AppState {
 
     /// Name advertised to remote clients: the configured display name, else
     /// the computer name.
-    var remoteDisplayName: String {
-        let configured = config.remote.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !configured.isEmpty { return configured }
-        return Host.current().localizedName ?? RemoteNetwork.machineHostName() ?? "Alas"
-    }
+    var remoteDisplayName: String { config.remote.resolvedDisplayName }
 
     func remoteServerIdentity() -> RemoteServerIdentity {
         RemoteServerIdentity(
