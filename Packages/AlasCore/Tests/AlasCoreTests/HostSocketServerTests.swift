@@ -26,6 +26,7 @@ struct HostSocketServerTests {
             projectsFile: root.appendingPathComponent("projects.json"),
             runHistoryStore: nil,
             workspaceStore: WorkspaceStore(url: root.appendingPathComponent("workspaces.json")),
+            attentionStore: .scratch(),
             environment: NoCheckpointsEnvironment()
         )
         let project = try await core.addProject(path: repo, displayName: "repo", icon: .default())

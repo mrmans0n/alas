@@ -22,7 +22,7 @@ struct AlasHostTests {
         projects.insertOptimisticWorktree(archived)
         projects.setOperationState(for: busy, state: .deleting(projectId: "p"))
         projects.setWorktreeHidden(projectId: "p", path: archived.path, hidden: true)
-        let host = AlasHost(core: AlasCoreContext(projects: projects, runHistoryStore: nil))
+        let host = AlasHost(core: AlasCoreContext(projects: projects, runHistoryStore: nil, attentionStore: .scratch()))
 
         #expect(host.worktrees.list() == [
             WorktreeSnapshot(worktree: busy, operation: .deleting, isArchived: false),
@@ -54,7 +54,7 @@ struct AlasHostTests {
         )
         projects.insertOptimisticWorktree(worktree)
         let environment = CheckingEnvironment()
-        let core = AlasCoreContext(projects: projects, runHistoryStore: nil, environment: environment)
+        let core = AlasCoreContext(projects: projects, runHistoryStore: nil, attentionStore: .scratch(), environment: environment)
         let host = AlasHost(core: core)
         let refusal: WorktreeCheckRefusal
         switch check {
@@ -100,7 +100,7 @@ struct AlasHostTests {
     /// configured base stays, and takes a new configured base when settings
     /// change it, so background refreshes do not query the old one.
     @Test func reviewLoopFollowsTheConfiguredBaseBranch() {
-        let core = AlasCoreContext(projects: ProjectsManager(persistedProjects: []), runHistoryStore: nil)
+        let core = AlasCoreContext(projects: ProjectsManager(persistedProjects: []), runHistoryStore: nil, attentionStore: .scratch())
         let worktree = Worktree(
             id: "w", projectId: "p", name: "feature", branch: "feature",
             path: URL(fileURLWithPath: "/srv/feature"), status: .clean, lastActivity: .distantPast
@@ -123,7 +123,7 @@ struct AlasHostTests {
             path: path, status: .clean, lastActivity: .distantPast
         )
         projects.insertOptimisticWorktree(worktree)
-        let host = AlasHost(core: AlasCoreContext(projects: projects, runHistoryStore: nil))
+        let host = AlasHost(core: AlasCoreContext(projects: projects, runHistoryStore: nil, attentionStore: .scratch()))
         let subscription = host.subscribe()
         defer { subscription.cancel() }
         // No remotes, so the read is local only.
@@ -164,7 +164,7 @@ struct AlasHostTests {
             path: path, status: .clean, lastActivity: .distantPast
         )
         projects.insertOptimisticWorktree(worktree)
-        let core = AlasCoreContext(projects: projects, runHistoryStore: nil)
+        let core = AlasCoreContext(projects: projects, runHistoryStore: nil, attentionStore: .scratch())
         let probe = RefreshProbe()
         core.reviewStatusRefresh = { probe.refreshed.append($0) }
         core.reviewStatusPause = { _ in
@@ -217,7 +217,7 @@ struct AlasHostTests {
                 output: .available(text: "out \(id)\n", truncated: id == "p2")
             ))
         }
-        let host = AlasHost(core: AlasCoreContext(projects: projects, runHistoryStore: history))
+        let host = AlasHost(core: AlasCoreContext(projects: projects, runHistoryStore: history, attentionStore: .scratch()))
 
         #expect(await host.runs.output(of: "run-p1", projectID: "p1") == .text("out p1\n", truncated: false))
         #expect(await host.runs.output(of: "run-p2", projectID: "p1") == .unknownRun)
@@ -278,7 +278,7 @@ struct AlasHostTests {
             path: path, status: .clean, lastActivity: .distantPast
         )
         projects.insertOptimisticWorktree(worktree)
-        let host = AlasHost(core: AlasCoreContext(projects: projects, runHistoryStore: nil))
+        let host = AlasHost(core: AlasCoreContext(projects: projects, runHistoryStore: nil, attentionStore: .scratch()))
         let script = RunScript(
             scope: .repo, fileName: "dev.sh", fileURL: path.appendingPathComponent(".alas/scripts/dev.sh"),
             displayName: "Dev", onExit: .close, cwd: nil, isExecutable: true
@@ -307,7 +307,7 @@ struct AlasHostTests {
             path: path, status: .clean, lastActivity: .distantPast
         )
         projects.insertOptimisticWorktree(worktree)
-        let core = AlasCoreContext(projects: projects, runHistoryStore: nil)
+        let core = AlasCoreContext(projects: projects, runHistoryStore: nil, attentionStore: .scratch())
         let reading = AsyncStream<Void>.makeStream()
         // A Git or code-host call does not end when its task is cancelled.
         let probe = RefreshProbe()
@@ -352,7 +352,7 @@ struct AlasHostTests {
         )
         projects.insertOptimisticWorktree(worktree)
         let environment = RunHoldingEnvironment()
-        let host = AlasHost(core: AlasCoreContext(projects: projects, runHistoryStore: nil, environment: environment))
+        let host = AlasHost(core: AlasCoreContext(projects: projects, runHistoryStore: nil, attentionStore: .scratch(), environment: environment))
         let script = RunScript(
             scope: .repo, fileName: "dev.sh", fileURL: scriptURL,
             displayName: "Dev", onExit: .close, cwd: nil, isExecutable: true
@@ -389,7 +389,7 @@ struct AlasHostTests {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = WorkspaceStore(url: directory.appendingPathComponent("workspaces.json"))
-        let host = AlasHost(core: AlasCoreContext(projects: projects, runHistoryStore: nil, workspaceStore: store))
+        let host = AlasHost(core: AlasCoreContext(projects: projects, runHistoryStore: nil, workspaceStore: store, attentionStore: .scratch()))
 
         let snapshot = try await host.snapshot()
         let subscription = host.subscribe(after: snapshot.cursor)
@@ -461,6 +461,7 @@ struct AlasHostTests {
             projects: projects,
             runHistoryStore: nil,
             workspaceStore: WorkspaceStore(url: directory.appendingPathComponent("workspaces.json")),
+            attentionStore: .scratch(),
             makeSessionManager: { owner, worktree in
                 ACPSessionManager(
                     worktreeId: worktree.id,
@@ -507,6 +508,7 @@ struct AlasHostTests {
             projectsFile: root.appendingPathComponent("projects.json"),
             runHistoryStore: nil,
             workspaceStore: WorkspaceStore(url: root.appendingPathComponent("workspaces.json")),
+            attentionStore: .scratch(),
             environment: environment
         )
         let project = try await core.addProject(path: repo, displayName: "repo", icon: .default())

@@ -296,7 +296,8 @@ struct HostProtocolServerTests {
             host = AlasHost(core: AlasCoreContext(
                 projects: projects,
                 runHistoryStore: nil,
-                workspaceStore: WorkspaceStore(url: directory.appendingPathComponent("workspaces.json"))
+                workspaceStore: WorkspaceStore(url: directory.appendingPathComponent("workspaces.json")),
+                attentionStore: .scratch()
             ))
             server = HostProtocolServer(host: host)
         }

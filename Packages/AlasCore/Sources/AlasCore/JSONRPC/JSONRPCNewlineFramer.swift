@@ -5,6 +5,9 @@ import Foundation
 public struct JSONRPCNewlineFramer: Sendable {
     private var buffer = Data()
     private var scannedBytes = 0
+    /// Bytes searched for a newline so far, for tests to check that a line
+    /// spanning many reads is not searched again on each one.
+    private(set) var searchedBytes = 0
 
     public init() {}
 
@@ -15,9 +18,11 @@ public struct JSONRPCNewlineFramer: Sendable {
     public mutating func drainFrames() -> [Data] {
         var out: [Data] = []
         var consumedBytes = 0
+        var searched = 0
         buffer.withUnsafeBytes { (bytes: UnsafeRawBufferPointer) in
             var searchStart = scannedBytes
             while let newline = bytes[searchStart...].firstIndex(of: 0x0A) {
+                searched += newline + 1 - searchStart
                 var end = newline
                 if end > consumedBytes, bytes[end - 1] == 0x0D { end -= 1 }
                 if end > consumedBytes {
@@ -26,7 +31,9 @@ public struct JSONRPCNewlineFramer: Sendable {
                 consumedBytes = newline + 1
                 searchStart = consumedBytes
             }
+            searched += bytes.count - searchStart
         }
+        searchedBytes += searched
         if consumedBytes == buffer.count {
             buffer = Data()
         } else if consumedBytes > 0 {

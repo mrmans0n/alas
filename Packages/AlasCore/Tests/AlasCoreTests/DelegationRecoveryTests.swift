@@ -18,7 +18,7 @@ struct DelegationRecoveryTests {
             pendingInitialPrompt: "Go", phase: .creatingWorktree, failureMessage: nil, createdAt: 1, updatedAt: 1
         ))
         let core = AlasCoreContext(
-            projects: ProjectsManager(persistedProjects: []), runHistoryStore: nil, orchestrationPersistence: persistence
+            projects: ProjectsManager(persistedProjects: []), runHistoryStore: nil, attentionStore: .scratch(), orchestrationPersistence: persistence
         )
 
         await core.recoverDelegations()

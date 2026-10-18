@@ -704,6 +704,7 @@ struct HostSessionsTests {
                 projects: projects,
                 runHistoryStore: nil,
                 workspaceStore: WorkspaceStore(url: root.appendingPathComponent("workspaces.json")),
+                attentionStore: .scratch(),
                 makeSessionManager: { owner, worktree in
                     ACPSessionManager(
                         worktreeId: worktree.id,
