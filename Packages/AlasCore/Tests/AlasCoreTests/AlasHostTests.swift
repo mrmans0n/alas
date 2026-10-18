@@ -265,8 +265,8 @@ struct AlasHostTests {
         }
     }
 
-    /// Once shutdown begins, nothing new starts: a run or a prompt a request
-    /// was still on its way to is refused.
+    /// Once shutdown begins, nothing new starts: a run, a prompt or a
+    /// worktree mutation a request was still on its way to is refused.
     @Test func aHostShuttingDownStartsNothingNew() async throws {
         let project = ProjectConfig(id: "p", name: "p", path: "/srv/repo", color: "blue", addedAt: .distantPast)
         let projects = ProjectsManager(persistedProjects: [project])
@@ -289,6 +289,9 @@ struct AlasHostTests {
         await #expect(throws: SessionRefusal.ownerUnavailable(reason: "The host is stopping.")) {
             _ = try await host.sessions.submit("any", prompt: "hi", caller: .cli)
         }
+        // Worktree mutations too: nothing Git or a repository hook would run.
+        #expect(throws: HostStopping()) { _ = try host.worktrees.beginDelete(worktree, caller: .cli) }
+        #expect(throws: HostStopping()) { try host.worktrees.unarchive(path: path, projectID: "p", caller: .cli) }
     }
 
     /// Changes made after a snapshot reach a subscriber holding its cursor,

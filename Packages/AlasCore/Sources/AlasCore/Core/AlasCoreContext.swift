@@ -118,6 +118,12 @@ public final class AlasCoreContext {
     /// Set once `AlasHost.shutdown()` begins: nothing new starts after it,
     /// requests already underway included.
     @ObservationIgnored var isStopping = false
+
+    /// Refuses work once the host is stopping, checked where the work would
+    /// start, after a request's last suspension.
+    func refuseIfStopping() throws {
+        if isStopping { throw HostStopping() }
+    }
     /// Runs in a plain process the launcher started, by run ID.
     @ObservationIgnored var processRuns: [String: (worktreeID: String, projectID: String, scriptKey: String, task: Task<RunScriptCompletion, Error>)] = [:]
     /// Why a run in a plain process ended without reporting, for `runScript`.
@@ -208,6 +214,7 @@ public final class AlasCoreContext {
         kind: ProjectKind = .git,
         id: String = UUID().uuidString
     ) async throws -> ProjectConfig {
+        try refuseIfStopping()
         guard !projects.projects.contains(where: { $0.id == id }) else {
             throw ProjectCreationError.projectAlreadyExists
         }
@@ -219,6 +226,11 @@ public final class AlasCoreContext {
             kind: kind,
             id: id
         )
+        // Adding awaits the repository's checks; the host can start stopping meanwhile.
+        guard !isStopping else {
+            projects.removeProject(id: project.id)
+            throw HostStopping()
+        }
         do {
             try saveProjects()
         } catch {

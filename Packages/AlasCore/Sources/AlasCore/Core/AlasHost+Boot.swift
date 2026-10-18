@@ -1,5 +1,10 @@
 import Foundation
 
+/// The host is stopping and starts nothing new.
+public struct HostStopping: Error, Equatable, LocalizedError {
+    public var errorDescription: String? { "The host is stopping." }
+}
+
 /// Why `AlasHost.boot(in:)` did not boot.
 public enum HostBootRefusal: Error, Equatable, LocalizedError {
     /// A host serves only its own process's data directory: every store,
@@ -67,10 +72,36 @@ extension AlasHost {
         for worktreeID in worktreeIDs {
             await core.stopProcessRuns(worktreeID: worktreeID)
         }
-        for manager in core.sessionManagers.values {
-            await manager.disposeAllLiveSessions()
-            await manager.flushAllPersistence()
+        // Every manager is marked disposed before the first await, so an
+        // attachment scheduled just before cannot start in any of them.
+        let managers = Array(core.sessionManagers.values)
+        core.sessionManagers.removeAll()
+        for manager in managers {
+            manager.flushPendingDraftWrites()
+            for runner in manager.runners.values {
+                runner.stop()
+            }
+            manager.prepareForDisposal()
+        }
+        for manager in managers {
+            await AlasCoreContext.finishDisposing(manager)
             manager.shutdownBackgroundTasks()
+        }
+        // A worktree mutation already past its checks (Git, repository
+        // scripts) finishes rather than being cut off at exit.
+        // ponytail: bounded at a minute, so a hung hook cannot keep the host alive.
+        let deadline = ContinuousClock.now + .seconds(60)
+        // Failed rows keep their state for a retry; only work underway is waited on.
+        func workUnderway() -> Bool {
+            core.projects.operationStatesSnapshot().values.contains { state in
+                switch state {
+                case .creating, .deleting, .archiving: true
+                default: false
+                }
+            }
+        }
+        while workUnderway(), ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(100))
         }
     }
 }

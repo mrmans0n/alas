@@ -230,6 +230,7 @@ extension AlasCoreContext {
     /// something (such as saving buffers) before `archiveWorktree(_:claim:)`.
     /// Release the claim if the archive does not go ahead.
     public func beginArchive(_ worktree: Worktree) throws -> UUID {
+        try refuseIfStopping()
         guard let project = projects.projects.first(where: { $0.id == worktree.projectId }) else {
             throw ProjectCreationError.projectNotFound
         }
@@ -276,6 +277,7 @@ extension AlasCoreContext {
     /// Shows an archived worktree again. Sessions and runs are not restored.
     /// Refused while any operation holds the worktree.
     public func unarchiveWorktree(path: URL, projectID: String) throws {
+        try refuseIfStopping()
         guard projects.projects.contains(where: { $0.id == projectID }) else {
             throw ProjectCreationError.projectNotFound
         }
@@ -429,6 +431,7 @@ extension AlasCoreContext {
     /// that confirm first. Pass the claim to `deleteWorktree(_:claim:options:)`,
     /// or release it if the deletion does not go ahead.
     public func beginDelete(_ worktree: Worktree) throws -> UUID {
+        try refuseIfStopping()
         guard let project = projects.projects.first(where: { $0.id == worktree.projectId }) else {
             throw ProjectCreationError.projectNotFound
         }

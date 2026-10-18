@@ -129,6 +129,7 @@ extension AlasCoreContext {
             status: .clean,
             lastActivity: Date()
         )
+        try refuseIfStopping()
         projects.insertOptimisticWorktree(worktree)
         let claim = projects.claimOperation(.creating, for: worktree)
         return PendingWorktreeCreation(request: request, worktree: worktree, claim: claim)
