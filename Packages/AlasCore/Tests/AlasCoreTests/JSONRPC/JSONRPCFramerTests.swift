@@ -66,17 +66,16 @@ struct JSONRPCFramerTests {
     @Test("large newline frames drain without rescanning every previous chunk")
     func largeNewlineFrameMakesProgress() {
         var framer = JSONRPCNewlineFramer()
-        let chunk = Data(repeating: 120, count: 16 * 1024)
-        let started = ContinuousClock.now
-        for _ in 0..<512 {
+        let chunk = Data(repeating: 120, count: 1024)
+        for _ in 0..<64 {
             framer.append(chunk)
             #expect(framer.drainFrames().isEmpty)
         }
         framer.append([10])
         let frames = framer.drainFrames()
-        #expect(frames == [Data(repeating: 120, count: 8 * 1024 * 1024)])
-        // Linear parsing takes milliseconds; the original rescan takes seconds
-        // even in an optimized build. Leave headroom for loaded CI machines.
-        #expect(started.duration(to: .now) < .seconds(4))
+        #expect(frames == [Data(repeating: 120, count: 64 * 1024)])
+        // Each byte is searched once; rescanning the partial line on every
+        // read would search about 32 times as many here.
+        #expect(framer.searchedBytes == 64 * 1024 + 1)
     }
 }
