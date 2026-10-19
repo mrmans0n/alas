@@ -19,7 +19,13 @@ let package = Package(
             linkerSettings: [.linkedLibrary("sqlite3")]
         ),
         .executableTarget(name: "alas-host", dependencies: ["AlasCore"]),
+        // Sets a scratch profile before the tests start; see profile.c.
+        .target(name: "AlasCoreTestProfile", path: "Tests/AlasCoreTestProfile"),
         // Depends on alas-host so `swift test` builds the binary its end-to-end tests launch.
-        .testTarget(name: "AlasCoreTests", dependencies: ["AlasCore", "alas-host"], exclude: ["Fixtures"]),
+        .testTarget(
+            name: "AlasCoreTests",
+            dependencies: ["AlasCore", "alas-host", "AlasCoreTestProfile"],
+            exclude: ["Fixtures"]
+        ),
     ]
 )
