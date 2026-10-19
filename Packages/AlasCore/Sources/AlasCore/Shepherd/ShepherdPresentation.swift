@@ -189,7 +189,9 @@ public enum ShepherdShipOffer {
         let closing = ask.trimmingCharacters(in: .whitespaces.union(.init(charactersIn: "*_`)\"'”’")))
         guard closing.hasSuffix("?") || matches(ask, #"^(?:let me know|say the word|just say)\b"#),
               // Status questions about work already done ("Did you open a PR?").
-              !matches(ask, #"^(?:did|have|has|was|were)\b"#)
+              !matches(ask, #"^(?:did|have|has|was|were)\b"#),
+              // The agent offers to act, rather than asking the user to ("Can you open a PR?").
+              !matches(ask, #"\byou\b"#) || matches(ask, #"\b(?:me|I|we|us)\b"#)
         else { return false }
         let request = #"(?:pr|pull request|merge request|mr)s?"#
         return matches(ask, #"\b(?:open|create|raise|put up|submit|file|send)\b[^.?!]{0,40}?\b"# + request + #"\b"#)

@@ -112,6 +112,8 @@ private let presentationCases: [ShepherdPresentationCase] = [
             ("Want me to open a PR? I can also add more tests first.", false),
             ("I opened a PR. Want me to add tests too?", false),
             ("Did you already open a PR for this?", false),
+            ("Can you open a PR when you're ready?", false),
+            ("Could you commit and push from your machine?", false),
             ("Want me to commit these changes?", false),
             ("Should I update the PR description?", false),
             ("I'll open a PR once the tests pass.", false),
