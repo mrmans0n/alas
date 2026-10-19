@@ -10,6 +10,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Review branch commits, branch commits plus uncommitted changes, only staged changes, everything since your last review feedback, or the branch's open pull/merge requests (including every gg stack entry) from the Prepare card's review menu.
 
+### Fixes
+
+- Restore keyboard focus to diff comment composers when their row is reattached, while respecting intentional focus changes to other controls.
+
 ## [0.21.8] - 2026-10-18
 
 ### ✨ Features

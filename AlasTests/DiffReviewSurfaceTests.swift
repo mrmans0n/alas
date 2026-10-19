@@ -425,7 +425,7 @@ struct DiffReviewSurfaceTests {
         }
     }
 
-    @Test func draftComposerRefocusesForEachNewFocusRequestGeneration() async throws {
+    @Test func draftComposerPreservesFocusIntentAcrossRequestsAndReattachment() async throws {
         let model = ReviewDraftComposerFocusModel()
         let controller = NSHostingController(
             rootView: ReviewDraftComposerFocusHarness(theme: theme(), model: model)
@@ -436,10 +436,16 @@ struct DiffReviewSurfaceTests {
             backing: .buffered,
             defer: false
         )
-        window.contentViewController = controller
+        let container = NSView(frame: window.contentView?.bounds ?? .zero)
+        window.contentView = container
+        container.addSubview(controller.view)
         controller.view.frame = window.contentView?.bounds ?? NSRect(x: 0, y: 0, width: 480, height: 240)
         controller.view.layoutSubtreeIfNeeded()
-        defer { ReviewDraftComposerFocusRetainer.retain(window, controller) }
+        window.makeKeyAndOrderFront(nil)
+        defer {
+            window.orderOut(nil)
+            ReviewDraftComposerFocusRetainer.retain(window, controller)
+        }
 
         await drainSwiftUI(controller.view)
 
@@ -451,11 +457,29 @@ struct DiffReviewSurfaceTests {
         )
         #expect(window.makeFirstResponder(sibling))
         #expect(window.firstResponder !== textView)
+        controller.view.removeFromSuperview()
+        container.addSubview(controller.view)
+        await drainSwiftUI(controller.view)
+        #expect(window.firstResponder !== textView)
 
         model.focusRequestGeneration += 1
         await drainSwiftUI(controller.view)
 
         #expect(window.firstResponder === textView)
+
+        controller.view.removeFromSuperview()
+        #expect(window.firstResponder !== textView)
+        container.addSubview(controller.view)
+        await drainSwiftUI(controller.view)
+        #expect(window.firstResponder === textView)
+
+        let key = try #require(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+            context: nil, characters: "x", charactersIgnoringModifiers: "x", isARepeat: false, keyCode: 7
+        ))
+        window.sendEvent(key)
+        #expect(textView.string == "x")
     }
 
     @Test func railFilterNarrowsNavigationWithoutChangingSelectionAndPersistsAcrossCollapse() async {
