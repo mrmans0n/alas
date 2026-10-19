@@ -188,6 +188,18 @@ public struct AppConfig: Codable, Equatable, Sendable {
             self.crashReports = crashReports
             self.usageAnalytics = usageAnalytics
         }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            let d = AppConfig.defaults.general
+            launchAtLogin = (try? c.decode(Bool.self, forKey: .launchAtLogin)) ?? d.launchAtLogin
+            closeToTray = (try? c.decode(Bool.self, forKey: .closeToTray)) ?? d.closeToTray
+            confirmQuit = (try? c.decode(Bool.self, forKey: .confirmQuit)) ?? d.confirmQuit
+            autoUpdate = (try? c.decode(Bool.self, forKey: .autoUpdate)) ?? d.autoUpdate
+            updateChannel = (try? c.decode(String.self, forKey: .updateChannel)) ?? d.updateChannel
+            crashReports = (try? c.decode(Bool.self, forKey: .crashReports)) ?? d.crashReports
+            usageAnalytics = (try? c.decode(Bool.self, forKey: .usageAnalytics)) ?? d.usageAnalytics
+        }
     }
 
     public struct Worktrees: Codable, Equatable, Sendable {
@@ -246,16 +258,17 @@ public struct AppConfig: Codable, Equatable, Sendable {
 
         public init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
-            rootPath = try c.decode(String.self, forKey: .rootPath)
-            pathTemplate = try c.decode(String.self, forKey: .pathTemplate)
-            branchPrefix = try c.decode(String.self, forKey: .branchPrefix)
+            let d = AppConfig.defaults.worktrees
+            rootPath = (try? c.decode(String.self, forKey: .rootPath)) ?? d.rootPath
+            pathTemplate = (try? c.decode(String.self, forKey: .pathTemplate)) ?? d.pathTemplate
+            branchPrefix = (try? c.decode(String.self, forKey: .branchPrefix)) ?? d.branchPrefix
             branchTemplate = try? c.decode(String.self, forKey: .branchTemplate)
-            baseBranch = try c.decode(String.self, forKey: .baseBranch)
-            trackUpstream = try c.decode(Bool.self, forKey: .trackUpstream)
-            deleteBranchOnRemove = try c.decode(Bool.self, forKey: .deleteBranchOnRemove)
-            autoFetch = try c.decode(Bool.self, forKey: .autoFetch)
-            fetchIntervalMinutes = try c.decode(Int.self, forKey: .fetchIntervalMinutes)
-            pruneStale = try c.decode(Bool.self, forKey: .pruneStale)
+            baseBranch = (try? c.decode(String.self, forKey: .baseBranch)) ?? d.baseBranch
+            trackUpstream = (try? c.decode(Bool.self, forKey: .trackUpstream)) ?? d.trackUpstream
+            deleteBranchOnRemove = (try? c.decode(Bool.self, forKey: .deleteBranchOnRemove)) ?? d.deleteBranchOnRemove
+            autoFetch = (try? c.decode(Bool.self, forKey: .autoFetch)) ?? d.autoFetch
+            fetchIntervalMinutes = (try? c.decode(Int.self, forKey: .fetchIntervalMinutes)) ?? d.fetchIntervalMinutes
+            pruneStale = (try? c.decode(Bool.self, forKey: .pruneStale)) ?? d.pruneStale
             fetchRemoteBeforeCreate = (try? c.decode(Bool.self, forKey: .fetchRemoteBeforeCreate)) ?? false
             defaultOrdering = (try? c.decode(WorktreeSortMode.self, forKey: .defaultOrdering)) ?? .lastUpdateDesc
             cleanupIdleDays = (try? c.decode(Int.self, forKey: .cleanupIdleDays)) ?? 3
@@ -328,17 +341,18 @@ public struct AppConfig: Codable, Equatable, Sendable {
 
         public init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
-            shell = try c.decode(String.self, forKey: .shell)
-            workingDirectory = try c.decode(String.self, forKey: .workingDirectory)
-            startupScript = try c.decode(String.self, forKey: .startupScript)
-            worktreeCreateScript = try c.decode(String.self, forKey: .worktreeCreateScript)
-            inheritParentEnv = try c.decode(Bool.self, forKey: .inheritParentEnv)
-            fontFamily = try c.decode(String.self, forKey: .fontFamily)
-            fontSize = try c.decode(Int.self, forKey: .fontSize)
-            cursorStyle = try c.decode(String.self, forKey: .cursorStyle)
-            cursorBlink = try c.decode(Bool.self, forKey: .cursorBlink)
-            scrollbackLines = try c.decode(Int.self, forKey: .scrollbackLines)
-            bell = try c.decode(String.self, forKey: .bell)
+            let d = AppConfig.defaults.terminal
+            shell = (try? c.decode(String.self, forKey: .shell)) ?? d.shell
+            workingDirectory = (try? c.decode(String.self, forKey: .workingDirectory)) ?? d.workingDirectory
+            startupScript = (try? c.decode(String.self, forKey: .startupScript)) ?? d.startupScript
+            worktreeCreateScript = (try? c.decode(String.self, forKey: .worktreeCreateScript)) ?? d.worktreeCreateScript
+            inheritParentEnv = (try? c.decode(Bool.self, forKey: .inheritParentEnv)) ?? d.inheritParentEnv
+            fontFamily = (try? c.decode(String.self, forKey: .fontFamily)) ?? d.fontFamily
+            fontSize = (try? c.decode(Int.self, forKey: .fontSize)) ?? d.fontSize
+            cursorStyle = (try? c.decode(String.self, forKey: .cursorStyle)) ?? d.cursorStyle
+            cursorBlink = (try? c.decode(Bool.self, forKey: .cursorBlink)) ?? d.cursorBlink
+            scrollbackLines = (try? c.decode(Int.self, forKey: .scrollbackLines)) ?? d.scrollbackLines
+            bell = (try? c.decode(String.self, forKey: .bell)) ?? d.bell
             syncTabTitleWithTerminalTitle = (try? c.decode(Bool.self, forKey: .syncTabTitleWithTerminalTitle)) ?? true
             confirmCloseTabs = (try? c.decode(Bool.self, forKey: .confirmCloseTabs)) ?? false
             keepSessionsAlive = (try? c.decode(Bool.self, forKey: .keepSessionsAlive)) ?? true
@@ -903,21 +917,24 @@ extension AppConfig {
     // Swift still synthesizes encode(to:) automatically.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        let rawThemeId = try c.decode(String.self, forKey: .themeId)
+        // A key that is missing, as in a hand-written file that names only
+        // what it changes, is its default.
+        let d = AppConfig.defaults
+        let rawThemeId = (try? c.decode(String.self, forKey: .themeId)) ?? d.themeId
         // Migrate stale themeIds from versions that shipped warm-amber and
         // neutral. We now ship only cool-slate and light, so anything else
         // collapses to the dark default.
         themeId = (rawThemeId == "warm-amber" || rawThemeId == "neutral") ? "cool-slate" : rawThemeId
-        accent = try c.decode(String.self, forKey: .accent)
-        matchSystemTheme = try c.decode(Bool.self, forKey: .matchSystemTheme)
+        accent = (try? c.decode(String.self, forKey: .accent)) ?? d.accent
+        matchSystemTheme = (try? c.decode(Bool.self, forKey: .matchSystemTheme)) ?? d.matchSystemTheme
         sidebarMaterial = (try? c.decode(SidebarMaterialChoice.self, forKey: .sidebarMaterial)) ?? .appKitFullScreenUI
-        sidebarWidth = try c.decode(Double.self, forKey: .sidebarWidth)
-        rightPaneWidth = try c.decode(Double.self, forKey: .rightPaneWidth)
-        rightPaneVisible = try c.decode(Bool.self, forKey: .rightPaneVisible)
+        sidebarWidth = (try? c.decode(Double.self, forKey: .sidebarWidth)) ?? d.sidebarWidth
+        rightPaneWidth = (try? c.decode(Double.self, forKey: .rightPaneWidth)) ?? d.rightPaneWidth
+        rightPaneVisible = (try? c.decode(Bool.self, forKey: .rightPaneVisible)) ?? d.rightPaneVisible
         sidebarVisible = (try? c.decode(Bool.self, forKey: .sidebarVisible)) ?? true
         commitDetailSplitRatio = (try? c.decode(Double.self, forKey: .commitDetailSplitRatio)) ?? 0.32
-        general = try c.decode(General.self, forKey: .general)
-        worktrees = try c.decode(Worktrees.self, forKey: .worktrees)
+        general = (try? c.decode(General.self, forKey: .general)) ?? d.general
+        worktrees = (try? c.decode(Worktrees.self, forKey: .worktrees)) ?? d.worktrees
         if let termContainer = try? c.nestedContainer(keyedBy: AppConfig.Terminal.CodingKeys.self, forKey: .terminal) {
             let shell = (try? termContainer.decode(String.self, forKey: .shell)) ?? "/bin/zsh"
             let workingDirectory = (try? termContainer.decode(String.self, forKey: .workingDirectory)) ?? "worktreeRoot"
@@ -971,7 +988,7 @@ extension AppConfig {
                 keepSessionsAlive: true
             )
         }
-        harness = try c.decode(Harness.self, forKey: .harness)
+        harness = (try? c.decode(Harness.self, forKey: .harness)) ?? d.harness
         if let codeContainer = try? c.nestedContainer(keyedBy: AppConfig.Code.CodingKeys.self, forKey: .code) {
             let fontFamily = (try? codeContainer.decode(String.self, forKey: .fontFamily)) ?? "JetBrainsMono Nerd Font"
             let rawSize = (try? codeContainer.decode(Int.self, forKey: .fontSize)) ?? 13
