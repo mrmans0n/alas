@@ -35,6 +35,7 @@ verify_contains_arch() {
 
 verify_exact_arch "${app}/Contents/MacOS/Alas"
 verify_exact_arch "${app}/Contents/Resources/zmx/zmx"
+verify_exact_arch "${app}/Contents/Resources/alas-host/alas-host"
 verify_exact_arch "${app}/Contents/Frameworks/libfff_c.dylib"
 
 while IFS= read -r -d '' library; do

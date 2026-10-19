@@ -146,6 +146,9 @@ targets:
       - name: Build Alas CLI
         script: '"${SRCROOT}/scripts/build-alas-cli.sh"'
         basedOnDependencyAnalysis: false
+      - name: Build alas-host
+        script: '"${SRCROOT}/scripts/build-alas-host.sh"'
+        basedOnDependencyAnalysis: false
       - name: Build fff
         script: '"${SRCROOT}/scripts/build-fff.sh"'
         basedOnDependencyAnalysis: false
