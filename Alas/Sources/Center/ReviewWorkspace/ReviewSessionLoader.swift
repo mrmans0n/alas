@@ -56,6 +56,9 @@ struct ReviewSessionLoader: @unchecked Sendable {
     var workingTreeRange: (_ target: ReviewSessionTarget, _ current: String) async throws -> DiffReviewLoadedSession
     /// Writes the working tree as a git tree object.
     var snapshotWorkingTree: (URL) async throws -> String
+    /// The snapshot a full local-changes review shows, nil when it hides
+    /// conflicted files the snapshot would include.
+    var snapshotLocalChanges: (URL) async throws -> String?
     var reviewRequest: (ReviewSessionTarget) async throws -> ReviewSessionProviderLoadedSession
     var draftReviewRequest: (ReviewSessionTarget) async throws -> DiffReviewLoadedSession
 
@@ -67,6 +70,7 @@ struct ReviewSessionLoader: @unchecked Sendable {
         branch: @escaping (ReviewSessionTarget) async throws -> DiffReviewLoadedSession = { _ in throw ReviewSessionLoaderError.unsupportedTarget },
         workingTreeRange: @escaping (ReviewSessionTarget, String) async throws -> DiffReviewLoadedSession = { _, _ in throw ReviewSessionLoaderError.unsupportedTarget },
         snapshotWorkingTree: @escaping (URL) async throws -> String = { _ in throw ReviewSessionLoaderError.unsupportedTarget },
+        snapshotLocalChanges: @escaping (URL) async throws -> String? = { _ in nil },
         reviewRequest: @escaping (ReviewSessionTarget) async throws -> ReviewSessionProviderLoadedSession = { _ in throw ReviewSessionLoaderError.unsupportedTarget },
         draftReviewRequest: @escaping (ReviewSessionTarget) async throws -> DiffReviewLoadedSession = { _ in throw ReviewSessionLoaderError.unsupportedTarget }
     ) {
@@ -77,6 +81,7 @@ struct ReviewSessionLoader: @unchecked Sendable {
         self.branch = branch
         self.workingTreeRange = workingTreeRange
         self.snapshotWorkingTree = snapshotWorkingTree
+        self.snapshotLocalChanges = snapshotLocalChanges
         self.reviewRequest = reviewRequest
         self.draftReviewRequest = draftReviewRequest
     }
@@ -184,6 +189,9 @@ struct ReviewSessionLoader: @unchecked Sendable {
             snapshotWorkingTree: { path in
                 try await git.workingTreeSnapshot(worktreePath: path)
             },
+            snapshotLocalChanges: { path in
+                try await git.localChangesReviewSnapshot(worktreePath: path)
+            },
             reviewRequest: { target in
                 guard case .reviewRequest(let providerKind, let host, let repositorySlug, let number, _) = target.payload,
                       let provider = providerRegistry.provider(for: providerKind),
@@ -281,7 +289,7 @@ struct ReviewSessionLoader: @unchecked Sendable {
             // before loading: an edit landing in between then shows in this
             // review and again in the next, rather than in neither.
             if case .localChanges(.all) = target.payload, !target.repositoryPath.isRemoteAlasPath {
-                reviewedWorkingTree = try? await snapshotWorkingTree(target.repositoryPath)
+                reviewedWorkingTree = (try? await snapshotLocalChanges(target.repositoryPath)) ?? nil
             }
             session = try await localChanges(target)
             providerContext = nil

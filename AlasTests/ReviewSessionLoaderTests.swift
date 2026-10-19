@@ -358,12 +358,45 @@ struct ReviewSessionLoaderTests {
                 #expect(current == "now")
                 return empty
             },
-            snapshotWorkingTree: { _ in "now" }
+            snapshotWorkingTree: { _ in "now" },
+            snapshotLocalChanges: { _ in "now" }
         )
 
         let loaded = try await loader.load(target: target)
 
         #expect(loaded.reviewedWorkingTree == expected)
+    }
+
+    @Test func localChangesSnapshotIsWithheldWhileConflictsAreUnresolved() async throws {
+        let repo = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-review-session-loader-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: repo) }
+        func git(_ args: String...) async throws {
+            _ = try await Process.git(args, cwd: repo)
+        }
+        func write(_ text: String) throws {
+            try text.write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        }
+        try await git("init", "-q", "-b", "main")
+        try await git("config", "user.email", "test@example.com")
+        try await git("config", "user.name", "Test User")
+        try write("base\n")
+        try await git("add", "a.txt")
+        try await git("commit", "-qm", "base")
+        try await git("checkout", "-qb", "other")
+        try write("other\n")
+        try await git("commit", "-qam", "other")
+        try await git("checkout", "-q", "main")
+        try write("main\n")
+        try await git("commit", "-qam", "main")
+        let service = GitService()
+        #expect(try await service.localChangesReviewSnapshot(worktreePath: repo) != nil)
+
+        try await git("merge", "-q", "other")
+
+        // The local-changes review hides conflicted a.txt, so no baseline may cover it.
+        #expect(try await service.localChangesReviewSnapshot(worktreePath: repo) == nil)
     }
 
     @MainActor

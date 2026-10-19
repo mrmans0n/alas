@@ -32,4 +32,16 @@ extension GitService {
         _ = try await run(["add", "-A"], environment: environment)
         return try await run(["write-tree"], environment: environment)
     }
+
+    /// The snapshot a local-changes review shows, or nil when the index has
+    /// unmerged paths: that review hides conflicted files, while the
+    /// snapshot would capture them, so it would cover content nobody saw.
+    public func localChangesReviewSnapshot(worktreePath: URL) async throws -> String? {
+        let unmerged = try await Process.git(["ls-files", "--unmerged", "-z"], cwd: worktreePath)
+        guard unmerged.exitCode == 0 else {
+            throw ProcessError.nonZeroExit(unmerged.exitCode, unmerged.stderr)
+        }
+        guard unmerged.stdout.isEmpty else { return nil }
+        return try await workingTreeSnapshot(worktreePath: worktreePath)
+    }
 }

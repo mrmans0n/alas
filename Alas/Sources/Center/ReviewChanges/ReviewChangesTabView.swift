@@ -461,7 +461,7 @@ struct ReviewChangesTabView: View {
             // in this review and again in the next, rather than in neither.
             let tree = worktree.path.isRemoteAlasPath
                 ? nil
-                : try? await GitService().workingTreeSnapshot(worktreePath: worktree.path)
+                : (try? await GitService().localChangesReviewSnapshot(worktreePath: worktree.path)) ?? nil
             let loaded = try await loader.load(worktreePath: worktree.path)
             guard
                 requestedLoadToken.isActive(activeKey: activeLoadKey, activeID: activeLoadID),
