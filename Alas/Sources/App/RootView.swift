@@ -16,7 +16,7 @@ struct WorktreeCleanupPresentation: Identifiable, Equatable {
     let projectId: String
 }
 
-private struct CommitReviewSessionLaunchError: Identifiable, Equatable {
+private struct ReviewSessionLaunchError: Identifiable, Equatable {
     let id = UUID()
     let message: String
 }
@@ -44,7 +44,7 @@ struct RootView: View {
     @State private var worktreeCleanupPresentation: WorktreeCleanupPresentation?
     @State private var creatingWorkspaceCheckout: Workspace?
     @State private var editingWorkspace: Workspace?
-    @State private var commitReviewSessionLaunchError: CommitReviewSessionLaunchError?
+    @State private var reviewSessionLaunchError: ReviewSessionLaunchError?
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
@@ -119,13 +119,13 @@ struct RootView: View {
             .alert(
                 "Could not open review session",
                 isPresented: Binding(
-                    get: { commitReviewSessionLaunchError != nil },
-                    set: { if !$0 { commitReviewSessionLaunchError = nil } }
+                    get: { reviewSessionLaunchError != nil },
+                    set: { if !$0 { reviewSessionLaunchError = nil } }
                 ),
-                presenting: commitReviewSessionLaunchError
+                presenting: reviewSessionLaunchError
             ) { _ in
                 Button("OK", role: .cancel) {
-                    commitReviewSessionLaunchError = nil
+                    reviewSessionLaunchError = nil
                 }
             } message: { error in
                 Text(error.message)
@@ -312,7 +312,13 @@ struct RootView: View {
                     openOrFocusCommitEditor(worktree: wt, commit: commit, baseRef: baseRef)
                 },
                 onReviewCommit: { commit in
-                    openOrFocusCommitReviewSession(worktree: wt, commit: commit)
+                    openOrFocusReviewSession(
+                        worktree: wt,
+                        target: Self.commitReviewSessionTarget(worktree: wt, commit: commit)
+                    )
+                },
+                onReviewScope: { option in
+                    openReviewScope(option, worktree: wt)
                 }
             )
         case .creating(let wt):
@@ -602,20 +608,31 @@ struct RootView: View {
     }
 
     @MainActor
-    private func openOrFocusCommitReviewSession(worktree: Worktree, commit: CommitInfo) {
-        let target = Self.commitReviewSessionTarget(worktree: worktree, commit: commit)
+    private func openReviewScope(_ option: ChangesReviewScopeOption, worktree: Worktree) {
+        Task { @MainActor in
+            do {
+                let target = try await option.target(worktree: worktree)
+                openOrFocusReviewSession(worktree: worktree, target: target)
+            } catch {
+                reviewSessionLaunchError = ReviewSessionLaunchError(message: error.localizedDescription)
+            }
+        }
+    }
+
+    @MainActor
+    private func openOrFocusReviewSession(worktree: Worktree, target: ReviewSessionTarget) {
         let store = ReviewSessionStore()
         ReviewSessionLauncher.openOrFocus(
             target: target,
             findActive: { try store.findActive(targetID: $0) },
             save: { try store.save($0) },
             open: { record in
-                commitReviewSessionLaunchError = nil
+                reviewSessionLaunchError = nil
                 let tab = state.tabs.openOrFocusReviewSession(worktreeId: worktree.id, record: record)
                 state.activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tab.id)
             },
             onFailure: { error in
-                commitReviewSessionLaunchError = CommitReviewSessionLaunchError(
+                reviewSessionLaunchError = ReviewSessionLaunchError(
                     message: error.localizedDescription
                 )
             }

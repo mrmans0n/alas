@@ -220,6 +220,125 @@ struct ReviewSessionLoaderTests {
     }
 
     @MainActor
+    @Test func branchWithLocalChangesDiffsWorkingTreeAgainstMergeBase() async throws {
+        let repo = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-review-session-loader-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: repo) }
+        func git(_ args: String...) async throws {
+            let result = try await Process.git(args, cwd: repo)
+            #expect(result.exitCode == 0, "git \(args.joined(separator: " ")): \(result.stderr)")
+        }
+        func write(_ text: String, to path: String) throws {
+            try text.write(to: repo.appendingPathComponent(path), atomically: true, encoding: .utf8)
+        }
+        try await git("init", "-q", "-b", "main")
+        try await git("config", "user.email", "test@example.com")
+        try await git("config", "user.name", "Test User")
+        try write("base\n", to: "base.txt")
+        try await git("add", "base.txt")
+        try await git("commit", "-q", "-m", "base")
+        try await git("checkout", "-q", "-b", "feature")
+        try write("feature\n", to: "feature.txt")
+        try await git("add", "feature.txt")
+        try await git("commit", "-q", "-m", "feature")
+        // main moves on after the fork; none of it belongs to the review.
+        try await git("checkout", "-q", "main")
+        try write("main\n", to: "main-only.txt")
+        try await git("add", "main-only.txt")
+        try await git("commit", "-q", "-m", "main")
+        try await git("checkout", "-q", "feature")
+        try write("feature\nmore\n", to: "feature.txt")
+        try write("staged\n", to: "staged.txt")
+        try await git("add", "staged.txt")
+        try write("untracked\n", to: "untracked.txt")
+
+        let worktree = Worktree(
+            id: Worktree.makeId(path: repo),
+            projectId: "project-1",
+            name: "feature",
+            branch: "feature",
+            path: repo,
+            status: .clean,
+            lastActivity: Date(timeIntervalSince1970: 1)
+        )
+        let target = ReviewSessionTarget.branchWithLocalChanges(
+            worktreeID: worktree.id,
+            repositoryPath: repo,
+            base: try await GitService().resolveRevision(at: repo, ref: "main")
+        )
+        let loader = ReviewSessionLoader.production(
+            appState: AppState(store: TestPersistenceStore()),
+            worktree: worktree
+        )
+
+        let loaded = try await loader.load(target: target)
+
+        let files = loaded.session.files.map(\.summary)
+        #expect(files.map(\.path) == ["feature.txt", "staged.txt", "untracked.txt"])
+        // The committed line and the unstaged edit land in one diff.
+        #expect(files.first?.additions == 2)
+        #expect(files.allSatisfy { $0.status == .added })
+    }
+
+    @MainActor
+    @Test func sinceSnapshotShowsOnlyChangesAfterTheReviewedWorkingTree() async throws {
+        let repo = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-review-session-loader-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: repo) }
+        func git(_ args: String...) async throws -> String {
+            let result = try await Process.git(args, cwd: repo)
+            #expect(result.exitCode == 0, "git \(args.joined(separator: " ")): \(result.stderr)")
+            return result.stdout
+        }
+        func write(_ text: String, to path: String) throws {
+            try text.write(to: repo.appendingPathComponent(path), atomically: true, encoding: .utf8)
+        }
+        _ = try await git("init", "-q", "-b", "main")
+        _ = try await git("config", "user.email", "test@example.com")
+        _ = try await git("config", "user.name", "Test User")
+        try write("one\n", to: "reviewed.txt")
+        _ = try await git("add", "reviewed.txt")
+        _ = try await git("commit", "-q", "-m", "base")
+        // The state under review: an edit, a staged file, an untracked file.
+        try write("one\ntwo\n", to: "reviewed.txt")
+        try write("staged\n", to: "staged.txt")
+        _ = try await git("add", "staged.txt")
+        try write("untracked\n", to: "untracked.txt")
+        let statusBefore = try await git("status", "--porcelain")
+
+        let tree = try await GitService().workingTreeSnapshot(worktreePath: repo)
+
+        #expect(try await git("status", "--porcelain") == statusBefore)
+        // The agent's follow-up: one more edit and a new file.
+        try write("one\ntwo\nthree\n", to: "reviewed.txt")
+        try write("fix\n", to: "fix.txt")
+
+        let worktree = Worktree(
+            id: Worktree.makeId(path: repo),
+            projectId: "project-1",
+            name: "main",
+            branch: "main",
+            path: repo,
+            status: .clean,
+            lastActivity: Date(timeIntervalSince1970: 1)
+        )
+        let loader = ReviewSessionLoader.production(
+            appState: AppState(store: TestPersistenceStore()),
+            worktree: worktree
+        )
+
+        let loaded = try await loader.load(
+            target: .sinceSnapshot(worktreeID: worktree.id, repositoryPath: repo, tree: tree)
+        )
+
+        let files = loaded.session.files.map(\.summary)
+        #expect(files.map(\.path) == ["fix.txt", "reviewed.txt"])
+        #expect(files.map(\.additions) == [1, 1])
+    }
+
+    @MainActor
     @Test func productionLoaderLoadsProviderReviewRequestWithProviderContext() async throws {
         let repo = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-review-session-loader-\(UUID().uuidString)")

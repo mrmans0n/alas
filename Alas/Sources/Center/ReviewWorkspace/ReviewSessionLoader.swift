@@ -46,6 +46,9 @@ struct ReviewSessionLoader: @unchecked Sendable {
     var commit: (ReviewSessionTarget) async throws -> DiffReviewLoadedSession
     var commitRange: (ReviewSessionTarget) async throws -> DiffReviewLoadedSession
     var branch: (ReviewSessionTarget) async throws -> DiffReviewLoadedSession
+    /// Diffs from a fixed left side to the working tree: `.branchWithLocalChanges`
+    /// and `.sinceSnapshot` targets.
+    var workingTreeRange: (ReviewSessionTarget) async throws -> DiffReviewLoadedSession
     var reviewRequest: (ReviewSessionTarget) async throws -> ReviewSessionProviderLoadedSession
     var draftReviewRequest: (ReviewSessionTarget) async throws -> DiffReviewLoadedSession
 
@@ -55,6 +58,7 @@ struct ReviewSessionLoader: @unchecked Sendable {
         commit: @escaping (ReviewSessionTarget) async throws -> DiffReviewLoadedSession = { _ in throw ReviewSessionLoaderError.unsupportedTarget },
         commitRange: @escaping (ReviewSessionTarget) async throws -> DiffReviewLoadedSession = { _ in throw ReviewSessionLoaderError.unsupportedTarget },
         branch: @escaping (ReviewSessionTarget) async throws -> DiffReviewLoadedSession = { _ in throw ReviewSessionLoaderError.unsupportedTarget },
+        workingTreeRange: @escaping (ReviewSessionTarget) async throws -> DiffReviewLoadedSession = { _ in throw ReviewSessionLoaderError.unsupportedTarget },
         reviewRequest: @escaping (ReviewSessionTarget) async throws -> ReviewSessionProviderLoadedSession = { _ in throw ReviewSessionLoaderError.unsupportedTarget },
         draftReviewRequest: @escaping (ReviewSessionTarget) async throws -> DiffReviewLoadedSession = { _ in throw ReviewSessionLoaderError.unsupportedTarget }
     ) {
@@ -63,6 +67,7 @@ struct ReviewSessionLoader: @unchecked Sendable {
         self.commit = commit
         self.commitRange = commitRange
         self.branch = branch
+        self.workingTreeRange = workingTreeRange
         self.reviewRequest = reviewRequest
         self.draftReviewRequest = draftReviewRequest
     }
@@ -137,6 +142,32 @@ struct ReviewSessionLoader: @unchecked Sendable {
                 return try await rangeLoader.load(
                     worktreePath: target.repositoryPath,
                     base: base, head: head, threeDot: true,
+                    files: files,
+                    openFileForPath: { path in
+                        openFileAction(appState: appState, worktreeID: target.worktreeID, worktreePath: target.repositoryPath, relativePath: path)
+                    }
+                )
+            },
+            workingTreeRange: { target in
+                // Snapshot the working tree so both sides are trees: a plain
+                // `git diff <ref>` goes through the index and misreads
+                // untracked files on the left as deleted.
+                let current = try await git.workingTreeSnapshot(worktreePath: target.repositoryPath)
+                let left: String
+                switch target.payload {
+                case .branchWithLocalChanges(let base):
+                    left = try await git.resolvedRangeTrees(
+                        worktreePath: target.repositoryPath, base: base, head: "HEAD", threeDot: true
+                    ).before
+                case .sinceSnapshot(let tree):
+                    left = tree
+                default:
+                    throw ReviewSessionLoaderError.unsupportedTarget
+                }
+                let files = try await git.rangeChangedFiles(at: target.repositoryPath, base: left, head: current, threeDot: false)
+                return try await rangeLoader.load(
+                    worktreePath: target.repositoryPath,
+                    base: left, head: current, threeDot: false,
                     files: files,
                     openFileForPath: { path in
                         openFileAction(appState: appState, worktreeID: target.worktreeID, worktreePath: target.repositoryPath, relativePath: path)
@@ -251,6 +282,9 @@ struct ReviewSessionLoader: @unchecked Sendable {
             providerContext = nil
         case .branch:
             session = try await branch(target)
+            providerContext = nil
+        case .branchWithLocalChanges, .sinceSnapshot:
+            session = try await workingTreeRange(target)
             providerContext = nil
         case .reviewRequest:
             let loaded = try await reviewRequest(target)

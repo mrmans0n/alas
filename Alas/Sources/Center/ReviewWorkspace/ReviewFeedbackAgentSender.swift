@@ -59,14 +59,16 @@ struct ReviewFeedbackAgentSender {
                 }
                 return targets
             },
-            send: { delivery, target, completion in
+            send: { delivery, target, sendCompletion in
                 switch target {
                 case .newChat(let agentID, _):
                     guard Self.availableAgent(appState: appState, worktreeID: worktreeID, agentID: agentID) != nil else {
-                        completion(.failure(ReviewFeedbackAgentSendError.rejected))
+                        sendCompletion(.failure(ReviewFeedbackAgentSendError.rejected))
                         return
                     }
                     Task { @MainActor in
+                        let completion = await Self.recordingReviewedSnapshot(
+                            appState: appState, worktreeID: worktreeID, completion: sendCompletion)
                         guard let opened = await Self.openNewChat(appState: appState, worktreeID: worktreeID, agentID: agentID) else {
                             completion(.failure(ReviewFeedbackAgentSendError.rejected))
                             return
@@ -90,6 +92,8 @@ struct ReviewFeedbackAgentSender {
                         )
                     }
                     Task { @MainActor in
+                        let completion = await Self.recordingReviewedSnapshot(
+                            appState: appState, worktreeID: worktreeID, completion: sendCompletion)
                         await Self.deliver(delivery, appState: appState, sessionID: sessionID, owner: owner, completion: completion)
                     }
                 }
@@ -104,6 +108,29 @@ struct ReviewFeedbackAgentSender {
                 }
             }
         )
+    }
+
+    /// Snapshots the working tree the user just reviewed, before the agent
+    /// can touch it, and returns `completion` wrapped to keep the snapshot
+    /// once the feedback goes out, so "since last review" shows only what
+    /// changed after. Best effort: a remote worktree or a git failure only
+    /// costs that menu entry, never the send.
+    private static func recordingReviewedSnapshot(
+        appState: AppState,
+        worktreeID: String,
+        completion: @escaping @MainActor (Result<Void, Error>) -> Void
+    ) async -> @MainActor (Result<Void, Error>) -> Void {
+        guard let worktree = projectAndWorktree(appState: appState, worktreeID: worktreeID)?.worktree,
+              !worktree.path.isRemoteAlasPath,
+              let tree = try? await GitService().workingTreeSnapshot(worktreePath: worktree.path)
+        else { return completion }
+        let snapshot = ReviewedWorkingTreeSnapshot(tree: tree, capturedAt: Date())
+        return { result in
+            if case .success = result, (try? ReviewedSnapshotStore().save(snapshot, worktreeID: worktreeID)) != nil {
+                NotificationCenter.default.post(name: .alasReviewedSnapshotDidChange, object: worktreeID)
+            }
+            completion(result)
+        }
     }
 
     /// A new chat that refuses the turn (its agent needs sign-in or setup)
