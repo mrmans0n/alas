@@ -142,6 +142,38 @@ struct AlasHostExecutableTests {
         #expect(try await host.exitStatus() == 0)
     }
 
+    /// Inside the app, the host serves the web client the app ships, beside
+    /// its own directory, when started through a link as the cask installs it.
+    @Test func aBundledHostServesTheWebClientBesideIt() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-bundle-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let resources = root.appendingPathComponent("Alas.app/Contents/Resources")
+        let bundled = resources.appendingPathComponent("alas-host/alas-host")
+        try FileManager.default.createDirectory(at: bundled.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: AlasHostProcess.binary, to: bundled)
+        let marker = "bundled web client \(UUID().uuidString)"
+        try FileManager.default.createDirectory(at: resources.appendingPathComponent("RemoteWeb"), withIntermediateDirectories: true)
+        try Data(marker.utf8).write(to: resources.appendingPathComponent("RemoteWeb/index.html"))
+        let link = root.appendingPathComponent("bin/alas-host")
+        try FileManager.default.createDirectory(at: link.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: bundled)
+        let dataDirectory = root.appendingPathComponent("data")
+        try FileManager.default.createDirectory(at: dataDirectory, withIntermediateDirectories: true)
+        var config = AppConfig.defaults
+        config.remote.enabled = true
+        try PersistenceStore().write(config, to: dataDirectory.appendingPathComponent("app.json"))
+
+        let host = try AlasHostProcess(dataDirectory: dataDirectory, binary: link)
+        _ = try await host.socketPath()
+        try await eventually { [host] in host.output.contains("remote ") || !host.process.isRunning }
+        let line = try #require(host.output.split(separator: "\n").first { $0.hasPrefix("remote ") }, "\(host.errorOutput)")
+        let address = try #require(URL(string: String(line.dropFirst("remote ".count))))
+        let (page, _) = try await URLSession.shared.data(from: address)
+        #expect(String(decoding: page, as: UTF8.self) == marker)
+        host.process.terminate()
+        #expect(try await host.exitStatus() == 0)
+    }
+
     /// Hostless, over the wire: the built host serves a project, a worktree,
     /// a session with a scripted agent and a run, then stops and frees its
     /// data directory.

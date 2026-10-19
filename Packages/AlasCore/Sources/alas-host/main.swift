@@ -12,8 +12,8 @@ usage: alas-host
 Serves the Alas host protocol for the data directory ALAS_APP_SUPPORT_DIR
 (default: ~/Library/Application Support/Alas) on its local socket, and prints
 the socket path. When the profile enables Remote, also serves it on loopback
-and prints its address, with the web client of the installed Alas.app or of
-ALAS_REMOTE_WEB_DIR. Stops on SIGINT or SIGTERM.
+and prints its address, with the web client of the Alas.app it ships in, of
+the one in /Applications, or of ALAS_REMOTE_WEB_DIR. Stops on SIGINT or SIGTERM.
 
 `alas-host pair` asks the running host for a Remote pairing code, which a
 phone or browser redeems within two minutes, and prints it.
@@ -97,10 +97,15 @@ if config.remote.enabled {
     let settings = config.remote
     let pairing = RemotePairingService(store: FileDeviceStore())
     let interfaces = RemoteNetwork.interfaces()
-    // The web client ships inside the app; without it, devices that already
-    // have a client still pair and connect.
+    // The web client ships inside the app, beside this executable's own
+    // directory there (`Contents/Resources/alas-host/alas-host`), wherever the
+    // app is installed and whatever link started it. Without one, devices
+    // that already have a client still pair and connect.
     let webClient = [
         ProcessInfo.processInfo.environment["ALAS_REMOTE_WEB_DIR"].map { URL(fileURLWithPath: $0) },
+        Bundle.main.executableURL.map {
+            $0.resolvingSymlinksInPath().deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("RemoteWeb")
+        },
         URL(fileURLWithPath: "/Applications/Alas.app/Contents/Resources/RemoteWeb"),
     ].compactMap { $0 }.first { FileManager.default.fileExists(atPath: $0.appendingPathComponent("index.html").path) }
     if webClient == nil {
