@@ -57,6 +57,8 @@ if [ -x "${output}" ] && [ -f "${fingerprint_path}" ] && [ "$(cat "${fingerprint
     exit 0
 fi
 
+# Invalidated first, so an interrupted build is never taken as current.
+rm -f "${fingerprint_path}"
 build=("${clean_env[@]}" xcrun swift build
     --package-path "${package_root}"
     --scratch-path "${scratch_path}"
@@ -68,7 +70,7 @@ bin_path="$("${build[@]}" --show-bin-path)"
 [ -x "${bin_path}/alas-host" ] || { echo "build-alas-host.sh: error: swift build did not produce ${bin_path}/alas-host" >&2; exit 1; }
 
 mkdir -p "${output_root}"
-rm -f "${output}"
-cp "${bin_path}/alas-host" "${output}"
+cp "${bin_path}/alas-host" "${output}.tmp"
+mv -f "${output}.tmp" "${output}"
 printf '%s\n' "${fingerprint}" > "${fingerprint_path}"
 echo "build-alas-host.sh: built alas-host (${swift_configuration}, ${target_arch})"
