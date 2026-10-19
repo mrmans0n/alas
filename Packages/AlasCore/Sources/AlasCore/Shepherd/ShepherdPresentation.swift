@@ -189,14 +189,16 @@ public enum ShepherdShipOffer {
         let closing = ask.trimmingCharacters(in: .whitespaces.union(.init(charactersIn: "*_`)\"'”’")))
         guard closing.hasSuffix("?") || matches(ask, #"^(?:let me know|say the word|just say)\b"#),
               // Proposing not to ship ("Should I not open a PR?").
-              !matches(ask, #"(?:\bnot|\bnever|n't)\s+(?:\w+\s+){0,2}(?:open|create|raise|put|submit|file|send|commit|ship)\b"#)
+              !matches(ask, #"(?:\bnot|\bnever|n't)\s+(?:\w+\s+){0,2}(?:open|create|raise|put|submit|file|send|commit|ship)\b"#),
+              // Offering only to check ("Want me to check if I can open a PR?").
+              !matches(ask, #"\b(?:check|verify|see|confirm|find out|look into)\s+(?:\w+\s+){0,2}?(?:if|whether)\b"#)
         else { return false }
         // The agent offers to act ("Want me to…", "Should I…"), so neither a
         // request to the user ("Can you open a PR?") nor a status question
         // ("Is there an open PR?") counts.
         let offer = #"\b(?:(?:want|like) me to|should I|shall I|can I|may I|I can|I'll|ready (?:for me )?to|ok(?:ay)? (?:for me |if I )?to)"#
         // A few words may sit between ("want me to go ahead and open…"), but
-        // not an article that makes the verb an adjective ("…check for an open PR").
+        // not an article that makes the verb an adjective ("…look for an open PR").
         let between = #"(?:\s+[\w'’,]+){0,8}?\s+(?<!\b(?:an|the|any|no|already)\s)"#
         let request = #"(?:pr|pull request|merge request|mr)s?"#
         let ship = #"(?:(?:open|create|raise|put up|submit|file|send)\b[^.?!]{0,40}?\b"# + request
