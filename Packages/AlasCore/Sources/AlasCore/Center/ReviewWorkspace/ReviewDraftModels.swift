@@ -7,6 +7,8 @@ public enum ReviewDraftSourceKind: String, Codable, Equatable, Hashable, Sendabl
     case commitRange = "commit-range"
     case draftCommit = "draft-commit"
     case branch
+    case branchWithLocalChanges = "branch-with-local-changes"
+    case sinceSnapshot = "since-snapshot"
     case reviewRequest = "review-request"
     case draftReviewRequest = "draft-review-request"
 }
@@ -57,6 +59,14 @@ public struct ReviewDraftSessionID: Codable, Equatable, Hashable, Sendable, RawR
 
     public static func branch(worktreeID: String, repositoryPath: URL, base: String, head: String) -> Self {
         make(.branch, [worktreeID, repositoryPath.standardizedFileURL.path, base, head])
+    }
+
+    public static func branchWithLocalChanges(worktreeID: String, repositoryPath: URL, base: String) -> Self {
+        make(.branchWithLocalChanges, [worktreeID, repositoryPath.standardizedFileURL.path, base])
+    }
+
+    public static func sinceSnapshot(worktreeID: String, repositoryPath: URL, tree: String) -> Self {
+        make(.sinceSnapshot, [worktreeID, repositoryPath.standardizedFileURL.path, tree])
     }
 
     public static func reviewRequest(

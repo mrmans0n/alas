@@ -62,6 +62,56 @@ struct ChangesPreparationModelTests {
         #expect(ChangesPreparationCardText.syncStepState(.failed) == "Failed")
     }
 
+    private static let stagedFile = ChangedFile(path: "a.swift", status: "M", stage: .staged, add: 1, del: 0, renameFrom: nil)
+    private static let unstagedFile = ChangedFile(path: "a.swift", status: "M", stage: .unstaged, add: 2, del: 0, renameFrom: nil)
+    private static let untrackedFile = ChangedFile(path: "b.swift", status: "A", stage: .unstaged, add: 3, del: 0, renameFrom: nil)
+
+    @Test(arguments: [
+        // Commits plus a partially staged tree: every scope, staged counted per path.
+        ([stagedFile, unstagedFile, untrackedFile], 2, "origin/main" as String?, [
+            ChangesReviewScopeOption.branchCommits(comparisonRef: "origin/main", commitCount: 2),
+            .branchWithLocalChanges(comparisonRef: "origin/main", commitCount: 2),
+            .stagedOnly(fileCount: 1),
+        ]),
+        // Clean tree: only the commits.
+        ([], 2, "origin/main", [.branchCommits(comparisonRef: "origin/main", commitCount: 2)]),
+        // Everything staged: staged-only would repeat the primary button.
+        ([stagedFile], 0, "origin/main", []),
+        // No comparison ref: no branch scopes even with commits.
+        ([stagedFile, untrackedFile], 3, nil, [.stagedOnly(fileCount: 1)]),
+    ])
+    func reviewScopeOptionsOfferOnlyScopesThatDifferFromThePrimaryButton(
+        changes: [ChangedFile],
+        commitCount: Int,
+        comparisonRef: String?,
+        expected: [ChangesReviewScopeOption]
+    ) {
+        #expect(ChangesReviewScopeOption.options(
+            changes: changes,
+            commitCount: commitCount,
+            comparisonRef: comparisonRef
+        ) == expected)
+    }
+
+    @Test func stackHostedReviewsListOpenRequestsAndNeedARemote() throws {
+        let remote = CodeHostRemote(
+            kind: .gitlab, host: "gitlab.com", owner: "team", repository: "app",
+            remoteName: "origin", webURL: try #require(URL(string: "https://gitlab.com/team/app"))
+        )
+        let stack = GGStack(name: "theming", base: "main", totalCommits: 4, syncedCommits: 4, currentPosition: 4, behindBase: 0, entries: [
+            GGStackEntry(position: 1, sha: "a", title: "Landed", prNumber: 1, prState: .merged),
+            GGStackEntry(position: 2, sha: "b", title: "Store theme", prNumber: 2, prState: .open),
+            GGStackEntry(position: 3, sha: "c", title: "Unpushed"),
+            GGStackEntry(position: 4, sha: "d", title: "Override", prNumber: 4, prState: .draft),
+        ])
+
+        let reviews = ChangesReviewScopeOption.hostedReviews(stack: stack, stackRemote: remote, branchRequest: nil)
+
+        #expect(reviews.map(\.number) == [2, 4])
+        #expect(ChangesReviewScopeOption.hostedReview(reviews[0]).title() == "Review !2 · Store theme")
+        #expect(ChangesReviewScopeOption.hostedReviews(stack: stack, stackRemote: nil, branchRequest: nil).isEmpty)
+    }
+
     private typealias Action = ReviewReadinessModel.Action
     private let stagedOnlyCapabilities = GGCapabilities(
         structuredSplit: false,
@@ -228,6 +278,8 @@ struct ChangesPreparationModelTests {
             model: model,
             onReviewChanges: {},
             onChooseReviewScope: {},
+            reviewScopeOptions: [],
+            onReviewScopeOption: { _ in },
             reviewScopeShortcut: nil,
             onDraftCommit: {},
             onPublishCommit: {},
