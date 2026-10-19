@@ -573,22 +573,16 @@ extension ACPTranscriptCoreTextRowView {
         let label = actionsTimestamp ?? makeTimestampLabel()
         label.stringValue = ACPMessageTimestampFormatter.string(for: createdAt)
         label.textColor = theme.nsColor("fg-faint")
-        label.layer?.backgroundColor = theme.nsColor("bg-3").withAlphaComponent(0.92).cgColor
         label.sizeToFit()
-        let labelSize = NSSize(width: label.frame.width + 12, height: label.frame.height + 8)
-        label.frame = NSRect(
-            x: x, y: actionsButton.frame.maxY + ACPMessageGutterLayout.timestampVerticalSpacing,
-            width: labelSize.width, height: labelSize.height
+        label.frame.origin = NSPoint(
+            x: x, y: actionsButton.frame.maxY + ACPMessageGutterLayout.timestampVerticalSpacing
         )
-        label.layer?.cornerRadius = labelSize.height / 2
         label.alphaValue = actionsButton.alphaValue
     }
 
     private func makeTimestampLabel() -> NSTextField {
         let label = TimestampLabel(labelWithString: "")
-        label.font = .monospacedSystemFont(ofSize: 10, weight: .medium)
-        label.alignment = .center
-        label.wantsLayer = true
+        label.font = .monospacedDigitSystemFont(ofSize: 10, weight: .regular)
         label.setAccessibilityElement(false)
         addSubview(label)
         actionsTimestamp = label
@@ -679,7 +673,7 @@ final class ActionsButton: NSButton {
     }
 }
 
-/// The inline timestamp capsule under the button; never a hit target.
+/// The inline timestamp caption under the button; never a hit target.
 private final class TimestampLabel: NSTextField {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
