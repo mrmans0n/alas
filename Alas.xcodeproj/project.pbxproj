@@ -6512,6 +6512,7 @@
 				2A52B3AA269E67D4B89E4A6B /* Build zmx */,
 				A8FC861C1A7630AE525F4E85 /* Build Alas Helper */,
 				E7133D66219548A98B3DF549 /* Build Alas CLI */,
+				3D81448C75C45F571E86F9F8 /* Build alas-host */,
 				4609384BD7FA0393B4CE182E /* Build fff */,
 				A4E68D93681832810FDA0179 /* Build TreeSitter Pack */,
 				16AE5D200CA779AE0410E1B1 /* Sources */,
@@ -6694,6 +6695,25 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "\"${SRCROOT}/scripts/embed-ghostty-resources.sh\"";
+		};
+		3D81448C75C45F571E86F9F8 /* Build alas-host */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Build alas-host";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${SRCROOT}/scripts/build-alas-host.sh\"";
 		};
 		4609384BD7FA0393B4CE182E /* Build fff */ = {
 			isa = PBXShellScriptBuildPhase;

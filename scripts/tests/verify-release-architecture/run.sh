@@ -11,6 +11,7 @@ app="${tmp}/Alas.app"
 mkdir -p "${fake_bin}" \
     "${app}/Contents/MacOS" \
     "${app}/Contents/Resources/zmx" \
+    "${app}/Contents/Resources/alas-host" \
     "${app}/Contents/Frameworks"
 
 cat > "${fake_bin}/lipo" <<'EOF'
@@ -27,6 +28,7 @@ write_arches() {
 
 write_arches "${app}/Contents/MacOS/Alas" "arm64"
 write_arches "${app}/Contents/Resources/zmx/zmx" "arm64"
+write_arches "${app}/Contents/Resources/alas-host/alas-host" "arm64"
 write_arches "${app}/Contents/Frameworks/libfff_c.dylib" "arm64"
 write_arches "${app}/Contents/Frameworks/libswiftCompatibilitySpan.dylib" "x86_64 arm64 arm64e"
 write_arches "${app}/Contents/Frameworks/libthirdparty.dylib" "arm64"
