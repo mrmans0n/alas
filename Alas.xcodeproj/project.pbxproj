@@ -601,6 +601,7 @@
 		5255F92036DF00CB48082526 /* ReviewSessionTabViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4120556B9870D6246D0F30A /* ReviewSessionTabViewTests.swift */; };
 		5269ED23D9732680EF7F4E16 /* ReviewChangesScrollSpy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80694744AA6D7E12FEB38A1A /* ReviewChangesScrollSpy.swift */; };
 		5272D54299577A1E600205F5 /* NativePeerTranscript.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBB2FDD6388E36EC6C8688E0 /* NativePeerTranscript.swift */; };
+		527DF92DD568AA190CAAB5E9 /* AlasCore in Frameworks */ = {isa = PBXBuildFile; productRef = 07CC88ED3E6902B99FD02D50 /* AlasCore */; };
 		52E1F744D076C631138EE8C1 /* ACPComposerActionButtonChevronTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF7BF3B9C7985A07F3E79E76 /* ACPComposerActionButtonChevronTests.swift */; };
 		52E3CDEB14242DB611348EEA /* WorktreeSortMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97DEBCFA106423E38276E9C2 /* WorktreeSortMenu.swift */; };
 		5332F007C78B16A9950DDDAA /* ZmxPassiveClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB5EE7A686D55350599708BE /* ZmxPassiveClientTests.swift */; };
@@ -883,6 +884,7 @@
 		7E3FC231CA6865CF6F172F26 /* NextPromptInferenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99ADB2CF3D4BF7E1BFC5ADC5 /* NextPromptInferenceTests.swift */; };
 		7E56D356C235F59E1CE24210 /* AgentBuiltinsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AED8A6EE8EF0CC317D7A4C7 /* AgentBuiltinsTests.swift */; };
 		7E5819BACB71C38AA2B3A80E /* ChangesTabViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEA0432FB3F35FC9780718C8 /* ChangesTabViewTests.swift */; };
+		7E60FAE6FB762FA1353C3E0C /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60591506CA6F1CAED1BD0846 /* main.swift */; };
 		7E96B2791D7BA1E458305743 /* AppState+SessionRecap.swift in Sources */ = {isa = PBXBuildFile; fileRef = 190AAF6F403717ADFDD5CC4C /* AppState+SessionRecap.swift */; };
 		7EB1A9415AE49BBB694946AC /* PairedComposerTextControlsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E984007859E2721356CAF8A /* PairedComposerTextControlsTests.swift */; };
 		7EB64E55CE27886D660C5D0C /* DefinitionSnippetCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D6BC5CC26EC6A242C2FDDDA /* DefinitionSnippetCacheTests.swift */; };
@@ -1663,6 +1665,7 @@
 		EE4A552DB5EF6559CA1A5AE0 /* GGStackActionStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C421FFAE27A92B2510D87C9 /* GGStackActionStateTests.swift */; };
 		EE916A5436673F6E95F2B4B4 /* AppConfigInlayHintsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAAABE645804436FA1332588 /* AppConfigInlayHintsTests.swift */; };
 		EEB1E9992AB101D398909EFA /* DiffFeedbackLaneTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4128039056F417E483AB4DC /* DiffFeedbackLaneTests.swift */; };
+		EEC769084EDF915C1A64519F /* AlasHost in Embed Dependencies */ = {isa = PBXBuildFile; fileRef = 0CA29ACACE519DE00507EB73 /* AlasHost */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		EF2540A211FBE06D7B30FC61 /* Code.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F4C58E8C0B1BC5B7CB2BBCB /* Code.swift */; };
 		EF8ECFE012675EE7C7F2347E /* ImageDiffPair+AppKit.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAD8F83EDBFABC3327254E1A /* ImageDiffPair+AppKit.swift */; };
 		EFC7C4236178EB3E3FE6D105 /* ACPTranscriptRowExpansionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 369B312B65E6D4C969B8BF2B /* ACPTranscriptRowExpansionStore.swift */; };
@@ -1792,7 +1795,28 @@
 			remoteGlobalIDString = E4C94E93C35EAAB0719C6D98;
 			remoteInfo = Alas;
 		};
+		BE89123F4D78E19D9C39AD25 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 759006A3C44F0DA5ACF36C55 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 335926F2C3CE770C9A59F33D;
+			remoteInfo = AlasHost;
+		};
 /* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		2712E12EE8A4AD5B52367A67 /* Embed Dependencies */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "alas-host";
+			dstSubfolderSpec = 7;
+			files = (
+				EEC769084EDF915C1A64519F /* AlasHost in Embed Dependencies */,
+			);
+			name = "Embed Dependencies";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		00057A43DD2D53F8F79FAC43 /* ShortcutActionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutActionTests.swift; sourceTree = "<group>"; };
@@ -1885,6 +1909,7 @@
 		0C7E7FB69F674BDC568D6647 /* ACPAbsolutePathDetectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPAbsolutePathDetectorTests.swift; sourceTree = "<group>"; };
 		0C8541BE5617C7E212CCD034 /* FilesTabLoadingIndicatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilesTabLoadingIndicatorTests.swift; sourceTree = "<group>"; };
 		0C9D29CB741846E7193F9142 /* RepoHookLoaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoHookLoaderTests.swift; sourceTree = "<group>"; };
+		0CA29ACACE519DE00507EB73 /* AlasHost */ = {isa = PBXFileReference; includeInIndex = 0; path = AlasHost; sourceTree = BUILT_PRODUCTS_DIR; };
 		0CB1655ABBE1D0CB79CAE1C3 /* AgentSidebarFormatting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentSidebarFormatting.swift; sourceTree = "<group>"; };
 		0CC074B85082A8BB30EEAFA5 /* UpdateAvailableSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateAvailableSheet.swift; sourceTree = "<group>"; };
 		0D1EFF4C02286F36DE5C5D98 /* RenameBranchDialog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RenameBranchDialog.swift; sourceTree = "<group>"; };
@@ -2482,6 +2507,7 @@
 		6016A3CF87F34222C533D350 /* ClaudeInstallerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeInstallerTests.swift; sourceTree = "<group>"; };
 		6033DBD8BF13A76978A653A3 /* EditorFindControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorFindControllerTests.swift; sourceTree = "<group>"; };
 		6048519B4C444FCB46A11E49 /* ACPMessageStableIdTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPMessageStableIdTests.swift; sourceTree = "<group>"; };
+		60591506CA6F1CAED1BD0846 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		606DD97D8F66AC2B5883F984 /* TerminalIntegrationActionsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalIntegrationActionsTests.swift; sourceTree = "<group>"; };
 		60891D9CBBA05DFB0F514660 /* SessionSummarySettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionSummarySettingsTests.swift; sourceTree = "<group>"; };
 		60E071F02E7A79BA6E0CA507 /* ACPTranscriptCoreTextRowView+Drawing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ACPTranscriptCoreTextRowView+Drawing.swift"; sourceTree = "<group>"; };
@@ -3593,6 +3619,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		9B396EAADA39819F48C0B4F2 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				527DF92DD568AA190CAAB5E9 /* AlasCore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		CE811745928C7FA1A7D1EE13 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -4662,6 +4696,14 @@
 			path = CodeThemes;
 			sourceTree = "<group>";
 		};
+		4207E81AACBA5EDFABBFBED3 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				7493DF3E0751F3C1035C76CF /* alas-host */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
 		42C76CF381570A3B233F79D2 /* ReviewChanges */ = {
 			isa = PBXGroup;
 			children = (
@@ -5184,6 +5226,14 @@
 			path = Status;
 			sourceTree = "<group>";
 		};
+		7493DF3E0751F3C1035C76CF /* alas-host */ = {
+			isa = PBXGroup;
+			children = (
+				60591506CA6F1CAED1BD0846 /* main.swift */,
+			);
+			path = "alas-host";
+			sourceTree = "<group>";
+		};
 		7592B5DE2FBCFC47DB6F481D /* Theme */ = {
 			isa = PBXGroup;
 			children = (
@@ -5345,6 +5395,7 @@
 			isa = PBXGroup;
 			children = (
 				13CF33E32C77CEBF1A489DA7 /* AlasCore */,
+				F18C474F23519A0E8198E63C /* AlasCore */,
 			);
 			path = Packages;
 			sourceTree = "<group>";
@@ -5927,6 +5978,7 @@
 			isa = PBXGroup;
 			children = (
 				519CFB3707E8DDBDECD6C5D1 /* Alas.app */,
+				0CA29ACACE519DE00507EB73 /* AlasHost */,
 				B65018D176CD2E52A3999CF0 /* AlasTests.xctest */,
 			);
 			name = Products;
@@ -6298,6 +6350,14 @@
 			path = res;
 			sourceTree = "<group>";
 		};
+		F18C474F23519A0E8198E63C /* AlasCore */ = {
+			isa = PBXGroup;
+			children = (
+				4207E81AACBA5EDFABBFBED3 /* Sources */,
+			);
+			path = AlasCore;
+			sourceTree = "<group>";
+		};
 		F211897D927000B71316F28A /* WindowChrome */ = {
 			isa = PBXGroup;
 			children = (
@@ -6484,6 +6544,25 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		335926F2C3CE770C9A59F33D /* AlasHost */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F4FE368CBD899565DFE0525B /* Build configuration list for PBXNativeTarget "AlasHost" */;
+			buildPhases = (
+				27AFECCD03F71B88EF4F5DA0 /* Sources */,
+				9B396EAADA39819F48C0B4F2 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = AlasHost;
+			packageProductDependencies = (
+				07CC88ED3E6902B99FD02D50 /* AlasCore */,
+			);
+			productName = AlasHost;
+			productReference = 0CA29ACACE519DE00507EB73 /* AlasHost */;
+			productType = "com.apple.product-type.tool";
+		};
 		B7139BF80AE27BA75A8D4740 /* AlasTests */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 4ECEFB1265B7751E394C85A4 /* Build configuration list for PBXNativeTarget "AlasTests" */;
@@ -6512,17 +6591,18 @@
 				2A52B3AA269E67D4B89E4A6B /* Build zmx */,
 				A8FC861C1A7630AE525F4E85 /* Build Alas Helper */,
 				E7133D66219548A98B3DF549 /* Build Alas CLI */,
-				3D81448C75C45F571E86F9F8 /* Build alas-host */,
 				4609384BD7FA0393B4CE182E /* Build fff */,
 				A4E68D93681832810FDA0179 /* Build TreeSitter Pack */,
 				16AE5D200CA779AE0410E1B1 /* Sources */,
 				BD47E15DBE895A60942DDB48 /* Resources */,
 				65B162623B36E39612A379EA /* Frameworks */,
+				2712E12EE8A4AD5B52367A67 /* Embed Dependencies */,
 				3B94E98F09B4EBB141FF6D87 /* Embed Ghostty Resources */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				B2CF76B1796D162222FD040A /* PBXTargetDependency */,
 			);
 			name = Alas;
 			packageProductDependencies = (
@@ -6549,6 +6629,9 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
+					335926F2C3CE770C9A59F33D = {
+						ProvisioningStyle = Automatic;
+					};
 					E4C94E93C35EAAB0719C6D98 = {
 						ProvisioningStyle = Automatic;
 					};
@@ -6578,6 +6661,7 @@
 			projectRoot = "";
 			targets = (
 				E4C94E93C35EAAB0719C6D98 /* Alas */,
+				335926F2C3CE770C9A59F33D /* AlasHost */,
 				B7139BF80AE27BA75A8D4740 /* AlasTests */,
 			);
 		};
@@ -6695,25 +6779,6 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "\"${SRCROOT}/scripts/embed-ghostty-resources.sh\"";
-		};
-		3D81448C75C45F571E86F9F8 /* Build alas-host */ = {
-			isa = PBXShellScriptBuildPhase;
-			alwaysOutOfDate = 1;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-			);
-			name = "Build alas-host";
-			outputFileListPaths = (
-			);
-			outputPaths = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "\"${SRCROOT}/scripts/build-alas-host.sh\"";
 		};
 		4609384BD7FA0393B4CE182E /* Build fff */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -7497,6 +7562,14 @@
 				3DD8B67CC98CDC509E7B9BD3 /* WorktreeUpstreamStatus.swift in Sources */,
 				943EB1606E8D0035431C785E /* WorktreeUpstreamStatusStore.swift in Sources */,
 				467BA12331DB76C41313BF70 /* WorktreesPane.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		27AFECCD03F71B88EF4F5DA0 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7E60FAE6FB762FA1353C3E0C /* main.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -8539,6 +8612,11 @@
 			target = E4C94E93C35EAAB0719C6D98 /* Alas */;
 			targetProxy = 5F682506C464A32C7F23838F /* PBXContainerItemProxy */;
 		};
+		B2CF76B1796D162222FD040A /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 335926F2C3CE770C9A59F33D /* AlasHost */;
+			targetProxy = BE89123F4D78E19D9C39AD25 /* PBXContainerItemProxy */;
+		};
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
@@ -8751,6 +8829,46 @@
 			};
 			name = Debug;
 		};
+		E64BB00F589961DD444E55F9 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALAS_APP_ARCHS = "$(ARCHS_STANDARD)";
+				ARCHS = "$(ALAS_APP_ARCHS)";
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = io.nlopez.AlasHost;
+				PRODUCT_NAME = "alas-host";
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+			};
+			name = Release;
+		};
+		EF5120DC46A8385FB2F71DE2 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALAS_APP_ARCHS = "$(ARCHS_STANDARD)";
+				ARCHS = "$(ALAS_APP_ARCHS)";
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = io.nlopez.AlasHost;
+				PRODUCT_NAME = "alas-host";
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+			};
+			name = Debug;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -8777,6 +8895,15 @@
 			buildConfigurations = (
 				6202B549740A569C39BD0B49 /* Debug */,
 				A2FE0D1E9BE6C7D51667B232 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		F4FE368CBD899565DFE0525B /* Build configuration list for PBXNativeTarget "AlasHost" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				EF5120DC46A8385FB2F71DE2 /* Debug */,
+				E64BB00F589961DD444E55F9 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
@@ -8846,6 +8973,10 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 891F84CB2FCFDD716754D8D3 /* XCRemoteSwiftPackageReference "mlx-swift" */;
 			productName = MLX;
+		};
+		07CC88ED3E6902B99FD02D50 /* AlasCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = AlasCore;
 		};
 		131295FF74DC62E00615B2AC /* MLXHuggingFace */ = {
 			isa = XCSwiftPackageProductDependency;

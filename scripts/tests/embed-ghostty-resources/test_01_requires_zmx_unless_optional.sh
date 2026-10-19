@@ -37,12 +37,6 @@ for target in \
     chmod +x "${cli}"
 done
 cp "${repo_root}/AlasCLI/manifest.json" "${srcroot}/AlasCLI/manifest.json"
-for arch in arm64 x86_64; do
-    host="${srcroot}/.build/alas-host/${arch}/alas-host"
-    mkdir -p "$(dirname "${host}")"
-    printf '#!/bin/sh\n' > "${host}"
-    chmod +x "${host}"
-done
 touch "${srcroot}/.build/fff/arm64/install/lib/libfff_c.dylib"
 for tool in install_name_tool codesign; do
     printf '#!/bin/sh\nexit 0\n' > "${tmp}/bin/${tool}"
@@ -86,7 +80,6 @@ cmp "${srcroot}/AlasHelper/manifest.json" "${resources}/alas-helper/manifest.jso
 test -x "${resources}/alas-cli/macos-x86_64/alas"
 test -x "${resources}/alas-cli/macos-aarch64/alas"
 cmp "${srcroot}/AlasCLI/manifest.json" "${resources}/alas-cli/manifest.json"
-test -x "${resources}/alas-host/alas-host"
 
 # Xcode can report undefined_arch for the parent target while ARCHS still
 # names the single requested slice. Resource embedding must select that same
