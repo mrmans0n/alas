@@ -26,10 +26,10 @@ final class AlasHostProcess: @unchecked Sendable {
             .appendingPathComponent(".build/debug/alas-host")
     }
 
-    init(dataDirectory: URL, arguments: [String] = []) throws {
+    init(dataDirectory: URL, arguments: [String] = [], binary: URL = AlasHostProcess.binary) throws {
         let root = AlasProfile.canonicalDirectory(dataDirectory) ?? dataDirectory
         runtimeDirectory = AlasProfile.runtimeDirectory(for: root, uid: getuid())
-        process.executableURL = Self.binary
+        process.executableURL = binary
         process.arguments = arguments
         var environment = ProcessInfo.processInfo.environment
         environment["ALAS_APP_SUPPORT_DIR"] = dataDirectory.path

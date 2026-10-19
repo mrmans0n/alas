@@ -134,6 +134,7 @@ for cli_arch in macos-x86_64 macos-aarch64; do
     "$app_path/Contents/Resources/alas-cli/$cli_arch/alas" \
     "Alas CLI ($cli_arch)"
 done
+sign_embedded_executable "$app_path/Contents/Resources/alas-host/alas-host" "alas-host"
 
 echo "==> Signing $app_path"
 codesign \
