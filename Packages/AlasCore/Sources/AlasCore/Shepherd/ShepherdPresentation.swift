@@ -181,8 +181,9 @@ public enum ShepherdShipOffer {
         let paragraph = agentText
             .components(separatedBy: "\n\n")
             .last { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? ""
+        // The closing clause: the last sentence, after any ";", ":" or "—".
         let ask = paragraph
-            .replacingOccurrences(of: #"([.!?])\s+"#, with: "$1\n", options: .regularExpression)
+            .replacingOccurrences(of: #"([.!?])\s+|[;:—]"#, with: "$1\n", options: .regularExpression)
             .components(separatedBy: "\n")
             .map { $0.trimmingCharacters(in: .whitespaces.union(.init(charactersIn: "*_>-"))) }
             .last { !$0.isEmpty } ?? ""

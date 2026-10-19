@@ -121,6 +121,8 @@ private let presentationCases: [ShepherdPresentationCase] = [
             ("Want me to check if I can open a PR?", false),
             ("Want me to show you how to open a PR?", false),
             ("I can help you open a PR?", false),
+            ("I can open a PR after we add tests; should I add them first?", false),
+            ("All green: want me to open a PR?", true),
             ("Want me to go ahead and commit these changes and open a pull request?", true),
             ("Want me to commit these changes?", false),
             ("Should I update the PR description?", false),
