@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixes
+
+- Restore keyboard focus to diff comment composers when their row is reattached, while respecting intentional focus changes to other controls.
+
 ## [0.21.8] - 2026-10-18
 
 ### ✨ Features
