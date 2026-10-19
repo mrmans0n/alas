@@ -4,7 +4,7 @@ import Foundation
 /// `host.lock` in it, held for as long as this value lives. The kernel drops
 /// it when the process dies, so a crash never leaves the directory locked.
 /// The lock file holds the holder's pid, for the refusal to name it.
-public final class DataDirectoryLock {
+public final class DataDirectoryLock: Sendable {
     public enum Refusal: Error, Equatable, LocalizedError {
         /// Another live process holds it; its pid when it recorded one.
         case held(pid: Int32?)

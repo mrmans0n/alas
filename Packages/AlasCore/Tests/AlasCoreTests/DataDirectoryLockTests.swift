@@ -21,4 +21,19 @@ struct DataDirectoryLockTests {
         // kernel closes them on exec.
         try await eventually { (try? DataDirectoryLock.acquire(in: directory)) != nil }
     }
+
+    /// A waiting taker blocks while the directory is held and takes it as
+    /// soon as the holder lets go, as the launch agent's host waits for the app.
+    @Test func aWaitingTakerGetsTheDirectoryOnceReleased() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("alas-lock-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var first: DataDirectoryLock? = try DataDirectoryLock.acquire(in: directory)
+        // The lock is exclusive, so the waiter cannot return before `first`
+        // lets go; without waiting it would refuse at once.
+        let waiter = Task.detached { try DataDirectoryLock.acquire(in: directory, waiting: true) }
+        first = nil
+        _ = first
+        let second = try await waiter.value
+        #expect(second.url == directory.appendingPathComponent("host.lock"))
+    }
 }
