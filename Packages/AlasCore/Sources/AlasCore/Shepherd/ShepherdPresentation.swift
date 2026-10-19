@@ -208,7 +208,11 @@ public enum ShepherdShipOffer {
         // something about one ("open the PR in your browser", "a PR template").
         let ship = #"(?:(?:open|create|raise|put up|submit|file)\s+(?:(?:a|an|the)\s+)?(?:(?:new|draft)\s+)?"# + request
             + #"(?=\s*(?:[?.!,]|$)|\s+(?:for|with|against|to|from|into|that|now|or|and|once|so)\b)"#
-            + #"|commit(?:\s+[\w']+){0,4}?\s+(?:and|then|&)\s+(?:then\s+)?push\b|ship (?:it|this|these changes)\b)"#
+            + #"|commit(?!\s+to\b)(?:\s+[\w']+){0,4}?\s+(?:and|then|&)\s+(?:then\s+)?push"#
+            // A git push ("push the branch up"), not "push back on the reviewer".
+            + #"(?:\s+(?:it|them|this|everything|(?:the|this) (?:branch|changes|commits?)))?"#
+            + #"(?:\s+(?:up|upstream|to (?:origin|the remote|remote|github|gitlab)))?"#
+            + #"(?=\s*(?:[?.!,]|$)|\s+(?:and|so|now|for)\b)|ship (?:it|this|these changes)\b)"#
         return matches(ask, offer + between + ship)
     }
 

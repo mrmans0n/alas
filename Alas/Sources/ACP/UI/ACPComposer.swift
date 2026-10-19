@@ -1187,6 +1187,10 @@ final class ACPNSTextView: PairedDelimiterTextView {
     func performNextPromptAction() -> Bool {
         onNextPromptStateChange(nextPromptInputState)
         guard nextPromptGhostText != nil, let action = nextPromptAction else { return false }
+        // Consumed before it runs, so a double click can't run it twice
+        // before SwiftUI clears the offer.
+        nextPromptAction = nil
+        clearNextPromptPresentation()
         action.perform()
         return true
     }
