@@ -5,6 +5,7 @@ public struct CodexInstaller: AgentInstaller, Sendable {
     public let hooksURL: URL
     public let configURL: URL
     public let runEnableHooks: @Sendable () async throws -> CommandResult
+    public let trustHooks: @Sendable (_ hooksURL: URL, _ commands: Set<String>) async throws -> Void
 
     public struct CommandResult: Sendable {
         public let status: Int32
@@ -20,7 +21,8 @@ public struct CodexInstaller: AgentInstaller, Sendable {
         homeDirectoryURL: URL = FileManager.default.homeDirectoryForCurrentUser,
         hooksURL: URL? = nil,
         configURL: URL? = nil,
-        runEnableHooks: (@Sendable () async throws -> CommandResult)? = nil
+        runEnableHooks: (@Sendable () async throws -> CommandResult)? = nil,
+        trustHooks: (@Sendable (_ hooksURL: URL, _ commands: Set<String>) async throws -> Void)? = nil
     ) {
         self.hooksURL = hooksURL ?? homeDirectoryURL
             .appendingPathComponent(".codex", isDirectory: true)
@@ -34,6 +36,9 @@ public struct CodexInstaller: AgentInstaller, Sendable {
         // warning. `defaultEnableHooks` captures nothing, so the literal is
         // trivially `@Sendable`.
         self.runEnableHooks = runEnableHooks ?? { try await CodexInstaller.defaultEnableHooks() }
+        self.trustHooks = trustHooks ?? { hooksURL, commands in
+            try await CodexHookTrust.trustViaAppServer(hooksURL: hooksURL, commands: commands)
+        }
     }
 
     public func installState() -> InstallState {
@@ -42,20 +47,28 @@ public struct CodexInstaller: AgentInstaller, Sendable {
         do {
             let json = try JSONHookSettingsFile.load(at: hooksURL)
             let hooks = json["hooks"] as? [String: Any] ?? [:]
+            let placements = managedPlacements(in: hooks)
             // Seed every canonical event so a fully missing placement
             // compares as empty (not as a missing key).
             var actual: [String: Set<String>] = Dictionary(
                 uniqueKeysWithValues: canonical.keys.map { ($0, Set<String>()) }
             )
-            for (event, cmds) in JSONHookSettingsFile.managedCommandsByEventFlat(in: hooks) {
-                actual[event, default: []].formUnion(cmds)
+            for placement in placements {
+                actual[placement.event, default: []].insert(placement.command)
             }
-            if actual.values.allSatisfy(\.isEmpty) { return .notInstalled }
+            if actual.values.allSatisfy(\.isEmpty) {
+                // Entries in the old flat shape mean Alas installed hooks that
+                // Codex never ran; report them as needing an update.
+                let legacy = JSONHookSettingsFile.managedCommandsByEventFlat(in: hooks)
+                return legacy.isEmpty ? .notInstalled : .outdated
+            }
             // Per-event compare: a stale install with the right commands
             // under the wrong event keys would otherwise be reported as
             // installed.
-            guard actual == canonical else { return .outdated }
-            return hasFeaturesFlag() ? .installed : .outdated
+            guard actual == canonical, managedGroupsMatchCanonical(in: hooks), hasFeaturesFlag() else {
+                return .outdated
+            }
+            return hasTrustEntries(for: placements) ? .installed : .outdated
         } catch {
             return .notInstalled
         }
@@ -69,7 +82,7 @@ public struct CodexInstaller: AgentInstaller, Sendable {
         }
         var json = try JSONHookSettingsFile.load(at: hooksURL)
         let existing = json["hooks"] as? [String: Any] ?? [:]
-        var hooks = JSONHookSettingsFile.pruneManagedFlat(from: existing)
+        var hooks = Self.pruneManaged(from: existing)
         for (event, entries) in hooksByEvent() {
             var current = hooks[event] as? [[String: Any]] ?? []
             current.append(contentsOf: entries)
@@ -77,12 +90,13 @@ public struct CodexInstaller: AgentInstaller, Sendable {
         }
         json["hooks"] = hooks
         try JSONHookSettingsFile.write(json, to: hooksURL)
+        try await trustHooks(hooksURL, Set(canonicalCommandsByEvent().values.joined()))
     }
 
     public func uninstall() throws {
         var json = try JSONHookSettingsFile.load(at: hooksURL)
         let existing = json["hooks"] as? [String: Any] ?? [:]
-        let remaining = JSONHookSettingsFile.pruneManagedFlat(from: existing)
+        let remaining = Self.pruneManaged(from: existing)
         json["hooks"] = remaining
         try JSONHookSettingsFile.write(json, to: hooksURL)
         // Only flip the features.hooks flag back off when the user has no
@@ -93,7 +107,12 @@ public struct CodexInstaller: AgentInstaller, Sendable {
         }
     }
 
-    // MARK: - Codex hook map (flat format)
+    // MARK: - Codex hook map
+
+    // Codex reads hooks.json as `event → [matcher group]`, each group holding
+    // a `hooks` array of handlers. Alas used to write handlers directly under
+    // the event; Codex parses those as groups with no handlers and skips them
+    // without a warning.
 
     private static let busy = AlasHookCommand.compositeCommand(
         events: [.busy], agent: .codex, forwardStdinAsBody: false)
@@ -106,23 +125,122 @@ public struct CodexInstaller: AgentInstaller, Sendable {
 
     private func hooksByEvent() -> [String: [[String: Any]]] {
         [
-            "SessionStart": [flatEntry(command: Self.attached)],
-            "SessionEnd": [flatEntry(command: Self.detached)],
-            "UserPromptSubmit": [flatEntry(command: Self.busy)],
-            "Stop": [flatEntry(command: Self.idleAndNotify)],
+            "SessionStart": [hookGroup(command: Self.attached)],
+            "SessionEnd": [hookGroup(command: Self.detached)],
+            "UserPromptSubmit": [hookGroup(command: Self.busy)],
+            "Stop": [hookGroup(command: Self.idleAndNotify)],
         ]
     }
 
-    private func flatEntry(command: String, timeout: Int = 10) -> [String: Any] {
-        ["command": command, "timeout": timeout]
+    private func hookGroup(command: String, timeout: Int = 10) -> [String: Any] {
+        ["hooks": [["type": "command", "command": command, "timeout": timeout]]]
     }
 
     private func canonicalCommandsByEvent() -> [String: Set<String>] {
         var result: [String: Set<String>] = [:]
-        for (event, entries) in hooksByEvent() {
-            result[event] = Set(entries.compactMap { $0["command"] as? String })
+        for (event, groups) in hooksByEvent() {
+            result[event] = Set(Self.commands(inGroups: groups).map(\.command))
         }
         return result
+    }
+
+    /// Strips Alas entries in both the grouped shape and the old flat one,
+    /// so updating an existing install leaves no dead flat entries behind.
+    private static func pruneManaged(from hooks: [String: Any]) -> [String: Any] {
+        JSONHookSettingsFile.pruneManaged(from: JSONHookSettingsFile.pruneManagedFlat(from: hooks))
+    }
+
+    private struct Placement {
+        let event: String
+        let groupIndex: Int
+        let handlerIndex: Int
+        let command: String
+    }
+
+    private func managedPlacements(in hooks: [String: Any]) -> [Placement] {
+        hooks.flatMap { event, value -> [Placement] in
+            guard let groups = value as? [[String: Any]] else { return [] }
+            return Self.commands(inGroups: groups)
+                .filter { AlasHookCommand.isManagedCommand($0.command) }
+                .map { Placement(event: event, groupIndex: $0.group, handlerIndex: $0.handler, command: $0.command) }
+        }
+    }
+
+    private static func commands(inGroups groups: [[String: Any]]) -> [(group: Int, handler: Int, command: String)] {
+        groups.enumerated().flatMap { groupIndex, group in
+            ((group["hooks"] as? [[String: Any]]) ?? []).enumerated().compactMap { handlerIndex, handler in
+                (handler["command"] as? String).map { (groupIndex, handlerIndex, $0) }
+            }
+        }
+    }
+
+    /// Codex hashes the whole normalized group (timeout, type, matcher), not
+    /// just the command. `install()` trusts exactly the canonical groups, so
+    /// any Alas group that differs from them carries a stale hash and Codex
+    /// marks it modified and skips it.
+    private func managedGroupsMatchCanonical(in hooks: [String: Any]) -> Bool {
+        let canonical = hooksByEvent()
+        return hooks.allSatisfy { event, value in
+            guard let groups = value as? [[String: Any]] else { return true }
+            let expected = (canonical[event] ?? []).map { $0 as NSDictionary }
+            return groups
+                .filter { group in
+                    Self.commands(inGroups: [group]).contains { AlasHookCommand.isManagedCommand($0.command) }
+                }
+                .allSatisfy { expected.contains($0 as NSDictionary) }
+        }
+    }
+
+    // MARK: - Hook trust
+
+    /// Whether config.toml records trust for each placement's key. Keys are
+    /// positional (`<hooks.json>:<event>:<group>:<handler>`), so another tool
+    /// adding a hook ahead of Alas's moves it to a key nobody has trusted.
+    /// The hash itself is not checked; `install()` verified it with Codex.
+    private func hasTrustEntries(for placements: [Placement]) -> Bool {
+        guard let contents = try? String(contentsOf: configURL, encoding: .utf8) else { return false }
+        let trustedKeys = Self.trustedHookKeys(inConfig: contents)
+        let hooksPath = CodexHookTrust.canonicalPath(hooksURL)
+        return placements.allSatisfy { placement in
+            let key = "\(hooksPath):\(Self.snakeCase(placement.event)):\(placement.groupIndex):\(placement.handlerIndex)"
+            return trustedKeys.contains(key)
+        }
+    }
+
+    /// Keys of `[hooks.state."…"]` tables that set `trusted_hash`.
+    private static func trustedHookKeys(inConfig contents: String) -> Set<String> {
+        var keys = Set<String>()
+        var currentKey: String?
+        for line in contents.split(separator: "\n", omittingEmptySubsequences: false) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("[") {
+                currentKey = Self.hookStateKey(fromHeader: trimmed)
+                continue
+            }
+            if let key = currentKey, trimmed.range(of: #"^trusted_hash\s*="#, options: .regularExpression) != nil {
+                keys.insert(key)
+            }
+        }
+        return keys
+    }
+
+    private static func hookStateKey(fromHeader header: String) -> String? {
+        let prefix = #"[hooks.state.""#
+        let suffix = #""]"#
+        guard header.hasPrefix(prefix), header.hasSuffix(suffix), header.count > prefix.count + suffix.count else {
+            return nil
+        }
+        let quoted = header.dropFirst(prefix.count).dropLast(suffix.count)
+        return quoted.replacingOccurrences(of: #"\""#, with: "\"").replacingOccurrences(of: #"\\"#, with: #"\"#)
+    }
+
+    /// `UserPromptSubmit` → `user_prompt_submit`, the spelling Codex uses in
+    /// hook keys.
+    private static func snakeCase(_ event: String) -> String {
+        event.reduce(into: "") { result, char in
+            if char.isUppercase, !result.isEmpty { result.append("_") }
+            result.append(char.lowercased())
+        }
     }
 
     // MARK: - Features flag
@@ -190,6 +308,7 @@ public struct CodexInstaller: AgentInstaller, Sendable {
 public enum CodexInstallerError: Error, LocalizedError, Sendable {
     case codexUnavailable
     case enableHooksFailed(String)
+    case trustHooksFailed(String)
 
     public var errorDescription: String? {
         switch self {
@@ -197,6 +316,8 @@ public enum CodexInstallerError: Error, LocalizedError, Sendable {
             return "Codex must be installed and available in your login shell."
         case .enableHooksFailed(let details):
             return details.isEmpty ? "Could not enable the Codex hooks feature." : "Could not enable the Codex hooks feature: \(details)"
+        case .trustHooksFailed(let details):
+            return "Could not mark the Alas hooks as trusted in Codex: \(details)"
         }
     }
 }
