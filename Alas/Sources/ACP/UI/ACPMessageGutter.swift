@@ -125,12 +125,8 @@ struct ACPMessageGutter<Content: View>: View {
     @ViewBuilder private var timestamp: some View {
         if let messageCreatedAt {
             Text(ACPMessageTimestampFormatter.string(for: messageCreatedAt))
-                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .font(.system(size: 10).monospacedDigit())
                 .foregroundStyle(theme.color("fg-faint"))
-                .padding(.horizontal, 6)
-                .padding(.vertical, 4)
-                .background(theme.color("bg-3").opacity(0.92))
-                .clipShape(Capsule())
                 .accessibilityHidden(true)
         }
     }

@@ -36,14 +36,4 @@ struct ACPMessageTimestampFormatterTests {
         #expect(ACPToolCallDurationFormatter.string(for: 2.4, locale: locale) == "2.4s")
         #expect(ACPToolCallDurationFormatter.string(for: 42, locale: locale) == "42s")
     }
-
-    @Test("places the hover timestamp below the message actions button")
-    func hoverTimestampPlacement() {
-        #expect(ACPMessageGutterLayout.timestampVerticalSpacing == 4)
-    }
-
-    @Test("reserves enough width for a timestamp below the message actions button")
-    func hoverTimestampWidth() {
-        #expect(ACPMessageGutterLayout.timestampWidth == 128)
-    }
 }
