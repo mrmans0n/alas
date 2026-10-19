@@ -6,8 +6,9 @@ import Foundation
 // the profile's local socket.
 
 let usage = """
-usage: alas-host
+usage: alas-host [--wait-for-lock]
        alas-host pair
+       alas-host install-agent | uninstall-agent
 
 Serves the Alas host protocol for the data directory ALAS_APP_SUPPORT_DIR
 (default: ~/Library/Application Support/Alas) on its local socket, and prints
@@ -15,8 +16,15 @@ the socket path. When the profile enables Remote, also serves it on loopback
 and prints its address, with the web client of the Alas.app it ships in, of
 the one in /Applications, or of ALAS_REMOTE_WEB_DIR. Stops on SIGINT or SIGTERM.
 
+With --wait-for-lock, waits while another process (the app) holds the data
+directory instead of exiting, and serves once it lets go.
+
 `alas-host pair` asks the running host for a Remote pairing code, which a
 phone or browser redeems within two minutes, and prints it.
+
+`alas-host install-agent` installs and starts a launchd agent that runs this
+executable with --wait-for-lock at login, and restarts it after a crash;
+`uninstall-agent` stops and removes it. Each profile has its own agent.
 """
 
 func fail(_ message: String) -> Never {
@@ -50,14 +58,54 @@ if CommandLine.arguments.dropFirst().elementsEqual(["pair"]) {
         fail("the host does not mint Remote pairing codes")
     }
 }
-if let unknown = CommandLine.arguments.dropFirst().first {
-    fail("unknown argument \(unknown)\n\(usage)")
+let arguments = Array(CommandLine.arguments.dropFirst())
+if arguments == ["install-agent"] || arguments == ["uninstall-agent"] {
+    // The bundled executable, not the link that may have started this one,
+    // so the agent keeps working wherever the link points.
+    guard let executable = Bundle.main.executableURL?.resolvingSymlinksInPath() else {
+        fail("cannot locate this executable")
+    }
+    let agent = HostLaunchAgent(executable: executable)
+    let domain = "gui/\(getuid())"
+    @discardableResult
+    func launchctl(_ arguments: String...) -> Int32 {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        process.arguments = arguments
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        guard (try? process.run()) != nil else { return -1 }
+        process.waitUntilExit()
+        return process.terminationStatus
+    }
+    // Not loaded is fine: there is nothing to stop.
+    launchctl("bootout", "\(domain)/\(agent.label)")
+    if arguments == ["uninstall-agent"] {
+        try? FileManager.default.removeItem(at: agent.plistURL)
+        print("removed \(agent.plistURL.path)")
+        exit(0)
+    }
+    do {
+        try FileManager.default.createDirectory(at: agent.plistURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try agent.plistData().write(to: agent.plistURL, options: .atomic)
+    } catch {
+        fail("cannot write \(agent.plistURL.path): \(error.localizedDescription)")
+    }
+    guard launchctl("bootstrap", domain, agent.plistURL.path) == 0 else {
+        fail("launchctl could not start \(agent.label) from \(agent.plistURL.path)")
+    }
+    print("installed \(agent.plistURL.path)")
+    exit(0)
+}
+let waitsForLock = arguments == ["--wait-for-lock"]
+if !arguments.isEmpty, !waitsForLock {
+    fail("unknown argument \(arguments[0])\n\(usage)")
 }
 
 // Held until the process exits; the kernel releases it then.
 let lock: DataDirectoryLock
 do {
-    lock = try DataDirectoryLock.acquire()
+    lock = try DataDirectoryLock.acquire(waiting: waitsForLock)
 } catch {
     fail(error.localizedDescription)
 }
