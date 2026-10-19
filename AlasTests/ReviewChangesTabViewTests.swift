@@ -160,6 +160,26 @@ struct ReviewChangesTabViewTests {
         ReviewFeedbackPromptActions.sendToAgent(bundle, target: target, sender: sender)
     }
 
+    @Test(arguments: [true, false])
+    func reviewedWorkingTreeBecomesTheBaselineOnlyWhenFeedbackIsAccepted(accepted: Bool) {
+        let persistence = TestPersistenceStore()
+        let store = ReviewedSnapshotStore(store: persistence, url: URL(fileURLWithPath: "/tmp/review-snapshots.json"))
+        let sender = ReviewFeedbackAgentSender(
+            availableTargets: { [] },
+            send: { _, _, completion in
+                completion(accepted ? .success(()) : .failure(ReviewFeedbackAgentSendError.rejected))
+            }
+        ).recordingReviewedWorkingTree("reviewed-tree", worktreeID: "wt-1", store: store)
+
+        sender.send(
+            ReviewFeedbackDelivery(text: "Fix it", source: .shipCreate(kind: .github, branch: "b", messageID: UUID())),
+            .newChat(agentID: "codex", title: "New chat")
+        ) { _ in }
+
+        let saved = persistence.writes.last?.value as? [String: ReviewedWorkingTreeSnapshot]
+        #expect(saved?["wt-1"]?.tree == (accepted ? "reviewed-tree" : nil))
+    }
+
     @Test func sendToAgentRecordsSessionHandoff() {
         var sentPrompt: String?
         var recorded: ReviewFeedbackHandoff?

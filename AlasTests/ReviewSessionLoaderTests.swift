@@ -338,6 +338,34 @@ struct ReviewSessionLoaderTests {
         #expect(files.map(\.additions) == [1, 1])
     }
 
+    private static let repoPath = URL(fileURLWithPath: "/tmp/repo")
+
+    @Test(arguments: [
+        (ReviewSessionTarget.localChanges(worktreeID: "wt", repositoryPath: repoPath, scope: .all), "now" as String?),
+        (.branchWithLocalChanges(worktreeID: "wt", repositoryPath: repoPath, base: "main"), "now"),
+        (.sinceSnapshot(worktreeID: "wt", repositoryPath: repoPath, tree: "then"), "now"),
+        // These never show the whole working tree, so feedback on them must
+        // not move the "since last review" baseline.
+        (.localChanges(worktreeID: "wt", repositoryPath: repoPath, scope: .staged), nil),
+        (.commit(worktreeID: "wt", repositoryPath: repoPath, sha: "abc", title: "Commit"), nil),
+    ])
+    func onlyWholeWorkingTreeReviewsReportTheReviewedTree(target: ReviewSessionTarget, expected: String?) async throws {
+        let empty = DiffReviewLoadedSession(files: [], summary: DiffReviewSessionModel(files: [], groupsEnabled: false))
+        let loader = ReviewSessionLoader(
+            localChanges: { _ in empty },
+            commit: { _ in empty },
+            workingTreeRange: { _, current in
+                #expect(current == "now")
+                return empty
+            },
+            snapshotWorkingTree: { _ in "now" }
+        )
+
+        let loaded = try await loader.load(target: target)
+
+        #expect(loaded.reviewedWorkingTree == expected)
+    }
+
     @MainActor
     @Test func productionLoaderLoadsProviderReviewRequestWithProviderContext() async throws {
         let repo = FileManager.default.temporaryDirectory

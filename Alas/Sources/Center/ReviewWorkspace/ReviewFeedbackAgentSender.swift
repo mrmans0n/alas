@@ -59,16 +59,14 @@ struct ReviewFeedbackAgentSender {
                 }
                 return targets
             },
-            send: { delivery, target, sendCompletion in
+            send: { delivery, target, completion in
                 switch target {
                 case .newChat(let agentID, _):
                     guard Self.availableAgent(appState: appState, worktreeID: worktreeID, agentID: agentID) != nil else {
-                        sendCompletion(.failure(ReviewFeedbackAgentSendError.rejected))
+                        completion(.failure(ReviewFeedbackAgentSendError.rejected))
                         return
                     }
                     Task { @MainActor in
-                        let completion = await Self.recordingReviewedSnapshot(
-                            appState: appState, worktreeID: worktreeID, completion: sendCompletion)
                         guard let opened = await Self.openNewChat(appState: appState, worktreeID: worktreeID, agentID: agentID) else {
                             completion(.failure(ReviewFeedbackAgentSendError.rejected))
                             return
@@ -92,8 +90,6 @@ struct ReviewFeedbackAgentSender {
                         )
                     }
                     Task { @MainActor in
-                        let completion = await Self.recordingReviewedSnapshot(
-                            appState: appState, worktreeID: worktreeID, completion: sendCompletion)
                         await Self.deliver(delivery, appState: appState, sessionID: sessionID, owner: owner, completion: completion)
                     }
                 }
@@ -110,27 +106,33 @@ struct ReviewFeedbackAgentSender {
         )
     }
 
-    /// Snapshots the working tree the user just reviewed, before the agent
-    /// can touch it, and returns `completion` wrapped to keep the snapshot
-    /// once the feedback goes out, so "since last review" shows only what
-    /// changed after. Best effort: a remote worktree or a git failure only
-    /// costs that menu entry, never the send.
-    private static func recordingReviewedSnapshot(
-        appState: AppState,
+    /// This sender, keeping `tree` as the worktree's "since last review"
+    /// baseline once feedback goes out. `tree` must be the right-hand side of
+    /// the diff the feedback came from, snapshotted when it loaded, so the
+    /// baseline never covers edits the user did not see. nil keeps the
+    /// baseline: commit, staged-only, and hosted reviews don't show the
+    /// whole working tree.
+    func recordingReviewedWorkingTree(
+        _ tree: String?,
         worktreeID: String,
-        completion: @escaping @MainActor (Result<Void, Error>) -> Void
-    ) async -> @MainActor (Result<Void, Error>) -> Void {
-        guard let worktree = projectAndWorktree(appState: appState, worktreeID: worktreeID)?.worktree,
-              !worktree.path.isRemoteAlasPath,
-              let tree = try? await GitService().workingTreeSnapshot(worktreePath: worktree.path)
-        else { return completion }
-        let snapshot = ReviewedWorkingTreeSnapshot(tree: tree, capturedAt: Date())
-        return { result in
-            if case .success = result, (try? ReviewedSnapshotStore().save(snapshot, worktreeID: worktreeID)) != nil {
-                NotificationCenter.default.post(name: .alasReviewedSnapshotDidChange, object: worktreeID)
+        store: ReviewedSnapshotStore = ReviewedSnapshotStore()
+    ) -> ReviewFeedbackAgentSender {
+        guard let tree else { return self }
+        var sender = self
+        let send = self.send
+        sender.send = { delivery, target, completion in
+            send(delivery, target) { result in
+                if case .success = result,
+                   (try? store.save(
+                       ReviewedWorkingTreeSnapshot(tree: tree, capturedAt: Date()),
+                       worktreeID: worktreeID
+                   )) != nil {
+                    NotificationCenter.default.post(name: .alasReviewedSnapshotDidChange, object: worktreeID)
+                }
+                completion(result)
             }
-            completion(result)
         }
+        return sender
     }
 
     /// A new chat that refuses the turn (its agent needs sign-in or setup)
