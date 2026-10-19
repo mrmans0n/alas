@@ -46,6 +46,7 @@ cask "alas" do
   depends_on macos: :sonoma
 
   app "Alas.app"
+  binary "#{{appdir}}/Alas.app/Contents/Resources/alas-host/alas-host"
 
   zap trash: [
     "~/Library/Application Support/Alas",
