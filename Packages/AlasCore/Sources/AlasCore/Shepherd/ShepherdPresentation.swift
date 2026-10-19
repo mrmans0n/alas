@@ -204,11 +204,11 @@ public enum ShepherdShipOffer {
         let between = #"(?:\s+(?:go ahead and|also|now|just|then|finally|first|"#
             + #"(?:commit|push)(?:\s+(?:the|these|this|all|my|your))?(?:\s+(?:changes|work|fix|fixes|branch))?,?\s+and))*\s+"#
         let request = #"(?:pr|pull request|merge request|mr)s?"#
-        // The request is the verb's object ("open a draft PR"), not something
-        // about an existing one ("open the PR in your browser", "the PR link").
+        // The request is the verb's object ("open a draft PR for this"), not
+        // something about one ("open the PR in your browser", "a PR template").
         let ship = #"(?:(?:open|create|raise|put up|submit|file)\s+(?:(?:a|an|the)\s+)?(?:(?:new|draft)\s+)?"# + request
-            + #"\b(?!\s+(?:in|link|url|page|description|title)\b)"#
-            + #"|commit\b[^.?!]{0,40}?\bpush\b|ship (?:it|this|these changes)\b)"#
+            + #"(?=\s*(?:[?.!,]|$)|\s+(?:for|with|against|to|from|into|that|now|or|and|once|so)\b)"#
+            + #"|commit(?:\s+[\w']+){0,4}?\s+(?:and|then|&)\s+(?:then\s+)?push\b|ship (?:it|this|these changes)\b)"#
         return matches(ask, offer + between + ship)
     }
 
