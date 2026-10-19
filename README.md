@@ -20,6 +20,9 @@ brew install --cask mrmans0n/tap/alas
 
 Or grab the signed DMG from [Releases](https://github.com/mrmans0n/alas/releases/latest).
 
+To run Alas without its window, on a Mac that serves agents and runs to your
+phone, see the [headless host](docs/headless-host.md).
+
 ## Why Alas
 
 Keep each task in its own worktree, with its terminals, agent conversations,
