@@ -2,7 +2,7 @@ import Foundation
 
 /// The launchd agent that keeps `alas-host` serving a profile while the user
 /// is logged in: started at login, waiting for the data directory while the
-/// app holds it, and restarted after a crash but not after a stop.
+/// app holds it, and restarted whenever it ends while its executable exists.
 public struct HostLaunchAgent: Equatable, Sendable {
     public let label: String
     /// `~/Library/LaunchAgents/<label>.plist`.
@@ -34,9 +34,11 @@ public struct HostLaunchAgent: Equatable, Sendable {
             "Label": label,
             "ProgramArguments": [executable.path, "--wait-for-lock"],
             "RunAtLoad": true,
-            // A stop (SIGTERM, as `launchctl bootout` sends) exits 0 and stays
-            // stopped; a crash or a failed start is retried.
-            "KeepAlive": ["SuccessfulExit": false],
+            // Kept running, restarted whenever it ends, while its executable
+            // exists: an app upgrade keeps the path and the agent, and an app
+            // that was deleted stops it rather than leaving launchd retrying.
+            // `uninstall-agent` (`launchctl bootout`) is how it is stopped.
+            "KeepAlive": ["PathState": [executable.path: true]],
             "ProcessType": "Background",
             "StandardOutPath": logURL.path,
             "StandardErrorPath": logURL.path,

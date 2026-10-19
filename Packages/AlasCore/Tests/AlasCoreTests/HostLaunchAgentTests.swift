@@ -6,8 +6,8 @@ struct HostLaunchAgentTests {
     private let executable = URL(fileURLWithPath: "/Applications/Alas.app/Contents/Resources/alas-host/alas-host")
     private let home = URL(fileURLWithPath: "/Users/someone")
 
-    /// The everyday profile's agent waits for the app, restarts only after a
-    /// failure, and sets no profile.
+    /// The everyday profile's agent waits for the app, runs only while its
+    /// executable exists, and sets no profile.
     @Test func theEverydayProfilesAgentRunsTheHostWaitingForTheApp() throws {
         let agent = HostLaunchAgent(executable: executable, profile: AlasProfile(appSupportOverride: nil, runtimeDirectory: nil), home: home)
         #expect(agent.label == "io.nlopez.alas.host")
@@ -15,7 +15,7 @@ struct HostLaunchAgentTests {
         let plist = try #require(PropertyListSerialization.propertyList(from: agent.plistData(), format: nil) as? [String: Any])
         #expect(plist["ProgramArguments"] as? [String] == [executable.path, "--wait-for-lock"])
         #expect(plist["RunAtLoad"] as? Bool == true)
-        #expect((plist["KeepAlive"] as? [String: Bool]) == ["SuccessfulExit": false])
+        #expect((plist["KeepAlive"] as? [String: [String: Bool]]) == ["PathState": [executable.path: true]])
         #expect(plist["EnvironmentVariables"] == nil)
     }
 
