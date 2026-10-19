@@ -114,12 +114,38 @@ if !arguments.isEmpty, !waitsForLock {
     fail("unknown argument \(arguments[0])\n\(usage)")
 }
 
+// As the launch agent, an app upgrade replaces this executable under the
+// running host: it stops, and launchd starts the new one at the same path.
+// Opened before the lock is waited for, so an upgrade while the app holds
+// the directory is still this file's.
+let executablePath = Bundle.main.executableURL?.resolvingSymlinksInPath().path
+let executableFD: Int32 = waitsForLock ? executablePath.map { open($0, O_EVTONLY) } ?? -1 : -1
+/// Whether the executable at this process's path is no longer the file it started from.
+func executableWasReplaced() -> Bool {
+    guard executableFD >= 0, let executablePath else { return false }
+    var started = stat()
+    var current = stat()
+    guard fstat(executableFD, &started) == 0 else { return false }
+    guard stat(executablePath, &current) == 0 else { return true }
+    return started.st_dev != current.st_dev || started.st_ino != current.st_ino
+}
+
 // Held until the process exits; the kernel releases it then.
 let lock: DataDirectoryLock
 do {
-    lock = try DataDirectoryLock.acquire(waiting: waitsForLock)
+    do {
+        lock = try DataDirectoryLock.acquire()
+    } catch .held(let pid) where waitsForLock {
+        FileHandle.standardError.write(Data("alas-host: waiting for \(pid.map { "process \($0)" } ?? "another process") to release \(Paths.appSupportRoot.path)\n".utf8))
+        lock = try DataDirectoryLock.acquire(waiting: true)
+    }
 } catch {
     fail(error.localizedDescription)
+}
+if executableWasReplaced() {
+    // Upgraded while waiting: nothing has started, so launchd starts the
+    // new executable in this one's place.
+    exit(0)
 }
 
 let host: AlasHost
@@ -259,17 +285,13 @@ for signalNumber in [SIGINT, SIGTERM] {
     source.resume()
     stopSources.append(source)
 }
-// As the launch agent, an app upgrade replaces this executable under the
-// running host: it stops, and launchd starts the new one at the same path.
-if waitsForLock, let executable = Bundle.main.executableURL?.resolvingSymlinksInPath() {
-    let fd = open(executable.path, O_EVTONLY)
-    if fd >= 0 {
-        let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: [.delete, .rename, .revoke], queue: .main)
-        source.setEventHandler { MainActor.assumeIsolated { stop() } }
-        source.setCancelHandler { close(fd) }
-        source.resume()
-        stopSources.append(source)
-    }
+if executableFD >= 0 {
+    let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: executableFD, eventMask: [.delete, .rename, .revoke], queue: .main)
+    source.setEventHandler { MainActor.assumeIsolated { stop() } }
+    source.resume()
+    stopSources.append(source)
+    // Replaced between the check after the lock and now.
+    if executableWasReplaced() { stop() }
 }
 
 print(socket.path)

@@ -51,17 +51,18 @@ cask "alas" do
   # The launchd agents `alas-host install-agent` installs, one per profile.
   # Not on uninstall, which an upgrade runs too: an agent survives upgrades,
   # and stops by itself once the app is gone (it runs while its executable
-  # exists).
-  zap launchctl: "io.nlopez.alas.host*",
-      trash: [
-    "~/Library/Application Support/Alas",
-    "~/Library/Caches/io.nlopez.alas",
-    "~/Library/HTTPStorages/io.nlopez.alas",
-    "~/Library/Preferences/io.nlopez.alas.plist",
-    "~/Library/Saved Application State/io.nlopez.alas.savedState",
-    "~/Library/WebKit/io.nlopez.alas",
-    "~/Library/LaunchAgents/io.nlopez.alas.host*.plist",
-  ]
+  # exists). The everyday profile's label is named as is: Homebrew's
+  # wildcard matches only agents running at the time.
+  zap launchctl: ["io.nlopez.alas.host", "io.nlopez.alas.host.*"],
+      trash:     [
+        "~/Library/Application Support/Alas",
+        "~/Library/Caches/io.nlopez.alas",
+        "~/Library/HTTPStorages/io.nlopez.alas",
+        "~/Library/LaunchAgents/io.nlopez.alas.host*.plist",
+        "~/Library/Preferences/io.nlopez.alas.plist",
+        "~/Library/Saved Application State/io.nlopez.alas.savedState",
+        "~/Library/WebKit/io.nlopez.alas",
+      ]
 end
 '''
 

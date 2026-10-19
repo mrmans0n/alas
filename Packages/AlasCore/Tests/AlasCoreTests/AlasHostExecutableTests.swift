@@ -192,6 +192,28 @@ struct AlasHostExecutableTests {
         #expect(try await host.exitStatus() == 0)
     }
 
+    /// An upgrade while the agent's host waits for the app counts too: once
+    /// the app lets go, the old host exits instead of serving.
+    @Test func anAgentsHostUpgradedWhileWaitingExitsInsteadOfServing() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-upgrade-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let installed = root.appendingPathComponent("alas-host")
+        let dataDirectory = root.appendingPathComponent("data")
+        try FileManager.default.createDirectory(at: dataDirectory, withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: AlasHostProcess.binary, to: installed)
+        var app: DataDirectoryLock? = try DataDirectoryLock.acquire(in: dataDirectory)
+        let host = try AlasHostProcess(dataDirectory: dataDirectory, arguments: ["--wait-for-lock"], binary: installed)
+        try await eventually { [host] in host.errorOutput.contains("waiting for process \(getpid())") }
+
+        let upgrade = root.appendingPathComponent("alas-host.new")
+        try FileManager.default.copyItem(at: AlasHostProcess.binary, to: upgrade)
+        #expect(rename(upgrade.path, installed.path) == 0)
+        app = nil
+        _ = app
+        #expect(try await host.exitStatus() == 0)
+        #expect(host.output.isEmpty)
+    }
+
     /// Hostless, over the wire: the built host serves a project, a worktree,
     /// a session with a scripted agent and a run, then stops and frees its
     /// data directory.
