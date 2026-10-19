@@ -197,9 +197,11 @@ public enum ShepherdShipOffer {
         // request to the user ("Can you open a PR?") nor a status question
         // ("Is there an open PR?") counts.
         let offer = #"\b(?:(?:want|like) me to|should I|shall I|can I|may I|I can|I'll|ready (?:for me )?to|ok(?:ay)? (?:for me |if I )?to)"#
-        // A few words may sit between ("want me to go ahead and open…"), but
-        // not an article that makes the verb an adjective ("…look for an open PR").
-        let between = #"(?:\s+[\w'’,]+){0,8}?\s+(?<!\b(?:an|the|any|no|already)\s)"#
+        // Only modifiers of the shipping action may sit between ("want me to
+        // go ahead and commit these changes and open…"), so offers to explain
+        // or help ("show you how to open a PR") don't count.
+        let between = #"(?:\s+(?:go ahead and|also|now|just|then|finally|first|"#
+            + #"(?:commit|push)(?:\s+(?:the|these|this|all|my|your))?(?:\s+(?:changes|work|fix|fixes|branch))?,?\s+and))*\s+"#
         let request = #"(?:pr|pull request|merge request|mr)s?"#
         let ship = #"(?:(?:open|create|raise|put up|submit|file|send)\b[^.?!]{0,40}?\b"# + request
             + #"|commit\b[^.?!]{0,40}?\bpush|ship (?:it|this|these changes))\b"#
