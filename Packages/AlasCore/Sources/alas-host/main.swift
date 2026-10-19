@@ -235,29 +235,41 @@ if config.remote.enabled {
 // Installed before the path is printed, so a stop sent as soon as the host
 // announces itself still ends its work. Delivered on the main queue, where
 // the host's main actor runs.
-var stopSignals: [DispatchSourceSignal] = []
+@MainActor
+func stop() {
+    guard !isStopping else { return }
+    isStopping = true
+    // No request, on an open connection either, starts work teardown would miss.
+    protocolServer.close()
+    socket.stop()
+    tailscaleServe?.stop()
+    remote?.stop()
+    keepAwake.update(enabled: false, serverRunning: false)
+    Task { @MainActor in
+        await host.shutdown()
+        withExtendedLifetime(lock) {}
+        exit(0)
+    }
+}
+var stopSources: [any DispatchSourceProtocol] = []
 for signalNumber in [SIGINT, SIGTERM] {
     signal(signalNumber, SIG_IGN)
     let source = DispatchSource.makeSignalSource(signal: signalNumber, queue: .main)
-    source.setEventHandler {
-        MainActor.assumeIsolated {
-            guard !isStopping else { return }
-            isStopping = true
-            // No request, on an open connection either, starts work teardown would miss.
-            protocolServer.close()
-            socket.stop()
-            tailscaleServe?.stop()
-            remote?.stop()
-            keepAwake.update(enabled: false, serverRunning: false)
-            Task { @MainActor in
-                await host.shutdown()
-                withExtendedLifetime(lock) {}
-                exit(0)
-            }
-        }
-    }
+    source.setEventHandler { MainActor.assumeIsolated { stop() } }
     source.resume()
-    stopSignals.append(source)
+    stopSources.append(source)
+}
+// As the launch agent, an app upgrade replaces this executable under the
+// running host: it stops, and launchd starts the new one at the same path.
+if waitsForLock, let executable = Bundle.main.executableURL?.resolvingSymlinksInPath() {
+    let fd = open(executable.path, O_EVTONLY)
+    if fd >= 0 {
+        let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: [.delete, .rename, .revoke], queue: .main)
+        source.setEventHandler { MainActor.assumeIsolated { stop() } }
+        source.setCancelHandler { close(fd) }
+        source.resume()
+        stopSources.append(source)
+    }
 }
 
 print(socket.path)
