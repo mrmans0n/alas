@@ -171,3 +171,33 @@ public enum ShepherdShipAction: Equatable, Sendable {
         return nil
     }
 }
+
+/// Whether an agent's reply ends by offering what Ship does: opening a pull
+/// or merge request, or committing and pushing the work. The composer then
+/// offers `/ship`, so the request goes through Ship rather than a plain "yes"
+/// the agent would act on outside it.
+public enum ShepherdShipOffer {
+    public static func isOffered(in agentText: String) -> Bool {
+        let paragraph = agentText
+            .components(separatedBy: "\n\n")
+            .last { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? ""
+        let ask = paragraph
+            .replacingOccurrences(of: #"([.!?])\s+"#, with: "$1\n", options: .regularExpression)
+            .components(separatedBy: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces.union(.init(charactersIn: "*_>-"))) }
+            .last { !$0.isEmpty } ?? ""
+        let closing = ask.trimmingCharacters(in: .whitespaces.union(.init(charactersIn: "*_`)\"'”’")))
+        guard closing.hasSuffix("?") || matches(ask, #"^(?:let me know|say the word|just say)\b"#),
+              // Status questions about work already done ("Did you open a PR?").
+              !matches(ask, #"^(?:did|have|has|was|were)\b"#)
+        else { return false }
+        let request = #"(?:pr|pull request|merge request|mr)s?"#
+        return matches(ask, #"\b(?:open|create|raise|put up|submit|file|send)\b[^.?!]{0,40}?\b"# + request + #"\b"#)
+            || matches(ask, #"\bcommit\b[^.?!]{0,40}?\bpush\b"#)
+            || matches(ask, #"\bship (?:it|this|these changes)\b"#)
+    }
+
+    private static func matches(_ text: String, _ pattern: String) -> Bool {
+        text.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
+    }
+}

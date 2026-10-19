@@ -52,6 +52,7 @@ struct ACPInputField: NSViewRepresentable {
     var onEditorSelectionChange: () -> Void = {}
     var onEditorKeyDown: (NSEvent) -> Bool = { _ in false }
     var nextPromptOffer: String? = nil
+    var nextPromptAction: ACPNextPromptAction? = nil
     var takeNextPromptOffer: () -> String? = { nil }
     var dismissNextPromptOffer: () -> Void = {}
     var onNextPromptStateChange: (NextPromptEligibilitySnapshot.Environment) -> Void = { _ in }
@@ -198,6 +199,7 @@ struct ACPInputField: NSViewRepresentable {
                 // gets its pill once the list arrives.
                 tv.pillCommandsIfNeeded()
             }
+            tv.nextPromptAction = nextPromptAction
             tv.nextPromptOffer = nextPromptOffer
             tv.onNextPromptStateChange(tv.nextPromptInputState)
             tv.refreshNextPromptLayout()
@@ -1040,9 +1042,22 @@ extension Dictionary where Key == NSAttributedString.Key, Value == Any {
 }
 
 extension NSAttributedString.Key {
+    static let nextPromptActionButton = NSAttributedString.Key("alas.acp.nextPromptActionButton")
     static let attachmentURI = NSAttributedString.Key("alas.acp.attachmentURI")
     static let imageAttachmentURI = NSAttributedString.Key("alas.acp.imageAttachmentURI")
     static let imageAttachmentMime = NSAttributedString.Key("alas.acp.imageAttachmentMime")
+}
+
+/// A button the ghost prompt carries before its keycap, with a line saying
+/// what it does. Clicking it runs `perform`; Tab still inserts the offer.
+struct ACPNextPromptAction: Equatable {
+    let detail: String
+    let title: String
+    let perform: () -> Void
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.detail == rhs.detail && lhs.title == rhs.title
+    }
 }
 
 final class ACPNSTextView: PairedDelimiterTextView {
@@ -1050,6 +1065,12 @@ final class ACPNSTextView: PairedDelimiterTextView {
     var nextPromptOffer: String? {
         didSet {
             guard nextPromptOffer != oldValue else { return }
+            refreshNextPromptLayout()
+        }
+    }
+    var nextPromptAction: ACPNextPromptAction? {
+        didSet {
+            guard nextPromptAction != oldValue else { return }
             refreshNextPromptLayout()
         }
     }
@@ -1100,8 +1121,79 @@ final class ACPNSTextView: PairedDelimiterTextView {
             .font: NSFontManager.shared.convert(baseFont, toHaveTrait: .italicFontMask),
             .foregroundColor: NSColor.secondaryLabelColor,
         ])
+        if let action = nextPromptAction {
+            presentation.append(NSAttributedString(string: "· " + action.detail + "\u{00A0}", attributes: [
+                .font: baseFont,
+                .foregroundColor: NSColor.tertiaryLabelColor,
+            ]))
+            let button = NSMutableAttributedString(attachment: actionButton(title: action.title, font: baseFont))
+            button.addAttribute(.nextPromptActionButton, value: true, range: NSRange(location: 0, length: button.length))
+            presentation.append(button)
+            presentation.append(NSAttributedString(string: "\u{00A0}"))
+        }
         presentation.append(NSAttributedString(attachment: acceptKeycap(for: baseFont)))
         return presentation
+    }
+
+    /// Where the ghost prompt's action button is drawn, laid out the way
+    /// `draw(_:)` lays out the presentation.
+    var nextPromptActionRect: NSRect? {
+        guard nextPromptAction != nil, string.isEmpty, let presentation = nextPromptPresentation else { return nil }
+        var buttonRange = NSRange(location: NSNotFound, length: 0)
+        presentation.enumerateAttribute(.nextPromptActionButton, in: NSRange(location: 0, length: presentation.length)) { value, range, stop in
+            guard value != nil else { return }
+            buttonRange = range
+            stop.pointee = true
+        }
+        guard buttonRange.location != NSNotFound else { return nil }
+        let storage = NSTextStorage(attributedString: presentation)
+        let layout = NSLayoutManager()
+        let container = NSTextContainer(size: NSSize(width: max(1, bounds.width - 2 * ghostHorizontalInset),
+                                                     height: .greatestFiniteMagnitude))
+        container.lineFragmentPadding = 0
+        layout.addTextContainer(container)
+        storage.addLayoutManager(layout)
+        let glyphs = layout.glyphRange(forCharacterRange: buttonRange, actualCharacterRange: nil)
+        let rect = layout.boundingRect(forGlyphRange: glyphs, in: container)
+        return rect.offsetBy(dx: ghostHorizontalInset, dy: textContainerInset.height)
+    }
+
+    private var actionButtonCache: (title: String, font: NSFont, attachment: NSTextAttachment)?
+
+    /// The ghost prompt's action, drawn as an accent pill.
+    private func actionButton(title: String, font: NSFont) -> NSTextAttachment {
+        if let cache = actionButtonCache, cache.title == title, cache.font == font { return cache.attachment }
+        let label = NSAttributedString(string: title, attributes: [
+            .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize, weight: .semibold),
+            .foregroundColor: NSColor.white,
+        ])
+        let labelSize = label.size()
+        let size = NSSize(width: ceil(labelSize.width) + 14, height: ceil(labelSize.height) + 4)
+        let image = NSImage(size: size, flipped: false) { rect in
+            NSColor.controlAccentColor.setFill()
+            NSBezierPath(roundedRect: rect, xRadius: 5, yRadius: 5).fill()
+            label.draw(at: NSPoint(x: (rect.width - labelSize.width) / 2, y: (rect.height - labelSize.height) / 2))
+            return true
+        }
+        let attachment = NSTextAttachment()
+        attachment.image = image
+        attachment.bounds = NSRect(x: 0, y: round((font.capHeight - size.height) / 2),
+                                   width: size.width, height: size.height)
+        actionButtonCache = (title, font, attachment)
+        return attachment
+    }
+
+    @discardableResult
+    func performNextPromptAction() -> Bool {
+        onNextPromptStateChange(nextPromptInputState)
+        guard nextPromptGhostText != nil, let action = nextPromptAction else { return false }
+        action.perform()
+        return true
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        if let rect = nextPromptActionRect { addCursorRect(rect, cursor: .pointingHand) }
     }
 
     private var acceptKeycapCache: (font: NSFont, attachment: NSTextAttachment)?
@@ -1158,6 +1250,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
 
     func refreshNextPromptLayout() {
         needsDisplay = true
+        window?.invalidateCursorRects(for: self)
         invalidateIntrinsicContentSize()
         enclosingScrollView?.invalidateIntrinsicContentSize()
         if let scroll = enclosingScrollView {
@@ -1217,14 +1310,19 @@ final class ACPNSTextView: PairedDelimiterTextView {
 
     override func accessibilityHelp() -> String? {
         guard let text = nextPromptGhostText else { return super.accessibilityHelp() }
-        return "Suggestion: \(text) Press Tab or Right Arrow, or use Accept Suggestion to insert it."
+        let action = nextPromptAction.map { " \($0.detail): use \($0.title) to run it." } ?? ""
+        return "Suggestion: \(text)\(action) Press Tab or Right Arrow, or use Accept Suggestion to insert it."
     }
 
     override func accessibilityCustomActions() -> [NSAccessibilityCustomAction]? {
         guard nextPromptGhostText != nil else { return super.accessibilityCustomActions() }
-        return [NSAccessibilityCustomAction(name: "Accept Suggestion") { [weak self] in
+        let accept = NSAccessibilityCustomAction(name: "Accept Suggestion") { [weak self] in
             self?.acceptNextPromptSuggestion() ?? false
-        }]
+        }
+        guard let action = nextPromptAction else { return [accept] }
+        return [NSAccessibilityCustomAction(name: action.title) { [weak self] in
+            self?.performNextPromptAction() ?? false
+        }, accept]
     }
 
     override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
@@ -1696,6 +1794,10 @@ final class ACPNSTextView: PairedDelimiterTextView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        if let rect = nextPromptActionRect, rect.contains(convert(event.locationInWindow, from: nil)),
+           performNextPromptAction() {
+            return
+        }
         if openUpstreamReference(at: convert(event.locationInWindow, from: nil), event: event) { return }
         if let hit = ACPPastedTextChip.hit(at: convert(event.locationInWindow, from: nil), in: self) {
             window?.makeFirstResponder(self)

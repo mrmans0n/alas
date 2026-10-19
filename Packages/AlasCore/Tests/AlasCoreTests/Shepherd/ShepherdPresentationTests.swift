@@ -97,4 +97,27 @@ private let presentationCases: [ShepherdPresentationCase] = [
         )
         #expect(action == expected)
     }
+
+    @Test(
+        "an agent's closing offer to ship is recognized",
+        arguments: [
+            ("Done.\n\nWant me to open a PR?", true),
+            ("Tests pass. Want me to open a PR with these changes, or keep iterating on the edge cases?", true),
+            ("Should I commit this and push the branch?", true),
+            ("Shall I create a draft pull request for review?", true),
+            ("**Ready to raise the MR?**", true),
+            ("Let me know if you want me to open a PR.", true),
+            ("Want me to ship it?", true),
+            ("Want me to open a PR?\n\nFor context, the fix touches two files.", false),
+            ("Want me to open a PR? I can also add more tests first.", false),
+            ("I opened a PR. Want me to add tests too?", false),
+            ("Did you already open a PR for this?", false),
+            ("Want me to commit these changes?", false),
+            ("Should I update the PR description?", false),
+            ("I'll open a PR once the tests pass.", false),
+        ]
+    )
+    func shipOffer(text: String, expected: Bool) {
+        #expect(ShepherdShipOffer.isOffered(in: text) == expected)
+    }
 }
