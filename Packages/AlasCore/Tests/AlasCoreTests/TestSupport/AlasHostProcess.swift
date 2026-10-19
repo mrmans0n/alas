@@ -1,4 +1,5 @@
 import Foundation
+@testable import AlasCore
 import Testing
 
 /// The built `alas-host`, run on a data directory: what it prints, and how
@@ -10,6 +11,9 @@ final class AlasHostProcess: @unchecked Sendable {
     private var err = Data()
     /// The pipes that reached end of file: their output is complete.
     private var closedPipes = 0
+    /// Where the host's profile keeps its sockets, outside its data
+    /// directory: removed with this value, since each test's profile is new.
+    private let runtimeDirectory: URL
 
     /// The `alas-host` that `swift test` built, in the package's build
     /// directory: `.build/debug` is the configuration it tests.
@@ -23,6 +27,8 @@ final class AlasHostProcess: @unchecked Sendable {
     }
 
     init(dataDirectory: URL, arguments: [String] = []) throws {
+        let root = AlasProfile.canonicalDirectory(dataDirectory) ?? dataDirectory
+        runtimeDirectory = AlasProfile.runtimeDirectory(for: root, uid: getuid())
         process.executableURL = Self.binary
         process.arguments = arguments
         var environment = ProcessInfo.processInfo.environment
@@ -70,6 +76,10 @@ final class AlasHostProcess: @unchecked Sendable {
     }
 
     deinit {
-        if process.isRunning { process.terminate() }
+        if process.isRunning {
+            process.terminate()
+            process.waitUntilExit()
+        }
+        try? FileManager.default.removeItem(at: runtimeDirectory)
     }
 }

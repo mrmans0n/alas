@@ -5,6 +5,7 @@
 // the environment is kept; a blank one, which means the everyday profile, is
 // not.
 
+#include <CommonCrypto/CommonDigest.h>
 #include <ctype.h>
 #include <limits.h>
 #include <removefile.h>
@@ -15,10 +16,6 @@
 
 static char scratch[PATH_MAX];
 
-static void remove_scratch_profile(void) {
-    removefile(scratch, NULL, REMOVEFILE_RECURSIVE);
-}
-
 static int is_blank(const char *value) {
     for (; *value != '\0'; value++) {
         if (!isspace((unsigned char)*value)) return 0;
@@ -26,11 +23,34 @@ static int is_blank(const char *value) {
     return 1;
 }
 
+// Removes the profile and the runtime directory derived from it, named as
+// `AlasProfile.runtimeDirectory(for:uid:)` names it: the first four bytes of
+// the SHA-256 of the profile's canonical path, standardized as Foundation
+// does, which drops `/private` before `/var`, `/tmp` and `/etc`.
+static void remove_scratch_profile(void) {
+    char canonical[PATH_MAX];
+    if (realpath(scratch, canonical) != NULL) {
+        const char *path = canonical;
+        if (strncmp(path, "/private/", 9) == 0
+            && (strncmp(path + 8, "/var/", 5) == 0 || strncmp(path + 8, "/tmp/", 5) == 0 || strncmp(path + 8, "/etc/", 5) == 0)) {
+            path += 8;
+        }
+        unsigned char digest[CC_SHA256_DIGEST_LENGTH];
+        CC_SHA256(path, (CC_LONG)strlen(path), digest);
+        char runtime[64];
+        snprintf(runtime, sizeof runtime, "/tmp/alas-%u-%02x%02x%02x%02x",
+                 (unsigned)getuid(), digest[0], digest[1], digest[2], digest[3]);
+        removefile(runtime, NULL, REMOVEFILE_RECURSIVE);
+    }
+    removefile(scratch, NULL, REMOVEFILE_RECURSIVE);
+}
+
 __attribute__((constructor)) static void use_scratch_profile(void) {
     const char *set = getenv("ALAS_APP_SUPPORT_DIR");
     if (set != NULL && !is_blank(set)) return;
     const char *tmp = getenv("TMPDIR");
-    snprintf(scratch, sizeof scratch, "%s/alas-core-tests-XXXXXX", tmp != NULL ? tmp : "/tmp");
+    if (tmp == NULL || tmp[0] != '/') tmp = "/tmp";
+    snprintf(scratch, sizeof scratch, "%s/alas-core-tests-XXXXXX", tmp);
     if (mkdtemp(scratch) == NULL) {
         perror("AlasCoreTests: cannot create a scratch profile");
         abort();
