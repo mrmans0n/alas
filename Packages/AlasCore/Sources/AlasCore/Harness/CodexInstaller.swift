@@ -65,7 +65,9 @@ public struct CodexInstaller: AgentInstaller, Sendable {
             // Per-event compare: a stale install with the right commands
             // under the wrong event keys would otherwise be reported as
             // installed.
-            guard actual == canonical, hasFeaturesFlag() else { return .outdated }
+            guard actual == canonical, managedGroupsMatchCanonical(in: hooks), hasFeaturesFlag() else {
+                return .outdated
+            }
             return hasTrustEntries(for: placements) ? .installed : .outdated
         } catch {
             return .notInstalled
@@ -169,6 +171,23 @@ public struct CodexInstaller: AgentInstaller, Sendable {
             ((group["hooks"] as? [[String: Any]]) ?? []).enumerated().compactMap { handlerIndex, handler in
                 (handler["command"] as? String).map { (groupIndex, handlerIndex, $0) }
             }
+        }
+    }
+
+    /// Codex hashes the whole normalized group (timeout, type, matcher), not
+    /// just the command. `install()` trusts exactly the canonical groups, so
+    /// any Alas group that differs from them carries a stale hash and Codex
+    /// marks it modified and skips it.
+    private func managedGroupsMatchCanonical(in hooks: [String: Any]) -> Bool {
+        let canonical = hooksByEvent()
+        return hooks.allSatisfy { event, value in
+            guard let groups = value as? [[String: Any]] else { return true }
+            let expected = (canonical[event] ?? []).map { $0 as NSDictionary }
+            return groups
+                .filter { group in
+                    Self.commands(inGroups: [group]).contains { AlasHookCommand.isManagedCommand($0.command) }
+                }
+                .allSatisfy { expected.contains($0 as NSDictionary) }
         }
     }
 

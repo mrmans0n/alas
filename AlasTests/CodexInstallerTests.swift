@@ -111,18 +111,39 @@ struct CodexInstallerTests {
         #expect(installer.installState() == .installed)
     }
 
-    /// Codex keys trust by position, so another tool inserting a hook ahead
-    /// of Alas's leaves the Alas hook untrusted and silently skipped.
-    @Test func installState_hookMovedToUntrustedPosition_outdated() async throws {
+    enum TrustInvalidatingEdit: CaseIterable, Sendable {
+        /// Codex keys trust by position, so a hook inserted ahead of Alas's
+        /// moves it to a key nobody has trusted.
+        case hookInsertedAhead
+        /// Codex hashes the whole group, so a changed timeout or added
+        /// matcher leaves the stored hash stale and the hook "modified".
+        case timeoutChanged
+        case matcherAdded
+    }
+
+    /// Each edit makes Codex skip the Alas hook, so Alas must offer an update.
+    @Test(arguments: TrustInvalidatingEdit.allCases)
+    func installState_trustInvalidatingEdit_outdated(_ edit: TrustInvalidatingEdit) async throws {
         let (dir, cleanup) = tmpDir()
         defer { cleanup() }
         let installer = try makeInstaller(dir: dir)
         try await installer.install()
+        #expect(installer.installState() == .installed)
 
         var json = try JSONSerialization.jsonObject(with: Data(contentsOf: installer.hooksURL)) as! [String: Any]
         var hooks = json["hooks"] as! [String: Any]
-        let prompt = hooks["UserPromptSubmit"] as! [[String: Any]]
-        hooks["UserPromptSubmit"] = [["hooks": [["type": "command", "command": "other"]]]] + prompt
+        var prompt = hooks["UserPromptSubmit"] as! [[String: Any]]
+        switch edit {
+        case .hookInsertedAhead:
+            prompt.insert(["hooks": [["type": "command", "command": "other"]]], at: 0)
+        case .timeoutChanged:
+            var handlers = prompt[0]["hooks"] as! [[String: Any]]
+            handlers[0]["timeout"] = 30
+            prompt[0]["hooks"] = handlers
+        case .matcherAdded:
+            prompt[0]["matcher"] = "*"
+        }
+        hooks["UserPromptSubmit"] = prompt
         json["hooks"] = hooks
         try JSONSerialization.data(withJSONObject: json).write(to: installer.hooksURL)
 
