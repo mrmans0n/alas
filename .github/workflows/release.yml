@@ -37,7 +37,6 @@ jobs:
       ALAS_ZMX_TARGET_ARCH: ${{ matrix.arch }}
       ALAS_FFF_TARGET_ARCH: ${{ matrix.arch }}
       ALAS_TS_PACK_TARGET_ARCH: ${{ matrix.arch }}
-      ALAS_HOST_TARGET_ARCH: ${{ matrix.arch }}
     strategy:
       fail-fast: false
       matrix:

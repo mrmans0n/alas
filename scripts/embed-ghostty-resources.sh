@@ -108,27 +108,6 @@ for mapping in "${cli_targets[@]}"; do
 done
 rsync -a "${SRCROOT}/AlasCLI/manifest.json" "${cli_destination_root}/manifest.json"
 
-# Headless host, built for the app's architecture by build-alas-host.sh. It
-# finds the web client at ../RemoteWeb, beside its own directory.
-if [ -z "${ALAS_HOST_TARGET_ARCH:-}" ] && [ "${CURRENT_ARCH:-}" = "undefined_arch" ]; then
-    case "${ARCHS:-}" in
-        arm64|x86_64) host_arch="${ARCHS}" ;;
-        *) host_arch="universal" ;;
-    esac
-else
-    host_arch="${ALAS_HOST_TARGET_ARCH:-${CURRENT_ARCH:-$(uname -m)}}"
-fi
-host_source="${SRCROOT}/.build/alas-host/${host_arch}/alas-host"
-host_destination_root="${destination_root}/alas-host"
-if [ ! -x "${host_source}" ]; then
-    echo "embed-ghostty-resources.sh: error: alas-host not found at ${host_source}" >&2
-    exit 1
-fi
-rm -rf "${host_destination_root}"
-mkdir -p "${host_destination_root}"
-rsync -a "${host_source}" "${host_destination_root}/alas-host"
-chmod +x "${host_destination_root}/alas-host"
-
 # fff search backend dylib. Selection mirrors build-fff.sh.
 if [ -n "${ALAS_FFF_TARGET_ARCH:-}" ]; then
     fff_arch="${ALAS_FFF_TARGET_ARCH}"
