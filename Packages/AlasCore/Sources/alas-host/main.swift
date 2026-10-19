@@ -6,8 +6,9 @@ import Foundation
 // the profile's local socket.
 
 let usage = """
-usage: alas-host
+usage: alas-host [--wait-for-lock]
        alas-host pair
+       alas-host install-agent | uninstall-agent
 
 Serves the Alas host protocol for the data directory ALAS_APP_SUPPORT_DIR
 (default: ~/Library/Application Support/Alas) on its local socket, and prints
@@ -15,8 +16,15 @@ the socket path. When the profile enables Remote, also serves it on loopback
 and prints its address, with the web client of the Alas.app it ships in, of
 the one in /Applications, or of ALAS_REMOTE_WEB_DIR. Stops on SIGINT or SIGTERM.
 
+With --wait-for-lock, waits while another process (the app) holds the data
+directory instead of exiting, and serves once it lets go.
+
 `alas-host pair` asks the running host for a Remote pairing code, which a
 phone or browser redeems within two minutes, and prints it.
+
+`alas-host install-agent` installs and starts a launchd agent that runs this
+executable with --wait-for-lock at login, and restarts it after a crash;
+`uninstall-agent` stops and removes it. Each profile has its own agent.
 """
 
 func fail(_ message: String) -> Never {
@@ -50,16 +58,94 @@ if CommandLine.arguments.dropFirst().elementsEqual(["pair"]) {
         fail("the host does not mint Remote pairing codes")
     }
 }
-if let unknown = CommandLine.arguments.dropFirst().first {
-    fail("unknown argument \(unknown)\n\(usage)")
+let arguments = Array(CommandLine.arguments.dropFirst())
+if arguments == ["install-agent"] || arguments == ["uninstall-agent"] {
+    // The bundled executable, not the link that may have started this one,
+    // so the agent keeps working wherever the link points.
+    guard let executable = Bundle.main.executableURL?.resolvingSymlinksInPath() else {
+        fail("cannot locate this executable")
+    }
+    let agent = HostLaunchAgent(executable: executable)
+    let domain = "gui/\(getuid())"
+    @discardableResult
+    func launchctl(_ arguments: String...) -> Int32 {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        process.arguments = arguments
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        guard (try? process.run()) != nil else { return -1 }
+        process.waitUntilExit()
+        return process.terminationStatus
+    }
+    // 3 (ESRCH) is an agent that is not loaded: there is nothing to stop.
+    let stopped = launchctl("bootout", "\(domain)/\(agent.label)")
+    guard stopped == 0 || stopped == ESRCH else {
+        fail("launchctl could not stop \(agent.label) (status \(stopped))")
+    }
+    if arguments == ["uninstall-agent"] {
+        do {
+            if FileManager.default.fileExists(atPath: agent.plistURL.path) {
+                try FileManager.default.removeItem(at: agent.plistURL)
+            }
+        } catch {
+            fail("cannot remove \(agent.plistURL.path): \(error.localizedDescription)")
+        }
+        print("removed \(agent.plistURL.path)")
+        exit(0)
+    }
+    do {
+        // launchd creates the log file, not its directory: the profile's,
+        // which a profile the app never opened does not have yet.
+        try FileManager.default.createDirectory(at: agent.logURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: agent.plistURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try agent.plistData().write(to: agent.plistURL, options: .atomic)
+    } catch {
+        fail("cannot write \(agent.plistURL.path): \(error.localizedDescription)")
+    }
+    guard launchctl("bootstrap", domain, agent.plistURL.path) == 0 else {
+        fail("launchctl could not start \(agent.label) from \(agent.plistURL.path)")
+    }
+    print("installed \(agent.plistURL.path)")
+    exit(0)
+}
+let waitsForLock = arguments == ["--wait-for-lock"]
+if !arguments.isEmpty, !waitsForLock {
+    fail("unknown argument \(arguments[0])\n\(usage)")
+}
+
+// As the launch agent, an app upgrade replaces this executable under the
+// running host: it stops, and launchd starts the new one at the same path.
+// Opened before the lock is waited for, so an upgrade while the app holds
+// the directory is still this file's.
+let executablePath = Bundle.main.executableURL?.resolvingSymlinksInPath().path
+let executableFD: Int32 = waitsForLock ? executablePath.map { open($0, O_EVTONLY) } ?? -1 : -1
+/// Whether the executable at this process's path is no longer the file it started from.
+func executableWasReplaced() -> Bool {
+    guard executableFD >= 0, let executablePath else { return false }
+    var started = stat()
+    var current = stat()
+    guard fstat(executableFD, &started) == 0 else { return false }
+    guard stat(executablePath, &current) == 0 else { return true }
+    return started.st_dev != current.st_dev || started.st_ino != current.st_ino
 }
 
 // Held until the process exits; the kernel releases it then.
 let lock: DataDirectoryLock
 do {
-    lock = try DataDirectoryLock.acquire()
+    do {
+        lock = try DataDirectoryLock.acquire()
+    } catch .held(let pid) where waitsForLock {
+        FileHandle.standardError.write(Data("alas-host: waiting for \(pid.map { "process \($0)" } ?? "another process") to release \(Paths.appSupportRoot.path)\n".utf8))
+        lock = try DataDirectoryLock.acquire(waiting: true)
+    }
 } catch {
     fail(error.localizedDescription)
+}
+if executableWasReplaced() {
+    // Upgraded while waiting: nothing has started, so launchd starts the
+    // new executable in this one's place.
+    exit(0)
 }
 
 let host: AlasHost
@@ -175,29 +261,37 @@ if config.remote.enabled {
 // Installed before the path is printed, so a stop sent as soon as the host
 // announces itself still ends its work. Delivered on the main queue, where
 // the host's main actor runs.
-var stopSignals: [DispatchSourceSignal] = []
+@MainActor
+func stop() {
+    guard !isStopping else { return }
+    isStopping = true
+    // No request, on an open connection either, starts work teardown would miss.
+    protocolServer.close()
+    socket.stop()
+    tailscaleServe?.stop()
+    remote?.stop()
+    keepAwake.update(enabled: false, serverRunning: false)
+    Task { @MainActor in
+        await host.shutdown()
+        withExtendedLifetime(lock) {}
+        exit(0)
+    }
+}
+var stopSources: [any DispatchSourceProtocol] = []
 for signalNumber in [SIGINT, SIGTERM] {
     signal(signalNumber, SIG_IGN)
     let source = DispatchSource.makeSignalSource(signal: signalNumber, queue: .main)
-    source.setEventHandler {
-        MainActor.assumeIsolated {
-            guard !isStopping else { return }
-            isStopping = true
-            // No request, on an open connection either, starts work teardown would miss.
-            protocolServer.close()
-            socket.stop()
-            tailscaleServe?.stop()
-            remote?.stop()
-            keepAwake.update(enabled: false, serverRunning: false)
-            Task { @MainActor in
-                await host.shutdown()
-                withExtendedLifetime(lock) {}
-                exit(0)
-            }
-        }
-    }
+    source.setEventHandler { MainActor.assumeIsolated { stop() } }
     source.resume()
-    stopSignals.append(source)
+    stopSources.append(source)
+}
+if executableFD >= 0 {
+    let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: executableFD, eventMask: [.delete, .rename, .revoke], queue: .main)
+    source.setEventHandler { MainActor.assumeIsolated { stop() } }
+    source.resume()
+    stopSources.append(source)
+    // Replaced between the check after the lock and now.
+    if executableWasReplaced() { stop() }
 }
 
 print(socket.path)

@@ -4,7 +4,7 @@ import Foundation
 /// `host.lock` in it, held for as long as this value lives. The kernel drops
 /// it when the process dies, so a crash never leaves the directory locked.
 /// The lock file holds the holder's pid, for the refusal to name it.
-public final class DataDirectoryLock {
+public final class DataDirectoryLock: Sendable {
     public enum Refusal: Error, Equatable, LocalizedError {
         /// Another live process holds it; its pid when it recorded one.
         case held(pid: Int32?)
@@ -27,8 +27,9 @@ public final class DataDirectoryLock {
         self.fd = fd
     }
 
-    /// Takes the lock of `directory`, which is created when missing.
-    public static func acquire(in directory: URL = Paths.appSupportRoot) throws(Refusal) -> DataDirectoryLock {
+    /// Takes the lock of `directory`, which is created when missing. When
+    /// `waiting`, blocks until the holder lets go instead of refusing.
+    public static func acquire(in directory: URL = Paths.appSupportRoot, waiting: Bool = false) throws(Refusal) -> DataDirectoryLock {
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         } catch {
@@ -37,7 +38,11 @@ public final class DataDirectoryLock {
         let url = directory.appendingPathComponent("host.lock")
         let fd = open(url.path, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
         guard fd >= 0 else { throw .unavailable(String(cString: strerror(errno))) }
-        guard flock(fd, LOCK_EX | LOCK_NB) == 0 else {
+        var locked = flock(fd, LOCK_EX | (waiting ? 0 : LOCK_NB)) == 0
+        while !locked, waiting, errno == EINTR {
+            locked = flock(fd, LOCK_EX) == 0
+        }
+        guard locked else {
             let reason = errno
             let holder = recordedPID(fd)
             close(fd)
