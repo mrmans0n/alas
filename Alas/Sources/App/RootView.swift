@@ -612,7 +612,10 @@ struct RootView: View {
         Task { @MainActor in
             do {
                 let target = try await option.target(worktree: worktree)
-                openOrFocusReviewSession(worktree: worktree, target: target)
+                // A scope's content moves while its session stays the same
+                // (the working tree, a request's pushes), so a reopened tab
+                // reloads instead of showing the diff from when it opened.
+                openOrFocusReviewSession(worktree: worktree, target: target, reloadIfOpen: true)
             } catch {
                 reviewSessionLaunchError = ReviewSessionLaunchError(message: error.localizedDescription)
             }
@@ -620,7 +623,7 @@ struct RootView: View {
     }
 
     @MainActor
-    private func openOrFocusReviewSession(worktree: Worktree, target: ReviewSessionTarget) {
+    private func openOrFocusReviewSession(worktree: Worktree, target: ReviewSessionTarget, reloadIfOpen: Bool = false) {
         let store = ReviewSessionStore()
         ReviewSessionLauncher.openOrFocus(
             target: target,
@@ -628,8 +631,14 @@ struct RootView: View {
             save: { try store.save($0) },
             open: { record in
                 reviewSessionLaunchError = nil
+                let wasOpen = state.tabs.tabs(forWorktree: worktree.id).contains { tab in
+                    if case .reviewSession(let open) = tab { open.sessionID == record.id } else { false }
+                }
                 let tab = state.tabs.openOrFocusReviewSession(worktreeId: worktree.id, record: record)
                 state.activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tab.id)
+                if reloadIfOpen, wasOpen {
+                    state.reloadReviewSession(sessionID: record.id)
+                }
             },
             onFailure: { error in
                 reviewSessionLaunchError = ReviewSessionLaunchError(
