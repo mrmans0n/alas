@@ -171,3 +171,52 @@ public enum ShepherdShipAction: Equatable, Sendable {
         return nil
     }
 }
+
+/// Whether an agent's reply ends by offering what Ship does: opening a pull
+/// or merge request, or committing and pushing the work. The composer then
+/// offers `/ship`, so the request goes through Ship rather than a plain "yes"
+/// the agent would act on outside it.
+public enum ShepherdShipOffer {
+    public static func isOffered(in agentText: String) -> Bool {
+        let paragraph = agentText
+            .components(separatedBy: "\n\n")
+            .last { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? ""
+        // The closing clause: the last sentence, after any ";", ":" or "—".
+        let ask = paragraph
+            .replacingOccurrences(of: #"([.!?])\s+|[;:—]"#, with: "$1\n", options: .regularExpression)
+            .components(separatedBy: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces.union(.init(charactersIn: "*_>-"))) }
+            .last { !$0.isEmpty } ?? ""
+        let closing = ask.trimmingCharacters(in: .whitespaces.union(.init(charactersIn: "*_`)\"'”’")))
+        guard closing.hasSuffix("?") || matches(ask, #"^(?:let me know|say the word|just say)\b"#),
+              // Proposing not to ship ("Should I not open a PR?").
+              !matches(ask, #"(?:\bnot|\bnever|n't)\s+(?:\w+\s+){0,2}(?:open|create|raise|put|submit|file|send|commit|ship)\b"#),
+              // Offering only to check ("Want me to check if I can open a PR?").
+              !matches(ask, #"\b(?:check|verify|see|confirm|find out|look into)\s+(?:\w+\s+){0,2}?(?:if|whether)\b"#)
+        else { return false }
+        // The agent offers to act ("Want me to…", "Should I…"), so neither a
+        // request to the user ("Can you open a PR?") nor a status question
+        // ("Is there an open PR?") counts.
+        let offer = #"\b(?:(?:want|like) me to|should I|shall I|can I|may I|I can|I'll|ready (?:for me )?to|ok(?:ay)? (?:for me |if I )?to)"#
+        // Only modifiers of the shipping action may sit between ("want me to
+        // go ahead and commit these changes and open…"), so offers to explain
+        // or help ("show you how to open a PR") don't count.
+        let between = #"(?:\s+(?:go ahead and|also|now|just|then|finally|first|"#
+            + #"(?:commit|push)(?:\s+(?:the|these|this|all|my|your))?(?:\s+(?:changes|work|fix|fixes|branch))?,?\s+and))*\s+"#
+        let request = #"(?:pr|pull request|merge request|mr)s?"#
+        // The request is the verb's object ("open a draft PR for this"), not
+        // something about one ("open the PR in your browser", "a PR template").
+        let ship = #"(?:(?:open|create|raise|put up|submit|file)\s+(?:(?:a|an|the)\s+)?(?:(?:new|draft)\s+)?"# + request
+            + #"(?=\s*(?:[?.!,]|$)|\s+(?:for|with|against|to|from|into|that|now|or|and|once|so)\b)"#
+            + #"|commit(?!\s+to\b)(?:\s+[\w']+){0,4}?\s+(?:and|then|&)\s+(?:then\s+)?push"#
+            // A git push ("push the branch up"), not "push back on the reviewer".
+            + #"(?:\s+(?:it|them|this|everything|(?:the|this) (?:branch|changes|commits?)))?"#
+            + #"(?:\s+(?:up|upstream|to (?:origin|the remote|remote|github|gitlab)))?"#
+            + #"(?=\s*(?:[?.!,]|$)|\s+(?:and|so|now|for)\b)|ship (?:it|this|these changes)\b)"#
+        return matches(ask, offer + between + ship)
+    }
+
+    private static func matches(_ text: String, _ pattern: String) -> Bool {
+        text.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
+    }
+}
