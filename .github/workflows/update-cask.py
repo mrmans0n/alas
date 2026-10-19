@@ -48,6 +48,10 @@ cask "alas" do
   app "Alas.app"
   binary "#{{appdir}}/Alas.app/Contents/Resources/alas-host/alas-host"
 
+  # The launchd agents `alas-host install-agent` installs, one per profile.
+  uninstall launchctl: "io.nlopez.alas.host*",
+            delete:    "~/Library/LaunchAgents/io.nlopez.alas.host*.plist"
+
   zap trash: [
     "~/Library/Application Support/Alas",
     "~/Library/Caches/io.nlopez.alas",

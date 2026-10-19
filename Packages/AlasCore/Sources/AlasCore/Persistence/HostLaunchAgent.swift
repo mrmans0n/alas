@@ -22,10 +22,14 @@ public struct HostLaunchAgent: Equatable, Sendable {
         self.profile = profile
     }
 
-    /// The agent's property list. Its output goes to `alas-host.log` in the
+    /// Where the agent's host writes its output: `alas-host.log` in the
     /// profile's directory.
+    public var logURL: URL {
+        (profile.appSupportOverride ?? Paths.standardAppSupportRoot).appendingPathComponent("alas-host.log")
+    }
+
+    /// The agent's property list.
     public func propertyList() -> [String: Any] {
-        let root = profile.appSupportOverride ?? Paths.standardAppSupportRoot
         var plist: [String: Any] = [
             "Label": label,
             "ProgramArguments": [executable.path, "--wait-for-lock"],
@@ -34,8 +38,8 @@ public struct HostLaunchAgent: Equatable, Sendable {
             // stopped; a crash or a failed start is retried.
             "KeepAlive": ["SuccessfulExit": false],
             "ProcessType": "Background",
-            "StandardOutPath": root.appendingPathComponent("alas-host.log").path,
-            "StandardErrorPath": root.appendingPathComponent("alas-host.log").path,
+            "StandardOutPath": logURL.path,
+            "StandardErrorPath": logURL.path,
         ]
         if let override = profile.appSupportOverride {
             plist["EnvironmentVariables"] = [AlasProfile.environmentKey: override.path]

@@ -78,14 +78,26 @@ if arguments == ["install-agent"] || arguments == ["uninstall-agent"] {
         process.waitUntilExit()
         return process.terminationStatus
     }
-    // Not loaded is fine: there is nothing to stop.
-    launchctl("bootout", "\(domain)/\(agent.label)")
+    // 3 (ESRCH) is an agent that is not loaded: there is nothing to stop.
+    let stopped = launchctl("bootout", "\(domain)/\(agent.label)")
+    guard stopped == 0 || stopped == ESRCH else {
+        fail("launchctl could not stop \(agent.label) (status \(stopped))")
+    }
     if arguments == ["uninstall-agent"] {
-        try? FileManager.default.removeItem(at: agent.plistURL)
+        do {
+            if FileManager.default.fileExists(atPath: agent.plistURL.path) {
+                try FileManager.default.removeItem(at: agent.plistURL)
+            }
+        } catch {
+            fail("cannot remove \(agent.plistURL.path): \(error.localizedDescription)")
+        }
         print("removed \(agent.plistURL.path)")
         exit(0)
     }
     do {
+        // launchd creates the log file, not its directory: the profile's,
+        // which a profile the app never opened does not have yet.
+        try FileManager.default.createDirectory(at: agent.logURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: agent.plistURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try agent.plistData().write(to: agent.plistURL, options: .atomic)
     } catch {
