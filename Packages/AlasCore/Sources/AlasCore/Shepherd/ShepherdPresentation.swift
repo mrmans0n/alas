@@ -191,7 +191,9 @@ public enum ShepherdShipOffer {
               // Status questions about work already done ("Did you open a PR?").
               !matches(ask, #"^(?:did|have|has|was|were)\b"#),
               // The agent offers to act, rather than asking the user to ("Can you open a PR?").
-              !matches(ask, #"\byou\b"#) || matches(ask, #"\b(?:me|I|we|us)\b"#)
+              !matches(ask, #"\byou\b"#) || matches(ask, #"\b(?:me|I|we|us)\b"#),
+              // Proposing not to ship ("Should I not open a PR?").
+              !matches(ask, #"(?:\bnot|\bnever|n't)\s+(?:\w+\s+){0,2}(?:open|create|raise|put|submit|file|send|commit|ship)\b"#)
         else { return false }
         let request = #"(?:pr|pull request|merge request|mr)s?"#
         return matches(ask, #"\b(?:open|create|raise|put up|submit|file|send)\b[^.?!]{0,40}?\b"# + request + #"\b"#)
