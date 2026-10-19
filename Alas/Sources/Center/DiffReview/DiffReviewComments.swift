@@ -220,6 +220,9 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
         textView.onWindowChanged = { [weak coordinator = context.coordinator] in
             coordinator?.requestFocusIfNeeded()
         }
+        textView.onFocusedWindowDetachment = { [weak coordinator = context.coordinator] in
+            coordinator?.invalidateFulfilledFocusRequest()
+        }
         scrollView.documentView = textView
         context.coordinator.textView = textView
         applyTheme(to: scrollView, textView: textView)
@@ -250,6 +253,7 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
         guard let textView = scrollView.documentView as? ReviewDraftComposerNSTextView else { return }
         textView.onKeyboardAction = nil
         textView.onWindowChanged = nil
+        textView.onFocusedWindowDetachment = nil
         coordinator.editorUndoManager.removeAllActions()
         textView.delegate = nil
     }
@@ -349,6 +353,12 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
             scheduledInsertCodeTask = nil
         }
 
+        func invalidateFulfilledFocusRequest() {
+            // A parked row keeps its coordinator, but detachment drops the
+            // first responder. Its focus request must survive reattachment.
+            latestFulfilledFocusRequestGeneration = 0
+        }
+
         func requestFocusIfNeeded() {
             let generation = parent.focusRequestGeneration
             let hasExplicitRequest = generation > latestFulfilledFocusRequestGeneration
@@ -410,6 +420,14 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
 private final class ReviewDraftComposerNSTextView: PairedDelimiterTextView {
     var onKeyboardAction: (@MainActor (ReviewDraftComposerKeyboardAction) -> Void)?
     var onWindowChanged: (@MainActor () -> Void)?
+    var onFocusedWindowDetachment: (@MainActor () -> Void)?
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow !== window, window?.firstResponder === self {
+            onFocusedWindowDetachment?()
+        }
+        super.viewWillMove(toWindow: newWindow)
+    }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
