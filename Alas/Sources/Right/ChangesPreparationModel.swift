@@ -73,6 +73,14 @@ struct ChangesPreparationModel: Equatable {
 
     var primaryAction: ReviewAction? { reviewAction }
 
+    /// No actions of its own: the card renders only its Review button.
+    static let reviewScopesOnly = ChangesPreparationModel(
+        changes: [],
+        hasDraft: false,
+        draftNonEmpty: false,
+        readinessActions: []
+    )
+
     var isVisible: Bool {
         if landingStatus != nil {
             return true

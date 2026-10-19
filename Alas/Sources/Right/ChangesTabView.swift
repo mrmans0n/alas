@@ -543,21 +543,24 @@ struct ChangesTabView: View {
             })
         }
 
-        if Self.shouldShowChangesPreparationCard(preparationIsVisible: preparation.isVisible) {
-            let reviewScopeShortcut = appState.binding(for: .openReviewPalette)
-            let reviewSnapshot = rps.reviewLoop.snapshot
-            let reviewScopeOptions = ChangesReviewScopeOption.options(
-                changes: rps.changes,
-                commitCount: rps.commits.count,
-                comparisonRef: rps.comparisonRef,
-                canSnapshotWorkingTree: !rps.worktree.path.isRemoteAlasPath,
-                lastReview: lastReviewSnapshot,
-                hostedReviews: ChangesReviewScopeOption.hostedReviews(
-                    stack: rps.ggContext.isActive && rps.ggStackLoadState == .loaded ? rps.ggStack : nil,
-                    stackRemote: reviewSnapshot?.remote ?? rps.commitRemote ?? rps.primaryCommitRemote,
-                    branchRequest: reviewSnapshot?.reviewRequest
-                )
+        let reviewSnapshot = rps.reviewLoop.snapshot
+        let reviewScopeOptions = ChangesReviewScopeOption.options(
+            changes: rps.changes,
+            commitCount: rps.commits.count,
+            comparisonRef: rps.comparisonRef,
+            canSnapshotWorkingTree: !rps.worktree.path.isRemoteAlasPath,
+            lastReview: lastReviewSnapshot,
+            hostedReviews: ChangesReviewScopeOption.hostedReviews(
+                stack: rps.ggContext.isActive && rps.ggStackLoadState == .loaded ? rps.ggStack : nil,
+                stackRemote: reviewSnapshot?.remote ?? rps.commitRemote ?? rps.primaryCommitRemote,
+                branchRequest: reviewSnapshot?.reviewRequest
             )
+        )
+        if let preparation = Self.changesPreparationCardModel(
+            preparation: preparation,
+            hasReviewScopes: !reviewScopeOptions.isEmpty
+        ) {
+            let reviewScopeShortcut = appState.binding(for: .openReviewPalette)
             rows.append(appKitRow(
                 id: "changes-preparation",
                 token: String(reflecting: preparation) + String(reflecting: reviewScopeShortcut)
@@ -1230,10 +1233,16 @@ struct ChangesTabView: View {
         drawerIsActive || landingStatus != nil
     }
 
-    static func shouldShowChangesPreparationCard(
-        preparationIsVisible: Bool
-    ) -> Bool {
-        preparationIsVisible
+    /// The model the Prepare card renders, or nil to hide it. A card with
+    /// nothing else to show still appears for review scopes, as a lone
+    /// Review button: a clean branch's commits, stack requests, and changes
+    /// since the last review are otherwise out of reach.
+    static func changesPreparationCardModel(
+        preparation: ChangesPreparationModel,
+        hasReviewScopes: Bool
+    ) -> ChangesPreparationModel? {
+        if preparation.isVisible { return preparation }
+        return hasReviewScopes ? .reviewScopesOnly : nil
     }
 
     static func stackAction(for action: GGChangesPreparationAction) -> GGStackActionKind? {

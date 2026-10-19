@@ -219,57 +219,83 @@ struct ReviewSessionLoaderTests {
         #expect(loaded.feedbackTarget.revisionDescription == "HEAD -> \(sha)")
     }
 
+    /// A configured repository on `main` whose only commit adds `base.txt`
+    /// ("base\n"), built once and copied per test.
+    private static let repositoryTemplate = Task {
+        let template = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-review-session-loader-template-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: template, withIntermediateDirectories: true)
+        let repo = GitFixture(url: template)
+        try await repo.git("init", "-q", "-b", "main")
+        try await repo.git("config", "user.email", "test@example.com")
+        try await repo.git("config", "user.name", "Test User")
+        try repo.write("base\n", to: "base.txt")
+        try await repo.git("add", "base.txt")
+        try await repo.git("commit", "-q", "-m", "base")
+        return template
+    }
+
+    private struct GitFixture {
+        let url: URL
+
+        @discardableResult
+        func git(_ args: String...) async throws -> String {
+            let result = try await Process.git(args, cwd: url)
+            #expect(result.exitCode == 0, "git \(args.joined(separator: " ")): \(result.stderr)")
+            return result.stdout
+        }
+
+        func write(_ text: String, to path: String) throws {
+            try text.write(to: url.appendingPathComponent(path), atomically: true, encoding: .utf8)
+        }
+
+        var worktree: Worktree {
+            Worktree(
+                id: Worktree.makeId(path: url),
+                projectId: "project-1",
+                name: "main",
+                branch: "main",
+                path: url,
+                status: .clean,
+                lastActivity: Date(timeIntervalSince1970: 1)
+            )
+        }
+    }
+
+    private func makeRepo() async throws -> GitFixture {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-review-session-loader-\(UUID().uuidString)")
+        try FileManager.default.copyItem(at: try await Self.repositoryTemplate.value, to: url)
+        return GitFixture(url: url)
+    }
+
     @MainActor
     @Test func branchWithLocalChangesDiffsWorkingTreeAgainstMergeBase() async throws {
-        let repo = FileManager.default.temporaryDirectory
-            .appendingPathComponent("alas-review-session-loader-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: repo) }
-        func git(_ args: String...) async throws {
-            let result = try await Process.git(args, cwd: repo)
-            #expect(result.exitCode == 0, "git \(args.joined(separator: " ")): \(result.stderr)")
-        }
-        func write(_ text: String, to path: String) throws {
-            try text.write(to: repo.appendingPathComponent(path), atomically: true, encoding: .utf8)
-        }
-        try await git("init", "-q", "-b", "main")
-        try await git("config", "user.email", "test@example.com")
-        try await git("config", "user.name", "Test User")
-        try write("base\n", to: "base.txt")
-        try await git("add", "base.txt")
-        try await git("commit", "-q", "-m", "base")
-        try await git("checkout", "-q", "-b", "feature")
-        try write("feature\n", to: "feature.txt")
-        try await git("add", "feature.txt")
-        try await git("commit", "-q", "-m", "feature")
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo.url) }
+        try await repo.git("checkout", "-q", "-b", "feature")
+        try repo.write("feature\n", to: "feature.txt")
+        try await repo.git("add", "feature.txt")
+        try await repo.git("commit", "-q", "-m", "feature")
         // main moves on after the fork; none of it belongs to the review.
-        try await git("checkout", "-q", "main")
-        try write("main\n", to: "main-only.txt")
-        try await git("add", "main-only.txt")
-        try await git("commit", "-q", "-m", "main")
-        try await git("checkout", "-q", "feature")
-        try write("feature\nmore\n", to: "feature.txt")
-        try write("staged\n", to: "staged.txt")
-        try await git("add", "staged.txt")
-        try write("untracked\n", to: "untracked.txt")
+        try await repo.git("checkout", "-q", "main")
+        try repo.write("main\n", to: "main-only.txt")
+        try await repo.git("add", "main-only.txt")
+        try await repo.git("commit", "-q", "-m", "main")
+        try await repo.git("checkout", "-q", "feature")
+        try repo.write("feature\nmore\n", to: "feature.txt")
+        try repo.write("staged\n", to: "staged.txt")
+        try await repo.git("add", "staged.txt")
+        try repo.write("untracked\n", to: "untracked.txt")
 
-        let worktree = Worktree(
-            id: Worktree.makeId(path: repo),
-            projectId: "project-1",
-            name: "feature",
-            branch: "feature",
-            path: repo,
-            status: .clean,
-            lastActivity: Date(timeIntervalSince1970: 1)
-        )
         let target = ReviewSessionTarget.branchWithLocalChanges(
-            worktreeID: worktree.id,
-            repositoryPath: repo,
-            base: try await GitService().resolveRevision(at: repo, ref: "main")
+            worktreeID: repo.worktree.id,
+            repositoryPath: repo.url,
+            base: try await GitService().resolveRevision(at: repo.url, ref: "main")
         )
         let loader = ReviewSessionLoader.production(
             appState: AppState(store: TestPersistenceStore()),
-            worktree: worktree
+            worktree: repo.worktree
         )
 
         let loaded = try await loader.load(target: target)
@@ -283,58 +309,32 @@ struct ReviewSessionLoaderTests {
 
     @MainActor
     @Test func sinceSnapshotShowsOnlyChangesAfterTheReviewedWorkingTree() async throws {
-        let repo = FileManager.default.temporaryDirectory
-            .appendingPathComponent("alas-review-session-loader-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: repo) }
-        func git(_ args: String...) async throws -> String {
-            let result = try await Process.git(args, cwd: repo)
-            #expect(result.exitCode == 0, "git \(args.joined(separator: " ")): \(result.stderr)")
-            return result.stdout
-        }
-        func write(_ text: String, to path: String) throws {
-            try text.write(to: repo.appendingPathComponent(path), atomically: true, encoding: .utf8)
-        }
-        _ = try await git("init", "-q", "-b", "main")
-        _ = try await git("config", "user.email", "test@example.com")
-        _ = try await git("config", "user.name", "Test User")
-        try write("one\n", to: "reviewed.txt")
-        _ = try await git("add", "reviewed.txt")
-        _ = try await git("commit", "-q", "-m", "base")
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo.url) }
         // The state under review: an edit, a staged file, an untracked file.
-        try write("one\ntwo\n", to: "reviewed.txt")
-        try write("staged\n", to: "staged.txt")
-        _ = try await git("add", "staged.txt")
-        try write("untracked\n", to: "untracked.txt")
-        let statusBefore = try await git("status", "--porcelain")
+        try repo.write("base\ntwo\n", to: "base.txt")
+        try repo.write("staged\n", to: "staged.txt")
+        try await repo.git("add", "staged.txt")
+        try repo.write("untracked\n", to: "untracked.txt")
+        let statusBefore = try await repo.git("status", "--porcelain")
 
-        let tree = try await GitService().workingTreeSnapshot(worktreePath: repo)
+        let tree = try await GitService().workingTreeSnapshot(worktreePath: repo.url)
 
-        #expect(try await git("status", "--porcelain") == statusBefore)
+        #expect(try await repo.git("status", "--porcelain") == statusBefore)
         // The agent's follow-up: one more edit and a new file.
-        try write("one\ntwo\nthree\n", to: "reviewed.txt")
-        try write("fix\n", to: "fix.txt")
-
-        let worktree = Worktree(
-            id: Worktree.makeId(path: repo),
-            projectId: "project-1",
-            name: "main",
-            branch: "main",
-            path: repo,
-            status: .clean,
-            lastActivity: Date(timeIntervalSince1970: 1)
-        )
+        try repo.write("base\ntwo\nthree\n", to: "base.txt")
+        try repo.write("fix\n", to: "fix.txt")
         let loader = ReviewSessionLoader.production(
             appState: AppState(store: TestPersistenceStore()),
-            worktree: worktree
+            worktree: repo.worktree
         )
 
         let loaded = try await loader.load(
-            target: .sinceSnapshot(worktreeID: worktree.id, repositoryPath: repo, tree: tree)
+            target: .sinceSnapshot(worktreeID: repo.worktree.id, repositoryPath: repo.url, tree: tree)
         )
 
         let files = loaded.session.files.map(\.summary)
-        #expect(files.map(\.path) == ["fix.txt", "reviewed.txt"])
+        #expect(files.map(\.path) == ["base.txt", "fix.txt"])
         #expect(files.map(\.additions) == [1, 1])
     }
 
@@ -368,35 +368,22 @@ struct ReviewSessionLoaderTests {
     }
 
     @Test func localChangesSnapshotIsWithheldWhileConflictsAreUnresolved() async throws {
-        let repo = FileManager.default.temporaryDirectory
-            .appendingPathComponent("alas-review-session-loader-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: repo) }
-        func git(_ args: String...) async throws {
-            _ = try await Process.git(args, cwd: repo)
-        }
-        func write(_ text: String) throws {
-            try text.write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
-        }
-        try await git("init", "-q", "-b", "main")
-        try await git("config", "user.email", "test@example.com")
-        try await git("config", "user.name", "Test User")
-        try write("base\n")
-        try await git("add", "a.txt")
-        try await git("commit", "-qm", "base")
-        try await git("checkout", "-qb", "other")
-        try write("other\n")
-        try await git("commit", "-qam", "other")
-        try await git("checkout", "-q", "main")
-        try write("main\n")
-        try await git("commit", "-qam", "main")
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo.url) }
+        try await repo.git("checkout", "-q", "-b", "other")
+        try repo.write("other\n", to: "base.txt")
+        try await repo.git("commit", "-q", "-a", "-m", "other")
+        try await repo.git("checkout", "-q", "main")
+        try repo.write("main\n", to: "base.txt")
+        try await repo.git("commit", "-q", "-a", "-m", "main")
         let service = GitService()
-        #expect(try await service.localChangesReviewSnapshot(worktreePath: repo) != nil)
+        #expect(try await service.localChangesReviewSnapshot(worktreePath: repo.url) != nil)
 
-        try await git("merge", "-q", "other")
+        // Exits 1 on the conflict.
+        _ = try await Process.git(["merge", "-q", "other"], cwd: repo.url)
 
-        // The local-changes review hides conflicted a.txt, so no baseline may cover it.
-        #expect(try await service.localChangesReviewSnapshot(worktreePath: repo) == nil)
+        // The local-changes review hides conflicted base.txt, so no baseline may cover it.
+        #expect(try await service.localChangesReviewSnapshot(worktreePath: repo.url) == nil)
     }
 
     @MainActor
