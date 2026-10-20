@@ -42,19 +42,22 @@ struct ReviewChangesLoader {
 
         let git = git
         let keys = changes.map(ReviewChangesDiffKey.init)
+        // The batch detects renames only, so a copy (`status.renames=copies`)
+        // would come back as a whole-file add; copies diff singly with `-C`.
+        let batchedKeys = keys.filter { !$0.isCopy }
         let diffs = try await DiffReviewBatchLoading.diffs(
             for: keys,
             batched: {
                 async let unstaged = git.workingCopyDiffsByFile(
                     worktreePath: worktreePath, staged: false,
-                    paths: keys.filter { $0.stage == .unstaged }.map(\.path)
+                    paths: batchedKeys.filter { $0.stage == .unstaged }.map(\.path)
                 )
                 async let staged = git.workingCopyDiffsByFile(
                     worktreePath: worktreePath, staged: true,
-                    paths: keys.filter { $0.stage == .staged }.map(\.path)
+                    paths: batchedKeys.filter { $0.stage == .staged }.map(\.path)
                 )
                 let byStage = try await (unstaged: unstaged, staged: staged)
-                return Dictionary(keys.compactMap { key in
+                return Dictionary(batchedKeys.compactMap { key in
                     (key.stage == .staged ? byStage.staged : byStage.unstaged)[key.path].map { (key, $0) }
                 }, uniquingKeysWith: { first, _ in first })
             },
@@ -223,11 +226,13 @@ private struct ReviewChangesDiffKey: Hashable, Sendable {
     let path: String
     let stage: ChangeStage
     let renameFrom: String?
+    let isCopy: Bool
 
     init(_ change: ChangedFile) {
         path = change.path
         stage = change.stage
         renameFrom = change.renameFrom
+        isCopy = change.status == "C"
     }
 }
 
