@@ -127,10 +127,9 @@ Each phase is one or more PRs that build and pass on their own.
    That keeps them out of the app's API but makes the module boundary softer
    than it could be; tightening it is later work.
 
-## Open questions
+## Decided
 
-- **Granularity.** Seven modules is a starting point chosen by size and
-  dependency; fewer, larger ones are less churn but may miss the memory budget.
-- **The umbrella.** Re-exporting keeps every import unchanged. Importing the
-  modules directly would make dependencies visible in the app too, at the cost
-  of touching every app file.
+- **Seven modules** as listed, split further only where Phase 4's measurements
+  ask for it.
+- **The umbrella stays:** `AlasCore` re-exports the modules, and the app and
+  the tests keep importing `AlasCore`.
