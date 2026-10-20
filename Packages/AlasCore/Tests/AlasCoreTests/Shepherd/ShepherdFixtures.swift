@@ -95,6 +95,7 @@ enum ShepherdFixtures {
         autoFix: Bool = true,
         autoMerge: Bool = false,
         fixAttempts: Int = 0,
+        maxFixAttempts: Int? = ShepherdPolicy.defaultMaxFixAttempts,
         lastDispatched: ShepherdFingerprint? = nil,
         viewerCommentIDs: [String]? = nil,
         handled: [String]? = nil,
@@ -112,6 +113,7 @@ enum ShepherdFixtures {
         )
         record.phase = phase
         record.fixAttempts = fixAttempts
+        record.maxFixAttempts = maxFixAttempts
         record.lastDispatchedFingerprint = lastDispatched
         record.viewerCommentIDsAtDispatch = viewerCommentIDs
         record.handledThreadRevisions = handled

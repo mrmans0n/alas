@@ -298,6 +298,7 @@ public final class ReviewShepherd {
         baseBranch: String,
         autoFix: Bool,
         autoMerge: Bool,
+        maxFixAttempts: Int = ShepherdPolicy.defaultMaxFixAttempts,
         contextRules: ShepherdRules?
     ) async -> ShepherdRecord {
         let id = ShepherdRecordID(worktreeID: worktreeID, request: request)
@@ -314,6 +315,7 @@ public final class ReviewShepherd {
                 baseBranch: baseBranch,
                 autoFix: autoFix,
                 autoMerge: autoMerge,
+                maxFixAttempts: maxFixAttempts,
                 now: now
             )
         if record.sessionID != sessionID {
@@ -327,6 +329,7 @@ public final class ReviewShepherd {
         record.baseBranch = baseBranch
         record.autoFix = autoFix
         record.autoMerge = autoMerge
+        record.maxFixAttempts = ShepherdPolicy.clampedFixAttempts(maxFixAttempts)
         record.phase = .watching
         record.fixAttempts = 0
         record.lastDispatchedFingerprint = nil
@@ -360,6 +363,10 @@ public final class ReviewShepherd {
 
     public func setAutoMerge(_ on: Bool, for id: ShepherdRecordID) {
         update(id) { $0.autoMerge = on }
+    }
+
+    public func setMaxFixAttempts(_ budget: Int, for id: ShepherdRecordID) {
+        update(id) { $0.setFixAttemptBudget(budget) }
     }
 
     /// Escalated or paused back to watching with a full attempt budget. The

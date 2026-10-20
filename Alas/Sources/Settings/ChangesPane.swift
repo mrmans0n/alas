@@ -67,6 +67,16 @@ struct ChangesPane: View {
                             .labelsHidden()
                     }
                     SettingsRow(
+                        name: "Fix attempts per PR",
+                        desc: "Fix prompts sent before the shepherd stops and asks for you. The count resets once the PR is clean. Each PR can change this from its toolbar button."
+                    ) {
+                        Stepper(
+                            "\(state.config.changes.shepherd.maxFixAttempts)",
+                            value: state.bind(\.changes.shepherd.maxFixAttempts),
+                            in: ShepherdPolicy.fixAttemptRange
+                        )
+                    }
+                    SettingsRow(
                         name: "Auto-merge new PRs",
                         desc: "Squash-merge once checks pass, required reviewers have reviewed the current head, and the head has stayed the same for two polls."
                     ) {

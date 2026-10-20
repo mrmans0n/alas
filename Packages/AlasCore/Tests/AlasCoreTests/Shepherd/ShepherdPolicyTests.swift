@@ -233,6 +233,14 @@ private let policyCases: [ShepherdPolicyCase] = [
     .init(testDescription: "attempt cap escalates",
           record: F.record(fixAttempts: 3), observation: F.observation(F.snapshot(F.request(checks: [F.failing]))),
           action: .escalate(.attemptsExhausted), phase: .escalated(.attemptsExhausted)),
+    .init(testDescription: "a record saved without a budget caps at the default",
+          record: F.record(fixAttempts: 3, maxFixAttempts: nil),
+          observation: F.observation(F.snapshot(F.request(checks: [F.failing]))),
+          action: .escalate(.attemptsExhausted), phase: .escalated(.attemptsExhausted)),
+    .init(testDescription: "a raised budget keeps dispatching past the default",
+          record: F.record(fixAttempts: 3, maxFixAttempts: 5),
+          observation: F.observation(F.snapshot(F.request(checks: [F.failing]))),
+          action: .dispatchFix(failingOnly), phase: .fixing(dispatchedAt: F.now)),
     // Rule 8
     .init(testDescription: "merges when the gate passes",
           record: stable(autoMerge: true), observation: F.observation(F.snapshot(F.request())),
@@ -465,6 +473,20 @@ private let policyCases: [ShepherdPolicyCase] = [
             F.observation(F.snapshot(F.request(checks: checks)))
         )
         #expect(decision.record.fixAttempts == expected)
+    }
+
+    @Test("changing the budget resumes only a record that ran out of attempts below it", arguments: [
+        (ShepherdPhase.escalated(.attemptsExhausted), 5, ShepherdPhase.watching, 5),
+        (.escalated(.attemptsExhausted), 3, .escalated(.attemptsExhausted), 3),
+        (.escalated(.noProgress), 5, .escalated(.noProgress), 5),
+        (.escalated(.attemptsExhausted), 99, .watching, ShepherdPolicy.fixAttemptRange.upperBound),
+    ] as [(ShepherdPhase, Int, ShepherdPhase, Int)])
+    func budgetChange(phase: ShepherdPhase, budget: Int, expectedPhase: ShepherdPhase, expectedBudget: Int) {
+        var record = F.record(phase: phase, fixAttempts: 3)
+        record.setFixAttemptBudget(budget)
+        #expect(record.phase == expectedPhase)
+        #expect(record.fixAttemptBudget == expectedBudget)
+        #expect(record.fixAttempts == 3)
     }
 
     @Test("head stability counts consecutive complete polls on one head", arguments: stabilityCases)

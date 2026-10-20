@@ -101,6 +101,9 @@ public struct ShepherdRecord: Codable, Equatable, Sendable {
     /// before this field existed.
     public var handledThreadRevisions: [String]?
     public var fixAttempts: Int
+    /// Fix prompts allowed before escalating. Nil in records saved before
+    /// this field existed; read it through `fixAttemptBudget`.
+    public var maxFixAttempts: Int?
     public var lastSeenHeadSHA: String?
     /// Consecutive polls that saw `lastSeenHeadSHA` with no pending or
     /// unknown check,
@@ -128,6 +131,7 @@ public struct ShepherdRecord: Codable, Equatable, Sendable {
         baseBranch: String,
         autoFix: Bool,
         autoMerge: Bool,
+        maxFixAttempts: Int = ShepherdPolicy.defaultMaxFixAttempts,
         now: Date
     ) {
         self.id = id
@@ -142,6 +146,7 @@ public struct ShepherdRecord: Codable, Equatable, Sendable {
         self.viewerCommentIDsAtDispatch = nil
         self.handledThreadRevisions = nil
         self.fixAttempts = 0
+        self.maxFixAttempts = ShepherdPolicy.clampedFixAttempts(maxFixAttempts)
         self.lastSeenHeadSHA = nil
         self.stableHeadPolls = 0
         self.headFirstSeenAt = nil
@@ -152,6 +157,18 @@ public struct ShepherdRecord: Codable, Equatable, Sendable {
     }
 
     public var owner: SessionOwnerID { .worktree(id.worktreeID) }
+
+    public var fixAttemptBudget: Int { maxFixAttempts ?? ShepherdPolicy.defaultMaxFixAttempts }
+
+    /// Sets the budget, clamped to `ShepherdPolicy.fixAttemptRange`. A record
+    /// that escalated for running out of attempts goes back to watching when
+    /// the new budget leaves room for another, keeping the attempts it used.
+    public mutating func setFixAttemptBudget(_ budget: Int) {
+        maxFixAttempts = ShepherdPolicy.clampedFixAttempts(budget)
+        if phase == .escalated(.attemptsExhausted), fixAttempts < fixAttemptBudget {
+            phase = .watching
+        }
+    }
 
     /// When the policy first saw `headSHA`: the lower bound for timestamped
     /// review evidence on that head. Nil for any head other than the one this
@@ -171,15 +188,22 @@ public struct ShepherdDefaults: Codable, Equatable, Sendable {
     public var autoFix: Bool = true
     public var autoMerge: Bool = false
     public var archiveAfterMerge: Bool = false
+    public var maxFixAttempts: Int = ShepherdPolicy.defaultMaxFixAttempts
 
     private enum CodingKeys: String, CodingKey {
-        case autoFix, autoMerge, archiveAfterMerge
+        case autoFix, autoMerge, archiveAfterMerge, maxFixAttempts
     }
 
-    public init(autoFix: Bool = true, autoMerge: Bool = false, archiveAfterMerge: Bool = false) {
+    public init(
+        autoFix: Bool = true,
+        autoMerge: Bool = false,
+        archiveAfterMerge: Bool = false,
+        maxFixAttempts: Int = ShepherdPolicy.defaultMaxFixAttempts
+    ) {
         self.autoFix = autoFix
         self.autoMerge = autoMerge
         self.archiveAfterMerge = archiveAfterMerge
+        self.maxFixAttempts = maxFixAttempts
     }
 
     /// Tolerant, like the rest of `AppConfig`: a missing or mistyped key keeps
@@ -189,5 +213,7 @@ public struct ShepherdDefaults: Codable, Equatable, Sendable {
         autoFix = (try? c.decode(Bool.self, forKey: .autoFix)) ?? true
         autoMerge = (try? c.decode(Bool.self, forKey: .autoMerge)) ?? false
         archiveAfterMerge = (try? c.decode(Bool.self, forKey: .archiveAfterMerge)) ?? false
+        maxFixAttempts = ShepherdPolicy.clampedFixAttempts(
+            (try? c.decode(Int.self, forKey: .maxFixAttempts)) ?? ShepherdPolicy.defaultMaxFixAttempts)
     }
 }
