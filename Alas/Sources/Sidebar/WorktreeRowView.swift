@@ -178,6 +178,8 @@ struct WorktreeRowView: View {
     var onPullUpstream: (() -> Void)? = nil
     var isPullUpstreamInFlight: Bool = false
     let operationState: WorktreeOperationState?
+    var landingStatus: GGLandingPresentation.SidebarStatus? = nil
+    var onOpenGGLanding: (() -> Void)? = nil
     let harnessSummary: HarnessService.WorktreeHarnessSummary?
     let ggMenuModel: GGWorktreeMenuModel
     let onTap: () -> Void
@@ -399,6 +401,8 @@ struct WorktreeRowView: View {
                 firstLine()
                 if operationState != nil {
                     operationLine
+                } else if let landingStatus {
+                    landingLine(status: landingStatus)
                 } else {
                     secondLine(
                         status: status,
@@ -522,6 +526,71 @@ struct WorktreeRowView: View {
         .padding(.leading, 19)
     }
 
+    private func landingLine(status: GGLandingPresentation.SidebarStatus) -> some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 7) {
+                landingButton(status: status)
+                    .fixedSize()
+                workspaceCheckoutButton
+                    .fixedSize()
+            }
+            landingButton(status: status)
+        }
+        .font(.system(size: 10))
+        .foregroundStyle(theme.color("fg-dim"))
+        .padding(.leading, 19)
+    }
+
+    private func landingButton(status: GGLandingPresentation.SidebarStatus) -> some View {
+        Button {
+            onOpenGGLanding?()
+        } label: {
+            HStack(spacing: 5) {
+                if status.isSpinning {
+                    Spinner(lineWidth: 1.2, duration: 0.7, color: theme.color(status.colorToken))
+                        .frame(width: 9, height: 9)
+                        .accessibilityHidden(true)
+                }
+                Text(status.title)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            .foregroundStyle(theme.color(status.colorToken))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .pointingHandCursor()
+        .help("\(status.title). Open gg land details.")
+        .accessibilityLabel("gg land: \(status.title)")
+        .accessibilityHint("Opens the landing tab for this repository")
+    }
+
+    @ViewBuilder
+    private var workspaceCheckoutButton: some View {
+        if let workspaceCheckout {
+            Button { onOpenWorkspaceCheckout(workspaceCheckout) } label: {
+                HStack(spacing: 4) {
+                    Icon(
+                        name: "square.grid.2x2",
+                        size: 9,
+                        color: theme.color(workspaceCheckout.isActive ? "accent" : "fg-dim")
+                    )
+                    .accessibilityHidden(true)
+                    Text(workspaceCheckout.name)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                .foregroundColor(theme.color(workspaceCheckout.isActive ? "accent" : "fg-dim"))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .pointingHandCursor()
+            .help(workspaceCheckout.accessibilityLabel)
+            .accessibilityLabel(workspaceCheckout.accessibilityLabel)
+            .accessibilityHint("Opens the workspace focused on this repository")
+        }
+    }
+
     private var diffStats: WorktreeDiffStats {
         WorktreeStatusStore.shared.diffStats(forPath: worktree.path.path)
             ?? WorktreeDiffStats(added: worktree.addedLines, deleted: worktree.deletedLines)
@@ -554,28 +623,7 @@ struct WorktreeRowView: View {
         showsExplanation: Bool
     ) -> some View {
         HStack(spacing: 7) {
-            if let workspaceCheckout {
-                Button { onOpenWorkspaceCheckout(workspaceCheckout) } label: {
-                    HStack(spacing: 4) {
-                        Icon(
-                            name: "square.grid.2x2",
-                            size: 9,
-                            color: theme.color(workspaceCheckout.isActive ? "accent" : "fg-dim")
-                        )
-                        .accessibilityHidden(true)
-                        Text(workspaceCheckout.name)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                    }
-                    .foregroundColor(theme.color(workspaceCheckout.isActive ? "accent" : "fg-dim"))
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .pointingHandCursor()
-                .help(workspaceCheckout.accessibilityLabel)
-                .accessibilityLabel(workspaceCheckout.accessibilityLabel)
-                .accessibilityHint("Opens the workspace focused on this repository")
-            }
+            workspaceCheckoutButton
             if let status {
                 HStack(spacing: 5) {
                     StatusDot(color: theme.color(status.colorToken), pulses: status.pulses)

@@ -64,6 +64,9 @@ struct RepoGroupView: View {
     let workspaceCheckout: (Worktree) -> WorktreeWorkspaceCheckoutPresentation?
     var onOpenWorkspaceCheckout: (WorktreeWorkspaceCheckoutPresentation) -> Void = { _ in }
     let operationState: (Worktree) -> WorktreeOperationState?
+    var landingHostWorktreeId: String? = nil
+    var landingStatus: GGLandingPresentation.SidebarStatus? = nil
+    var onOpenGGLanding: (() -> Void)? = nil
     let harnessSummary: (String) -> HarnessService.WorktreeHarnessSummary?
     let ggMenuModel: (Worktree) -> GGWorktreeMenuModel
     let onSelect: (Worktree) -> Void
@@ -263,6 +266,8 @@ struct RepoGroupView: View {
             onPullUpstream: onPullUpstream.map { pull in { pull(wt) } },
             isPullUpstreamInFlight: isPullUpstreamInFlight?(wt) ?? false,
             operationState: operationState(wt),
+            landingStatus: wt.id == landingHostWorktreeId ? landingStatus : nil,
+            onOpenGGLanding: onOpenGGLanding,
             harnessSummary: harnessSummary(wt.id),
             ggMenuModel: ggMenuModel(wt),
             onTap: { onSelect(wt) },
