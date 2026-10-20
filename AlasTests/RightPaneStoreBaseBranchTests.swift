@@ -328,12 +328,7 @@ struct RightPaneStoreBaseBranchTests {
         #expect(appState.inAppNotifications.notifications(in: source.id).isEmpty)
 
         appState.isPreviewingForestScenes = false
-        _ = appState.rightPaneStore.state(
-            for: visible,
-            baseBranch: "main",
-            comparisonMode: .manual,
-            activates: false
-        )
+        appState.rightPaneStore.flushPendingBulkResolveNotifications(to: visible.id)
 
         let notification = try #require(
             appState.inAppNotifications.notifications(in: visible.id).first

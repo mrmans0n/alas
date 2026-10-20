@@ -128,10 +128,10 @@ final class RightPaneStore {
         )
     }
 
-    private func flushPendingBulkResolveNotifications() {
-        guard let appState,
-              let bannerWorktreeID = appState.inAppBannerWorktreeID,
-              !pendingBulkResolveNotifications.isEmpty else { return }
+    /// Delivers bulk-resolution outcomes queued while no center pane was
+    /// mounted. The mounted notification stack supplies the visible worktree.
+    func flushPendingBulkResolveNotifications(to bannerWorktreeID: String) {
+        guard let appState, !pendingBulkResolveNotifications.isEmpty else { return }
         for pending in pendingBulkResolveNotifications {
             postBulkResolveNotification(
                 pending.report,
@@ -386,7 +386,6 @@ final class RightPaneStore {
         result.checkpointTargetProvider = { [weak self] in
             self?.appState?.checkpointTarget(for: worktree)
         }
-        flushPendingBulkResolveNotifications()
         return result
     }
 
