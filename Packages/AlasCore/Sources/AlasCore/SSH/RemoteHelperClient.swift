@@ -605,19 +605,21 @@ public actor RemoteHelperClient {
     public func openMCPRoute(fence: RemoteSessionFence) async throws -> (
         handle: RemoteMCPRouteHandle,
         descriptor: RemoteMCPRouteDescriptor,
+        toolScope: BuiltInMCPToolScope,
         events: AsyncStream<RemoteMCPRelayEvent>
     ) {
         _ = try ensureStarted()
         if helperCapabilities?.generation != generation { _ = try await hello() }
         guard helperCapabilities?.generation == generation,
-              helperCapabilities?.capabilities.visualMCPRelay == RemoteMCPRelayLimits.protocolVersion
+              let capabilities = helperCapabilities?.capabilities,
+              capabilities.visualMCPRelay == RemoteMCPRelayLimits.protocolVersion
         else { throw RemoteSessionUnavailable.visualRelayRequired }
         let handle = RemoteMCPRouteHandle()
         let (events, continuation) = AsyncStream.makeStream(of: RemoteMCPRelayEvent.self)
         mcpRoutes[handle] = ActiveRemoteMCPRoute(fence: fence, continuation: continuation)
         do {
             let descriptor = try await registerMCPRoute(handle)
-            return (handle, descriptor, events)
+            return (handle, descriptor, capabilities.relayedMCPToolScope, events)
         } catch {
             mcpRoutes.removeValue(forKey: handle)
             continuation.finish()

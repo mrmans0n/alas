@@ -119,9 +119,9 @@ comparison. It is an MCP tool only, has no `alas` CLI command, and applies to
 ACP sessions, including Workspace Checkout sessions. The phone web
 client shows visuals too; see the phone section below.
 
-In a session whose project runs over SSH, the agent gets `visual_show` and no
-other Alas tool: the remote helper relays it back to the Mac that owns the
-session, so the visual, its question, and the answer behave as in a local
+In a session whose project runs over SSH, the agent gets `visual_show` plus
+`pr_create` and `pr_status`, and no other Alas tool: the remote helper relays
+them back to the Mac that owns the session, so the visual, its question, and the answer behave as in a local
 session. It needs a helper that advertises the visual relay (Alas upgrades it
 on connect) and an agent that consumes ACP-provided MCP servers. Pi ignores
 those, so SSH Pi sessions have no visual tool. Turning off the built-in tools,

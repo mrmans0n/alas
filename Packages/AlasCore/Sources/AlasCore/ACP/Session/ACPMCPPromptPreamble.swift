@@ -174,6 +174,14 @@ public enum ACPMCPPromptPreamble: Sendable {
                 + "use it when that explains better than prose. The "
                 + "user's answer arrives as their next prompt. No other Alas tools are "
                 + "available in this session.")
+        } else if builtInTools == .remote {
+            lines.append("The MCP server \"alas\" (built-in) provides visual_show (show an HTML visual, "
+                + "such as a diagram, comparison, or chart, in this session's transcript as part of your "
+                + "reply, optionally with a question; use it when that explains better than prose, before "
+                + "your final reply; the user's answer arrives as their next prompt) and pr_create/pr_status "
+                + "(open a PR/MR for this worktree's branch and have Alas watch it until it merges; offer "
+                + "pr_create when you've finished a change the user will want reviewed, and call it only "
+                + "after the user agrees or asks). No other Alas tools are available in this session.")
         } else if builtInTools == .full {
             let sessionTools = isDelegated
                 ? "session_list/session_send/session_read/session_search"

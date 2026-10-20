@@ -49,7 +49,8 @@ Result:
     "ping": true,
     "proc": true,
     "sessionCoordination": 1,
-    "visualMCPRelay": 1
+    "visualMCPRelay": 1,
+    "remoteMCPTools": 1
   }
 }
 ```
@@ -319,10 +320,16 @@ session, and stale metadata writes cannot clear it.
 
 ## Visual MCP relay
 
-SSH ACP sessions get the built-in Alas MCP server's `visual_show` tool, and only
-that tool, through the helper. Helpers advertise it with `visualMCPRelay: 1`;
-Alas gates on that value, not on the binary version, and an older helper leaves
-the tool unavailable without sending it an unknown method.
+SSH ACP sessions get a subset of the built-in Alas MCP server's tools through
+the helper. Helpers advertise the relay with `visualMCPRelay: 1`; Alas gates on
+that value, not on the binary version, and an older helper leaves the tools
+unavailable without sending it an unknown method.
+
+A helper that also advertises `remoteMCPTools: 1` waits long enough for
+`pr_create`, so Alas relays `visual_show`, `pr_create`, and `pr_status` and runs
+`alas mcp --remote` for the session. Behind a helper without it, Alas relays
+`visual_show` only and runs `alas mcp --visual-only`. The relay itself is the
+same in both cases.
 
 ```text
 remote ACP agent
@@ -330,7 +337,7 @@ remote ACP agent
   -> current route for the record, read from the remote session registry
   -> one framed exchange over that route's private Unix socket
   -> `mcp/request` notification over the existing SSH channel
-  -> the owning Mac, which runs `alas mcp --visual-only` for the session
+  -> the owning Mac, which runs `alas mcp --remote` (or `--visual-only`) for the session
 ```
 
 The agent's MCP configuration holds only the helper path, its absolute state
@@ -363,22 +370,27 @@ per connection, with the same framing for the reply. An empty reply
 acknowledges an inner notification. Raw frames are at most 4 MiB; relay
 envelopes at most 6 MiB. Lengths are checked before allocation. Header reads
 time out after 5 seconds, body reads after 10, the helper's wait for a
-completion after 35, and the proxy's wait for a reply after 40. Each record has
+completion after 130, and the proxy's wait for a reply after 135. These sit
+just above the 120 seconds `alas mcp` waits for `pr_create`; every other call
+gives up locally after 30. Each record has
 at most two exchanges in flight and each `serve` process at most eight; excess
 work fails at once. Frames are opaque and never path-rewritten.
 
 When the relay fails, an inner request gets
-`{"jsonrpc":"2.0","id":<original id>,"error":{"code":-32000,"message":"Alas visual relay unavailable"}}`,
-and an inner notification gets no reply. A visual may already have been saved
-when its response is lost; the agent sees a failure or an unknown outcome, never
-a fabricated success, and Alas does not retry the call.
+`{"jsonrpc":"2.0","id":<original id>,"error":{"code":-32000,"message":"Alas relay unavailable; the call's outcome is unknown"}}`,
+and an inner notification gets no reply. A visual may already have been saved,
+or a PR opened, when its response is lost; the agent sees a failure or an
+unknown outcome, never a fabricated success, and Alas does not retry the call.
+A repeated `pr_create` waits for the first and adopts the PR it opened.
 
 On the Mac, the session manager prepares the route after confirming remote
 authority and before sending the session's MCP servers, and revokes it when that
 attachment ends: reconnect, stand-down, takeover, detach, deletion, or manager
 disposal. Each relayed request is checked against the attachment that prepared
 it and that attachment's fence, and `visual_show` confirms writer authority
-again before appending. The Mac-side bridge gives each relayed request a unique
+again before appending. `pr_create` and `pr_status` resolve the session's
+worktree as for a local session; on an SSH project their git and `gh`/`glab`
+commands run on the remote host. The Mac-side bridge gives each relayed request a unique
 backend ID and restores the caller's ID in the response, so proxies whose MCP
 IDs collide cannot receive each other's results. A completion reaches only the
 registration and helper generation that delivered its request. When the helper

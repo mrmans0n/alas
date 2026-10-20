@@ -1000,9 +1000,9 @@ pub fn send(socket: &Path, req: &Request) -> Result<Response, TransportError> {
     send_with_timeout(socket, req, READ_TIMEOUT)
 }
 
-/// `send`, parameterized on the read timeout so tests can exercise the
-/// timeout behavior without waiting on the real [`READ_TIMEOUT`].
-fn send_with_timeout(
+/// `send`, parameterized on the read timeout for calls that legitimately
+/// take longer than [`READ_TIMEOUT`], and for tests.
+pub fn send_with_timeout(
     socket: &Path,
     req: &Request,
     read_timeout: Duration,

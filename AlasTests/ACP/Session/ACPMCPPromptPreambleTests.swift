@@ -93,12 +93,20 @@ struct ACPMCPPromptPreambleTests {
         #expect(text.contains("pr_create and pr_status are MCP-only"))
     }
 
-    @Test("a visual-only built-in names visual_show and offers no other Alas tool, CLI fallback, or delegation route")
-    func visualOnlyBuiltIn() throws {
+    @Test(
+        "a relayed built-in names its tools and offers no other Alas tool, CLI fallback, or delegation route",
+        arguments: [
+            (BuiltInMCPToolScope.visualOnly, ["visual_show"]),
+            (BuiltInMCPToolScope.remote, ["visual_show", "pr_create", "pr_status"]),
+        ]
+    )
+    func relayedBuiltIn(scope: BuiltInMCPToolScope, tools: [String]) throws {
         let text = try #require(ACPMCPPromptPreamble.text(
-            builtInTools: .visualOnly, isDelegated: false, userServerNames: [], nativeSubagentsDisabled: true))
-        #expect(text.contains("visual_show"))
-        for tool in ACPMCPPromptPreamble.builtInToolNames where tool.contains("_") && tool != "visual_show" {
+            builtInTools: scope, isDelegated: false, userServerNames: [], nativeSubagentsDisabled: true))
+        for tool in tools {
+            #expect(text.contains(tool), "missing tool \(tool)")
+        }
+        for tool in ACPMCPPromptPreamble.builtInToolNames where tool.contains("_") && !tools.contains(tool) {
             #expect(!text.contains(tool), "unexpected tool \(tool)")
         }
         #expect(!text.contains("`alas` CLI"))

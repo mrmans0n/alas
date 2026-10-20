@@ -6886,10 +6886,10 @@ final class AppState {
             let prepared = try await RemoteVisualMCPBridge.prepare(
                 client: RemoteHelperClientPool.shared.client(for: host),
                 fence: fence,
-                makeBackend: {
+                makeBackend: { toolScope in
                     JSONRPCStdioTransport(
                         executable: URL(fileURLWithPath: binaryPath),
-                        arguments: ["mcp", "--visual-only"],
+                        arguments: ["mcp", toolScope.relayBackendFlag ?? "--visual-only"],
                         environment: environment,
                         framing: .newline
                     )
