@@ -87,6 +87,11 @@ struct ReviewSessionTabView: View {
     @Environment(\.theme) private var theme
     @State private var record: ReviewSessionRecord?
     @State private var loaded: ReviewSessionLoadedContext?
+    /// The stored record while the first load runs, so the header can show
+    /// before `record` is published.
+    @State private var loadingRecord: ReviewSessionRecord?
+    /// The review's files, still without diffs, while the first load runs.
+    @State private var pendingSession: DiffReviewLoadedSession?
     @State private var loadedTrackedResolvedSHA: String?
     @State private var lspLeases = LSPServerLeaseSet()
     @State private var isLoading = false
@@ -270,12 +275,12 @@ struct ReviewSessionTabView: View {
                     .font(.system(size: 13, weight: .medium))
                     .foregroundColor(theme.color("accent"))
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(record?.target.title ?? tabState.title)
+                    Text(headerRecord?.target.title ?? tabState.title)
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundColor(theme.color("fg"))
                         .lineLimit(1)
-                        .accessibilityLabel(record?.target.title ?? tabState.title)
-                    if let sourceDescription = record?.target.sourceDescription {
+                        .accessibilityLabel(headerRecord?.target.title ?? tabState.title)
+                    if let sourceDescription = headerRecord?.target.sourceDescription {
                         Text(sourceDescription)
                             .font(.system(size: 11))
                             .foregroundColor(theme.color("fg-muted"))
@@ -286,7 +291,7 @@ struct ReviewSessionTabView: View {
                 if let appState {
                     LSPServerChipStrip(chips: lspLeases.chips, appState: appState)
                 }
-                if let providerDescription = record?.target.providerDescription {
+                if let providerDescription = headerRecord?.target.providerDescription {
                     Text(providerDescription)
                         .font(.system(size: 11, weight: .medium))
                         .foregroundColor(theme.color("fg-muted"))
@@ -304,9 +309,13 @@ struct ReviewSessionTabView: View {
         .background(
             DiffReviewAccessibilityMarker(
                 identifier: "review-session-title",
-                label: record?.target.title ?? tabState.title
+                label: headerRecord?.target.title ?? tabState.title
             )
         )
+    }
+
+    private var headerRecord: ReviewSessionRecord? {
+        record ?? loadingRecord
     }
 
     private var trackedRevision: TrackedRevision? {
@@ -347,14 +356,25 @@ struct ReviewSessionTabView: View {
         appState.acceptTrackedRevisionCheckout(worktreeID: worktree.id, tabID: tabState.id)
     }
 
+    /// The loaded review or, while the first load runs, its file list. One
+    /// branch for both, so the surface keeps its state as the diffs arrive.
+    private var displayedContext: (context: ReviewSessionLoadedContext, isPartial: Bool)? {
+        if let loaded { return (loaded, false) }
+        guard isLoading, let pendingSession, let target = headerRecord?.target else { return nil }
+        return (
+            ReviewSessionLoadedContext(session: pendingSession, target: target, providerContext: nil),
+            true
+        )
+    }
+
     @ViewBuilder
     private var content: some View {
-        if isLoading {
-            stateView(title: "Loading review session...", detail: nil, color: theme.color("fg-dim"), showsRetry: false)
+        if let displayed = displayedContext, !displayed.context.session.files.isEmpty {
+            reviewSurface(displayed.context, isPartial: displayed.isPartial)
+        } else if isLoading {
+            DiffReviewLoadingSkeleton(railCollapsed: railCollapsed)
         } else if let loaded, loaded.session.files.isEmpty {
             emptyReviewState()
-        } else if let loaded {
-            reviewSurface(loaded)
         } else if let loadError {
             stateView(title: "Could not load review session", detail: loadError, color: theme.color("del"), showsRetry: loadsOnAppear)
         } else {
@@ -394,7 +414,9 @@ struct ReviewSessionTabView: View {
         .background(theme.color("bg-1"))
     }
 
-    private func reviewSurface(_ loaded: ReviewSessionLoadedContext) -> some View {
+    /// A partial review lists files whose diffs are still loading; commenting
+    /// and feedback wait for the full load.
+    private func reviewSurface(_ loaded: ReviewSessionLoadedContext, isPartial: Bool) -> some View {
         VStack(spacing: 0) {
             if let providerPublishError, !providerPublishError.isEmpty {
                 providerErrorBanner(providerPublishError)
@@ -418,17 +440,19 @@ struct ReviewSessionTabView: View {
                 showsSourceBadges: true,
                 showsRailDisplayControls: true,
                 showsDraftSummaryRail: true,
+                allowsDraftCommentCreation: !isPartial,
+                allowsNonLineDraftCommentCreation: !isPartial,
                 lspContextForFile: makeLSPContext,
                 inlineFeedbackByFileID: inlineFeedbackByFileID(for: loaded),
                 focusedFeedbackID: focusedFeedbackID,
                 inlineFeedbackScrollCommand: inlineFeedbackScrollCommand,
-                inlineFeedbackActions: inlineFeedbackActions(for: loaded),
+                inlineFeedbackActions: isPartial ? DiffReviewInlineFeedbackActions() : inlineFeedbackActions(for: loaded),
                 onSelectInlineFeedback: selectInlineFeedback,
                 reviewFeedbackTarget: loaded.feedbackTarget,
                 draftCommentsByFileID: ReviewDraftCommentGrouping.commentsByFileID(draftCommentController?.comments ?? []),
                 focusedDraftCommentID: focusedDraftCommentID,
                 draftCommentScrollCommand: draftCommentScrollCommand,
-                draftCommentActions: draftCommentActions(for: loaded),
+                draftCommentActions: isPartial ? ReviewDraftCommentActions() : draftCommentActions(for: loaded),
                 onSelectDraftComment: selectDraftComment,
                 onSaveDraftComment: saveDraftComment,
                 onDraftCommentReveal: { command, succeeded in
@@ -592,6 +616,7 @@ struct ReviewSessionTabView: View {
     private func beginLoadReviewSession() -> ReviewSessionTabLoadToken {
         let token = loadCoordinator.begin()
         isLoading = loaded == nil
+        pendingSession = nil
         loadError = nil
         return token
     }
@@ -602,6 +627,7 @@ struct ReviewSessionTabView: View {
             guard let storedRecord = try sessionStore.load(id: tabState.sessionID) else {
                 throw ReviewSessionTabError.missingSession(tabState.sessionID)
             }
+            if record == nil { loadingRecord = storedRecord }
 
             let resolvedRecord: (record: ReviewSessionRecord, paused: Bool)
             let refreshError: String?
@@ -637,19 +663,44 @@ struct ReviewSessionTabView: View {
                 try sessionStore.save(refreshedRecord)
             }
 
-            let loadedContext = try await loader.load(target: refreshedRecord.target)
+            let seed = appState?.tabs.takeReviewSessionSeed(sessionID: tabState.sessionID, target: refreshedRecord.target)
+            let loadedContext: ReviewSessionLoadedContext
+            if let seed {
+                loadedContext = ReviewSessionLoadedContext(session: seed.session, target: refreshedRecord.target, providerContext: nil)
+            } else {
+                loadedContext = try await loader.load(target: refreshedRecord.target) { session in
+                    guard loadCoordinator.canPublish(token), loaded == nil else { return }
+                    if pendingSession == nil {
+                        selectedFileID = DiffReviewSurfaceSelectionSync.synchronizedSelection(
+                            current: storedRecord.selectedFileID,
+                            fileIDs: session.summary.files.map(\.id)
+                        )
+                    }
+                    pendingSession = session
+                }
+            }
             guard loadCoordinator.canPublish(token) else { return false }
             refreshedRecord = mergeLatestMutableFields(into: refreshedRecord, fallback: storedRecord)
             if !resolvedRecord.paused, refreshedRecord.target != storedRecord.target {
                 try sessionStore.save(refreshedRecord)
             }
+            if refreshedRecord.selectedFileID == nil, let seededSelection = seed?.selectedFileID {
+                refreshedRecord.selectedFileID = seededSelection
+                try sessionStore.save(refreshedRecord)
+            }
 
+            // A file picked while the list showed beats the stored selection.
+            let partialSelection = pendingSession != nil ? selectedFileID : nil
             publishInitialLoad(
                 ReviewSessionTabLoadPublication.initial(
                     record: refreshedRecord,
                     loaded: loadedContext
                 )
             )
+            pendingSession = nil
+            if let partialSelection, loadedContext.session.summary.files.contains(where: { $0.id == partialSelection }) {
+                setSelectedFileID(partialSelection, persist: true)
+            }
             loadError = refreshError
             loadDraftCommentController(for: refreshedRecord)
             isLoading = false
@@ -658,11 +709,13 @@ struct ReviewSessionTabView: View {
             return true
         } catch is CancellationError {
             guard loadCoordinator.canPublish(token) else { return false }
+            pendingSession = nil
             isLoading = false
             loadCoordinator.finish(token)
             return false
         } catch {
             guard loadCoordinator.canPublish(token) else { return false }
+            pendingSession = nil
             loadError = error.localizedDescription
             isLoading = false
             loadCoordinator.finish(token)

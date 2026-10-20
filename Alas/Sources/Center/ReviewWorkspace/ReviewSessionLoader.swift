@@ -10,6 +10,14 @@ struct ReviewSessionProviderLoadedSession {
     let providerContext: ReviewSessionProviderContext
 }
 
+/// A diff another tab already loaded for `target`, so a review session
+/// opened from it can publish immediately instead of reloading.
+struct ReviewSessionSeed {
+    let target: ReviewSessionTarget
+    let session: DiffReviewLoadedSession
+    let selectedFileID: DiffReviewFileID?
+}
+
 struct ReviewSessionLoadedContext {
     let session: DiffReviewLoadedSession
     let feedbackTarget: ReviewFeedbackTarget
@@ -18,25 +26,42 @@ struct ReviewSessionLoadedContext {
     /// side is the whole working tree. Sending feedback on it advances the
     /// worktree's "since last review" baseline; nil leaves the baseline alone.
     var reviewedWorkingTree: String? = nil
+}
+
+extension ReviewSessionLoadedContext {
+    init(
+        session: DiffReviewLoadedSession,
+        target: ReviewSessionTarget,
+        providerContext: ReviewSessionProviderContext?,
+        reviewedWorkingTree: String? = nil
+    ) {
+        self.session = session
+        self.feedbackTarget = ReviewFeedbackTarget(
+            title: target.title,
+            repositoryPath: target.repositoryPath.path,
+            providerDescription: target.providerDescription,
+            sourceDescription: target.sourceDescription,
+            sessionDescription: "Review session: \(target.title)",
+            revisionDescription: target.revisionDescription,
+            priorHandoffDescription: nil,
+            reopenAction: .reviewSession(target)
+        )
+        self.providerContext = providerContext
+        self.reviewedWorkingTree = reviewedWorkingTree
+    }
 
     func replacingFeedbackTarget(for target: ReviewSessionTarget) -> ReviewSessionLoadedContext {
         ReviewSessionLoadedContext(
             session: session,
-            feedbackTarget: ReviewFeedbackTarget(
-                title: target.title,
-                repositoryPath: target.repositoryPath.path,
-                providerDescription: target.providerDescription,
-                sourceDescription: target.sourceDescription,
-                sessionDescription: "Review session: \(target.title)",
-                revisionDescription: target.revisionDescription,
-                priorHandoffDescription: nil,
-                reopenAction: .reviewSession(target)
-            ),
+            target: target,
             providerContext: providerContext,
             reviewedWorkingTree: reviewedWorkingTree
         )
     }
 }
+
+/// Receives a review's files as pending sections while their diffs load.
+typealias ReviewSessionFileListHandler = @MainActor (DiffReviewLoadedSession) -> Void
 
 /// `@unchecked Sendable` is sound because these closures are nonisolated by
 /// type but built (in `.production`) from a `@MainActor` context; any
@@ -46,14 +71,14 @@ struct ReviewSessionLoadedContext {
 /// concurrently. This lets `load(target:)` stay nonisolated (callable from
 /// anywhere) while still being safe to hold on a `@MainActor` view.
 struct ReviewSessionLoader: @unchecked Sendable {
-    var localChanges: (ReviewSessionTarget) async throws -> DiffReviewLoadedSession
-    var draftCommit: (ReviewSessionTarget) async throws -> DiffReviewLoadedSession
-    var commit: (ReviewSessionTarget) async throws -> DiffReviewLoadedSession
-    var commitRange: (ReviewSessionTarget) async throws -> DiffReviewLoadedSession
-    var branch: (ReviewSessionTarget) async throws -> DiffReviewLoadedSession
+    var localChanges: (ReviewSessionTarget, ReviewSessionFileListHandler?) async throws -> DiffReviewLoadedSession
+    var draftCommit: (ReviewSessionTarget, ReviewSessionFileListHandler?) async throws -> DiffReviewLoadedSession
+    var commit: (ReviewSessionTarget, ReviewSessionFileListHandler?) async throws -> DiffReviewLoadedSession
+    var commitRange: (ReviewSessionTarget, ReviewSessionFileListHandler?) async throws -> DiffReviewLoadedSession
+    var branch: (ReviewSessionTarget, ReviewSessionFileListHandler?) async throws -> DiffReviewLoadedSession
     /// Diffs from a fixed left side to `current`, the working tree snapshot:
     /// `.branchWithLocalChanges` and `.sinceSnapshot` targets.
-    var workingTreeRange: (_ target: ReviewSessionTarget, _ current: String) async throws -> DiffReviewLoadedSession
+    var workingTreeRange: (_ target: ReviewSessionTarget, _ current: String, _ onFileList: ReviewSessionFileListHandler?) async throws -> DiffReviewLoadedSession
     /// Writes the working tree as a git tree object.
     var snapshotWorkingTree: (URL) async throws -> String
     /// The snapshot a full local-changes review shows, nil when it hides
@@ -63,12 +88,12 @@ struct ReviewSessionLoader: @unchecked Sendable {
     var draftReviewRequest: (ReviewSessionTarget) async throws -> DiffReviewLoadedSession
 
     init(
-        localChanges: @escaping (ReviewSessionTarget) async throws -> DiffReviewLoadedSession = { _ in throw ReviewSessionLoaderError.unsupportedTarget },
-        draftCommit: @escaping (ReviewSessionTarget) async throws -> DiffReviewLoadedSession = { _ in throw ReviewSessionLoaderError.unsupportedTarget },
-        commit: @escaping (ReviewSessionTarget) async throws -> DiffReviewLoadedSession = { _ in throw ReviewSessionLoaderError.unsupportedTarget },
-        commitRange: @escaping (ReviewSessionTarget) async throws -> DiffReviewLoadedSession = { _ in throw ReviewSessionLoaderError.unsupportedTarget },
-        branch: @escaping (ReviewSessionTarget) async throws -> DiffReviewLoadedSession = { _ in throw ReviewSessionLoaderError.unsupportedTarget },
-        workingTreeRange: @escaping (ReviewSessionTarget, String) async throws -> DiffReviewLoadedSession = { _, _ in throw ReviewSessionLoaderError.unsupportedTarget },
+        localChanges: @escaping (ReviewSessionTarget, ReviewSessionFileListHandler?) async throws -> DiffReviewLoadedSession = { _, _ in throw ReviewSessionLoaderError.unsupportedTarget },
+        draftCommit: @escaping (ReviewSessionTarget, ReviewSessionFileListHandler?) async throws -> DiffReviewLoadedSession = { _, _ in throw ReviewSessionLoaderError.unsupportedTarget },
+        commit: @escaping (ReviewSessionTarget, ReviewSessionFileListHandler?) async throws -> DiffReviewLoadedSession = { _, _ in throw ReviewSessionLoaderError.unsupportedTarget },
+        commitRange: @escaping (ReviewSessionTarget, ReviewSessionFileListHandler?) async throws -> DiffReviewLoadedSession = { _, _ in throw ReviewSessionLoaderError.unsupportedTarget },
+        branch: @escaping (ReviewSessionTarget, ReviewSessionFileListHandler?) async throws -> DiffReviewLoadedSession = { _, _ in throw ReviewSessionLoaderError.unsupportedTarget },
+        workingTreeRange: @escaping (ReviewSessionTarget, String, ReviewSessionFileListHandler?) async throws -> DiffReviewLoadedSession = { _, _, _ in throw ReviewSessionLoaderError.unsupportedTarget },
         snapshotWorkingTree: @escaping (URL) async throws -> String = { _ in throw ReviewSessionLoaderError.unsupportedTarget },
         snapshotLocalChanges: @escaping (URL) async throws -> String? = { _ in nil },
         reviewRequest: @escaping (ReviewSessionTarget) async throws -> ReviewSessionProviderLoadedSession = { _ in throw ReviewSessionLoaderError.unsupportedTarget },
@@ -98,18 +123,24 @@ struct ReviewSessionLoader: @unchecked Sendable {
         let rangeLoader = RangeReviewLoader(git: git)
 
         return ReviewSessionLoader(
-            localChanges: { target in
-                let session = try await changesLoader.load(worktreePath: worktree.path)
+            localChanges: { target, onFileList in
                 guard case .localChanges(let scope) = target.payload else {
                     throw ReviewSessionLoaderError.unsupportedTarget
                 }
+                let session = try await changesLoader.load(
+                    worktreePath: worktree.path,
+                    onFileList: filteringFileList(onFileList, scope: scope)
+                )
                 return filterLocalChanges(session, scope: scope)
             },
-            draftCommit: { _ in
-                let session = try await changesLoader.load(worktreePath: worktree.path)
+            draftCommit: { _, onFileList in
+                let session = try await changesLoader.load(
+                    worktreePath: worktree.path,
+                    onFileList: filteringFileList(onFileList, scope: .staged)
+                )
                 return filterLocalChanges(session, scope: .staged)
             },
-            commit: { target in
+            commit: { target, onFileList in
                 let sha: String
                 switch target.payload {
                 case .commit(let commitSHA):
@@ -131,10 +162,11 @@ struct ReviewSessionLoader: @unchecked Sendable {
                             worktreePath: target.repositoryPath,
                             relativePath: path
                         )
-                    }
+                    },
+                    onFileList: onFileList
                 )
             },
-            commitRange: { target in
+            commitRange: { target, onFileList in
                 guard case .commitRange(let base, let head) = target.payload else {
                     throw ReviewSessionLoaderError.unsupportedTarget
                 }
@@ -145,10 +177,11 @@ struct ReviewSessionLoader: @unchecked Sendable {
                     files: files,
                     openFileForPath: { path in
                         openFileAction(appState: appState, worktreeID: target.worktreeID, worktreePath: target.repositoryPath, relativePath: path)
-                    }
+                    },
+                    onFileList: onFileList
                 )
             },
-            branch: { target in
+            branch: { target, onFileList in
                 guard case .branch(let base, let head) = target.payload else {
                     throw ReviewSessionLoaderError.unsupportedTarget
                 }
@@ -159,10 +192,11 @@ struct ReviewSessionLoader: @unchecked Sendable {
                     files: files,
                     openFileForPath: { path in
                         openFileAction(appState: appState, worktreeID: target.worktreeID, worktreePath: target.repositoryPath, relativePath: path)
-                    }
+                    },
+                    onFileList: onFileList
                 )
             },
-            workingTreeRange: { target, current in
+            workingTreeRange: { target, current, onFileList in
                 // Both sides are trees: a plain `git diff <ref>` goes through
                 // the index and misreads untracked files on the left as deleted.
                 let left: String
@@ -183,7 +217,8 @@ struct ReviewSessionLoader: @unchecked Sendable {
                     files: files,
                     openFileForPath: { path in
                         openFileAction(appState: appState, worktreeID: target.worktreeID, worktreePath: target.repositoryPath, relativePath: path)
-                    }
+                    },
+                    onFileList: onFileList
                 )
             },
             snapshotWorkingTree: { path in
@@ -277,7 +312,13 @@ struct ReviewSessionLoader: @unchecked Sendable {
         )
     }
 
-    func load(target: ReviewSessionTarget) async throws -> ReviewSessionLoadedContext {
+    /// `onFileList` receives the target's files as pending sections once they
+    /// are known and before their diffs finish loading. Hosted review requests
+    /// list their files only with the diff, so they never report one.
+    func load(
+        target: ReviewSessionTarget,
+        onFileList: ReviewSessionFileListHandler? = nil
+    ) async throws -> ReviewSessionLoadedContext {
         try Task.checkCancellation()
 
         let session: DiffReviewLoadedSession
@@ -291,26 +332,26 @@ struct ReviewSessionLoader: @unchecked Sendable {
             if case .localChanges(.all) = target.payload, !target.repositoryPath.isRemoteAlasPath {
                 reviewedWorkingTree = (try? await snapshotLocalChanges(target.repositoryPath)) ?? nil
             }
-            session = try await localChanges(target)
+            session = try await localChanges(target, onFileList)
             providerContext = nil
         case .draftCommit:
-            session = try await draftCommit(target)
+            session = try await draftCommit(target, onFileList)
             providerContext = nil
         case .commit:
-            session = try await commit(target)
+            session = try await commit(target, onFileList)
             providerContext = nil
         case .trackedCommit:
-            session = try await commit(target)
+            session = try await commit(target, onFileList)
             providerContext = nil
         case .commitRange:
-            session = try await commitRange(target)
+            session = try await commitRange(target, onFileList)
             providerContext = nil
         case .branch:
-            session = try await branch(target)
+            session = try await branch(target, onFileList)
             providerContext = nil
         case .branchWithLocalChanges, .sinceSnapshot:
             let current = try await snapshotWorkingTree(target.repositoryPath)
-            session = try await workingTreeRange(target, current)
+            session = try await workingTreeRange(target, current, onFileList)
             reviewedWorkingTree = current
             providerContext = nil
         case .reviewRequest:
@@ -326,16 +367,7 @@ struct ReviewSessionLoader: @unchecked Sendable {
 
         return ReviewSessionLoadedContext(
             session: session,
-            feedbackTarget: ReviewFeedbackTarget(
-                title: target.title,
-                repositoryPath: target.repositoryPath.path,
-                providerDescription: target.providerDescription,
-                sourceDescription: target.sourceDescription,
-                sessionDescription: "Review session: \(target.title)",
-                revisionDescription: target.revisionDescription,
-                priorHandoffDescription: nil,
-                reopenAction: .reviewSession(target)
-            ),
+            target: target,
             providerContext: providerContext,
             reviewedWorkingTree: reviewedWorkingTree
         )
@@ -376,6 +408,14 @@ struct ReviewSessionLoader: @unchecked Sendable {
         guard currentSHA == expectedSHA || currentSHA.hasPrefix(expectedSHA) else {
             throw ReviewSessionLoaderError.unsupportedTarget
         }
+    }
+
+    private static func filteringFileList(
+        _ handler: ReviewSessionFileListHandler?,
+        scope: ReviewDraftLocalChangesScope
+    ) -> ReviewSessionFileListHandler? {
+        guard let handler else { return nil }
+        return { handler(filterLocalChanges($0, scope: scope)) }
     }
 
     private static func filterLocalChanges(
