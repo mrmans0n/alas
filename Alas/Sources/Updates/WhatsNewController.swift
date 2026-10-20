@@ -14,11 +14,11 @@ final class WhatsNewController {
 
     private let identity: BuildIdentity
     private let defaults: UserDefaults
-    private let isExistingInstall: Bool
+    private let hadUpdateCheck: Bool
     @ObservationIgnored private var didEvaluateLaunch = false
 
     private static let lastSeenKey = "io.nlopez.alas.whatsNew.lastSeenVersion"
-    /// Written by `UpdateController`; its presence marks an install that predates this feature.
+    /// Written by `UpdateController` after a successful check; one signal of an install that predates this feature.
     private static let updatesLastCheckedKey = "io.nlopez.alas.updates.lastCheckedAt"
     private static let logger = Logger(subsystem: "io.nlopez.alas", category: "whats-new")
 
@@ -31,7 +31,7 @@ final class WhatsNewController {
         self.catalog = catalog
         self.defaults = defaults
         // UpdateController writes this key only after a network check, so reading it here is order-safe.
-        isExistingInstall = defaults.object(forKey: Self.updatesLastCheckedKey) != nil
+        hadUpdateCheck = defaults.object(forKey: Self.updatesLastCheckedKey) != nil
         for problem in catalog.problems {
             Self.logger.error(
                 "Skipping what's new entry \(problem.file, privacy: .public): \(problem.message, privacy: .public)"
@@ -45,14 +45,16 @@ final class WhatsNewController {
     }
 
     /// Runs once per process; later calls are no-ops so a re-run root task cannot re-present.
-    func evaluateOnLaunch() {
+    /// `hasConfiguredProjects` is durable evidence of an existing install for users whose
+    /// update checks are disabled or have never succeeded.
+    func evaluateOnLaunch(hasConfiguredProjects: Bool) {
         guard !didEvaluateLaunch else { return }
         didEvaluateLaunch = true
         let decision = WhatsNewPolicy.onLaunch(
             track: identity.track,
             current: identity.version,
             lastSeen: lastSeen,
-            isExistingInstall: isExistingInstall,
+            isExistingInstall: hadUpdateCheck || hasConfiguredProjects,
             entries: catalog.entries
         )
         if let version = decision.seenVersionToStore {

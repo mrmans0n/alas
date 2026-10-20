@@ -51,9 +51,15 @@ struct RootView: View {
         rootContent
             .environment(\.approvalNotificationInset, approvalStackHeight > 0 ? approvalStackHeight + 24 : 0)
             .overlay(alignment: .bottomTrailing) {
-                RemotePairingApprovalStack(coordinator: state.remotePairingApprovals)
-                    .frame(maxWidth: 380)
-                    .padding(16)
+                // One stack so the What's new card sits above pairing
+                // approvals instead of covering their controls.
+                VStack(alignment: .trailing, spacing: 0) {
+                    WhatsNewCardHost(state: state)
+                        .padding(.bottom, approvalStackHeight > 0 ? 12 : 0)
+                    RemotePairingApprovalStack(coordinator: state.remotePairingApprovals)
+                        .frame(maxWidth: 380)
+                }
+                .padding(16)
             }
             .onPreferenceChange(ApprovalStackHeightKey.self) { approvalStackHeight = $0 }
             .environment(\.theme, state.themeStore.current)
@@ -173,7 +179,7 @@ struct RootView: View {
                 state.startArchivedWorktreePruning()
                 // Last, so the card lands on the restored workspace rather
                 // than the loading UI.
-                state.whatsNew.evaluateOnLaunch()
+                state.whatsNew.evaluateOnLaunch(hasConfiguredProjects: !state.projectsManager.projects.isEmpty)
             }
             .onChange(of: state.selectedWorktreeId) { _, _ in
                 state.completeStartupRecoveryIfCenterPaneWillNotAppear()
@@ -734,7 +740,6 @@ private struct RootPresentationHandlers: ViewModifier {
             .modifier(RootReviewMergePresentationHandlers(state: state))
             .modifier(RootGGPresentationHandlers(state: state))
             .modifier(RootUpdatePresentationHandlers(state: state))
-            .modifier(RootWhatsNewPresentation(state: state))
             .modifier(RootRepoHookApprovalPresentationHandler(state: state))
     }
 }
@@ -959,35 +964,31 @@ private struct RootUpdatePresentationHandlers: ViewModifier {
 
 /// Bottom-right "What's new" card. An overlay rather than a sheet so it never
 /// takes focus from the workspace; held back while an update sheet is up.
-private struct RootWhatsNewPresentation: ViewModifier {
+private struct WhatsNewCardHost: View {
     @Bindable var state: AppState
 
-    func body(content: Content) -> some View {
-        content
-            .overlay(alignment: .bottomTrailing) {
-                if let entry = state.whatsNew.presented,
-                   state.updates.presentedUpdate == nil,
-                   !state.presentUpdateProgress {
-                    WhatsNewCard(
-                        entry: entry,
-                        mediaURL: state.whatsNew.catalog.mediaURL(for: entry),
-                        onAction: { action in
-                            state.whatsNew.dismiss()
-                            switch action {
-                            case .openPluginSettings:
-                                NotificationCenter.default.post(name: .alasOpenSettings, object: SettingsSection.plugins)
-                            }
-                        },
-                        onReleaseNotes: {
-                            state.whatsNew.dismiss()
-                            NSWorkspace.shared.open(entry.releaseNotesURL)
-                        },
-                        onDismiss: { state.whatsNew.dismiss() }
-                    )
-                    .environment(\.theme, state.themeStore.current)
-                    .padding(16)
-                }
-            }
+    var body: some View {
+        if let entry = state.whatsNew.presented,
+           state.updates.presentedUpdate == nil,
+           !state.presentUpdateProgress {
+            WhatsNewCard(
+                entry: entry,
+                mediaURL: state.whatsNew.catalog.mediaURL(for: entry),
+                onAction: { action in
+                    state.whatsNew.dismiss()
+                    switch action {
+                    case .openPluginSettings:
+                        NotificationCenter.default.post(name: .alasOpenSettings, object: SettingsSection.plugins)
+                    }
+                },
+                onReleaseNotes: {
+                    state.whatsNew.dismiss()
+                    NSWorkspace.shared.open(entry.releaseNotesURL)
+                },
+                onDismiss: { state.whatsNew.dismiss() }
+            )
+            .environment(\.theme, state.themeStore.current)
+        }
     }
 }
 
