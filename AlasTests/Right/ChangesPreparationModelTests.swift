@@ -401,7 +401,6 @@ struct ChangesPreparationModelTests {
         #expect(model.isVisible)
     }
 
-
     @Test func ggReconciliationPreservesReadinessPresentation() {
         let reconciliationAction = GGStackReadinessModel.Action(
             kind: .sync,
