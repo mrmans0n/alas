@@ -57,6 +57,18 @@ struct RemoteVisualMCPBridgeTests {
     }
 
     @Test(
+        "a session that cannot use the PR shepherd gets visual_show only, whatever the helper relays",
+        arguments: [
+            (BuiltInMCPToolScope.remote, true, BuiltInMCPToolScope.remote),
+            (.remote, false, .visualOnly),
+            (.visualOnly, true, .visualOnly),
+        ]
+    )
+    func routeToolScope(helper: BuiltInMCPToolScope, allowsPRTools: Bool, expected: BuiltInMCPToolScope) {
+        #expect(RemoteVisualMCPBridge.toolScope(helper: helper, allowsPRTools: allowsPRTools) == expected)
+    }
+
+    @Test(
         "only a successful initialize, tools/list, or relayed tool call proves registration",
         arguments: [
             #"{"jsonrpc":"2.0","id":3,"method":"initialize","params":{}}"#,
