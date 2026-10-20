@@ -192,6 +192,7 @@ struct ACPComposer: View {
     let symbolMentions: ACPSymbolMentionSource?
 
     let nextPromptOffer: String?
+    let nextPromptAction: ACPNextPromptAction?
     let takeNextPromptOffer: () -> String?
     let dismissNextPromptOffer: () -> Void
     let onNextPromptStateChange: (NextPromptEligibilitySnapshot.Environment) -> Void
@@ -230,6 +231,7 @@ struct ACPComposer: View {
         sessionMentions: ACPSessionMentionSource? = nil,
         symbolMentions: ACPSymbolMentionSource? = nil,
         nextPromptOffer: String? = nil,
+        nextPromptAction: ACPNextPromptAction? = nil,
         takeNextPromptOffer: @escaping () -> String? = { nil },
         dismissNextPromptOffer: @escaping () -> Void = {},
         onNextPromptStateChange: @escaping (NextPromptEligibilitySnapshot.Environment) -> Void = { _ in },
@@ -258,6 +260,7 @@ struct ACPComposer: View {
         self.symbolMentions = symbolMentions
         self.onSubmit = onSubmit
         self.nextPromptOffer = nextPromptOffer
+        self.nextPromptAction = nextPromptAction
         self.takeNextPromptOffer = takeNextPromptOffer
         self.dismissNextPromptOffer = dismissNextPromptOffer
         self.onNextPromptStateChange = onNextPromptStateChange
@@ -437,6 +440,7 @@ struct ACPComposer: View {
                 },
                 filesProvider: filesProvider,
                 nextPromptOffer: nextPromptOffer,
+                nextPromptAction: nextPromptAction,
                 takeNextPromptOffer: takeNextPromptOffer,
                 dismissNextPromptOffer: dismissNextPromptOffer,
                 onNextPromptStateChange: onNextPromptStateChange,

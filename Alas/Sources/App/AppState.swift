@@ -5465,6 +5465,12 @@ final class AppState {
         reviewSessionRetargetGenerations[sessionID.rawValue, default: 0]
     }
 
+    /// Reloads an open review session's diff in place, keeping its comments:
+    /// scopes such as the working tree change without changing the session.
+    func reloadReviewSession(sessionID: ReviewSessionID) {
+        bumpReviewSessionRetargetGeneration(sessionID: sessionID)
+    }
+
     func followRevision(worktreeID: String, tabID: TabID, target: TrackedRevisionTarget) {
         let requestKey = followRevisionRequestKey(worktreeID: worktreeID, tabID: tabID)
         let requestGeneration = bumpFollowRevisionRequestGeneration(requestKey)

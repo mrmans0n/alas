@@ -16,6 +16,8 @@ public enum ReviewSessionTargetKind: String, Codable, Equatable, Hashable, Senda
     case trackedCommit = "tracked-commit"
     case commitRange = "commit-range"
     case branch
+    case branchWithLocalChanges = "branch-with-local-changes"
+    case sinceSnapshot = "since-snapshot"
     case reviewRequest = "review-request"
     case draftReviewRequest = "draft-review-request"
 }
@@ -189,6 +191,55 @@ public struct ReviewSessionTarget: Codable, Equatable, Hashable, Identifiable, S
         )
     }
 
+    /// The branch's commits since it forked from `base` plus every
+    /// uncommitted change (staged, unstaged, and untracked), as one diff from
+    /// the merge base to the working tree.
+    public static func branchWithLocalChanges(
+        worktreeID: String,
+        repositoryPath: URL,
+        base: String,
+        title: String? = nil
+    ) -> Self {
+        let path = standardizedPath(repositoryPath)
+        return ReviewSessionTarget(
+            id: makeID(.branchWithLocalChanges, [worktreeID, path, base]),
+            kind: .branchWithLocalChanges,
+            worktreeID: worktreeID,
+            repositoryPath: standardizedURL(repositoryPath),
+            title: title ?? "Review working tree against \(base)",
+            sourceDescription: "Branch and uncommitted changes against \(base)",
+            providerDescription: nil,
+            providerURL: nil,
+            revisionDescription: "\(base)...working tree",
+            draftSessionID: .branchWithLocalChanges(worktreeID: worktreeID, repositoryPath: repositoryPath, base: base),
+            payload: .branchWithLocalChanges(base: base)
+        )
+    }
+
+    /// Everything that changed in the working tree since `tree`, a snapshot
+    /// taken when review feedback last went to an agent.
+    public static func sinceSnapshot(
+        worktreeID: String,
+        repositoryPath: URL,
+        tree: String,
+        title: String = "Review changes since last review"
+    ) -> Self {
+        let path = standardizedPath(repositoryPath)
+        return ReviewSessionTarget(
+            id: makeID(.sinceSnapshot, [worktreeID, path, tree]),
+            kind: .sinceSnapshot,
+            worktreeID: worktreeID,
+            repositoryPath: standardizedURL(repositoryPath),
+            title: title,
+            sourceDescription: "Working tree changes since the last review",
+            providerDescription: nil,
+            providerURL: nil,
+            revisionDescription: "\(tree)...working tree",
+            draftSessionID: .sinceSnapshot(worktreeID: worktreeID, repositoryPath: repositoryPath, tree: tree),
+            payload: .sinceSnapshot(tree: tree)
+        )
+    }
+
     public static func reviewRequest(
         worktreeID: String,
         repositoryPath: URL,
@@ -303,6 +354,8 @@ public struct ReviewSessionTarget: Codable, Equatable, Hashable, Identifiable, S
         case trackedCommit(TrackedRevision)
         case commitRange(base: String, head: String)
         case branch(base: String, head: String)
+        case branchWithLocalChanges(base: String)
+        case sinceSnapshot(tree: String)
         case reviewRequest(provider: CodeHostKind, host: String, repositorySlug: String, number: Int, headSHA: String?)
         case draftReviewRequest(provider: CodeHostKind, repositorySlug: String, base: String, head: String, headSHA: String?)
 
@@ -327,6 +380,12 @@ public struct ReviewSessionTarget: Codable, Equatable, Hashable, Identifiable, S
                 hasher.combine(4)
                 hasher.combine(base)
                 hasher.combine(head)
+            case .branchWithLocalChanges(let base):
+                hasher.combine(8)
+                hasher.combine(base)
+            case .sinceSnapshot(let tree):
+                hasher.combine(9)
+                hasher.combine(tree)
             case .reviewRequest(let provider, let host, let repositorySlug, let number, let headSHA):
                 hasher.combine(5)
                 hasher.combine(provider.rawValue)

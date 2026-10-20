@@ -8,6 +8,7 @@ struct ChangesTabView: View {
     let onSelectCommit: (CommitInfo) -> Void
     let onEditCommit: (CommitInfo, String) -> Void
     let onReviewCommit: (CommitInfo) -> Void
+    let onReviewScope: (ChangesReviewScopeOption) -> Void
 
     @State private var collapsedChangePaths: Set<String> = []
     @State private var appKitActionRelay = ChangesAppKitActionRelay()
@@ -16,6 +17,8 @@ struct ChangesTabView: View {
     /// Ids and archive flags of the worktree's recent sessions. Archiving,
     /// here or in another instance, changes it and reloads the owner row.
     @State private var shepherdSessionsSignature = ""
+    /// When review feedback last went to an agent from this worktree.
+    @State private var lastReviewSnapshot: ReviewedWorkingTreeSnapshot?
     @Environment(\.theme) private var theme
 
     private var conflicts: [ChangedFile] {
@@ -164,6 +167,16 @@ struct ChangesTabView: View {
         .task(id: shepherdOwnerTaskID) {
             await loadShepherdOwner()
         }
+        .task(id: rps.worktree.id) { loadLastReviewSnapshot() }
+        .onReceive(NotificationCenter.default.publisher(for: .alasReviewedSnapshotDidChange)) { notification in
+            guard notification.object as? String == rps.worktree.id else { return }
+            loadLastReviewSnapshot()
+        }
+    }
+
+    private func loadLastReviewSnapshot() {
+        let snapshot = try? ReviewedSnapshotStore().load(worktreeID: rps.worktree.id)
+        if snapshot != lastReviewSnapshot { lastReviewSnapshot = snapshot }
     }
 
     private var isRevealingAttentionReview: Bool {
@@ -530,11 +543,28 @@ struct ChangesTabView: View {
             })
         }
 
-        if Self.shouldShowChangesPreparationCard(preparationIsVisible: preparation.isVisible) {
+        let reviewSnapshot = rps.reviewLoop.snapshot
+        let reviewScopeOptions = ChangesReviewScopeOption.options(
+            changes: rps.changes,
+            commitCount: rps.commits.count,
+            comparisonRef: rps.comparisonRef,
+            canSnapshotWorkingTree: !rps.worktree.path.isRemoteAlasPath,
+            lastReview: lastReviewSnapshot,
+            hostedReviews: ChangesReviewScopeOption.hostedReviews(
+                stack: rps.ggContext.isActive && rps.ggStackLoadState == .loaded ? rps.ggStack : nil,
+                stackRemote: reviewSnapshot?.remote ?? rps.commitRemote ?? rps.primaryCommitRemote,
+                branchRequest: reviewSnapshot?.reviewRequest
+            )
+        )
+        if let preparation = Self.changesPreparationCardModel(
+            preparation: preparation,
+            hasReviewScopes: !reviewScopeOptions.isEmpty
+        ) {
             let reviewScopeShortcut = appState.binding(for: .openReviewPalette)
             rows.append(appKitRow(
                 id: "changes-preparation",
-                token: String(reflecting: preparation) + String(reflecting: reviewScopeShortcut),
+                token: String(reflecting: preparation) + String(reflecting: reviewScopeShortcut)
+                    + String(reflecting: reviewScopeOptions),
                 estimatedHeight: 92
             ) {
                 ChangesPreparationCard(
@@ -543,6 +573,8 @@ struct ChangesTabView: View {
                     onChooseReviewScope: { [appState, rps] in
                         appState.openReviewPaletteOverlay(prefill: rps.worktree)
                     },
+                    reviewScopeOptions: reviewScopeOptions,
+                    onReviewScopeOption: onReviewScope,
                     reviewScopeShortcut: reviewScopeShortcut,
                     onDraftCommit: openDraftTab,
                     onPublishCommit: openPublishTab,
@@ -1201,10 +1233,16 @@ struct ChangesTabView: View {
         drawerIsActive || landingStatus != nil
     }
 
-    static func shouldShowChangesPreparationCard(
-        preparationIsVisible: Bool
-    ) -> Bool {
-        preparationIsVisible
+    /// The model the Prepare card renders, or nil to hide it. A card with
+    /// nothing else to show still appears for review scopes, as a lone
+    /// Review button: a clean branch's commits, stack requests, and changes
+    /// since the last review are otherwise out of reach.
+    static func changesPreparationCardModel(
+        preparation: ChangesPreparationModel,
+        hasReviewScopes: Bool
+    ) -> ChangesPreparationModel? {
+        if preparation.isVisible { return preparation }
+        return hasReviewScopes ? .reviewScopesOnly : nil
     }
 
     static func stackAction(for action: GGChangesPreparationAction) -> GGStackActionKind? {

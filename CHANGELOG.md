@@ -10,6 +10,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Show gg landing progress in the source worktree's sidebar subtitle, with a shortcut back to landing details. Restyle the landing pane to match gg inbox, use Alas spinners, and distinguish waiting, cancellation, failures, merged entries, and queued entries.
 
+## [0.21.9] - 2026-10-20
+
+### ✨ Features
+
+- Review branch commits, branch commits plus uncommitted changes, only staged changes, everything since your last review feedback, or the branch's open pull/merge requests (including every gg stack entry) from the Prepare card's review menu.
+- Run Alas headlessly with `alas-host`, including startup migrations, login-shell PATH resolution, Remote access, device pairing, and keep-awake support (#2110, #2113, #2114).
+- Install `alas-host` with the app or as a standalone Homebrew cask, with its bundled web client available through symlinked installations (#2116, #2117, #2118, #2127).
+- Manage a per-profile launchd agent with `alas-host install-agent` and `uninstall-agent`, and wait for an occupied profile with `--wait-for-lock` (#2119).
+- Offer `/ship` when an agent asks to create a pull request (#2125).
+
+### Fixes
+
+- Restore keyboard focus to diff comment composers when their row is reattached, while respecting intentional focus changes to other controls.
+- Read partial `app.json` files while preserving configured settings and defaulting missing or unreadable fields (#2128).
+- Install Codex hooks in the supported format and register trust for Alas-owned user hooks. Existing installations require one Update action in Settings (#2123).
+- Render hover message timestamps as plain captions (#2120).
+
+### 🏗️ Internal
+
+- Build `alas-host` as an Xcode target sharing the app's AlasCore build (#2121).
+- Increase the nightly workflow timeout to 150 minutes (#2122).
+- Isolate core tests from the user's profile and replace load-sensitive timing checks with deterministic assertions (#2111, #2115).
+- Document headless-host setup, Remote access, pairing, and supported capabilities (#2112, #2129).
+- Plan splitting AlasCore into smaller modules to reduce release build time and memory use (#2130).
+
 ## [0.21.8] - 2026-10-18
 
 ### ✨ Features
