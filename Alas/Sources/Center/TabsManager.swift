@@ -81,6 +81,9 @@ final class TabsManager {
     private var commitPublishSessions: [TabID: CommitPublishSession] = [:]
     @ObservationIgnored var onCommitPublishCompletion: ((String, TabID) -> Void)?
     @ObservationIgnored var onCreatedReview: ((String, ReviewPRTabState) -> Void)?
+    /// In-memory only: diffs handed from a commit tab to the review session
+    /// tab that replaced it. Consumed on the review tab's first load.
+    @ObservationIgnored private var reviewSessionSeeds: [ReviewSessionID: ReviewSessionSeed] = [:]
     /// Tracks which tab IDs have already had `openExternalDocument` fired so
     /// that cache-hit calls to `externalBuffer` don't double-count the ref.
     private var openedExternalDocs: Set<TabID> = []
@@ -1349,12 +1352,8 @@ final class TabsManager {
         let baseState = ReviewSessionTabState(worktreeId: worktreeId, record: record)
         if var file = byWorktree[worktreeId],
            let idx = file.tabs.firstIndex(where: { $0.id == baseState.id }),
-           case .reviewSession(var existing) = file.tabs[idx] {
-            existing.title = record.target.title
-            existing.selectedFileID = record.selectedFileID
-            existing.focusedCommentID = record.focusedCommentID
-            existing.requestCommentScroll()
-            let tab = Tab.reviewSession(existing)
+           case .reviewSession(let existing) = file.tabs[idx] {
+            let tab = Tab.reviewSession(Self.focusing(existing, on: record))
             file.tabs[idx] = tab
             file.activeTabId = tab.id
             byWorktree[worktreeId] = file
@@ -1364,6 +1363,58 @@ final class TabsManager {
         let tab = Tab.reviewSession(baseState)
         append(tab, to: worktreeId)
         return tab
+    }
+
+    /// Turns a commit tab into the review session for that commit at the
+    /// same tab position. `seed` is the diff the commit tab already loaded;
+    /// a newly created review tab consumes it instead of reloading. An
+    /// already-open review tab for the record is focused and the commit tab
+    /// is dropped, mirroring `transitionToCreatedReview`.
+    @discardableResult
+    func replaceCommitWithReviewSession(
+        worktreeId: String,
+        commitTabId: TabID,
+        record: ReviewSessionRecord,
+        seed: ReviewSessionSeed?
+    ) -> Tab {
+        guard var file = byWorktree[worktreeId],
+              let commitIndex = file.tabs.firstIndex(where: { $0.id == commitTabId }),
+              case .commit = file.tabs[commitIndex]
+        else { return openOrFocusReviewSession(worktreeId: worktreeId, record: record) }
+        let baseState = ReviewSessionTabState(worktreeId: worktreeId, record: record)
+        let tab: Tab
+        if let existingIndex = file.tabs.firstIndex(where: { $0.id == baseState.id }),
+           case .reviewSession(let existing) = file.tabs[existingIndex] {
+            tab = .reviewSession(Self.focusing(existing, on: record))
+            file.tabs[existingIndex] = tab
+            file.tabs.remove(at: commitIndex)
+        } else {
+            tab = .reviewSession(baseState)
+            file.tabs[commitIndex] = tab
+            if let seed, seed.target == record.target {
+                reviewSessionSeeds[record.id] = seed
+            }
+        }
+        file.activeTabId = tab.id
+        byWorktree[worktreeId] = file
+        persist(worktreeId)
+        return tab
+    }
+
+    /// Hands over, once, a diff seeded by `replaceCommitWithReviewSession`
+    /// when it still matches the session's target.
+    func takeReviewSessionSeed(sessionID: ReviewSessionID, target: ReviewSessionTarget) -> ReviewSessionSeed? {
+        guard let seed = reviewSessionSeeds.removeValue(forKey: sessionID), seed.target == target else { return nil }
+        return seed
+    }
+
+    private static func focusing(_ existing: ReviewSessionTabState, on record: ReviewSessionRecord) -> ReviewSessionTabState {
+        var state = existing
+        state.title = record.target.title
+        state.selectedFileID = record.selectedFileID
+        state.focusedCommentID = record.focusedCommentID
+        state.requestCommentScroll()
+        return state
     }
 
     @discardableResult
