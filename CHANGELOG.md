@@ -12,7 +12,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixes
 
-- Hide HTML comment metadata in review cards while preserving the original bodies and comments inside code literals, including multiline inline-code spans bounded by their Markdown block.
+- Hide HTML comment metadata in review cards while preserving the original bodies and comments inside code literals. Match inline-code spans only within their Markdown block or table cell.
 
 ## [0.21.9] - 2026-10-20
 

@@ -194,6 +194,9 @@ public enum ACPMarkdownParser: Sendable {
         var codeEnd: String.Index?
         var result: [String] = []
         let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        let tableLines = lines.map(String.init)
+        var blockEnd = text.startIndex
+        var isTable = false
         for (lineNumber, line) in lines.enumerated() {
             if let opening = fence {
                 result.append(String(line))
@@ -204,6 +207,15 @@ public enum ACPMarkdownParser: Sendable {
                 fence = opening
                 result.append(String(line))
                 continue
+            }
+            if line.startIndex >= blockEnd {
+                if let (_, _, consumed) = matchTable(from: tableLines, at: lineNumber) {
+                    blockEnd = lines[lineNumber + consumed - 1].endIndex
+                    isTable = true
+                } else {
+                    blockEnd = inlineBlockEnd(in: lines, at: lineNumber)
+                    isTable = false
+                }
             }
             var visible = ""
             var index = line.startIndex
@@ -230,7 +242,9 @@ public enum ACPMarkdownParser: Sendable {
                 } else if line[index] == "`" {
                     let run = line[index...].prefix(while: { $0 == "`" })
                     let afterRun = line.index(index, offsetBy: run.count)
-                    let limit = inlineBlockEnd(in: lines, at: lineNumber)
+                    let limit = isTable
+                        ? (line[afterRun...].firstIndex(of: "|") ?? line.endIndex)
+                        : blockEnd
                     var search = afterRun
                     var closing: String.Index?
                     while search < limit {

@@ -25,4 +25,22 @@ struct ACPMarkdownParserTests {
     func hidesMetadataWithoutRemovingCode(input: String, expected: String) {
         #expect(ACPMarkdownParser.hidingHTMLComments(input) == expected)
     }
+
+    @Test(arguments: [
+        ("| `open <!-- metadata --> | close` |", "| `open  | close` |"),
+        ("| `open <!-- metadata --> | other |\n| close` | other |",
+         "| `open  | other |\n| close` | other |"),
+        ("| `<!-- literal -->` | <!-- metadata --> |", "| `<!-- literal -->` |  |")
+    ])
+    func tableCellsHaveIndependentCodeSpans(row: String, expected: String) {
+        let header = "| First | Second |\n| --- | --- |\n"
+        let visible = ACPMarkdownParser.hidingHTMLComments(header + row)
+        #expect(visible == header + expected)
+    }
+
+    @Test
+    func prosePipesDoNotSplitMultilineCodeSpans() {
+        let source = "`before | text\n<!-- literal -->\nafter`"
+        #expect(ACPMarkdownParser.hidingHTMLComments(source) == source)
+    }
 }
