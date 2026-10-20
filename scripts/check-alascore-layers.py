@@ -93,7 +93,7 @@ def members(text):
         # switch is not a declaration.
         match = CASES.match(line)
         if match:
-            names = match.group(1)
+            names = re.sub(r'"(?:[^"\\]|\\.)*"', '""', match.group(1))
             while "(" in names and re.search(r"\([^()]*\)", names):
                 names = re.sub(r"\([^()]*\)", "", names)
             if ":" not in names and "{" not in names:
