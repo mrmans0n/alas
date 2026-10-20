@@ -16,6 +16,7 @@ struct WhatsNewCard: View {
             header
             if let mediaURL {
                 WhatsNewMedia(url: mediaURL)
+                    .id(mediaURL)
                     .clipShape(RoundedRectangle(cornerRadius: 6))
             }
             VStack(alignment: .leading, spacing: 4) {
@@ -83,19 +84,21 @@ struct WhatsNewCard: View {
 
 /// Scales the image to the card's width, keeping its aspect ratio. GIFs animate.
 private struct WhatsNewMedia: View {
-    let url: URL
+    /// Loaded once per view identity; callers key the view by URL so a new file reloads.
     @State private var image: NSImage?
 
+    init(url: URL) {
+        // Bundled and small, so a synchronous load is fine and avoids an empty first frame.
+        _image = State(initialValue: NSImage(contentsOf: url))
+    }
+
     var body: some View {
-        Group {
-            if let image, image.size.width > 0, image.size.height > 0 {
-                AnimatedImageView(image: image)
-                    .aspectRatio(image.size, contentMode: .fit)
-                    .frame(maxHeight: 200)
-            }
+        if let image, image.size.width > 0, image.size.height > 0 {
+            AnimatedImageView(image: image)
+                .aspectRatio(image.size, contentMode: .fit)
+                .frame(maxHeight: 200)
+                .frame(maxWidth: .infinity)
         }
-        .frame(maxWidth: .infinity)
-        .task(id: url) { image = NSImage(contentsOf: url) }
     }
 }
 

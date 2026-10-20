@@ -14,6 +14,7 @@ final class WhatsNewController {
 
     private let identity: BuildIdentity
     private let defaults: UserDefaults
+    private let isExistingInstall: Bool
     @ObservationIgnored private var didEvaluateLaunch = false
 
     private static let lastSeenKey = "io.nlopez.alas.whatsNew.lastSeenVersion"
@@ -29,6 +30,8 @@ final class WhatsNewController {
         self.identity = identity
         self.catalog = catalog
         self.defaults = defaults
+        // UpdateController writes this key only after a network check, so reading it here is order-safe.
+        isExistingInstall = defaults.object(forKey: Self.updatesLastCheckedKey) != nil
         for problem in catalog.problems {
             Self.logger.error(
                 "Skipping what's new entry \(problem.file, privacy: .public): \(problem.message, privacy: .public)"
@@ -49,7 +52,7 @@ final class WhatsNewController {
             track: identity.track,
             current: identity.version,
             lastSeen: lastSeen,
-            isExistingInstall: defaults.object(forKey: Self.updatesLastCheckedKey) != nil,
+            isExistingInstall: isExistingInstall,
             entries: catalog.entries
         )
         if let version = decision.seenVersionToStore {
