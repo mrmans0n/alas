@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### ✨ Features
+
+- Turn a commit tab into its review session in place when pressing "Review This Commit", reusing the diff already loaded instead of opening a new tab and reloading it.
+
 ### Fixes
 
 - Show bulk conflict-resolution results as in-app notifications instead of inline Changes-tab messages.
