@@ -26,7 +26,7 @@ public struct ProjectShepherdSettings: Codable, Equatable, Sendable {
     }
 
     /// Reviewer logins lowercased, without a leading `@`, blanks or repeats.
-    static func normalizedReviewers(_ raw: [String]) -> [String] {
+    package static func normalizedReviewers(_ raw: [String]) -> [String] {
         var seen = Set<String>()
         var result: [String] = []
         for entry in raw {

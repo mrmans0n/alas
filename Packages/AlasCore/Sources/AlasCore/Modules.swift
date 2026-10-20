@@ -1,3 +1,4 @@
 // AlasCore is the umbrella of the modules it is split into: importing it
 // imports them all. See docs/plans/2026-10-20-alascore-modules.md.
 @_exported import AlasFoundation
+@_exported import AlasModel
