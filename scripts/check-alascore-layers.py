@@ -103,9 +103,14 @@ BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.S)
 LINE_COMMENT = re.compile(r"(?<!:)//.*$", re.M)
 
 
+# A string literal without interpolation, which may name a type as text.
+PLAIN_STRING = re.compile(r'"(?:[^"\\\n]|\\[^(\n])*"')
+
+
 def strip_comments(text):
-    """The text without comments, which name types without depending on them."""
-    return LINE_COMMENT.sub("", BLOCK_COMMENT.sub("", text))
+    """The text without comments or plain strings, which name types without
+    depending on them."""
+    return PLAIN_STRING.sub('""', LINE_COMMENT.sub("", BLOCK_COMMENT.sub("", text)))
 
 
 def module_of(folder):

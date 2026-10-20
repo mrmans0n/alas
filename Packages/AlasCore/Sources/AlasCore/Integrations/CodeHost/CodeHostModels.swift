@@ -1,55 +1,5 @@
 import Foundation
 
-public enum CodeHostKind: String, Codable, Equatable, Sendable {
-    case github
-    case gitlab
-
-    public var displayName: String {
-        switch self {
-        case .github: "GitHub"
-        case .gitlab: "GitLab"
-        }
-    }
-
-    public var reviewRequestLabel: String {
-        switch self {
-        case .github: "PR"
-        case .gitlab: "MR"
-        }
-    }
-
-    public var reviewRequestNumberPrefix: String {
-        switch self {
-        case .github: "#"
-        case .gitlab: "!"
-        }
-    }
-
-    public var iconName: String {
-        switch self {
-        case .github: "github"
-        case .gitlab: "gitlab"
-        }
-    }
-
-    public var createReviewRequestTitle: String {
-        "Create \(reviewRequestLabel)"
-    }
-
-    public var openReviewRequestTitle: String {
-        "Open \(reviewRequestLabel)"
-    }
-
-    public var mergeReviewRequestTitle: String {
-        "Merge \(reviewRequestLabel)"
-    }
-
-    public func mergeReviewRequestTitle(for request: ReviewRequest) -> String {
-        if request.isMergeQueueEnabled { return "Add to queue" }
-        return mergeReviewRequestTitle
-    }
-}
-
 public struct CodeHostRemote: Codable, Equatable, Sendable {
     public let kind: CodeHostKind
     public let host: String
@@ -861,5 +811,12 @@ public struct ReviewLoopAction: Equatable, Sendable {
         self.kind = kind
         self.title = title
         self.detail = detail
+    }
+}
+
+extension CodeHostKind {
+    public func mergeReviewRequestTitle(for request: ReviewRequest) -> String {
+        if request.isMergeQueueEnabled { return "Add to queue" }
+        return mergeReviewRequestTitle
     }
 }
