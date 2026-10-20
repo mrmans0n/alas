@@ -83,11 +83,14 @@ def members(text):
     all_members, in_extensions = set(), set()
     extended = None
     lines = text.splitlines()
-    # A `case` declaration that wraps after a comma continues on the next
-    # lines; join them so every name it declares is read.
+    # A `case` declaration that wraps after a comma, or inside associated
+    # values, continues on the next lines; join them so every name it
+    # declares is read.
     joined = []
     for line in lines:
-        if joined and CASES.match(joined[-1]) and joined[-1].rstrip().endswith(","):
+        last = joined[-1] if joined else ""
+        open_case = CASES.match(last) and (last.rstrip().endswith(",") or last.count("(") > last.count(")"))
+        if open_case:
             joined[-1] = joined[-1].rstrip() + " " + line.strip()
         else:
             joined.append(line)
