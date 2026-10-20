@@ -58,16 +58,6 @@ public struct ACPTerminalOutputResult: Codable, Equatable, Sendable {
     }
 }
 
-public struct ACPTerminalExitStatus: Codable, Equatable, Sendable {
-    public let exitCode: Int?
-    public let signal: String?
-
-    public init(exitCode: Int?, signal: String?) {
-        self.exitCode = exitCode
-        self.signal = signal
-    }
-}
-
 public struct ACPTerminalIdParams: Codable, Equatable, Sendable {
     public let sessionId: String
     public let terminalId: String
