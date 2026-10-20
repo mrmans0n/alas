@@ -308,7 +308,7 @@ private struct ShepherdPopover: View {
                         get: { record.fixAttemptBudget },
                         set: { state.reviewShepherd.setMaxFixAttempts($0, for: record.id) }
                     ),
-                    in: ShepherdPolicy.fixAttemptRange
+                    in: ShepherdDefaults.fixAttemptRange
                 )
                 .labelsHidden()
                 .controlSize(.mini)

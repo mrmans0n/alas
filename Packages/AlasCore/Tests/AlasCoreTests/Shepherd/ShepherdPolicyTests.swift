@@ -479,7 +479,7 @@ private let policyCases: [ShepherdPolicyCase] = [
         (ShepherdPhase.escalated(.attemptsExhausted), 5, ShepherdPhase.watching, 5),
         (.escalated(.attemptsExhausted), 3, .escalated(.attemptsExhausted), 3),
         (.escalated(.noProgress), 5, .escalated(.noProgress), 5),
-        (.escalated(.attemptsExhausted), 99, .watching, ShepherdPolicy.fixAttemptRange.upperBound),
+        (.escalated(.attemptsExhausted), 99, .watching, ShepherdDefaults.fixAttemptRange.upperBound),
     ] as [(ShepherdPhase, Int, ShepherdPhase, Int)])
     func budgetChange(phase: ShepherdPhase, budget: Int, expectedPhase: ShepherdPhase, expectedBudget: Int) {
         var record = F.record(phase: phase, fixAttempts: 3)

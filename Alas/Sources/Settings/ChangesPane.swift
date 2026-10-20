@@ -73,7 +73,7 @@ struct ChangesPane: View {
                         Stepper(
                             "\(state.config.changes.shepherd.maxFixAttempts)",
                             value: state.bind(\.changes.shepherd.maxFixAttempts),
-                            in: ShepherdPolicy.fixAttemptRange
+                            in: ShepherdDefaults.fixAttemptRange
                         )
                     }
                     SettingsRow(

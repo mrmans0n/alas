@@ -413,3 +413,24 @@ private extension WorkspaceConfigurationMode {
         }
     }
 }
+
+extension String {
+    public func inheritsGlobalSetupPrefix(_ global: String) -> Bool {
+        let global = global.trimmingCharacters(in: .whitespacesAndNewlines)
+        let script = trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !global.isEmpty, !script.isEmpty else { return false }
+        return script == global || script.hasPrefix(global + "\n")
+    }
+
+    public func removingInheritedGlobalSetupPrefix(_ global: String) -> String {
+        let global = global.trimmingCharacters(in: .whitespacesAndNewlines)
+        let script = trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !global.isEmpty, !script.isEmpty else { return script }
+        if script == global { return "" }
+        let prefix = global + "\n"
+        if script.hasPrefix(prefix) {
+            return String(script.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return script
+    }
+}

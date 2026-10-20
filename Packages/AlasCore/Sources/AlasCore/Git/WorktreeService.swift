@@ -1458,7 +1458,7 @@ public struct WorktreeService: Sendable {
             existing = Set(refs.stdout.split(whereSeparator: \.isNewline).map(String.init))
         }
         existing.remove(from)
-        let target = WorktreeAutoBranchName.uniqueName(to) { existing.contains($0) }
+        let target = Self.uniqueName(to) { existing.contains($0) }
         guard target != from else { return from }
         let rename = try await Process.git(["branch", "-m", from, target], cwd: worktreePath)
         guard rename.exitCode == 0 else { throw WorktreeError.gitFailed(rename.stderr) }
@@ -2020,5 +2020,15 @@ public struct WorktreeService: Sendable {
     }
 
     public init() {
+    }
+}
+
+extension WorktreeService {
+    /// `name`, or the first of `name-2`, `name-3`, … that is not taken.
+    public static func uniqueName(_ name: String, isTaken: (String) -> Bool) -> String {
+        guard isTaken(name) else { return name }
+        var suffix = 2
+        while isTaken("\(name)-\(suffix)") { suffix += 1 }
+        return "\(name)-\(suffix)"
     }
 }

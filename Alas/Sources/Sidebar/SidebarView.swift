@@ -73,13 +73,19 @@ struct SidebarView: View {
                                     spaceID: spaceID,
                                     isInteractive: spaceID == state.spacesManager.activeSpaceId
                                 ) { project in
-                                    RepoGroupView(
+                                    let liveWorktrees = state.projectsManager.visibleWorktrees(projectId: project.id)
+                                    let landingSession = GGLandingStore.shared.sessions[project.id]
+                                    let landingHostWorktreeId = landingSession.flatMap { session in
+                                        AppState.landingHostWorktreeId(
+                                            sessionWorktreeId: session.worktreeId,
+                                            selectedWorktreeId: state.selectedWorktreeId,
+                                            projectWorktreeIds: liveWorktrees.map(\.id)
+                                        )
+                                    }
+                                    return RepoGroupView(
                                         project: project,
                                         icon: { state.effectiveIcon(for: $0) },
-                                        worktrees: WorktreeSidebarFilter.apply(
-                                            worktreeFilter,
-                                            to: state.projectsManager.visibleWorktrees(projectId: project.id)
-                                        ),
+                                        worktrees: WorktreeSidebarFilter.apply(worktreeFilter, to: liveWorktrees),
                                         collapsed: Binding(
                                             get: { collapsedProjects.contains(project.id) },
                                             set: { collapsed in
@@ -117,6 +123,11 @@ struct SidebarView: View {
                                                 projectId: wt.projectId
                                             )
                                         },
+                                        landingHostWorktreeId: landingHostWorktreeId,
+                                        landingStatus: landingSession.flatMap {
+                                            GGLandingPresentation.sidebarStatus(for: $0)
+                                        },
+                                        onOpenGGLanding: { state.openGGLanding(projectId: project.id) },
                                         harnessSummary: { worktreeId in
                                             let ids = state.tabs.tabs(forWorktree: worktreeId).flatMap { tab -> [String] in
                                                 switch tab {

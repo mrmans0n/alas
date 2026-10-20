@@ -298,7 +298,7 @@ public final class ReviewShepherd {
         baseBranch: String,
         autoFix: Bool,
         autoMerge: Bool,
-        maxFixAttempts: Int = ShepherdPolicy.defaultMaxFixAttempts,
+        maxFixAttempts: Int = ShepherdDefaults.defaultMaxFixAttempts,
         contextRules: ShepherdRules?
     ) async -> ShepherdRecord {
         let id = ShepherdRecordID(worktreeID: worktreeID, request: request)
@@ -329,7 +329,7 @@ public final class ReviewShepherd {
         record.baseBranch = baseBranch
         record.autoFix = autoFix
         record.autoMerge = autoMerge
-        record.maxFixAttempts = ShepherdPolicy.clampedFixAttempts(maxFixAttempts)
+        record.maxFixAttempts = ShepherdDefaults.clampedFixAttempts(maxFixAttempts)
         record.phase = .watching
         record.fixAttempts = 0
         record.lastDispatchedFingerprint = nil

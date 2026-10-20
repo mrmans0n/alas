@@ -39,6 +39,22 @@ struct CommitTabViewTests {
         #expect(target.revisionDescription == "abcdef1234567890")
     }
 
+    @Test func followedCommitLauncherBuildsTrackedCommitTarget() throws {
+        let revision = try #require(TrackedRevision(
+            expression: "HEAD~3", baselineBranch: "feature", resolvedSHA: "abcdef1234567890"
+        ))
+        let target = CommitTabView.reviewSessionTarget(
+            worktreeID: "wt",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            sha: "abcdef1234567890",
+            title: "Add review sessions",
+            trackedRevision: revision
+        )
+
+        #expect(target.kind == .trackedCommit)
+        #expect(target.payload == .trackedCommit(revision))
+    }
+
     @Test func commitReviewContextMenuBuildsCommitReviewTarget() {
         let worktree = Worktree(
             id: "wt-1",

@@ -131,7 +131,7 @@ public struct ShepherdRecord: Codable, Equatable, Sendable {
         baseBranch: String,
         autoFix: Bool,
         autoMerge: Bool,
-        maxFixAttempts: Int = ShepherdPolicy.defaultMaxFixAttempts,
+        maxFixAttempts: Int = ShepherdDefaults.defaultMaxFixAttempts,
         now: Date
     ) {
         self.id = id
@@ -146,7 +146,7 @@ public struct ShepherdRecord: Codable, Equatable, Sendable {
         self.viewerCommentIDsAtDispatch = nil
         self.handledThreadRevisions = nil
         self.fixAttempts = 0
-        self.maxFixAttempts = ShepherdPolicy.clampedFixAttempts(maxFixAttempts)
+        self.maxFixAttempts = ShepherdDefaults.clampedFixAttempts(maxFixAttempts)
         self.lastSeenHeadSHA = nil
         self.stableHeadPolls = 0
         self.headFirstSeenAt = nil
@@ -158,13 +158,13 @@ public struct ShepherdRecord: Codable, Equatable, Sendable {
 
     public var owner: SessionOwnerID { .worktree(id.worktreeID) }
 
-    public var fixAttemptBudget: Int { maxFixAttempts ?? ShepherdPolicy.defaultMaxFixAttempts }
+    public var fixAttemptBudget: Int { maxFixAttempts ?? ShepherdDefaults.defaultMaxFixAttempts }
 
-    /// Sets the budget, clamped to `ShepherdPolicy.fixAttemptRange`. A record
+    /// Sets the budget, clamped to `ShepherdDefaults.fixAttemptRange`. A record
     /// that escalated for running out of attempts goes back to watching when
     /// the new budget leaves room for another, keeping the attempts it used.
     public mutating func setFixAttemptBudget(_ budget: Int) {
-        maxFixAttempts = ShepherdPolicy.clampedFixAttempts(budget)
+        maxFixAttempts = ShepherdDefaults.clampedFixAttempts(budget)
         if phase == .escalated(.attemptsExhausted), fixAttempts < fixAttemptBudget {
             phase = .watching
         }
@@ -181,39 +181,4 @@ public struct ShepherdRecord: Codable, Equatable, Sendable {
 
 public enum ShepherdSessionState: Equatable, Sendable {
     case idle, busy, archived, missing
-}
-
-/// Global defaults for newly bound PRs (`AppConfig.Changes.shepherd`).
-public struct ShepherdDefaults: Codable, Equatable, Sendable {
-    public var autoFix: Bool = true
-    public var autoMerge: Bool = false
-    public var archiveAfterMerge: Bool = false
-    public var maxFixAttempts: Int = ShepherdPolicy.defaultMaxFixAttempts
-
-    private enum CodingKeys: String, CodingKey {
-        case autoFix, autoMerge, archiveAfterMerge, maxFixAttempts
-    }
-
-    public init(
-        autoFix: Bool = true,
-        autoMerge: Bool = false,
-        archiveAfterMerge: Bool = false,
-        maxFixAttempts: Int = ShepherdPolicy.defaultMaxFixAttempts
-    ) {
-        self.autoFix = autoFix
-        self.autoMerge = autoMerge
-        self.archiveAfterMerge = archiveAfterMerge
-        self.maxFixAttempts = maxFixAttempts
-    }
-
-    /// Tolerant, like the rest of `AppConfig`: a missing or mistyped key keeps
-    /// its default instead of failing the whole config.
-    public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        autoFix = (try? c.decode(Bool.self, forKey: .autoFix)) ?? true
-        autoMerge = (try? c.decode(Bool.self, forKey: .autoMerge)) ?? false
-        archiveAfterMerge = (try? c.decode(Bool.self, forKey: .archiveAfterMerge)) ?? false
-        maxFixAttempts = ShepherdPolicy.clampedFixAttempts(
-            (try? c.decode(Int.self, forKey: .maxFixAttempts)) ?? ShepherdPolicy.defaultMaxFixAttempts)
-    }
 }

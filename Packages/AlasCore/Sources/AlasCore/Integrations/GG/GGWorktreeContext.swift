@@ -1,11 +1,5 @@
 import Foundation
 
-public enum GGWorktreeMode: String, Codable, Equatable, CaseIterable, Sendable {
-    case inherit
-    case on
-    case off
-}
-
 public enum GGWorktreeInactiveReason: Equatable, Sendable {
     case masterDisabled
     case cliMissing

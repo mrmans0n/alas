@@ -95,7 +95,7 @@ enum ShepherdFixtures {
         autoFix: Bool = true,
         autoMerge: Bool = false,
         fixAttempts: Int = 0,
-        maxFixAttempts: Int? = ShepherdPolicy.defaultMaxFixAttempts,
+        maxFixAttempts: Int? = ShepherdDefaults.defaultMaxFixAttempts,
         lastDispatched: ShepherdFingerprint? = nil,
         viewerCommentIDs: [String]? = nil,
         handled: [String]? = nil,

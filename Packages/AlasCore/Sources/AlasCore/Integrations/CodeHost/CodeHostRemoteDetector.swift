@@ -1,22 +1,5 @@
 import Foundation
 
-public struct GitRemote: Equatable, Sendable {
-    public enum Direction: Equatable, Sendable {
-        case fetch
-        case push
-    }
-
-    public let name: String
-    public let url: String
-    public let direction: Direction
-
-    public init(name: String, url: String, direction: Direction = .fetch) {
-        self.name = name
-        self.url = url
-        self.direction = direction
-    }
-}
-
 public enum CodeHostRemoteDetector: Sendable {
     public static func preferredRemoteName(forBaseBranch baseBranch: String, remotes: [GitRemote]) -> String? {
         remotes.first { baseBranch.hasPrefix("\($0.name)/") }?.name
