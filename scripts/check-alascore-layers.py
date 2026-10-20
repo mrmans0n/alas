@@ -65,8 +65,10 @@ LOWER_WORD = re.compile(r"\b[a-z_]\w*\b")
 MEMBER = re.compile(
     r"^    (?:@\w+(?:\([^)]*\))?\s+)*(?:(?:public|internal|package|private|fileprivate|static|class|"
     r"final|override|nonisolated|mutating|lazy|weak|convenience|required)\s+)*"
-    r"(?:func|var|let|struct|class|enum|actor|typealias)\s+([a-zA-Z_]\w*)",
+    r"(?:func|var|let|case|struct|class|enum|actor|typealias)\s+([a-zA-Z_]\w*)",
 )
+# The same at any depth, for telling whether a member's name is unambiguous.
+ANY_MEMBER = re.compile(MEMBER.pattern.replace("^    ", "^\\s+", 1))
 INITIALIZER = re.compile(r"^    (?:(?:public|internal|package|convenience|required|nonisolated)\s+)*init\??\(\s*(\w+)")
 INITIALIZER_USE = re.compile(r"\b([A-Z]\w*)\(\s*(\w+)\s*:")
 EXTENSION = re.compile(r"^(?:(?:public|internal|package)\s+)?extension\s+([A-Z]\w*)")
@@ -83,11 +85,12 @@ def members(text):
         if line and not line[0].isspace():
             match = EXTENSION.match(line)
             extended = match.group(1) if match else None
-        match = MEMBER.match(line)
+        match = ANY_MEMBER.match(line)
         if match:
             all_members.add(match.group(1))
-            if extended:
-                in_extensions.add((extended, match.group(1)))
+        match = MEMBER.match(line)
+        if match and extended:
+            in_extensions.add((extended, match.group(1)))
         match = INITIALIZER.match(line)
         if match and extended:
             # Keyed by its first label, as `Type(label:` is how it is called.
