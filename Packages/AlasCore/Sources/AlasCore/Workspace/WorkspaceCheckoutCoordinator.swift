@@ -119,24 +119,6 @@ public struct WorkspaceFrozenWorktreeOperation: Sendable {
     }
 }
 
-public enum FrozenBranchIntent: Equatable, Sendable {
-    case create(atCommit: String)
-    case reuse(atCommit: String)
-
-    public init(_ intent: WorkspaceBranchIntent, baseCommit: String) {
-        switch intent {
-        case .create(let commit): self = .create(atCommit: commit)
-        case .reuse: self = .reuse(atCommit: baseCommit)
-        }
-    }
-
-    public var commit: String {
-        switch self {
-        case .create(let atCommit), .reuse(let atCommit): atCommit
-        }
-    }
-}
-
 public struct WorkspaceCheckoutSetupOperation: Sendable {
     public var checkoutID: UUID
     public var checkoutMemberID: UUID
@@ -2049,27 +2031,6 @@ extension WorkspaceCheckoutCoordinatorError: LocalizedError {
         case .completedWorktreeReturned:
             "The worktree reappeared while cleanup was running."
         }
-    }
-}
-
-extension String {
-    public func inheritsGlobalSetupPrefix(_ global: String) -> Bool {
-        let global = global.trimmingCharacters(in: .whitespacesAndNewlines)
-        let script = trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !global.isEmpty, !script.isEmpty else { return false }
-        return script == global || script.hasPrefix(global + "\n")
-    }
-
-    public func removingInheritedGlobalSetupPrefix(_ global: String) -> String {
-        let global = global.trimmingCharacters(in: .whitespacesAndNewlines)
-        let script = trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !global.isEmpty, !script.isEmpty else { return script }
-        if script == global { return "" }
-        let prefix = global + "\n"
-        if script.hasPrefix(prefix) {
-            return String(script.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        return script
     }
 }
 

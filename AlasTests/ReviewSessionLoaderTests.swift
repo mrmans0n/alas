@@ -51,7 +51,7 @@ struct ReviewSessionLoaderTests {
             scope: .all
         )
         let loader = ReviewSessionLoader(
-            localChanges: { target in
+            localChanges: { target, _ in
                 #expect(target.kind == .localChanges)
                 let summary = DiffReviewFileSummary(
                     path: "Sources/A.swift",
@@ -95,7 +95,7 @@ struct ReviewSessionLoaderTests {
             title: "Review deadbeef"
         )
         let loader = ReviewSessionLoader(
-            commit: { target in
+            commit: { target, _ in
                 #expect(target.revisionDescription == "deadbeef")
                 return DiffReviewLoadedSession(files: [], summary: DiffReviewSessionModel(files: [], groupsEnabled: false))
             }
@@ -118,7 +118,7 @@ struct ReviewSessionLoaderTests {
         )
         var loadedPayload: ReviewSessionTarget.Payload?
         let loader = ReviewSessionLoader(
-            commit: { target in
+            commit: { target, _ in
                 loadedPayload = target.payload
                 guard case .trackedCommit(let loadedRevision) = target.payload else {
                     throw ReviewSessionLoaderError.unsupportedTarget
@@ -352,9 +352,9 @@ struct ReviewSessionLoaderTests {
     func onlyWholeWorkingTreeReviewsReportTheReviewedTree(target: ReviewSessionTarget, expected: String?) async throws {
         let empty = DiffReviewLoadedSession(files: [], summary: DiffReviewSessionModel(files: [], groupsEnabled: false))
         let loader = ReviewSessionLoader(
-            localChanges: { _ in empty },
-            commit: { _ in empty },
-            workingTreeRange: { _, current in
+            localChanges: { _, _ in empty },
+            commit: { _, _ in empty },
+            workingTreeRange: { _, current, _ in
                 #expect(current == "now")
                 return empty
             },
@@ -454,7 +454,7 @@ struct ReviewSessionLoaderTests {
     @Test func routesCommitRangeTargetToInjectedLoader() async throws {
         let path = URL(fileURLWithPath: "/tmp/repo")
         let expected = DiffReviewLoadedSession(files: [], summary: DiffReviewSessionModel(files: [], groupsEnabled: false))
-        let loader = ReviewSessionLoader(commitRange: { _ in expected })
+        let loader = ReviewSessionLoader(commitRange: { _, _ in expected })
         let target = ReviewSessionTarget.commitRange(worktreeID: "wt", repositoryPath: path, base: "aaa", head: "bbb")
 
         let context = try await loader.load(target: target)

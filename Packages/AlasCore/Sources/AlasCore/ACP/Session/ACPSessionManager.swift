@@ -760,7 +760,7 @@ public final class ACPSessionManager: ChangeTracking {
         persistQueue(for: session)
         runners[id]?.flushQueueIfIdle()
         onQueueChanged?(id, retainedCleanupHasActivePromptWork(for: id))
-        return RemoteQueueProjection.plainText(from: draft)
+        return draft.remoteQueuePlainText
     }
 
     /// Return a pending queued prompt to the local composer without losing

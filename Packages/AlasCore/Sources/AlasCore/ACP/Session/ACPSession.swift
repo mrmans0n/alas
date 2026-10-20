@@ -949,20 +949,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
     }
 
     public nonisolated static func removingAlasWorkspaceContext(from text: String) -> String {
-        var result = text
-        let openingTag = "<alas-workspace-context>"
-        let closingTag = "</alas-workspace-context>"
-        while let openingRange = result.range(of: openingTag) {
-            guard let closingRange = result.range(
-                of: closingTag,
-                range: openingRange.upperBound..<result.endIndex
-            ) else {
-                result.removeSubrange(openingRange.lowerBound..<result.endIndex)
-                break
-            }
-            result.removeSubrange(openingRange.lowerBound..<closingRange.upperBound)
-        }
-        return result
+        PromptProse.removingAlasWorkspaceContext(from: text)
     }
 
     /// Returns the set of transcript message indices that were appended or

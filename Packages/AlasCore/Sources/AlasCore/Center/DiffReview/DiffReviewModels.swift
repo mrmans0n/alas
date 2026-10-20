@@ -1,18 +1,5 @@
 import Foundation
 
-public struct DiffReviewFileID: Codable, Equatable, Hashable, Identifiable, Sendable {
-    public let namespace: String
-    public let path: String
-
-    public var id: String { rawValue }
-    public var rawValue: String { "\(namespace):\(path)" }
-
-    public init(namespace: String, path: String) {
-        self.namespace = namespace
-        self.path = path
-    }
-}
-
 public enum DiffReviewInlineFeedbackSide: String, Codable, Equatable, Hashable, Sendable {
     case old
     case new
@@ -226,8 +213,10 @@ public struct DiffReviewFileSectionModel: Identifiable {
     public let contextProvider: DiffReviewContextProvider?
     public var imageProvider: DiffReviewImageProvider? = nil
     public var stagedMutationActions: DiffReviewStagedMutationActions? = nil
+    /// True while the file is listed but its diff is still loading.
+    public var isPending: Bool = false
 
-    public init(summary: DiffReviewFileSummary, parsedDiff: ParsedDiff?, displayModel: DiffDisplayModel?, placeholderMessage: String?, openFile: (() -> Void)?, contextProvider: DiffReviewContextProvider?, imageProvider: DiffReviewImageProvider? = nil, stagedMutationActions: DiffReviewStagedMutationActions? = nil) {
+    public init(summary: DiffReviewFileSummary, parsedDiff: ParsedDiff?, displayModel: DiffDisplayModel?, placeholderMessage: String?, openFile: (() -> Void)?, contextProvider: DiffReviewContextProvider?, imageProvider: DiffReviewImageProvider? = nil, stagedMutationActions: DiffReviewStagedMutationActions? = nil, isPending: Bool = false) {
         self.summary = summary
         self.parsedDiff = parsedDiff
         self.displayModel = displayModel
@@ -236,6 +225,20 @@ public struct DiffReviewFileSectionModel: Identifiable {
         self.contextProvider = contextProvider
         self.imageProvider = imageProvider
         self.stagedMutationActions = stagedMutationActions
+        self.isPending = isPending
+    }
+
+    /// A listed file whose diff has not loaded yet.
+    public static func pending(summary: DiffReviewFileSummary) -> DiffReviewFileSectionModel {
+        DiffReviewFileSectionModel(
+            summary: summary,
+            parsedDiff: nil,
+            displayModel: nil,
+            placeholderMessage: nil,
+            openFile: nil,
+            contextProvider: nil,
+            isPending: true
+        )
     }
 }
 
@@ -364,6 +367,7 @@ extension DiffReviewFileSectionModel {
         summary == other.summary
             && displayModel == other.displayModel
             && placeholderMessage == other.placeholderMessage
+            && isPending == other.isPending
             && (openFile == nil) == (other.openFile == nil)
             && contextProvider?.id == other.contextProvider?.id
             && imageProvider?.id == other.imageProvider?.id
