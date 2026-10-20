@@ -14,6 +14,6 @@ public enum RepoMCPTrust: Sendable {
     /// Reuses the attachment fingerprint's canonical encoding, so identical
     /// configs hash identically regardless of the derived `repo:<name>` id.
     public static func hash(for server: ProjectMCPServer) -> String {
-        MCPAttachmentPlanner.configurationFingerprint(for: [server])
+        ProjectMCPServer.configurationFingerprint(for: [server])
     }
 }

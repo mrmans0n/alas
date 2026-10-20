@@ -75,6 +75,52 @@ struct RangeReviewLoaderTests {
         #expect(section.imageProvider?.id == provider.id)
     }
 
+    @Test func reportsFilesAsPendingSectionsBeforeAnyDiffLoads() async throws {
+        let git = FakeRangeReviewGitClient(diffs: ["a.swift": diff(lines: [.init(kind: .add, text: "let a = 1", oldNumber: nil, newNumber: 1)])])
+        let loader = RangeReviewLoader(git: git)
+        var reported: [DiffReviewLoadedSession] = []
+        var diffsRequestedBeforeReport: [String]?
+
+        let session = try await loader.load(
+            worktreePath: URL(fileURLWithPath: "/tmp/repo"),
+            base: "aaa", head: "bbb", threeDot: false,
+            files: [CommitChangedFile(path: "a.swift", originalPath: nil, status: "A", add: 7, del: 0)],
+            openFileForPath: { _ in nil },
+            onFileList: {
+                reported.append($0)
+                diffsRequestedBeforeReport = git.requestedPaths
+            }
+        )
+
+        #expect(reported.count == 1)
+        let pending = try #require(reported.first)
+        #expect(diffsRequestedBeforeReport == [])
+        #expect(pending.files.map(\.isPending) == [true])
+        #expect(pending.files.map(\.id) == session.files.map(\.id))
+        #expect(pending.summary.totalAdditions == 7)
+        #expect(session.files.map(\.isPending) == [false])
+    }
+
+    @Test func diffsSinglyOnlyTheFilesTheBatchMissed() async throws {
+        let batched = diff(lines: [.init(kind: .add, text: "batched", oldNumber: nil, newNumber: 1)])
+        let single = diff(lines: [.init(kind: .add, text: "single", oldNumber: nil, newNumber: 1)])
+        let git = FakeRangeReviewGitClient(diffs: ["a.swift": single, "b.swift": single], batched: ["a.swift": batched])
+        let loader = RangeReviewLoader(git: git)
+
+        let session = try await loader.load(
+            worktreePath: URL(fileURLWithPath: "/tmp/repo"),
+            base: "aaa", head: "bbb", threeDot: false,
+            files: [
+                CommitChangedFile(path: "a.swift", originalPath: nil, status: "A", add: 1, del: 0),
+                CommitChangedFile(path: "b.swift", originalPath: nil, status: "A", add: 1, del: 0),
+            ],
+            openFileForPath: { _ in nil }
+        )
+
+        #expect(session.files.map(\.parsedDiff) == [batched, single])
+        #expect(git.requestedPaths == ["b.swift"])
+    }
+
     private func diff(lines: [ParsedDiff.Hunk.Line]) -> ParsedDiff {
         ParsedDiff(hunks: [
             ParsedDiff.Hunk(
@@ -106,10 +152,24 @@ private func imageProvider(path: String, before: String, after: String) -> DiffR
 
 private final class FakeRangeReviewGitClient: RangeReviewGitClient, @unchecked Sendable {
     private let diffs: [String: ParsedDiff]
+    private let batched: [String: ParsedDiff]
     private let imageProvider: DiffReviewImageProvider?
-    init(diffs: [String: ParsedDiff], imageProvider: DiffReviewImageProvider? = nil) {
+    private let lock = NSLock()
+    private var singlyRequestedPaths: [String] = []
+
+    init(diffs: [String: ParsedDiff], batched: [String: ParsedDiff] = [:], imageProvider: DiffReviewImageProvider? = nil) {
         self.diffs = diffs
+        self.batched = batched
         self.imageProvider = imageProvider
+    }
+
+    /// Paths diffed one at a time, in request order.
+    var requestedPaths: [String] {
+        lock.withLock { singlyRequestedPaths }
+    }
+
+    func treeDiffsByFile(worktreePath: URL, revisions: (before: String, after: String), paths: [String]) async throws -> [String: ParsedDiff] {
+        batched.filter { paths.contains($0.key) }
     }
 
     func resolvedRangeTrees(worktreePath: URL, base: String, head: String, threeDot: Bool) async throws -> (before: String, after: String) {
@@ -117,7 +177,8 @@ private final class FakeRangeReviewGitClient: RangeReviewGitClient, @unchecked S
     }
 
     func rangeDiff(worktreePath: URL, revisions: (before: String, after: String), file: String, originalPath: String?) async throws -> ParsedDiff {
-        diffs[file, default: ParsedDiff(hunks: [])]
+        lock.withLock { singlyRequestedPaths.append(file) }
+        return diffs[file, default: ParsedDiff(hunks: [])]
     }
 
     func rangeContextSnapshot(worktreePath: URL, base: String, head: String, threeDot: Bool, file: String, originalPath: String?) async throws -> DiffReviewFileContextSnapshot {

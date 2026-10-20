@@ -369,9 +369,9 @@ public struct ACPDelegationModelCatalog: Codable, Equatable, Sendable {
     public let state: ACPDelegationModelCatalogState
     /// Non-empty only for `.known` and `.stale`. Ids are the agent's own
     /// model ids; the agent stays the authority when a session starts.
-    public let models: [ACPAgentModelCatalog.Model]
+    public let models: [ACPAgentModel]
 
-    public init(state: ACPDelegationModelCatalogState, models: [ACPAgentModelCatalog.Model]) {
+    public init(state: ACPDelegationModelCatalogState, models: [ACPAgentModel]) {
         self.state = state
         self.models = models
     }
@@ -464,7 +464,7 @@ public struct ACPDelegatedSessionWaitRequest: Equatable, Sendable {
 /// `session_read`: one page of a session's text-only transcript.
 public struct ACPOrchestrationReadResponse: Codable, Equatable, Sendable {
     public let sessionId: String
-    public let entries: [ACPSessionTranscriptReader.Entry]
+    public let entries: [ACPTranscriptEntry]
     public let start: Int
     /// Pass as `offset` to read on from the last returned entry.
     public let end: Int
@@ -478,7 +478,7 @@ public struct ACPOrchestrationReadResponse: Codable, Equatable, Sendable {
         case total
     }
 
-    public init(sessionId: String, entries: [ACPSessionTranscriptReader.Entry], start: Int, end: Int, total: Int) {
+    public init(sessionId: String, entries: [ACPTranscriptEntry], start: Int, end: Int, total: Int) {
         self.sessionId = sessionId
         self.entries = entries
         self.start = start

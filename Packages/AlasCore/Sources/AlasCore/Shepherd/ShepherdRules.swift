@@ -1,31 +1,5 @@
 import Foundation
 
-/// Per-project shepherd rules stored in `ProjectConfig.shepherd`.
-public struct ProjectShepherdSettings: Codable, Equatable, Sendable {
-    public var instructions: String
-    public var requiredReviewers: [String]
-
-    private enum CodingKeys: String, CodingKey {
-        case instructions, requiredReviewers
-    }
-
-    public init(instructions: String = "", requiredReviewers: [String] = []) {
-        self.instructions = instructions
-        self.requiredReviewers = requiredReviewers
-    }
-
-    public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        instructions = (try? c.decode(String.self, forKey: .instructions)) ?? ""
-        requiredReviewers = (try? c.decode([String].self, forKey: .requiredReviewers)) ?? []
-    }
-
-    public var isEmpty: Bool {
-        instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && ShepherdRulesResolver.normalizedReviewers(requiredReviewers).isEmpty
-    }
-}
-
 public struct ShepherdRules: Equatable, Sendable {
     public enum Source: String, Codable, Equatable, Sendable {
         case localFile, repoFile, projectSettings, none
@@ -87,7 +61,7 @@ public enum ShepherdRulesResolver {
             return ShepherdRules(
                 source: .projectSettings,
                 instructions: projectSettings.instructions.trimmingCharacters(in: .whitespacesAndNewlines),
-                requiredReviewers: normalizedReviewers(projectSettings.requiredReviewers)
+                requiredReviewers: ProjectShepherdSettings.normalizedReviewers(projectSettings.requiredReviewers)
             )
         }
         return .none
@@ -111,7 +85,7 @@ public enum ShepherdRulesResolver {
         let body = lines[(closing + 1)...].joined(separator: "\n")
         return (
             body.trimmingCharacters(in: .whitespacesAndNewlines),
-            normalizedReviewers(reviewers(inFrontmatter: frontmatter))
+            ProjectShepherdSettings.normalizedReviewers(reviewers(inFrontmatter: frontmatter))
         )
     }
 
@@ -161,18 +135,6 @@ public enum ShepherdRulesResolver {
         }
         if result.exitCode == 1, catReportedMissing { return nil }
         throw ShepherdRulesReadError(file: file, host: host, detail: result.stderr)
-    }
-
-    static func normalizedReviewers(_ raw: [String]) -> [String] {
-        var seen = Set<String>()
-        var result: [String] = []
-        for entry in raw {
-            var login = entry.trimmingCharacters(in: .whitespaces).lowercased()
-            if login.hasPrefix("@") { login.removeFirst() }
-            guard !login.isEmpty, seen.insert(login).inserted else { continue }
-            result.append(login)
-        }
-        return result
     }
 
     private static func rules(fromFile contents: String, source: ShepherdRules.Source) -> ShepherdRules {
