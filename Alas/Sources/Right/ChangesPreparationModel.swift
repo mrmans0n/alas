@@ -60,6 +60,24 @@ struct ChangesPreparationModel: Equatable {
         let detail: String
     }
 
+    enum GGStackStatus: Equatable {
+        case unavailable, loading, empty, refreshingRemote, remoteUnavailable
+        case synced(commits: Int)
+        case unsynced(commits: Int)
+
+        var text: String {
+            switch self {
+            case .unavailable: "Stack unavailable"
+            case .loading: "Loading stack…"
+            case .empty: "No stack commits"
+            case .refreshingRemote: "Refreshing remote status…"
+            case .remoteUnavailable: "Remote status unavailable"
+            case .synced(let count): count == 1 ? "1 commit synced" : "\(count) commits synced"
+            case .unsynced(let count): count == 1 ? "1 commit not synced" : "\(count) commits not synced"
+            }
+        }
+    }
+
     let reviewAction: ReviewAction?
     let draftAction: DraftAction?
     let publishAction: CommitPublishAvailability?
@@ -70,8 +88,16 @@ struct ChangesPreparationModel: Equatable {
     let canDismissSyncFailure: Bool
     let ggActions: [GGAction]
     let mutationError: String?
+    let ggStackStatus: GGStackStatus?
+    let hasLocalChanges: Bool
 
     var primaryAction: ReviewAction? { reviewAction }
+
+    var showsGGCommitActions: Bool {
+        hasLocalChanges || ggActions.contains {
+            $0.hasNonEmptyDraft || $0.isInFlight
+        }
+    }
 
     /// No actions of its own: the card renders only its Review button.
     static let reviewScopesOnly = ChangesPreparationModel(
@@ -142,6 +168,8 @@ struct ChangesPreparationModel: Equatable {
         canDismissSyncFailure = false
         ggActions = []
         mutationError = nil
+        ggStackStatus = nil
+        hasLocalChanges = !changes.isEmpty
         let availableActions = publishAction == nil ? readinessActions : readinessActions.filter {
             $0.kind != .pushBranch && $0.kind != .createReviewRequest
         }
@@ -172,7 +200,8 @@ struct ChangesPreparationModel: Equatable {
         reconciliationAction: GGStackReadinessModel.Action? = nil,
         landingStatus: GGLandingStatus? = nil,
         syncProgress: GGSyncProgressPresentation? = nil,
-        canDismissSyncFailure: Bool = false
+        canDismissSyncFailure: Bool = false,
+        stackStatus: GGStackStatus? = nil
     ) -> ChangesPreparationModel {
         let summary = ReviewChangesTriggerSummary.summary(for: changes)
         let stagedChanges = changes.filter { $0.stage == .staged }
@@ -182,6 +211,7 @@ struct ChangesPreparationModel: Equatable {
             deletions: stagedChanges.reduce(0) { $0 + $1.del }
         )
         return makeGG(
+            hasLocalChanges: !changes.isEmpty,
             staged: staged,
             hasDraft: hasDraft,
             capabilities: capabilities,
@@ -194,7 +224,8 @@ struct ChangesPreparationModel: Equatable {
             landingStatus: landingStatus,
             syncProgress: syncProgress,
             canDismissSyncFailure: canDismissSyncFailure,
-            reviewSummary: summary
+            reviewSummary: summary,
+            stackStatus: stackStatus
         )
     }
 
@@ -210,7 +241,8 @@ struct ChangesPreparationModel: Equatable {
         reconciliationAction: GGStackReadinessModel.Action? = nil,
         landingStatus: GGLandingStatus? = nil,
         syncProgress: GGSyncProgressPresentation? = nil,
-        canDismissSyncFailure: Bool = false
+        canDismissSyncFailure: Bool = false,
+        stackStatus: GGStackStatus? = nil
     ) -> ChangesPreparationModel {
         let summary = staged.hasChanges
             ? ReviewChangesTriggerSummary(
@@ -220,6 +252,7 @@ struct ChangesPreparationModel: Equatable {
             )
             : nil
         return makeGG(
+            hasLocalChanges: staged.hasChanges,
             staged: staged,
             hasDraft: hasDraft,
             capabilities: capabilities,
@@ -232,7 +265,8 @@ struct ChangesPreparationModel: Equatable {
             landingStatus: landingStatus,
             syncProgress: syncProgress,
             canDismissSyncFailure: canDismissSyncFailure,
-            reviewSummary: summary
+            reviewSummary: summary,
+            stackStatus: stackStatus
         )
     }
 
@@ -241,6 +275,7 @@ struct ChangesPreparationModel: Equatable {
     }
 
     private static func makeGG(
+        hasLocalChanges: Bool,
         staged: StagedStats,
         hasDraft: Bool,
         capabilities: GGCapabilities,
@@ -253,7 +288,8 @@ struct ChangesPreparationModel: Equatable {
         landingStatus: GGLandingStatus?,
         syncProgress: GGSyncProgressPresentation?,
         canDismissSyncFailure: Bool,
-        reviewSummary: ReviewChangesTriggerSummary?
+        reviewSummary: ReviewChangesTriggerSummary?,
+        stackStatus: GGStackStatus?
     ) -> ChangesPreparationModel {
         if let landingStatus {
             return ChangesPreparationModel(
@@ -287,6 +323,8 @@ struct ChangesPreparationModel: Equatable {
             syncProgress: syncProgress,
             canDismissSyncFailure: canDismissSyncFailure,
             mutationError: mutationError,
+            ggStackStatus: stackStatus,
+            hasLocalChanges: hasLocalChanges,
             ggActions: [
                 GGAction(
                     kind: .newStackCommit,
@@ -331,6 +369,8 @@ struct ChangesPreparationModel: Equatable {
         syncProgress: GGSyncProgressPresentation?,
         canDismissSyncFailure: Bool,
         mutationError: String?,
+        ggStackStatus: GGStackStatus?,
+        hasLocalChanges: Bool,
         ggActions: [GGAction]
     ) {
         self.reviewAction = reviewAction
@@ -342,6 +382,8 @@ struct ChangesPreparationModel: Equatable {
         self.syncProgress = syncProgress
         self.canDismissSyncFailure = canDismissSyncFailure
         self.mutationError = mutationError
+        self.ggStackStatus = ggStackStatus
+        self.hasLocalChanges = hasLocalChanges
         self.ggActions = ggActions
     }
 
@@ -359,6 +401,8 @@ struct ChangesPreparationModel: Equatable {
         canDismissSyncFailure = false
         self.mutationError = mutationError
         ggActions = []
+        ggStackStatus = nil
+        hasLocalChanges = false
     }
 
     private static func compactReviewRequestActions(
