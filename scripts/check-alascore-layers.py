@@ -69,7 +69,7 @@ MEMBER = re.compile(
 )
 # The same at any depth, for telling whether a member's name is unambiguous.
 ANY_MEMBER = re.compile(MEMBER.pattern.replace("^    ", "^\\s+", 1))
-CASES = re.compile(r"^\s+(?:indirect\s+)?case\s+([^=:{]+?)\s*$")
+CASES = re.compile(r"^\s+(?:indirect\s+)?case\s+([a-zA-Z_].*?)\s*$")
 INITIALIZER = re.compile(r"^    (?:(?:public|internal|package|convenience|required|nonisolated)\s+)*init\??\(\s*(\w+)")
 INITIALIZER_USE = re.compile(r"\b([A-Z]\w*)\(\s*(\w+)\s*:")
 EXTENSION = re.compile(r"^(?:(?:public|internal|package)\s+)?extension\s+([A-Z]\w*)")
@@ -89,10 +89,16 @@ def members(text):
         match = ANY_MEMBER.match(line)
         if match:
             all_members.add(match.group(1))
-        # Every name in `case a, b(Int), c`.
+        # Every name in `case a, b(value: Int), c = 2`; a `case x:` of a
+        # switch is not a declaration.
         match = CASES.match(line)
         if match:
-            all_members.update(re.findall(r"(?:^|,)\s*([a-zA-Z_]\w*)", re.sub(r"\([^)]*\)", "", match.group(1))))
+            names = match.group(1)
+            while "(" in names and re.search(r"\([^()]*\)", names):
+                names = re.sub(r"\([^()]*\)", "", names)
+            if ":" not in names and "{" not in names:
+                names = re.sub(r"=[^,]*", "", names)
+                all_members.update(re.findall(r"(?:^|,)\s*([a-zA-Z_]\w*)", names))
         match = MEMBER.match(line)
         if match and extended:
             in_extensions.add((extended, match.group(1)))
