@@ -133,6 +133,16 @@ Each phase is one or more PRs that build and pass on their own.
   access, or an `@_spi(Testing)` import where the symbol was already SPI. The
   layering check and its allowlist are gone: the compiler enforces the
   boundaries.
+- **Phase 4, measured locally** (`swift build -c release --target <module>`,
+  bottom up, peak resident memory): AlasFoundation 0.3 GB, AlasModel 0.8,
+  AlasPlatform 1.6, AlasFeatures 2.4, AlasCode 1.0, AlasAgents 2.8,
+  AlasHostCore 1.6. Peak memory tracks size: modules up to about 27k lines
+  stay near 1.6 GB, so each module is kept under about 30k.
+- **AlasFeatures is split too**, which the plan did not expect: Integrations,
+  Issues, Projects and Shepherd become `AlasIntegrations` (28k lines, 1.5 GB)
+  above the rest of `AlasFeatures` (21k lines, 1.5 GB). The few lower files
+  that used them moved up with them; `ReviewEvidenceStatus` and
+  `WorkspaceRepairCandidate`, plain values, moved down.
 
 ## Risks
 

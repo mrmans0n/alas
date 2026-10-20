@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import AlasCore
 @testable import AlasHostCore
-@testable import AlasFeatures
+@testable import AlasIntegrations
 
 struct ShepherdRulesResolveCase: Sendable, CustomTestStringConvertible {
     let testDescription: String

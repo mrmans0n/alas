@@ -23,25 +23,29 @@ let package = Package(
         .target(name: "AlasPlatform", dependencies: ["AlasFoundation", "AlasModel"]),
         .target(name: "AlasFeatures", dependencies: ["AlasFoundation", "AlasModel", "AlasPlatform"]),
         .target(
+            name: "AlasIntegrations",
+            dependencies: ["AlasFoundation", "AlasModel", "AlasPlatform", "AlasFeatures"]
+        ),
+        .target(
             name: "AlasCode",
             dependencies: [
-                "AlasFoundation", "AlasModel", "AlasPlatform", "AlasFeatures",
+                "AlasFoundation", "AlasModel", "AlasPlatform", "AlasFeatures", "AlasIntegrations",
                 .product(name: "SwiftTreeSitter", package: "swift-tree-sitter"),
             ]
         ),
         .target(
             name: "AlasAgents",
-            dependencies: ["AlasFoundation", "AlasModel", "AlasPlatform", "AlasFeatures", "AlasCode"]
+            dependencies: ["AlasFoundation", "AlasModel", "AlasPlatform", "AlasFeatures", "AlasIntegrations", "AlasCode"]
         ),
         .target(
             name: "AlasHostCore",
-            dependencies: ["AlasFoundation", "AlasModel", "AlasPlatform", "AlasFeatures", "AlasCode", "AlasAgents"]
+            dependencies: ["AlasFoundation", "AlasModel", "AlasPlatform", "AlasFeatures", "AlasIntegrations", "AlasCode", "AlasAgents"]
         ),
         // The umbrella: re-exports every module, so the app imports one.
         .target(
             name: "AlasCore",
             dependencies: [
-                "AlasFoundation", "AlasModel", "AlasPlatform", "AlasFeatures", "AlasCode", "AlasAgents",
+                "AlasFoundation", "AlasModel", "AlasPlatform", "AlasFeatures", "AlasIntegrations", "AlasCode", "AlasAgents",
                 "AlasHostCore",
             ]
         ),

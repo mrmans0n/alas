@@ -5,6 +5,7 @@ import AlasPlatform
 import AlasFeatures
 import AlasCode
 import AlasAgents
+import AlasIntegrations
 
 extension SessionsAPI {
     /// Why a session cannot start while a checkpoint restore awaits recovery.

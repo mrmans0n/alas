@@ -5,6 +5,7 @@ import AlasPlatform
 import AlasFeatures
 import AlasCode
 import AlasAgents
+import AlasIntegrations
 
 /// A review session `ReviewsAPI.open` saved, for the presenter to show.
 public struct OpenedReview: Sendable {

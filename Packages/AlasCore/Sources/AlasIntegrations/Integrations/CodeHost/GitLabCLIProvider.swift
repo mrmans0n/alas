@@ -3,6 +3,7 @@ import Foundation
 import AlasFoundation
 import AlasModel
 import AlasPlatform
+import AlasFeatures
 
 public struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding, Sendable {
     public let kind: CodeHostKind = .gitlab

@@ -2,6 +2,7 @@ import Foundation
 import AlasFoundation
 import AlasModel
 import AlasPlatform
+import AlasFeatures
 
 public protocol WorkspaceReviewSessionReading {
     func list(worktreeID: String) throws -> [ReviewSessionRecord]

@@ -5,6 +5,7 @@ import AlasPlatform
 import AlasFeatures
 import AlasCode
 import AlasAgents
+import AlasIntegrations
 
 extension AlasCoreContext {
     func makeOrchestrationCoordinator() -> ACPSessionOrchestrationCoordinator {

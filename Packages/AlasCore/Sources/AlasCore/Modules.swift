@@ -4,6 +4,7 @@
 @_exported import AlasModel
 @_exported import AlasPlatform
 @_exported import AlasFeatures
+@_exported import AlasIntegrations
 @_exported import AlasCode
 @_exported import AlasAgents
 @_exported import AlasHostCore

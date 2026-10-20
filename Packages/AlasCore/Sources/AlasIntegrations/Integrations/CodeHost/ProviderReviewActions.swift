@@ -2,6 +2,7 @@ import Foundation
 import AlasFoundation
 import AlasModel
 import AlasPlatform
+import AlasFeatures
 
 public enum ProviderReviewDecision: String, Codable, Equatable, Sendable {
     case comment

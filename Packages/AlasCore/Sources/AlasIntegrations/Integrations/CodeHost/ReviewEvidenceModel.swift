@@ -3,6 +3,7 @@ import Observation
 import AlasFoundation
 import AlasModel
 import AlasPlatform
+import AlasFeatures
 
 @Observable
 @MainActor

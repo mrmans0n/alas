@@ -5,6 +5,7 @@ import AlasPlatform
 import AlasFeatures
 import AlasCode
 import AlasAgents
+import AlasIntegrations
 
 /// Serves the host protocol to any transport: each connection hands it the
 /// messages it decoded and gets back the messages to send. The transport

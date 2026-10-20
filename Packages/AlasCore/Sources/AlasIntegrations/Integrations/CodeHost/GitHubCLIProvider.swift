@@ -2,6 +2,7 @@ import Foundation
 import AlasFoundation
 import AlasModel
 import AlasPlatform
+import AlasFeatures
 
 public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Sendable {
     public let kind: CodeHostKind = .github

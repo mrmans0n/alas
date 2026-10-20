@@ -3,6 +3,7 @@ import os
 import AlasFoundation
 import AlasModel
 import AlasPlatform
+import AlasFeatures
 
 public struct ReviewRequestDiffLoader: Sendable {
     private static let imageLogger = Logger(subsystem: "io.nlopez.alas", category: "review-image")
