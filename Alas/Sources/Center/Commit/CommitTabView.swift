@@ -55,8 +55,18 @@ struct CommitTabView: View {
         worktreeID: String,
         repositoryPath: URL,
         sha: String,
-        title: String
+        title: String,
+        trackedRevision: TrackedRevision? = nil
     ) -> ReviewSessionTarget {
+        // A followed tab keeps following once it becomes a review.
+        if let trackedRevision {
+            return ReviewSessionTarget.trackedCommit(
+                worktreeID: worktreeID,
+                repositoryPath: repositoryPath,
+                revision: trackedRevision,
+                title: "Review \(trackedRevision.target.displayLabel)"
+            )
+        }
         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let sessionTitle = trimmedTitle.isEmpty ? "Review \(String(sha.prefix(10)))" : "Review \(trimmedTitle)"
         return ReviewSessionTarget.commit(
@@ -197,8 +207,10 @@ struct CommitTabView: View {
                         worktreeID: worktreeId,
                         repositoryPath: worktreePath,
                         sha: details.info.sha,
-                        title: details.info.subject
-                    )
+                        title: details.info.subject,
+                        trackedRevision: tabState.revision.tracked
+                    ),
+                    loadedSHA: details.info.sha
                 )
             }
         }
@@ -415,7 +427,7 @@ struct CommitTabView: View {
     }
 
     @MainActor
-    private func openReviewSession(target: ReviewSessionTarget) {
+    private func openReviewSession(target: ReviewSessionTarget, loadedSHA: String) {
         let store = ReviewSessionStore()
         ReviewSessionLauncher.openOrFocus(
             target: target,
@@ -427,8 +439,13 @@ struct CommitTabView: View {
                     worktreeId: worktreeId,
                     commitTabId: tabState.id,
                     record: record,
-                    seed: reviewSession.map {
-                        ReviewSessionSeed(target: record.target, session: $0, selectedFileID: selectedReviewFileID)
+                    seed: reviewSession.flatMap { session in
+                        // Hand over the loaded diff only when it is the commit
+                        // the review shows: a followed revision may have moved.
+                        if case .trackedCommit(let revision) = record.target.payload, revision.resolvedSHA != loadedSHA {
+                            return nil
+                        }
+                        return ReviewSessionSeed(target: record.target, session: session, selectedFileID: selectedReviewFileID)
                     }
                 )
             },
