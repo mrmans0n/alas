@@ -71,7 +71,6 @@ Persistence/RemotePathMigration.swift RemotePath
 Persistence/RemotePathMigration.swift runSchedulesFile
 Persistence/RepoMCPTrust.swift MCPAttachmentPlanner
 Persistence/ShortcutAction.swift Worktree
-Persistence/ShortcutAction.swift runScript
 Persistence/SpaceConfig.swift SpaceMemberReference
 Persistence/SpaceConfig.swift Workspace
 Plugins/PluginCatalog.swift boundedFetch

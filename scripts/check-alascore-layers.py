@@ -82,7 +82,16 @@ def members(text):
     extend, are in extensions."""
     all_members, in_extensions = set(), set()
     extended = None
-    for line in text.splitlines():
+    lines = text.splitlines()
+    # A `case` declaration that wraps after a comma continues on the next
+    # lines; join them so every name it declares is read.
+    joined = []
+    for line in lines:
+        if joined and CASES.match(joined[-1]) and joined[-1].rstrip().endswith(","):
+            joined[-1] = joined[-1].rstrip() + " " + line.strip()
+        else:
+            joined.append(line)
+    for line in joined:
         if line and not line[0].isspace():
             match = EXTENSION.match(line)
             extended = match.group(1) if match else None

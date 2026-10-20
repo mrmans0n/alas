@@ -100,6 +100,8 @@ public enum LowKind {
 func low() -> LowKind { .hostOnly(1) }
 SWIFT
 python3 -I "${check}" --sources "${sources}" --allowlist "${allowlist}" > /dev/null
+printf 'public enum LowKind {\n    case first,\n         hostOnly\n}\nfunc low() -> LowKind { .hostOnly }\n' > "${sources}/Helpers/Low.swift"
+python3 -I "${check}" --sources "${sources}" --allowlist "${allowlist}" > /dev/null || { echo "rejected a case on a continuation line" >&2; exit 1; }
 for cases in 'case first(value: Int), hostOnly(value: Int)' 'case first = 1, hostOnly = 2' 'case first = "https://example", hostOnly = "{host}"'; do
     printf 'public enum LowKind: Int {\n    %s\n}\nfunc low() { _ = LowKind.self; _ = [.hostOnly] as [LowKind] }\n' "${cases}" > "${sources}/Helpers/Low.swift"
     python3 -I "${check}" --sources "${sources}" --allowlist "${allowlist}" > /dev/null || { echo "rejected a local case: ${cases}" >&2; exit 1; }
