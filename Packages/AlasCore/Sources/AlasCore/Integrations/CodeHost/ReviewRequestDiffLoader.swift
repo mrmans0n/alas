@@ -27,7 +27,11 @@ public struct ReviewRequestDiffLoader: Sendable {
             cwd: cwd
         )
 
-        let parsedDiffs = sections.map { DiffParser.parse($0.rawDiff) }
+        var parsedDiffs: [ParsedDiff] = []
+        for section in sections {
+            try Task.checkCancellation()
+            parsedDiffs.append(DiffParser.parse(section.rawDiff))
+        }
         let textIndices = sections.indices.filter { Self.canRenderText(sections[$0], diff: parsedDiffs[$0]) }
         let textModels = try await DiffDisplayModelBuilder.buildConcurrently(
             textIndices.map { (diff: parsedDiffs[$0], filePath: sections[$0].path) }
