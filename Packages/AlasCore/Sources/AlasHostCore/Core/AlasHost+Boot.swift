@@ -6,6 +6,7 @@ import AlasFeatures
 import AlasCode
 import AlasAgents
 import AlasIntegrations
+import AlasACP
 
 /// The host is stopping and starts nothing new.
 public struct HostStopping: Error, Equatable, LocalizedError {

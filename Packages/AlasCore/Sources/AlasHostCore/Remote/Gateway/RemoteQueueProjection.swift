@@ -5,6 +5,7 @@ import AlasPlatform
 import AlasFeatures
 import AlasCode
 import AlasAgents
+import AlasSessions
 
 /// Pure translation between the in-process queue model and the remote wire
 /// shape. Kept free of the gateway, the session, and SwiftUI so the mapping

@@ -5,6 +5,7 @@ import AlasPlatform
 import AlasFeatures
 import AlasCode
 import AlasAgents
+import AlasACP
 
 /// What a finished run printed, as the host serves it.
 public enum HostRunOutput: Codable, Equatable, Sendable {

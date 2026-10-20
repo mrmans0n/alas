@@ -6,6 +6,7 @@ import AlasPlatform
 import AlasFeatures
 import AlasCode
 import AlasAgents
+import AlasSessions
 
 /// A position in the host's change log. Events after a cursor describe every
 /// change since the snapshot that returned it. Each log has its own

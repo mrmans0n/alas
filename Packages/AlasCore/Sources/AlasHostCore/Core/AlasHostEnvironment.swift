@@ -5,6 +5,8 @@ import AlasPlatform
 import AlasFeatures
 import AlasCode
 import AlasAgents
+import AlasACP
+import AlasAgentKit
 
 /// What a host adds to the core's worktree and Workspace lifecycles: the
 /// app closes its terminals, asks about repository hooks and refreshes what

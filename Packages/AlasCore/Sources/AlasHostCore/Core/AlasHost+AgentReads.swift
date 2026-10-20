@@ -5,6 +5,7 @@ import AlasPlatform
 import AlasFeatures
 import AlasCode
 import AlasAgents
+import AlasACP
 
 extension SessionsAPI {
     /// The enabled ACP agents a session of `projectID` can start: on a

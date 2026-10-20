@@ -3,7 +3,7 @@ import Combine
 import Testing
 @testable import Alas
 @testable import AlasCore
-@testable import AlasAgents
+@testable import AlasSessions
 
 @MainActor
 @Suite("ACPSessionRunner")

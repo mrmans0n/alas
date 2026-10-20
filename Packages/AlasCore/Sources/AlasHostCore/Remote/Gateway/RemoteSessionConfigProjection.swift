@@ -5,6 +5,8 @@ import AlasPlatform
 import AlasFeatures
 import AlasCode
 import AlasAgents
+import AlasACP
+import AlasSessions
 
 /// The single place an `ACPSession` becomes a `sessionConfig` frame. The
 /// subscribe reply (`AppState.sessionConfig(for:)`) and the gateway's change

@@ -5,6 +5,8 @@ import AlasPlatform
 import AlasFeatures
 import AlasCode
 import AlasAgents
+import AlasAgentKit
+import AlasSessions
 
 /// The host side of a viewer's `@` mentions: ranking candidates the way the
 /// local picker does, and turning the mentions a prompt carries back into

@@ -157,7 +157,7 @@ struct ProcessTransportTerminationTests {
     @Test("Local ACP helper termination preserves detached broker supervisors")
     func localACPHelperPreservesBrokerSupervisors() throws {
         let transportSource = try source(named: "Packages/AlasCore/Sources/AlasFoundation/JSONRPC/JSONRPCStdioTransport.swift")
-        let brokerSource = try source(named: "Packages/AlasCore/Sources/AlasAgents/ACP/Broker/LocalACPBrokerService.swift")
+        let brokerSource = try source(named: "Packages/AlasCore/Sources/AlasACP/ACP/Broker/LocalACPBrokerService.swift")
 
         #expect(transportSource.contains("terminationScope == .processTree"))
         #expect(brokerSource.contains("terminationScope: .processOnly"))

@@ -5,6 +5,7 @@ import AlasPlatform
 import AlasFeatures
 import AlasCode
 import AlasAgents
+import AlasAgentKit
 
 /// Why a worktree a caller waited for was not created.
 public struct WorktreeCreationFailure: Error, Equatable, Sendable {

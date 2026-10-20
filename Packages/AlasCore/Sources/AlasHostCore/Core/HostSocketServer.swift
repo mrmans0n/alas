@@ -7,6 +7,7 @@ import AlasPlatform
 import AlasFeatures
 import AlasCode
 import AlasAgents
+import AlasAgentKit
 
 private let hostSocketLogger = Logger(subsystem: "io.nlopez.alas", category: "HostSocket")
 

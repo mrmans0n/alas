@@ -5,6 +5,7 @@ import AlasPlatform
 import AlasFeatures
 import AlasCode
 import AlasAgents
+import AlasSessions
 
 /// Per-connection, per-session sync bookkeeping for incremental transcript
 /// delivery: tracks how much of the change log this connection has already

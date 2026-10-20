@@ -143,6 +143,17 @@ Each phase is one or more PRs that build and pass on their own.
   above the rest of `AlasFeatures` (21k lines, 1.5 GB). The few lower files
   that used them moved up with them; `ReviewEvidenceStatus` and
   `WorkspaceRepairCandidate`, plain values, moved down.
+- **AlasAgents is split in four,** not along `ACP/Session` and `ACP/Adapter`:
+  `ACP/Session` alone was 40k lines, and its value types and its runtime
+  depend on each other through the session and the runner. The cut follows
+  the declarations instead: `AlasACP` (protocol, broker, adapter, remote and
+  the session value types the rest uses; 28k lines, 0.9 GB), `AlasSessions`
+  (`ACPSession`, its runner and store, and the plugin host that drives them;
+  27k, 0.9 GB), `AlasAgentKit` (harness, schedules, agent registry; 11k,
+  0.7 GB) and `AlasAgents` (the session manager; 13k, 1.6 GB). A type and its
+  extensions in one file stay together; 32 files with declarations on both
+  sides of a cut were split, and the private helpers they share became
+  `package`. `AlasHostCore` above them peaks at 1.3 GB.
 
 ## Risks
 

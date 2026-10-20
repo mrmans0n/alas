@@ -5,6 +5,8 @@ import AlasPlatform
 import AlasFeatures
 import AlasCode
 import AlasAgents
+import AlasAgentKit
+import AlasSessions
 
 /// What `@` offers in a session's composer: the files, symbols and other
 /// sessions of its project, for the app's composer and for Remote clients.

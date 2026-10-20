@@ -7,6 +7,8 @@ import AlasFeatures
 import AlasCode
 import AlasAgents
 import AlasIntegrations
+import AlasACP
+import AlasSessions
 
 private let hostLogger = Logger(subsystem: "io.nlopez.alas", category: "AlasHost")
 

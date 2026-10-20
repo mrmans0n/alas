@@ -345,7 +345,7 @@ assert.throws(() => V.buildDocument("<p>x</p>", "</script><script>", () => stubD
 {
   const fs = require("node:fs");
   const path = require("node:path");
-  const core = path.join(__dirname, "../../../Packages/AlasCore/Sources/AlasAgents");
+  const core = path.join(__dirname, "../../../Packages/AlasCore/Sources/AlasSessions");
   const macVariables = new Set(["Plugins/PluginWebPolicy.swift", "ACP/VisualAid/VisualAidWebPolicy.swift"]
     .flatMap((file) => [...fs.readFileSync(path.join(core, file), "utf8").matchAll(/"(--alas-[a-z0-9-]+)"/g)].map((m) => m[1])));
   assert.ok(macVariables.has("--alas-chart-6") && macVariables.has("--alas-font-sans"), "the Mac lists were found");

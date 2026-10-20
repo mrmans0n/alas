@@ -1,0 +1,96 @@
+import Foundation
+import Observation
+import AlasFoundation
+import AlasModel
+import AlasPlatform
+import AlasFeatures
+import AlasCode
+import AlasACP
+
+/// Maps a visual aid's question onto the native user-input form, and the
+/// submitted form back onto an answer and the prompt the agent receives.
+public enum ACPVisualAidQuestionForm: Sendable {
+    public static let choiceKey = "choice"
+    public static let noteKey = "note"
+    public static let noteMaxLength = 2000
+
+    public static func request(for visual: ACPVisualAid) -> ACPUserInputRequest? {
+        guard let question = visual.question else { return nil }
+        let choice = ACPUserInputField(key: choiceKey, required: true, schema: .init(
+            type: question.allowMultiple ? "array" : "string",
+            title: question.prompt, description: nil,
+            minLength: nil, maxLength: nil, pattern: nil, format: nil, minimum: nil, maximum: nil,
+            minItems: question.allowMultiple ? 1 : nil, maxItems: nil,
+            options: question.options.map { ACPElicitationOption(const: $0.id, title: $0.label, description: nil) },
+            defaultValue: nil, isSecret: false
+        ))
+        let note = ACPUserInputField(key: noteKey, required: false, schema: .init(
+            type: "string", title: "Note", description: nil,
+            minLength: nil, maxLength: noteMaxLength, pattern: nil, format: nil, minimum: nil, maximum: nil,
+            minItems: nil, maxItems: nil, options: [], defaultValue: nil, isSecret: false
+        ))
+        return ACPUserInputRequest(
+            id: visual.id, source: .visualAid(visual.id), title: visual.title,
+            message: question.prompt, fields: [choice, note], mode: .form
+        )
+    }
+
+    /// Whether the question can still be edited and submitted here: it is unanswered and this process
+    /// may answer it. A mirror of a session another process drives only reads it.
+    public static func isEditable(answer: ACPVisualAid.Answer?, canAnswer: Bool) -> Bool {
+        answer == nil && canAnswer
+    }
+
+    /// The choice field when `choice` is exactly one of the option ids.
+    public static func choiceField(for choice: String, in request: ACPUserInputRequest) -> ACPUserInputField? {
+        guard let field = request.fields.first(where: { $0.key == choiceKey }),
+              field.schema.options.contains(where: { $0.const == choice })
+        else { return nil }
+        return field
+    }
+
+    public static func answer(
+        from content: [String: ACPElicitationValue],
+        question: ACPVisualAid.Question,
+        at date: Date
+    ) -> ACPVisualAid.Answer? {
+        let picked: Set<String>
+        switch content[choiceKey] {
+        case .string(let id): picked = [id]
+        case .strings(let ids): picked = Set(ids)
+        default: return nil
+        }
+        let ordered = question.options.map(\.id).filter(picked.contains)
+        guard !ordered.isEmpty else { return nil }
+        var note: String?
+        if case .string(let text) = content[noteKey] {
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            note = trimmed.isEmpty ? nil : trimmed
+        }
+        return .answered(selectedOptionIds: ordered, note: note, at: date)
+    }
+
+    private static let answerPromptPrefix = "[Visual aid: "
+
+    /// The user prompt an answer sends; nil for a dismissal, which sends nothing.
+    public static func answerPrompt(for visual: ACPVisualAid, answer: ACPVisualAid.Answer) -> String? {
+        guard case .answered(let ids, let note, _) = answer else { return nil }
+        let labels = Dictionary(uniqueKeysWithValues: (visual.question?.options ?? []).map { ($0.id, $0.label) })
+        var lines = [
+            "\(answerPromptPrefix)\(visual.title)] \(visual.question?.prompt ?? "")",
+            "Selected: " + ids.map { "\($0) (\(labels[$0] ?? $0))" }.joined(separator: ", "),
+        ]
+        if let note, !note.isEmpty { lines.append("Note: \(note)") }
+        return lines.joined(separator: "\n")
+    }
+
+    /// Whether `message` is the prompt that answering a visual aid sends. The answered card already
+    /// shows the choice, so transcripts hide that prompt instead of rendering it as something the
+    /// user typed. Decided from the message alone, not from the visual it answers: the visual can
+    /// be outside a tail-first hydration slice, and a rolled-back answer must not flip the prompt's
+    /// visibility on a row nothing re-emits.
+    public static func isAnswerPrompt(_ message: ACPMessage) -> Bool {
+        guard case .user(_, _, let text, _, nil, _) = message else { return false }
+        return text.hasPrefix(answerPromptPrefix) && text.contains("\nSelected: ")
+    }
+}

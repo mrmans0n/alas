@@ -1,0 +1,758 @@
+import Foundation
+import AlasFoundation
+import AlasModel
+import AlasPlatform
+import AlasFeatures
+import AlasCode
+
+public enum PluginCapability: String, Codable, CaseIterable, Sendable, Hashable {
+    case workspaceRead = "workspace.read"
+    case worktreeSwitch = "worktree.switch"
+    case sessionFocus = "session.focus"
+    case tasksStart = "tasks.start"
+    case sessionRead = "session.read"
+    case notify
+    case network
+    case timers
+    case sessionWrite = "session.write"
+    case runsRead = "runs.read"
+    case runsStart = "runs.start"
+    case reviewRead = "review.read"
+    case reviewWrite = "review.write"
+    case processExec = "process.exec"
+    case filesRead = "files.read"
+    case filesWrite = "files.write"
+    case sessionContext = "session.context"
+    case usageRead = "usage.read"
+
+    /// The plugin API that introduced the capability; a manifest for an older API cannot ask for it.
+    public var api: Int {
+        switch self {
+        case .notify, .network, .timers: 5
+        case .sessionWrite, .runsRead, .runsStart, .reviewRead, .reviewWrite, .processExec, .filesRead, .filesWrite: 6
+        case .sessionContext: 7
+        case .usageRead: 12
+        default: 4
+        }
+    }
+
+    /// Plain-language description shown when the user approves a plugin.
+    public var summary: String {
+        switch self {
+        case .workspaceRead: "Read this project's worktrees and what their agent sessions are doing"
+        case .worktreeSwitch: "Switch the selected worktree"
+        case .sessionFocus: "Open agent sessions in this project"
+        case .tasksStart: "Create worktrees and start agents in this project"
+        case .sessionRead: "Read agents' final replies and session changes in this project"
+        case .notify: "Show notifications"
+        case .network: "Make web requests to the hosts it lists"
+        case .timers: "Run on a schedule"
+        case .sessionWrite: "Send messages to agent sessions in this project"
+        case .runsRead: "Read when run scripts start and finish in this project, and their output"
+        case .runsStart: "Start run scripts in this project"
+        case .reviewRead: "Read the pull request state and checks of this project's worktrees"
+        case .reviewWrite: "Add review comments to changes in this project"
+        case .processExec: "Run the commands listed below in this project's worktrees"
+        case .filesRead: "Read files in this project's worktrees"
+        case .filesWrite: "Create and change files in this project's worktrees"
+        case .sessionContext: "Add text to every prompt sent to agents in this project"
+        case .usageRead: "Read your agents' token usage, cost and usage-limit history across all projects"
+        }
+    }
+
+    /// Acts with the user's permissions outside the sandbox, so approving it takes a separate confirmation.
+    public var isFullAccess: Bool { self == .processExec || self == .filesWrite }
+}
+
+/// A command the plugin may run with `process.exec`: an exact argv prefix (API 6).
+public struct PluginProcessContribution: Equatable, Sendable {
+    public let id: String
+    public let command: [String]
+    public var appendArgs = false
+    public var longRunning = false
+
+    public init(id: String, command: [String], appendArgs: Bool = false, longRunning: Bool = false) {
+        self.id = id
+        self.command = command
+        self.appendArgs = appendArgs
+        self.longRunning = longRunning
+    }
+}
+
+/// A slash command in the agent composer that the plugin expands into a prompt with `prompt/expand` (API 7).
+public struct PluginPromptContribution: Equatable, Sendable {
+    public let name: String
+    public var description: String?
+
+    public init(name: String, description: String? = nil) {
+        self.name = name
+        self.description = description
+    }
+}
+
+/// Changes a plugin can subscribe to with the manifest's `events`.
+public enum PluginEvent: String, Sendable, Hashable {
+    case sessionState = "session.state"
+    case sessionFinished = "session.finished"
+    // API 6.
+    case gitChanged = "git.changed"
+    case worktreeCreated = "worktree.created"
+    case worktreeRemoved = "worktree.removed"
+    case focusChanged = "focus.changed"
+    case runStarted = "run.started"
+    case runFinished = "run.finished"
+    case reviewChanged = "review.changed"
+    // API 12.
+    case turnFinished = "turn.finished"
+
+    public var capability: PluginCapability {
+        switch self {
+        case .sessionState, .sessionFinished: .sessionRead
+        case .gitChanged, .worktreeCreated, .worktreeRemoved, .focusChanged: .workspaceRead
+        case .runStarted, .runFinished: .runsRead
+        case .reviewChanged: .reviewRead
+        case .turnFinished: .usageRead
+        }
+    }
+
+    public var api: Int {
+        switch capability {
+        case .sessionRead: 5
+        case .usageRead: 12
+        default: 6
+        }
+    }
+    /// `session.state` is sent as `session/state`.
+    public var method: String { rawValue.replacingOccurrences(of: ".", with: "/") }
+}
+
+/// A tab the plugin draws with `alas.present` (canvas) or describes with `view/render` (view).
+public struct PluginTabContribution: Equatable, Sendable {
+    public enum Kind: String, Sendable {
+        case canvas, view
+        /// A page from the manifest's `web` script, in a sandboxed web view (API 12).
+        case web
+    }
+
+    public let id: String
+    public let title: String
+    public var kind: Kind = .canvas
+
+    public init(id: String, title: String, kind: Kind = .canvas) {
+        self.id = id
+        self.title = title
+        self.kind = kind
+    }
+}
+
+/// Where a panel is shown.
+public enum PluginPanelLocation: String, Sendable {
+    /// A button in the right pane's rail.
+    case right
+    /// A row in the Changes tab, rendered for its worktree (API 6).
+    case changesSection = "changes.section"
+    /// Under a run report's header, rendered for its run (API 6).
+    case runReportSection = "run.report.section"
+    /// The plugin's own screen, opened from Settings → Plugins (API 9).
+    case configure
+
+    public var api: Int {
+        switch self {
+        case .right: 5
+        case .changesSection, .runReportSection: 6
+        case .configure: 9
+        }
+    }
+}
+
+/// What the plugin shows outside the center tabs: a view tree (`view/render {panel}`), or at `right` from API 15 a canvas
+/// or web page.
+public struct PluginPanelContribution: Equatable, Sendable {
+    public static let defaultIcon = "puzzlepiece.extension"
+
+    public let id: String
+    public let title: String
+    public var icon: String = defaultIcon
+    public var location: PluginPanelLocation = .right
+    public var kind: PluginTabContribution.Kind = .view
+
+    public init(id: String, title: String, icon: String = defaultIcon, location: PluginPanelLocation = .right, kind: PluginTabContribution.Kind = .view) {
+        self.id = id
+        self.title = title
+        self.icon = icon
+        self.location = location
+        self.kind = kind
+    }
+}
+
+/// A value the user sets for the plugin in Settings → Plugins.
+public struct PluginSetting: Equatable, Sendable {
+    public enum Kind: String, Sendable { case string, bool, secret }
+
+    public let key: String
+    public let title: String
+    public let kind: Kind
+    public var defaultValue: PluginSettingValue?
+    /// Secret only: the hosts its `{{secret:key}}` may be sent to.
+    public var hosts: [String] = []
+
+    public init(key: String, title: String, kind: Kind, defaultValue: PluginSettingValue? = nil, hosts: [String] = []) {
+        self.key = key
+        self.title = title
+        self.kind = kind
+        self.defaultValue = defaultValue
+        self.hosts = hosts
+    }
+}
+
+/// A setting's value or default; encodes as a bare JSON string or boolean.
+public enum PluginSettingValue: Codable, Equatable, Sendable {
+    case string(String)
+    case bool(Bool)
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .string(let value): try container.encode(value)
+        case .bool(let value): try container.encode(value)
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let value = try? container.decode(Bool.self) {
+            self = .bool(value)
+        } else {
+            self = .string(try container.decode(String.self))
+        }
+    }
+}
+
+public enum PluginManifestError: Error, Equatable, CustomStringConvertible, Sendable {
+    case malformed
+    case missingField(String)
+    case invalidID(String)
+    case unsupportedAPI(Int)
+    case unknownCapability(String)
+    case invalidEntry(String)
+    case invalidTab(String)
+    case invalidCommand(String)
+    case unknownEvent(String)
+    case eventNeedsCapability(String)
+    case needsNewerAPI(String, api: Int = 5)
+    case invalidSetting(String)
+    case invalidNetwork(String)
+    case invalidPanel(String)
+    case invalidProcess(String)
+    case invalidPrompt(String)
+    case invalidRemote
+    case invalidWeb(String)
+
+    public var description: String {
+        switch self {
+        case .malformed:
+            "plugin.json is not a valid JSON object"
+        case .missingField(let field):
+            "plugin.json is missing \"\(field)\""
+        case .invalidID(let id):
+            "invalid plugin id \"\(id)\"; use reverse-DNS such as io.example.plugin"
+        case .unsupportedAPI(let api) where (1...3).contains(api):
+            "built for plugin API \(api), the WebAssembly runtime, which Alas no longer supports; rebuild it for API \(PluginManifest.supportedAPIVersions.upperBound)"
+        case .unsupportedAPI(let api):
+            "requires plugin API \(api); this Alas supports up to \(PluginManifest.supportedAPIVersions.upperBound)"
+        case .unknownCapability(let name):
+            "unknown capability \"\(name)\""
+        case .invalidEntry(let entry):
+            "entry \"\(entry)\" must be a relative path inside the plugin folder"
+        case .invalidTab(let reason):
+            "invalid tab contribution: \(reason)"
+        case .invalidCommand(let reason):
+            "invalid command contribution: \(reason)"
+        case .unknownEvent(let name):
+            "unknown event \"\(name)\""
+        case .eventNeedsCapability(let name):
+            "event \"\(name)\" needs capability \"\(PluginEvent(rawValue: name)?.capability.rawValue ?? "")\""
+        case .needsNewerAPI(let feature, let api):
+            "\(feature) needs \"api\": \(api)"
+        case .invalidSetting(let reason):
+            "invalid setting: \(reason)"
+        case .invalidNetwork(let reason):
+            "invalid network list: \(reason)"
+        case .invalidPanel(let reason):
+            "invalid panel contribution: \(reason)"
+        case .invalidProcess(let reason):
+            "invalid process: \(reason)"
+        case .invalidPrompt(let reason):
+            "invalid prompt contribution: \(reason)"
+        case .invalidRemote:
+            "\"remote\" needs capability \"files.read\", \"files.write\" or \"process.exec\""
+        case .invalidWeb(let reason):
+            "invalid web page: \(reason)"
+        }
+    }
+}
+
+/// `plugin.json`. Unknown fields are ignored so newer manifests still load.
+public struct PluginManifest: Equatable, Sendable {
+    public static let supportedAPIVersions = 4...16
+    public static let maxTabs = 4
+    public static let maxTabTitleLength = 40
+    public static let maxCommands = 16
+    public static let maxSettings = 16
+    public static let maxPanels = 2
+    public static let maxPanelsAPI6 = 4
+    public static let maxProcesses = 16
+    public static let maxArgBytes = 1024
+    public static let maxPrompts = 16
+    /// Prompts an instance sets with `prompts/set` (API 9).
+    public static let maxRuntimePrompts = 32
+    public static let maxPromptDescriptionLength = 200
+
+    public let id: String
+    public let name: String
+    public let version: String
+    public let api: Int
+    public let entry: String
+    public let capabilities: [PluginCapability]
+    public var tabs: [PluginTabContribution] = []
+    public var panels: [PluginPanelContribution] = []
+    public var commands: [PluginCommandContribution] = []
+    public var events: [PluginEvent] = []
+    public var settings: [PluginSetting] = []
+    /// Hosts `http/fetch` may reach: exact, lowercase names.
+    public var network: [String] = []
+    /// Commands `process.exec` may run.
+    public var processes: [PluginProcessContribution] = []
+    /// Slash commands for the agent composer.
+    public var prompts: [PluginPromptContribution] = []
+    /// `process.*` and `file/*` also work on worktrees of SSH projects, run on that host (API 11).
+    public var remote = false
+    /// The script a `web` tab's page runs, relative to the plugin folder like `entry` (API 12).
+    public var web: String?
+
+    /// The panel Settings → Plugins opens with Configure… (API 9).
+    public var configurePanel: PluginPanelContribution? { panels.first { $0.location == .configure } }
+
+    /// Hosts the web page may load `https` images from (API 15): the `network` list.
+    public var webImageHosts: [String] { web != nil && api >= 15 ? network : [] }
+
+    /// The approval sheet's line about the web page, or nil without one.
+    public var webSummary: String? {
+        guard web != nil else { return nil }
+        return webImageHosts.isEmpty
+            ? "Show its own web content, with no network access"
+            : "Show its own web content, with images from \(webImageHosts.joined(separator: ", "))"
+    }
+
+    public static func parse(_ data: Data) throws(PluginManifestError) -> PluginManifest {
+        let raw: Raw
+        do {
+            raw = try JSONDecoder().decode(Raw.self, from: data)
+        } catch {
+            throw .malformed
+        }
+
+        func required(_ value: String?, _ field: String) throws(PluginManifestError) -> String {
+            guard let value, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw .missingField(field)
+            }
+            return value
+        }
+        let id = try required(raw.id, "id")
+        let name = try required(raw.name, "name")
+        let version = try required(raw.version, "version")
+        guard let api = raw.api else { throw .missingField("api") }
+        let entry = try required(raw.entry, "entry")
+
+        guard id.wholeMatch(of: /[a-z0-9-]+(\.[a-z0-9-]+)+/) != nil else { throw .invalidID(id) }
+        guard supportedAPIVersions.contains(api) else { throw .unsupportedAPI(api) }
+        // Features newer than the manifest's API are refused, so a plugin never half-works on an older Alas.
+        var capabilities: [PluginCapability] = []
+        for name in raw.capabilities ?? [] {
+            guard let capability = PluginCapability(rawValue: name) else { throw .unknownCapability(name) }
+            guard capability.api <= api else { throw .needsNewerAPI("capability \"\(name)\"", api: capability.api) }
+            capabilities.append(capability)
+        }
+        var events: [PluginEvent] = []
+        for name in raw.events ?? [] {
+            guard let event = PluginEvent(rawValue: name) else { throw .unknownEvent(name) }
+            guard api >= 5 else { throw .needsNewerAPI("\"events\"") }
+            guard event.api <= api else { throw .needsNewerAPI("event \"\(name)\"", api: event.api) }
+            guard capabilities.contains(event.capability) else { throw .eventNeedsCapability(name) }
+            events.append(event)
+        }
+        guard isRelativePath(entry) else { throw .invalidEntry(entry) }
+        if raw.contributesMalformed { throw .malformed }
+        let tabs = try parseTabs(raw.contributes?.tabs ?? [])
+        if let web = raw.web {
+            guard api >= 12 else { throw .needsNewerAPI("\"web\"", api: 12) }
+            guard isRelativePath(web), !web.isEmpty else { throw .invalidWeb("\"\(web)\" must be a relative path inside the plugin folder") }
+            // A file name, not the folder a trailing `/` or `.` would name.
+            guard !web.hasSuffix("/"), (web as NSString).lastPathComponent != "." else {
+                throw .invalidWeb("\"\(web)\" must name a file")
+            }
+            // Installing writes each file in turn, so none may be another, or a folder holding another.
+            guard !pathsCollide(web, entry) else {
+                throw .invalidWeb("\"web\" and \"entry\" must be different files, neither inside the other")
+            }
+            guard !pathsCollide(web, "plugin.json") else { throw .invalidWeb("\"web\" can't use the name plugin.json") }
+        }
+        if raw.contributes?.panels != nil, api < 5 { throw .needsNewerAPI("\"contributes.panels\"") }
+        let panels = try parsePanels(raw.contributes?.panels ?? [], tabs: tabs, api: api)
+        if let tab = tabs.first(where: { $0.kind == .web }) {
+            guard api >= 12 else { throw .needsNewerAPI("tab \"\(tab.id)\" kind \"web\"", api: 12) }
+            guard raw.web != nil else { throw .invalidWeb("tab \"\(tab.id)\" has kind \"web\", so the manifest needs \"web\"") }
+        } else if let panel = panels.first(where: { $0.kind == .web }) {
+            guard raw.web != nil else { throw .invalidWeb("panel \"\(panel.id)\" has kind \"web\", so the manifest needs \"web\"") }
+        } else if raw.web != nil {
+            throw .invalidWeb("\"web\" needs a tab or panel with kind \"web\"")
+        }
+        if raw.contributes?.commands != nil, api < 5 { throw .needsNewerAPI("\"contributes.commands\"") }
+        let commands = try parseCommands(raw.contributes?.commands ?? [], tabs: tabs, panels: panels, api: api)
+        if raw.contributes?.prompts != nil, api < 7 { throw .needsNewerAPI("\"contributes.prompts\"", api: 7) }
+        let prompts = try parsePrompts((raw.contributes?.prompts ?? []).map { ($0.name, $0.description) }, max: maxPrompts)
+        if raw.network != nil || raw.settings != nil, api < 5 {
+            throw .needsNewerAPI(raw.network != nil ? "\"network\"" : "\"settings\"")
+        }
+        let network = raw.network ?? []
+        if capabilities.contains(.network) {
+            guard !network.isEmpty else { throw .invalidNetwork("capability \"network\" needs at least one host") }
+        } else if !network.isEmpty {
+            throw .invalidNetwork("\"network\" needs capability \"network\"")
+        }
+        for host in network where !isValidHost(host) {
+            throw .invalidNetwork("\"\(host)\" is not a lowercase hostname; no schemes, ports or wildcards")
+        }
+        let settings = try parseSettings(raw.settings ?? [], network: network)
+        if raw.processes != nil, api < 6 { throw .needsNewerAPI("\"processes\"", api: 6) }
+        let processes = try parseProcesses(raw.processes ?? [])
+        if capabilities.contains(.processExec) {
+            guard !processes.isEmpty else { throw .invalidProcess("capability \"process.exec\" needs at least one process") }
+        } else if !processes.isEmpty {
+            throw .invalidProcess("\"processes\" needs capability \"process.exec\"")
+        }
+        let remote = raw.remote ?? false
+        if remote {
+            guard api >= 11 else { throw .needsNewerAPI("\"remote\"", api: 11) }
+            guard capabilities.contains(where: { [.filesRead, .filesWrite, .processExec].contains($0) }) else {
+                throw .invalidRemote
+            }
+        }
+        return PluginManifest(
+            id: id, name: name, version: version, api: api, entry: entry,
+            capabilities: capabilities, tabs: tabs, panels: panels, commands: commands, events: events,
+            settings: settings, network: network, processes: processes, prompts: prompts, remote: remote, web: raw.web)
+    }
+
+    /// Whether two relative paths can't both be files: the same name, or one a folder the other is in. Compared
+    /// after `./` and `//` are removed, ignoring case and Unicode normalization, as the default macOS volume does.
+    public static func pathsCollide(_ a: String, _ b: String) -> Bool {
+        func normalized(_ path: String) -> String {
+            (path as NSString).standardizingPath.precomposedStringWithCanonicalMapping.lowercased()
+        }
+        let (a, b) = (normalized(a), normalized(b))
+        return a == b || a.hasPrefix(b + "/") || b.hasPrefix(a + "/")
+    }
+
+    private static func isRelativePath(_ path: String) -> Bool {
+        !path.hasPrefix("/") && !path.split(separator: "/").contains("..")
+    }
+
+    public static func isValidHost(_ host: String) -> Bool {
+        host.wholeMatch(of: /[a-z0-9-]+(\.[a-z0-9-]+)+/) != nil
+    }
+
+    private static func parseSettings(_ raw: [Raw.RawSetting], network: [String]) throws(PluginManifestError) -> [PluginSetting] {
+        guard raw.count <= maxSettings else { throw .invalidSetting("at most \(maxSettings) settings") }
+        var settings: [PluginSetting] = []
+        for entry in raw {
+            let key = entry.key ?? ""
+            // Also the `{{secret:key}}` placeholder, so no braces or spaces.
+            guard key.wholeMatch(of: /[A-Za-z0-9_-]{1,64}/) != nil else {
+                throw .invalidSetting("invalid setting key \"\(key)\"")
+            }
+            // Case-insensitive: secrets may fall back to files, and the default macOS volume folds case.
+            guard !settings.contains(where: { $0.key.lowercased() == key.lowercased() }) else {
+                throw .invalidSetting("duplicate setting key \"\(key)\"")
+            }
+            let title = (entry.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard (1...maxTabTitleLength).contains(title.count) else {
+                throw .invalidSetting("setting \"\(key)\" needs a title of 1 to \(maxTabTitleLength) characters")
+            }
+            guard let kind = PluginSetting.Kind(rawValue: entry.type ?? "") else {
+                throw .invalidSetting("setting \"\(key)\" has unknown type \"\(entry.type ?? "")\"")
+            }
+            switch (kind, entry.defaultValue) {
+            case (_, nil), (.string, .string?), (.bool, .bool?): break
+            default: throw .invalidSetting("setting \"\(key)\" has a default of the wrong type")
+            }
+            // The same limit the form enforces, so every settings message fits.
+            if case .string(let text)? = entry.defaultValue, text.utf8.count > PluginSettings.maxStringBytes {
+                throw .invalidSetting("setting \"\(key)\" has a default longer than \(PluginSettings.maxStringBytes) bytes")
+            }
+            let hosts = entry.hosts ?? []
+            if kind == .secret {
+                guard !hosts.isEmpty else { throw .invalidSetting("secret \"\(key)\" needs at least one host") }
+                // A secret only travels in `http/fetch`, so its hosts must be ones the plugin may reach.
+                if let host = hosts.first(where: { !network.contains($0) }) {
+                    throw .invalidSetting("secret \"\(key)\" names \"\(host)\", which is not in \"network\"")
+                }
+            } else if !hosts.isEmpty {
+                throw .invalidSetting("only secret settings take hosts")
+            }
+            settings.append(PluginSetting(key: key, title: title, kind: kind, defaultValue: entry.defaultValue, hosts: hosts))
+        }
+        return settings
+    }
+
+    private static func parseProcesses(_ raw: [Raw.RawProcess]) throws(PluginManifestError) -> [PluginProcessContribution] {
+        guard raw.count <= maxProcesses else { throw .invalidProcess("at most \(maxProcesses) processes") }
+        var processes: [PluginProcessContribution] = []
+        for entry in raw {
+            let id = entry.id ?? ""
+            guard id.wholeMatch(of: /[a-z0-9-]+(\.[a-z0-9-]+)*/) != nil else { throw .invalidProcess("invalid process id \"\(id)\"") }
+            guard !processes.contains(where: { $0.id == id }) else { throw .invalidProcess("duplicate process id \"\(id)\"") }
+            let command = entry.command ?? []
+            guard let executable = command.first, !executable.isEmpty else {
+                throw .invalidProcess("process \"\(id)\" needs a command")
+            }
+            guard command.allSatisfy({ $0.utf8.count <= maxArgBytes }) else {
+                throw .invalidProcess("process \"\(id)\" has an argument longer than \(maxArgBytes) bytes")
+            }
+            processes.append(PluginProcessContribution(
+                id: id, command: command, appendArgs: entry.appendArgs ?? false, longRunning: entry.longRunning ?? false))
+        }
+        return processes
+    }
+
+    /// Also checks the prompts an instance sets with `prompts/set`.
+    public static func parsePrompts(
+        _ raw: [(name: String?, description: String?)], max: Int
+    ) throws(PluginManifestError) -> [PluginPromptContribution] {
+        guard raw.count <= max else { throw .invalidPrompt("at most \(max) prompts") }
+        var prompts: [PluginPromptContribution] = []
+        for entry in raw {
+            // Typed after a slash in the composer, so no dots, spaces or capitals.
+            let name = entry.name ?? ""
+            guard name.wholeMatch(of: /[a-z0-9][a-z0-9-]{0,31}/) != nil else { throw .invalidPrompt("invalid prompt name \"\(name)\"") }
+            guard !prompts.contains(where: { $0.name == name }) else { throw .invalidPrompt("duplicate prompt name \"\(name)\"") }
+            let description = entry.description?.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard (description?.count ?? 0) <= maxPromptDescriptionLength else {
+                throw .invalidPrompt("prompt \"\(name)\" has a description longer than \(maxPromptDescriptionLength) characters")
+            }
+            prompts.append(PluginPromptContribution(name: name, description: description?.isEmpty == false ? description : nil))
+        }
+        return prompts
+    }
+
+    private static func parseCommands(
+        _ raw: [Raw.RawCommand], tabs: [PluginTabContribution], panels: [PluginPanelContribution], api: Int
+    ) throws(PluginManifestError) -> [PluginCommandContribution] {
+        guard raw.count <= maxCommands else { throw .invalidCommand("at most \(maxCommands) commands") }
+        var commands: [PluginCommandContribution] = []
+        for entry in raw {
+            let id = entry.id ?? ""
+            guard id.wholeMatch(of: /[a-z0-9-]+(\.[a-z0-9-]+)*/) != nil else { throw .invalidCommand("invalid command id \"\(id)\"") }
+            guard !commands.contains(where: { $0.id == id }) else { throw .invalidCommand("duplicate command id \"\(id)\"") }
+            let title = (entry.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard (1...maxTabTitleLength).contains(title.count) else {
+                throw .invalidCommand("command \"\(id)\" needs a title of 1 to \(maxTabTitleLength) characters")
+            }
+            guard let slots = entry.slots, !slots.isEmpty else { throw .invalidCommand("command \"\(id)\" needs at least one slot") }
+            if let opens = entry.opens {
+                guard api >= 8 else { throw .needsNewerAPI("command \"\(id)\" \"opens\"", api: 8) }
+                let opensPanel = api >= 15 && panels.contains { $0.id == opens && $0.location == .right }
+                guard tabs.contains(where: { $0.id == opens }) || opensPanel else {
+                    throw .invalidCommand(
+                        "command \"\(id)\" opens \"\(opens)\", which is not a declared \(api >= 15 ? "tab or right panel" : "tab")")
+                }
+            }
+            // Slots will keep growing, so one this Alas does not know is skipped rather than refused, and so is one
+            // newer than the manifest's API, as an Alas of that API would.
+            commands.append(PluginCommandContribution(
+                id: id, title: title, icon: entry.icon,
+                slots: slots.compactMap(PluginCommandSlot.init(rawValue:)).filter { $0.api <= api }, opens: entry.opens))
+        }
+        return commands
+    }
+
+    private static func parsePanels(
+        _ raw: [Raw.RawPanel], tabs: [PluginTabContribution], api: Int
+    ) throws(PluginManifestError) -> [PluginPanelContribution] {
+        let limit = api >= 6 ? maxPanelsAPI6 : maxPanels
+        guard raw.count <= limit else { throw .invalidPanel("at most \(limit) panels") }
+        var panels: [PluginPanelContribution] = []
+        // Every declared id, skipped locations included, so uniqueness does not depend on order or on what this
+        // Alas supports.
+        var declared: Set<String> = []
+        var hasConfigure = false
+        for entry in raw {
+            let id = entry.id ?? ""
+            guard id.wholeMatch(of: /[a-z0-9-]+(\.[a-z0-9-]+)*/) != nil else { throw .invalidPanel("invalid panel id \"\(id)\"") }
+            guard declared.insert(id).inserted else { throw .invalidPanel("duplicate panel id \"\(id)\"") }
+            guard !tabs.contains(where: { $0.id == id }) else { throw .invalidPanel("panel id \"\(id)\" is also a tab id") }
+            let title = (entry.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard (1...maxTabTitleLength).contains(title.count) else {
+                throw .invalidPanel("panel \"\(id)\" needs a title of 1 to \(maxTabTitleLength) characters")
+            }
+            if entry.location == PluginPanelLocation.configure.rawValue {
+                guard api >= 9 else { throw .needsNewerAPI("panel \"\(id)\" location \"configure\"", api: 9) }
+                guard !hasConfigure else { throw .invalidPanel("at most one panel with location \"configure\"") }
+                hasConfigure = true
+            }
+            // Locations will keep growing, so one this Alas does not know is skipped rather than refused, and so is
+            // one newer than the manifest's API, as an Alas of that API would.
+            guard let location = PluginPanelLocation(rawValue: entry.location ?? "right"), location.api <= api else { continue }
+            var kind = PluginTabContribution.Kind.view
+            if let rawKind = entry.kind {
+                guard let parsed = PluginTabContribution.Kind(rawValue: rawKind) else {
+                    throw .invalidPanel("panel \"\(id)\" has unknown kind \"\(rawKind)\"")
+                }
+                kind = parsed
+            }
+            if kind != .view {
+                guard api >= 15 else { throw .needsNewerAPI("panel \"\(id)\" kind \"\(kind.rawValue)\"", api: 15) }
+                // Inline sections and the configure sheet size to their content, which a canvas or a page doesn't.
+                guard location == .right else {
+                    throw .invalidPanel("panel \"\(id)\" at \(location.rawValue) can only have kind \"view\"")
+                }
+            }
+            let icon = (entry.icon ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            panels.append(PluginPanelContribution(
+                id: id, title: title, icon: icon.isEmpty ? PluginPanelContribution.defaultIcon : icon, location: location,
+                kind: kind))
+        }
+        return panels
+    }
+
+    private static func parseTabs(_ raw: [Raw.RawTab]) throws(PluginManifestError) -> [PluginTabContribution] {
+        guard raw.count <= maxTabs else { throw .invalidTab("at most \(maxTabs) tabs") }
+        var tabs: [PluginTabContribution] = []
+        for entry in raw {
+            let id = entry.id ?? ""
+            guard id.wholeMatch(of: /[a-z0-9-]+(\.[a-z0-9-]+)*/) != nil else { throw .invalidTab("invalid tab id \"\(id)\"") }
+            guard !tabs.contains(where: { $0.id == id }) else { throw .invalidTab("duplicate tab id \"\(id)\"") }
+            let title = (entry.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard (1...maxTabTitleLength).contains(title.count) else {
+                throw .invalidTab("tab \"\(id)\" needs a title of 1 to \(maxTabTitleLength) characters")
+            }
+            var kind = PluginTabContribution.Kind.canvas
+            if let rawKind = entry.kind {
+                guard let parsed = PluginTabContribution.Kind(rawValue: rawKind) else {
+                    throw .invalidTab("tab \"\(id)\" has unknown kind \"\(rawKind)\"")
+                }
+                kind = parsed
+            }
+            tabs.append(PluginTabContribution(id: id, title: title, kind: kind))
+        }
+        return tabs
+    }
+
+    public init(id: String, name: String, version: String, api: Int, entry: String, capabilities: [PluginCapability], tabs: [PluginTabContribution] = [], panels: [PluginPanelContribution] = [], commands: [PluginCommandContribution] = [], events: [PluginEvent] = [], settings: [PluginSetting] = [], network: [String] = [], processes: [PluginProcessContribution] = [], prompts: [PluginPromptContribution] = [], remote: Bool = false, web: String? = nil) {
+        self.id = id
+        self.name = name
+        self.version = version
+        self.api = api
+        self.entry = entry
+        self.capabilities = capabilities
+        self.tabs = tabs
+        self.panels = panels
+        self.commands = commands
+        self.events = events
+        self.settings = settings
+        self.network = network
+        self.processes = processes
+        self.prompts = prompts
+        self.remote = remote
+        self.web = web
+    }
+}
+
+private struct Raw: Decodable {
+    struct RawTab: Decodable {
+        let id: String?
+        let title: String?
+        let kind: String?
+    }
+    struct RawCommand: Decodable {
+        let id: String?
+        let title: String?
+        let icon: String?
+        let slots: [String]?
+        let opens: String?
+    }
+    struct RawSetting: Decodable {
+        let key: String?
+        let title: String?
+        let type: String?
+        let defaultValue: PluginSettingValue?
+        let hosts: [String]?
+
+        private enum CodingKeys: String, CodingKey {
+            case key, title, type, hosts
+            case defaultValue = "default"
+        }
+    }
+    struct RawPanel: Decodable {
+        let id: String?
+        let title: String?
+        let icon: String?
+        let location: String?
+        let kind: String?
+    }
+    struct RawProcess: Decodable {
+        let id: String?
+        let command: [String]?
+        let appendArgs: Bool?
+        let longRunning: Bool?
+    }
+    struct RawPrompt: Decodable {
+        let name: String?
+        let description: String?
+    }
+    struct RawContributes: Decodable {
+        let tabs: [RawTab]?
+        let commands: [RawCommand]?
+        let panels: [RawPanel]?
+        let prompts: [RawPrompt]?
+    }
+
+    let id: String?
+    let name: String?
+    let version: String?
+    let api: Int?
+    let entry: String?
+    let capabilities: [String]?
+    let events: [String]?
+    let settings: [RawSetting]?
+    let network: [String]?
+    let processes: [RawProcess]?
+    let remote: Bool?
+    let web: String?
+    let contributes: RawContributes?
+    let contributesMalformed: Bool
+
+    private enum CodingKeys: String, CodingKey { case id, name, version, api, entry, capabilities, events, settings, network, processes, remote, web, contributes }
+
+    package init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(String.self, forKey: .id)
+        name = try container.decodeIfPresent(String.self, forKey: .name)
+        version = try container.decodeIfPresent(String.self, forKey: .version)
+        api = try container.decodeIfPresent(Int.self, forKey: .api)
+        entry = try container.decodeIfPresent(String.self, forKey: .entry)
+        // Optional means omitted, not null: `"capabilities": null` is malformed, not "none requested".
+        capabilities = container.contains(.capabilities)
+            ? try container.decode([String].self, forKey: .capabilities) : nil
+        events = container.contains(.events) ? try container.decode([String].self, forKey: .events) : nil
+        settings = container.contains(.settings) ? try container.decode([RawSetting].self, forKey: .settings) : nil
+        network = container.contains(.network) ? try container.decode([String].self, forKey: .network) : nil
+        processes = container.contains(.processes) ? try container.decode([RawProcess].self, forKey: .processes) : nil
+        remote = container.contains(.remote) ? try container.decode(Bool.self, forKey: .remote) : nil
+        web = container.contains(.web) ? try container.decode(String.self, forKey: .web) : nil
+        // Lenient here so `parse` can tell a malformed `contributes` from a missing one.
+        contributes = (try? container.decodeIfPresent(RawContributes.self, forKey: .contributes)) ?? nil
+        contributesMalformed = contributes == nil && container.contains(.contributes)
+            && !((try? container.decodeNil(forKey: .contributes)) ?? false)
+    }
+}

@@ -5,6 +5,8 @@ import AlasPlatform
 import AlasFeatures
 import AlasCode
 import AlasAgents
+import AlasACP
+import AlasSessions
 
 /// A position in one session's transcript, from its `ACPTranscriptChangeLog`.
 /// Deltas after a revision describe every change since it, as long as the
