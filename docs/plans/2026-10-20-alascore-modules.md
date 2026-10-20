@@ -76,7 +76,7 @@ Bottom to top; each depends only on the ones before it.
 | `AlasPlatform` | SSH, Git, Search, RepoHooks, Zmx, Updates, LocalText | ~30k |
 | `AlasFeatures` | Integrations, Issues, Center, Shepherd, Checkpoints, Projects, Workspace, RunScripts, Schedules, Attention | ~60k |
 | `AlasCode` | Code (LSP, symbols, highlighting) | ~12k |
-| `AlasAgents` | ACP (minus what moved down), Agents, Harness, Plugins, FailureBriefs | ~75k |
+| `AlasAgents` | ACP (minus what moved down), Agents, Harness, Plugins, FailureBriefs, Right | ~75k |
 | `AlasHostCore` | Core, Remote, the host extensions from feature folders | ~22k |
 | `AlasCore` | Umbrella: `@_exported import` of all of the above | — |
 
