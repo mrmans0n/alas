@@ -651,6 +651,7 @@ struct ReviewSessionTabView: View {
             }
             if refreshedRecord.selectedFileID == nil, let seededSelection = seed?.selectedFileID {
                 refreshedRecord.selectedFileID = seededSelection
+                try sessionStore.save(refreshedRecord)
             }
 
             publishInitialLoad(
