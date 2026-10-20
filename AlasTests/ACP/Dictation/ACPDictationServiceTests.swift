@@ -17,7 +17,7 @@ private final class FakeDictationEngine: ACPDictationEngine {
 
     func installedLocaleIdentifiers() async -> [String] { installed }
 
-    func start(preferredLocaleIdentifier: String?, callbacks: ACPDictationCallbacks) {
+    func start(preferredLocaleIdentifier: String?, microphoneUID: String?, callbacks: ACPDictationCallbacks) {
         startCallCount += 1
         lastPreferredLocale = preferredLocaleIdentifier
         self.callbacks = callbacks
@@ -175,7 +175,7 @@ struct ACPDictationServiceTests {
     func preferredLocaleReachesEngine() {
         let engine = FakeDictationEngine()
         let service = ACPDictationService(engine: engine)
-        service.preferredLocaleIdentifier = "es_ES"
+        service.preferences = ACPDictationPreferences(localeIdentifier: "es_ES")
 
         service.start()
 
@@ -186,7 +186,7 @@ struct ACPDictationServiceTests {
     func emptyLocalePreferenceBecomesNil() {
         let engine = FakeDictationEngine()
         let service = ACPDictationService(engine: engine)
-        service.preferredLocaleIdentifier = ""
+        service.preferences = ACPDictationPreferences(localeIdentifier: "")
 
         service.start()
 

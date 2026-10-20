@@ -1,17 +1,17 @@
 import SwiftUI
 
-/// The composer's push-to-talk button, with the language menu on
-/// right-click. Shared by the local and peer composers.
+/// The composer's push-to-talk button, with language and microphone menus
+/// on right-click. Shared by the local and peer composers.
 struct ACPDictationMicButton: View {
     @ObservedObject var dictation: ACPDictationService
-    /// Languages ready to use without a download, for the menu.
-    let installedLocales: [String]
-    /// Current value of the `acpDictationLocale` setting.
-    let selectedLocale: String
+    let preferences: ACPDictationPreferences
     var onWillToggle: () -> Void = {}
-    /// Persists a language chosen from the menu.
-    let onSelectLocale: (String) -> Void
+    /// Persists a language or microphone chosen from the menu.
+    let onChangePreferences: (ACPDictationPreferences) -> Void
     @Environment(\.theme) private var theme
+    /// Languages ready to use without a download.
+    @State private var installedLocales: [String] = []
+    @State private var microphones: [ACPAudioInputDevice] = []
 
     var body: some View {
         Button {
@@ -40,21 +40,52 @@ struct ACPDictationMicButton: View {
         .accessibilityLabel("Dictate")
         .help(ACPComposerControlPresentation.micHelp(for: dictation.state))
         .contextMenu {
-            ForEach(ACPComposerControlPresentation.dictationMenuItems(
-                installed: installedLocales,
-                selected: selectedLocale
-            )) { item in
-                Button {
-                    // Stop first, so a session never keeps running under a
-                    // language the menu no longer shows as current.
-                    dictation.stop()
-                    onSelectLocale(item.localeIdentifier)
-                } label: {
-                    // A checkmark prefix rather than a Toggle: these are
-                    // mutually exclusive and Toggle rows in a context menu
-                    // read as independently switchable.
-                    Text(item.isSelected ? "✓ \(item.title)" : item.title)
+            Section("Language") {
+                menuEntries(ACPComposerControlPresentation.languageMenuItems(
+                    installed: installedLocales,
+                    selected: preferences.localeIdentifier
+                )) { identifier in
+                    var updated = preferences
+                    updated.localeIdentifier = identifier
+                    return updated
                 }
+            }
+            Section("Microphone") {
+                menuEntries(ACPComposerControlPresentation.microphoneMenuItems(
+                    available: microphones,
+                    selected: preferences.microphone
+                )) { identifier in
+                    var updated = preferences
+                    updated.microphone = ACPComposerControlPresentation.microphone(
+                        forMenuIdentifier: identifier,
+                        available: microphones,
+                        selected: preferences.microphone
+                    )
+                    return updated
+                }
+            }
+        }
+        .task { installedLocales = await dictation.installedLocaleIdentifiers() }
+        .task {
+            for await devices in ACPAudioInputDevices.updates() { microphones = devices }
+        }
+    }
+
+    private func menuEntries(
+        _ items: [ACPDictationMenuItem],
+        applying choice: @escaping (String) -> ACPDictationPreferences
+    ) -> some View {
+        ForEach(items) { item in
+            Button {
+                // Stop first, so a session never keeps running under a
+                // choice the menu no longer shows as current.
+                dictation.stop()
+                onChangePreferences(choice(item.identifier))
+            } label: {
+                // A checkmark prefix rather than a Toggle: these are
+                // mutually exclusive and Toggle rows in a context menu
+                // read as independently switchable.
+                Text(item.isSelected ? "✓ \(item.title)" : item.title)
             }
         }
     }

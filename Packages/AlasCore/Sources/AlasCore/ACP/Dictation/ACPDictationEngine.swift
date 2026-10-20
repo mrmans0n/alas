@@ -2,7 +2,7 @@ import Foundation
 
 /// Callbacks a dictation engine reports through. Grouped into one value so
 /// `start` keeps a readable signature as the engine grew a preferred
-/// locale and a silence report.
+/// locale, a chosen microphone and a silence report.
 public struct ACPDictationCallbacks {
     /// Setup finished and audio is being captured.
     public let onReady: () -> Void
@@ -16,12 +16,22 @@ public struct ACPDictationCallbacks {
     /// most once per session, and does NOT stop dictation, since sound may
     /// still start. Carries the input device name when it's known.
     public let onSilence: (_ deviceName: String?) -> Void
+    /// The chosen microphone isn't connected, so recording fell back to the
+    /// system default input. Does not stop dictation.
+    public let onMicrophoneUnavailable: () -> Void
 
-    public init(onReady: @escaping () -> Void, onResult: @escaping (_ text: String, _ isFinal: Bool) -> Void, onFailure: @escaping (_ message: String) -> Void, onSilence: @escaping (_ deviceName: String?) -> Void) {
+    public init(
+        onReady: @escaping () -> Void,
+        onResult: @escaping (_ text: String, _ isFinal: Bool) -> Void,
+        onFailure: @escaping (_ message: String) -> Void,
+        onSilence: @escaping (_ deviceName: String?) -> Void,
+        onMicrophoneUnavailable: @escaping () -> Void
+    ) {
         self.onReady = onReady
         self.onResult = onResult
         self.onFailure = onFailure
         self.onSilence = onSilence
+        self.onMicrophoneUnavailable = onMicrophoneUnavailable
     }
 }
 
@@ -45,8 +55,9 @@ public protocol ACPDictationEngine: AnyObject {
     /// number of times until `stop()` is called.
     ///
     /// `preferredLocaleIdentifier` is the user's explicit language choice,
-    /// or nil to detect one automatically.
-    func start(preferredLocaleIdentifier: String?, callbacks: ACPDictationCallbacks)
+    /// or nil to detect one automatically. `microphoneUID` is the CoreAudio
+    /// UID of the input to record from, or nil for the system default.
+    func start(preferredLocaleIdentifier: String?, microphoneUID: String?, callbacks: ACPDictationCallbacks)
 
     /// Tears down the audio tap and transcriber. Safe to call even if
     /// `start` never reached `onReady`.

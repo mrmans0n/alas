@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### ✨ Features
+
+- Choose the microphone chat dictation records from, in Settings → Chat or from the mic button's right-click menu. Falls back to the system default, with a notice, when the chosen microphone isn't connected.
+
 ## [0.21.9] - 2026-10-20
 
 ### ✨ Features
