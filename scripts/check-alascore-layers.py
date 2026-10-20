@@ -33,8 +33,8 @@ MODULES = [
     ("AlasPlatform", ["SSH", "Git", "Search", "RepoHooks", "Zmx", "Updates"]),
     ("AlasFeatures", ["Integrations", "Issues", "Center", "Shepherd", "Checkpoints", "Projects",
                       "Workspace", "RunScripts", "Schedules", "Attention"]),
-    ("AlasAgents", ["ACP", "Agents", "Harness", "Plugins", "FailureBriefs", "Right"]),
     ("AlasCode", ["Code"]),
+    ("AlasAgents", ["ACP", "Agents", "Harness", "Plugins", "FailureBriefs", "Right"]),
     ("AlasHostCore", ["Core", "Remote"]),
 ]
 
