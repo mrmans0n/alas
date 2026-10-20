@@ -33,7 +33,7 @@ import sys
 # gets a module when it is created.
 MODULES = [
     ("AlasFoundation", ["Helpers", "SQLiteKit", "JSONRPC", "Watch", "Dialogs", "Diagnostics"]),
-    ("AlasModel", ["Persistence"]),
+    ("AlasModel", ["Persistence", "Model"]),
     ("AlasPlatform", ["SSH", "Git", "Search", "RepoHooks", "Zmx", "Updates", "LocalText"]),
     ("AlasFeatures", ["Integrations", "Issues", "Center", "Shepherd", "Checkpoints", "Projects",
                       "Workspace", "RunScripts", "Schedules", "Attention"]),
