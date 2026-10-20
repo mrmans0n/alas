@@ -1,0 +1,216 @@
+import Foundation
+
+extension SemanticVersion: Codable {
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        guard let parsed = SemanticVersion(parsing: raw) else {
+            throw DecodingError.dataCorrupted(
+                .init(codingPath: decoder.codingPath, debugDescription: "Invalid version \"\(raw)\""))
+        }
+        self = parsed
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(description)
+    }
+}
+
+/// Actions a "What's new" card can offer. Closed set so bundled JSON cannot
+/// reference behavior the app does not implement.
+public enum WhatsNewAction: String, Codable, CaseIterable, Sendable {
+    case openPluginSettings
+}
+
+public struct WhatsNewHeadline: Codable, Equatable, Sendable {
+    public let title: String
+    public let body: String
+    public let media: String?
+    public let action: WhatsNewAction?
+    public let actionLabel: String?
+
+    public init(
+        title: String, body: String, media: String? = nil,
+        action: WhatsNewAction? = nil, actionLabel: String? = nil
+    ) {
+        self.title = title
+        self.body = body
+        self.media = media
+        self.action = action
+        self.actionLabel = actionLabel
+    }
+}
+
+public struct WhatsNewAlso: Codable, Equatable, Sendable {
+    public let title: String
+
+    public init(title: String) { self.title = title }
+}
+
+public struct WhatsNewEntry: Codable, Equatable, Sendable {
+    public let version: SemanticVersion
+    public let headline: WhatsNewHeadline
+    public let also: [WhatsNewAlso]
+
+    public init(version: SemanticVersion, headline: WhatsNewHeadline, also: [WhatsNewAlso] = []) {
+        self.version = version
+        self.headline = headline
+        self.also = also
+    }
+
+    private enum CodingKeys: String, CodingKey { case version, headline, also }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        version = try container.decode(SemanticVersion.self, forKey: .version)
+        headline = try container.decode(WhatsNewHeadline.self, forKey: .headline)
+        also = try container.decodeIfPresent([WhatsNewAlso].self, forKey: .also) ?? []
+    }
+
+    public var headerTitle: String { "New in \(version.major).\(version.minor)" }
+
+    public var releaseNotesURL: URL {
+        URL(string: "https://github.com/mrmans0n/alas/releases/tag/v\(version)")!
+    }
+}
+
+public struct WhatsNewProblem: Equatable, Sendable {
+    public let file: String
+    public let message: String
+
+    public init(file: String, message: String) {
+        self.file = file
+        self.message = message
+    }
+}
+
+public struct WhatsNewCatalog: Sendable {
+    public static let maxAlsoItems = 2
+
+    public let directory: URL
+    /// Valid entries only, sorted ascending by version.
+    public let entries: [WhatsNewEntry]
+    public let problems: [WhatsNewProblem]
+
+    public static func load(directory: URL, fileManager: FileManager = .default) -> WhatsNewCatalog {
+        let root = directory.standardizedFileURL
+        guard
+            let names = try? fileManager.contentsOfDirectory(atPath: directory.path)
+        else {
+            return WhatsNewCatalog(directory: directory, entries: [], problems: [])
+        }
+
+        var entries: [WhatsNewEntry] = []
+        var problems: [WhatsNewProblem] = []
+        for name in names.sorted() where name.hasSuffix(".json") {
+            let url = directory.appendingPathComponent(name)
+            var isDirectory: ObjCBool = false
+            guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory),
+                !isDirectory.boolValue
+            else { continue }
+            do {
+                let entry = try JSONDecoder().decode(WhatsNewEntry.self, from: Data(contentsOf: url))
+                if let message = validate(entry, fileName: name, root: root, fileManager: fileManager) {
+                    problems.append(WhatsNewProblem(file: name, message: message))
+                } else {
+                    entries.append(entry)
+                }
+            } catch {
+                problems.append(WhatsNewProblem(file: name, message: "Could not decode: \(error)"))
+            }
+        }
+        entries.sort { $0.version < $1.version }
+        return WhatsNewCatalog(directory: directory, entries: entries, problems: problems)
+    }
+
+    /// The media file for an entry, or nil when the entry has none.
+    public func mediaURL(for entry: WhatsNewEntry) -> URL? {
+        guard let media = entry.headline.media else { return nil }
+        return directory.appendingPathComponent(media).standardizedFileURL
+    }
+
+    private static func validate(
+        _ entry: WhatsNewEntry, fileName: String, root: URL, fileManager: FileManager
+    ) -> String? {
+        let stem = (fileName as NSString).deletingPathExtension
+        guard stem == entry.version.description else {
+            return "File name does not match version \(entry.version)"
+        }
+        func isBlank(_ text: String) -> Bool { text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        guard !isBlank(entry.headline.title) else { return "Headline title must not be empty" }
+        guard !isBlank(entry.headline.body) else { return "Headline body must not be empty" }
+        if let label = entry.headline.actionLabel, isBlank(label) {
+            return "Action label must not be empty"
+        }
+        guard !entry.also.contains(where: { isBlank($0.title) }) else {
+            return "Also titles must not be empty"
+        }
+        guard entry.also.count <= maxAlsoItems else {
+            return "At most \(maxAlsoItems) also items are allowed"
+        }
+        if let media = entry.headline.media {
+            guard !media.hasPrefix("/") else { return "Media path must be relative" }
+            // Resolve symlinks on both sides so a link inside the folder
+            // cannot point the shipped media outside it.
+            let realRoot = root.resolvingSymlinksInPath()
+            let resolved = root.appendingPathComponent(media).standardizedFileURL.resolvingSymlinksInPath()
+            guard resolved.path.hasPrefix(realRoot.path + "/") else {
+                return "Media path escapes the directory"
+            }
+            var isDirectory: ObjCBool = false
+            guard fileManager.fileExists(atPath: resolved.path, isDirectory: &isDirectory) else {
+                return "Media file \(media) does not exist"
+            }
+            guard !isDirectory.boolValue else { return "Media path \(media) is a directory" }
+        }
+        return nil
+    }
+}
+
+/// Decides when the "What's new" card appears and what "seen" version to persist.
+public enum WhatsNewPolicy {
+    public struct LaunchDecision: Equatable, Sendable {
+        /// Card to show now.
+        public let entry: WhatsNewEntry?
+        /// Value to write immediately; nil leaves the stored value untouched.
+        public let seenVersionToStore: SemanticVersion?
+
+        public init(entry: WhatsNewEntry?, seenVersionToStore: SemanticVersion?) {
+            self.entry = entry
+            self.seenVersionToStore = seenVersionToStore
+        }
+    }
+
+    public static func onLaunch(
+        track: ReleaseTrack, current: SemanticVersion, lastSeen: SemanticVersion?,
+        isExistingInstall: Bool, entries: [WhatsNewEntry]
+    ) -> LaunchDecision {
+        guard track == .stable else { return LaunchDecision(entry: nil, seenVersionToStore: nil) }
+
+        let candidate: WhatsNewEntry?
+        if let lastSeen {
+            guard lastSeen < current else { return LaunchDecision(entry: nil, seenVersionToStore: nil) }
+            candidate = entries.filter { $0.version > lastSeen && $0.version <= current }
+                .max { $0.version < $1.version }
+        } else if isExistingInstall {
+            candidate = entries.first { $0.version == current }
+        } else {
+            return LaunchDecision(entry: nil, seenVersionToStore: current)
+        }
+        return LaunchDecision(entry: candidate, seenVersionToStore: candidate == nil ? current : nil)
+    }
+
+    /// Value to store when the card is dismissed or acted on.
+    public static func seenVersionAfterDismiss(
+        current: SemanticVersion, lastSeen: SemanticVersion?
+    ) -> SemanticVersion {
+        max(current, lastSeen ?? current)
+    }
+
+    /// Entry for Help > What's New: newest with version <= current.
+    public static func latestEntry(
+        current: SemanticVersion, entries: [WhatsNewEntry]
+    ) -> WhatsNewEntry? {
+        entries.filter { $0.version <= current }.max { $0.version < $1.version }
+    }
+}

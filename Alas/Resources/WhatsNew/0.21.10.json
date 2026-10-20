@@ -1,0 +1,12 @@
+{
+  "version": "0.21.10",
+  "headline": {
+    "title": "Ship with your agent",
+    "body": "One click and your agent writes the PR, opens it, and shepherds it through CI and review.",
+    "media": "media/0.21.10-ship.png"
+  },
+  "also": [
+    { "title": "Review from the commit tab" },
+    { "title": "Clearer gg landing progress" }
+  ]
+}
