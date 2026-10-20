@@ -362,11 +362,7 @@ struct ReviewSessionTabView: View {
         if let loaded { return (loaded, false) }
         guard isLoading, let pendingSession, let target = headerRecord?.target else { return nil }
         return (
-            ReviewSessionLoadedContext(
-                session: pendingSession,
-                feedbackTarget: ReviewSessionLoadedContext.feedbackTarget(for: target),
-                providerContext: nil
-            ),
+            ReviewSessionLoadedContext(session: pendingSession, target: target, providerContext: nil),
             true
         )
     }
@@ -667,19 +663,29 @@ struct ReviewSessionTabView: View {
                 try sessionStore.save(refreshedRecord)
             }
 
-            let loadedContext = try await loader.load(target: refreshedRecord.target) { session in
-                guard loadCoordinator.canPublish(token), loaded == nil else { return }
-                if pendingSession == nil {
-                    selectedFileID = DiffReviewSurfaceSelectionSync.synchronizedSelection(
-                        current: storedRecord.selectedFileID,
-                        fileIDs: session.summary.files.map(\.id)
-                    )
+            let seed = appState?.tabs.takeReviewSessionSeed(sessionID: tabState.sessionID, target: refreshedRecord.target)
+            let loadedContext: ReviewSessionLoadedContext
+            if let seed {
+                loadedContext = ReviewSessionLoadedContext(session: seed.session, target: refreshedRecord.target, providerContext: nil)
+            } else {
+                loadedContext = try await loader.load(target: refreshedRecord.target) { session in
+                    guard loadCoordinator.canPublish(token), loaded == nil else { return }
+                    if pendingSession == nil {
+                        selectedFileID = DiffReviewSurfaceSelectionSync.synchronizedSelection(
+                            current: storedRecord.selectedFileID,
+                            fileIDs: session.summary.files.map(\.id)
+                        )
+                    }
+                    pendingSession = session
                 }
-                pendingSession = session
             }
             guard loadCoordinator.canPublish(token) else { return false }
             refreshedRecord = mergeLatestMutableFields(into: refreshedRecord, fallback: storedRecord)
             if !resolvedRecord.paused, refreshedRecord.target != storedRecord.target {
+                try sessionStore.save(refreshedRecord)
+            }
+            if refreshedRecord.selectedFileID == nil, let seededSelection = seed?.selectedFileID {
+                refreshedRecord.selectedFileID = seededSelection
                 try sessionStore.save(refreshedRecord)
             }
 
