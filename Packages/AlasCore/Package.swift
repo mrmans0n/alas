@@ -23,12 +23,20 @@ let package = Package(
         .target(name: "AlasPlatform", dependencies: ["AlasFoundation", "AlasModel"]),
         .target(name: "AlasFeatures", dependencies: ["AlasFoundation", "AlasModel", "AlasPlatform"]),
         .target(
+            name: "AlasCode",
+            dependencies: [
+                "AlasFoundation", "AlasModel", "AlasPlatform", "AlasFeatures",
+                .product(name: "SwiftTreeSitter", package: "swift-tree-sitter"),
+            ]
+        ),
+        .target(
             name: "AlasCore",
             dependencies: [
                 "AlasFoundation",
                 "AlasModel",
                 "AlasPlatform",
                 "AlasFeatures",
+                "AlasCode",
                 .product(name: "SwiftTreeSitter", package: "swift-tree-sitter"),
             ]
         ),
