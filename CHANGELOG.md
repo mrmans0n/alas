@@ -10,6 +10,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Turn a commit tab into its review session in place when pressing "Review This Commit", reusing the diff already loaded instead of opening a new tab and reloading it.
 
+### Changed
+
+- Show gg landing progress in the source worktree's sidebar subtitle, with a shortcut back to landing details. Restyle the landing pane to match gg inbox, use Alas spinners, and distinguish waiting, cancellation, failures, merged entries, and queued entries.
+
+### Fixed
+
+- Treat GitLab entries already on the merge train as queued in landing counts, status, and rows rather than showing them as completed merges.
+
 ## [0.21.9] - 2026-10-20
 
 ### ✨ Features
