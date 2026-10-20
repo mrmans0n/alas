@@ -169,7 +169,7 @@ public enum ACPMarkdownParser: Sendable {
         let first = String(lines[start])
         let trimmed = first.trimmingCharacters(in: .whitespaces)
         // Headings, task items and standalone images are rendered separately.
-        if matchHeading(trimmed) != nil || matchTaskItem(first) != nil || matchImage(trimmed) != nil {
+        if trimmed.isEmpty || matchHeading(trimmed) != nil || matchTaskItem(first) != nil || matchImage(trimmed) != nil {
             return lines[start].endIndex
         }
         let isQuote = trimmed.hasPrefix(">")
@@ -203,6 +203,9 @@ public enum ACPMarkdownParser: Sendable {
                 if closesFence(String(line), opening) { fence = nil }
                 continue
             }
+            if line.startIndex >= blockEnd {
+                inComment = false
+            }
             if !inComment, codeEnd == nil, let opening = matchFence(String(line)) {
                 fence = opening
                 result.append(String(line))
@@ -219,6 +222,18 @@ public enum ACPMarkdownParser: Sendable {
             }
             var visible = ""
             var index = line.startIndex
+            // Quote prefixes are structure, not part of the inline comment.
+            if inComment {
+                let leading = line.prefix(while: { $0 == " " || $0 == "\t" })
+                let marker = line.index(line.startIndex, offsetBy: leading.count)
+                if marker < line.endIndex, line[marker] == ">" {
+                    index = line.index(after: marker)
+                    if index < line.endIndex, line[index] == " " {
+                        index = line.index(after: index)
+                    }
+                    visible += line[..<index]
+                }
+            }
             while index < line.endIndex {
                 if let end = codeEnd {
                     let visibleEnd = min(end, line.endIndex)

@@ -49,6 +49,26 @@ struct ACPMarkdownParserTests {
         #expect(ACPMarkdownParser.parse(visible) == [.table(header: ["First", "Second"], rows: expected)])
     }
 
+    @Test(arguments: [
+        ("\n\nVisible", [ACPMarkdownParser.Block.paragraph("Visible")]),
+        ("\n# Visible", [.heading(level: 1, text: "Visible")]),
+        ("\n- [ ] Visible", [.taskList([.init(isChecked: false, text: "Visible")])]),
+        ("\n![Visible](image.png)", [.image(alt: "Visible", source: "image.png")]),
+        ("\n```html\n<!-- literal -->\n```", [.code(language: "html", body: "<!-- literal -->")]),
+        ("\n> Visible", [.quote("Visible")]),
+        ("\n\n| Header |\n| --- |\n| Visible |", [.table(header: ["Header"], rows: [["Visible"]])])
+    ])
+    func unfinishedCommentsDoNotConsumeFollowingBlocks(suffix: String, expected: [ACPMarkdownParser.Block]) {
+        let visible = ACPMarkdownParser.hidingHTMLComments("Intro <!--" + suffix)
+        #expect(ACPMarkdownParser.parse(visible) == [.paragraph("Intro ")] + expected)
+    }
+
+    @Test
+    func multilineQuoteCommentsPreserveQuoteStructure() {
+        let visible = ACPMarkdownParser.hidingHTMLComments("> Before <!--\n> metadata --> Visible")
+        #expect(ACPMarkdownParser.parse(visible) == [.quote("Before\n Visible")])
+    }
+
     @Test
     func prosePipesDoNotSplitMultilineCodeSpans() {
         let source = "`before | text\n<!-- literal -->\nafter`"
