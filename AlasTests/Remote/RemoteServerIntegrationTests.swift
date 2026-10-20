@@ -233,7 +233,7 @@ struct RemoteServerIntegrationTests {
         let testFile = URL(fileURLWithPath: #filePath)
         let repoRoot = testFile.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let source = try String(
-            contentsOf: repoRoot.appendingPathComponent("Packages/AlasCore/Sources/AlasCore/Remote/Server/RemoteConnection.swift"),
+            contentsOf: repoRoot.appendingPathComponent("Packages/AlasCore/Sources/AlasHostCore/Remote/Server/RemoteConnection.swift"),
             encoding: .utf8
         )
         #expect(source.contains("private var pendingHelloRefresh = false"))

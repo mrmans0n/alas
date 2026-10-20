@@ -1,0 +1,115 @@
+import Foundation
+import AlasFoundation
+import AlasModel
+import AlasPlatform
+import AlasFeatures
+
+public struct MasonPackage: Codable, Equatable, Sendable, Identifiable {
+    public let masonId: String
+    public let displayName: String
+    /// Pre-resolved canonical LSP languageId for the primary language. The
+    /// generator normalizes Mason's display names (e.g. "Bash" → "shellscript",
+    /// "C++" → "cpp") so the Add-language dialog persists a config under the
+    /// same languageId the registry uses for the corresponding built-in.
+    /// Empty if Mason had no language data; the dialog falls back to masonId.
+    public let languageId: String
+    public let languages: [String]
+    public let extensions: [String]
+    public let command: String
+    public let args: [String]
+    public let recipes: [InstallRecipe]
+
+    public var id: String { masonId }
+
+    public init(masonId: String, displayName: String, languageId: String, languages: [String], extensions: [String], command: String, args: [String], recipes: [InstallRecipe]) {
+        self.masonId = masonId
+        self.displayName = displayName
+        self.languageId = languageId
+        self.languages = languages
+        self.extensions = extensions
+        self.command = command
+        self.args = args
+        self.recipes = recipes
+    }
+}
+
+public struct MasonSnapshot: Sendable {
+    public static let maxResults = 25
+
+    public let packages: [MasonPackage]
+
+    public static let shared: MasonSnapshot = {
+        guard let url = Bundle.main.url(forResource: "mason-lsps", withExtension: "json"),
+              let data = try? Data(contentsOf: url) else {
+            return MasonSnapshot(packages: [])
+        }
+        struct Envelope: Decodable {
+            let packages: [MasonPackage]
+        }
+        do {
+            let env = try JSONDecoder().decode(Envelope.self, from: data)
+            return MasonSnapshot(packages: env.packages)
+        } catch {
+            // Fail open — empty snapshot means the prefill picker shows
+            // nothing but the manual form keeps working.
+            return MasonSnapshot(packages: [])
+        }
+    }()
+
+    /// Case-insensitive prefix/contains match across masonId, displayName,
+    /// and languages. Empty query returns []. Result count capped at
+    /// `maxResults`.
+    public func search(_ query: String) -> [MasonPackage] {
+        let q = query.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return [] }
+        var out: [MasonPackage] = []
+        for pkg in packages {
+            let id = pkg.masonId.lowercased()
+            let name = pkg.displayName.lowercased()
+            if id.contains(q) || name.contains(q) || pkg.languages.contains(where: { $0.lowercased() == q }) {
+                out.append(pkg)
+                if out.count >= Self.maxResults { break }
+            }
+        }
+        return out
+    }
+
+    /// Exact extension lookup for editor install nudges. Accepts either
+    /// `toml` or `.toml`, normalizes case, and keeps results deterministic.
+    public func packages(forFileExtension ext: String) -> [MasonPackage] {
+        let normalized = ext
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingPrefix(".")
+            .lowercased()
+        guard !normalized.isEmpty else { return [] }
+
+        return packages
+            .filter { pkg in
+                pkg.extensions.contains { $0.lowercased() == normalized }
+            }
+            .sorted { lhs, rhs in
+                packageRank(lhs, for: normalized) < packageRank(rhs, for: normalized)
+            }
+    }
+
+    private func packageRank(_ pkg: MasonPackage, for ext: String) -> (Int, String) {
+        if pkg.languageId.lowercased() == ext {
+            return (0, pkg.masonId)
+        }
+        if !pkg.languageId.isEmpty {
+            return (1, pkg.masonId)
+        }
+        return (2, pkg.masonId)
+    }
+
+    public init(packages: [MasonPackage]) {
+        self.packages = packages
+    }
+}
+
+private extension String {
+    func trimmingPrefix(_ prefix: String) -> String {
+        guard hasPrefix(prefix) else { return self }
+        return String(dropFirst(prefix.count))
+    }
+}

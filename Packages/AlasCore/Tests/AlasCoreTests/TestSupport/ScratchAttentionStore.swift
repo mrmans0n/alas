@@ -1,5 +1,6 @@
 import Foundation
 @testable import AlasCore
+@testable import AlasHostCore
 
 extension AttentionStore {
     /// An empty attention log for a test's core context. The default reads

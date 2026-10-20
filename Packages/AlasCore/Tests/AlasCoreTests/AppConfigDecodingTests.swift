@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import AlasCore
+@testable import AlasHostCore
 
 struct AppConfigDecodingTests {
     /// A hand-written `app.json` names only what it changes: everything else

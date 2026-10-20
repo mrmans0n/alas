@@ -13,10 +13,37 @@ let package = Package(
         .package(url: "https://github.com/tree-sitter/swift-tree-sitter", exact: "0.25.0"),
     ],
     targets: [
+        // The modules AlasCore is split into, bottom to top; see
+        // docs/plans/2026-10-20-alascore-modules.md. AlasCore re-exports them.
+        .target(
+            name: "AlasFoundation",
+            linkerSettings: [.linkedLibrary("sqlite3")]
+        ),
+        .target(name: "AlasModel", dependencies: ["AlasFoundation"]),
+        .target(name: "AlasPlatform", dependencies: ["AlasFoundation", "AlasModel"]),
+        .target(name: "AlasFeatures", dependencies: ["AlasFoundation", "AlasModel", "AlasPlatform"]),
+        .target(
+            name: "AlasCode",
+            dependencies: [
+                "AlasFoundation", "AlasModel", "AlasPlatform", "AlasFeatures",
+                .product(name: "SwiftTreeSitter", package: "swift-tree-sitter"),
+            ]
+        ),
+        .target(
+            name: "AlasAgents",
+            dependencies: ["AlasFoundation", "AlasModel", "AlasPlatform", "AlasFeatures", "AlasCode"]
+        ),
+        .target(
+            name: "AlasHostCore",
+            dependencies: ["AlasFoundation", "AlasModel", "AlasPlatform", "AlasFeatures", "AlasCode", "AlasAgents"]
+        ),
+        // The umbrella: re-exports every module, so the app imports one.
         .target(
             name: "AlasCore",
-            dependencies: [.product(name: "SwiftTreeSitter", package: "swift-tree-sitter")],
-            linkerSettings: [.linkedLibrary("sqlite3")]
+            dependencies: [
+                "AlasFoundation", "AlasModel", "AlasPlatform", "AlasFeatures", "AlasCode", "AlasAgents",
+                "AlasHostCore",
+            ]
         ),
         .executableTarget(name: "alas-host", dependencies: ["AlasCore"]),
         // Sets a scratch profile before the tests start; see profile.c.

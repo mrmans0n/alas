@@ -2,6 +2,7 @@ import Darwin
 import Foundation
 import Testing
 @testable import AlasCore
+@testable import AlasHostCore
 
 @MainActor
 struct HostSocketServerTests {

@@ -1,0 +1,423 @@
+import CryptoKit
+import Foundation
+import AlasFoundation
+import AlasModel
+import AlasPlatform
+import AlasFeatures
+import AlasCode
+
+/// Project-scoped input that is deliberately fetched at attach time, so a
+/// fresh attach reflects the current project configuration without restarting
+/// an already connected session.
+public struct MCPProjectContext: Equatable, Sendable {
+    public let projectDirectory: String
+    public let configuredServers: [ProjectMCPServer]
+    /// Team-defined servers from the repo's `.alas/config.json`. Empty for
+    /// remote projects, where repo config is not read in v1.
+    public var repoServers: [ProjectMCPServer] = []
+    /// Names of repo-defined servers the user disabled for this project.
+    public var disabledRepoServerNames: Set<String> = []
+    /// Per-user trust decisions for repo-defined servers, keyed by
+    /// `RepoMCPTrust.hash(for:)`.
+    public var repoTrust: [String: RepoMCPTrustState] = [:]
+
+    public init(projectDirectory: String, configuredServers: [ProjectMCPServer], repoServers: [ProjectMCPServer] = [], disabledRepoServerNames: Set<String> = [], repoTrust: [String: RepoMCPTrustState] = [:]) {
+        self.projectDirectory = projectDirectory
+        self.configuredServers = configuredServers
+        self.repoServers = repoServers
+        self.disabledRepoServerNames = disabledRepoServerNames
+        self.repoTrust = repoTrust
+    }
+}
+
+public struct MCPAttachmentPlan: Equatable, Sendable {
+    public let wireServers: [ACPMCPServer]
+    public let statuses: [MCPAttachmentServerStatus]
+    public let configurationFingerprint: String
+
+    public init(wireServers: [ACPMCPServer], statuses: [MCPAttachmentServerStatus], configurationFingerprint: String) {
+        self.wireServers = wireServers
+        self.statuses = statuses
+        self.configurationFingerprint = configurationFingerprint
+    }
+}
+
+/// Session-visible attachment state. This intentionally excludes resolved
+/// wire definitions, which may contain environment-expanded credentials.
+public struct MCPAttachmentSummary: Equatable, Sendable {
+    public let statuses: [MCPAttachmentServerStatus]
+    public let configurationFingerprint: String
+
+    public init(statuses: [MCPAttachmentServerStatus], configurationFingerprint: String) {
+        self.statuses = statuses
+        self.configurationFingerprint = configurationFingerprint
+    }
+
+    public init(plan: MCPAttachmentPlan) {
+        self.init(
+            statuses: plan.statuses,
+            configurationFingerprint: plan.configurationFingerprint
+        )
+    }
+}
+
+public struct MCPAttachmentPlannerInput: Sendable {
+    public let configuredServers: [ProjectMCPServer]
+    public let projectDirectory: String
+    public let worktreeDirectory: String
+    public let environment: [String: String]
+    public let capabilities: ACPMCPServerCapabilities
+    /// Checkout sessions supply descriptors captured during preflight. They
+    /// must never fall back to current Project configuration on restore.
+    public let frozenServerDescriptors: [WorkspaceMCPServerDescriptor]?
+    /// Descriptor identities whose frozen member is currently unavailable.
+    /// The IDs are snapshot identities, not live Project or focus identities.
+    public let unavailableFrozenDescriptorIDs: Set<String>
+    /// Repo-defined servers and their per-user gating. Only consulted on
+    /// live configured paths - frozen snapshots never gain repo servers.
+    public var repoServers: [ProjectMCPServer] = []
+    public var disabledRepoServerNames: Set<String> = []
+    public var repoTrust: [String: RepoMCPTrustState] = [:]
+
+    public init(
+        configuredServers: [ProjectMCPServer],
+        projectDirectory: String,
+        worktreeDirectory: String,
+        environment: [String: String],
+        capabilities: ACPMCPServerCapabilities,
+        frozenServerDescriptors: [WorkspaceMCPServerDescriptor]? = nil,
+        unavailableFrozenDescriptorIDs: Set<String> = [],
+        repoServers: [ProjectMCPServer] = [],
+        disabledRepoServerNames: Set<String> = [],
+        repoTrust: [String: RepoMCPTrustState] = [:]
+    ) {
+        self.configuredServers = configuredServers
+        self.projectDirectory = projectDirectory
+        self.worktreeDirectory = worktreeDirectory
+        self.environment = environment
+        self.capabilities = capabilities
+        self.frozenServerDescriptors = frozenServerDescriptors
+        self.unavailableFrozenDescriptorIDs = unavailableFrozenDescriptorIDs
+        self.repoServers = repoServers
+        self.disabledRepoServerNames = disabledRepoServerNames
+        self.repoTrust = repoTrust
+    }
+}
+
+public enum MCPAttachmentPlanner: Sendable {
+    private enum ResolutionError: Error {
+        case missingVariable(String)
+    }
+    public static func plan(_ input: MCPAttachmentPlannerInput) -> MCPAttachmentPlan {
+        // Repo-defined servers participate only on live configured paths:
+        // checkout snapshots never gain repo servers retroactively, so the
+        // frozen path is untouched by the merge.
+        let merge: RepoMCPResolver.Result?
+        let configuredServers: [ProjectMCPServer]
+        if input.frozenServerDescriptors == nil {
+            let result = RepoMCPResolver.merge(
+                appServers: input.configuredServers,
+                repoServers: input.repoServers,
+                disabledNames: input.disabledRepoServerNames,
+                trust: input.repoTrust
+            )
+            merge = result
+            configuredServers = result.active
+        } else {
+            merge = nil
+            configuredServers = input.configuredServers
+        }
+
+        let descriptors = descriptors(for: configuredServers, input: input)
+        let validationIssues = ProjectMCPValidation.validate(descriptors.map(\.server))
+        var wireServers: [ACPMCPServer] = []
+        var statuses: [MCPAttachmentServerStatus] = []
+
+        for (index, descriptor) in descriptors.enumerated() {
+            let server = descriptor.server
+            let transport = transportKind(for: server.transport)
+            let disposition: MCPAttachmentDisposition
+            let environment = resolvedEnvironment(for: input, descriptor: descriptor)
+
+            if input.unavailableFrozenDescriptorIDs.contains(descriptor.id) {
+                disposition = .skipped(.unavailableMember)
+            } else if validationIssues.contains(where: { applies($0, to: server) && !isDeferredTemplateURLIssue($0, server: server) }) {
+                disposition = .skipped(.invalidConfiguration("The server configuration is invalid."))
+            } else if !isSupported(transport, capabilities: input.capabilities) {
+                disposition = .skipped(.unsupportedTransport)
+            } else {
+                switch makeWireServer(server, environment: environment) {
+                case let .success(wireServer):
+                    if hasValidResolvedWireServer(wireServer) {
+                        wireServers.append(wireServer)
+                        disposition = .requested
+                    } else {
+                        disposition = .skipped(.invalidConfiguration("The server configuration is invalid."))
+                    }
+                case let .failure(.missingVariable(variable)):
+                    disposition = .skipped(.missingVariable(variable))
+                }
+            }
+
+            // Configuration can be edited externally and contain duplicate names.
+            // Keep the presentation identity unique without retaining sensitive values.
+            statuses.append(.init(
+                id: descriptor.id.isEmpty ? String(index) : descriptor.id,
+                name: server.name,
+                transport: transport,
+                disposition: disposition
+            ))
+        }
+
+        // Repo servers skipped by the merge surface after the app-level rows
+        // so the status control can show why they are not enabled.
+        statuses.append(contentsOf: repoSkipStatuses(from: merge))
+
+        return .init(
+            wireServers: wireServers,
+            statuses: statuses,
+            configurationFingerprint: configurationFingerprint(for: descriptors.map(\.server))
+        )
+    }
+
+    /// Repo servers the merge declined to attach, mapped to status rows.
+    /// A repo server shadowed by an app-level server of the same name adds no
+    /// row: the app-level server's own status already represents that slot.
+    private static func repoSkipStatuses(from merge: RepoMCPResolver.Result?) -> [MCPAttachmentServerStatus] {
+        guard let skipped = merge?.skipped else { return [] }
+        return skipped.compactMap { entry in
+            switch entry.reason {
+            case .shadowedByApp:
+                return nil
+            case .disabled:
+                return status(for: entry.server, disposition: .skipped(.repoDisabled))
+            case .declined:
+                return status(for: entry.server, disposition: .skipped(.repoDeclined))
+            case .notApproved:
+                return status(for: entry.server, disposition: .skipped(.repoNotApproved))
+            }
+        }
+    }
+
+    private static func status(
+        for server: ProjectMCPServer,
+        disposition: MCPAttachmentDisposition
+    ) -> MCPAttachmentServerStatus {
+        // Repo servers carry deterministic "repo:<name>" ids, which cannot
+        // collide with the index-based ids of the app-level rows above.
+        .init(
+            id: server.id,
+            name: server.name,
+            transport: transportKind(for: server.transport),
+            disposition: disposition
+        )
+    }
+
+    private static func descriptors(
+        for configuredServers: [ProjectMCPServer],
+        input: MCPAttachmentPlannerInput
+    ) -> [WorkspaceMCPServerDescriptor] {
+        guard let frozenServerDescriptors = input.frozenServerDescriptors else {
+            return configuredServers.enumerated().map { index, server in
+                // Repo servers keep their deterministic "repo:<name>" id so
+                // statuses stay stable across reloads; app-level servers keep
+                // the historical index-based ids.
+                let id = server.id.hasPrefix(RepoConfig.repoServerIDPrefix) ? server.id : String(index)
+                return .init(id: id, server: server, projectDirectory: input.projectDirectory, worktreeDirectory: input.worktreeDirectory)
+            }
+        }
+        return normalizedFrozenServerDescriptors(for: frozenServerDescriptors)
+    }
+
+    public static func normalizedFrozenServerDescriptors(for frozenServerDescriptors: [WorkspaceMCPServerDescriptor]) -> [WorkspaceMCPServerDescriptor] {
+        let nameCounts = Dictionary(
+            grouping: frozenServerDescriptors.map { $0.server.name.trimmingCharacters(in: .whitespacesAndNewlines) },
+            by: { $0 }
+        ).mapValues(\.count)
+        return frozenServerDescriptors.map { descriptor in
+            let name = descriptor.server.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard name.isEmpty == false,
+                  (nameCounts[name] ?? 0) > 1
+            else { return descriptor }
+            var server = descriptor.server
+            server.name = "\(name) (\(descriptor.id))"
+            return .init(
+                id: descriptor.id,
+                server: server,
+                projectDirectory: descriptor.projectDirectory,
+                worktreeDirectory: descriptor.worktreeDirectory,
+                checkoutRoot: descriptor.checkoutRoot
+            )
+        }
+    }
+
+    public static func configurationFingerprint(for servers: [ProjectMCPServer]) -> String {
+        ProjectMCPServer.configurationFingerprint(for: servers)
+    }
+
+    public static func resolvedConfigurationFingerprint(for servers: [ACPMCPServer]) -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        let data = (try? encoder.encode(servers)) ?? Data()
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func resolvedEnvironment(for input: MCPAttachmentPlannerInput, descriptor: WorkspaceMCPServerDescriptor) -> [String: String] {
+        var environment = input.environment
+        environment["PROJECT_DIR"] = descriptor.checkoutRoot
+        environment["WORKTREE_DIR"] = descriptor.worktreeDirectory
+        return environment
+    }
+
+    private static func transportKind(for transport: ProjectMCPTransport) -> MCPTransportKind {
+        switch transport {
+        case .stdio: .stdio
+        case .http: .http
+        case .sse: .sse
+        }
+    }
+
+    private static func isSupported(_ transport: MCPTransportKind, capabilities: ACPMCPServerCapabilities) -> Bool {
+        switch transport {
+        case .stdio: true
+        case .http: capabilities.http
+        case .sse: capabilities.sse
+        }
+    }
+
+    private static func applies(_ issue: ProjectMCPValidationIssue, to server: ProjectMCPServer) -> Bool {
+        let name = server.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch issue {
+        case let .emptyServerName(serverId):
+            return server.id == serverId
+        case let .duplicateServerName(serverName),
+             let .emptyCommand(serverName),
+             let .invalidURL(serverName),
+             let .invalidEnvironmentName(serverName, _),
+             let .duplicateEnvironmentName(serverName, _),
+             let .emptyHeaderName(serverName),
+             let .invalidHeaderName(serverName, _),
+             let .duplicateHeaderName(serverName, _):
+            return name == serverName
+        }
+    }
+
+    private static func isDeferredTemplateURLIssue(_ issue: ProjectMCPValidationIssue, server: ProjectMCPServer) -> Bool {
+        guard case .invalidURL = issue else { return false }
+        switch server.transport {
+        case let .http(url, _), let .sse(url, _):
+            return variableRegex.firstMatch(in: url, range: NSRange(url.startIndex..., in: url)) != nil
+        case .stdio:
+            return false
+        }
+    }
+
+    private static func hasValidResolvedWireServer(_ server: ACPMCPServer) -> Bool {
+        let value: String?
+        switch server {
+        case let .stdio(_, command, _, _):
+            let trimmedCommand = command.trimmingCharacters(in: .whitespacesAndNewlines)
+            return command == trimmedCommand && !trimmedCommand.isEmpty
+        case let .http(_, url, _), let .sse(_, url, _):
+            value = url
+        }
+        guard let value, value == value.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.contains(where: \.isWhitespace),
+              let url = URL(string: value), let host = url.host, !host.isEmpty else { return false }
+        return url.scheme?.lowercased() == "http" || url.scheme?.lowercased() == "https"
+    }
+
+    private static func makeWireServer(
+        _ server: ProjectMCPServer,
+        environment: [String: String]
+    ) -> Result<ACPMCPServer, ResolutionError> {
+        switch server.transport {
+        case let .stdio(command, args, variables):
+            guard let command = interpolate(command, environment: environment) else {
+                return .failure(.missingVariable(firstMissingVariable(in: command, environment: environment)!))
+            }
+            var resolvedArgs: [String] = []
+            for argument in args {
+                guard let argument = interpolate(argument, environment: environment) else {
+                    return .failure(.missingVariable(firstMissingVariable(in: argument, environment: environment)!))
+                }
+                resolvedArgs.append(argument)
+            }
+            var resolvedEnvironment: [ACPMCPKeyValue] = []
+            for variable in variables {
+                guard let value = interpolate(variable.value, environment: environment) else {
+                    return .failure(.missingVariable(firstMissingVariable(in: variable.value, environment: environment)!))
+                }
+                resolvedEnvironment.append(.init(name: variable.name, value: value))
+            }
+            return .success(.stdio(name: server.name, command: command, args: resolvedArgs, env: resolvedEnvironment))
+
+        case let .http(url, headers):
+            return makeRemoteWireServer(name: server.name, url: url, headers: headers, environment: environment, type: .http)
+        case let .sse(url, headers):
+            return makeRemoteWireServer(name: server.name, url: url, headers: headers, environment: environment, type: .sse)
+        }
+    }
+
+    private static func makeRemoteWireServer(
+        name: String,
+        url: String,
+        headers: [MCPKeyValue],
+        environment: [String: String],
+        type: MCPTransportKind
+    ) -> Result<ACPMCPServer, ResolutionError> {
+        guard let url = interpolate(url, environment: environment) else {
+            return .failure(.missingVariable(firstMissingVariable(in: url, environment: environment)!))
+        }
+        var resolvedHeaders: [ACPMCPKeyValue] = []
+        for header in headers {
+            guard let value = interpolate(header.value, environment: environment) else {
+                return .failure(.missingVariable(firstMissingVariable(in: header.value, environment: environment)!))
+            }
+            resolvedHeaders.append(.init(name: header.name, value: value))
+        }
+        switch type {
+        case .http:
+            return .success(.http(name: name, url: url, headers: resolvedHeaders))
+        case .sse:
+            return .success(.sse(name: name, url: url, headers: resolvedHeaders))
+        case .stdio:
+            preconditionFailure("Remote server must use an HTTP transport")
+        }
+    }
+
+    private static func interpolate(_ value: String, environment: [String: String]) -> String? {
+        guard firstMissingVariable(in: value, environment: environment) == nil else { return nil }
+        return replacingVariables(in: value, environment: environment)
+    }
+
+    private static func firstMissingVariable(in value: String, environment: [String: String]) -> String? {
+        for match in variableMatches(in: value) where environment[match] == nil {
+            return match
+        }
+        return nil
+    }
+
+    private static func replacingVariables(in value: String, environment: [String: String]) -> String {
+        var result = value
+        let matches = variableRegex.matches(in: value, range: NSRange(value.startIndex..., in: value))
+        for match in matches.reversed() {
+            guard let range = Range(match.range, in: result),
+                  let nameRange = Range(match.range(at: 1), in: result),
+                  let replacement = environment[String(result[nameRange])] else {
+                continue
+            }
+            result.replaceSubrange(range, with: replacement)
+        }
+        return result
+    }
+
+    private static func variableMatches(in value: String) -> [String] {
+        variableRegex.matches(in: value, range: NSRange(value.startIndex..., in: value)).compactMap { match in
+            guard let range = Range(match.range(at: 1), in: value) else { return nil }
+            return String(value[range])
+        }
+    }
+
+    private static let variableRegex = try! NSRegularExpression(pattern: #"\$\{([A-Za-z_][A-Za-z0-9_]*)\}"#)
+}

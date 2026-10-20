@@ -1,5 +1,6 @@
 import Foundation
 @testable import AlasCore
+@testable import AlasHostCore
 import Testing
 
 /// The built `alas-host`, run on a data directory: what it prints, and how

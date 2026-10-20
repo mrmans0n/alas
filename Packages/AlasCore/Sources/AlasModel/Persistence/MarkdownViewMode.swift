@@ -1,0 +1,18 @@
+import Foundation
+import AlasFoundation
+
+/// View mode for a markdown editor tab. Persisted in `EditorTabState`
+/// and in `AppConfig.markdown.defaultViewMode`. Raw values are part of
+/// the on-disk format — do not rename.
+public enum MarkdownViewMode: String, Codable, Equatable, Hashable, Sendable, CaseIterable {
+    case editor, split, preview
+
+    /// Cycle order used by the `⌘⇧M` shortcut: editor → split → preview → editor.
+    public func next() -> MarkdownViewMode {
+        switch self {
+        case .editor:  return .split
+        case .split:   return .preview
+        case .preview: return .editor
+        }
+    }
+}

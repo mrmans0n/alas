@@ -1,0 +1,647 @@
+import Foundation
+import AlasFoundation
+import AlasModel
+import AlasPlatform
+import AlasFeatures
+import AlasCode
+
+public struct ACPSessionUpdateParams: Codable, Equatable, Sendable {
+    public let sessionId: String
+    public let update: ACPSessionUpdate
+    public let durableConsumptionAcknowledgement: ACPDurableConsumptionAcknowledgement?
+
+    public init(
+        sessionId: String,
+        update: ACPSessionUpdate,
+        durableConsumptionAcknowledgement: ACPDurableConsumptionAcknowledgement? = nil
+    ) {
+        self.sessionId = sessionId
+        self.update = update
+        self.durableConsumptionAcknowledgement = durableConsumptionAcknowledgement
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionId, update
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        sessionId = try container.decode(String.self, forKey: .sessionId)
+        update = try container.decode(ACPSessionUpdate.self, forKey: .update)
+        durableConsumptionAcknowledgement = nil
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(sessionId, forKey: .sessionId)
+        try container.encode(update, forKey: .update)
+    }
+
+    public static func == (lhs: ACPSessionUpdateParams, rhs: ACPSessionUpdateParams) -> Bool {
+        lhs.sessionId == rhs.sessionId && lhs.update == rhs.update
+    }
+}
+
+public enum ACPSessionUpdate: Codable, Equatable, Sendable {
+    case userMessageChunk(ACPTextChunk)
+    case agentMessageChunk(ACPTextChunk)
+    case agentThoughtChunk(ACPTextChunk)
+    case toolCall(ACPToolCallPayload)
+    case toolCallUpdate(ACPToolCallUpdate)
+    case plan([ACPPlanEntry])
+    case availableModelsUpdate([ACPModelInfo])
+    case currentModeUpdate(modeId: String)
+    case currentModelUpdate(modelId: String)
+    case sessionConfigOptionsUpdate([ACPConfigOption])
+    case availableCommandsUpdate([ACPPromptSuggestion])
+    case usageUpdate(ACPUsageInfo)
+    case sessionInfoUpdate(ACPSessionInfoUpdate)
+    case compactionUpdate(ACPCompactionUpdate)
+    case compactionSummaryChunk(ACPCompactionSummaryChunk)
+    case notice(ACPSessionNotice)
+    case subagentSpawned(ACPSubagentSpawn)
+    case subagentStateUpdate(ACPSubagentStateUpdate)
+    case asyncTask(ACPAsyncTaskUpdate)
+    case unknown(String)
+
+    public static func userMessageChunk(_ content: ACPContentBlock) -> ACPSessionUpdate {
+        .userMessageChunk(.init(content: content))
+    }
+
+    public static func agentMessageChunk(_ content: ACPContentBlock) -> ACPSessionUpdate {
+        .agentMessageChunk(.init(content: content))
+    }
+
+    public static func agentThoughtChunk(_ content: ACPContentBlock) -> ACPSessionUpdate {
+        .agentThoughtChunk(.init(content: content))
+    }
+
+    private enum Keys: String, CodingKey {
+        case sessionUpdate, content, availableModels, modeId, modelId,
+             entries, availableCommands, configOptions
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        let kind = try c.decode(String.self, forKey: .sessionUpdate)
+        switch kind {
+        case "user_message_chunk":
+            self = .userMessageChunk(try ACPTextChunk(from: decoder))
+        case "agent_message_chunk":
+            self = .agentMessageChunk(try ACPTextChunk(from: decoder))
+        case "agent_thought_chunk":
+            self = .agentThoughtChunk(try ACPTextChunk(from: decoder))
+        case "tool_call":
+            self = .toolCall(try ACPToolCallPayload(from: decoder))
+        case "tool_call_update":
+            self = .toolCallUpdate(try ACPToolCallUpdate(from: decoder))
+        case "plan":
+            self = .plan(try c.decode([ACPPlanEntry].self, forKey: .entries))
+        case "available_models_update":
+            self = .availableModelsUpdate(try c.decode([ACPModelInfo].self, forKey: .availableModels))
+        case "current_mode_update":
+            self = .currentModeUpdate(modeId: try c.decode(String.self, forKey: .modeId))
+        case "current_model_update":
+            self = .currentModelUpdate(modelId: try c.decode(String.self, forKey: .modelId))
+        // Spec uses `config_option_update`; some drafts/implementations
+        // emit `session_config_options_update`. Accept both.
+        case "config_option_update", "session_config_options_update":
+            self = .sessionConfigOptionsUpdate(
+                try c.decode([ACPConfigOption].self, forKey: .configOptions))
+        case "available_commands_update":
+            // Wire format:
+            // `{ availableCommands: [{ name, description, input: { hint } }] }`.
+            let raw = (try? c.decode([ACPAvailableCommand].self, forKey: .availableCommands)) ?? []
+            self = .availableCommandsUpdate(raw.map {
+                let cmd = $0.name.hasPrefix("/") ? $0.name : "/" + $0.name
+                return ACPPromptSuggestion(
+                    command: cmd, description: $0.description, hint: $0.input?.hint)
+            })
+        case "usage_update":
+            self = .usageUpdate(try ACPUsageInfo(from: decoder))
+        case "session_info_update":
+            self = .sessionInfoUpdate(try ACPSessionInfoUpdate(from: decoder))
+        case "compaction_update":
+            self = .compactionUpdate(try ACPCompactionUpdate(from: decoder))
+        case "compaction_summary_chunk":
+            self = .compactionSummaryChunk(try ACPCompactionSummaryChunk(from: decoder))
+        case "notice":
+            self = .notice(try ACPSessionNotice(from: decoder))
+        case "subagent_spawned":
+            self = .subagentSpawned(try ACPSubagentSpawn(from: decoder))
+        case "subagent_state_update":
+            self = .subagentStateUpdate(try ACPSubagentStateUpdate(from: decoder))
+        case "async_task_spawned", "async_task_progress", "async_task_state_update":
+            self = .asyncTask(try ACPAsyncTaskUpdate(from: decoder))
+        // `subagent_update` and `session_message(_chunk)` land here on
+        // purpose: one of them can stand for several updates, so transports
+        // decode `session/update` through `ACPSessionUpdateFrame`, which
+        // normalizes them into the cases above.
+        default:
+            self = .unknown(kind)
+        }
+    }
+
+    /// Mirror of the wire-format command shape from `available_commands_update`.
+    /// Decoded then mapped to `ACPPromptSuggestion` so the rest of the
+    /// codebase doesn't need to learn the protocol's leaner shape.
+    private struct ACPAvailableCommand: Codable {
+        let name: String
+        let description: String?
+        let input: Input?
+        struct Input: Codable { let hint: String }
+        enum CodingKeys: String, CodingKey { case name, description, input }
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            name = try c.decode(String.self, forKey: .name)
+            description = try? c.decodeIfPresent(String.self, forKey: .description)
+            input = try? c.decodeIfPresent(Input.self, forKey: .input)
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        // Encoding not required for v1 (we only receive these). Implement when needed.
+        var c = encoder.container(keyedBy: Keys.self)
+        switch self {
+        case .userMessageChunk(let b):
+            try c.encode("user_message_chunk", forKey: .sessionUpdate)
+            try b.encodeFields(to: encoder)
+        case .agentMessageChunk(let b):
+            try c.encode("agent_message_chunk", forKey: .sessionUpdate)
+            try b.encodeFields(to: encoder)
+        case .agentThoughtChunk(let b):
+            try c.encode("agent_thought_chunk", forKey: .sessionUpdate)
+            try b.encodeFields(to: encoder)
+        case .plan(let e):
+            try c.encode("plan", forKey: .sessionUpdate)
+            try c.encode(e, forKey: .entries)
+        case .availableModelsUpdate(let m):
+            try c.encode("available_models_update", forKey: .sessionUpdate)
+            try c.encode(m, forKey: .availableModels)
+        case .currentModeUpdate(let m):
+            try c.encode("current_mode_update", forKey: .sessionUpdate)
+            try c.encode(m, forKey: .modeId)
+        case .currentModelUpdate(let m):
+            try c.encode("current_model_update", forKey: .sessionUpdate)
+            try c.encode(m, forKey: .modelId)
+        case .sessionConfigOptionsUpdate(let opts):
+            try c.encode("session_config_options_update", forKey: .sessionUpdate)
+            try c.encode(opts, forKey: .configOptions)
+        case .sessionInfoUpdate(let info):
+            try c.encode("session_info_update", forKey: .sessionUpdate)
+            try info.encodeFields(to: encoder)
+        case .subagentSpawned(let spawn):
+            try c.encode("subagent_spawned", forKey: .sessionUpdate)
+            try spawn.encode(to: encoder)
+        case .subagentStateUpdate(let state):
+            try c.encode("subagent_state_update", forKey: .sessionUpdate)
+            try state.encode(to: encoder)
+        case .asyncTask(let update):
+            try update.encode(to: encoder)
+        case .availableCommandsUpdate:
+            break
+        case .toolCall, .toolCallUpdate, .usageUpdate, .compactionUpdate,
+             .compactionSummaryChunk, .notice, .unknown:
+            break
+        }
+    }
+}
+
+public enum ACPMessagePhase: String, Codable, Equatable, Sendable {
+    case commentary
+    case finalAnswer = "final_answer"
+
+    public static func codexPhase(in metadata: AnyCodable?) -> ACPMessagePhase? {
+        let root = metadata?.value as? [String: AnyCodable]
+        let codex = root?["codex"]?.value as? [String: AnyCodable]
+        guard let value = codex?["phase"]?.value as? String else { return nil }
+        return ACPMessagePhase(rawValue: value)
+    }
+}
+
+/// Experimental ACP compaction lifecycle update. Optional fields decode
+/// defensively because this wire format is still evolving.
+public struct ACPCompactionUpdate: Codable, Equatable, Sendable {
+    public let compactionId: String
+    public let status: String
+    public let summary: [ACPContentBlock]?
+    public let summaryWasProvided: Bool
+    public let summaryWasNull: Bool
+    public let error: String?
+    public let errorWasProvided: Bool
+    public let errorWasNull: Bool
+    public let metadata: AnyCodable?
+
+    private enum CodingKeys: String, CodingKey {
+        case compactionId, status, summary, error
+        case metadata = "_meta"
+    }
+
+    public init(
+        compactionId: String,
+        status: String,
+        summary: [ACPContentBlock]? = nil,
+        error: String? = nil,
+        metadata: AnyCodable? = nil
+    ) {
+        self.compactionId = compactionId
+        self.status = status
+        self.summary = summary
+        self.summaryWasProvided = summary != nil
+        self.summaryWasNull = false
+        self.error = error
+        self.errorWasProvided = error != nil
+        self.errorWasNull = false
+        self.metadata = metadata
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        compactionId = try c.decode(String.self, forKey: .compactionId)
+        status = try c.decode(String.self, forKey: .status)
+        summaryWasProvided = c.contains(.summary)
+        summaryWasNull = summaryWasProvided ? try c.decodeNil(forKey: .summary) : false
+        summary = summaryWasNull ? nil : try? c.decodeIfPresent([ACPContentBlock].self, forKey: .summary)
+        errorWasProvided = c.contains(.error)
+        errorWasNull = errorWasProvided ? try c.decodeNil(forKey: .error) : false
+        error = errorWasNull ? nil : try? c.decodeIfPresent(String.self, forKey: .error)
+        metadata = try? c.decodeIfPresent(AnyCodable.self, forKey: .metadata)
+    }
+}
+
+/// Experimental ACP chunk appended to an in-progress compaction summary.
+public struct ACPCompactionSummaryChunk: Codable, Equatable, Sendable {
+    public let compactionId: String
+    public let content: ACPContentBlock
+    public let metadata: AnyCodable?
+
+    private enum CodingKeys: String, CodingKey {
+        case compactionId, content
+        case metadata = "_meta"
+    }
+
+    public init(compactionId: String, content: ACPContentBlock, metadata: AnyCodable? = nil) {
+        self.compactionId = compactionId
+        self.content = content
+        self.metadata = metadata
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        compactionId = try c.decode(String.self, forKey: .compactionId)
+        content = try c.decode(ACPContentBlock.self, forKey: .content)
+        metadata = try? c.decodeIfPresent(AnyCodable.self, forKey: .metadata)
+    }
+}
+
+/// Experimental ACP session notice — a fire-and-forget out-of-band event
+/// (an MCP server dropping, a rate limit, a model fallback…) that can arrive
+/// at any time a session exists, including outside a prompt turn. It has no
+/// id, no ack, and no removal; an `error` severity does not fail the
+/// request or change session state. Live UI state only — never persisted
+/// into the transcript and never replayed on `session/load`.
+public struct ACPSessionNotice: Codable, Equatable, Sendable {
+    /// Open enum: the spec reserves `info`/`warning`/`error`, treats
+    /// `_`-prefixed values as implementation-specific, and everything else
+    /// as reserved-for-future-use. Both of the latter must render generically
+    /// (as `info`), which `.other` does at the presentation layer.
+    public enum Severity: Equatable, Sendable {
+        case info
+        case warning
+        case error
+        case other(String)
+
+        public init(rawValue: String) {
+            switch rawValue {
+            case "info": self = .info
+            case "warning": self = .warning
+            case "error": self = .error
+            default: self = .other(rawValue)
+            }
+        }
+
+        public var rawValue: String {
+            switch self {
+            case .info: return "info"
+            case .warning: return "warning"
+            case .error: return "error"
+            case .other(let value): return value
+            }
+        }
+
+        /// True for `.info` and any unrecognized value (`_`-prefixed or
+        /// reserved-unknown): the spec requires both to render — and
+        /// therefore behave, e.g. auto-dismiss — generically as info.
+        /// `.warning`/`.error` are the only severities that stay pinned.
+        public var behavesAsInfo: Bool {
+            switch self {
+            case .info, .other: return true
+            case .warning, .error: return false
+            }
+        }
+    }
+
+    public let severity: Severity
+    public let title: String
+    public let description: String?
+    public let metadata: AnyCodable?
+
+    /// Whether `other` shows the same banner content as `self` — i.e. same
+    /// severity/title/description. `_meta` is deliberately excluded: it
+    /// carries no displayed content, so a chatty agent re-sending the same
+    /// notice with a bumped trace id must still coalesce.
+    public func isVisuallyIdentical(to other: ACPSessionNotice) -> Bool {
+        severity == other.severity && title == other.title && description == other.description
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case severity, title, description
+        case metadata = "_meta"
+    }
+
+    public init(severity: Severity, title: String, description: String? = nil, metadata: AnyCodable? = nil) {
+        self.severity = severity
+        self.title = title
+        self.description = description
+        self.metadata = metadata
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        severity = Severity(rawValue: try c.decode(String.self, forKey: .severity))
+        title = try c.decode(String.self, forKey: .title)
+        description = try? c.decodeIfPresent(String.self, forKey: .description)
+        metadata = try? c.decodeIfPresent(AnyCodable.self, forKey: .metadata)
+    }
+}
+
+extension ACPSessionNotice.Severity: Codable {
+    public init(from decoder: Decoder) throws {
+        self.init(rawValue: try decoder.singleValueContainer().decode(String.self))
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        try c.encode(rawValue)
+    }
+}
+
+public struct ACPTextChunk: Codable, Equatable, Sendable {
+    public let messageId: String?
+    public let content: ACPContentBlock
+    public let metadata: AnyCodable?
+    /// Set when this chunk came from a revised-form `session_message`, a
+    /// message between sessions rather than a human turn. Never on the wire;
+    /// see `ACPRevisedSubagentUpdate`.
+    public var directed: ACPDirectedMessage? = nil
+
+    public var phase: ACPMessagePhase? {
+        ACPMessagePhase.codexPhase(in: metadata)
+    }
+
+    public init(
+        messageId: String? = nil,
+        content: ACPContentBlock,
+        metadata: AnyCodable? = nil,
+        directed: ACPDirectedMessage? = nil
+    ) {
+        self.messageId = messageId
+        self.content = content
+        self.metadata = metadata
+        self.directed = directed
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case messageId, content
+        case metadata = "_meta"
+    }
+
+    public func encodeFields(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encodeIfPresent(messageId, forKey: .messageId)
+        try c.encode(content, forKey: .content)
+        try c.encodeIfPresent(metadata, forKey: .metadata)
+    }
+}
+
+public struct ACPSessionInfoUpdate: Codable, Equatable, Sendable {
+    public let title: ACPStringFieldUpdate
+    public let updatedAt: String?
+    public let metadata: AnyCodable?
+
+    private enum CodingKeys: String, CodingKey {
+        case title, updatedAt
+        case metadata = "_meta"
+    }
+
+    public init(
+        title: ACPStringFieldUpdate = .absent,
+        updatedAt: String? = nil,
+        metadata: AnyCodable? = nil
+    ) {
+        self.title = title
+        self.updatedAt = updatedAt
+        self.metadata = metadata
+    }
+
+    public init(title: String?, updatedAt: String? = nil, metadata: AnyCodable? = nil) {
+        self.title = title.map(ACPStringFieldUpdate.value) ?? .absent
+        self.updatedAt = updatedAt
+        self.metadata = metadata
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        if !c.contains(.title) {
+            title = .absent
+        } else if (try? c.decodeNil(forKey: .title)) == true {
+            title = .null
+        } else if let value = try? c.decode(String.self, forKey: .title) {
+            title = .value(value)
+        } else {
+            title = .absent
+        }
+        updatedAt = try? c.decodeIfPresent(String.self, forKey: .updatedAt)
+        metadata = try? c.decodeIfPresent(AnyCodable.self, forKey: .metadata)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        try encodeFields(to: encoder)
+    }
+
+    public func encodeFields(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        switch title {
+        case .absent:
+            break
+        case .null:
+            try c.encodeNil(forKey: .title)
+        case .value(let title):
+            try c.encode(title, forKey: .title)
+        }
+        try c.encodeIfPresent(updatedAt, forKey: .updatedAt)
+        try c.encodeIfPresent(metadata, forKey: .metadata)
+    }
+}
+
+public enum ACPStringFieldUpdate: Equatable, Sendable {
+    case absent
+    case null
+    case value(String)
+}
+
+public struct ACPToolCallPayload: Codable, Equatable, Sendable {
+    public let toolCallId: String
+    public let title: String
+    public let kind: String?
+    public let status: String
+    public let content: [ACPToolCallContent]?
+    public let locations: [ACPToolLocation]?
+    public let rawInput: AnyCodable?
+    public let rawOutput: AnyCodable?
+    public let metadata: AnyCodable?
+    /// Stable, opaque tool identifier (ACP 1.22+), distinct from the
+    /// per-invocation `title` and the coarse `kind` — e.g. `Bash`, `Read`,
+    /// `exec_command`. Presentation metadata only; grants no capability.
+    public let name: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case toolCallId, title, kind, status, content, locations, rawInput, rawOutput, name
+        case metadata = "_meta"
+    }
+
+    public init(
+        toolCallId: String,
+        title: String,
+        kind: String?,
+        status: String,
+        content: [ACPToolCallContent]? = nil,
+        locations: [ACPToolLocation]? = nil,
+        rawInput: AnyCodable? = nil,
+        rawOutput: AnyCodable? = nil,
+        metadata: AnyCodable? = nil,
+        name: String? = nil
+    ) {
+        self.toolCallId = toolCallId
+        self.title = title
+        self.kind = kind
+        self.status = status
+        self.content = content
+        self.locations = locations
+        self.rawInput = rawInput
+        self.rawOutput = rawOutput
+        self.metadata = metadata
+        self.name = name
+    }
+}
+
+public struct ACPToolCallUpdate: Codable, Equatable, Sendable {
+    public let toolCallId: String
+    public let title: String?
+    public let status: String?
+    public let locations: [ACPToolLocation]?
+    public let content: [ACPToolCallContent]?
+    public let rawOutput: AnyCodable?
+    public let rawInput: AnyCodable?
+    public let metadata: AnyCodable?
+    /// Stable tool identifier. Per spec, omitted or `null` means unchanged
+    /// (v1 cannot clear a name once set); a present string replaces.
+    public let name: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case toolCallId, title, status, locations, content, rawInput, rawOutput, name
+        case metadata = "_meta"
+    }
+
+    public init(
+        toolCallId: String,
+        status: String? = nil,
+        content: [ACPToolCallContent]? = nil,
+        rawOutput: AnyCodable? = nil,
+        title: String? = nil,
+        locations: [ACPToolLocation]? = nil,
+        rawInput: AnyCodable? = nil,
+        metadata: AnyCodable? = nil,
+        name: String? = nil
+    ) {
+        self.toolCallId = toolCallId
+        self.title = title
+        self.status = status
+        self.locations = locations
+        self.content = content
+        self.rawOutput = rawOutput
+        self.rawInput = rawInput
+        self.metadata = metadata
+        self.name = name
+    }
+}
+
+public struct ACPToolLocation: Codable, Equatable, Sendable {
+    public let path: String
+    public let line: Int?
+
+    public init(path: String, line: Int?) {
+        self.path = path
+        self.line = line
+    }
+}
+
+public struct ACPPlanEntry: Codable, Equatable, Sendable {
+    public let content: String
+    public let priority: String?
+    public let status: String
+
+    public init(content: String, priority: String?, status: String) {
+        self.content = content
+        self.priority = priority
+        self.status = status
+    }
+}
+
+/// Context-window usage from the ACP `usage_update` notification.
+/// `used`/`size` are token counts; `cost` is cumulative session cost when the
+/// agent reports it. A malformed/partial `cost` must not sink the whole update,
+/// so it is decoded defensively to `nil`.
+public struct ACPUsageInfo: Codable, Equatable, Sendable {
+    public let used: Int
+    public let size: Int
+    public let cost: Cost?
+    /// Runtime only: Claude's latest rate-limit info from `_meta`. Not encoded.
+    public let claudeRateLimit: ACPClaudeRateLimit?
+
+    public struct Cost: Codable, Equatable, Sendable {
+        public let amount: Double
+        public let currency: String
+
+        public init(amount: Double, currency: String) {
+            self.amount = amount
+            self.currency = currency
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey { case used, size, cost, meta = "_meta" }
+    private enum MetaKeys: String, CodingKey { case claudeRateLimit = "_claude/rateLimit" }
+
+    public init(used: Int, size: Int, cost: Cost?, claudeRateLimit: ACPClaudeRateLimit? = nil) {
+        self.used = used
+        self.size = size
+        self.cost = cost
+        self.claudeRateLimit = claudeRateLimit
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        used = try c.decode(Int.self, forKey: .used)
+        size = try c.decode(Int.self, forKey: .size)
+        cost = try? c.decodeIfPresent(Cost.self, forKey: .cost)
+        let meta = try? c.nestedContainer(keyedBy: MetaKeys.self, forKey: .meta)
+        claudeRateLimit = try? meta?.decodeIfPresent(ACPClaudeRateLimit.self, forKey: .claudeRateLimit)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(used, forKey: .used)
+        try c.encode(size, forKey: .size)
+        try c.encodeIfPresent(cost, forKey: .cost)
+    }
+}

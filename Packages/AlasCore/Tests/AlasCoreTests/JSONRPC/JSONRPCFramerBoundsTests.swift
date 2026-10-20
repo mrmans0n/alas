@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import AlasCore
+@testable import AlasHostCore
 
 struct JSONRPCFramerBoundsTests {
     @Test func drainsMaximumFrameBeforeCheckingFollowingFrameInSameRead() {

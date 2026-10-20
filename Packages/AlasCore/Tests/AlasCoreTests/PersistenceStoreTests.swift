@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 @testable import AlasCore
+@testable import AlasHostCore
 
 struct PersistenceStoreTests {
     struct Sample: Codable, Equatable { let name: String

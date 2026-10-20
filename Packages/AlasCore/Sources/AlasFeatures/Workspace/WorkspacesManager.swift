@@ -1,0 +1,154 @@
+import Foundation
+import Observation
+import AlasFoundation
+import AlasModel
+import AlasPlatform
+
+public enum WorkspaceLoadState: Equatable, Sendable {
+    case notLoaded
+    case loaded(WorkspaceStateFile)
+    case unreadable(WorkspaceRecoveryState)
+}
+
+/// Owns the loaded Workspace state read from `workspaces.json` and the
+/// reconciled presentation of its checkouts.
+@Observable
+@MainActor
+public final class WorkspacesManager {
+    private let bridge: WorkspaceSpacePersistenceBridge
+    private let observer: any WorkspaceCheckoutObserving
+    public private(set) var loadState: WorkspaceLoadState = .notLoaded
+    public private(set) var checkoutReconciliations: [UUID: WorkspaceCheckoutReconciliation] = [:]
+
+    public var canMutate: Bool {
+        if case .loaded = loadState { return true }
+        return false
+    }
+
+    public var recoveryState: WorkspaceRecoveryState? {
+        guard case .unreadable(let recovery) = loadState else { return nil }
+        return recovery
+    }
+
+    public var workspaces: [Workspace] {
+        guard case let .loaded(state) = loadState else { return [] }
+        return state.workspaces
+    }
+
+    public var checkouts: [WorkspaceCheckout] {
+        guard case let .loaded(state) = loadState else { return [] }
+        return state.checkouts.map(presentedCheckout)
+    }
+
+    /// Current persisted/reconciled checkout snapshot for runtime session
+    /// attachment. Returns nil while Workspace storage is unavailable rather
+    /// than fabricating a focus-derived replacement.
+    public func checkout(id: UUID) -> WorkspaceCheckout? {
+        guard case let .loaded(state) = loadState else { return nil }
+        return state.checkouts
+            .first(where: { $0.id == id })
+            .map(presentedCheckout)
+    }
+
+    public init(bridge: WorkspaceSpacePersistenceBridge = WorkspaceSpacePersistenceBridge(), observer: any WorkspaceCheckoutObserving = WorkspaceCheckoutObserver()) {
+        self.bridge = bridge
+        self.observer = observer
+    }
+
+    /// Loads Workspace storage and reconciles its checkouts. Returns the
+    /// Spaces file with typed layouts re-upgraded, or nil when unchanged.
+    public func load(spacesFile: SpacesFile) async -> SpacesFile? {
+        switch await bridge.load() {
+        case .missing:
+            let state = WorkspaceStateFile()
+            loadState = .loaded(state)
+            return nil
+        case .unreadable(let recovery):
+            loadState = .unreadable(recovery)
+            return nil
+        case .loaded(let state):
+            loadState = .loaded(state)
+            checkoutReconciliations = await reconcileCheckouts(in: state)
+            // Loading is strictly observational. Explicit Workspace
+            // operations own persistence; loading must never rewrite an
+            // otherwise valid state merely because the app launched.
+            let result = WorkspaceSpaceMigration.reupgrade(
+                spacesFile: spacesFile,
+                savedLayouts: state.spaceLayouts
+            )
+            return result.spaces == spacesFile.spaces ? nil : SpacesFile(
+                activeSpaceId: spacesFile.activeSpaceId,
+                spaces: result.spaces,
+                showSingleSpaceAffordance: spacesFile.showSingleSpaceAffordance
+            )
+        }
+    }
+
+    /// Creation progress only needs to inspect the checkout being created.
+    /// Keep observations for unrelated, unchanged snapshots without contacting their hosts.
+    public func refreshCheckoutSnapshots(reconciling checkoutID: UUID? = nil) async {
+        guard case .loaded(let previous) = loadState else { return }
+        switch await bridge.load() {
+        case .loaded(let state):
+            guard canMutate else { return }
+            loadState = .loaded(state)
+            if let checkoutID {
+                let previousByID = Dictionary(uniqueKeysWithValues: previous.checkouts.map { ($0.id, $0) })
+                let unchangedIDs = Set(state.checkouts.filter { previousByID[$0.id] == $0 }.map(\.id))
+                checkoutReconciliations = checkoutReconciliations.filter { unchangedIDs.contains($0.key) }
+                let report = try? await bridge.reconcileCheckout(id: checkoutID, observer: observer)
+                guard canMutate else { return }
+                checkoutReconciliations[checkoutID] = report
+            } else {
+                let reports = await reconcileCheckouts(in: state)
+                guard canMutate else { return }
+                checkoutReconciliations = reports
+            }
+        case .unreadable(let recovery):
+            loadState = .unreadable(recovery)
+            checkoutReconciliations = [:]
+        case .missing:
+            loadState = .loaded(.init())
+            checkoutReconciliations = [:]
+        }
+    }
+
+    private func reconcileCheckouts(in state: WorkspaceStateFile) async -> [UUID: WorkspaceCheckoutReconciliation] {
+        var reports: [UUID: WorkspaceCheckoutReconciliation] = [:]
+        for checkout in state.checkouts {
+            if let report = try? await bridge.reconcileCheckout(id: checkout.id, observer: observer) {
+                reports[checkout.id] = report
+            }
+        }
+        return reports
+    }
+
+    private func presentedCheckout(_ checkout: WorkspaceCheckout) -> WorkspaceCheckout {
+        guard let report = checkoutReconciliations[checkout.id] else { return checkout }
+        var copy = checkout
+        copy.members = checkout.members.map { member in
+            guard member.availability != .explicitlyDeleted else { return member }
+            guard let observation = report.observations[member.id] else { return member }
+            var presented = member
+            switch observation {
+            case .exactLineage:
+                presented.availability = .available
+            case .missing:
+                presented.availability = .missing
+            case .identityConflict:
+                presented.availability = .identityConflict
+            case .unavailable:
+                presented.availability = .unavailable
+            }
+            return presented
+        }
+        return copy
+    }
+
+    /// Checkpoints typed Space layout only while Workspace state is
+    /// editable and successfully loaded.
+    public func checkpointSpaceLayouts(afterWriting spacesFile: SpacesFile) async throws {
+        guard canMutate else { return }
+        try await bridge.checkpointAfterSpacesWrite(spacesFile)
+    }
+}

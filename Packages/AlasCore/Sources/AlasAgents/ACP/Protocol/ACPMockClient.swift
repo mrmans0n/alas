@@ -1,0 +1,231 @@
+import Foundation
+import AlasFoundation
+import AlasModel
+import AlasPlatform
+import AlasFeatures
+import AlasCode
+
+public final class ACPMockClient: ACPRequestHandoffPreparing, @unchecked Sendable {
+    public var advertisesTerminalCapability = true
+    public var brokerGenerationForTesting: ACPBrokerGeneration?
+    public let providesDurableOperationKeyDeduplication: Bool
+
+    public private(set) var sent: [ACPRequest] = []
+    private var scripts: [String: (ACPRequest) throws -> Data] = [:]
+    private var asyncScripts: [String: (ACPRequest) async throws -> Data] = [:]
+    private var responseScripts: [String: (ACPRequest) async throws -> ACPResponse] = [:]
+    private var notificationAsyncScripts: [String: (ACPRequest) async throws -> Void] = [:]
+    private let updatesCont: AsyncStream<ACPSessionUpdateParams>.Continuation
+    private let permsCont: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>.Continuation
+    private let cancelRequestsCont: AsyncStream<JSONRPCID>.Continuation
+    private let questionsCont: AsyncStream<ACPQuestionRequest>.Continuation
+    private let plansCont: AsyncStream<ACPCursorPlanRequest>.Continuation
+    private let elicitationsCont: AsyncStream<ACPElicitationRequest>.Continuation
+    private let completionsCont: AsyncStream<ACPElicitationCompleteParams>.Continuation
+    private let filesCont: AsyncStream<ACPFileRequest>.Continuation
+    private let terminalsCont: AsyncStream<ACPTerminalRequest>.Continuation
+    private let authStatusCont: AsyncStream<ACPAuthStatusEvent>.Continuation
+    private let sessionListChangesCont: AsyncStream<ACPSessionListChanges>.Continuation
+    private let updateCountLock = NSLock()
+    private var _yieldedUpdateCount = 0
+    public private(set) var shutdownCount = 0
+    public var rejectsRequestsAfterShutdown = false
+    public private(set) var requestsAfterShutdownCount = 0
+
+    public let incomingUpdates: AsyncStream<ACPSessionUpdateParams>
+    public var yieldedUpdateCount: Int {
+        updateCountLock.lock()
+        defer { updateCountLock.unlock() }
+        return _yieldedUpdateCount
+    }
+    public let permissionRequests: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>
+    public let cancelRequests: AsyncStream<JSONRPCID>
+    public let questionRequests: AsyncStream<ACPQuestionRequest>
+    public let planRequests: AsyncStream<ACPCursorPlanRequest>
+    public let elicitationRequests: AsyncStream<ACPElicitationRequest>
+    public let elicitationCompletions: AsyncStream<ACPElicitationCompleteParams>
+    public let fileRequests: AsyncStream<ACPFileRequest>
+    public let terminalRequests: AsyncStream<ACPTerminalRequest>
+    public let authStatusUpdates: AsyncStream<ACPAuthStatusEvent>
+    public let sessionListChanges: AsyncStream<ACPSessionListChanges>
+
+    public var terminalResponses: [JSONRPCID: Result<Data, JSONRPCError>] = [:]
+
+    public init(providesDurableOperationKeyDeduplication: Bool = false) {
+        self.providesDurableOperationKeyDeduplication =
+            providesDurableOperationKeyDeduplication
+        var u: AsyncStream<ACPSessionUpdateParams>.Continuation!
+        self.incomingUpdates = AsyncStream { u = $0 }
+        self.updatesCont = u
+        var p: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>.Continuation!
+        self.permissionRequests = AsyncStream { p = $0 }
+        self.permsCont = p
+        var cr: AsyncStream<JSONRPCID>.Continuation!
+        self.cancelRequests = AsyncStream { cr = $0 }
+        self.cancelRequestsCont = cr
+        var q: AsyncStream<ACPQuestionRequest>.Continuation!
+        self.questionRequests = AsyncStream { q = $0 }
+        self.questionsCont = q
+        var plan: AsyncStream<ACPCursorPlanRequest>.Continuation!
+        self.planRequests = AsyncStream { plan = $0 }
+        self.plansCont = plan
+        var e: AsyncStream<ACPElicitationRequest>.Continuation!
+        self.elicitationRequests = AsyncStream { e = $0 }
+        self.elicitationsCont = e
+        var c: AsyncStream<ACPElicitationCompleteParams>.Continuation!
+        self.elicitationCompletions = AsyncStream { c = $0 }
+        self.completionsCont = c
+        var f: AsyncStream<ACPFileRequest>.Continuation!
+        self.fileRequests = AsyncStream { f = $0 }
+        self.filesCont = f
+        var t: AsyncStream<ACPTerminalRequest>.Continuation!
+        self.terminalRequests = AsyncStream { t = $0 }
+        self.terminalsCont = t
+        var a: AsyncStream<ACPAuthStatusEvent>.Continuation!
+        self.authStatusUpdates = AsyncStream { a = $0 }
+        self.authStatusCont = a
+        var slc: AsyncStream<ACPSessionListChanges>.Continuation!
+        self.sessionListChanges = AsyncStream { slc = $0 }
+        self.sessionListChangesCont = slc
+    }
+
+    public func send(_ request: ACPRequest) async throws -> ACPResponse {
+        try await send(request, onRequestHandoff: {})
+    }
+
+    public func send(
+        _ request: ACPRequest,
+        onRequestHandoff: @Sendable () -> Void
+    ) async throws -> ACPResponse {
+        if rejectsRequestsAfterShutdown, shutdownCount > 0 {
+            requestsAfterShutdownCount += 1
+            throw ACPClientError.notRunning
+        }
+        sent.append(request)
+        onRequestHandoff()
+        if let script = responseScripts[request.method] {
+            return try await script(request)
+        }
+        if let script = asyncScripts[request.method] {
+            return ACPResponse(body: try await script(request))
+        }
+        guard let script = scripts[request.method] else {
+            throw ACPClientError.noScript(method: request.method)
+        }
+        return ACPResponse(body: try script(request))
+    }
+
+    public func send(
+        _ request: ACPRequest,
+        beforeRequestHandoff: @Sendable (ACPBrokerGeneration?) async throws -> Void,
+        onRequestHandoff: @Sendable () throws -> Void
+    ) async throws -> ACPResponse {
+        try await beforeRequestHandoff(brokerGenerationForTesting)
+        try onRequestHandoff()
+        return try await send(request)
+    }
+
+    /// Mock notifications just record the call. Tests can inspect
+    /// `sent` (which holds both requests and notifications in arrival
+    /// order) without needing to script a reply.
+    public func notify(_ request: ACPRequest) async throws {
+        sent.append(request)
+        if let script = notificationAsyncScripts[request.method] {
+            try await script(request)
+        }
+    }
+
+    public func emit(_ update: ACPSessionUpdateParams) {
+        updateCountLock.lock()
+        _yieldedUpdateCount += 1
+        updateCountLock.unlock()
+        updatesCont.yield(update)
+    }
+    public func emitPermission(id: JSONRPCID, params: ACPPermissionRequestParams) { permsCont.yield((id, params)) }
+    public func emitCancelRequest(id: JSONRPCID) { cancelRequestsCont.yield(id) }
+    public func emitQuestion(id: JSONRPCID, params: ACPQuestionRequestParams) {
+        questionsCont.yield(.init(id: id, params: params))
+    }
+    public func emitPlan(id: JSONRPCID, params: ACPCursorCreatePlanParams) {
+        plansCont.yield(.init(id: id, params: params))
+    }
+    public func emitElicitation(id: JSONRPCID, params: ACPElicitationRequestParams) {
+        elicitationsCont.yield(.init(id: id, params: params))
+    }
+    public func emitElicitationComplete(elicitationId: String) {
+        completionsCont.yield(.init(elicitationId: elicitationId))
+    }
+    public func emitFile(_ req: ACPFileRequest) { filesCont.yield(req) }
+    public func emitTerminal(_ req: ACPTerminalRequest) { terminalsCont.yield(req) }
+    public func emitAuthStatus(
+        _ status: ACPAuthStatus,
+        durableConsumptionAcknowledgement: ACPDurableConsumptionAcknowledgement? = nil
+    ) {
+        authStatusCont.yield(.init(
+            status: status,
+            durableConsumptionAcknowledgement: durableConsumptionAcknowledgement
+        ))
+    }
+
+    public func emitSessionListChanges(_ changes: ACPSessionListChanges) {
+        sessionListChangesCont.yield(changes)
+    }
+
+    public var permissionResponses: [JSONRPCID: ACPPermissionResponse] = [:]
+    public func respondToPermission(id: JSONRPCID, response: ACPPermissionResponse) {
+        permissionResponses[id] = response
+    }
+    public var questionResponses: [JSONRPCID: ACPQuestionResponse] = [:]
+    public func respondToQuestion(id: JSONRPCID, response: ACPQuestionResponse) {
+        questionResponses[id] = response
+    }
+    public var planResponses: [JSONRPCID: ACPCursorPlanResponse] = [:]
+    public func respondToPlan(id: JSONRPCID, response: ACPCursorPlanResponse) {
+        planResponses[id] = response
+    }
+    public var elicitationResponses: [JSONRPCID: Result<ACPElicitationResponse, JSONRPCError>] = [:]
+    public func respondToElicitation(
+        id: JSONRPCID,
+        result: Result<ACPElicitationResponse, JSONRPCError>
+    ) {
+        elicitationResponses[id] = result
+    }
+    public var fileResponses: [JSONRPCID: Result<Data, JSONRPCError>] = [:]
+    public func respondToFileRequest(id: JSONRPCID, result: Result<Data, JSONRPCError>) {
+        fileResponses[id] = result
+    }
+    public func respondToTerminalRequest(id: JSONRPCID, result: Result<Data, JSONRPCError>) {
+        terminalResponses[id] = result
+    }
+
+    public func script(method: String, _ handler: @escaping (ACPRequest) throws -> Data) {
+        scripts[method] = handler
+    }
+
+    public func scriptResponse(method: String, _ handler: @escaping (ACPRequest) async throws -> ACPResponse) {
+        responseScripts[method] = handler
+    }
+
+    public func scriptAsync(method: String, _ handler: @escaping (ACPRequest) async throws -> Data) {
+        asyncScripts[method] = handler
+    }
+
+    public func scriptNotifyAsync(method: String, _ handler: @escaping (ACPRequest) async throws -> Void) {
+        notificationAsyncScripts[method] = handler
+    }
+
+    public func shutdown() async {
+        shutdownCount += 1
+        updatesCont.finish()
+        permsCont.finish()
+        cancelRequestsCont.finish()
+        questionsCont.finish()
+        plansCont.finish()
+        elicitationsCont.finish()
+        completionsCont.finish()
+        filesCont.finish()
+        terminalsCont.finish()
+        authStatusCont.finish()
+        sessionListChangesCont.finish()
+    }
+}

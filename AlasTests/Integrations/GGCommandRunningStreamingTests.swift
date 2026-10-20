@@ -134,7 +134,7 @@ struct GGCommandRunningStreamingTests {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
         let source = try String(
-            contentsOf: root.appendingPathComponent("Packages/AlasCore/Sources/AlasCore/Integrations/GG/GGService.swift"),
+            contentsOf: root.appendingPathComponent("Packages/AlasCore/Sources/AlasFeatures/Integrations/GG/GGService.swift"),
             encoding: .utf8
         )
         #expect(source.contains("process.terminationHandler = { [weak processTree] proc in"))
@@ -146,7 +146,7 @@ struct GGCommandRunningStreamingTests {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
         let source = try String(
-            contentsOf: root.appendingPathComponent("Packages/AlasCore/Sources/AlasCore/Integrations/GG/GGStreamingProcessTree.swift"),
+            contentsOf: root.appendingPathComponent("Packages/AlasCore/Sources/AlasFeatures/Integrations/GG/GGStreamingProcessTree.swift"),
             encoding: .utf8
         )
         let helper = try #require(source.range(of: "private func signalRootAndGroup"))
@@ -165,7 +165,7 @@ struct GGCommandRunningStreamingTests {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
         let source = try String(
-            contentsOf: root.appendingPathComponent("Packages/AlasCore/Sources/AlasCore/Integrations/GG/GGStreamingProcessTree.swift"),
+            contentsOf: root.appendingPathComponent("Packages/AlasCore/Sources/AlasFeatures/Integrations/GG/GGStreamingProcessTree.swift"),
             encoding: .utf8
         )
         let start = try #require(source.range(of: "private func signalRootAndGroup"))
@@ -182,7 +182,7 @@ struct GGCommandRunningStreamingTests {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
         let source = try String(
-            contentsOf: root.appendingPathComponent("Packages/AlasCore/Sources/AlasCore/Integrations/GG/GGStreamingProcessTree.swift"),
+            contentsOf: root.appendingPathComponent("Packages/AlasCore/Sources/AlasFeatures/Integrations/GG/GGStreamingProcessTree.swift"),
             encoding: .utf8
         )
         #expect(source.contains("eventMask: [.fork, .exit]"))
@@ -195,14 +195,14 @@ struct GGCommandRunningStreamingTests {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
         let treeSource = try String(
-            contentsOf: root.appendingPathComponent("Packages/AlasCore/Sources/AlasCore/Integrations/GG/GGStreamingProcessTree.swift"),
+            contentsOf: root.appendingPathComponent("Packages/AlasCore/Sources/AlasFeatures/Integrations/GG/GGStreamingProcessTree.swift"),
             encoding: .utf8
         )
         #expect(treeSource.contains("func start(\n        rootIdentity: ACPTerminal.DescendantKey,\n        wrapperIdentity: ACPTerminal.DescendantKey"))
         #expect(treeSource.contains("ACPTerminal.currentlyMatching(Set([rootIdentity, wrapperIdentity]))"))
 
         let serviceSource = try String(
-            contentsOf: root.appendingPathComponent("Packages/AlasCore/Sources/AlasCore/Integrations/GG/GGService.swift"),
+            contentsOf: root.appendingPathComponent("Packages/AlasCore/Sources/AlasFeatures/Integrations/GG/GGService.swift"),
             encoding: .utf8
         )
         #expect(serviceSource.contains("set -m;"))

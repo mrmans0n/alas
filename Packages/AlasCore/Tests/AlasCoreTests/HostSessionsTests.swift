@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @_spi(Testing) @_spi(AppHost) @testable import AlasCore
+@_spi(Testing) @_spi(AppHost) @testable import AlasHostCore
 
 @MainActor
 struct HostSessionsTests {
