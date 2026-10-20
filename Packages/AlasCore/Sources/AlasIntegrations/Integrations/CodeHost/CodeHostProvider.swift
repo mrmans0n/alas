@@ -2,6 +2,7 @@ import Foundation
 import AlasFoundation
 import AlasModel
 import AlasPlatform
+import AlasFeatures
 
 public enum CodeHostProviderError: LocalizedError, Equatable, Sendable {
     case cliMissing(String)

@@ -2,6 +2,7 @@ import Foundation
 import AlasFoundation
 import AlasModel
 import AlasPlatform
+import AlasFeatures
 
 public enum TrackedRevisionTransition: Equatable, Sendable {
     case unchanged(TrackedRevision)

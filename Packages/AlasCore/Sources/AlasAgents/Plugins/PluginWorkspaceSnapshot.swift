@@ -4,6 +4,7 @@ import AlasModel
 import AlasPlatform
 import AlasFeatures
 import AlasCode
+import AlasIntegrations
 
 /// What `workspace.read` exposes: one project's worktrees and their agent
 /// sessions. Always the whole project, so plugins never reconcile diffs.

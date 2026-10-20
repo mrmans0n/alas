@@ -2,6 +2,7 @@ import Foundation
 import AlasFoundation
 import AlasModel
 import AlasPlatform
+import AlasFeatures
 
 /// Creating and removing worktrees on disk, locally or over SSH, independent
 /// of any UI.

@@ -5,6 +5,7 @@ import AlasPlatform
 import AlasFeatures
 import AlasCode
 import AlasAgents
+import AlasIntegrations
 
 /// The host protocol: the messages a client exchanges with `AlasHost` over
 /// any transport. A client sends `HostClientMessage`s and receives

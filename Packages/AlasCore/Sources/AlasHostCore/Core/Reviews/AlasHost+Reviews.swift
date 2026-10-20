@@ -5,6 +5,7 @@ import AlasPlatform
 import AlasFeatures
 import AlasCode
 import AlasAgents
+import AlasIntegrations
 
 extension AlasHost {
     /// Review comments on a worktree's changes, as agents file and answer

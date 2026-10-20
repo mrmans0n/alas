@@ -4,6 +4,7 @@ import AlasModel
 import AlasPlatform
 import AlasFeatures
 import AlasCode
+import AlasIntegrations
 
 /// Per-worktree cache behind reference chips: resolves the code host remote
 /// once, then looks up each `#N` / `!N` at most once per `staleAfter`.

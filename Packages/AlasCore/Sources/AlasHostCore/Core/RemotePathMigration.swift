@@ -6,6 +6,7 @@ import AlasPlatform
 import AlasFeatures
 import AlasCode
 import AlasAgents
+import AlasIntegrations
 
 /// Remote worktree ids moved from real paths to `RemotePath` virtual paths
 /// (see `ProjectConfig.legacyWorktreeIDs`). Every store keyed by worktree id

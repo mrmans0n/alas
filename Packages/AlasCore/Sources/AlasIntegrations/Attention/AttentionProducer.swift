@@ -3,6 +3,7 @@ import CryptoKit
 import AlasFoundation
 import AlasModel
 import AlasPlatform
+import AlasFeatures
 
 public enum AttentionProducer: Sendable {
     public static func harnessFingerprint(state: ActivityState, body: String?, requiresUserInput: Bool = false) -> String {

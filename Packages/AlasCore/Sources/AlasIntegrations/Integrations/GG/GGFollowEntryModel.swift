@@ -2,6 +2,7 @@ import Foundation
 import AlasFoundation
 import AlasModel
 import AlasPlatform
+import AlasFeatures
 
 /// One row in the follow-a-stack-entry picker.
 public struct GGFollowEntryCandidate: Equatable, Identifiable, Sendable {

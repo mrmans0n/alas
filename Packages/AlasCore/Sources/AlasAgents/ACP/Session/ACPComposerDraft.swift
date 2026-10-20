@@ -4,6 +4,7 @@ import AlasModel
 import AlasPlatform
 import AlasFeatures
 import AlasCode
+import AlasIntegrations
 
 public struct ACPComposerDraft: Codable, Equatable, Sendable {
     public var segments: [Segment]

@@ -2,6 +2,7 @@ import Foundation
 import AlasFoundation
 import AlasModel
 import AlasPlatform
+import AlasFeatures
 
 public struct WorkspaceCheckoutProgress: Equatable, Sendable {
     public var completedMembers: Int
@@ -419,19 +420,6 @@ public struct WorkspaceLifecycleConfirmationModel: Equatable, Sendable {
         self.risks = risks
         self.confirmAction = confirmAction
         self.canForceDelete = canForceDelete
-    }
-}
-
-public struct WorkspaceRepairCandidate: Equatable, Identifiable, Sendable {
-    public var id: String { path }
-    public var path: String
-    public var lineageID: String
-    public var isExactMatch: Bool
-
-    public init(path: String, lineageID: String, isExactMatch: Bool) {
-        self.path = path
-        self.lineageID = lineageID
-        self.isExactMatch = isExactMatch
     }
 }
 

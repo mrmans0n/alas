@@ -5,6 +5,7 @@ import AlasPlatform
 import AlasFeatures
 import AlasCode
 import AlasAgents
+import AlasIntegrations
 
 /// Agent-facing failure of `pr_create` / `pr_status`; `message` is returned verbatim.
 private struct PRShepherdCLIError: Error {

@@ -6,6 +6,7 @@ import AlasPlatform
 import AlasFeatures
 import AlasCode
 import AlasAgents
+import AlasIntegrations
 
 /// The headless composition root: the projects Alas manages, their worktrees,
 /// and the session managers that run agents in them. Nothing here needs the

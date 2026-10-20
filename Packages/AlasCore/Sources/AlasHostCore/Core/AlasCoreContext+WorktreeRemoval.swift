@@ -6,6 +6,7 @@ import AlasModel
 import AlasPlatform
 import AlasCode
 import AlasAgents
+@_spi(Testing) import AlasIntegrations
 
 private let removalLogger = Logger(subsystem: "io.nlopez.alas", category: "WorktreeRemoval")
 

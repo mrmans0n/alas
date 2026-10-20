@@ -5,6 +5,7 @@ import AlasPlatform
 import AlasFeatures
 import AlasCode
 import AlasAgents
+import AlasIntegrations
 
 /// What `AlasCoreContext.startRun` did with a request.
 public enum RunStart: Codable, Equatable, Sendable {

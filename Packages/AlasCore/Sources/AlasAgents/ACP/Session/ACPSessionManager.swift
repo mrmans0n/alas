@@ -4,6 +4,7 @@ import AlasModel
 import AlasPlatform
 import AlasFeatures
 import AlasCode
+import AlasIntegrations
 
 private struct ACPTranscriptScrollMemory: Equatable {
     var anchorMessageId: String?

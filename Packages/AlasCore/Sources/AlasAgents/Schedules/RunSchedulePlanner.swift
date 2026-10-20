@@ -4,6 +4,7 @@ import AlasModel
 import AlasPlatform
 import AlasFeatures
 import AlasCode
+import AlasIntegrations
 
 /// Pure firing arithmetic. Everything the scheduler decides about *when* goes
 /// through here so the semantics can be tested with a fixed clock and no
