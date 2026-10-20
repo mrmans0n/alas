@@ -69,6 +69,7 @@ MEMBER = re.compile(
 )
 # The same at any depth, for telling whether a member's name is unambiguous.
 ANY_MEMBER = re.compile(MEMBER.pattern.replace("^    ", "^\\s+", 1))
+CASES = re.compile(r"^\s+(?:indirect\s+)?case\s+([^=:{]+?)\s*$")
 INITIALIZER = re.compile(r"^    (?:(?:public|internal|package|convenience|required|nonisolated)\s+)*init\??\(\s*(\w+)")
 INITIALIZER_USE = re.compile(r"\b([A-Z]\w*)\(\s*(\w+)\s*:")
 EXTENSION = re.compile(r"^(?:(?:public|internal|package)\s+)?extension\s+([A-Z]\w*)")
@@ -88,6 +89,10 @@ def members(text):
         match = ANY_MEMBER.match(line)
         if match:
             all_members.add(match.group(1))
+        # Every name in `case a, b(Int), c`.
+        match = CASES.match(line)
+        if match:
+            all_members.update(re.findall(r"(?:^|,)\s*([a-zA-Z_]\w*)", re.sub(r"\([^)]*\)", "", match.group(1))))
         match = MEMBER.match(line)
         if match and extended:
             in_extensions.add((extended, match.group(1)))
