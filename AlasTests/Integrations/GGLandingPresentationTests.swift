@@ -3,88 +3,99 @@ import Testing
 @testable import Alas
 
 struct GGLandingPresentationTests {
-    @Test func readinessCombinesAvailableFacts() {
-        #expect(GGLandingPresentation.detail(for: wait(ci: "running", approved: true))
-            == "CI running · Approved · Waiting 20s")
-        #expect(GGLandingPresentation.detail(for: wait(approved: false))
-            == "Waiting for approval · Waiting 20s")
-        #expect(GGLandingPresentation.detail(for: wait(ci: "success"))
-            == "CI passed · Waiting 20s")
-        #expect(GGLandingPresentation.detail(for: wait(ci: "failure"))
-            == "CI failed · Waiting 20s")
-        #expect(GGLandingPresentation.detail(for: wait()) == "Waiting for readiness · Waiting 20s")
+    @Test func preparationSpinsForSessionButNotAnEntry() {
+        var session = session()
+        session.isPreparing = true
+        #expect(GGLandingPresentation.status(for: session) == .checking)
+        #expect(GGLandingPresentation.status(for: session).isSpinning)
+        #expect(session.rows.allSatisfy { !GGLandingPresentation.isActive($0, in: session) })
+        session.isPreparing = false
+        #expect(GGLandingPresentation.rowStatus(for: session.rows[0], in: session) == .active)
+        #expect(GGLandingPresentation.rowStatus(for: session.rows[1], in: session) == .pending)
     }
 
-    @Test func mergeTrainIncludesQueuePosition() {
-        let wait = GGLandWait(
-            position: 1, prNumber: 42, phase: .mergeTrain, poll: 4,
-            elapsedSeconds: 65, ciStatus: nil, approved: nil,
-            mergeTrainStatus: "fresh", mergeTrainPosition: 3,
-            pipelineRunning: true, error: nil
-        )
-        #expect(GGLandingPresentation.detail(for: wait)
-            == "Merge train · Position 3 · Pipeline running · Waiting 1m 5s")
+    @Test(arguments: [GGLandPhase.readiness, .mergeTrain])
+    func waitSelectsOnlyItsUnfinishedEntry(phase: GGLandPhase) {
+        var session = session()
+        let wait = wait(position: 2, phase: phase)
+        session.activeWait = wait
+        session.rows[1].wait = wait
+        #expect(GGLandingPresentation.status(for: session) == (phase == .readiness ? .readiness : .mergeTrain))
+        #expect(!GGLandingPresentation.isActive(session.rows[0], in: session))
+        #expect(GGLandingPresentation.isActive(session.rows[1], in: session))
+        session.rows[1].outcome = .init(position: 2, prNumber: 42, action: "queued")
+        #expect(!GGLandingPresentation.isActive(session.rows[1], in: session))
+        #expect(GGLandingPresentation.rowStatus(for: session.rows[1], in: session) == .queued)
     }
 
-    @Test func queuedIsDistinctFromMergedAndSummaryCountsBoth() {
+    @Test(arguments: [GGLandingPhase.cancelling, .cancelled, .failed, .succeeded])
+    func sessionPhaseOverridesStaleWaitAndPreparation(phase: GGLandingPhase) {
+        var session = session()
+        session.phase = phase
+        session.isPreparing = true
+        session.activeWait = wait()
+        session.rows[0].wait = wait()
+        let expected: GGLandingPresentation.Status
+        switch phase {
+        case .cancelling: expected = .cancelling
+        case .cancelled: expected = .cancelled
+        case .failed: expected = .failed
+        default: expected = .merged
+        }
+        let status = GGLandingPresentation.status(for: session)
+        #expect(status == expected)
+        #expect(status.isSpinning == (phase == .cancelling))
+        if phase != .cancelling {
+            #expect(session.rows.allSatisfy { !GGLandingPresentation.isActive($0, in: session) })
+        }
+    }
+
+    @Test func partialResultsKeepQueuedMergedAndFailedSeparate() {
         var session = session()
         session.rows[0].outcome = .init(position: 1, prNumber: 41, action: "merged")
         session.rows[1].outcome = .init(position: 2, prNumber: 42, action: "queued")
-        #expect(GGLandingPresentation.detail(for: session.rows[1], in: session) == "Queued")
-        #expect(GGLandingPresentation.progress(for: session) == "2 / 3")
-        session.phase = .succeeded
-        session.result = .init(landed: session.rows.compactMap(\.outcome), remaining: 1)
-        #expect(GGLandingPresentation.summary(for: session) == "1 merged · 1 queued · 1 remaining")
-    }
-
-    @Test func terminalStatesPreservePartialProgress() {
-        var session = session()
-        session.rows[0].outcome = .init(position: 1, prNumber: 41, action: "merged")
-        session.phase = .cancelled
-        #expect(GGLandingPresentation.summary(for: session) == "Cancelled · 1 merged · 2 remaining")
-        #expect(GGLandingPresentation.detail(for: session.rows[1], in: session) == "Cancelled")
+        session.rows[2].outcome = .init(position: 3, prNumber: 43, error: "Conflict")
         session.phase = .failed
-        session.error = "Merge failed"
-        session.rows[1].outcome = .init(position: 2, prNumber: 42, error: "Conflict")
-        #expect(GGLandingPresentation.summary(for: session) == "Failed · 1 merged · 2 remaining")
-        #expect(GGLandingPresentation.detail(for: session.rows[1], in: session) == "Conflict")
-        #expect(GGLandingPresentation.detail(for: session.rows[2], in: session) == "Not landed")
-        #expect(GGLandingPresentation.progress(for: session) == "1 / 3")
+        #expect(GGLandingPresentation.counts(for: session) == .init(total: 3, completed: 2, merged: 1, queued: 1, remaining: 1))
+        #expect(GGLandingPresentation.rowStatus(for: session.rows[0], in: session) == .merged)
+        #expect(GGLandingPresentation.rowStatus(for: session.rows[1], in: session) == .queued)
+        #expect(GGLandingPresentation.rowStatus(for: session.rows[2], in: session) == .failed)
+        session.rows[2].outcome = .init(position: 3, prNumber: 43, action: "merged")
+        session.phase = .succeeded
+        session.result = .init(landed: session.rows.compactMap(\.outcome), remaining: 0)
+        #expect(GGLandingPresentation.status(for: session) == .queued)
+        #expect(GGLandingPresentation.counts(for: session).remaining == 0)
     }
 
-    @Test func onlyActiveRowsShowHeartbeatWhileRunning() {
+    @Test func terminalDiagnosticsKeepBothSessionAndResultInformation() {
         var session = session()
+        session.phase = .failed
+        session.warning = "Temporary forge outage"
+        session.error = "Landing stopped"
+        session.result = .init(landed: [], warnings: ["Cleanup skipped"], error: "Merge rejected")
+        #expect(Set(GGLandingPresentation.warnings(for: session)) == ["Temporary forge outage", "Cleanup skipped"])
+        #expect(Set(GGLandingPresentation.errors(for: session)) == ["Landing stopped", "Merge rejected"])
+    }
+
+    @Test(arguments: [GGLandingPhase.running, .cancelling, .cancelled, .failed, .succeeded])
+    func sidebarSuppressesSuccessAndKeepsTerminalPrecedence(phase: GGLandingPhase) throws {
+        var session = session()
+        session.isPreparing = true
         session.activeWait = wait()
-        session.rows[0].wait = wait()
-        #expect(GGLandingPresentation.isActive(session.rows[0], in: session))
-        #expect(!GGLandingPresentation.isActive(session.rows[1], in: session))
-        session.phase = .cancelled
-        #expect(!GGLandingPresentation.isActive(session.rows[0], in: session))
-        #expect(GGLandingPresentation.detail(for: session.rows[0], in: session) == "Cancelled")
+        session.phase = phase
+        let status = GGLandingPresentation.sidebarStatus(for: session)
+        if phase == .succeeded {
+            #expect(status == nil)
+        } else {
+            let status = try #require(status)
+            #expect(status.isSpinning == (phase == .running || phase == .cancelling))
+            if phase == .failed { #expect(status.colorToken == "del") }
+        }
     }
 
-    @Test func preparingRowReportsTheStackCheckUntilGGReportsProgress() {
-        var session = session()
-        session.isPreparing = true
-        // The tab opens before `gg ls` re-validates the stack; the head row
-        // must say so instead of claiming the merge already started.
-        #expect(GGLandingPresentation.detail(for: session.rows[0], in: session) == "Checking stack…")
-        #expect(GGLandingPresentation.detail(for: session.rows[1], in: session) == "Pending")
-
-        session.isPreparing = false
-        #expect(GGLandingPresentation.detail(for: session.rows[0], in: session) == "Landing…")
-
-        // A live wait always wins over both.
-        session.isPreparing = true
-        session.activeWait = wait(approved: false)
-        session.rows[0].wait = wait(approved: false)
-        #expect(GGLandingPresentation.detail(for: session.rows[0], in: session)
-            == "Waiting for approval · Waiting 20s")
-    }
-
-    private func wait(ci: String? = nil, approved: Bool? = nil) -> GGLandWait {
-        .init(position: 1, prNumber: 42, phase: .readiness, poll: 2,
-              elapsedSeconds: 20, ciStatus: ci, approved: approved,
+    private func wait(position: Int = 1, phase: GGLandPhase = .readiness) -> GGLandWait {
+        .init(position: position, prNumber: 40 + position, phase: phase, poll: 2,
+              elapsedSeconds: 20, ciStatus: "running", approved: false,
               mergeTrainStatus: nil, mergeTrainPosition: nil, pipelineRunning: nil, error: nil)
     }
 

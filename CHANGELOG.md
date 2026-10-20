@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Show gg landing progress in the source worktree's sidebar subtitle, with a shortcut back to landing details. Restyle the landing pane to match gg inbox, use Alas spinners, and distinguish waiting, cancellation, failures, merged entries, and queued entries.
+
 ## [0.21.8] - 2026-10-18
 
 ### ✨ Features
