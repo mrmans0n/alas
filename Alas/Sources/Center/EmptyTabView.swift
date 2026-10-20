@@ -1,4 +1,3 @@
-import Lottie
 import SwiftUI
 
 struct EmptyTabAction: Identifiable {
@@ -46,8 +45,8 @@ struct EmptyTabView: View {
 
     private var card: some View {
         VStack(spacing: 16) {
-            LovebirdView()
-                .accessibilityHidden(true)
+            LovebirdView(pose: .idle)
+                .shadow(color: .black.opacity(0.2), radius: 6, y: 3)
             VStack(spacing: 5) {
                 Text("No tabs open")
                     .font(.system(size: 15, weight: .semibold))
@@ -69,29 +68,6 @@ struct EmptyTabView: View {
         .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(theme.color("line"), lineWidth: 0.5))
         .shadow(color: .black.opacity(0.18), radius: 24, y: 10)
         .padding(.horizontal, 24)
-    }
-}
-
-/// A lovebird idling on a twig. The Lottie is exported from
-/// `assets/lovebird.cv` (Cavalry); Reduce Motion holds its resting first frame.
-private struct LovebirdView: View {
-    private static let animation = LottieAnimation.named("lovebird")
-    @Environment(\.theme) private var theme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var body: some View {
-        if let animation = Self.animation {
-            LottieView(animation: animation)
-                .playbackMode(reduceMotion ? .paused(at: .progress(0)) : .playing(.toProgress(1, loopMode: .loop)))
-                .resizable()
-                .frame(width: 64, height: 64)
-                .shadow(color: .black.opacity(0.2), radius: 6, y: 3)
-        } else {
-            Image(systemName: "bird.fill")
-                .font(.system(size: 30))
-                .foregroundStyle(theme.color("accent").gradient)
-                .shadow(color: theme.color("accent").opacity(0.3), radius: 8, y: 3)
-        }
     }
 }
 

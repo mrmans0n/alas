@@ -55,13 +55,8 @@ struct ACPFirstRunConnectingView: View {
     }
 
     private var mark: some View {
-        Image(systemName: ACPNewChatEmptyStateArtwork.systemImageName)
-            .font(.system(size: ACPNewChatEmptyStateArtwork.fontSize, weight: .semibold))
-            .foregroundStyle(theme.color("accent"))
-            .frame(
-                width: ACPNewChatEmptyStateArtwork.frameSize,
-                height: ACPNewChatEmptyStateArtwork.frameSize
-            )
+        LovebirdView(pose: .waiting, size: 72)
+            .shadow(color: .black.opacity(0.18), radius: 6, y: 3)
     }
 
     private var phaseChips: some View {
