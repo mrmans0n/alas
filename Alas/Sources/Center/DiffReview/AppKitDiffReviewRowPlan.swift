@@ -483,7 +483,9 @@ enum AppKitDiffReviewRowPlanBuilder {
             let isDeferred = (!input.automaticallyRendersDiff || !automaticallyRendersByAggregateBudget || individuallyDeferred)
                 && !input.state.showFullDiffOverride
             if isDeferred || (input.file.displayModel == nil && input.file.imageProvider == nil) {
-                if input.file.displayModel == nil && input.file.imageProvider == nil {
+                // A pending file's comments wait for its diff rather than
+                // showing as file accessories and then moving into it.
+                if input.file.displayModel == nil && input.file.imageProvider == nil && !input.file.isPending {
                     appendFileAccessories(input, context: nil, rows: &rows, fallbacks: &fallbackByTargetID)
                 }
                 let placeholderID = AppKitDiffReviewRowID.placeholder(fileID: fileID)
@@ -1051,6 +1053,7 @@ enum AppKitDiffReviewRowPlanBuilder {
     ) -> Int {
         var hasher = Hasher()
         hasher.combine(input.file.placeholderMessage)
+        hasher.combine(input.file.isPending)
         hasher.combine(input.file.summary.additions)
         hasher.combine(input.file.summary.deletions)
         hasher.combine(input.inlineFeedback.count + input.draftComments.count + input.threads.count)
@@ -1403,6 +1406,16 @@ struct AppKitDiffReviewPlaceholderRowBody: View {
     }
 
     var body: some View {
+        if input.file.isPending {
+            DiffReviewSkeletonLines(lineWidths: [0.55, 0.4, 0.65])
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .padding(.horizontal, 14).padding(.vertical, 18).background(input.theme.color("bg-1"))
+        } else {
+            message
+        }
+    }
+
+    private var message: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
                 .font(.system(size: 12, weight: isDeferred ? .semibold : .regular))
