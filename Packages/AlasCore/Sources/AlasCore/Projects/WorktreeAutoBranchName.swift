@@ -59,16 +59,13 @@ public enum WorktreeAutoBranchName: Sendable {
 
     /// `name`, or `name-2`, `name-3`, … for the first one not taken.
     public static func uniqueName(_ name: String, isTaken: (String) -> Bool) -> String {
-        guard isTaken(name) else { return name }
-        var suffix = 2
-        while isTaken("\(name)-\(suffix)") { suffix += 1 }
-        return "\(name)-\(suffix)"
+        WorktreeService.uniqueName(name, isTaken: isTaken)
     }
 
     /// The prose the name is inferred from, or nil when the prompt carries no
     /// request worth naming a branch after (a greeting, a bare attachment).
     public static func source(fromPrompt prompt: String) -> String? {
-        ACPLocalTitleGenerator.candidate(from: prompt)
+        PromptProse.candidate(from: prompt)
     }
 
     public static func messageCandidates(source: String) -> [[LocalTextMessage]] {

@@ -16,15 +16,7 @@ private let catalogLogger = Logger(subsystem: "io.nlopez.alas", category: "ACPAg
 @MainActor
 @Observable
 public final class ACPAgentModelCatalog {
-    public struct Model: Codable, Equatable, Hashable, Sendable, Identifiable {
-        public let id: String
-        public let name: String
-
-        public init(id: String, name: String) {
-            self.id = id
-            self.name = name
-        }
-    }
+    public typealias Model = ACPAgentModel
 
     public struct EffortLevel: Codable, Equatable, Hashable, Sendable, Identifiable {
         public let id: String

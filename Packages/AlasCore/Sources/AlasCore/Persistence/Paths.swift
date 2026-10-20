@@ -52,7 +52,7 @@ public struct AlasProfile: Equatable, Sendable {
                 fatalError("\(environmentKey): \(requested.path) must be a directory owned by this user and closed to others")
             }
             let runtime = runtimeDirectory(for: root, uid: getuid())
-            guard AgentHookSocketServer.prepareSocketDirectory(runtime.path, ownerUid: getuid()) else {
+            guard AlasProfile.prepareOwnerOnlyDirectory(runtime.path, ownerUid: getuid()) else {
                 fatalError("\(environmentKey): runtime directory \(runtime.path) must be a directory owned by this user, not writable by group or others, that Alas can set to 0700; remove it so Alas recreates it")
             }
             return AlasProfile(appSupportOverride: root, runtimeDirectory: runtime)
@@ -83,7 +83,7 @@ public struct AlasProfile: Equatable, Sendable {
             withIntermediateDirectories: true,
             attributes: [.posixPermissions: NSNumber(value: 0o700)]
         )
-        return AgentHookSocketServer.prepareSocketDirectory(url.path, ownerUid: ownerUid)
+        return AlasProfile.prepareOwnerOnlyDirectory(url.path, ownerUid: ownerUid)
     }
 
     /// The filesystem's own spelling of an existing directory: symlinks in any
@@ -136,6 +136,29 @@ public struct AlasProfile: Equatable, Sendable {
         let digest = SHA256.hash(data: Data(appSupportRoot.standardizedFileURL.path.utf8))
         let hash = digest.prefix(4).map { String(format: "%02x", $0) }.joined()
         return URL(fileURLWithPath: "/tmp/alas-\(uid)-\(hash)", isDirectory: true)
+    }
+
+    /// Ensures `path` is a real directory (no symlink) owned by `ownerUid`
+    /// with mode `0700`, creating it or tightening an existing one's mode.
+    /// Refuses a symlink, a non-directory, a directory owned by someone else,
+    /// one that group or others could write, or one whose mode cannot be set.
+    /// Another local user could pre-create `/tmp/alas-<uid>` for our
+    /// predictable UID, or plant a `pid-<pid>` socket in a directory they
+    /// could write, and then spoof hook events or intercept CLI requests;
+    /// tightening the mode afterwards would not remove what they planted.
+    /// Owner-only but untraversable modes (`0600`, `0500`) are tightened so
+    /// the directory stays usable for sockets.
+    public static func prepareOwnerOnlyDirectory(_ path: String, ownerUid: uid_t) -> Bool {
+        var st = Darwin.stat()
+        if Darwin.lstat(path, &st) != 0 {
+            guard mkdir(path, 0o700) == 0 else { return false }
+            guard Darwin.lstat(path, &st) == 0 else { return false }
+        }
+        guard (st.st_mode & S_IFMT) == S_IFDIR,
+              st.st_uid == ownerUid,
+              (st.st_mode & 0o022) == 0
+        else { return false }
+        return (st.st_mode & 0o777) == 0o700 || chmod(path, 0o700) == 0
     }
 
     public init(appSupportOverride: URL?, runtimeDirectory: URL?) {
