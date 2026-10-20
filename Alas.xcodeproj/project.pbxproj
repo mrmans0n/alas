@@ -265,6 +265,7 @@
 		2472561EEB7160C90085B4C3 /* ACPTranscriptVisibleRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46D97A89C40731455D9EC2DA /* ACPTranscriptVisibleRow.swift */; };
 		249E943D5C46A84496390B31 /* StagedDiffSelectionBridgingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B3DCDC9F76F91CE1071471C /* StagedDiffSelectionBridgingTests.swift */; };
 		24A08E630652473CB6D78E46 /* RepoHookApprovalSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4B654C302FFA32F6B54DBB6 /* RepoHookApprovalSheet.swift */; };
+		24CFB775A536EC113A0D580B /* lovebird.json in Resources */ = {isa = PBXBuildFile; fileRef = A7E06DA92A45B6AF0C89BE7C /* lovebird.json */; };
 		24F85DE0934F8CCC405BB330 /* ACPRegistryBrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98CCC179D11BF6227792AEDE /* ACPRegistryBrowserView.swift */; };
 		24F8EA15B87C38C319B8A66B /* AlasField.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9E6D61B213F3378243B4A26 /* AlasField.swift */; };
 		24F8FC4320CB8B8EA19809F6 /* IssueWorktreeLaunchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C0479721D1BC95DC664D4CB /* IssueWorktreeLaunchTests.swift */; };
@@ -1114,6 +1115,7 @@
 		9FEF30B9E3406B15D5967F55 /* ACPSideQuestionPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A350DB9C5853F6CBD2F6EC0 /* ACPSideQuestionPolicyTests.swift */; };
 		A0012CF058E580908B5348BC /* AppKitDiffTilingController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89B2725002A4349D9E5D1432 /* AppKitDiffTilingController.swift */; };
 		A00B9173561A37FD3B409BA9 /* GGCommandRunningStreamingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B58B29E5D4E497CEA3CE9BA /* GGCommandRunningStreamingTests.swift */; };
+		A03338AC85E6EC8201D56F95 /* Lottie in Frameworks */ = {isa = PBXBuildFile; productRef = B560227F4D545A43E9657398 /* Lottie */; };
 		A050BAECF89694B0D613C5D2 /* EditorBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64E96E26D5F53F217BFD1F49 /* EditorBuffer.swift */; };
 		A05391FF4907AB0870A79C02 /* ReviewEvidenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B05E0E44B026AE7E8EA3101 /* ReviewEvidenceTests.swift */; };
 		A06C59805BCD9D3200896932 /* StagedDiffLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B2FEDAAF927CDC9E4D19551 /* StagedDiffLoader.swift */; };
@@ -2969,6 +2971,7 @@
 		A77AA40A1700F0AF21335876 /* AlasHookCommandTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasHookCommandTests.swift; sourceTree = "<group>"; };
 		A78C23951DE157A38A9ED899 /* AgentHookSocketServerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentHookSocketServerTests.swift; sourceTree = "<group>"; };
 		A79A06E48E215BF7B9EC2408 /* RemoteServerIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteServerIntegrationTests.swift; sourceTree = "<group>"; };
+		A7E06DA92A45B6AF0C89BE7C /* lovebird.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = lovebird.json; sourceTree = "<group>"; };
 		A7F019D14D6FEFFE084FA498 /* ACPSessionOrchestrationPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSessionOrchestrationPolicyTests.swift; sourceTree = "<group>"; };
 		A7FB37A9430467B477E40819 /* ACPImageChipAttachment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPImageChipAttachment.swift; sourceTree = "<group>"; };
 		A8CC42BD54479E057902D392 /* LanguageServerAvailabilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LanguageServerAvailabilityTests.swift; sourceTree = "<group>"; };
@@ -3616,6 +3619,7 @@
 				1D66F354E7488D0CDAC39BE2 /* SwiftTreeSitter in Frameworks */,
 				7C9B1B7376FE5F651D9127D1 /* Markdown in Frameworks */,
 				AB8B755B315E94BDF0BD937B /* BeautifulMermaid in Frameworks */,
+				A03338AC85E6EC8201D56F95 /* Lottie in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -4541,6 +4545,14 @@
 				36EBAD798ECDCED2A7761133 /* Settings */,
 			);
 			path = Remote;
+			sourceTree = "<group>";
+		};
+		38D881696AC9EF68024880FA /* Lottie */ = {
+			isa = PBXGroup;
+			children = (
+				A7E06DA92A45B6AF0C89BE7C /* lovebird.json */,
+			);
+			path = Lottie;
 			sourceTree = "<group>";
 		};
 		3D07C587920AEB3910329603 /* Attention */ = {
@@ -6289,6 +6301,7 @@
 				B586C7A794B846F3AD9228BD /* RemoteWeb */,
 				BEFDF1D7C500A42645A7FF12 /* VisualAid */,
 				41A58031DA4CFC5D1958EB92 /* CodeThemes */,
+				38D881696AC9EF68024880FA /* Lottie */,
 				4A546C28E4A7690D621C99E0 /* Themes */,
 			);
 			path = Resources;
@@ -6615,6 +6628,7 @@
 				F1A519F1F3F2B01C1D2E13A7 /* SwiftTreeSitter */,
 				B69450B224F0C82A52D00662 /* Markdown */,
 				F1692E6406C1269703621C3B /* BeautifulMermaid */,
+				B560227F4D545A43E9657398 /* Lottie */,
 			);
 			productName = Alas;
 			productReference = 519CFB3707E8DDBDECD6C5D1 /* Alas.app */;
@@ -6648,6 +6662,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				F2E544B61384EB937D0A6EF0 /* XCRemoteSwiftPackageReference "beautiful-mermaid-swift" */,
+				421E1CF91FC4BF2D63F1A4E1 /* XCRemoteSwiftPackageReference "lottie-spm" */,
 				891F84CB2FCFDD716754D8D3 /* XCRemoteSwiftPackageReference "mlx-swift" */,
 				E1C99CADFFC5936D126030B0 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */,
 				B9008B8C0F5A7E880C250FE4 /* XCRemoteSwiftPackageReference "swift-markdown" */,
@@ -6728,6 +6743,7 @@
 				127F4CE18436ABCCF9D1B329 /* gruvbox-dark.json in Resources */,
 				B0CB9010F0BE8200A6F5DCE4 /* gruvbox-light.json in Resources */,
 				C893CA3167A5CC6637FCD8C8 /* light.json in Resources */,
+				24CFB775A536EC113A0D580B /* lovebird.json in Resources */,
 				4421A9D1E7481B49701B3131 /* mason-lsps.json in Resources */,
 				382F8344F78587D1C18327C0 /* nord.json in Resources */,
 				E0BCC51B36B9C34CB417A185 /* one-dark.json in Resources */,
@@ -8918,6 +8934,14 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		421E1CF91FC4BF2D63F1A4E1 /* XCRemoteSwiftPackageReference "lottie-spm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/airbnb/lottie-spm";
+			requirement = {
+				kind = exactVersion;
+				version = 4.6.1;
+			};
+		};
 		4413BECA6EF27981FBFCF796 /* XCRemoteSwiftPackageReference "swift-transformers" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/huggingface/swift-transformers";
@@ -9001,6 +9025,11 @@
 		A567E786F3FA16127421E616 /* AlasCore */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = AlasCore;
+		};
+		B560227F4D545A43E9657398 /* Lottie */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 421E1CF91FC4BF2D63F1A4E1 /* XCRemoteSwiftPackageReference "lottie-spm" */;
+			productName = Lottie;
 		};
 		B69450B224F0C82A52D00662 /* Markdown */ = {
 			isa = XCSwiftPackageProductDependency;
