@@ -1545,7 +1545,7 @@ fn call_tool(
     let command = command_for_tool(name, &args, worktree_dir).map_err(|msg| (-32602, msg))?;
     Ok(match dispatch(&command) {
         Ok(resp) => tool_result(&command, resp),
-        Err(err) => transport_error_result(&err),
+        Err(err) => transport_error_result(&command, &err),
     })
 }
 
@@ -1638,7 +1638,15 @@ fn success_message(command: &Command) -> String {
     }
 }
 
-fn transport_error_result(err: &TransportError) -> Value {
+fn transport_error_result(command: &Command, err: &TransportError) -> Value {
+    // A pr_create that was sent but got no reply keeps running in the app, so
+    // its push and PR/MR may still land; never report that as a failure.
+    if matches!(command, Command::PrCreate { .. }) && matches!(err, TransportError::Io) {
+        return text_result(
+            "Alas did not reply before the pr_create deadline; the push and PR/MR may still complete. Call pr_status before retrying.".into(),
+            true,
+        );
+    }
     // Mirrors describe() in main.rs so agents and humans read the same words.
     let message = match err {
         TransportError::Malformed => "malformed response from Alas",
@@ -1933,7 +1941,7 @@ pub fn serve(env: &McpEnv) -> std::io::Result<()> {
                 if !runs_on_worker(&command) {
                     let result = match dispatch(env, &command) {
                         Ok(resp) => tool_result(&command, resp),
-                        Err(err) => transport_error_result(&err),
+                        Err(err) => transport_error_result(&command, &err),
                     };
                     let _ = reply_tx.send(json!({
                         "jsonrpc": "2.0",
@@ -1980,7 +1988,7 @@ pub fn serve(env: &McpEnv) -> std::io::Result<()> {
                         let Some(dispatched) = dispatched else { return };
                         let result = match dispatched {
                             Ok(resp) => tool_result(&command, resp),
-                            Err(err) => transport_error_result(&err),
+                            Err(err) => transport_error_result(&command, &err),
                         };
                         let _ = worker_reply_tx.send(json!({
                             "jsonrpc": "2.0",
@@ -2377,7 +2385,7 @@ fn build_http_response(
                 };
                 let result = match dispatched {
                     Ok(resp) => tool_result(&command, resp),
-                    Err(err) => transport_error_result(&err),
+                    Err(err) => transport_error_result(&command, &err),
                 };
                 let reply = json!({ "jsonrpc": "2.0", "id": id, "result": result });
                 return http_response(200, "application/json", &reply.to_string());
@@ -2410,9 +2418,9 @@ mod tests {
         cancellation_command_for_message, command_for_tool, dispatch, env_from, handle_line,
         handle_line_with_parent, http_response, initialize_result,
         parse_http_request, register_pending_preview, runs_on_worker, session_wait_timed_out, RelayScope,
-        tool_definitions, tool_result, tools_call_command, ToolScope,
+        tool_definitions, tool_result, tools_call_command, transport_error_result, ToolScope,
     };
-    use alas_client::{Command, Response, VisualOption, VisualQuestion};
+    use alas_client::{Command, Response, TransportError, VisualOption, VisualQuestion};
     use serde_json::{Value, json};
 
     #[test]
@@ -2955,6 +2963,26 @@ mod tests {
         )
         .unwrap();
         assert!(visual.get("error").is_none());
+    }
+
+    #[test]
+    fn pr_create_without_a_reply_reports_an_unknown_outcome() {
+        let create = Command::PrCreate {
+            title: "t".into(),
+            body: "b".into(),
+            draft: false,
+            base: None,
+        };
+        let text = |command: &Command, err: TransportError| {
+            transport_error_result(command, &err)["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        };
+        assert!(text(&create, TransportError::Io).contains("Call pr_status before retrying"));
+        // Nothing was sent, or the call is read-only: a plain failure.
+        assert_eq!(text(&create, TransportError::Connect), "could not reach Alas");
+        assert_eq!(text(&Command::PrStatus, TransportError::Io), "could not reach Alas");
     }
 
     #[test]
