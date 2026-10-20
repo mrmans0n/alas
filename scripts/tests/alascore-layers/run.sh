@@ -65,6 +65,26 @@ fi
 grep -Fq "Helpers/Low.swift: hostRun (AlasFoundation -> AlasHostCore)" "${tmp}/out"
 echo 'public struct LowThing {}' > "${sources}/Helpers/Low.swift"
 
+# A function used as a value, an extension's initializer and its nested type
+# count as well.
+cat > "${sources}/Helpers/Base.swift" <<'SWIFT'
+public struct Base {}
+SWIFT
+cat > "${sources}/Core/Base+Host.swift" <<'SWIFT'
+extension Base {
+    public init(hostValue: Int) { self.init() }
+    public struct HostNested {}
+}
+SWIFT
+for use in 'let callback = hostFetch' 'let base = Base(hostValue: 1)' 'let nested = Base.HostNested()'; do
+    printf 'func low() { %s }\n' "${use}" > "${sources}/Helpers/Low.swift"
+    if python3 -I "${check}" --sources "${sources}" --allowlist "${allowlist}" > "${tmp}/out" 2>&1; then
+        echo "accepted an upward use: ${use}" >&2; exit 1
+    fi
+done
+echo 'public struct LowThing {}' > "${sources}/Helpers/Low.swift"
+rm "${sources}/Core/Base+Host.swift" "${sources}/Helpers/Base.swift"
+
 # A folder without a module fails.
 : > "${allowlist}"
 mkdir -p "${sources}/Mystery"

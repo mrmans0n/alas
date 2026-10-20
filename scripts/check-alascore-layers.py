@@ -14,11 +14,12 @@ entry that is no longer a violation, so the list only shrinks.
 
 A declaration counts when it is at the top level of a file in exactly one
 module: a type (`struct`, `class`, `enum`, `protocol`, `actor`, `typealias`),
-a function, or a global `let` or `var`; or a member an extension adds, when no
-other module declares a member of that name. A use is any occurrence of a
-type's or a global's name, a call of a function's, and `.name` for an extension
-member, comments included: precise enough to guide the moves, and the compiler
-takes over once the targets exist.
+a function, or a global `let` or `var`; or a member, nested type or initializer
+an extension adds. A use is any occurrence of a type's, function's or global's
+name; `Type.member`, or `.member` when no other module declares a member of
+that name; and `Type(label:` for an extension's initializer, comments included:
+precise enough to guide the moves, and the compiler takes over once the targets
+exist.
 
 Usage: check-alascore-layers.py [--sources DIR] [--allowlist FILE] [--update]
   --update rewrites the allowlist to the current violations.
@@ -59,14 +60,15 @@ GLOBAL = re.compile(
     r"(?:let|var)\s+([a-z_]\w*)",
     re.M,
 )
-CALL = re.compile(r"\b([a-z_]\w*)\s*\(")
 LOWER_WORD = re.compile(r"\b[a-z_]\w*\b")
 # Members, at the first level of indentation, of a type or an extension.
 MEMBER = re.compile(
     r"^    (?:@\w+(?:\([^)]*\))?\s+)*(?:(?:public|internal|package|private|fileprivate|static|class|"
     r"final|override|nonisolated|mutating|lazy|weak|convenience|required)\s+)*"
-    r"(?:func|var|let)\s+([a-zA-Z_]\w*)",
+    r"(?:func|var|let|struct|class|enum|actor|typealias)\s+([a-zA-Z_]\w*)",
 )
+INITIALIZER = re.compile(r"^    (?:(?:public|internal|package|convenience|required|nonisolated)\s+)*init\??\(\s*(\w+)")
+INITIALIZER_USE = re.compile(r"\b([A-Z]\w*)\(\s*(\w+)\s*:")
 EXTENSION = re.compile(r"^(?:(?:public|internal|package)\s+)?extension\s+([A-Z]\w*)")
 MEMBER_USE = re.compile(r"\.([a-zA-Z_]\w*)\b")
 QUALIFIED_USE = re.compile(r"\b([A-Z]\w*)\.([a-zA-Z_]\w*)\b")
@@ -86,6 +88,10 @@ def members(text):
             all_members.add(match.group(1))
             if extended:
                 in_extensions.add((extended, match.group(1)))
+        match = INITIALIZER.match(line)
+        if match and extended:
+            # Keyed by its first label, as `Type(label:` is how it is called.
+            in_extensions.add((extended, f"init({match.group(1)}:"))
     return all_members, in_extensions
 
 
@@ -134,7 +140,8 @@ def violations(sources):
             qualified_modules.setdefault(pair, set()).add(module)
     extension_owner = {
         member: next(iter(member_modules[member]))
-        for (_, member) in qualified_modules if len(member_modules[member]) == 1
+        for (_, member) in qualified_modules
+        if not member.startswith("init(") and len(member_modules[member]) == 1
     }
     qualified_owner = {
         f"{extended}.{member}": next(iter(modules))
@@ -144,7 +151,7 @@ def violations(sources):
     # Each kind of declaration, and how a use of it appears in a file.
     kinds = [
         (owners(DECLARATION), WORD),
-        (owners(FUNCTION), CALL),
+        (owners(FUNCTION), LOWER_WORD),
         (owners(GLOBAL), LOWER_WORD),
         (extension_owner, MEMBER_USE),
     ]
@@ -155,6 +162,11 @@ def violations(sources):
                 target = owner.get(word)
                 if target and target[0] > level:
                     found.add((relative, word, name, target[1]))
+        for extended, label in set(INITIALIZER_USE.findall(text)):
+            qualified = f"{extended}.init({label}:"
+            target = qualified_owner.get(qualified)
+            if target and target[0] > level:
+                found.add((relative, f"{extended}(init {label}:)", name, target[1]))
         for extended, member in set(QUALIFIED_USE.findall(text)):
             qualified = f"{extended}.{member}"
             target = qualified_owner.get(qualified)
