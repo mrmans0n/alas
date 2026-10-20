@@ -12,6 +12,12 @@ struct ACPMarkdownParserTests {
         ("`before\n<!-- literal -->\nafter`<!-- hidden -->", "`before\n<!-- literal -->\nafter`"),
         ("``before\n`<!-- literal -->`\nafter``", "``before\n`<!-- literal -->`\nafter``"),
         ("`unmatched\n<!-- hidden -->", "`unmatched\n"),
+        ("`before\n\n<!-- metadata -->\nafter`", "`before\n\n\nafter`"),
+        ("`before\n# Heading `\n<!-- metadata -->", "`before\n# Heading `\n"),
+        ("`before\n> quote `\n<!-- metadata -->", "`before\n> quote `\n"),
+        ("`before\n- [ ] task `\n<!-- metadata -->", "`before\n- [ ] task `\n"),
+        ("`before\n```html\n<!-- literal -->\n```\nafter`", "`before\n```html\n<!-- literal -->\n```\nafter`"),
+        ("# Heading `\n<!-- metadata -->\nafter`", "# Heading `\n\nafter`"),
         ("```html\n<!-- literal -->\n```\n<!-- hidden -->", "```html\n<!-- literal -->\n```\n"),
         ("~~~html\n<!-- literal -->\n~~~\n<!-- hidden -->", "~~~html\n<!-- literal -->\n~~~\n"),
         (#"\<!-- literal -->"#, #"\<!-- literal -->"#)

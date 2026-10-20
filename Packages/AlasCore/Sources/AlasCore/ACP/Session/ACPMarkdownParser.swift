@@ -159,6 +159,33 @@ public enum ACPMarkdownParser: Sendable {
         )
     }
 
+    private static func startsParagraphBoundary(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        return trimmed.isEmpty || matchFence(line) != nil || trimmed.hasPrefix(">")
+            || matchHeading(trimmed) != nil || matchTaskItem(line) != nil || matchImage(trimmed) != nil
+    }
+
+    private static func inlineBlockEnd(in lines: [Substring], at start: Int) -> String.Index {
+        let first = String(lines[start])
+        let trimmed = first.trimmingCharacters(in: .whitespaces)
+        // Headings, task items and standalone images are rendered separately.
+        if matchHeading(trimmed) != nil || matchTaskItem(first) != nil || matchImage(trimmed) != nil {
+            return lines[start].endIndex
+        }
+        let isQuote = trimmed.hasPrefix(">")
+        var end = start
+        while end + 1 < lines.count {
+            let next = String(lines[end + 1])
+            if isQuote {
+                if !next.trimmingCharacters(in: .whitespaces).hasPrefix(">") { break }
+            } else if startsParagraphBoundary(next) {
+                break
+            }
+            end += 1
+        }
+        return lines[end].endIndex
+    }
+
     /// Display-only filtering for review bodies. Code literals retain HTML comments.
     public static func hidingHTMLComments(_ text: String) -> String {
         guard text.contains("<!--") else { return text }
@@ -166,7 +193,8 @@ public enum ACPMarkdownParser: Sendable {
         var inComment = false
         var codeEnd: String.Index?
         var result: [String] = []
-        for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        for (lineNumber, line) in lines.enumerated() {
             if let opening = fence {
                 result.append(String(line))
                 if closesFence(String(line), opening) { fence = nil }
@@ -202,10 +230,11 @@ public enum ACPMarkdownParser: Sendable {
                 } else if line[index] == "`" {
                     let run = line[index...].prefix(while: { $0 == "`" })
                     let afterRun = line.index(index, offsetBy: run.count)
+                    let limit = inlineBlockEnd(in: lines, at: lineNumber)
                     var search = afterRun
                     var closing: String.Index?
-                    while search < text.endIndex {
-                        guard let tick = text[search...].firstIndex(of: "`") else { break }
+                    while search < limit {
+                        guard let tick = text[search..<limit].firstIndex(of: "`") else { break }
                         let count = text[tick...].prefix(while: { $0 == "`" }).count
                         search = text.index(tick, offsetBy: count)
                         if count == run.count { closing = search; break }
@@ -317,9 +346,7 @@ public enum ACPMarkdownParser: Sendable {
             var para: [String] = [line]
             i += 1
             while i < lines.count {
-                let next = lines[i].trimmingCharacters(in: .whitespaces)
-                if next.isEmpty { break }
-                if matchFence(lines[i]) != nil || next.hasPrefix(">") || matchHeading(next) != nil || matchTaskItem(lines[i]) != nil || matchImage(next) != nil { break }
+                if startsParagraphBoundary(lines[i]) { break }
                 para.append(lines[i])
                 i += 1
             }
