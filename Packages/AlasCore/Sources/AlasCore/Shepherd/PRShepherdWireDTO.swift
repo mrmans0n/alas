@@ -170,11 +170,14 @@ public struct PRStatusWire: Encodable, Equatable, Sendable {
     }
 
     public struct Shepherd: Encodable, Equatable, Sendable {
-        public init(phase: String, autoFix: Bool, autoMerge: Bool, fixAttempts: Int, rulesSource: String) {
+        public init(
+            phase: String, autoFix: Bool, autoMerge: Bool, fixAttempts: Int, maxFixAttempts: Int, rulesSource: String
+        ) {
             self.phase = phase
             self.autoFix = autoFix
             self.autoMerge = autoMerge
             self.fixAttempts = fixAttempts
+            self.maxFixAttempts = maxFixAttempts
             self.rulesSource = rulesSource
         }
 
@@ -182,6 +185,7 @@ public struct PRStatusWire: Encodable, Equatable, Sendable {
         public var autoFix: Bool
         public var autoMerge: Bool
         public var fixAttempts: Int
+        public var maxFixAttempts: Int
         public var rulesSource: String
     }
 
@@ -245,6 +249,7 @@ extension PRStatusWire.Shepherd {
             autoFix: record.autoFix,
             autoMerge: record.autoMerge,
             fixAttempts: record.fixAttempts,
+            maxFixAttempts: record.fixAttemptBudget,
             rulesSource: Self.wireName(rules.source)
         )
     }

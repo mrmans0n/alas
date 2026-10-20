@@ -298,6 +298,7 @@ public final class ReviewShepherd {
         baseBranch: String,
         autoFix: Bool,
         autoMerge: Bool,
+        maxFixAttempts: Int = ShepherdDefaults.defaultMaxFixAttempts,
         contextRules: ShepherdRules?
     ) async -> ShepherdRecord {
         let id = ShepherdRecordID(worktreeID: worktreeID, request: request)
@@ -314,6 +315,7 @@ public final class ReviewShepherd {
                 baseBranch: baseBranch,
                 autoFix: autoFix,
                 autoMerge: autoMerge,
+                maxFixAttempts: maxFixAttempts,
                 now: now
             )
         if record.sessionID != sessionID {
@@ -327,6 +329,7 @@ public final class ReviewShepherd {
         record.baseBranch = baseBranch
         record.autoFix = autoFix
         record.autoMerge = autoMerge
+        record.maxFixAttempts = ShepherdDefaults.clampedFixAttempts(maxFixAttempts)
         record.phase = .watching
         record.fixAttempts = 0
         record.lastDispatchedFingerprint = nil
@@ -360,6 +363,22 @@ public final class ReviewShepherd {
 
     public func setAutoMerge(_ on: Bool, for id: ShepherdRecordID) {
         update(id) { $0.autoMerge = on }
+    }
+
+    /// The budget only gates the next dispatch, so a fix prompt already on
+    /// its way stays current. Only a record the change puts back to watching
+    /// is re-evaluated, and an escalated record has no prompt in flight.
+    public func setMaxFixAttempts(_ budget: Int, for id: ShepherdRecordID) {
+        guard let current = records[id], !current.phase.isTerminal else { return }
+        var record = current
+        record.setFixAttemptBudget(budget)
+        guard record != current else { return }
+        guard record.phase == current.phase else {
+            update(id) { $0 = record }
+            return
+        }
+        record.updatedAt = now()
+        put(record)
     }
 
     /// Escalated or paused back to watching with a full attempt budget. The

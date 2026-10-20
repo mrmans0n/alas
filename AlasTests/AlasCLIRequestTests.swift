@@ -496,9 +496,12 @@ struct AlasCLIRequestTests {
                     )],
                     missingRequiredReviewers: ["chatgpt-codex-connector"]
                 ),
-                shepherd: .init(phase: "fixing", autoFix: true, autoMerge: false, fixAttempts: 1, rulesSource: "repo_file")
+                shepherd: .init(
+                    phase: "fixing", autoFix: true, autoMerge: false, fixAttempts: 1, maxFixAttempts: 3,
+                    rulesSource: "repo_file"
+                )
             ),
-            #"{"pull_request":{"checks":{"failed":1,"failing":[{"name":"unit-tests","url":null,"workflow":"CI"}],"passed":10,"pending":1,"skipped":0},"draft":false,"head_sha":"a3f9c1e","merge_state":"blocked","missing_required_reviewers":["chatgpt-codex-connector"],"number":2041,"state":"open","threads":[{"author":"maintainer","body":"Back off.","id":"PRRT_1","line":88,"path":"Auth\/TokenRefresher.swift","trust":"trusted","url":null}],"url":"https:\/\/example.com\/pr\/2041"},"shepherd":{"auto_fix":true,"auto_merge":false,"fix_attempts":1,"phase":"fixing","rules_source":"repo_file"}}"#
+            #"{"pull_request":{"checks":{"failed":1,"failing":[{"name":"unit-tests","url":null,"workflow":"CI"}],"passed":10,"pending":1,"skipped":0},"draft":false,"head_sha":"a3f9c1e","merge_state":"blocked","missing_required_reviewers":["chatgpt-codex-connector"],"number":2041,"state":"open","threads":[{"author":"maintainer","body":"Back off.","id":"PRRT_1","line":88,"path":"Auth\/TokenRefresher.swift","trust":"trusted","url":null}],"url":"https:\/\/example.com\/pr\/2041"},"shepherd":{"auto_fix":true,"auto_merge":false,"fix_attempts":1,"max_fix_attempts":3,"phase":"fixing","rules_source":"repo_file"}}"#
         ),
     ])
     func prStatusWireMatchesTheSpecKeys(status: PRStatusWire, expected: String) {

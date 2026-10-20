@@ -84,7 +84,6 @@ public struct ShepherdDecision: Equatable, Sendable {
 /// Pure decision logic for one shepherd poll. Runs only after a successful
 /// provider fetch; fetch errors are the poller's business.
 public enum ShepherdPolicy {
-    public static let maxFixAttempts = 3
     public static let noProgressPollLimit = 3
     public static let requiredStablePolls = 2
     /// An awaitingPush record with no progress escalates after this long,
@@ -308,7 +307,7 @@ public enum ShepherdPolicy {
             }
             return nil
         }
-        if record.fixAttempts >= maxFixAttempts {
+        if record.fixAttempts >= record.fixAttemptBudget {
             record.phase = .escalated(.attemptsExhausted)
             return .escalate(.attemptsExhausted)
         }

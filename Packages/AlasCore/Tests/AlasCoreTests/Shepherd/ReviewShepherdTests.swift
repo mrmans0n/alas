@@ -122,6 +122,36 @@ struct ReviewShepherdTests {
         #expect(shepherd.records[record.id]?.phase == .fixing(dispatchedAt: F.now))
     }
 
+    @Test func changingTheFixBudgetWhileTheFixPromptIsDeliveredKeepsTheFix() async throws {
+        let request = F.request(threads: [F.trustedThread])
+        let gate = DeliveryGate()
+        let (entered, enteredContinuation) = AsyncStream<Void>.makeStream()
+        let shepherd = makeShepherd(request: request) { text, isStillWanted in
+            await withCheckedContinuation { continuation in
+                gate.release = continuation
+                enteredContinuation.yield()
+            }
+            guard isStillWanted() else { return .superseded }
+            gate.delivered.append(text)
+            return .delivered
+        }
+        let record = await shepherd.bind(
+            sessionID: "session-1", worktreeID: "wt-1", request: request, baseBranch: "main",
+            autoFix: true, autoMerge: false, contextRules: nil
+        )
+
+        let evaluation = Task { await shepherd.evaluateNow(record.id) }
+        var iterator = entered.makeAsyncIterator()
+        await iterator.next()
+        shepherd.setMaxFixAttempts(5, for: record.id)
+        gate.release?.resume()
+        await evaluation.value
+
+        #expect(gate.delivered.count == 1)
+        #expect(shepherd.records[record.id]?.phase == .fixing(dispatchedAt: F.now))
+        #expect(shepherd.records[record.id]?.fixAttemptBudget == 5)
+    }
+
     @Test func unreadableRulesHoldEveryDecision() async {
         let request = F.request(threads: [F.trustedThread])
         var delivered: [String] = []
