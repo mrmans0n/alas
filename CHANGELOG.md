@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixes
+
+- Keep Prepare visible on clean GG stacks with manual Sync and Review actions, compact sync status, and commit controls only when there are local changes or a draft.
+
 ## [0.21.8] - 2026-10-18
 
 ### ✨ Features

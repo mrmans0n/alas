@@ -512,18 +512,58 @@ struct ChangesTabViewTests {
         #expect(ChangesTabView.reconciliationAction(from: readiness)?.kind == .rebase)
     }
 
-    @Test func prepareOmitsNonReconciliationReadiness() {
+    @Test(arguments: [false, true])
+    func cleanSyncedStackKeepsManualSyncAndPrepareAvailable(approved: Bool) throws {
         let readiness = GGStackReadinessModel.make(
-            stack: stack(
-                syncedCommits: 1,
-                prState: .open,
-                approved: true,
-                ciStatus: .success
-            ),
+            stack: stack(syncedCommits: 1, prState: .open, approved: approved, ciStatus: .success),
             action: GGStackActionState()
         )
+        let action = try #require(ChangesTabView.reconciliationAction(from: readiness))
+        let preparation = ChangesPreparationModel.makeGG(
+            staged: .zero,
+            hasDraft: false,
+            capabilities: .init(structuredSplit: false, keepCurrentUnstack: false),
+            reconciliationAction: action
+        )
 
+        #expect(action.kind == .sync)
+        #expect(action.isEnabled)
+        #expect(action.emphasis == .normal)
+        #expect(preparation.isVisible)
+        #expect(!preparation.showsGGCommitActions)
+    }
+
+    @Test(arguments: [GGStackActionKind.restack, .sync, .land])
+    func manualSyncRespectsRunningOperation(operation: GGStackActionKind) throws {
+        let state = GGStackActionState()
+        #expect(state.beginAction(operation))
+        let readiness = GGStackReadinessModel.make(
+            stack: stack(syncedCommits: 1, prState: .open),
+            action: state
+        )
+        let reason = ChangesTabView.ggPreparationMutationDisabledReason(
+            contextIsActive: true,
+            stackLoadState: .loaded,
+            pausedOperation: nil,
+            inFlightAction: state.inFlightAction,
+            mergeOperation: nil
+        )
+        let action = try #require(ChangesTabView.reconciliationAction(
+            from: readiness,
+            mutationDisabledReason: reason
+        ))
+        #expect(!action.isEnabled)
+    }
+
+    @Test func manualSyncDoesNotBypassPausedOrUnavailableStack() {
+        let state = GGStackActionState()
+        state.setPaused(.init(pausedBy: .sync))
+        let readiness = GGStackReadinessModel.make(
+            stack: stack(syncedCommits: 1, prState: .open),
+            action: state
+        )
         #expect(ChangesTabView.reconciliationAction(from: readiness) == nil)
+        #expect(ChangesTabView.reconciliationAction(from: nil) == nil)
     }
 
     @Test func landingStatusUsesOnlyActiveSessions() {

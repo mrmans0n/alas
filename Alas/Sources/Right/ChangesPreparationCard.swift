@@ -125,25 +125,43 @@ struct ChangesPreparationCard: View {
         if let reviewAction = model.reviewAction {
             primaryReviewButton(reviewAction)
         }
-        if let reconciliationAction = model.reconciliationAction {
-            ggReconciliationButton(reconciliationAction)
-        }
         if !model.ggActions.isEmpty {
-            LazyVGrid(columns: [GridItem(.flexible(minimum: 0)), GridItem(.flexible(minimum: 0))], spacing: 6) {
-                ForEach(model.ggActions, id: \.kind) { action in
-                    ggDestinationButton(action)
+            if model.showsGGCommitActions {
+                if let reconciliationAction = model.reconciliationAction {
+                    ggReconciliationButton(reconciliationAction)
+                }
+                LazyVGrid(columns: [GridItem(.flexible(minimum: 0)), GridItem(.flexible(minimum: 0))], spacing: 6) {
+                    ForEach(model.ggActions, id: \.kind) { action in
+                        ggDestinationButton(action)
+                    }
+                }
+                if model.reviewAction == nil {
+                    secondaryReviewScopeButton
+                }
+            } else {
+                Text(model.ggStackStatus.map { "No local changes · \($0)" } ?? "No local changes")
+                    .font(.system(size: 11))
+                    .foregroundStyle(theme.color("fg-dim"))
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 8) {
+                    if let reconciliationAction = model.reconciliationAction {
+                        ggReconciliationButton(reconciliationAction)
+                    }
+                    reviewScopeButton(subtitle: nil)
                 }
             }
-            if model.reviewAction == nil {
+        } else {
+            if let reconciliationAction = model.reconciliationAction {
+                ggReconciliationButton(reconciliationAction)
+            }
+            if model.draftAction != nil || model.publishAction != nil || !model.reviewRequestActions.isEmpty {
+                ViewThatFits(in: .horizontal) {
+                    secondaryActionsHorizontal
+                    secondaryActionsVertical
+                }
+            } else if model.reviewAction == nil {
                 secondaryReviewScopeButton
             }
-        } else if model.draftAction != nil || model.publishAction != nil || !model.reviewRequestActions.isEmpty {
-            ViewThatFits(in: .horizontal) {
-                secondaryActionsHorizontal
-                secondaryActionsVertical
-            }
-        } else if model.reviewAction == nil {
-            secondaryReviewScopeButton
         }
     }
 
@@ -306,9 +324,13 @@ struct ChangesPreparationCard: View {
     /// Stands in for the split button when there are no uncommitted changes
     /// to review, so the palette stays reachable.
     private var secondaryReviewScopeButton: some View {
+        reviewScopeButton(subtitle: reviewScopeShortcut?.displayString ?? ChangesPreparationCardText.reviewScopeButtonSubtitle)
+    }
+
+    private func reviewScopeButton(subtitle: String?) -> some View {
         secondaryButton(
             title: ChangesPreparationCardText.reviewScopeButtonTitle,
-            subtitle: reviewScopeShortcut?.displayString ?? ChangesPreparationCardText.reviewScopeButtonSubtitle,
+            subtitle: subtitle,
             iconName: "diff",
             showsDot: false,
             isEnabled: true,
@@ -571,7 +593,7 @@ struct ChangesPreparationCard: View {
 
     private func secondaryButton(
         title: String,
-        subtitle: String,
+        subtitle: String?,
         iconName: String,
         showsDot: Bool,
         isEnabled: Bool,
@@ -600,10 +622,12 @@ struct ChangesPreparationCard: View {
                                 .frame(width: 5, height: 5)
                         }
                     }
-                    Text(subtitle)
-                        .font(.system(size: 10.5))
-                        .foregroundColor(theme.color("fg-faint"))
-                        .lineLimit(1)
+                    if let subtitle {
+                        Text(subtitle)
+                            .font(.system(size: 10.5))
+                            .foregroundColor(theme.color("fg-faint"))
+                            .lineLimit(1)
+                    }
                 }
                 Spacer(minLength: 4)
             }
