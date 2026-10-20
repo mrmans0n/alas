@@ -2,11 +2,6 @@ ACP/Orchestration/ACPSessionOrchestrationCoordinator.swift WorktreeCreationError
 ACP/Session/ACPSessionManager.swift RemoteQueueProjection
 Attention/AttentionProducer.swift ActivityState
 Attention/AttentionProducer.swift AgentKind
-Attention/AttentionRollUp.swift LocalTextAppleFirstRouter
-Attention/AttentionRollUp.swift LocalTextGenerating
-Attention/AttentionRollUp.swift LocalTextGenerationRequest
-Attention/AttentionRollUp.swift LocalTextMessage
-Attention/AttentionRollUp.swift LocalTextSafety
 Checkpoints/CheckpointWriterLeaseStore.swift ACPProcessLiveness
 Diagnostics/MemoryDiagnostics.swift ACPSession
 Diagnostics/MemoryDiagnostics.swift ACPSessionManager
@@ -38,10 +33,6 @@ Integrations/GG/GGMCPInjection.swift MCPAttachmentPlanner
 Integrations/GG/GGMCPInjection.swift MCPAttachmentServerStatus
 Integrations/GG/GGService.swift ACPTerminal
 Integrations/GG/GGStreamingProcessTree.swift ACPTerminal
-Issues/IssueWorktreeNameSuggestion.swift LocalTextAppleFirstRouter
-Issues/IssueWorktreeNameSuggestion.swift LocalTextGenerating
-Issues/IssueWorktreeNameSuggestion.swift LocalTextGenerationRequest
-Issues/IssueWorktreeNameSuggestion.swift LocalTextMessage
 Persistence/AppConfig.swift ACPRegistryInstalledAgent
 Persistence/AppConfig.swift ACPSideQuestionDockPreferences
 Persistence/AppConfig.swift AgentDefinition
@@ -79,7 +70,6 @@ Plugins/PluginSettings.swift RemoteFileSecretStore
 Plugins/PluginSettings.swift RemoteKeychainSecretStore
 Plugins/PluginSettings.swift RemoteSecretStore
 Projects/WorktreeAutoBranchName.swift ACPLocalTitleGenerator
-Projects/WorktreeAutoBranchName.swift LocalTextMessage
 Projects/WorktreeLaunchSurface.swift ACPLaunchCatalog
 Projects/WorktreeLaunchSurface.swift ACPPromptCard
 Projects/WorktreeLaunchSurface.swift ACPSession

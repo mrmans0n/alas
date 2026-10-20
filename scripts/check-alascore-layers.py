@@ -34,7 +34,7 @@ import sys
 MODULES = [
     ("AlasFoundation", ["Helpers", "SQLiteKit", "JSONRPC", "Watch", "Dialogs", "Diagnostics"]),
     ("AlasModel", ["Persistence"]),
-    ("AlasPlatform", ["SSH", "Git", "Search", "RepoHooks", "Zmx", "Updates"]),
+    ("AlasPlatform", ["SSH", "Git", "Search", "RepoHooks", "Zmx", "Updates", "LocalText"]),
     ("AlasFeatures", ["Integrations", "Issues", "Center", "Shepherd", "Checkpoints", "Projects",
                       "Workspace", "RunScripts", "Schedules", "Attention"]),
     ("AlasCode", ["Code"]),
