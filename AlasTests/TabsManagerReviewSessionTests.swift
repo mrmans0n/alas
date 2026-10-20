@@ -192,4 +192,56 @@ struct TabsManagerReviewSessionTests {
         #expect(manager.tabs(forWorktree: "wt-1").map(\.id) == [existing.id])
         #expect(manager.activeTabId(forWorktree: "wt-1") == existing.id)
     }
+
+    @Test func reviewingCommitReplacesItsTabInPlaceAndSeedsTheLoadedDiffOnce() {
+        let manager = TabsManager()
+        let commit = manager.appendCommit(worktreeId: "wt-1", sha: "abc", title: "Fix parser")
+        let neighbor = manager.appendCommit(worktreeId: "wt-1", sha: "def", title: "Other")
+        let record = Self.commitRecord(sha: "abc")
+        let selected = DiffReviewFileID(namespace: "commit", path: "A.swift")
+        let seed = ReviewSessionSeed(
+            target: record.target,
+            session: DiffReviewLoadedSession(files: [], summary: DiffReviewSessionModel(files: [], groupsEnabled: false)),
+            selectedFileID: selected
+        )
+
+        let review = manager.replaceCommitWithReviewSession(
+            worktreeId: "wt-1", commitTabId: commit.id, record: record, seed: seed
+        )
+
+        #expect(manager.tabs(forWorktree: "wt-1").map(\.id) == [review.id, neighbor.id])
+        #expect(manager.activeTabId(forWorktree: "wt-1") == review.id)
+        #expect(manager.takeReviewSessionSeed(sessionID: record.id, target: record.target)?.selectedFileID == selected)
+        #expect(manager.takeReviewSessionSeed(sessionID: record.id, target: record.target) == nil)
+    }
+
+    @Test func reviewingCommitWithOpenReviewFocusesItAndDropsTheCommitTab() {
+        let manager = TabsManager()
+        let record = Self.commitRecord(sha: "abc")
+        let existing = manager.openOrFocusReviewSession(worktreeId: "wt-1", record: record)
+        let commit = manager.appendCommit(worktreeId: "wt-1", sha: "abc", title: "Fix parser")
+
+        let review = manager.replaceCommitWithReviewSession(
+            worktreeId: "wt-1", commitTabId: commit.id, record: record, seed: nil
+        )
+
+        #expect(review.id == existing.id)
+        #expect(manager.tabs(forWorktree: "wt-1").map(\.id) == [existing.id])
+        #expect(manager.activeTabId(forWorktree: "wt-1") == existing.id)
+    }
+
+    private static func commitRecord(sha: String) -> ReviewSessionRecord {
+        let target = ReviewSessionTarget.commit(
+            worktreeID: "wt-1",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            sha: sha,
+            title: "Review \(sha)"
+        )
+        return ReviewSessionRecord(
+            id: target.id,
+            target: target,
+            createdAt: .init(timeIntervalSince1970: 1),
+            updatedAt: .init(timeIntervalSince1970: 1)
+        )
+    }
 }
