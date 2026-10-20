@@ -4637,7 +4637,7 @@ final class RightPaneState: GGSplitCommitServicing {
             var report: BulkConflictResolveReport
             do {
                 guard await self.checkpointMutationAllowedAfterJournalRevalidation() else { return }
-                _ = try await MergeAgent.resolveAllInWorkspace(
+                let agentOutput = try await MergeAgent.resolveAllInWorkspace(
                     agent: agent,
                     prompt: prompt,
                     worktreePath: self.worktree.path,
@@ -4654,7 +4654,8 @@ final class RightPaneState: GGSplitCommitServicing {
                 report = BulkConflictResolveReport(
                     success: true,
                     remainingConflicts: remaining,
-                    summary: headline
+                    summary: headline,
+                    details: agentOutput.trimmingCharacters(in: .whitespacesAndNewlines)
                 )
             } catch let runError as AgentRunError {
                 if case .binaryNotFound = runError,
@@ -4666,7 +4667,8 @@ final class RightPaneState: GGSplitCommitServicing {
                 report = BulkConflictResolveReport(
                     success: false,
                     remainingConflicts: remaining,
-                    summary: "Agent failed: \(runError.localizedDescription)"
+                    summary: "Agent failed: \(runError.localizedDescription)",
+                    details: ""
                 )
             } catch {
                 await self.refresh()
@@ -4674,7 +4676,8 @@ final class RightPaneState: GGSplitCommitServicing {
                 report = BulkConflictResolveReport(
                     success: false,
                     remainingConflicts: remaining,
-                    summary: "Agent failed: \(error.localizedDescription)"
+                    summary: "Agent failed: \(error.localizedDescription)",
+                    details: ""
                 )
             }
             self.bulkResolveInFlight = false

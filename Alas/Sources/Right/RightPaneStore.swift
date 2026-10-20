@@ -158,7 +158,12 @@ final class RightPaneStore {
         let message = bannerWorktreeID == worktree.id
             ? report.summary
             : "\(worktree.title): \(report.summary)"
-        store.post(message, severity: severity, worktreeID: bannerWorktreeID)
+        store.post(
+            message,
+            severity: severity,
+            worktreeID: bannerWorktreeID,
+            detail: report.details.isEmpty ? nil : report.details
+        )
     }
 
     /// - Parameter activates: When false, the returned state is created or

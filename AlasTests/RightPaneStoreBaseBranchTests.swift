@@ -319,7 +319,8 @@ struct RightPaneStoreBaseBranchTests {
             BulkConflictResolveReport(
                 success: true,
                 remainingConflicts: 0,
-                summary: "All conflicts resolved."
+                summary: "All conflicts resolved.",
+                details: "Resolved App.swift by preserving both changes."
             )
         )
         #expect(appState.inAppNotifications.notifications(in: visible.id).isEmpty)
@@ -338,6 +339,7 @@ struct RightPaneStoreBaseBranchTests {
         )
         #expect(notification.message == "feature/conflicts: All conflicts resolved.")
         #expect(notification.severity == .success)
+        #expect(notification.detail == "Resolved App.swift by preserving both changes.")
         #expect(appState.inAppNotifications.notifications(in: source.id).isEmpty)
     }
 

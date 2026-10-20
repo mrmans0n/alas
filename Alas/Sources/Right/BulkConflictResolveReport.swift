@@ -11,4 +11,6 @@ struct BulkConflictResolveReport: Equatable {
     let remainingConflicts: Int
     /// Message shown in the worktree's in-app notification.
     let summary: String
+    /// Agent stdout, shown as the notification detail when non-empty.
+    let details: String
 }

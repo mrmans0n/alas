@@ -10,7 +10,8 @@ struct InAppNotificationStack: View {
         let nextExpiry = entries.filter { $0.pausedAt == nil }.compactMap(\.expiresAt).min()
         VStack(alignment: .trailing, spacing: 8) {
             ForEach(entries) { entry in
-                InAppNotificationBanner(message: entry.message, severity: entry.severity,
+                InAppNotificationBanner(message: entry.message, detail: entry.detail,
+                                        severity: entry.severity,
                                         actionTitle: entry.cancel == nil ? nil : "Cancel",
                                         action: { store.cancel(entry.id) }, dismiss: { store.dismiss(entry.id) })
                     .onHover { store.setPaused($0, id: entry.id) }
