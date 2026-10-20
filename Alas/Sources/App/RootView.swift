@@ -171,6 +171,9 @@ struct RootView: View {
                 state.startRunScheduler()
                 state.startReviewShepherd()
                 state.startArchivedWorktreePruning()
+                // Last, so the card lands on the restored workspace rather
+                // than the loading UI.
+                state.whatsNew.evaluateOnLaunch()
             }
             .onChange(of: state.selectedWorktreeId) { _, _ in
                 state.completeStartupRecoveryIfCenterPaneWillNotAppear()
@@ -985,7 +988,6 @@ private struct RootWhatsNewPresentation: ViewModifier {
                     .padding(16)
                 }
             }
-            .task { state.whatsNew.evaluateOnLaunch() }
     }
 }
 
