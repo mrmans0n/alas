@@ -156,4 +156,15 @@ struct WhatsNewTests {
                 == Self.v("0.22.0"))
         #expect(WhatsNewPolicy.latestEntry(current: Self.v("0.20.0"), entries: Self.fixtureEntries) == nil)
     }
+
+    @Test func committedEntriesAreValid() throws {
+        let directory = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Alas/Resources/WhatsNew", isDirectory: true)
+        var isDirectory: ObjCBool = false
+        try #require(FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDirectory) && isDirectory.boolValue)
+        let catalog = WhatsNewCatalog.load(directory: directory)
+        #expect(catalog.problems.isEmpty, "\(catalog.problems)")
+    }
 }

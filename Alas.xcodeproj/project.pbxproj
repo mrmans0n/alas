@@ -710,6 +710,7 @@
 		63FE9896BFDEEA686A2C2500 /* NativePeerConsoleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3B1C19145A8571E53F4163F /* NativePeerConsoleView.swift */; };
 		64402D666DBDAA9B98D641F6 /* ShortcutRecorderValidationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60F628A45666E477DD695AD7 /* ShortcutRecorderValidationTests.swift */; };
 		644E16E231DD77B4A6DD5B9B /* CheckpointRestorePreparationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7418FC4CE7EBD544B58108EE /* CheckpointRestorePreparationTests.swift */; };
+		64894683EAF69BBA86043CFD /* WhatsNew in Resources */ = {isa = PBXBuildFile; fileRef = 0BE492BC7AD3C4B64A352747 /* WhatsNew */; };
 		64ADA6AFE69C52F121A163E1 /* FileTypeIconView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F721FB733081A583D4053DDA /* FileTypeIconView.swift */; };
 		64B3203710BD07F8E0C0342F /* PluginTabTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE12F73E12FB10936CAD6DA2 /* PluginTabTests.swift */; };
 		64E8AEA26165143714AE32BB /* WebPreviewBrowserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C6281C3FC6602FD3C92B699 /* WebPreviewBrowserTests.swift */; };
@@ -1904,6 +1905,7 @@
 		0B44AABB5C13BEBDAF636E3C /* PluginViewTreeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginViewTreeTests.swift; sourceTree = "<group>"; };
 		0BCD93747BF71CB256038314 /* ACPPermissionPrompt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPPermissionPrompt.swift; sourceTree = "<group>"; };
 		0BCDB66D0948AF52EBA880CD /* GGStackIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GGStackIcon.swift; sourceTree = "<group>"; };
+		0BE492BC7AD3C4B64A352747 /* WhatsNew */ = {isa = PBXFileReference; lastKnownFileType = folder; name = WhatsNew; path = Alas/Resources/WhatsNew; sourceTree = SOURCE_ROOT; };
 		0C1BD0B57853511DF095D276 /* RemotePathMigrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemotePathMigrationTests.swift; sourceTree = "<group>"; };
 		0C5373F76231F229D3F96AF3 /* session-update-config-option.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "session-update-config-option.json"; sourceTree = "<group>"; };
 		0C7E7FB69F674BDC568D6647 /* ACPAbsolutePathDetectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPAbsolutePathDetectorTests.swift; sourceTree = "<group>"; };
@@ -6288,6 +6290,7 @@
 				F1A58F7A93F1809B98179ABB /* MCPLogo-LICENSE.txt */,
 				B586C7A794B846F3AD9228BD /* RemoteWeb */,
 				BEFDF1D7C500A42645A7FF12 /* VisualAid */,
+				0BE492BC7AD3C4B64A352747 /* WhatsNew */,
 				41A58031DA4CFC5D1958EB92 /* CodeThemes */,
 				4A546C28E4A7690D621C99E0 /* Themes */,
 			);
@@ -6717,6 +6720,7 @@
 				6DB690F830F4F1F4DE66A077 /* MCPLogo-LICENSE.txt in Resources */,
 				F1AB5B4DF8A59DF85D585058 /* RemoteWeb in Resources */,
 				8B14CBC398D991822B643A1E /* VisualAid in Resources */,
+				64894683EAF69BBA86043CFD /* WhatsNew in Resources */,
 				8A4646E61460DEFB048C1345 /* ayu-light.json in Resources */,
 				444B1C11BC433A94A00BC2A5 /* ayu-mirage.json in Resources */,
 				E6441AD06107907F8DAABEFF /* catppuccin-latte.json in Resources */,
