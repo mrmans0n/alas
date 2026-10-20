@@ -17,7 +17,7 @@ module: a type (`struct`, `class`, `enum`, `protocol`, `actor`, `typealias`),
 a function, or a global `let` or `var`; or a member, nested type or initializer
 an extension adds. A use is any occurrence of a type's, function's or global's
 name; `Type.member`, or `.member` when no other module declares a member of
-that name; and `Type(label:` for an extension's initializer, comments included:
+that name; and `Type(label:` for an extension's initializer, outside comments and plain strings:
 precise enough to guide the moves, and the compiler takes over once the targets
 exist.
 
@@ -124,6 +124,19 @@ def members(text):
     return all_members, in_extensions
 
 
+BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.S)
+# A `//` that does not follow a `:`, so a URL in a string survives.
+LINE_COMMENT = re.compile(r"(?<!:)//.*$", re.M)
+# A string literal without interpolation, which may name a type as text.
+PLAIN_STRING = re.compile(r'"(?:[^"\\\n]|\\[^(\n])*"')
+
+
+def strip_comments(text):
+    """The text without comments or plain strings, which name types without
+    depending on them and can unbalance the parsing of a declaration."""
+    return PLAIN_STRING.sub('""', LINE_COMMENT.sub("", BLOCK_COMMENT.sub("", text)))
+
+
 def module_of(folder):
     for index, (name, folders) in enumerate(MODULES):
         if folder in folders:
@@ -146,7 +159,7 @@ def violations(sources):
                 unmapped.add(folder if os.sep in relative else relative)
                 continue
             with open(path, encoding="utf-8", errors="replace") as handle:
-                files[relative] = (module, handle.read())
+                files[relative] = (module, strip_comments(handle.read()))
     def owners(pattern):
         declared = {}
         for module, text in files.values():

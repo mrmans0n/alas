@@ -100,7 +100,7 @@ public enum LowKind {
 func low() -> LowKind { .hostOnly(1) }
 SWIFT
 python3 -I "${check}" --sources "${sources}" --allowlist "${allowlist}" > /dev/null
-for shape in '    case first,\n         hostOnly' '    case first(\n        value: Int\n    ), hostOnly' '    case first = \"(\"\n    case hostOnly' '    case first( // )\n        value: Int\n    ), hostOnly'; do
+for shape in '    case first,\n         hostOnly' '    case first(\n        value: Int\n    ), hostOnly' '    case first = \"(\"\n    case hostOnly' '    case first( // )\n        value: Int\n    ), hostOnly' '    case first( /* comment\n        ) */ value: Int\n    ), hostOnly'; do
     printf "public enum LowKind {\n${shape}\n}\nfunc low() -> LowKind { .hostOnly }\n" > "${sources}/Helpers/Low.swift"
     python3 -I "${check}" --sources "${sources}" --allowlist "${allowlist}" > /dev/null || { echo "rejected a case on a continuation line" >&2; exit 1; }
 done
