@@ -22,17 +22,31 @@ pub struct McpEnv {
     pub session_id: String,
     pub parent_session_id: Option<String>,
     pub workspace_only: bool,
-    /// Set by `alas mcp --visual-only`: only `visual_show` is listed or
-    /// callable, whatever the other restrictions say.
-    pub visual_only: bool,
+    /// Set by `alas mcp --visual-only` or `--remote`: the backend of the
+    /// remote-session relay, which lists and accepts only that relay's tools,
+    /// whatever the other restrictions say.
+    pub relay: Option<RelayScope>,
     /// "stdio" or "http"; tags every request this server dispatches.
     pub transport: &'static str,
 }
 
+/// The tools an SSH session's relay backend exposes. Alas picks `Remote` only
+/// when the remote helper waits long enough for `pr_create` to finish.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum RelayScope {
+    /// `visual_show` only.
+    Visual,
+    /// `visual_show`, `pr_create`, and `pr_status`.
+    Remote,
+}
+
 impl McpEnv {
     fn tool_scope(&self) -> ToolScope {
-        if self.visual_only {
-            ToolScope::Visual
+        if let Some(relay) = self.relay {
+            match relay {
+                RelayScope::Visual => ToolScope::Visual,
+                RelayScope::Remote => ToolScope::Remote,
+            }
         } else if self.workspace_only {
             ToolScope::Workspace
         } else {
@@ -47,8 +61,10 @@ enum ToolScope {
     All,
     /// Workspace Checkout sessions: read-only workspace, preview, and visual tools.
     Workspace,
-    /// The remote-session bridge: `visual_show` only.
+    /// The remote-session bridge behind an older helper: `visual_show` only.
     Visual,
+    /// The remote-session bridge: `visual_show` and the PR shepherd tools.
+    Remote,
 }
 
 impl ToolScope {
@@ -57,6 +73,7 @@ impl ToolScope {
             ToolScope::All => true,
             ToolScope::Workspace => is_workspace_tool(name),
             ToolScope::Visual => name == "visual_show",
+            ToolScope::Remote => matches!(name, "visual_show" | "pr_create" | "pr_status"),
         }
     }
 
@@ -67,7 +84,7 @@ impl ToolScope {
                 -32602,
                 format!("tool unavailable in Workspace Checkout context: {name}"),
             ),
-            ToolScope::All | ToolScope::Visual => (-32602, format!("unknown tool: {name}")),
+            ToolScope::All | ToolScope::Visual | ToolScope::Remote => (-32602, format!("unknown tool: {name}")),
         }
     }
 }
@@ -80,7 +97,7 @@ impl Clone for McpEnv {
             session_id: self.session_id.clone(),
             parent_session_id: self.parent_session_id.clone(),
             workspace_only: self.workspace_only,
-            visual_only: self.visual_only,
+            relay: self.relay,
             transport: self.transport,
         }
     }
@@ -129,7 +146,7 @@ pub fn env_from(get: impl Fn(&str) -> Option<String>) -> Result<McpEnv, String> 
         workspace_only: get("ALAS_MCP_WORKSPACE_ONLY")
             .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
             .unwrap_or(false),
-        visual_only: false,
+        relay: None,
         transport: "stdio",
     })
 }
@@ -185,6 +202,9 @@ fn handle_line_with_parent(
 
 fn initialize_result(parent_session_id: Option<&str>, scope: ToolScope) -> Value {
     let instructions = match parent_session_id {
+        _ if scope == ToolScope::Remote => {
+            "Shows visuals to the user in Alas with visual_show, and opens pull requests with pr_create/pr_status. Reach for visual_show when an explanation has shape: how parts connect (architecture, data or control flow, state machines, sequences), options compared on several dimensions, before/after layouts or UI sketches, or numbers that read better as a chart. Keep it to one visual per reply, usually none: skip it for short answers, single facts, code edits, status updates, and anything a list or code block already shows clearly. A visual may ask one optional question; the user's answer arrives as their next prompt, so end your turn after showing it. pr_create pushes this worktree's branch, opens its PR/MR, and has Alas watch it until it merges; offer it when you've finished a change the user will want reviewed, and call it only after the user agrees or asks. pr_status reports that PR/MR."
+        }
         _ if scope == ToolScope::Visual => {
             "Shows visuals to the user in Alas with visual_show. Reach for it when an explanation has shape: how parts connect (architecture, data or control flow, state machines, sequences), options compared on several dimensions, before/after layouts or UI sketches, or numbers that read better as a chart. Keep it to one visual per reply, usually none: skip it for short answers, single facts, code edits, status updates, and anything a list or code block already shows clearly. A visual may ask one optional question; the user's answer arrives as their next prompt, so end your turn after showing it."
         }
@@ -1488,8 +1508,19 @@ pub fn dispatch(env: &McpEnv, command: &Command) -> Result<Response, TransportEr
         Some(env.worktree_dir.clone()),
     );
     req.mcp_transport = Some(env.transport);
-    alas_client::send(&env.socket, &req)
+    match command {
+        Command::PrCreate { .. } => {
+            alas_client::send_with_timeout(&env.socket, &req, PR_CREATE_READ_TIMEOUT)
+        }
+        _ => alas_client::send(&env.socket, &req),
+    }
 }
+
+/// `pr_create` checks the branch, pushes it, and opens the PR/MR with
+/// `gh`/`glab` before replying; on an SSH worktree each of those runs over
+/// ssh, so it gets far longer than the default 30-second reply bound. The
+/// remote helper's relay waits slightly longer than this.
+const PR_CREATE_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// Unknown tools and invalid arguments are JSON-RPC protocol errors
 /// (-32602); failures while executing a valid call are tool results with
@@ -1514,7 +1545,7 @@ fn call_tool(
     let command = command_for_tool(name, &args, worktree_dir).map_err(|msg| (-32602, msg))?;
     Ok(match dispatch(&command) {
         Ok(resp) => tool_result(&command, resp),
-        Err(err) => transport_error_result(&err),
+        Err(err) => transport_error_result(&command, &err),
     })
 }
 
@@ -1607,7 +1638,15 @@ fn success_message(command: &Command) -> String {
     }
 }
 
-fn transport_error_result(err: &TransportError) -> Value {
+fn transport_error_result(command: &Command, err: &TransportError) -> Value {
+    // A pr_create that was sent but got no reply keeps running in the app, so
+    // its push and PR/MR may still land; never report that as a failure.
+    if matches!(command, Command::PrCreate { .. }) && matches!(err, TransportError::Io) {
+        return text_result(
+            "Alas did not reply before the pr_create deadline; the push and PR/MR may still complete. Call pr_status before retrying.".into(),
+            true,
+        );
+    }
     // Mirrors describe() in main.rs so agents and humans read the same words.
     let message = match err {
         TransportError::Malformed => "malformed response from Alas",
@@ -1705,7 +1744,8 @@ fn is_preview_command(command: &Command) -> bool {
 /// Calls that can block for seconds in the app. The stdio loop runs them on
 /// a worker so it keeps reading other calls and cancellations meanwhile.
 fn runs_on_worker(command: &Command) -> bool {
-    is_preview_command(command) || matches!(command, Command::SessionWait { .. })
+    is_preview_command(command)
+        || matches!(command, Command::SessionWait { .. } | Command::PrCreate { .. })
 }
 
 /// Longest single `session_wait` request sent to the app by a worker.
@@ -1843,9 +1883,9 @@ pub fn serve(env: &McpEnv) -> std::io::Result<()> {
 
     // Announce startup so the app can tell an injected-but-spawned server from
     // one the harness silently dropped. Best-effort; never blocks serving.
-    // The visual-only bridge backend starts before any agent talks to it, so
-    // its startup proves nothing and it stays quiet.
-    if !env.visual_only {
+    // The relay backend starts before any agent talks to it, so its startup
+    // proves nothing and it stays quiet.
+    if env.relay.is_none() {
         alas_client::send_hello(&env.socket, &env.session_id, "stdio");
     }
 
@@ -1901,7 +1941,7 @@ pub fn serve(env: &McpEnv) -> std::io::Result<()> {
                 if !runs_on_worker(&command) {
                     let result = match dispatch(env, &command) {
                         Ok(resp) => tool_result(&command, resp),
-                        Err(err) => transport_error_result(&err),
+                        Err(err) => transport_error_result(&command, &err),
                     };
                     let _ = reply_tx.send(json!({
                         "jsonrpc": "2.0",
@@ -1948,7 +1988,7 @@ pub fn serve(env: &McpEnv) -> std::io::Result<()> {
                         let Some(dispatched) = dispatched else { return };
                         let result = match dispatched {
                             Ok(resp) => tool_result(&command, resp),
-                            Err(err) => transport_error_result(&err),
+                            Err(err) => transport_error_result(&command, &err),
                         };
                         let _ = worker_reply_tx.send(json!({
                             "jsonrpc": "2.0",
@@ -2285,7 +2325,7 @@ fn build_http_response(
     // supervisor reuses the process across ACP reattaches while the app clears
     // its registration per attach, so a reconnecting harness must re-announce.
     let first_request = claim_http_hello();
-    if !env.visual_only && (first_request || is_initialize_message(&req.body)) {
+    if env.relay.is_none() && (first_request || is_initialize_message(&req.body)) {
         alas_client::send_hello(&env.socket, &env.session_id, "http");
     }
 
@@ -2345,7 +2385,7 @@ fn build_http_response(
                 };
                 let result = match dispatched {
                     Ok(resp) => tool_result(&command, resp),
-                    Err(err) => transport_error_result(&err),
+                    Err(err) => transport_error_result(&command, &err),
                 };
                 let reply = json!({ "jsonrpc": "2.0", "id": id, "result": result });
                 return http_response(200, "application/json", &reply.to_string());
@@ -2377,10 +2417,10 @@ mod tests {
         CHILD_ONLY_TOOLS, HttpRequest, McpEnv, McpRuntime, PROTOCOL_VERSION, build_http_response,
         cancellation_command_for_message, command_for_tool, dispatch, env_from, handle_line,
         handle_line_with_parent, http_response, initialize_result,
-        parse_http_request, register_pending_preview, runs_on_worker, session_wait_timed_out,
-        tool_definitions, tool_result, tools_call_command, ToolScope,
+        parse_http_request, register_pending_preview, runs_on_worker, session_wait_timed_out, RelayScope,
+        tool_definitions, tool_result, tools_call_command, transport_error_result, ToolScope,
     };
-    use alas_client::{Command, Response, VisualOption, VisualQuestion};
+    use alas_client::{Command, Response, TransportError, VisualOption, VisualQuestion};
     use serde_json::{Value, json};
 
     #[test]
@@ -2926,56 +2966,83 @@ mod tests {
     }
 
     #[test]
-    fn visual_only_mode_lists_and_accepts_only_visual_show() {
-        // Workspace and delegated restrictions must not widen visual-only mode.
-        let env = McpEnv {
-            socket: "/tmp/alas-no-such-socket-for-visual-only-test".into(),
-            worktree_dir: "/wt".into(),
-            session_id: "s1".into(),
-            parent_session_id: Some("parent".into()),
-            workspace_only: true,
-            visual_only: true,
-            transport: "stdio",
+    fn pr_create_without_a_reply_reports_an_unknown_outcome() {
+        let create = Command::PrCreate {
+            title: "t".into(),
+            body: "b".into(),
+            draft: false,
+            base: None,
         };
-        let scope = env.tool_scope();
-        let instructions = initialize_result(Some("parent"), scope)["instructions"]
-            .as_str()
-            .unwrap()
-            .to_string();
-        assert!(instructions.contains("visual_show"));
-        assert!(!instructions.contains("session_send"));
+        let text = |command: &Command, err: TransportError| {
+            transport_error_result(command, &err)["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        };
+        assert!(text(&create, TransportError::Io).contains("Call pr_status before retrying"));
+        // Nothing was sent, or the call is read-only: a plain failure.
+        assert_eq!(text(&create, TransportError::Connect), "could not reach Alas");
+        assert_eq!(text(&Command::PrStatus, TransportError::Io), "could not reach Alas");
+    }
 
-        let list = handle_line_with_parent(
-            r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#,
-            "/wt",
-            Some("parent"),
-            scope,
-            |_| unreachable!(),
-        )
-        .unwrap();
-        let visual = tool_definitions()
-            .into_iter()
-            .find(|tool| tool["name"] == json!("visual_show"))
+    #[test]
+    fn relay_modes_list_and_accept_only_their_tools() {
+        for (relay, allowed) in [
+            (RelayScope::Visual, &["visual_show"][..]),
+            (RelayScope::Remote, &["pr_create", "pr_status", "visual_show"][..]),
+        ] {
+            // Workspace and delegated restrictions must not widen a relay mode.
+            let env = McpEnv {
+                socket: "/tmp/alas-no-such-socket-for-relay-test".into(),
+                worktree_dir: "/wt".into(),
+                session_id: "s1".into(),
+                parent_session_id: Some("parent".into()),
+                workspace_only: true,
+                relay: Some(relay),
+                transport: "stdio",
+            };
+            let scope = env.tool_scope();
+            let instructions = initialize_result(Some("parent"), scope)["instructions"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            for name in allowed {
+                assert!(instructions.contains(name), "{relay:?} {name}");
+            }
+            assert!(!instructions.contains("session_send"), "{relay:?}");
+
+            let list = handle_line_with_parent(
+                r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#,
+                "/wt",
+                Some("parent"),
+                scope,
+                |_| unreachable!(),
+            )
             .unwrap();
-        assert_eq!(list["result"]["tools"], json!([visual]));
+            let expected: Vec<Value> = tool_definitions()
+                .into_iter()
+                .filter(|tool| allowed.contains(&tool["name"].as_str().unwrap()))
+                .collect();
+            assert_eq!(list["result"]["tools"], json!(expected), "{relay:?}");
 
-        // Every other name, listed or hidden, is refused before dispatch on
-        // both the shared path and the stdio/HTTP pre-parse path.
-        let mut names: Vec<String> = tool_definitions()
-            .iter()
-            .map(|tool| tool["name"].as_str().unwrap().to_string())
-            .filter(|name| name != "visual_show")
-            .collect();
-        names.extend(["resolve".to_string(), "workspace_create".to_string()]);
-        for name in names {
-            let line = call(&name, json!({}));
-            let reply =
-                handle_line_with_parent(&line, "/wt", Some("parent"), scope, |_| unreachable!())
-                    .unwrap();
-            assert_eq!(reply["error"]["code"], json!(-32602), "{name}");
-            assert_eq!(reply["error"]["message"], json!(format!("unknown tool: {name}")));
-            let msg: Value = serde_json::from_str(&line).unwrap();
-            assert!(tools_call_command(&msg, "/wt", scope).is_err(), "{name}");
+            // Every other name, listed or hidden, is refused before dispatch on
+            // both the shared path and the stdio/HTTP pre-parse path.
+            let mut names: Vec<String> = tool_definitions()
+                .iter()
+                .map(|tool| tool["name"].as_str().unwrap().to_string())
+                .filter(|name| !allowed.contains(&name.as_str()))
+                .collect();
+            names.extend(["resolve".to_string(), "workspace_create".to_string()]);
+            for name in names {
+                let line = call(&name, json!({}));
+                let reply =
+                    handle_line_with_parent(&line, "/wt", Some("parent"), scope, |_| unreachable!())
+                        .unwrap();
+                assert_eq!(reply["error"]["code"], json!(-32602), "{relay:?} {name}");
+                assert_eq!(reply["error"]["message"], json!(format!("unknown tool: {name}")));
+                let msg: Value = serde_json::from_str(&line).unwrap();
+                assert!(tools_call_command(&msg, "/wt", scope).is_err(), "{relay:?} {name}");
+            }
         }
     }
 
@@ -3286,7 +3353,7 @@ mod tests {
             session_id: "s1".into(),
             parent_session_id: None,
             workspace_only: false,
-            visual_only: false,
+            relay: None,
             transport: "stdio",
         };
         let req = HttpRequest {
@@ -4065,7 +4132,7 @@ mod tests {
             session_id: "acp-1".into(),
             parent_session_id: None,
             workspace_only: false,
-            visual_only: false,
+            relay: None,
             transport: "stdio",
         };
         let resp = dispatch(&env, &alas_client::Command::WtList).unwrap();

@@ -33,11 +33,11 @@ public actor RemoteVisualMCPBridge {
     /// remain the final authority for the visual itself.
     public typealias Authorization = @Sendable () async -> Bool
     /// Genuine agent traffic reached the backend through the current route:
-    /// a successful `initialize`, `tools/list`, or accepted `visual_show`.
+    /// a successful `initialize`, `tools/list`, or accepted relayed tool call.
     public typealias RegistrationEvidence = @Sendable () async -> Void
 
     static let unavailableCode = -32000
-    static let unavailableMessage = "Alas visual relay unavailable"
+    static let unavailableMessage = "Alas relay unavailable; the call's outcome is unknown"
 
     private struct Pending {
         let origin: RemoteMCPRelayOrigin
@@ -80,28 +80,38 @@ public actor RemoteVisualMCPBridge {
         self.onRegistration = onRegistration
     }
 
-    /// Opens a fenced route on the helper and starts serving it. The
-    /// returned attachment's invalidation revokes the route.
+    /// The tools a route serves: the PR shepherd tools join `visual_show` only
+    /// when the helper's relay waits long enough for them and the session can
+    /// use them (Workspace Checkouts cannot).
+    public static func toolScope(helperRelaysPRTools: Bool, allowsPRTools: Bool) -> BuiltInMCPToolScope {
+        helperRelaysPRTools && allowsPRTools ? .remote : .visualOnly
+    }
+
+    /// Opens a fenced route on the helper and starts serving it, with a
+    /// backend for the tools the helper can relay and the session can use.
+    /// The returned attachment's invalidation revokes the route.
     @MainActor
     public static func prepare(
         client: RemoteHelperClient,
         fence: RemoteSessionFence,
-        makeBackend: @escaping BackendFactory,
+        allowsPRTools: Bool,
+        makeBackend: @escaping @Sendable (BuiltInMCPToolScope) -> JSONRPCStdioTransporting,
         authorize: @escaping Authorization,
         onRegistration: @escaping RegistrationEvidence
     ) async throws -> PreparedBuiltInMCPAttachment {
         let opened = try await client.openMCPRoute(fence: fence)
+        let toolScope = toolScope(helperRelaysPRTools: opened.relaysPRTools, allowsPRTools: allowsPRTools)
         let bridge = RemoteVisualMCPBridge(
             route: opened.handle,
             events: opened.events,
             relay: client,
-            makeBackend: makeBackend,
+            makeBackend: { makeBackend(toolScope) },
             authorize: authorize,
             onRegistration: onRegistration
         )
         await bridge.start()
         return PreparedBuiltInMCPAttachment(
-            injection: BuiltInAlasMCP.remoteVisualInjection(descriptor: opened.descriptor),
+            injection: BuiltInAlasMCP.remoteVisualInjection(descriptor: opened.descriptor, toolScope: toolScope),
             cleanup: { await bridge.invalidate() }
         )
     }
@@ -328,12 +338,17 @@ public actor RemoteVisualMCPBridge {
         return CFGetTypeID(number) != CFBooleanGetTypeID()
     }
 
+    /// Every tool any relay backend serves; the backend itself refuses the
+    /// ones outside its scope.
+    static let relayedToolNames: Set<String> = ["visual_show", "pr_create", "pr_status"]
+
     private static func provesRegistration(method: String, message: [String: Any]) -> Bool {
         switch method {
         case "initialize", "tools/list":
             return true
         case "tools/call":
-            return (message["params"] as? [String: Any])?["name"] as? String == "visual_show"
+            let name = (message["params"] as? [String: Any])?["name"] as? String
+            return name.map(relayedToolNames.contains) ?? false
         default:
             return false
         }

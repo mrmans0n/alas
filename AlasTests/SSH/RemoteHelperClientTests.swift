@@ -1665,6 +1665,8 @@ struct RemoteHelperClientTests {
         let firstRelayId = try registerReply(first, 1)
         let opened = try await opening.value
         #expect(opened.descriptor.proxyArgs.last == "record")
+        // Without remoteMCPTools the helper's relay gives up before pr_create can finish.
+        #expect(!opened.relaysPRTools)
         var events = opened.events.makeAsyncIterator()
         #expect(await events.next() == .available)
 

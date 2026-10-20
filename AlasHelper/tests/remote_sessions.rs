@@ -592,7 +592,7 @@ fn retained_mcp_proxy_follows_takeover_and_never_completes_through_the_old_owner
     );
     assert_eq!(
         reply(),
-        json!({"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"Alas visual relay unavailable"}})
+        json!({"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"Alas relay unavailable; the call's outcome is unknown"}})
     );
 
     // A notification is acknowledged without output, so the next line the

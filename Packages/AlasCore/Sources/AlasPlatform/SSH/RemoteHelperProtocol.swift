@@ -40,6 +40,9 @@ public struct RemoteHelperCapabilities: Codable, Equatable, Sendable {
     public var sessionCoordination: Int? = nil
     /// `1` when the helper relays the visual-only MCP server (`mcp/*`).
     public var visualMCPRelay: Int? = nil
+    /// `1` when that relay waits long enough for `pr_create`, so SSH
+    /// sessions can also get the PR shepherd tools.
+    public var remoteMCPTools: Int? = nil
 
     public init(watchKinds: [RemoteHelperWatchKind], fs: RemoteHelperFSCapabilities, search: Bool?, proc: Bool?, acp: Bool?, ping: Bool, sessionCoordination: Int? = nil, visualMCPRelay: Int? = nil) {
         self.watchKinds = watchKinds

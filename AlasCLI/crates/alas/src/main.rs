@@ -79,18 +79,24 @@ fn describe(err: &DispatchError) -> (String, u8) {
 enum McpMode {
     Stdio,
     Http(mcp::HttpOptions),
-    VisualOnly,
+    Relay(mcp::RelayScope),
 }
 
 /// `alas mcp` runs the stdio MCP server; `alas mcp --http [--port <n>]
 /// [--exit-with-parent]` runs the same server over localhost HTTP;
 /// `alas mcp --visual-only` runs the stdio server exposing only
-/// `visual_show`. Anything else falls through to the normal parser, which
-/// rejects it with usage text.
+/// `visual_show`, and `alas mcp --remote` adds `pr_create`/`pr_status`; both
+/// back the SSH session relay. Anything else falls through to the normal
+/// parser, which rejects it with usage text.
 fn mcp_mode(args: &[String]) -> Option<McpMode> {
     match args {
         [only] if only == "mcp" => Some(McpMode::Stdio),
-        [first, second] if first == "mcp" && second == "--visual-only" => Some(McpMode::VisualOnly),
+        [first, second] if first == "mcp" && second == "--visual-only" => {
+            Some(McpMode::Relay(mcp::RelayScope::Visual))
+        }
+        [first, second] if first == "mcp" && second == "--remote" => {
+            Some(McpMode::Relay(mcp::RelayScope::Remote))
+        }
         [first, second, rest @ ..] if first == "mcp" && second == "--http" => {
             http_options(rest).map(McpMode::Http)
         }
@@ -124,11 +130,11 @@ fn run_mcp(mode: McpMode) -> ExitCode {
     };
     match mode {
         McpMode::Http(_) => env.transport = "http",
-        McpMode::VisualOnly => env.visual_only = true,
+        McpMode::Relay(relay) => env.relay = Some(relay),
         McpMode::Stdio => {}
     }
     let result = match mode {
-        McpMode::Stdio | McpMode::VisualOnly => mcp::serve(&env),
+        McpMode::Stdio | McpMode::Relay(_) => mcp::serve(&env),
         McpMode::Http(options) => mcp::serve_http(&env, &options),
     };
     match result {
@@ -206,7 +212,11 @@ mod tests {
         );
         assert_eq!(
             mcp_mode(&["mcp".into(), "--visual-only".into()]),
-            Some(McpMode::VisualOnly)
+            Some(McpMode::Relay(mcp::RelayScope::Visual))
+        );
+        assert_eq!(
+            mcp_mode(&["mcp".into(), "--remote".into()]),
+            Some(McpMode::Relay(mcp::RelayScope::Remote))
         );
         assert_eq!(mcp_mode(&["open".into()]), None);
     }

@@ -197,6 +197,10 @@ struct AlasApp: App {
                     modifiers: AppQuitAction.terminateSessionsShortcutModifiers
                 )
             }
+            CommandGroup(before: .help) {
+                Button("What's New…") { state.whatsNew.showLatest() }
+                    .disabled(!state.whatsNew.hasLatest)
+            }
         }
         CommandMenu("Spaces") {
             Button("Select Space 1") {

@@ -57,8 +57,27 @@ struct RemoteVisualMCPBridgeTests {
         await harness.bridge.invalidate()
     }
 
-    @Test("only a successful initialize, tools/list, or visual_show proves registration")
-    func registrationNeedsGenuineAgentTraffic() async throws {
+    @Test(
+        "PR tools need both a helper that relays them and a session that can use them",
+        arguments: [
+            (true, true, BuiltInMCPToolScope.remote),
+            (true, false, .visualOnly),
+            (false, true, .visualOnly),
+        ]
+    )
+    func routeToolScope(helperRelaysPRTools: Bool, allowsPRTools: Bool, expected: BuiltInMCPToolScope) {
+        #expect(RemoteVisualMCPBridge.toolScope(
+            helperRelaysPRTools: helperRelaysPRTools, allowsPRTools: allowsPRTools) == expected)
+    }
+
+    @Test(
+        "only a successful initialize, tools/list, or relayed tool call proves registration",
+        arguments: [
+            #"{"jsonrpc":"2.0","id":3,"method":"initialize","params":{}}"#,
+            #"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"pr_create","arguments":{}}}"#,
+        ]
+    )
+    func registrationNeedsGenuineAgentTraffic(proof: String) async throws {
         let harness = BridgeHarness()
         harness.send("not json", from: harness.origin(requestId: "bad"))
         harness.send(#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#, from: harness.origin(requestId: "ping"))
@@ -72,9 +91,9 @@ struct RemoteVisualMCPBridgeTests {
         #expect(await harness.relay.completions.first?.completion == .failed(code: -32700, message: "Parse error"))
         #expect(await harness.registrations == 0)
 
-        harness.send(#"{"jsonrpc":"2.0","id":3,"method":"initialize","params":{}}"#, from: harness.origin(requestId: "init"))
+        harness.send(proof, from: harness.origin(requestId: "proof"))
         try await eventually { backend.sentIds.count == 3 }
-        backend.respond(#"{"jsonrpc":"2.0","id":"\#(backend.sentIds[2])","result":{"protocolVersion":"2025-06-18"}}"#)
+        backend.respond(#"{"jsonrpc":"2.0","id":"\#(backend.sentIds[2])","result":{}}"#)
         try await eventually { await harness.registrations == 1 }
         await harness.bridge.invalidate()
     }
@@ -100,7 +119,7 @@ struct RemoteVisualMCPBridgeTests {
         let completions = await harness.relay.completions
         #expect(completions.map(\.origin) == [refused, pending])
         #expect(completions.allSatisfy {
-            $0.completion == .failed(code: -32000, message: "Alas visual relay unavailable")
+            $0.completion == .failed(code: -32000, message: "Alas relay unavailable; the call's outcome is unknown")
         })
         #expect(harness.backendCount == 1)
     }

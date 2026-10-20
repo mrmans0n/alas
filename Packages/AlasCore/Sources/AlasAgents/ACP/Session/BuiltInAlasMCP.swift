@@ -6,11 +6,24 @@ import AlasPlatform
 import AlasFeatures
 import AlasCode
 
-/// Which built-in tools an attachment exposes. SSH sessions only get
-/// `visual_show`, relayed back to this Mac by the remote helper.
+/// Which built-in tools an attachment exposes. SSH sessions get a subset,
+/// relayed back to this Mac by the remote helper.
 public enum BuiltInMCPToolScope: Equatable, Sendable {
     case full
+    /// `visual_show` only: an SSH session behind a helper without
+    /// `remoteMCPTools`, whose relay gives up before `pr_create` can finish.
     case visualOnly
+    /// `visual_show`, `pr_create`, and `pr_status`: an SSH session.
+    case remote
+
+    /// The `alas mcp` flag for an SSH relay backend serving this scope.
+    public var relayBackendFlag: String? {
+        switch self {
+        case .full: nil
+        case .visualOnly: "--visual-only"
+        case .remote: "--remote"
+        }
+    }
 }
 
 /// What the session manager knows when it asks for the built-in server.
@@ -135,15 +148,18 @@ public enum BuiltInAlasMCP: Sendable {
     }
 
     /// The entry for an SSH session: the remote helper's stdio proxy, which
-    /// relays `visual_show` back to this Mac. It carries no local command,
+    /// relays the scope's tools back to this Mac. It carries no local command,
     /// socket, credential, or session id; the descriptor names only the
     /// helper binary, its state directory, and the stable remote record.
-    public static func remoteVisualInjection(descriptor: RemoteMCPRouteDescriptor) -> Injection {
+    public static func remoteVisualInjection(
+        descriptor: RemoteMCPRouteDescriptor,
+        toolScope: BuiltInMCPToolScope
+    ) -> Injection {
         Injection(
             server: .stdio(name: serverName, command: descriptor.proxyCommand, args: descriptor.proxyArgs, env: []),
             status: .init(id: statusId, name: serverName, transport: .stdio, disposition: .requested),
             isDelegated: false,
-            toolScope: .visualOnly
+            toolScope: toolScope
         )
     }
 
