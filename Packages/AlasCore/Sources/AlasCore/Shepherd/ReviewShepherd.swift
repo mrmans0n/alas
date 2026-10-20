@@ -365,8 +365,20 @@ public final class ReviewShepherd {
         update(id) { $0.autoMerge = on }
     }
 
+    /// The budget only gates the next dispatch, so a fix prompt already on
+    /// its way stays current. Only a record the change puts back to watching
+    /// is re-evaluated, and an escalated record has no prompt in flight.
     public func setMaxFixAttempts(_ budget: Int, for id: ShepherdRecordID) {
-        update(id) { $0.setFixAttemptBudget(budget) }
+        guard let current = records[id], !current.phase.isTerminal else { return }
+        var record = current
+        record.setFixAttemptBudget(budget)
+        guard record != current else { return }
+        guard record.phase == current.phase else {
+            update(id) { $0 = record }
+            return
+        }
+        record.updatedAt = now()
+        put(record)
     }
 
     /// Escalated or paused back to watching with a full attempt budget. The
