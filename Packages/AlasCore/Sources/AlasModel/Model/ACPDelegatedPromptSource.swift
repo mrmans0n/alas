@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 public struct ACPDelegatedPromptSource: Codable, Equatable, Sendable {
     public struct AppAction: Codable, Equatable, Sendable {

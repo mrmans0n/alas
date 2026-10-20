@@ -1,5 +1,6 @@
 // Alas/Sources/Harness/AgentKind.swift
 import Foundation
+import AlasFoundation
 
 public enum AgentKind: String, CaseIterable, Sendable, Codable, Identifiable {
     case claude

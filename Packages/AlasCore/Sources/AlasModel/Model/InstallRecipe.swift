@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 /// Package managers we know how to invoke for LSP installation.
 /// Values are stable strings used in `mason-lsps.json` and in user config

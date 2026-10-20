@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 public struct DiffReviewFileID: Codable, Equatable, Hashable, Identifiable, Sendable {
     public let namespace: String

@@ -1,6 +1,7 @@
 import Foundation
 import Security
 import os
+import AlasFoundation
 
 /// Where this Mac's own remote credentials live: the peer identity private
 /// key, and the bearer tokens paired peers issued to us. Both are secrets

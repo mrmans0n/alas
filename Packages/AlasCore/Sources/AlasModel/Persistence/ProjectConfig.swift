@@ -1,5 +1,6 @@
 import Foundation
 import os
+import AlasFoundation
 
 private let projectConfigLogger = Logger(subsystem: "io.nlopez.alas", category: "project-config")
 

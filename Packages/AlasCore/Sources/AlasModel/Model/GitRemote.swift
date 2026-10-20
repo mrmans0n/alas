@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 public struct GitRemote: Equatable, Sendable {
     public enum Direction: Equatable, Sendable {

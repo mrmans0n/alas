@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 public enum CodeHostIssueState: String, Codable, Equatable, Sendable {
     case open

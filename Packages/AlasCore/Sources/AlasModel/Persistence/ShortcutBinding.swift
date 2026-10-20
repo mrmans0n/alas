@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 public struct ShortcutBinding: Codable, Equatable, Hashable, Sendable {
     public var key: String          // "p", "return", "leftArrow", "="

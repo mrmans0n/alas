@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 public struct WarningCharacter: Codable, Equatable, Identifiable, Sendable {
     public let scalarValue: UInt32

@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import AlasFoundation
 
 public struct MCPAttachmentServerStatus: Equatable, Identifiable, Sendable {
     public let id: String

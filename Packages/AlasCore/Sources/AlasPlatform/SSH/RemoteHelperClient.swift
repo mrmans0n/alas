@@ -1,0 +1,1359 @@
+import Foundation
+import AlasFoundation
+import AlasModel
+
+public struct RemoteHelperInvocation: Equatable, Sendable {
+    public let executable: String
+    public let args: [String]
+
+    public init(executable: String, args: [String]) {
+        self.executable = executable
+        self.args = args
+    }
+}
+
+private struct ActiveRemoteHelperSubscription {
+    let params: RemoteHelperWatchSubscribeParams
+    var helperSubscriptionId: String
+    var helperGeneration: Int
+    let updates: AsyncStream<RemoteHelperWatchUpdate>
+    let updatesContinuation: AsyncStream<RemoteHelperWatchUpdate>.Continuation
+
+    public init(params: RemoteHelperWatchSubscribeParams, helperSubscriptionId: String, helperGeneration: Int, updates: AsyncStream<RemoteHelperWatchUpdate>, updatesContinuation: AsyncStream<RemoteHelperWatchUpdate>.Continuation) {
+        self.params = params
+        self.helperSubscriptionId = helperSubscriptionId
+        self.helperGeneration = helperGeneration
+        self.updates = updates
+        self.updatesContinuation = updatesContinuation
+    }
+}
+
+private struct ActiveRemoteHelperSearch {
+    let continuation: AsyncThrowingStream<RemoteHelperSearchEvent, Error>.Continuation
+
+    public init(continuation: AsyncThrowingStream<RemoteHelperSearchEvent, Error>.Continuation) {
+        self.continuation = continuation
+    }
+}
+
+private struct ActiveRemoteHelperProcAttachment {
+    let id: String
+    let continuation: AsyncStream<RemoteHelperProcEvent>.Continuation
+
+    public init(id: String, continuation: AsyncStream<RemoteHelperProcEvent>.Continuation) {
+        self.id = id
+        self.continuation = continuation
+    }
+}
+
+private struct RemoteHelperProcOffsets {
+    var stdout: UInt64
+    var stderr: UInt64
+
+    public init(stdout: UInt64, stderr: UInt64) {
+        self.stdout = stdout
+        self.stderr = stderr
+    }
+}
+
+private struct ActiveRemoteMCPRoute {
+    let fence: RemoteSessionFence
+    /// The helper registration currently serving the route; nil while the
+    /// helper is down or before a replay registers it again.
+    var registration: (relayId: String, generation: Int)?
+    let continuation: AsyncStream<RemoteMCPRelayEvent>.Continuation
+
+    init(fence: RemoteSessionFence, continuation: AsyncStream<RemoteMCPRelayEvent>.Continuation) {
+        self.fence = fence
+        self.continuation = continuation
+    }
+}
+
+public enum RemoteHelperClientError: LocalizedError, Equatable, Sendable {
+    case notRunning
+    case unavailable(String)
+    case jsonrpc(JSONRPCError)
+    case decoding(String)
+
+    public var shouldFallbackToRemoteExec: Bool {
+        switch self {
+        case .notRunning, .unavailable:
+            return true
+        case .jsonrpc(let error):
+            return error.code == -32601 || error.code == -32021
+                || error.code == -32022 || error.code == -32023
+        case .decoding:
+            return false
+        }
+    }
+
+    public var errorDescription: String? {
+        switch self {
+        case .notRunning:
+            return "Remote helper is not running."
+        case .unavailable(let message):
+            return message
+        case .jsonrpc(let error):
+            return "Remote helper error \(error.code): \(error.message)"
+        case .decoding(let message):
+            return "Remote helper decoding failed: \(message)"
+        }
+    }
+}
+
+public actor RemoteHelperClient {
+    public typealias TransportFactory = @Sendable () -> JSONRPCStdioTransporting
+
+    public static let defaultIdleShutdownNanoseconds: UInt64 = 600_000_000_000
+    public static let legacyWatchEventBufferLimit = 64
+
+    public nonisolated let host: String
+    public nonisolated let watchEvents: AsyncStream<RemoteHelperWatchEvent>
+
+    private let transportFactory: TransportFactory
+    private let idleShutdownNanoseconds: UInt64
+    private let watchEventsCont: AsyncStream<RemoteHelperWatchEvent>.Continuation
+    private var transport: JSONRPCStdioTransporting?
+    private var dispatchTask: Task<Void, Never>?
+    private var idleShutdownTask: Task<Void, Never>?
+    private var generation = 0
+    private var helperCapabilities: (generation: Int, capabilities: RemoteHelperCapabilities)?
+    private var nextId = 0
+    private var nextClientSubscriptionId = 0
+    private var pending: [JSONRPCID: CheckedContinuation<Data, Error>] = [:]
+    private var activeSubscriptions: [String: ActiveRemoteHelperSubscription] = [:]
+    private var activeSearches: [String: ActiveRemoteHelperSearch] = [:]
+    private var earlySearchEvents: [String: [RemoteHelperSearchEvent]] = [:]
+    private var activeProcAttachments: [String: ActiveRemoteHelperProcAttachment] = [:]
+    private var earlyProcEvents: [String: [RemoteHelperProcEvent]] = [:]
+    private var procOffsets: [String: RemoteHelperProcOffsets] = [:]
+    private var detachedProcIds: Set<String> = []
+    private var pluginProcStreams: [String: AsyncStream<RemotePluginProcEvent>.Continuation] = [:]
+    private var mcpRoutes: [RemoteMCPRouteHandle: ActiveRemoteMCPRoute] = [:]
+    private var subscriptionReplayTask: Task<Void, Error>?
+    private var subscriptionsNeedReplay = false
+    private var lastExitStatus: Int32?
+
+    public init(
+        host: String,
+        idleShutdownNanoseconds: UInt64 = RemoteHelperClient.defaultIdleShutdownNanoseconds,
+        transportFactory: TransportFactory? = nil
+    ) {
+        self.host = host
+        self.idleShutdownNanoseconds = idleShutdownNanoseconds
+        self.transportFactory = transportFactory ?? {
+            Self.makeTransport(host: host)
+        }
+        var eventsCont: AsyncStream<RemoteHelperWatchEvent>.Continuation!
+        self.watchEvents = AsyncStream(
+            bufferingPolicy: .bufferingNewest(Self.legacyWatchEventBufferLimit)
+        ) { eventsCont = $0 }
+        self.watchEventsCont = eventsCont
+    }
+
+    public static func invocation(host: String) -> RemoteHelperInvocation {
+        let ssh = SSHCommand(host: host, mode: .batch)
+        let script = SSHCommand.remoteScript(command: "exec \"$HOME/.alas/bin/alas-helper\" serve")
+        return RemoteHelperInvocation(
+            executable: SSHCommand.executable,
+            args: ssh.argv(remoteScript: script)
+        )
+    }
+
+    private static func makeTransport(host: String) -> JSONRPCStdioTransporting {
+        let invocation = invocation(host: host)
+        return JSONRPCStdioTransport(
+            executable: URL(fileURLWithPath: invocation.executable),
+            arguments: invocation.args,
+            environment: nil,
+            framing: .newline
+        )
+    }
+
+    public func hello(_ params: RemoteHelperHelloParams = .init()) async throws -> RemoteHelperHelloResult {
+        _ = try ensureStarted()
+        let helloGeneration = generation
+        let result: RemoteHelperHelloResult = try await request(method: "hello", params: params)
+        if generation == helloGeneration {
+            helperCapabilities = (helloGeneration, result.capabilities)
+        }
+        return result
+    }
+
+    /// Coordination payloads already contain typed real paths. In particular,
+    /// transcript bytes and opaque remote IDs must never be path-rewritten.
+    public func remoteSessionRequest(method: String, encodedParams: Data) async throws -> Data {
+        if method == "hello" {
+            return try JSONEncoder().encode(try await hello(JSONDecoder().decode(RemoteHelperHelloParams.self, from: encodedParams)))
+        }
+        let params = try JSONDecoder().decode([String: AnyCodable].self, from: encodedParams)
+        let result: AnyCodable = try await request(method: method, params: params, stripVirtualPaths: false,
+            requiresSessionCoordination: method.hasPrefix("proc/") && params["leaseFence"] != nil)
+        return try JSONEncoder().encode(result)
+    }
+
+    public func ping() async throws -> RemoteHelperPingResult {
+        try await request(method: "ping", params: RemoteHelperNoParams())
+    }
+
+    public func subscribe(
+        root: String,
+        kinds: [RemoteHelperWatchKind]
+    ) async throws -> RemoteHelperWatchSubscribeResult {
+        let handle = try await subscribeWithUpdates(root: root, kinds: kinds)
+        return RemoteHelperWatchSubscribeResult(subscriptionId: handle.subscriptionId)
+    }
+
+    public func subscribeWithUpdates(
+        root: String,
+        kinds: [RemoteHelperWatchKind]
+    ) async throws -> RemoteHelperWatchHandle {
+        let helperResult: RemoteHelperWatchSubscribeResult = try await request(
+            method: "watch/subscribe",
+            params: RemoteHelperWatchSubscribeParams(root: root, kinds: kinds)
+        )
+        let params = RemoteHelperWatchSubscribeParams(root: root, kinds: kinds)
+        let clientSubscriptionId = makeClientSubscriptionId(avoiding: helperResult.subscriptionId)
+        var updatesContinuation: AsyncStream<RemoteHelperWatchUpdate>.Continuation!
+        let updates = AsyncStream<RemoteHelperWatchUpdate> { updatesContinuation = $0 }
+        activeSubscriptions[clientSubscriptionId] = ActiveRemoteHelperSubscription(
+            params: params,
+            helperSubscriptionId: helperResult.subscriptionId,
+            helperGeneration: generation,
+            updates: updates,
+            updatesContinuation: updatesContinuation
+        )
+        updatesContinuation.yield(.available)
+        return RemoteHelperWatchHandle(subscriptionId: clientSubscriptionId, updates: updates)
+    }
+
+    public func unsubscribe(subscriptionId: String) async throws -> RemoteHelperWatchUnsubscribeResult {
+        let subscription = activeSubscriptions[subscriptionId]
+        let helperSubscriptionId = subscription?.helperSubscriptionId ?? subscriptionId
+        guard transport != nil else {
+            activeSubscriptions.removeValue(forKey: subscriptionId)
+            subscription?.updatesContinuation.finish()
+            scheduleIdleShutdownIfPossible()
+            return RemoteHelperWatchUnsubscribeResult(ok: true)
+        }
+
+        let result: RemoteHelperWatchUnsubscribeResult
+        do {
+            result = try await request(
+                method: "watch/unsubscribe",
+                params: RemoteHelperWatchUnsubscribeParams(subscriptionId: helperSubscriptionId),
+                replaySubscriptionsOnStart: false
+            )
+        } catch RemoteHelperClientError.notRunning {
+            activeSubscriptions.removeValue(forKey: subscriptionId)
+            subscription?.updatesContinuation.finish()
+            scheduleIdleShutdownIfPossible()
+            return RemoteHelperWatchUnsubscribeResult(ok: true)
+        }
+        activeSubscriptions.removeValue(forKey: subscriptionId)
+        subscription?.updatesContinuation.finish()
+        scheduleIdleShutdownIfPossible()
+        return result
+    }
+
+    public func dropLocalSubscription(subscriptionId: String) {
+        guard let subscription = activeSubscriptions.removeValue(forKey: subscriptionId) else { return }
+        subscription.updatesContinuation.yield(.unavailable)
+        subscription.updatesContinuation.finish()
+        scheduleIdleShutdownIfPossible()
+    }
+
+    public func read(path: String, offset: UInt64? = nil) async throws -> RemoteHelperFSReadResult {
+        try await request(method: "fs/read", params: RemoteHelperFSReadParams(path: path, offset: offset))
+    }
+
+    public func write(
+        path: String,
+        content: String,
+        expectedMtime: Double? = nil,
+        expectedContent: String? = nil
+    ) async throws -> RemoteHelperFSWriteResult {
+        // File contents must stay byte-identical, so only the path is made real.
+        try await request(
+            method: "fs/write",
+            params: RemoteHelperFSWriteParams(
+                path: RemotePath.realPath(path),
+                content: content,
+                expectedMtime: expectedMtime,
+                expectedContent: expectedContent
+            ),
+            stripVirtualPaths: false
+        )
+    }
+
+    public func stat(paths: [String]) async throws -> RemoteHelperFSStatResult {
+        let result: RemoteHelperFSStatResult = try await request(
+            method: "fs/stat", params: RemoteHelperFSStatParams(paths: paths)
+        )
+        return RemoteHelperFSStatResult(entries: result.entries.map { $0.virtualized(host: host) })
+    }
+
+    public func lineCounts(root: String, paths: [String]) async throws -> RemoteHelperFSLineCountsResult {
+        let result: RemoteHelperFSLineCountsResult = try await request(
+            method: "fs/line-counts",
+            params: RemoteHelperFSLineCountsParams(root: root, paths: paths)
+        )
+        return RemoteHelperFSLineCountsResult(entries: result.entries.map { $0.virtualized(host: host) })
+    }
+
+    public func list(path: String) async throws -> RemoteHelperFSListResult {
+        try await request(method: "fs/list", params: RemoteHelperFSListParams(path: path))
+    }
+
+    /// A plugin's worktree-scoped file request (`fs/scoped-*`). Paths are real and content is the plugin's own, so
+    /// nothing is rewritten.
+    public func pluginFile<Params: Encodable, Result: Decodable>(_ method: String, _ params: Params) async throws -> Result {
+        try await request(method: method, params: params, stripVirtualPaths: false)
+    }
+
+    public func search(
+        root: String,
+        query: String,
+        caseSensitive: Bool,
+        wholeWord: Bool,
+        regex: Bool
+    ) async throws -> RemoteHelperSearchHandle {
+        let result: RemoteHelperSearchStartResult = try await request(
+            method: "search/start",
+            params: RemoteHelperSearchStartParams(
+                root: RemotePath.realPath(root),
+                query: query,
+                caseSensitive: caseSensitive,
+                wholeWord: wholeWord,
+                regex: regex
+            ),
+            stripVirtualPaths: false
+        )
+        var continuation: AsyncThrowingStream<RemoteHelperSearchEvent, Error>.Continuation!
+        let events = AsyncThrowingStream<RemoteHelperSearchEvent, Error> { continuation = $0 }
+        activeSearches[result.searchId] = ActiveRemoteHelperSearch(
+            continuation: continuation
+        )
+        for event in earlySearchEvents.removeValue(forKey: result.searchId) ?? [] {
+            continuation.yield(event)
+            if case .complete = event {
+                continuation.finish()
+                activeSearches.removeValue(forKey: result.searchId)
+            }
+        }
+        return RemoteHelperSearchHandle(searchId: result.searchId, events: events)
+    }
+
+    public func cancelSearch(searchId: String) async throws {
+        let _: RemoteHelperSearchCancelResult = try await request(
+            method: "search/cancel",
+            params: RemoteHelperSearchCancelParams(searchId: searchId)
+        )
+    }
+
+    public func spawnProc(
+        procId: String,
+        command: String,
+        args: [String],
+        cwd: String,
+        env: [String: String],
+        pathPrefixDirectories: [String] = [],
+        leaseFence: RemoteSessionFence? = nil
+    ) async throws -> RemoteHelperProcStatus {
+        try await request(
+            method: "proc/spawn",
+            params: RemoteHelperProcSpawnParams(
+                procId: procId,
+                command: command,
+                args: args,
+                cwd: cwd,
+                env: env,
+                pathPrefixDirectories: pathPrefixDirectories,
+                leaseFence: leaseFence
+            ),
+            requiresSessionCoordination: leaseFence != nil
+        )
+    }
+
+    public func attachProc(
+        procId: String,
+        attachmentId: String = UUID().uuidString,
+        stdoutOffset: UInt64? = nil,
+        stderrOffset: UInt64? = nil
+    ) async throws -> RemoteHelperProcAttachHandle {
+        let rememberedOffsets = procOffsets[procId]
+        let requestedStdoutOffset = stdoutOffset ?? rememberedOffsets?.stdout
+        let requestedStderrOffset = stderrOffset ?? rememberedOffsets?.stderr
+        let wasDetached = detachedProcIds.remove(procId) != nil
+        let result: RemoteHelperProcAttachResult
+        do {
+            result = try await request(
+                method: "proc/attach",
+                params: RemoteHelperProcAttachParams(
+                    procId: procId,
+                    stdoutOffset: requestedStdoutOffset,
+                    stderrOffset: requestedStderrOffset
+                )
+            )
+        } catch {
+            if wasDetached {
+                detachedProcIds.insert(procId)
+            }
+            throw error
+        }
+        var continuation: AsyncStream<RemoteHelperProcEvent>.Continuation!
+        let events = AsyncStream<RemoteHelperProcEvent> { continuation = $0 }
+        activeProcAttachments[procId] = ActiveRemoteHelperProcAttachment(
+            id: attachmentId,
+            continuation: continuation
+        )
+        for frame in result.stdoutFrames {
+            if let data = Data(base64Encoded: frame.dataBase64) {
+                continuation.yield(.stdout(data, offset: frame.offset))
+            }
+        }
+        for chunk in result.stderrChunks {
+            if let data = Data(base64Encoded: chunk.dataBase64) {
+                continuation.yield(.stderr(data, offset: chunk.offset))
+            }
+        }
+        var replayedExit = false
+        for event in earlyProcEvents.removeValue(forKey: procId) ?? [] {
+            if Self.procEventIsCoveredByAttachResult(
+                event,
+                stdoutOffset: result.stdoutOffset,
+                stderrOffset: result.stderrOffset
+            ) {
+                continue
+            }
+            rememberProcOffsetIfNeeded(event, procId: procId)
+            continuation.yield(event)
+            if case .exited = event {
+                replayedExit = true
+            }
+        }
+        if replayedExit {
+            continuation.finish()
+            activeProcAttachments.removeValue(forKey: procId)
+            scheduleIdleShutdownIfPossible()
+        } else if result.running {
+            continuation.yield(.available)
+        } else {
+            continuation.yield(.exited(result.exitCode))
+            continuation.finish()
+            activeProcAttachments.removeValue(forKey: procId)
+            scheduleIdleShutdownIfPossible()
+        }
+        return RemoteHelperProcAttachHandle(
+            procId: procId,
+            attachmentId: attachmentId,
+            stdinOffset: result.stdinOffset,
+            stdoutOffset: result.stdoutOffset,
+            stderrOffset: result.stderrOffset,
+            events: events
+        )
+    }
+
+    private static func procEventIsCoveredByAttachResult(
+        _ event: RemoteHelperProcEvent,
+        stdoutOffset: UInt64,
+        stderrOffset: UInt64
+    ) -> Bool {
+        switch event {
+        case .stdout(_, let offset):
+            return offset <= stdoutOffset
+        case .stderr(_, let offset):
+            return offset <= stderrOffset
+        case .available, .unavailable, .exited:
+            return false
+        }
+    }
+
+    public func detachProc(
+        procId: String,
+        attachmentId: String? = nil,
+        stdoutOffset: UInt64,
+        stderrOffset: UInt64
+    ) {
+        if let attachmentId,
+           activeProcAttachments[procId]?.id != attachmentId {
+            return
+        }
+        rememberProcOffsets(procId: procId, stdout: stdoutOffset, stderr: stderrOffset)
+        earlyProcEvents.removeValue(forKey: procId)
+        detachedProcIds.insert(procId)
+        if let attachment = activeProcAttachments.removeValue(forKey: procId) {
+            attachment.continuation.finish()
+        }
+        scheduleIdleShutdownIfPossible()
+    }
+
+    public func writeProc(procId: String, data: Data, expectedStdinOffset: UInt64? = nil, leaseFence: RemoteSessionFence? = nil) async throws -> UInt64 {
+        let result: RemoteHelperProcWriteResult = try await request(
+            method: "proc/write",
+            params: RemoteHelperProcWriteParams(
+                procId: procId,
+                dataBase64: data.base64EncodedString(),
+                expectedStdinOffset: expectedStdinOffset,
+                leaseFence: leaseFence
+            ),
+            replaySubscriptionsOnStart: false,
+            requiresSessionCoordination: leaseFence != nil
+        )
+        return result.stdinOffset
+    }
+
+    public func killProc(procId: String, leaseFence: RemoteSessionFence? = nil) async throws {
+        let _: RemoteHelperProcKillResult = try await request(
+            method: "proc/kill",
+            params: RemoteHelperProcKillParams(procId: procId, leaseFence: leaseFence),
+            replaySubscriptionsOnStart: false,
+            requiresSessionCoordination: leaseFence != nil
+        )
+    }
+
+    // MARK: Plugin processes (`pproc/*`)
+
+    /// The argv carries user text, so virtual paths are not rewritten in it; `cwd` is already the real path.
+    public func spawnPluginProc(_ params: RemotePluginProcSpawnParams) async throws {
+        let _: RemotePluginProcOK = try await request(method: "pproc/spawn", params: params, stripVirtualPaths: false)
+    }
+
+    /// Replays the journal from `offset` and streams what follows until the exit. The stream is registered before the
+    /// request goes out: the helper's first notification can arrive before this call resumes.
+    public func attachPluginProc(
+        procId: String, lease: String, offset: UInt64
+    ) async throws -> (RemotePluginProcAttachResult, AsyncStream<RemotePluginProcEvent>) {
+        let (stream, continuation) = AsyncStream.makeStream(of: RemotePluginProcEvent.self)
+        pluginProcStreams.removeValue(forKey: procId)?.finish()
+        pluginProcStreams[procId] = continuation
+        do {
+            let result: RemotePluginProcAttachResult = try await request(
+                method: "pproc/attach", params: RemotePluginProcOwnedParams(procId: procId, lease: lease, offset: offset))
+            if result.exit != nil {
+                pluginProcStreams.removeValue(forKey: procId)?.finish()
+            }
+            return (result, stream)
+        } catch {
+            pluginProcStreams.removeValue(forKey: procId)?.finish()
+            throw error
+        }
+    }
+
+    public func renewPluginProc(procId: String, lease: String, leaseMs: Int) async throws {
+        let _: RemotePluginProcOK = try await request(
+            method: "pproc/renew", params: RemotePluginProcOwnedParams(procId: procId, lease: lease, leaseMs: leaseMs))
+    }
+
+    /// Stops the process and everything it started; the exit follows on the attach stream.
+    public func killPluginProc(procId: String, lease: String) async throws {
+        let _: RemotePluginProcOK = try await request(
+            method: "pproc/kill", params: RemotePluginProcOwnedParams(procId: procId, lease: lease))
+    }
+
+    public func releasePluginProc(procId: String, lease: String) async throws {
+        let _: RemotePluginProcOK = try await request(
+            method: "pproc/release", params: RemotePluginProcOwnedParams(procId: procId, lease: lease))
+    }
+
+    public func listProcs() async throws -> RemoteHelperProcListResult {
+        try await request(method: "proc/list", params: RemoteHelperNoParams())
+    }
+
+    public func openACPBroker(_ params: ACPBrokerOpenParams) async throws -> ACPBrokerOpenResult {
+        try await request(method: "acp/open", params: params)
+    }
+
+    public func attachACPBroker(_ params: ACPBrokerAttachParams) async throws -> ACPBrokerAttachResult {
+        try await request(method: "acp/attach", params: params)
+    }
+
+    // The ACP broker is local-only and these frames carry prompts and file
+    // contents, so they are never rewritten.
+    public func sendACPBroker(_ params: ACPBrokerSendParams) async throws -> ACPBrokerSendResult {
+        try await request(method: "acp/send", params: params, replaySubscriptionsOnStart: false, stripVirtualPaths: false)
+    }
+
+    public func notifyACPBroker(_ params: ACPBrokerNotifyParams) async throws -> ACPBrokerSimpleOK {
+        try await request(method: "acp/notify", params: params, replaySubscriptionsOnStart: false, stripVirtualPaths: false)
+    }
+
+    public func respondACPBroker(_ params: ACPBrokerRespondParams) async throws -> ACPBrokerSimpleOK {
+        try await request(method: "acp/respond", params: params, replaySubscriptionsOnStart: false, stripVirtualPaths: false)
+    }
+
+    public func ackACPBroker(_ params: ACPBrokerAckParams) async throws -> ACPBrokerSimpleOK {
+        try await request(method: "acp/ack", params: params, replaySubscriptionsOnStart: false)
+    }
+
+    public func detachACPBroker(_ params: ACPBrokerDetachParams) async throws -> ACPBrokerSimpleOK {
+        try await request(method: "acp/detach", params: params, replaySubscriptionsOnStart: false)
+    }
+
+    public func closeACPBroker(_ params: ACPBrokerCloseParams) async throws -> ACPBrokerSimpleOK {
+        try await request(method: "acp/close", params: params, replaySubscriptionsOnStart: false)
+    }
+
+    public func listACPBroker() async throws -> ACPBrokerListResult {
+        try await request(method: "acp/list", params: RemoteHelperNoParams(), replaySubscriptionsOnStart: false)
+    }
+
+    // MARK: Visual MCP relay (`mcp/*`)
+
+    /// Registers a relay route for a fenced remote session record. The
+    /// returned descriptor is stable for the record; the route keeps
+    /// following helper reconnects (with fresh relay ids) until it is closed.
+    /// Relayed MCP bytes are opaque and never path-rewritten.
+    public func openMCPRoute(fence: RemoteSessionFence) async throws -> (
+        handle: RemoteMCPRouteHandle,
+        descriptor: RemoteMCPRouteDescriptor,
+        events: AsyncStream<RemoteMCPRelayEvent>
+    ) {
+        _ = try ensureStarted()
+        if helperCapabilities?.generation != generation { _ = try await hello() }
+        guard helperCapabilities?.generation == generation,
+              helperCapabilities?.capabilities.visualMCPRelay == RemoteMCPRelayLimits.protocolVersion
+        else { throw RemoteSessionUnavailable.visualRelayRequired }
+        let handle = RemoteMCPRouteHandle()
+        let (events, continuation) = AsyncStream.makeStream(of: RemoteMCPRelayEvent.self)
+        mcpRoutes[handle] = ActiveRemoteMCPRoute(fence: fence, continuation: continuation)
+        do {
+            let descriptor = try await registerMCPRoute(handle)
+            return (handle, descriptor, events)
+        } catch {
+            mcpRoutes.removeValue(forKey: handle)
+            continuation.finish()
+            scheduleIdleShutdownIfPossible()
+            throw error
+        }
+    }
+
+    /// Answers one relayed request on the helper process that delivered it.
+    /// A completion for a closed route, a replaced registration, or an
+    /// earlier helper generation is dropped: it never restarts the helper or
+    /// reaches a successor.
+    public func completeMCPRoute(origin: RemoteMCPRelayOrigin, completion: RemoteMCPRelayCompletion) async throws {
+        guard let route = mcpRoutes[origin.route],
+              let registration = route.registration,
+              registration.relayId == origin.relayId,
+              registration.generation == origin.helperGeneration
+        else { throw RemoteHelperClientError.notRunning }
+        var completion = completion
+        if case .frame(let data) = completion, data.count > RemoteMCPRelayLimits.maxFrameBytes {
+            completion = .failed(code: -32000, message: "Alas visual relay response is too large")
+        }
+        let _: RemoteMCPOKResult = try await request(
+            method: "mcp/complete",
+            params: RemoteMCPCompleteParams(
+                fence: route.fence,
+                relayId: origin.relayId,
+                requestId: origin.requestId,
+                completion: completion
+            ),
+            replaySubscriptionsOnStart: false,
+            stripVirtualPaths: false,
+            requiredGeneration: origin.helperGeneration
+        )
+    }
+
+    /// Forgets the route first, then unregisters it best effort on the
+    /// helper process that registered it. Never starts a helper.
+    public func closeMCPRoute(_ handle: RemoteMCPRouteHandle) async {
+        guard let route = mcpRoutes.removeValue(forKey: handle) else { return }
+        route.continuation.finish()
+        defer { scheduleIdleShutdownIfPossible() }
+        guard let registration = route.registration else { return }
+        let _: RemoteMCPOKResult? = try? await request(
+            method: "mcp/unregister",
+            params: RemoteMCPRegisterParams(fence: route.fence, relayId: registration.relayId),
+            replaySubscriptionsOnStart: false,
+            stripVirtualPaths: false,
+            requiredGeneration: registration.generation
+        )
+    }
+
+    private func registerMCPRoute(_ handle: RemoteMCPRouteHandle) async throws -> RemoteMCPRouteDescriptor {
+        _ = try ensureStarted()
+        guard let fence = mcpRoutes[handle]?.fence else { throw CancellationError() }
+        let relayId = UUID().uuidString.lowercased()
+        let registrationGeneration = generation
+        // The helper can relay a request before its register reply arrives.
+        mcpRoutes[handle]?.registration = (relayId, registrationGeneration)
+        let descriptor: RemoteMCPRouteDescriptor
+        do {
+            descriptor = try await request(
+                method: "mcp/register",
+                params: RemoteMCPRegisterParams(fence: fence, relayId: relayId),
+                replaySubscriptionsOnStart: false,
+                stripVirtualPaths: false,
+                requiredGeneration: registrationGeneration
+            )
+        } catch {
+            if mcpRoutes[handle]?.registration?.relayId == relayId {
+                mcpRoutes[handle]?.registration = nil
+            }
+            throw error
+        }
+        guard mcpRoutes[handle]?.registration?.relayId == relayId, generation == registrationGeneration else {
+            throw RemoteHelperClientError.notRunning
+        }
+        guard descriptor.relayId == relayId, descriptor.recordId == fence.recordId,
+              descriptor.relayProtocolVersion == RemoteMCPRelayLimits.protocolVersion
+        else {
+            mcpRoutes[handle]?.registration = nil
+            throw RemoteHelperClientError.decoding("mcp/register returned a mismatched route")
+        }
+        mcpRoutes[handle]?.continuation.yield(.available)
+        return descriptor
+    }
+
+    private func emitMCPRequest(_ data: Data) {
+        guard data.count <= RemoteMCPRelayLimits.maxEnvelopeBytes,
+              let env = try? JSONDecoder().decode(JSONRPCEnvelope<RemoteMCPRequestParams>.self, from: data),
+              let params = env.params,
+              params.frameBase64.utf8.count <= (RemoteMCPRelayLimits.maxFrameBytes + 2) / 3 * 4,
+              let frame = Data(base64Encoded: params.frameBase64),
+              frame.count <= RemoteMCPRelayLimits.maxFrameBytes,
+              let (handle, route) = mcpRoutes.first(where: {
+                  $0.value.registration?.relayId == params.relayId
+                      && $0.value.registration?.generation == generation
+                      && $0.value.fence.recordId == params.recordId
+              })
+        else { return }
+        route.continuation.yield(.request(
+            origin: RemoteMCPRelayOrigin(
+                route: handle,
+                relayId: params.relayId,
+                helperGeneration: generation,
+                requestId: params.requestId
+            ),
+            frame: frame
+        ))
+    }
+
+    public func reconnectAfterUpgrade() {
+        guard let previousTransport = transport else { return }
+        // Retire this generation before the old transport's asynchronous exit.
+        generation += 1
+        helperCapabilities = nil
+        dispatchTask?.cancel()
+        handleExit(0)
+        previousTransport.terminate()
+    }
+
+    public func shutdown() {
+        idleShutdownTask?.cancel()
+        idleShutdownTask = nil
+        subscriptionReplayTask?.cancel()
+        subscriptionReplayTask = nil
+        subscriptionsNeedReplay = false
+        for subscription in activeSubscriptions.values {
+            subscription.updatesContinuation.yield(.unavailable)
+            subscription.updatesContinuation.finish()
+        }
+        activeSubscriptions.removeAll()
+        for route in mcpRoutes.values {
+            route.continuation.yield(.unavailable)
+            route.continuation.finish()
+        }
+        mcpRoutes.removeAll()
+        for search in activeSearches.values {
+            search.continuation.finish(throwing: RemoteHelperClientError.notRunning)
+        }
+        activeSearches.removeAll()
+        earlySearchEvents.removeAll()
+        for proc in activeProcAttachments.values {
+            proc.continuation.yield(.unavailable)
+            proc.continuation.finish()
+        }
+        activeProcAttachments.removeAll()
+        // The process runs on; its owner attaches again from where it got to.
+        for stream in pluginProcStreams.values {
+            stream.finish()
+        }
+        pluginProcStreams.removeAll()
+        earlyProcEvents.removeAll()
+        detachedProcIds.removeAll()
+        drainPending(with: RemoteHelperClientError.notRunning)
+        dispatchTask?.cancel()
+        dispatchTask = nil
+        transport?.terminate()
+        transport = nil
+    }
+
+    public func lastObservedExitStatus() -> Int32? {
+        lastExitStatus
+    }
+
+    private func request<Params: Encodable, Result: Decodable>(
+        method: String,
+        params: Params,
+        replaySubscriptionsOnStart: Bool = true,
+        stripVirtualPaths: Bool = true,
+        requiresSessionCoordination: Bool = false,
+        requiredGeneration: Int? = nil
+    ) async throws -> Result {
+        let didStart: Bool
+        if let requiredGeneration {
+            // Bound to one helper process: never start or reach a successor.
+            guard transport != nil, generation == requiredGeneration else {
+                throw RemoteHelperClientError.notRunning
+            }
+            didStart = false
+        } else {
+            didStart = try ensureStarted()
+        }
+        if replaySubscriptionsOnStart {
+            if didStart, !activeSubscriptions.isEmpty || !mcpRoutes.isEmpty {
+                subscriptionsNeedReplay = true
+            }
+            if subscriptionsNeedReplay {
+                startSubscriptionReplayIfNeeded()
+            }
+            if let subscriptionReplayTask {
+                try await subscriptionReplayTask.value
+            }
+        }
+        if requiresSessionCoordination {
+            if helperCapabilities?.generation != generation { _ = try await hello() }
+            guard helperCapabilities?.generation == generation,
+                  helperCapabilities?.capabilities.sessionCoordination == 1 else { throw RemoteSessionUnavailable.helperRequired }
+        }
+        idleShutdownTask?.cancel()
+        idleShutdownTask = nil
+        defer {
+            scheduleIdleShutdownIfPossible()
+        }
+
+        nextId += 1
+        let id = JSONRPCID.number(nextId)
+        let body = try Self.encodeRequest(
+            method: method, params: params, id: id, host: host, stripVirtualPaths: stripVirtualPaths
+        )
+
+        let data: Data
+        do {
+            data = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
+                pending[id] = cont
+                do {
+                    guard let transport else {
+                        pending.removeValue(forKey: id)
+                        cont.resume(throwing: RemoteHelperClientError.notRunning)
+                        return
+                    }
+                    try transport.send(body)
+                } catch {
+                    let stillPending = pending.removeValue(forKey: id) != nil
+                    if stillPending { cont.resume(throwing: error) }
+                }
+            }
+        } catch {
+            if Self.responseErrorIndicatesLiveHost(error) {
+                await reportHostSuccess()
+            }
+            throw error
+        }
+        await reportHostSuccess()
+        do {
+            return try JSONDecoder().decode(Result.self, from: data)
+        } catch {
+            throw RemoteHelperClientError.decoding(error.localizedDescription)
+        }
+    }
+
+    private func ensureStarted() throws -> Bool {
+        if transport != nil {
+            return false
+        }
+        let nextTransport = transportFactory()
+        try nextTransport.start()
+        generation += 1
+        let transportGeneration = generation
+        transport = nextTransport
+        lastExitStatus = nil
+        dispatchTask = Task { [weak self] in
+            for await event in nextTransport.incoming {
+                await self?.handle(event, generation: transportGeneration)
+            }
+        }
+        return true
+    }
+
+    private func startSubscriptionReplayIfNeeded() {
+        guard subscriptionReplayTask == nil, !activeSubscriptions.isEmpty || !mcpRoutes.isEmpty else { return }
+        subscriptionReplayTask = Task { [weak self] in
+            guard let self else { return }
+            try await self.replayActiveSubscriptions()
+        }
+    }
+
+    private func makeClientSubscriptionId(avoiding helperSubscriptionId: String) -> String {
+        while true {
+            nextClientSubscriptionId += 1
+            let candidate = "client-\(nextClientSubscriptionId)"
+            guard candidate != helperSubscriptionId,
+                  activeSubscriptions[candidate] == nil,
+                  !activeSubscriptions.values.contains(where: { $0.helperSubscriptionId == candidate })
+            else {
+                continue
+            }
+            return candidate
+        }
+    }
+
+    private func replayActiveSubscriptions() async throws {
+        defer {
+            subscriptionReplayTask = nil
+        }
+        var restartCount = 0
+        while true {
+            _ = try ensureStarted()
+            let replayGeneration = generation
+            let subscriptions = activeSubscriptions
+            let routes = mcpRoutes.keys.filter { mcpRoutes[$0]?.registration == nil }
+            guard !subscriptions.isEmpty || !routes.isEmpty else {
+                subscriptionsNeedReplay = false
+                return
+            }
+
+            var shouldRestartReplay = false
+            for (clientSubscriptionId, subscription) in subscriptions {
+                guard subscription.helperGeneration != replayGeneration else {
+                    continue
+                }
+                guard transport != nil, generation == replayGeneration else {
+                    shouldRestartReplay = true
+                    break
+                }
+
+                let result: RemoteHelperWatchSubscribeResult
+                do {
+                    result = try await request(
+                        method: "watch/subscribe",
+                        params: subscription.params,
+                        replaySubscriptionsOnStart: false
+                    )
+                } catch RemoteHelperClientError.notRunning where transport == nil || generation != replayGeneration {
+                    shouldRestartReplay = true
+                    break
+                }
+
+                guard transport != nil, generation == replayGeneration else {
+                    shouldRestartReplay = true
+                    break
+                }
+                guard activeSubscriptions[clientSubscriptionId]?.params == subscription.params else {
+                    let _: RemoteHelperWatchUnsubscribeResult? = try? await request(
+                        method: "watch/unsubscribe",
+                        params: RemoteHelperWatchUnsubscribeParams(subscriptionId: result.subscriptionId),
+                        replaySubscriptionsOnStart: false
+                    )
+                    continue
+                }
+                activeSubscriptions[clientSubscriptionId] = ActiveRemoteHelperSubscription(
+                    params: subscription.params,
+                    helperSubscriptionId: result.subscriptionId,
+                    helperGeneration: replayGeneration,
+                    updates: subscription.updates,
+                    updatesContinuation: subscription.updatesContinuation
+                )
+                subscription.updatesContinuation.yield(.available)
+            }
+            // Only registrations are replayed, never relayed MCP frames. A
+            // route whose fence went stale stays unavailable instead of
+            // failing the replay that unrelated requests wait on.
+            for handle in routes where !shouldRestartReplay {
+                guard transport != nil, generation == replayGeneration else {
+                    shouldRestartReplay = true
+                    break
+                }
+                do {
+                    _ = try await registerMCPRoute(handle)
+                } catch where transport == nil || generation != replayGeneration {
+                    shouldRestartReplay = true
+                } catch {
+                    continue
+                }
+            }
+
+            guard shouldRestartReplay else {
+                subscriptionsNeedReplay = false
+                return
+            }
+            restartCount += 1
+            guard restartCount <= subscriptions.count + routes.count + 1 else {
+                throw RemoteHelperClientError.notRunning
+            }
+        }
+    }
+
+    private func handle(_ event: JSONRPCStdioTransport.Incoming, generation eventGeneration: Int) {
+        guard eventGeneration == generation else { return }
+        switch event {
+        case .frame(let data, _):
+            handleFrame(data)
+        case .stderr:
+            break
+        case .exited(let status):
+            handleExit(status)
+        }
+    }
+
+    private struct AnyEnvelopeHead: Decodable {
+        let id: JSONRPCID?
+        let method: String?
+
+        public init(id: JSONRPCID?, method: String?) {
+            self.id = id
+            self.method = method
+        }
+    }
+
+    private func handleFrame(_ data: Data) {
+        guard let head = try? JSONDecoder().decode(AnyEnvelopeHead.self, from: data) else {
+            return
+        }
+
+        if let id = head.id, head.method == nil {
+            let cont = pending.removeValue(forKey: id)
+            guard let cont else { return }
+            if let env = try? JSONDecoder().decode(RemoteHelperJSONRPCErrorEnvelope.self, from: data),
+               let error = env.error {
+                cont.resume(throwing: RemoteHelperClientError.jsonrpc(error))
+                return
+            }
+            guard let result = Self.extractResultBytes(from: data) else {
+                cont.resume(throwing: RemoteHelperClientError.decoding("no result/error in response"))
+                return
+            }
+            cont.resume(returning: result)
+            return
+        }
+
+        if head.method == "search/event",
+           let env = try? JSONDecoder().decode(JSONRPCEnvelope<RemoteHelperSearchEventParams>.self, from: data),
+           let event = env.params {
+            emitSearchEvent(.line(event.line), searchId: event.searchId)
+            return
+        }
+        if head.method == "search/complete",
+           let env = try? JSONDecoder().decode(JSONRPCEnvelope<RemoteHelperSearchCompleteParams>.self, from: data),
+           let event = env.params {
+            emitSearchEvent(
+                .complete(exitCode: event.exitCode, stderr: event.stderr, cancelled: event.cancelled),
+                searchId: event.searchId
+            )
+            return
+        }
+        if head.method == "pproc/output",
+           let env = try? JSONDecoder().decode(JSONRPCEnvelope<RemotePluginProcChunk>.self, from: data),
+           let chunk = env.params, let procId = chunk.procId {
+            pluginProcStreams[procId]?.yield(.output(chunk))
+            return
+        }
+        if head.method == "pproc/exit",
+           let env = try? JSONDecoder().decode(JSONRPCEnvelope<RemotePluginProcExit>.self, from: data),
+           let exit = env.params {
+            if let stream = pluginProcStreams.removeValue(forKey: exit.procId) {
+                stream.yield(.exit(exit))
+                stream.finish()
+            }
+            scheduleIdleShutdownIfPossible()
+            return
+        }
+        if head.method == "mcp/request" {
+            emitMCPRequest(data)
+            return
+        }
+        if head.method == "proc/output",
+           let env = try? JSONDecoder().decode(JSONRPCEnvelope<RemoteHelperProcOutputParams>.self, from: data),
+           let event = env.params {
+            emitProcOutput(event)
+            return
+        }
+        if head.method == "proc/exit",
+           let env = try? JSONDecoder().decode(JSONRPCEnvelope<RemoteHelperProcExitParams>.self, from: data),
+           let event = env.params {
+            emitProcEvent(.exited(event.exitCode), procId: event.procId)
+            return
+        }
+
+        guard head.method == "watch/event",
+              let env = try? JSONDecoder().decode(JSONRPCEnvelope<RemoteHelperWatchEvent>.self, from: data),
+              let rawEvent = env.params
+        else {
+            return
+        }
+        let event = rawEvent.virtualized(host: host)
+        guard let (clientSubscriptionId, subscription) = activeSubscriptions.first(where: {
+            $0.value.helperGeneration == generation
+                && $0.value.helperSubscriptionId == event.subscriptionId
+        }) else {
+            watchEventsCont.yield(event)
+            return
+        }
+        let stableEvent = RemoteHelperWatchEvent(
+            subscriptionId: clientSubscriptionId,
+            root: event.root,
+            kind: event.kind,
+            paths: event.paths
+        )
+        watchEventsCont.yield(stableEvent)
+        subscription.updatesContinuation.yield(.event(stableEvent))
+    }
+
+    private func emitSearchEvent(_ event: RemoteHelperSearchEvent, searchId: String) {
+        guard let search = activeSearches[searchId] else {
+            earlySearchEvents[searchId, default: []].append(event)
+            return
+        }
+        search.continuation.yield(event)
+        if case .complete = event {
+            search.continuation.finish()
+            activeSearches.removeValue(forKey: searchId)
+            scheduleIdleShutdownIfPossible()
+        }
+    }
+
+    private func emitProcOutput(_ output: RemoteHelperProcOutputParams) {
+        guard let data = Data(base64Encoded: output.dataBase64) else { return }
+        switch output.stream {
+        case "stdout":
+            emitProcEvent(.stdout(data, offset: output.offset), procId: output.procId)
+        case "stderr":
+            emitProcEvent(.stderr(data, offset: output.offset), procId: output.procId)
+        default:
+            break
+        }
+    }
+
+    private func emitProcEvent(_ event: RemoteHelperProcEvent, procId: String) {
+        guard let attachment = activeProcAttachments[procId] else {
+            if detachedProcIds.contains(procId) {
+                return
+            }
+            rememberProcOffsetIfNeeded(event, procId: procId)
+            earlyProcEvents[procId, default: []].append(event)
+            return
+        }
+        rememberProcOffsetIfNeeded(event, procId: procId)
+        attachment.continuation.yield(event)
+        if case .exited = event {
+            attachment.continuation.finish()
+            activeProcAttachments.removeValue(forKey: procId)
+            scheduleIdleShutdownIfPossible()
+        }
+    }
+
+    private func handleExit(_ status: Int32) {
+        lastExitStatus = status
+        transport = nil
+        dispatchTask = nil
+        subscriptionsNeedReplay = !activeSubscriptions.isEmpty || !mcpRoutes.isEmpty
+        idleShutdownTask?.cancel()
+        idleShutdownTask = nil
+        drainPending(with: RemoteHelperClientError.notRunning)
+        for subscription in activeSubscriptions.values {
+            subscription.updatesContinuation.yield(.unavailable)
+        }
+        // The helper's pending exchanges died with it; only the registration
+        // is replayed, under a fresh relay id.
+        for handle in mcpRoutes.keys {
+            mcpRoutes[handle]?.registration = nil
+            mcpRoutes[handle]?.continuation.yield(.unavailable)
+        }
+        for search in activeSearches.values {
+            search.continuation.finish(throwing: RemoteHelperClientError.notRunning)
+        }
+        activeSearches.removeAll()
+        earlySearchEvents.removeAll()
+        for proc in activeProcAttachments.values {
+            proc.continuation.yield(.unavailable)
+        }
+        activeProcAttachments.removeAll()
+        // The process runs on; its owner attaches again from where it got to.
+        for stream in pluginProcStreams.values {
+            stream.finish()
+        }
+        pluginProcStreams.removeAll()
+        earlyProcEvents.removeAll()
+        detachedProcIds.removeAll()
+        if RemoteExec.isConnectionFailure(exitCode: status) {
+            Task { @MainActor [host] in
+                RemoteHostStatusStore.shared.reportConnectionFailure(host: host)
+            }
+        }
+    }
+
+    private func rememberProcOffsetIfNeeded(_ event: RemoteHelperProcEvent, procId: String) {
+        switch event {
+        case .stdout(_, let offset):
+            rememberProcOffset(procId: procId, stream: "stdout", offset: offset)
+        case .stderr(_, let offset):
+            rememberProcOffset(procId: procId, stream: "stderr", offset: offset)
+        case .available, .unavailable, .exited:
+            break
+        }
+    }
+
+    private func rememberProcOffset(procId: String, stream: String, offset: UInt64) {
+        var offsets = procOffsets[procId] ?? RemoteHelperProcOffsets(stdout: 0, stderr: 0)
+        switch stream {
+        case "stdout":
+            offsets.stdout = offset
+        case "stderr":
+            offsets.stderr = offset
+        default:
+            return
+        }
+        procOffsets[procId] = offsets
+    }
+
+    private func rememberProcOffsets(procId: String, stdout: UInt64, stderr: UInt64) {
+        var offsets = procOffsets[procId] ?? RemoteHelperProcOffsets(stdout: 0, stderr: 0)
+        offsets.stdout = stdout
+        offsets.stderr = stderr
+        procOffsets[procId] = offsets
+    }
+
+    private func drainPending(with error: Error) {
+        let snapshot = pending
+        pending.removeAll()
+        for (_, cont) in snapshot {
+            cont.resume(throwing: error)
+        }
+    }
+
+    private func scheduleIdleShutdownIfPossible() {
+        guard idleShutdownNanoseconds > 0,
+              pending.isEmpty,
+              activeSubscriptions.isEmpty,
+              activeSearches.isEmpty,
+              activeProcAttachments.isEmpty,
+              pluginProcStreams.isEmpty,
+              mcpRoutes.isEmpty,
+              transport != nil else { return }
+        idleShutdownTask?.cancel()
+        let delay = idleShutdownNanoseconds
+        idleShutdownTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: delay)
+            await self?.shutdownIfIdle()
+        }
+    }
+
+    private func shutdownIfIdle() {
+        guard pending.isEmpty,
+              activeSubscriptions.isEmpty,
+              activeSearches.isEmpty,
+              activeProcAttachments.isEmpty,
+              pluginProcStreams.isEmpty,
+              mcpRoutes.isEmpty else { return }
+        shutdown()
+    }
+
+    @MainActor
+    private func reportHostSuccess() {
+        RemoteHostStatusStore.shared.reportSuccess(host: host)
+    }
+
+    /// Strips the virtual `/.alas-remote/<host>` prefix from every path in the
+    /// serialized request; the helper only knows real remote paths. Requests
+    /// that carry user text or file contents pass `stripVirtualPaths: false`
+    /// and make their path fields real themselves.
+    public static func encodeRequest<Params: Encodable>(
+        method: String,
+        params: Params,
+        id: JSONRPCID,
+        host: String,
+        stripVirtualPaths: Bool = true
+    ) throws -> Data {
+        var dict: [String: Any] = ["jsonrpc": "2.0", "id": id.asJSON, "method": method]
+        let paramsData = try JSONEncoder().encode(RemoteHelperAnyEncodableBox(params))
+        dict["params"] = try JSONSerialization.jsonObject(with: paramsData)
+        let data = try JSONSerialization.data(withJSONObject: dict, options: [.withoutEscapingSlashes])
+        guard stripVirtualPaths else { return data }
+        return Data(RemotePath.stripping(host: host, in: String(decoding: data, as: UTF8.self)).utf8)
+    }
+
+    private static func responseErrorIndicatesLiveHost(_ error: Error) -> Bool {
+        guard let error = error as? RemoteHelperClientError else { return false }
+        switch error {
+        case .jsonrpc, .decoding:
+            return true
+        case .notRunning, .unavailable:
+            return false
+        }
+    }
+
+    private static func extractResultBytes(from envelope: Data) -> Data? {
+        guard let obj = try? JSONSerialization.jsonObject(with: envelope) as? [String: Any],
+              let result = obj["result"]
+        else { return nil }
+        return try? JSONSerialization.data(withJSONObject: result, options: [.fragmentsAllowed])
+    }
+}
+
+public actor RemoteHelperClientPool {
+    public static let shared = RemoteHelperClientPool()
+
+    private var clients: [String: RemoteHelperClient] = [:]
+
+    public func client(for host: String) -> RemoteHelperClient {
+        if let client = clients[host] {
+            return client
+        }
+        let client = RemoteHelperClient(host: host)
+        clients[host] = client
+        return client
+    }
+
+    public func reconnectAfterUpgrade(host: String) async {
+        await clients[host]?.reconnectAfterUpgrade()
+    }
+
+    public func shutdown(host: String) {
+        guard let client = clients.removeValue(forKey: host) else { return }
+        Task {
+            await client.shutdown()
+        }
+    }
+
+    public func shutdownAll() {
+        let snapshot = clients
+        clients.removeAll()
+        for (_, client) in snapshot {
+            Task {
+                await client.shutdown()
+            }
+        }
+    }
+
+    public init() {}
+}
+
+private struct RemoteHelperNoParams: Encodable {
+    public init() {
+    }}
+
+private struct RemoteHelperJSONRPCErrorEnvelope: Decodable {
+    let error: JSONRPCError?
+
+    public init(error: JSONRPCError?) {
+        self.error = error
+    }
+}
+
+private struct RemoteHelperAnyEncodableBox: Encodable {
+    let value: Encodable
+    init(_ value: Encodable) { self.value = value }
+    func encode(to encoder: Encoder) throws { try value.encode(to: encoder) }
+}
+
+private extension JSONRPCID {
+    var asJSON: Any {
+        switch self {
+        case .number(let value): return value
+        case .string(let value): return value
+        }
+    }
+}

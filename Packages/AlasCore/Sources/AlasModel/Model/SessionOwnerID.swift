@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 /// Identifies the durable owner of shared session state.
 ///

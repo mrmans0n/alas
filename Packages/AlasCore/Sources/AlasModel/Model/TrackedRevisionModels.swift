@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 public struct TrackedRevision: Codable, Equatable, Hashable, Sendable {
     public let target: TrackedRevisionTarget

@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 /// Mutable, value-typed recents store used by the repo selector. Lives on
 /// `AppConfig` as two plain fields; this struct is the in-memory shape +

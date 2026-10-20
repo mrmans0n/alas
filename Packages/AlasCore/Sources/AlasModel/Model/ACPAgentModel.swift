@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 public struct ACPAgentModel: Codable, Equatable, Hashable, Sendable, Identifiable {
     public let id: String

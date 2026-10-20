@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 public struct GeneratedMessage: Equatable, Sendable {
     public let subject: String

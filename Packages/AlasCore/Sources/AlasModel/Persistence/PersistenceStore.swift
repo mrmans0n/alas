@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 public protocol PersistenceStoreProtocol {
     func write<T: Encodable>(_ value: T, to url: URL) throws

@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 public struct InlayHintSettings: Codable, Equatable, Sendable {
     public var enabled = true

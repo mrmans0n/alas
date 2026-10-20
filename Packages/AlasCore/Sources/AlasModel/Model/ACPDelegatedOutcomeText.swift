@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 /// Copy for the messages Alas injects into a parent session about one of its
 /// delegated children. Conventions: identify the sender, state the fact, do

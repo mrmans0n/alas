@@ -1,5 +1,6 @@
 import Foundation
 import os
+import AlasFoundation
 
 /// Outcome of reading a worktree's `.alas/config.json`. A malformed file stays
 /// distinct from a missing one so callers can tell "this repo has no config"

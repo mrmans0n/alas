@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 /// Per-project stacked-diffs mode.
 /// - `auto` (default): enabled when the repo's main worktree has

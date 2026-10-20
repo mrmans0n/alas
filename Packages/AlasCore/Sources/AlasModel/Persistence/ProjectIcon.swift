@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 public struct ProjectIcon: Codable, Equatable, Sendable {
     public enum Mode: String, Codable, Equatable, Hashable, CaseIterable, Sendable {

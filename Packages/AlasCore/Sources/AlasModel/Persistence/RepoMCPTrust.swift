@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 /// Per-user decision about an MCP server a repo wants to attach. Trust is
 /// keyed by a hash of the server's canonical config, so editing the server

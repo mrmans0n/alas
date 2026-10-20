@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 extension AppConfig.Code {
     public mutating func saveLanguageServerConfig(

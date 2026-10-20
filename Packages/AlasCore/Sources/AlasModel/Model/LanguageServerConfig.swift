@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 public struct LanguageServerConfig: Codable, Equatable, Identifiable, Sendable {
     public var id: String { language }

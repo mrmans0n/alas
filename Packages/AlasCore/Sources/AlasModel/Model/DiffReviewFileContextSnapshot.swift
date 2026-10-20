@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 public struct DiffReviewFileContextSnapshot: Equatable, Sendable {
     public let old: DiffReviewFileContextLines

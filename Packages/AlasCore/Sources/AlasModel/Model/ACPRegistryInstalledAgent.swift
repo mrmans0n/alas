@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 /// A registry agent the user installed, persisted in `AppConfig.agents.registry`.
 /// Registry agents are ACP-only: they join the launch catalog under

@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 /// The one process that may write a data directory: an exclusive `flock` on
 /// `host.lock` in it, held for as long as this value lives. The kernel drops

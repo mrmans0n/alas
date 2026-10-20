@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import AlasFoundation
 
 /// Cross-process liveness check. `kill(pid, 0)` sends no signal but
 /// performs the existence/permission check: 0 = alive, ESRCH = gone,

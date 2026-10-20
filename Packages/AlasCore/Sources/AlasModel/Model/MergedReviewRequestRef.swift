@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 /// A minimal reference to a merged review request. Deliberately far smaller
 /// than `ReviewRequest`: worktree cleanup only needs to answer "was this head

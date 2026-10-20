@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 public struct IssueAttachment: Codable, Equatable, Sendable {
     public let canonicalURL: URL

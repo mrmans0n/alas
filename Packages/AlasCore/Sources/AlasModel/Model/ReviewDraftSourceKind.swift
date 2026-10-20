@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 public enum ReviewDraftSourceKind: String, Codable, Equatable, Hashable, Sendable {
     case localChanges = "local-changes"

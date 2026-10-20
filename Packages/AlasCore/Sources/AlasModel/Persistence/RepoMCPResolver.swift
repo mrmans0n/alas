@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 /// Merges repo-defined MCP servers into the effective per-session list.
 /// App-level servers always win by name; repo servers attach only when

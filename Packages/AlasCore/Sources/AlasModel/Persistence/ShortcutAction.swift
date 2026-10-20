@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 public enum ShortcutGroup: String, CaseIterable, Sendable {
     case global, codeEditor, terminal, commit

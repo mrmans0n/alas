@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 public enum ExecutionLocation: Codable, Equatable, Sendable {
     case local

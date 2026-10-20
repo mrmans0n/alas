@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import AlasFoundation
 
 public struct ReviewSessionID: Codable, Equatable, Hashable, RawRepresentable, Sendable {
     public let rawValue: String

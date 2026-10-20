@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 /// One entry of the official ACP agent registry
 /// (`https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json`).

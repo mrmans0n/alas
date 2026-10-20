@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 public struct ReviewDraftSessionID: Codable, Equatable, Hashable, Sendable, RawRepresentable {
     public let rawValue: String

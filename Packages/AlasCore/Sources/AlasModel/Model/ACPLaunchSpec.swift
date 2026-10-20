@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 /// How an adapter receives MCP servers. Most honor the `mcpServers`
 /// payload in ACP `session/new`; `.external` adapters ignore it and need

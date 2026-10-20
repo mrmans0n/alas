@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 public struct SidebarChromeOverride: Codable, Equatable, Sendable {
     public var backgroundOpacity: Double  // 0...1

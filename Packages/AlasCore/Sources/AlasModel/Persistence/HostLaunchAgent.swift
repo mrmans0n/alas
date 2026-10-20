@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 /// The launchd agent that keeps `alas-host` serving a profile while the user
 /// is logged in: started at login, waiting for the data directory while the

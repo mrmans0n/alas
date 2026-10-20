@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 public struct ACPTranscriptEntry: Codable, Equatable, Sendable {
     public let index: Int

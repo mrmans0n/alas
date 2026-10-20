@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 public struct SpacesFile: Codable, Equatable, Sendable {
     public var version: Int = 1

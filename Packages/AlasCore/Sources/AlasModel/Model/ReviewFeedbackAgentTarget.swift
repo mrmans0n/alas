@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 public enum ReviewFeedbackAgentTarget: Codable, Equatable, Hashable, Identifiable, Sendable {
     case newChat(agentID: String, title: String)

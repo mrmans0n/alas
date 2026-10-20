@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 /// One CLI coding agent Alas knows about. Built-ins are seeded from
 /// `AgentBuiltins.catalog`; customs are user-defined entries persisted in

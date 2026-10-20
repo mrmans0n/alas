@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 /// Repo-local, team-shared Alas configuration decoded (read-only) from
 /// `.alas/config.json`. See docs/plans/2026-09-17-repo-local-config-design.md.

@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 /// The explicit inheritance operation used by Workspace configuration. A
 /// Workspace never reinterprets a frozen checkout snapshot from live settings.

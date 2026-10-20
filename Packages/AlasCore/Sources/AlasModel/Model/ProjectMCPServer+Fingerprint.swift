@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import AlasFoundation
 
 extension ProjectMCPServer {
     /// A digest of the servers' definitions, which changes when a server is

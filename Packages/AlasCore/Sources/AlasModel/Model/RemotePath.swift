@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 /// In-app identity for remote project paths. A remote path is carried as
 /// `/.alas-remote/<host><realPath>` so ids and path-keyed stores stay unique

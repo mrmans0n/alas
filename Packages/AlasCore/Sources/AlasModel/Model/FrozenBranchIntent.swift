@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 public enum FrozenBranchIntent: Equatable, Sendable {
     case create(atCommit: String)

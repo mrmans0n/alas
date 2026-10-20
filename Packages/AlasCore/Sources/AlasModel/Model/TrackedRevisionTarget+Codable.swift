@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 extension TrackedRevisionTarget: Codable {
     private enum CodingKeys: String, CodingKey {

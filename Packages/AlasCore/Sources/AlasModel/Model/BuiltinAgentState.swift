@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 /// Persisted per-built-in agent state. Built-in static knowledge
 /// (display name, args, flags, logo) lives in `AgentBuiltins.catalog`;

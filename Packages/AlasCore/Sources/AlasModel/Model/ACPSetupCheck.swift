@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 public enum ACPSetupCheck: Equatable, Sendable {
     case binaryOnPath(name: String)

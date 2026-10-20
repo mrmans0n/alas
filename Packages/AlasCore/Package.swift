@@ -20,11 +20,13 @@ let package = Package(
             linkerSettings: [.linkedLibrary("sqlite3")]
         ),
         .target(name: "AlasModel", dependencies: ["AlasFoundation"]),
+        .target(name: "AlasPlatform", dependencies: ["AlasFoundation", "AlasModel"]),
         .target(
             name: "AlasCore",
             dependencies: [
                 "AlasFoundation",
                 "AlasModel",
+                "AlasPlatform",
                 .product(name: "SwiftTreeSitter", package: "swift-tree-sitter"),
             ]
         ),

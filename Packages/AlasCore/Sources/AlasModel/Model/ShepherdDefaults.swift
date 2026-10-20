@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 /// Global defaults for newly bound PRs (`AppConfig.Changes.shepherd`).
 public struct ShepherdDefaults: Codable, Equatable, Sendable {

@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 public enum WorktreeStatus: String, Codable, Sendable {
     case clean, dirty, running

@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 /// View mode for a markdown editor tab. Persisted in `EditorTabState`
 /// and in `AppConfig.markdown.defaultViewMode`. Raw values are part of

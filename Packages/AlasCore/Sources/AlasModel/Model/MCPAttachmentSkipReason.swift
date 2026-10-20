@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import AlasFoundation
 
 public enum MCPAttachmentSkipReason: Equatable, Sendable {
     case unsupportedTransport

@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 /// How Alas shows a turn it injected (review feedback, Ship, PR shepherd):
 /// a structured card in place of the instruction text. Presentation only;

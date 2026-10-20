@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 public enum SidebarMaterialChoice: String, CaseIterable, Codable, Equatable, Sendable {
     case none

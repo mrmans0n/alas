@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 public enum DiffLayoutMode: String, Codable, Equatable, CaseIterable, Sendable {
     case split

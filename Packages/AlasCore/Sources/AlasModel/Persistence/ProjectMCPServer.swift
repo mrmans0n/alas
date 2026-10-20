@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 public struct MCPKeyValue: Codable, Equatable, Identifiable, Sendable {
     public let id: String

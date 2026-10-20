@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 /// Per-project shepherd rules stored in `ProjectConfig.shepherd`.
 public struct ProjectShepherdSettings: Codable, Equatable, Sendable {

@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 public enum SpaceMemberReference: Codable, Equatable, Sendable {
     case project(String)

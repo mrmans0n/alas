@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import AlasFoundation
 
 /// The card's last dock and the size chosen for each dock, kept app-wide.
 public struct ACPSideQuestionDockPreferences: Codable, Equatable, Sendable {

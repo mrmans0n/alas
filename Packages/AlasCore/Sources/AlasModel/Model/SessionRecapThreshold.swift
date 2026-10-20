@@ -1,4 +1,5 @@
 import Foundation
+import AlasFoundation
 
 /// How long a user must be away from a session before an automatic recap is offered.
 public enum SessionRecapThreshold: String, Codable, CaseIterable, Sendable {
