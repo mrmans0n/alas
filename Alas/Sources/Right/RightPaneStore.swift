@@ -13,7 +13,7 @@ final class RightPaneStore {
     private var states: [String: RightPaneState] = [:]
     @ObservationIgnored
     private var pendingBulkResolveNotifications: [
-        (worktree: Worktree, report: BulkConflictResolveReport)
+        (worktreeID: String, worktreeTitle: String, report: BulkConflictResolveReport)
     ] = []
 
     /// Id of the state currently being surfaced in the UI. Only that state
@@ -112,15 +112,17 @@ final class RightPaneStore {
     private let logger = Logger(subsystem: "io.nlopez.alas", category: "right-pane-store")
     private func deliverBulkResolveNotification(
         _ report: BulkConflictResolveReport,
-        from worktree: Worktree
+        sourceWorktreeID: String,
+        sourceTitle: String
     ) {
         guard let appState, let bannerWorktreeID = appState.inAppBannerWorktreeID else {
-            pendingBulkResolveNotifications.append((worktree, report))
+            pendingBulkResolveNotifications.append((sourceWorktreeID, sourceTitle, report))
             return
         }
         postBulkResolveNotification(
             report,
-            from: worktree,
+            sourceWorktreeID: sourceWorktreeID,
+            sourceTitle: sourceTitle,
             to: bannerWorktreeID,
             store: appState.inAppNotifications
         )
@@ -133,7 +135,8 @@ final class RightPaneStore {
         for pending in pendingBulkResolveNotifications {
             postBulkResolveNotification(
                 pending.report,
-                from: pending.worktree,
+                sourceWorktreeID: pending.worktreeID,
+                sourceTitle: pending.worktreeTitle,
                 to: bannerWorktreeID,
                 store: appState.inAppNotifications
             )
@@ -143,7 +146,8 @@ final class RightPaneStore {
 
     private func postBulkResolveNotification(
         _ report: BulkConflictResolveReport,
-        from worktree: Worktree,
+        sourceWorktreeID: String,
+        sourceTitle: String,
         to bannerWorktreeID: String,
         store: InAppNotificationStore
     ) {
@@ -155,9 +159,9 @@ final class RightPaneStore {
         } else {
             severity = .information
         }
-        let message = bannerWorktreeID == worktree.id
+        let message = bannerWorktreeID == sourceWorktreeID
             ? report.summary
-            : "\(worktree.title): \(report.summary)"
+            : "\(sourceTitle): \(report.summary)"
         store.post(
             message,
             severity: severity,
@@ -256,8 +260,14 @@ final class RightPaneStore {
             new.lastEffectiveBaseBranch = rawDefault
             new.comparisonMode = comparisonMode
             new.isAwaitingBaseBranchProbe = shouldDeferInitialRefresh
-            new.bulkResolveDidFinish = { [weak self] report in
-                self?.deliverBulkResolveNotification(report, from: worktree)
+            new.bulkResolveDidFinish = { [weak self, weak new] report in
+                guard let new else { return }
+                let sourceTitle = new.currentBranch.isEmpty ? worktree.title : new.currentBranch
+                self?.deliverBulkResolveNotification(
+                    report,
+                    sourceWorktreeID: id,
+                    sourceTitle: sourceTitle
+                )
             }
             new.closeDiffTabs = { [weak self] paths in
                 guard let app = self?.appState else { return }

@@ -313,6 +313,7 @@ struct RightPaneStoreBaseBranchTests {
             comparisonMode: .manual,
             activates: false
         )
+        sourceState.currentBranch = "feature/current"
         appState.isPreviewingForestScenes = true
 
         sourceState.bulkResolveDidFinish?(
@@ -337,7 +338,7 @@ struct RightPaneStoreBaseBranchTests {
         let notification = try #require(
             appState.inAppNotifications.notifications(in: visible.id).first
         )
-        #expect(notification.message == "feature/conflicts: All conflicts resolved.")
+        #expect(notification.message == "feature/current: All conflicts resolved.")
         #expect(notification.severity == .success)
         #expect(notification.detail == "Resolved App.swift by preserving both changes.")
         #expect(appState.inAppNotifications.notifications(in: source.id).isEmpty)
