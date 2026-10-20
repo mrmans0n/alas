@@ -85,6 +85,11 @@ done
 echo 'public struct LowThing {}' > "${sources}/Helpers/Low.swift"
 rm "${sources}/Core/Base+Host.swift" "${sources}/Helpers/Base.swift"
 
+# A comment naming a higher module's type is not a use.
+printf '/// See `HostThing`.\npublic struct LowThing {} // like HostThing\n/* HostThing */\n' > "${sources}/Helpers/Low.swift"
+python3 -I "${check}" --sources "${sources}" --allowlist "${allowlist}" > /dev/null
+echo 'public struct LowThing {}' > "${sources}/Helpers/Low.swift"
+
 # A folder without a module fails.
 : > "${allowlist}"
 mkdir -p "${sources}/Mystery"
