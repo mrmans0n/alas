@@ -46,6 +46,19 @@ public enum AlasMCPTransport: String, Codable, Equatable, Sendable {
     case http
 }
 
+/// A microphone chosen for dictation. Kept by CoreAudio UID, which stays the
+/// same when the device is unplugged and reconnected; the name is kept so the
+/// choice can still be shown while the device is away.
+public struct DictationMicrophone: Codable, Equatable, Hashable, Sendable {
+    public var uid: String
+    public var name: String
+
+    public init(uid: String, name: String) {
+        self.uid = uid
+        self.name = name
+    }
+}
+
 public struct AppConfig: Codable, Equatable, Sendable {
     public var themeId: String
     public var accent: String
@@ -402,13 +415,16 @@ public struct AppConfig: Codable, Equatable, Sendable {
         /// (e.g. "en_US"). Empty (the default) means detect automatically
         /// from the app locale and the user's preferred languages.
         public var acpDictationLocale: String
+        /// Microphone composer dictation records from. Nil (the default)
+        /// follows the system's default input device.
+        public var acpDictationMicrophone: DictationMicrophone?
 
         public enum CodingKeys: String, CodingKey, Sendable {
             case notifyOnFinish, notifyOnAwaiting, acpDelegatedBlockerEscalationSeconds,
                  dismissedHookInstallNudges,
                  confirmCloseChatTabs, acpSendOnEnter, acpAutoRunByDefault, acpLocalTitlesEnabled, acpShowMinimap,
                  acpAutoResumeAfterUsageLimit, acpContinueInterruptedSessions, acpCollapseFinishedToolCalls,
-                 exposeAlasMCP, alasMCPTransport, acpDictationLocale
+                 exposeAlasMCP, alasMCPTransport, acpDictationLocale, acpDictationMicrophone
         }
 
         public init(notifyOnFinish: Bool = true, notifyOnAwaiting: Bool = true,
@@ -424,7 +440,8 @@ public struct AppConfig: Codable, Equatable, Sendable {
              acpCollapseFinishedToolCalls: Bool = true,
              exposeAlasMCP: Bool = true,
              alasMCPTransport: AlasMCPTransport = .stdio,
-             acpDictationLocale: String = "")
+             acpDictationLocale: String = "",
+             acpDictationMicrophone: DictationMicrophone? = nil)
         {
             self.notifyOnFinish = notifyOnFinish
             self.notifyOnAwaiting = notifyOnAwaiting
@@ -441,6 +458,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
             self.exposeAlasMCP = exposeAlasMCP
             self.alasMCPTransport = alasMCPTransport
             self.acpDictationLocale = acpDictationLocale
+            self.acpDictationMicrophone = acpDictationMicrophone
         }
 
         public init(from decoder: Decoder) throws {
@@ -462,6 +480,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
             exposeAlasMCP = (try? c.decode(Bool.self, forKey: .exposeAlasMCP)) ?? true
             alasMCPTransport = (try? c.decode(AlasMCPTransport.self, forKey: .alasMCPTransport)) ?? .stdio
             acpDictationLocale = (try? c.decode(String.self, forKey: .acpDictationLocale)) ?? ""
+            acpDictationMicrophone = try? c.decodeIfPresent(DictationMicrophone.self, forKey: .acpDictationMicrophone)
         }
     }
 

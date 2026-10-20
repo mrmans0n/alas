@@ -26,8 +26,8 @@ public final class ACPDictationService: ChangeTracking {
     /// the composer can surface it in its notice line.
     public var onNotice: ((String) -> Void)?
 
-    /// The user's explicit language choice. Empty means automatic.
-    public var preferredLocaleIdentifier: String = ACPDictationLocaleFormatter.automaticIdentifier
+    /// The user's language and microphone choices, read when a session starts.
+    public var preferences = ACPDictationPreferences()
 
     private let engine: ACPDictationEngine
 
@@ -55,9 +55,11 @@ public final class ACPDictationService: ChangeTracking {
     public func start() {
         guard state == .idle || isFailed else { return }
         state = .preparing
-        let preferred = preferredLocaleIdentifier.isEmpty ? nil : preferredLocaleIdentifier
+        let locale = preferences.localeIdentifier
+        let microphone = preferences.microphone
         engine.start(
-            preferredLocaleIdentifier: preferred,
+            preferredLocaleIdentifier: locale.isEmpty ? nil : locale,
+            microphoneUID: microphone?.uid,
             callbacks: ACPDictationCallbacks(
                 onReady: { [weak self] in
                     guard let self, self.state == .preparing else { return }
@@ -75,6 +77,11 @@ public final class ACPDictationService: ChangeTracking {
                 onSilence: { [weak self] deviceName in
                     guard let self, self.state == .listening else { return }
                     self.onNotice?(Self.silenceMessage(deviceName: deviceName))
+                },
+                onMicrophoneUnavailable: { [weak self] in
+                    guard let self, self.state == .preparing || self.state == .listening,
+                          let microphone else { return }
+                    self.onNotice?("“\(microphone.name)” isn't connected. Using the system default microphone.")
                 }
             )
         )

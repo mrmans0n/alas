@@ -9,6 +9,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### ✨ Features
 
 - Turn a commit tab into its review session in place when pressing "Review This Commit", reusing the diff already loaded instead of opening a new tab and reloading it.
+- Choose the microphone chat dictation records from, in Settings → Chat or from the mic button's right-click menu. Falls back to the system default, with a notice, when the chosen microphone isn't connected.
 
 ### Changed
 

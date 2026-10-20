@@ -31,13 +31,8 @@ struct ACPNewChatEmptyStateView: View {
     }
 
     private var mark: some View {
-        Image(systemName: ACPNewChatEmptyStateArtwork.systemImageName)
-            .font(.system(size: ACPNewChatEmptyStateArtwork.fontSize, weight: .semibold))
-            .foregroundStyle(theme.color("accent"))
-            .frame(
-                width: ACPNewChatEmptyStateArtwork.frameSize,
-                height: ACPNewChatEmptyStateArtwork.frameSize
-            )
+        LovebirdView(pose: .hello, size: 72)
+            .shadow(color: .black.opacity(0.18), radius: 6, y: 3)
     }
 
     private var starterChips: some View {
@@ -83,10 +78,4 @@ struct ACPNewChatEmptyStateView: View {
         .buttonStyle(.plain)
         .help(prompt.promptText)
     }
-}
-
-enum ACPNewChatEmptyStateArtwork {
-    static let systemImageName = "sparkles"
-    static let fontSize: CGFloat = 28
-    static let frameSize: CGFloat = 40
 }

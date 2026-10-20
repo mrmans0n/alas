@@ -1,4 +1,5 @@
 @preconcurrency import AVFoundation
+import AudioToolbox
 import Foundation
 import Speech
 import os
@@ -193,7 +194,7 @@ public final class ACPSpeechDictationEngine: ACPDictationEngine {
         return await DictationTranscriber.supportedLocales.map(\.identifier)
     }
 
-    public func start(preferredLocaleIdentifier: String?, callbacks: ACPDictationCallbacks) {
+    public func start(preferredLocaleIdentifier: String?, microphoneUID: String?, callbacks: ACPDictationCallbacks) {
         guard #available(macOS 26.0, *) else {
             callbacks.onFailure("Dictation requires macOS 26 or later.")
             return
@@ -209,7 +210,7 @@ public final class ACPSpeechDictationEngine: ACPDictationEngine {
         // transcript into the new one's, or report its own failure as the
         // current state.
         //
-        // All four closures capture `self` and `session` weakly: they're
+        // All five closures capture `self` and `session` weakly: they're
         // held by `session` for as long as it runs, so a strong capture of
         // either would keep this engine (and every session it ever
         // started) alive until the app quits.
@@ -230,10 +231,18 @@ public final class ACPSpeechDictationEngine: ACPDictationEngine {
             onSilence: { [weak self, weak session] deviceName in
                 guard let self, let session, self.session as? Session === session else { return }
                 callbacks.onSilence(deviceName)
+            },
+            onMicrophoneUnavailable: { [weak self, weak session] in
+                guard let self, let session, self.session as? Session === session else { return }
+                callbacks.onMicrophoneUnavailable()
             }
         )
         session.runTask = Task {
-            await session.run(preferredLocaleIdentifier: preferredLocaleIdentifier, callbacks: wrapped)
+            await session.run(
+                preferredLocaleIdentifier: preferredLocaleIdentifier,
+                microphoneUID: microphoneUID,
+                callbacks: wrapped
+            )
         }
     }
 
@@ -283,7 +292,7 @@ public final class ACPSpeechDictationEngine: ACPDictationEngine {
         private var inputContinuation: AsyncStream<AnalyzerInput>.Continuation?
         private var resultsTask: Task<Void, Never>?
         private var silenceTask: Task<Void, Never>?
-        /// The task running `run(preferredLocaleIdentifier:callbacks:)`,
+        /// The task running `run(preferredLocaleIdentifier:microphoneUID:callbacks:)`,
         /// cancelled by `stop()` so a stop requested mid-setup doesn't
         /// leave, say, a speech-model download running unattended in the
         /// background after the user asked to cancel.
@@ -302,9 +311,13 @@ public final class ACPSpeechDictationEngine: ACPDictationEngine {
         private var tapInstalled = false
         nonisolated private static let logger = Logger(subsystem: "io.nlopez.alas", category: "dictation")
 
-        func run(preferredLocaleIdentifier: String?, callbacks: ACPDictationCallbacks) async {
+        func run(preferredLocaleIdentifier: String?, microphoneUID: String?, callbacks: ACPDictationCallbacks) async {
             do {
-                try await start(preferredLocaleIdentifier: preferredLocaleIdentifier, callbacks: callbacks)
+                try await start(
+                    preferredLocaleIdentifier: preferredLocaleIdentifier,
+                    microphoneUID: microphoneUID,
+                    callbacks: callbacks
+                )
             } catch {
                 // A stop-triggered cancellation surfaces here as a thrown
                 // `CancellationError` (or any error a cancelled `await`
@@ -321,6 +334,7 @@ public final class ACPSpeechDictationEngine: ACPDictationEngine {
 
         private func start(
             preferredLocaleIdentifier: String?,
+            microphoneUID: String?,
             callbacks: ACPDictationCallbacks
         ) async throws {
             let onReady = callbacks.onReady
@@ -381,7 +395,10 @@ public final class ACPSpeechDictationEngine: ACPDictationEngine {
             let analyzer = SpeechAnalyzer(modules: [transcriber])
             self.analyzer = analyzer
 
-            let audioEngine = AVAudioEngine()
+            let (audioEngine, microphoneName) = Self.makeAudioEngine(
+                microphoneUID: microphoneUID,
+                onUnavailable: callbacks.onMicrophoneUnavailable
+            )
             self.audioEngine = audioEngine
             let inputFormat = audioEngine.inputNode.outputFormat(forBus: 0)
             guard ACPSpeechDictationEngine.isUsableInputFormat(inputFormat) else {
@@ -434,7 +451,7 @@ public final class ACPSpeechDictationEngine: ACPDictationEngine {
 
             try await analyzer.start(inputSequence: stream)
             Self.logger.info("analyzer started; engine running=\(audioEngine.isRunning)")
-            startSilenceWatchdog(stats: tap.stats, onSilence: callbacks.onSilence)
+            startSilenceWatchdog(stats: tap.stats, microphoneName: microphoneName, onSilence: callbacks.onSilence)
             onReady()
         }
 
@@ -453,16 +470,57 @@ public final class ACPSpeechDictationEngine: ACPDictationEngine {
         /// their session.
         private func startSilenceWatchdog(
             stats: ACPDictationTapStats,
+            microphoneName: String?,
             onSilence: @escaping (String?) -> Void
         ) {
             silenceTask = Task { [weak self] in
                 try? await Task.sleep(nanoseconds: Self.silenceGraceSeconds * 1_000_000_000)
                 guard let self, !Task.isCancelled, !self.stopped else { return }
                 guard stats.peak <= Self.silenceThreshold else { return }
-                let deviceName = AVCaptureDevice.default(for: .audio)?.localizedName
+                let deviceName = microphoneName ?? AVCaptureDevice.default(for: .audio)?.localizedName
                 Self.logger.error("silent input after \(Self.silenceGraceSeconds)s: device=\(deviceName ?? "unknown") buffers=\(stats.buffers)")
                 onSilence(deviceName)
             }
+        }
+
+        /// An engine recording from the microphone with `microphoneUID`, and
+        /// that microphone's name. Falls back to the system default input,
+        /// reporting through `onUnavailable`, when the device isn't connected
+        /// or refuses the switch.
+        private static func makeAudioEngine(
+            microphoneUID: String?,
+            onUnavailable: () -> Void
+        ) -> (AVAudioEngine, String?) {
+            let audioEngine = AVAudioEngine()
+            guard let microphoneUID else { return (audioEngine, nil) }
+            guard let device = ACPAudioInputDevices.current().first(where: { $0.uid == microphoneUID }),
+                  route(audioEngine.inputNode, to: device.id)
+            else {
+                logger.error("microphone \(microphoneUID) unavailable; using system default")
+                onUnavailable()
+                // A failed switch can leave the input unit half-configured.
+                return (AVAudioEngine(), nil)
+            }
+            logger.info("recording from \(device.name)")
+            return (audioEngine, device.name)
+        }
+
+        /// Points the input node's I/O unit at `deviceID`. The node keeps the
+        /// client format it read from the default device, and the input unit
+        /// does not resample, so a device at another sample rate would deliver
+        /// no buffers; the client format is reset to the new device's.
+        private static func route(_ inputNode: AVAudioInputNode, to deviceID: AudioObjectID) -> Bool {
+            guard let unit = inputNode.audioUnit else { return false }
+            var id = deviceID
+            guard AudioUnitSetProperty(
+                unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
+                &id, UInt32(MemoryLayout<AudioObjectID>.size)
+            ) == noErr else { return false }
+            var format = inputNode.inputFormat(forBus: 0).streamDescription.pointee
+            return AudioUnitSetProperty(
+                unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Output, 1,
+                &format, UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
+            ) == noErr
         }
 
         /// Tears down the tap, engine, and analyzer immediately. Whatever
