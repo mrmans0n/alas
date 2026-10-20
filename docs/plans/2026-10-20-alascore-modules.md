@@ -120,6 +120,20 @@ Each phase is one or more PRs that build and pass on their own.
    compiler memory and the nightly's build step; split further only if a module
    misses the 2 GB budget or the nightly misses 60 minutes.
 
+## Progress
+
+- **Phases 0 and 1** are done: every misplaced type and file moved, and the
+  layering check's allowlist emptied.
+- **Phase 2 needed no seams.** Every upward call was a pure helper in the
+  wrong place: it moved down, leaving a forwarder at its old name, so no
+  protocol or closure was needed.
+- **Phase 3 is one PR, not seven.** All seven targets exist; `AlasCore` holds
+  only `Modules.swift`, which re-exports them. Every file of a target imports
+  the targets it uses. Internals that cross a target now need `package`
+  access, or an `@_spi(Testing)` import where the symbol was already SPI. The
+  layering check and its allowlist are gone: the compiler enforces the
+  boundaries.
+
 ## Risks
 
 - **Runtime performance.** Generic code called across a module boundary is no
