@@ -71,7 +71,8 @@ public enum RepoIconResolver: Sendable {
         ProjectIcon(
             mode: .letter,
             color: draft.color,
-            transparentBackground: draft.transparentBackground
+            transparentBackground: draft.transparentBackground,
+            gradient: draft.gradient
         )
     }
 
@@ -199,7 +200,8 @@ public enum RepoIconResolver: Sendable {
                     mode: .image,
                     color: appIcon.color,
                     imagePath: staged.imagePath,
-                    transparentBackground: appIcon.transparentBackground
+                    transparentBackground: appIcon.transparentBackground,
+                    gradient: appIcon.gradient
                 ),
                 sourceURL: target,
                 sourceModificationDate: values?.contentModificationDate,

@@ -59,13 +59,44 @@ struct ProjectIconTests {
         }
     }
 
-    @Test func opaqueIconOmitsTransparentBackgroundKey() throws {
+    @Test func solidOpaqueIconOmitsOptionalBackgroundKeys() throws {
         let data = try JSONEncoder().encode(ProjectIcon.default())
         let json = try #require(
             try JSONSerialization.jsonObject(with: data) as? [String: Any]
         )
 
         #expect(json["transparentBackground"] == nil)
+        #expect(json["gradient"] == nil)
+    }
+
+    @Test func gradientSurvivesRoundTripAndMirrorsFirstStopAsColor() throws {
+        let gradient = try #require(ProjectIconGradient(stops: ["#ff0000", "#00ff00", "#0000ff"], direction: .radial))
+        let icon = ProjectIcon(mode: .letter, color: "#112233", gradient: gradient)
+        let decoded = try JSONDecoder().decode(ProjectIcon.self, from: JSONEncoder().encode(icon))
+
+        #expect(decoded == icon)
+        #expect(decoded.color == "#ff0000")
+    }
+
+    @Test(arguments: [
+        (["#111111", "bad", "222222"], ["#111111", "#222222"] as [String]?),
+        (["#111111", "#222222", "#333333", "#444444"], ["#111111", "#222222", "#333333"]),
+        (["#111111", "nope"], nil),
+    ])
+    func gradientKeepsTwoToThreeValidStops(stops: [String], expected: [String]?) {
+        #expect(ProjectIconGradient(stops: stops)?.stops == expected)
+    }
+
+    @Test(arguments: [
+        (##"{"stops":["#111111"],"direction":"down"}"##, nil as ProjectIconGradient.Direction?),
+        (##"{"stops":["#111111","#222222"],"direction":"spiral"}"##, .downRight),
+    ])
+    func unusableGradientDegradesWithoutFailingTheIcon(gradientJSON: String, expected: ProjectIconGradient.Direction?) throws {
+        let json = ##"{"mode":"letter","color":"#123456","gradient":"## + gradientJSON + "}"
+        let icon = try JSONDecoder().decode(ProjectIcon.self, from: Data(json.utf8))
+
+        #expect(icon.gradient?.direction == expected)
+        #expect(icon.color == (expected == nil ? "#123456" : "#111111"))
     }
 
     @Test func legacyIconDecodesAsOpaque() throws {
@@ -80,5 +111,13 @@ struct ProjectIconTests {
 
         #expect(icon.withColor("#445566").transparentBackground == true)
         #expect(icon.withColor("#445566").color == "#445566")
+    }
+
+    /// `ProjectsManager.updateProject` re-applies the legacy color after the icon.
+    @Test func withColorKeepsGradient() throws {
+        let gradient = try #require(ProjectIconGradient(stops: ["#ff0000", "#0000ff"]))
+        let icon = ProjectIcon(mode: .letter, color: "#112233", gradient: gradient)
+
+        #expect(icon.withColor(icon.color) == icon)
     }
 }
