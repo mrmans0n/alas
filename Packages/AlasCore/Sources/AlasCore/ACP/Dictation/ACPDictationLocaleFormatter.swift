@@ -28,17 +28,18 @@ public enum ACPDictationLocaleFormatter: Sendable {
     }
 }
 
-/// One entry in the mic button's language menu.
+/// One entry in the mic button's language or microphone menu.
 public struct ACPDictationMenuItem: Equatable, Identifiable, Sendable {
-    /// Empty string means the automatic choice.
-    public let localeIdentifier: String
+    /// A locale identifier or a microphone UID. Empty means the automatic
+    /// language or the system default microphone.
+    public let identifier: String
     public let title: String
     public let isSelected: Bool
 
-    public var id: String { localeIdentifier }
+    public var id: String { identifier }
 
-    public init(localeIdentifier: String, title: String, isSelected: Bool) {
-        self.localeIdentifier = localeIdentifier
+    public init(identifier: String, title: String, isSelected: Bool) {
+        self.identifier = identifier
         self.title = title
         self.isSelected = isSelected
     }

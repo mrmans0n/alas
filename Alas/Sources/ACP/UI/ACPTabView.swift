@@ -969,9 +969,9 @@ private struct ACPSessionView: View {
             manager: manager,
             worktreeRoot: worktree.path,
             sendOnEnter: state.config.harness.acpSendOnEnter,
-            dictationLocale: state.config.harness.acpDictationLocale,
-            onSelectDictationLocale: { [state] identifier in
-                state.config.harness.acpDictationLocale = identifier
+            dictationPreferences: state.config.harness.dictationPreferences,
+            onChangeDictationPreferences: { [state] preferences in
+                state.config.harness.dictationPreferences = preferences
                 state.saveConfig()
             },
             focusRequest: composerFocusRequest,
