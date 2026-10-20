@@ -83,6 +83,7 @@ Persistence/RepoMCPTrust.swift MCPAttachmentPlanner
 Persistence/ShortcutAction.swift Worktree
 Persistence/SpaceConfig.swift SpaceMemberReference
 Persistence/SpaceConfig.swift Workspace
+Plugins/PluginCatalog.swift boundedFetch
 Plugins/PluginSettings.swift RemoteFileSecretStore
 Plugins/PluginSettings.swift RemoteKeychainSecretStore
 Plugins/PluginSettings.swift RemoteSecretStore

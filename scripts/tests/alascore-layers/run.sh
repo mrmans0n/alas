@@ -36,6 +36,20 @@ if python3 -I "${check}" --sources "${sources}" --allowlist "${allowlist}" > "${
 fi
 grep -Fq "'Helpers/Low.swift HostThing' is no longer a violation" "${tmp}/out"
 
+# A call of a higher module's top-level function counts as well.
+cat > "${sources}/Core/Fetch.swift" <<'SWIFT'
+public func hostFetch() {}
+SWIFT
+cat > "${sources}/Helpers/Low.swift" <<'SWIFT'
+public struct LowThing { func run() { hostFetch() } }
+SWIFT
+: > "${allowlist}"
+if python3 -I "${check}" --sources "${sources}" --allowlist "${allowlist}" > "${tmp}/out" 2>&1; then
+    echo "accepted an upward function call" >&2; exit 1
+fi
+grep -Fq "Helpers/Low.swift: hostFetch (AlasFoundation -> AlasHostCore)" "${tmp}/out"
+echo 'public struct LowThing {}' > "${sources}/Helpers/Low.swift"
+
 # A folder without a module fails.
 : > "${allowlist}"
 mkdir -p "${sources}/Mystery"

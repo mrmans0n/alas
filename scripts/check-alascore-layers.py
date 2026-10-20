@@ -12,10 +12,11 @@ Known violations are listed in the allowlist, one `<file> <Type>` per line. The
 check fails on a violation the allowlist does not list, and on an allowlist
 entry that is no longer a violation, so the list only shrinks.
 
-A type counts when it is declared at the top level of a file (`struct`,
-`class`, `enum`, `protocol`, `actor`, `typealias`) in exactly one module. A
-reference is any occurrence of its name, comments included: precise enough to
-guide the moves, and the compiler takes over once the targets exist.
+A declaration counts when it is at the top level of a file in exactly one
+module: a type (`struct`, `class`, `enum`, `protocol`, `actor`, `typealias`),
+a function, or a global `let` or `var`. A use is any occurrence of a type's or
+a global's name, and a call of a function's, comments included: precise enough
+to guide the moves, and the compiler takes over once the targets exist.
 
 Usage: check-alascore-layers.py [--sources DIR] [--allowlist FILE] [--update]
   --update rewrites the allowlist to the current violations.
@@ -45,6 +46,19 @@ DECLARATION = re.compile(
     re.M,
 )
 WORD = re.compile(r"\b[A-Z]\w*\b")
+# Top-level functions and globals, called or read from other files.
+FUNCTION = re.compile(
+    r"^(?:@\w+(?:\([^)]*\))?\s+)*(?:(?:public|internal|package|nonisolated)\s+)*"
+    r"func\s+([a-z_]\w*)",
+    re.M,
+)
+GLOBAL = re.compile(
+    r"^(?:@\w+(?:\([^)]*\))?\s+)*(?:(?:public|internal|package|nonisolated)\s+)*"
+    r"(?:let|var)\s+([a-z_]\w*)",
+    re.M,
+)
+CALL = re.compile(r"\b([a-z_]\w*)\s*\(")
+LOWER_WORD = re.compile(r"\b[a-z_]\w*\b")
 
 
 def module_of(folder):
@@ -70,17 +84,26 @@ def violations(sources):
                 continue
             with open(path, encoding="utf-8", errors="replace") as handle:
                 files[relative] = (module, handle.read())
-    declared = {}
-    for relative, (module, text) in files.items():
-        for match in DECLARATION.finditer(text):
-            declared.setdefault(match.group(1), set()).add(module)
-    owner = {name: next(iter(modules)) for name, modules in declared.items() if len(modules) == 1}
+    def owners(pattern):
+        declared = {}
+        for module, text in files.values():
+            for match in pattern.finditer(text):
+                declared.setdefault(match.group(1), set()).add(module)
+        return {name: next(iter(modules)) for name, modules in declared.items() if len(modules) == 1}
+
+    # Each kind of declaration, and how a use of it appears in a file.
+    kinds = [
+        (owners(DECLARATION), WORD),
+        (owners(FUNCTION), CALL),
+        (owners(GLOBAL), LOWER_WORD),
+    ]
     found = set()
     for relative, ((level, name), text) in files.items():
-        for word in set(WORD.findall(text)):
-            target = owner.get(word)
-            if target and target[0] > level:
-                found.add((relative, word, name, target[1]))
+        for owner, use in kinds:
+            for word in set(use.findall(text)):
+                target = owner.get(word)
+                if target and target[0] > level:
+                    found.add((relative, word, name, target[1]))
     return found, unmapped
 
 
