@@ -367,13 +367,27 @@ struct ChangesTabViewTests {
         ))
     }
 
-    @Test func changesPreparationCardVisibilityDoesNotDependOnGGDrawer() {
-        #expect(ChangesTabView.shouldShowChangesPreparationCard(
-            preparationIsVisible: true
-        ))
-        #expect(!ChangesTabView.shouldShowChangesPreparationCard(
-            preparationIsVisible: false
-        ))
+    @Test func preparationCardFallsBackToAReviewButtonOnlyWhenScopesExist() {
+        let visible = ChangesPreparationModel(
+            changes: [ChangedFile(path: "a.swift", status: "M", stage: .unstaged, add: 1, del: 0, renameFrom: nil)],
+            hasDraft: false,
+            draftNonEmpty: false,
+            readinessActions: []
+        )
+        let hidden = ChangesPreparationModel.makeGG(
+            staged: .zero,
+            hasDraft: false,
+            capabilities: GGCapabilities(structuredSplit: false, keepCurrentUnstack: false),
+            newCommitDisabledReason: "Nothing to commit"
+        )
+        #expect(!hidden.isVisible)
+
+        #expect(ChangesTabView.changesPreparationCardModel(preparation: visible, hasReviewScopes: false) == visible)
+        #expect(ChangesTabView.changesPreparationCardModel(preparation: hidden, hasReviewScopes: false) == nil)
+        // A hidden gg card must not resurface its disabled actions.
+        let fallback = ChangesTabView.changesPreparationCardModel(preparation: hidden, hasReviewScopes: true)
+        #expect(fallback?.ggActions.isEmpty == true)
+        #expect(fallback?.reviewAction == nil)
     }
 
     @Test func regularGitOperationDisablesGGPreparationMutations() {
@@ -564,6 +578,27 @@ struct ChangesTabViewTests {
         )
         #expect(ChangesTabView.reconciliationAction(from: readiness) == nil)
         #expect(ChangesTabView.reconciliationAction(from: nil) == nil)
+    }
+
+    @Test(arguments: [0, 1])
+    func entriesWithoutPRStateUseSyncCounts(syncedCommits: Int) {
+        let status = ChangesTabView.ggPreparationStackStatus(
+            loadState: .loaded,
+            stack: stack(syncedCommits: syncedCommits, prState: nil),
+            remoteError: nil,
+            remoteEnrichmentPending: false
+        )
+        #expect(status == (syncedCommits == 0 ? .unsynced(commits: 1) : .synced(commits: 1)))
+    }
+
+    @Test func remoteStatusFailureTakesPrecedenceOverSyncCounts() {
+        let status = ChangesTabView.ggPreparationStackStatus(
+            loadState: .loaded,
+            stack: stack(syncedCommits: 0, prState: nil),
+            remoteError: "Remote refresh failed",
+            remoteEnrichmentPending: false
+        )
+        #expect(status == .remoteUnavailable)
     }
 
     @Test func landingStatusUsesOnlyActiveSessions() {

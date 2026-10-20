@@ -60,11 +60,19 @@ if CommandLine.arguments.dropFirst().elementsEqual(["pair"]) {
 }
 let arguments = Array(CommandLine.arguments.dropFirst())
 if arguments == ["install-agent"] || arguments == ["uninstall-agent"] {
-    // The bundled executable, not the link that may have started this one,
-    // so the agent keeps working wherever the link points.
-    guard let executable = Bundle.main.executableURL?.resolvingSymlinksInPath() else {
-        fail("cannot locate this executable")
+    // The path this was started as, links not resolved: Homebrew's link in
+    // its `bin` outlives an upgrade, while what it points to (a versioned
+    // Caskroom directory, for the alas-host cask) does not.
+    let invoked = CommandLine.arguments[0]
+    let started: String? = if invoked.contains("/") {
+        invoked
+    } else {
+        (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":")
+            .map { "\($0)/\(invoked)" }
+            .first { FileManager.default.isExecutableFile(atPath: $0) }
     }
+    guard let started else { fail("cannot locate this executable") }
+    let executable = URL(fileURLWithPath: started).standardizedFileURL
     let agent = HostLaunchAgent(executable: executable)
     let domain = "gui/\(getuid())"
     @discardableResult

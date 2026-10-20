@@ -255,6 +255,9 @@ jobs:
           MACOS_NOTARY_TEAM_ID:      ${{ secrets.MACOS_NOTARY_TEAM_ID }}
         run: ./scripts/notarize-and-staple-dmg.sh "build/Build/Products/Release/Alas-${VERSION}-${{ matrix.arch }}.dmg"
 
+      - name: Package alas-host (${{ matrix.arch }})
+        run: ./scripts/package-alas-host.sh build/Build/Products/Release/Alas.app "alas-host-${VERSION}-${{ matrix.arch }}"
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -262,6 +265,7 @@ jobs:
           path: |
             build/Build/Products/Release/Alas-*-${{ matrix.arch }}.app.zip
             build/Build/Products/Release/Alas-*-${{ matrix.arch }}.dmg
+            build/Build/Products/Release/alas-host-*-${{ matrix.arch }}.zip
 
       - name: Cleanup signing keychain
         if: always()
@@ -312,6 +316,7 @@ jobs:
           files: |
             release-artifacts/**/Alas-*.app.zip
             release-artifacts/**/Alas-*.dmg
+            release-artifacts/**/alas-host-*.zip
 
   update-homebrew:
     name: Update Homebrew Cask
@@ -339,6 +344,10 @@ jobs:
           # validates regex-strictly).
           echo "SHA_ARM=$(shasum -a 256 alas-arm64.dmg | cut -d' ' -f1)" >> "$GITHUB_ENV"
           echo "SHA_INTEL=$(shasum -a 256 alas-x86_64.dmg | cut -d' ' -f1)" >> "$GITHUB_ENV"
+          curl -fsSL "https://github.com/mrmans0n/alas/releases/download/v${VERSION}/alas-host-${VERSION}-arm64.zip" -o alas-host-arm64.zip
+          curl -fsSL "https://github.com/mrmans0n/alas/releases/download/v${VERSION}/alas-host-${VERSION}-x86_64.zip" -o alas-host-x86_64.zip
+          echo "SHA_HOST_ARM=$(shasum -a 256 alas-host-arm64.zip | cut -d' ' -f1)" >> "$GITHUB_ENV"
+          echo "SHA_HOST_INTEL=$(shasum -a 256 alas-host-x86_64.zip | cut -d' ' -f1)" >> "$GITHUB_ENV"
 
       - name: Checkout homebrew-tap
         run: |
@@ -359,12 +368,12 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          if [ -z "$(git status --porcelain -- Casks/alas.rb)" ]; then
-            echo "Cask already up to date"
+          if [ -z "$(git status --porcelain -- Casks/alas.rb Casks/alas-host.rb)" ]; then
+            echo "Casks already up to date"
             exit 0
           fi
-          git add Casks/alas.rb
-          git commit -m "Update alas cask to ${VERSION}"
+          git add Casks/alas.rb Casks/alas-host.rb
+          git commit -m "Update alas casks to ${VERSION}"
           git push
 
       - name: Verify tap commit reached GitHub
@@ -414,3 +423,5 @@ jobs:
 
           brew audit --cask mrmans0n/tap/alas
           brew fetch --cask mrmans0n/tap/alas --force --verbose
+          brew audit --cask mrmans0n/tap/alas-host
+          brew fetch --cask mrmans0n/tap/alas-host --force --verbose

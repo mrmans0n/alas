@@ -60,6 +60,24 @@ struct ChangesPreparationModel: Equatable {
         let detail: String
     }
 
+    enum GGStackStatus: Equatable {
+        case unavailable, loading, empty, refreshingRemote, remoteUnavailable
+        case synced(commits: Int)
+        case unsynced(commits: Int)
+
+        var text: String {
+            switch self {
+            case .unavailable: "Stack unavailable"
+            case .loading: "Loading stack…"
+            case .empty: "No stack commits"
+            case .refreshingRemote: "Refreshing remote status…"
+            case .remoteUnavailable: "Remote status unavailable"
+            case .synced(let count): count == 1 ? "1 commit synced" : "\(count) commits synced"
+            case .unsynced(let count): count == 1 ? "1 commit not synced" : "\(count) commits not synced"
+            }
+        }
+    }
+
     let reviewAction: ReviewAction?
     let draftAction: DraftAction?
     let publishAction: CommitPublishAvailability?
@@ -70,7 +88,7 @@ struct ChangesPreparationModel: Equatable {
     let canDismissSyncFailure: Bool
     let ggActions: [GGAction]
     let mutationError: String?
-    let ggStackStatus: String?
+    let ggStackStatus: GGStackStatus?
     let hasLocalChanges: Bool
 
     var primaryAction: ReviewAction? { reviewAction }
@@ -80,6 +98,14 @@ struct ChangesPreparationModel: Equatable {
             $0.hasNonEmptyDraft || $0.isInFlight
         }
     }
+
+    /// No actions of its own: the card renders only its Review button.
+    static let reviewScopesOnly = ChangesPreparationModel(
+        changes: [],
+        hasDraft: false,
+        draftNonEmpty: false,
+        readinessActions: []
+    )
 
     var isVisible: Bool {
         if landingStatus != nil {
@@ -175,7 +201,7 @@ struct ChangesPreparationModel: Equatable {
         landingStatus: GGLandingStatus? = nil,
         syncProgress: GGSyncProgressPresentation? = nil,
         canDismissSyncFailure: Bool = false,
-        stackStatus: String? = nil
+        stackStatus: GGStackStatus? = nil
     ) -> ChangesPreparationModel {
         let summary = ReviewChangesTriggerSummary.summary(for: changes)
         let stagedChanges = changes.filter { $0.stage == .staged }
@@ -216,7 +242,7 @@ struct ChangesPreparationModel: Equatable {
         landingStatus: GGLandingStatus? = nil,
         syncProgress: GGSyncProgressPresentation? = nil,
         canDismissSyncFailure: Bool = false,
-        stackStatus: String? = nil
+        stackStatus: GGStackStatus? = nil
     ) -> ChangesPreparationModel {
         let summary = staged.hasChanges
             ? ReviewChangesTriggerSummary(
@@ -263,7 +289,7 @@ struct ChangesPreparationModel: Equatable {
         syncProgress: GGSyncProgressPresentation?,
         canDismissSyncFailure: Bool,
         reviewSummary: ReviewChangesTriggerSummary?,
-        stackStatus: String?
+        stackStatus: GGStackStatus?
     ) -> ChangesPreparationModel {
         if let landingStatus {
             return ChangesPreparationModel(
@@ -343,7 +369,7 @@ struct ChangesPreparationModel: Equatable {
         syncProgress: GGSyncProgressPresentation?,
         canDismissSyncFailure: Bool,
         mutationError: String?,
-        ggStackStatus: String?,
+        ggStackStatus: GGStackStatus?,
         hasLocalChanges: Bool,
         ggActions: [GGAction]
     ) {
@@ -491,5 +517,176 @@ struct ChangesPreparationModel: Equatable {
         guard let local else { return aheadCommitCount == 0 }
         if local.needsPush == false { return true }
         return !local.hasUpstream && local.aheadCommitCount == 0
+    }
+}
+
+/// Review targets in the Prepare card's review menu, between the primary
+/// button (every uncommitted change) and the palette catch-all.
+enum ChangesReviewScopeOption: Equatable {
+    /// A pull/merge request on the branch's code host.
+    struct HostedReview: Equatable {
+        let remote: CodeHostRemote
+        let number: Int
+        let title: String
+    }
+
+    /// The branch's commits since it forked from `comparisonRef`, as one diff.
+    case branchCommits(comparisonRef: String, commitCount: Int)
+    /// The branch's commits plus every uncommitted change, as one diff.
+    case branchWithLocalChanges(comparisonRef: String, commitCount: Int)
+    /// What changed in the working tree since feedback last went to an agent.
+    case sinceLastReview(ReviewedWorkingTreeSnapshot)
+    /// The staged half of a partially staged working tree.
+    case stagedOnly(fileCount: Int)
+    case hostedReview(HostedReview)
+
+    /// `canSnapshotWorkingTree` is false for remote worktrees: the combined
+    /// diff snapshots the working tree through a scratch index on this Mac.
+    static func options(
+        changes: [ChangedFile],
+        commitCount: Int,
+        comparisonRef: String?,
+        canSnapshotWorkingTree: Bool = true,
+        lastReview: ReviewedWorkingTreeSnapshot? = nil,
+        hostedReviews: [HostedReview] = []
+    ) -> [Self] {
+        var options: [Self] = []
+        if let comparisonRef, commitCount > 0 {
+            options.append(.branchCommits(comparisonRef: comparisonRef, commitCount: commitCount))
+            if !changes.isEmpty, canSnapshotWorkingTree {
+                options.append(.branchWithLocalChanges(comparisonRef: comparisonRef, commitCount: commitCount))
+            }
+        }
+        if let lastReview {
+            options.append(.sinceLastReview(lastReview))
+        }
+        // With nothing unstaged, staged-only is the primary button's diff.
+        let stagedPaths = Set(changes.filter { $0.stage == .staged }.map(\.path))
+        if !stagedPaths.isEmpty, changes.contains(where: { $0.stage == .unstaged }) {
+            options.append(.stagedOnly(fileCount: stagedPaths.count))
+        }
+        options.append(contentsOf: hostedReviews.map(Self.hostedReview))
+        return options
+    }
+
+    /// The open requests worth reviewing: every unmerged gg stack entry with
+    /// one, else the branch's own request.
+    static func hostedReviews(
+        stack: GGStack?,
+        stackRemote: CodeHostRemote?,
+        branchRequest: ReviewRequest?
+    ) -> [HostedReview] {
+        if let stack {
+            guard let stackRemote else { return [] }
+            return stack.entries.compactMap { entry in
+                guard let number = entry.prNumber, entry.prState != .merged, entry.prState != .closed else { return nil }
+                return HostedReview(remote: stackRemote, number: number, title: entry.title)
+            }
+        }
+        guard let branchRequest, branchRequest.state == .open else { return [] }
+        return [HostedReview(remote: branchRequest.remote, number: branchRequest.number, title: branchRequest.title)]
+    }
+
+    var id: String {
+        switch self {
+        case .branchCommits: "branch-commits"
+        case .branchWithLocalChanges: "branch-with-local-changes"
+        case .sinceLastReview: "since-last-review"
+        case .stagedOnly: "staged"
+        case .hostedReview(let review): "hosted-\(review.number)"
+        }
+    }
+
+    func title(now: Date = Date()) -> String {
+        switch self {
+        case .branchCommits(_, let commitCount):
+            return "Review Branch Commits (\(commitCount))"
+        case .branchWithLocalChanges(_, let commitCount):
+            return "Review Branch Commits (\(commitCount)) + Uncommitted"
+        case .sinceLastReview(let snapshot):
+            let formatter = RelativeDateTimeFormatter()
+            formatter.unitsStyle = .short
+            let age = formatter.localizedString(for: min(snapshot.capturedAt, now), relativeTo: now)
+            return "Review Changes Since Last Review (\(age))"
+        case .stagedOnly(let fileCount):
+            return "Review Staged Only (\(fileCount) \(fileCount == 1 ? "file" : "files"))"
+        case .hostedReview(let review):
+            let prefix = review.remote.kind.reviewRequestNumberPrefix
+            let title = review.title.count > 60 ? review.title.prefix(59) + "…" : review.title
+            return "Review \(prefix)\(review.number) · \(title)"
+        }
+    }
+
+    var accessibilityIdentifier: String { "changes-preparation-review-\(id)" }
+
+    /// Resolves the session target, pinning the comparison ref (and HEAD for
+    /// commits-only) to SHAs the way the review palette does, so a stored
+    /// review keeps its merge base when the ref moves.
+    func target(
+        worktree: Worktree,
+        git: GitService = GitService(),
+        providers: CodeHostProviderRegistry = .live()
+    ) async throws -> ReviewSessionTarget {
+        switch self {
+        case .branchCommits(let comparisonRef, _):
+            let headSHA = try await git.headSHA(at: worktree.path)
+            let baseSHA = try await git.resolveRevision(at: worktree.path, ref: comparisonRef)
+            return ReviewScopeSelection.target(
+                for: .branch(name: comparisonRef),
+                worktreeID: worktree.id,
+                repositoryPath: worktree.path,
+                headSHA: headSHA,
+                branchBaseSHA: baseSHA
+            )
+        case .branchWithLocalChanges(let comparisonRef, _):
+            let baseSHA = try await git.resolveRevision(at: worktree.path, ref: comparisonRef)
+            return ReviewScopeSelection.target(
+                for: .branchWithLocalChanges(name: comparisonRef),
+                worktreeID: worktree.id,
+                repositoryPath: worktree.path,
+                branchBaseSHA: baseSHA
+            )
+        case .sinceLastReview(let snapshot):
+            let exists = try await Process.git(["cat-file", "-e", "\(snapshot.tree)^{tree}"], cwd: worktree.path)
+            guard exists.exitCode == 0 else { throw ChangesReviewScopeError.snapshotPruned }
+            return .sinceSnapshot(worktreeID: worktree.id, repositoryPath: worktree.path, tree: snapshot.tree)
+        case .stagedOnly:
+            return ReviewScopeSelection.target(
+                for: .staged,
+                worktreeID: worktree.id,
+                repositoryPath: worktree.path
+            )
+        case .hostedReview(let review):
+            guard let provider = providers.provider(for: review.remote.kind) else {
+                throw ChangesReviewScopeError.unsupportedHost(review.remote.kind)
+            }
+            // Fetch fresh so the session pins the request's current head.
+            let request = try await provider.reviewRequest(remote: review.remote, number: review.number, cwd: worktree.path)
+            return .reviewRequest(
+                worktreeID: worktree.id,
+                repositoryPath: worktree.path,
+                provider: request.provider,
+                host: request.remote.host,
+                repositorySlug: request.remote.repositorySlug,
+                number: request.number,
+                url: request.url,
+                title: request.title,
+                headSHA: request.headSHA
+            )
+        }
+    }
+}
+
+enum ChangesReviewScopeError: LocalizedError, Equatable {
+    case snapshotPruned
+    case unsupportedHost(CodeHostKind)
+
+    var errorDescription: String? {
+        switch self {
+        case .snapshotPruned:
+            "The last review's snapshot is gone from the repository, likely pruned by git gc."
+        case .unsupportedHost(let kind):
+            "\(kind.displayName) reviews are not supported yet."
+        }
     }
 }

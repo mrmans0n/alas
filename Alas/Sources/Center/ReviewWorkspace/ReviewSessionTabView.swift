@@ -637,10 +637,20 @@ struct ReviewSessionTabView: View {
                 try sessionStore.save(refreshedRecord)
             }
 
-            let loadedContext = try await loader.load(target: refreshedRecord.target)
+            let seed = appState?.tabs.takeReviewSessionSeed(sessionID: tabState.sessionID, target: refreshedRecord.target)
+            let loadedContext: ReviewSessionLoadedContext
+            if let seed {
+                loadedContext = ReviewSessionLoadedContext(session: seed.session, target: refreshedRecord.target, providerContext: nil)
+            } else {
+                loadedContext = try await loader.load(target: refreshedRecord.target)
+            }
             guard loadCoordinator.canPublish(token) else { return false }
             refreshedRecord = mergeLatestMutableFields(into: refreshedRecord, fallback: storedRecord)
             if !resolvedRecord.paused, refreshedRecord.target != storedRecord.target {
+                try sessionStore.save(refreshedRecord)
+            }
+            if refreshedRecord.selectedFileID == nil, let seededSelection = seed?.selectedFileID {
+                refreshedRecord.selectedFileID = seededSelection
                 try sessionStore.save(refreshedRecord)
             }
 
@@ -797,7 +807,10 @@ struct ReviewSessionTabView: View {
         let handoffOriginRecordID = record?.id
         var actions = ReviewDraftWorkspaceActions.make(
             controller: draftCommentController,
-            sender: feedbackSender,
+            sender: feedbackSender.recordingReviewedWorkingTree(
+                persistsState ? loaded.reviewedWorkingTree : nil,
+                worktreeID: tabState.worktreeId
+            ),
             sessionID: tabState.sessionID,
             recordHandoff: { handoff in
                 recordSessionHandoff(handoff, originRecordID: handoffOriginRecordID)
@@ -1178,7 +1191,8 @@ struct ReviewSessionTabView: View {
             providerContext: ReviewSessionProviderContext(
                 remote: providerContext.remote,
                 reviewRequest: reviewRequest
-            )
+            ),
+            reviewedWorkingTree: current.reviewedWorkingTree
         )
     }
 

@@ -265,6 +265,10 @@ extension Paths {
         appSupportRoot.appendingPathComponent("review-sessions.json")
     }
 
+    public static var reviewSnapshotsFile: URL {
+        appSupportRoot.appendingPathComponent("review-snapshots.json")
+    }
+
     public static var pendingReviewsDir: URL {
         appSupportRoot.appendingPathComponent("pending-reviews", isDirectory: true)
     }

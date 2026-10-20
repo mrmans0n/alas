@@ -127,6 +127,11 @@ jobs:
       - name: Check formatting
         run: swiftformat Alas AlasTests Packages --lint --reporter github-actions-log
 
+      - name: Check AlasCore layers
+        # docs/plans/2026-10-20-alascore-modules.md: no new upward dependency
+        # while the folders move toward their modules.
+        run: bash scripts/tests/alascore-layers/run.sh
+
       - name: Test AlasCore
         # Hostless: no app, Ghostty, MLX, or submodules. Fails fast before
         # the app build starts.
