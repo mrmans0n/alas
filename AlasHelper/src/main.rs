@@ -265,7 +265,8 @@ fn capabilities() -> Value {
         ,
         "acp": true,
         "sessionCoordination": 1,
-        "visualMCPRelay": 1
+        "visualMCPRelay": 1,
+        "remoteMCPTools": 1
     })
 }
 
@@ -2517,6 +2518,7 @@ mod tests {
         );
         assert_eq!(value["result"]["capabilities"]["fs"]["read"], true);
         assert_eq!(value["result"]["capabilities"]["visualMCPRelay"], 1);
+        assert_eq!(value["result"]["capabilities"]["remoteMCPTools"], 1);
     }
 
     #[test]

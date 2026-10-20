@@ -682,7 +682,8 @@ struct ACPSessionManagerRemoteRestoreTests {
                     descriptor: .init(recordId: fence.recordId, relayId: "relay",
                                       proxyCommand: "/home/dev/.alas/bin/alas-helper",
                                       proxyArgs: ["mcp-proxy", "--state-dir", "/home/dev/.alas", "--record-id", fence.recordId],
-                                      relayProtocolVersion: 1)
+                                      relayProtocolVersion: 1),
+                    toolScope: .remote
                 )))
             }
         )
@@ -978,7 +979,8 @@ private final class RelayLog {
             return .prepared(PreparedBuiltInMCPAttachment(
                 injection: BuiltInAlasMCP.remoteVisualInjection(descriptor: .init(
                     recordId: fence.recordId, relayId: "relay-\(index)", proxyCommand: "/home/dev/.alas/bin/alas-helper",
-                    proxyArgs: ["mcp-proxy", "--record-id", fence.recordId], relayProtocolVersion: 1)),
+                    proxyArgs: ["mcp-proxy", "--record-id", fence.recordId], relayProtocolVersion: 1),
+                    toolScope: .remote),
                 cleanup: { await self.invalidated(index) }
             ))
         }

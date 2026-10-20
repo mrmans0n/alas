@@ -6863,9 +6863,12 @@ final class AppState {
     /// relays `visual_show` frames back here, where a local
     /// `alas mcp --visual-only` serves them against the app socket under this
     /// session's id; nothing local is written into the remote agent's config.
+    /// `allowsPRTools` is false for Workspace Checkouts, which the PR shepherd
+    /// does not support.
     func remoteVisualMCPAttachment(
         context: BuiltInMCPAttachmentContext,
-        configuredServers: [ProjectMCPServer]
+        configuredServers: [ProjectMCPServer],
+        allowsPRTools: Bool = true
     ) async -> BuiltInMCPAttachment {
         guard case .ssh(let host, let fence) = context.location,
               BuiltInAlasMCP.injectsRemoteVisual(
@@ -6887,10 +6890,11 @@ final class AppState {
             let prepared = try await RemoteVisualMCPBridge.prepare(
                 client: RemoteHelperClientPool.shared.client(for: host),
                 fence: fence,
-                makeBackend: {
+                allowsPRTools: allowsPRTools,
+                makeBackend: { toolScope in
                     JSONRPCStdioTransport(
                         executable: URL(fileURLWithPath: binaryPath),
-                        arguments: ["mcp", "--visual-only"],
+                        arguments: ["mcp", toolScope.relayBackendFlag ?? "--visual-only"],
                         environment: environment,
                         framing: .newline
                     )
@@ -12625,7 +12629,8 @@ final class AppState {
                 let current = self.currentWorkspaceCheckoutSnapshot(checkout)
                 let configuredServers = self.workspaceFrozenMCPServers(for: current)
                 guard case .local(let adapterSupportsHTTP) = context.location else {
-                    return await self.remoteVisualMCPAttachment(context: context, configuredServers: configuredServers)
+                    return await self.remoteVisualMCPAttachment(
+                        context: context, configuredServers: configuredServers, allowsPRTools: false)
                 }
                 guard let binaryPath = (try? TerminalCLIInjection.installExecutables())?
                     .appendingPathComponent(TerminalCLIInjection.executableName).path

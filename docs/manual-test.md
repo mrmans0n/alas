@@ -840,11 +840,14 @@ required.
 10. Visual aids over SSH: in an SSH ACP session (Claude, Codex, and OMP when
     installed), ask the agent to find the Alas visual tool and show a full HTML
     document, then a fragment with an A/B question. Its tool inventory from
-    the `alas` server must be `visual_show` only. Both visuals must render;
+    the `alas` server must be exactly `visual_show`, `pr_create`, and
+    `pr_status`. Both visuals must render;
     choose an option, submit, and confirm the agent receives the answer as its
     next prompt. Reopen the session and restart Alas: the same visual and
     answer must remain, and a new visual must still work. Repeat with a
-    session restored from before this helper version.
+    session restored from before this helper version. Then click Ship: the
+    agent must call `pr_create`, the PR must open from the remote branch, and
+    Alas must show it as shepherded.
 11. Kill the remote `alas-helper serve` while the agent and its proxy stay
     alive. A call in flight must fail without a duplicate visual; after
     reconnect, a new call through the same proxy must work. Take over from

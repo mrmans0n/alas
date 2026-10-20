@@ -1,4 +1,5 @@
-//! Visual MCP relay for SSH sessions.
+//! Built-in Alas MCP relay for SSH sessions (`visual_show`, `pr_create`,
+//! `pr_status`).
 //!
 //! A remote agent runs `alas-helper mcp-proxy` as a stdio MCP server. For
 //! every frame the proxy resolves the record's current route from the remote
@@ -31,13 +32,14 @@ const MAGIC: &[u8] = b"ALASMCP1 ";
 const MAX_HEADER_BYTES: usize = MAGIC.len() + 8;
 const HEADER_TIMEOUT: Duration = Duration::from_secs(5);
 const BODY_TIMEOUT: Duration = Duration::from_secs(10);
-/// Slightly longer than the app's own 30-second local transport deadline.
-const COMPLETION_TIMEOUT: Duration = Duration::from_secs(35);
-const PROXY_REPLY_TIMEOUT: Duration = Duration::from_secs(40);
+/// Slightly longer than the app's slowest local transport deadline, the
+/// 120 seconds `alas mcp` gives `pr_create`.
+const COMPLETION_TIMEOUT: Duration = Duration::from_secs(130);
+const PROXY_REPLY_TIMEOUT: Duration = Duration::from_secs(135);
 const MAX_IN_FLIGHT_PER_RECORD: usize = 2;
 const MAX_IN_FLIGHT: usize = 8;
 const MAX_PROXY_IN_FLIGHT: usize = 4;
-const UNAVAILABLE: &str = "Alas visual relay unavailable";
+const UNAVAILABLE: &str = "Alas relay unavailable; the call's outcome is unknown";
 /// Darwin's `sun_path` holds 104 bytes including the terminating NUL.
 const MAX_SOCKET_PATH_BYTES: usize = 103;
 
