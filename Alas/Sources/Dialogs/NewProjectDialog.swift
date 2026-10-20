@@ -22,6 +22,13 @@ struct EditProjectDialog: View {
     }
 }
 
+/// What fills the icon squircle; `.none` maps to `transparentBackground`.
+private enum IconFill: Hashable {
+    case none
+    case solid
+    case gradient
+}
+
 private enum ProjectDialogMode {
     case add(ProjectKind)
     case edit(ProjectConfig)
@@ -113,7 +120,9 @@ private struct ProjectDialog: View {
     @State private var worktreeBranchTemplate: String = ""
     @State private var iconMode: ProjectIcon.Mode = .letter
     @State private var iconColor: String = ProjectIcon.defaultColor
-    @State private var iconTransparent = false
+    @State private var iconFill: IconFill = .solid
+    @State private var gradientStops: [String] = ProjectIconGradientPreset.subtle[0].gradient.stops
+    @State private var gradientDirection: ProjectIconGradient.Direction = .downRight
     @State private var iconLabel: String = ""
     @State private var iconSymbolName: String = "folder"
     @State private var iconEmoji: String = "🚀"
@@ -184,8 +193,13 @@ private struct ProjectDialog: View {
             symbolName: iconMode == .symbol ? iconSymbolName : nil,
             emoji: iconMode == .emoji ? iconEmoji : nil,
             imagePath: iconMode == .image ? iconImagePath : nil,
-            transparentBackground: iconTransparent
+            transparentBackground: iconFill == .none,
+            gradient: iconFill == .gradient ? draftGradient : nil
         )
+    }
+
+    private var draftGradient: ProjectIconGradient? {
+        ProjectIconGradient(stops: gradientStops, direction: gradientDirection)
     }
 
     /// Whether the draft shows the repo's own icon.
@@ -708,8 +722,20 @@ private struct ProjectDialog: View {
     }
 
     private var colorControls: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Seg(value: $iconFill, options: [(.none, "None"), (.solid, "Solid"), (.gradient, "Gradient")])
+                .fixedSize()
+                .help("Squircle background")
+            switch iconFill {
+            // Without a fill the solid color tints the glyph, so the palette stays live.
+            case .none, .solid: solidColorControls
+            case .gradient: gradientControls
+            }
+        }
+    }
+
+    private var solidColorControls: some View {
         HStack(spacing: 8) {
-            transparentSwatch
             ForEach(availablePalette, id: \.self) { hex in
                 Button { iconColor = hex } label: {
                     Circle()
@@ -724,30 +750,113 @@ private struct ProjectDialog: View {
         }
     }
 
+    private var gradientControls: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            gradientPresetRow("Subtle", ProjectIconGradientPreset.subtle)
+            gradientPresetRow("Bold", ProjectIconGradientPreset.bold)
+            HStack(spacing: 6) {
+                ForEach(gradientStops.indices, id: \.self) { index in
+                    gradientStopField(index)
+                }
+                if gradientStops.count < ProjectIconGradient.maxStops {
+                    AlasButton(title: "Add Stop", icon: "plus") {
+                        gradientStops.append(gradientStops.last ?? ProjectIcon.defaultColor)
+                    }
+                }
+            }
+            HStack(spacing: 6) {
+                ForEach(ProjectIconGradient.Direction.allCases, id: \.self) { direction in
+                    gradientDirectionChip(direction)
+                }
+            }
+        }
+    }
+
+    private func gradientPresetRow(_ title: String, _ presets: [ProjectIconGradientPreset]) -> some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .font(.system(size: 11))
+                .foregroundColor(theme.color("fg-muted"))
+                .frame(width: 40, alignment: .leading)
+            ForEach(presets, id: \.name) { preset in
+                let selected = draftGradient == preset.gradient
+                Button {
+                    gradientStops = preset.gradient.stops
+                    gradientDirection = preset.gradient.direction
+                } label: {
+                    ProjectIconGradientFill(gradient: preset.gradient)
+                        .frame(width: 22, height: 22)
+                        .clipShape(Circle())
+                        .overlay(Circle().strokeBorder(selectedSwatchRing, lineWidth: selected ? 2 : 0))
+                }
+                .buttonStyle(.plain)
+                .help(preset.name)
+                .accessibilityLabel("\(preset.name) gradient")
+                .accessibilityAddTraits(selected ? [.isSelected] : [])
+            }
+        }
+    }
+
+    private func gradientStopField(_ index: Int) -> some View {
+        // Guarded reads: removing a stop can re-render a stale index once.
+        let stop = Binding(
+            get: { gradientStops.indices.contains(index) ? gradientStops[index] : "" },
+            set: { if gradientStops.indices.contains(index) { gradientStops[index] = $0 } }
+        )
+        return HStack(spacing: 4) {
+            Circle()
+                .fill(Color(hex: ProjectIcon.sanitizedColor(stop.wrappedValue)))
+                .frame(width: 10, height: 10)
+            AlasField(text: stop, placeholder: ProjectIcon.defaultColor, monospaced: true)
+                .frame(width: 86)
+            if gradientStops.count > 2 {
+                Button { gradientStops.remove(at: index) } label: {
+                    Icon(name: "x", size: 10, color: theme.color("fg-muted"))
+                }
+                .buttonStyle(.plain)
+                .help("Remove stop")
+            }
+        }
+    }
+
+    private func gradientDirectionChip(_ direction: ProjectIconGradient.Direction) -> some View {
+        Button { gradientDirection = direction } label: {
+            Text(Self.directionGlyph(direction))
+                .font(.system(size: 12))
+                .foregroundColor(theme.color("fg"))
+                .frame(width: 26, height: 22)
+                .background(gradientDirection == direction ? theme.color("bg-4") : theme.color("bg-2"))
+                .clipShape(RoundedRectangle(cornerRadius: 5))
+        }
+        .buttonStyle(.plain)
+        .help(Self.directionTitle(direction))
+        .accessibilityLabel(Self.directionTitle(direction))
+        .accessibilityAddTraits(gradientDirection == direction ? [.isSelected] : [])
+    }
+
+    private static func directionGlyph(_ direction: ProjectIconGradient.Direction) -> String {
+        switch direction {
+        case .down: "↓"
+        case .right: "→"
+        case .downRight: "↘"
+        case .upRight: "↗"
+        case .radial: "◎"
+        }
+    }
+
+    private static func directionTitle(_ direction: ProjectIconGradient.Direction) -> String {
+        switch direction {
+        case .down: "Top to bottom"
+        case .right: "Left to right"
+        case .downRight: "Diagonal down"
+        case .upRight: "Diagonal up"
+        case .radial: "Radial"
+        }
+    }
+
     /// A white ring disappears into light swatches on the light theme.
     private var selectedSwatchRing: Color {
         theme.darkMode ? .white : theme.color("fg")
-    }
-
-    /// Toggles the squircle fill off. The palette stays live because the color
-    /// becomes the glyph tint rather than the background.
-    private var transparentSwatch: some View {
-        Button { iconTransparent.toggle() } label: {
-            ImageCheckerboardBackground(tile: 5.5)
-                .background(theme.color("bg-1"))
-                .frame(width: 22, height: 22)
-                .clipShape(Circle())
-                .overlay(
-                    Circle().strokeBorder(
-                        iconTransparent ? selectedSwatchRing : theme.color("line"),
-                        lineWidth: iconTransparent ? 2 : 0.5
-                    )
-                )
-        }
-        .buttonStyle(.plain)
-        .help("Transparent background")
-        .accessibilityLabel("Transparent icon background")
-        .accessibilityAddTraits(iconTransparent ? [.isSelected] : [])
     }
 
     private var imageControls: some View {
@@ -1229,7 +1338,15 @@ private struct ProjectDialog: View {
             worktreeBranchTemplate = project.worktreeBranchTemplate ?? ""
             iconMode = project.icon.mode
             iconColor = project.icon.color
-            iconTransparent = project.icon.transparentBackground
+            if project.icon.transparentBackground {
+                iconFill = .none
+            } else if let gradient = project.icon.gradient {
+                iconFill = .gradient
+                gradientStops = gradient.stops
+                gradientDirection = gradient.direction
+            } else {
+                iconFill = .solid
+            }
             iconLabel = project.icon.label ?? ""
             iconSymbolName = project.icon.symbolName ?? "folder"
             iconEmoji = project.icon.emoji ?? "🚀"

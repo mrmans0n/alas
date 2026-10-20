@@ -18,6 +18,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 
 - Treat GitLab entries already on the merge train as queued in landing counts, status, and rows rather than showing them as completed merges.
+- Show bulk conflict-resolution results as in-app notifications instead of inline Changes-tab messages.
 - Keep Prepare visible on clean GG stacks with manual Sync and Review actions, compact sync status, and commit controls only when there are local changes or a draft. Treat unpublished commits as unsynced, not as a remote-status outage.
 
 ## [0.21.9] - 2026-10-20

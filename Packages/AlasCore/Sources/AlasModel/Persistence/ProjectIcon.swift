@@ -20,10 +20,13 @@ public struct ProjectIcon: Codable, Equatable, Sendable {
     /// Drops the squircle fill and tints the glyph with `color` instead.
     /// Ignored in `.image` mode, which never draws a background.
     public var transparentBackground: Bool
+    /// Fills the squircle with a gradient instead of `color`, which then
+    /// mirrors the first stop so older builds still show a matching solid.
+    public var gradient: ProjectIconGradient?
 
     public enum CodingKeys: String, CodingKey, Sendable {
         case mode, color, label, symbolName, emoji, imagePath, imageAssetName
-        case transparentBackground
+        case transparentBackground, gradient
     }
 
     public init(
@@ -33,7 +36,8 @@ public struct ProjectIcon: Codable, Equatable, Sendable {
         symbolName: String? = nil,
         emoji: String? = nil,
         imagePath: String? = nil,
-        transparentBackground: Bool = false
+        transparentBackground: Bool = false,
+        gradient: ProjectIconGradient? = nil
     ) {
         self.init(
             mode: mode,
@@ -43,7 +47,8 @@ public struct ProjectIcon: Codable, Equatable, Sendable {
             symbolName: symbolName,
             emoji: emoji,
             imagePath: imagePath,
-            transparentBackground: transparentBackground
+            transparentBackground: transparentBackground,
+            gradient: gradient
         )
     }
 
@@ -55,15 +60,17 @@ public struct ProjectIcon: Codable, Equatable, Sendable {
         symbolName: String?,
         emoji: String?,
         imagePath: String?,
-        transparentBackground: Bool
+        transparentBackground: Bool,
+        gradient: ProjectIconGradient?
     ) {
         self.mode = mode
-        self.color = Self.sanitizedColor(color, fallback: fallbackColor)
+        self.color = gradient?.stops.first ?? Self.sanitizedColor(color, fallback: fallbackColor)
         self.label = Self.sanitizedLabel(label)
         self.symbolName = Self.sanitizedNonEmpty(symbolName)
         self.emoji = Self.sanitizedEmoji(emoji)
         self.imagePath = Self.sanitizedNonEmpty(imagePath)
         self.transparentBackground = transparentBackground
+        self.gradient = gradient
     }
 
     public init(from decoder: Decoder) throws {
@@ -82,6 +89,7 @@ public struct ProjectIcon: Codable, Equatable, Sendable {
         if transparentBackground {
             try c.encode(true, forKey: .transparentBackground)
         }
+        try c.encodeIfPresent(gradient, forKey: .gradient)
     }
 
     public static func decode(from decoder: Decoder, fallbackColor: String) throws -> ProjectIcon {
@@ -95,7 +103,8 @@ public struct ProjectIcon: Codable, Equatable, Sendable {
             emoji: try? c.decode(String.self, forKey: .emoji),
             imagePath: (try? c.decode(String.self, forKey: .imagePath))
                 ?? (try? c.decode(String.self, forKey: .imageAssetName)),
-            transparentBackground: (try? c.decode(Bool.self, forKey: .transparentBackground)) ?? false
+            transparentBackground: (try? c.decode(Bool.self, forKey: .transparentBackground)) ?? false,
+            gradient: try? c.decode(ProjectIconGradient.self, forKey: .gradient)
         )
     }
 
@@ -111,7 +120,8 @@ public struct ProjectIcon: Codable, Equatable, Sendable {
             symbolName: symbolName,
             emoji: emoji,
             imagePath: imagePath,
-            transparentBackground: transparentBackground
+            transparentBackground: transparentBackground,
+            gradient: gradient
         )
     }
 
@@ -137,7 +147,7 @@ public struct ProjectIcon: Codable, Equatable, Sendable {
         raw.flatMap(normalizedHex) ?? normalizedHex(fallback) ?? defaultColor
     }
 
-    private static func normalizedHex(_ raw: String) -> String? {
+    static func normalizedHex(_ raw: String) -> String? {
         let value = raw.hasPrefix("#") ? String(raw.dropFirst()) : raw
         guard value.count == 6,
               value.allSatisfy({ $0.isHexDigit })
@@ -155,5 +165,56 @@ public struct ProjectIcon: Codable, Equatable, Sendable {
 
     public static func sanitizedEmoji(_ raw: String?) -> String? {
         EmojiIcon.sanitized(raw)
+    }
+}
+
+/// A squircle fill of 2...`maxStops` colors. Construction sanitizes the stops,
+/// so a decoded or typed-in gradient is either drawable or absent.
+public struct ProjectIconGradient: Codable, Equatable, Hashable, Sendable {
+    public enum Direction: String, Codable, Equatable, Hashable, CaseIterable, Sendable {
+        case down
+        case right
+        case downRight
+        case upRight
+        case radial
+    }
+
+    public static let maxStops = 3
+
+    public let stops: [String]
+    public let direction: Direction
+
+    /// Drops invalid hex stops and anything past `maxStops`; nil when fewer
+    /// than two usable stops remain.
+    public init?(stops: [String], direction: Direction = .downRight) {
+        let valid = stops.compactMap(ProjectIcon.normalizedHex).prefix(Self.maxStops)
+        guard valid.count >= 2 else { return nil }
+        self.stops = Array(valid)
+        self.direction = direction
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case stops, direction
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let stops = try c.decode([String].self, forKey: .stops)
+        // An unknown direction from a newer build keeps the colors.
+        let direction = (try? c.decode(Direction.self, forKey: .direction)) ?? .downRight
+        guard let gradient = ProjectIconGradient(stops: stops, direction: direction) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .stops,
+                in: c,
+                debugDescription: "A gradient needs at least two valid hex stops"
+            )
+        }
+        self = gradient
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(stops, forKey: .stops)
+        try c.encode(direction, forKey: .direction)
     }
 }

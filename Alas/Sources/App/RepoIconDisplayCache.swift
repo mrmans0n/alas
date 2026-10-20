@@ -27,11 +27,13 @@ final class RepoIconDisplayCache {
         let chain: [RepoIconResolver.SourceIdentity]
         let color: String
         let transparentBackground: Bool
+        let gradient: ProjectIconGradient?
 
         init(chain: [RepoIconResolver.SourceIdentity], appIcon: ProjectIcon) {
             self.chain = chain
             color = appIcon.color
             transparentBackground = appIcon.transparentBackground
+            gradient = appIcon.gradient
         }
     }
 

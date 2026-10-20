@@ -11,6 +11,10 @@ struct RightPaneGGStackSnapshot: Equatable {
 @MainActor
 final class RightPaneStore {
     private var states: [String: RightPaneState] = [:]
+    @ObservationIgnored
+    private var pendingBulkResolveNotifications: [
+        (worktreeID: String, worktreeTitle: String, report: BulkConflictResolveReport)
+    ] = []
 
     /// Id of the state currently being surfaced in the UI. Only that state
     /// runs its background sync timer + watcher; others sit cached but
@@ -106,6 +110,65 @@ final class RightPaneStore {
     }
 
     private let logger = Logger(subsystem: "io.nlopez.alas", category: "right-pane-store")
+    private func deliverBulkResolveNotification(
+        _ report: BulkConflictResolveReport,
+        sourceWorktreeID: String,
+        sourceTitle: String
+    ) {
+        guard let appState, let bannerWorktreeID = appState.inAppBannerWorktreeID else {
+            pendingBulkResolveNotifications.append((sourceWorktreeID, sourceTitle, report))
+            return
+        }
+        postBulkResolveNotification(
+            report,
+            sourceWorktreeID: sourceWorktreeID,
+            sourceTitle: sourceTitle,
+            to: bannerWorktreeID,
+            store: appState.inAppNotifications
+        )
+    }
+
+    /// Delivers bulk-resolution outcomes queued while no center pane was
+    /// mounted. The mounted notification stack supplies the visible worktree.
+    func flushPendingBulkResolveNotifications(to bannerWorktreeID: String) {
+        guard let appState, !pendingBulkResolveNotifications.isEmpty else { return }
+        for pending in pendingBulkResolveNotifications {
+            postBulkResolveNotification(
+                pending.report,
+                sourceWorktreeID: pending.worktreeID,
+                sourceTitle: pending.worktreeTitle,
+                to: bannerWorktreeID,
+                store: appState.inAppNotifications
+            )
+        }
+        pendingBulkResolveNotifications.removeAll(keepingCapacity: true)
+    }
+
+    private func postBulkResolveNotification(
+        _ report: BulkConflictResolveReport,
+        sourceWorktreeID: String,
+        sourceTitle: String,
+        to bannerWorktreeID: String,
+        store: InAppNotificationStore
+    ) {
+        let severity: InAppNotificationSeverity
+        if !report.success {
+            severity = .error
+        } else if report.remainingConflicts == 0 {
+            severity = .success
+        } else {
+            severity = .information
+        }
+        let message = bannerWorktreeID == sourceWorktreeID
+            ? report.summary
+            : "\(sourceTitle): \(report.summary)"
+        store.post(
+            message,
+            severity: severity,
+            worktreeID: bannerWorktreeID,
+            detail: report.details.isEmpty ? nil : report.details
+        )
+    }
 
     /// - Parameter activates: When false, the returned state is created or
     ///   returned cached but never becomes `activeId` — background work of the
@@ -197,6 +260,15 @@ final class RightPaneStore {
             new.lastEffectiveBaseBranch = rawDefault
             new.comparisonMode = comparisonMode
             new.isAwaitingBaseBranchProbe = shouldDeferInitialRefresh
+            new.bulkResolveDidFinish = { [weak self, weak new] report in
+                guard let new else { return }
+                let sourceTitle = new.currentBranch.isEmpty ? worktree.title : new.currentBranch
+                self?.deliverBulkResolveNotification(
+                    report,
+                    sourceWorktreeID: id,
+                    sourceTitle: sourceTitle
+                )
+            }
             new.closeDiffTabs = { [weak self] paths in
                 guard let app = self?.appState else { return }
                 app.tabs.closeDiffTabs(worktreeId: id, relativePaths: paths)
