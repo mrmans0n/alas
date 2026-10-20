@@ -6,6 +6,23 @@ struct ACPSystemNoticeView: View {
     let text: String
     @Environment(\.theme) private var theme
     var body: some View {
+        if let goal = Self.goalEvent(text) {
+            ACPGoalEventCard(isSet: goal.isSet, objective: goal.objective)
+        } else {
+            notice
+        }
+    }
+
+    /// A `/goal` confirmation ("Goal set: …", "Goal cleared: …") split into
+    /// its event and objective, so it can show as a card like Ship's.
+    static func goalEvent(_ text: String) -> (isSet: Bool, objective: String)? {
+        for (prefix, isSet) in [("Goal set: ", true), ("Goal cleared: ", false)] where text.hasPrefix(prefix) {
+            return (isSet, String(text.dropFirst(prefix.count)))
+        }
+        return nil
+    }
+
+    private var notice: some View {
         HStack(spacing: 8) {
             Image(systemName: iconName)
                 .font(.system(size: 10))
@@ -26,16 +43,49 @@ struct ACPSystemNoticeView: View {
     }
 
     /// Pick an icon based on the notice text. Interruption notices get
-    /// a stop glyph, goal confirmations the goal pill's target; everything
-    /// else stays on the generic info icon.
+    /// a stop glyph; everything else stays on the generic info icon.
     private var iconName: String {
         let lower = text.lowercased()
         if lower.hasPrefix("interrupted") { return "stop.circle" }
         if lower.contains("reconnected") { return "checkmark.circle" }
         if lower.contains("disconnected") { return "bolt.slash" }
-        if lower.hasPrefix("goal set:") { return "target" }
-        if lower.hasPrefix("goal cleared:") { return "xmark.circle" }
         return "info.circle"
+    }
+}
+
+/// A goal set or cleared, in the same chrome as `PromptCardRow`'s Ship and
+/// Review cards. The objective wraps in full, so there is nothing to disclose.
+private struct ACPGoalEventCard: View {
+    let isSet: Bool
+    let objective: String
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        let tint = isSet ? "goal" : "fg-muted"
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: isSet ? "target" : "xmark")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(theme.color(tint))
+                .frame(width: 18, height: 18)
+                .background(theme.color(tint).opacity(0.16), in: RoundedRectangle(cornerRadius: 5))
+            Text(isSet ? "Goal set" : "Goal cleared")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(theme.color("fg-faint"))
+                .fixedSize()
+                .padding(.top, 2)
+            Text(objective)
+                .font(.system(size: 12.5, weight: .semibold))
+                .foregroundStyle(theme.color(isSet ? "fg" : "fg-muted"))
+                .textSelection(.enabled)
+                .padding(.top, 1)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(theme.color("bg-2"))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(theme.color("line"), lineWidth: 0.75))
+        .accessibilityElement(children: .combine)
     }
 }
 
