@@ -205,7 +205,7 @@ struct PromptCardRow: View {
                 }
             }
             if let body = item.bodyMarkdown {
-                ACPMarkdownText(raw: body, typography: typography.flatteningHeadings())
+                ACPMarkdownText(raw: ACPMarkdownParser.hidingHTMLComments(body), typography: typography.flatteningHeadings())
             }
             if let excerpt = item.excerpt { excerptView(excerpt) }
             if live?.state == .resolved, let reply = live?.agentReply {

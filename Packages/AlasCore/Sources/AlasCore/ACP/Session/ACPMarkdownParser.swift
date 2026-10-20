@@ -159,6 +159,64 @@ public enum ACPMarkdownParser: Sendable {
         )
     }
 
+    /// Display-only filtering for review bodies. Code literals retain HTML comments.
+    public static func hidingHTMLComments(_ text: String) -> String {
+        guard text.contains("<!--") else { return text }
+        var fence: FenceDelimiter?
+        var inComment = false
+        var result: [String] = []
+        for line in text.components(separatedBy: "\n") {
+            if let opening = fence {
+                result.append(line)
+                if closesFence(line, opening) { fence = nil }
+                continue
+            }
+            if !inComment, let opening = matchFence(line) {
+                fence = opening
+                result.append(line)
+                continue
+            }
+            var visible = ""
+            var index = line.startIndex
+            while index < line.endIndex {
+                if inComment {
+                    guard let end = line[index...].range(of: "-->") else { break }
+                    index = end.upperBound
+                    inComment = false
+                } else if line[index...].hasPrefix("<!--") {
+                    inComment = true
+                    index = line.index(index, offsetBy: 4)
+                } else if line[index] == "\\" {
+                    visible.append(line[index])
+                    index = line.index(after: index)
+                    if index < line.endIndex {
+                        visible.append(line[index])
+                        index = line.index(after: index)
+                    }
+                } else if line[index] == "`" {
+                    let run = line[index...].prefix(while: { $0 == "`" })
+                    let afterRun = line.index(index, offsetBy: run.count)
+                    var search = afterRun
+                    var closing: String.Index?
+                    while search < line.endIndex {
+                        guard let tick = line[search...].firstIndex(of: "`") else { break }
+                        let count = line[tick...].prefix(while: { $0 == "`" }).count
+                        search = line.index(tick, offsetBy: count)
+                        if count == run.count { closing = search; break }
+                    }
+                    let end = closing ?? afterRun
+                    visible += line[index..<end]
+                    index = end
+                } else {
+                    visible.append(line[index])
+                    index = line.index(after: index)
+                }
+            }
+            result.append(visible)
+        }
+        return result.joined(separator: "\n")
+    }
+
     public static func parse(_ text: String) -> [Block] {
         var blocks: [Block] = []
         var i = 0

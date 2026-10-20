@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixes
+
+- Hide HTML comment metadata in review cards while preserving the original bodies and comments inside code literals.
+
 ## [0.21.9] - 2026-10-20
 
 ### ✨ Features
