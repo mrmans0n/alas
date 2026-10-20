@@ -13,10 +13,18 @@ let package = Package(
         .package(url: "https://github.com/tree-sitter/swift-tree-sitter", exact: "0.25.0"),
     ],
     targets: [
+        // The modules AlasCore is split into, bottom to top; see
+        // docs/plans/2026-10-20-alascore-modules.md. AlasCore re-exports them.
+        .target(
+            name: "AlasFoundation",
+            linkerSettings: [.linkedLibrary("sqlite3")]
+        ),
         .target(
             name: "AlasCore",
-            dependencies: [.product(name: "SwiftTreeSitter", package: "swift-tree-sitter")],
-            linkerSettings: [.linkedLibrary("sqlite3")]
+            dependencies: [
+                "AlasFoundation",
+                .product(name: "SwiftTreeSitter", package: "swift-tree-sitter"),
+            ]
         ),
         .executableTarget(name: "alas-host", dependencies: ["AlasCore"]),
         // Sets a scratch profile before the tests start; see profile.c.
