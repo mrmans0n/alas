@@ -1,5 +1,6 @@
 import Testing
 @testable import AlasCore
+@testable import AlasHostCore
 
 struct ACPRequestAnswersTests {
     /// Every question needs a selection of its own options, and a question

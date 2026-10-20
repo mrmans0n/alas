@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import AlasCore
+@testable import AlasHostCore
 
 struct HostLaunchAgentTests {
     private let executable = URL(fileURLWithPath: "/Applications/Alas.app/Contents/Resources/alas-host/alas-host")

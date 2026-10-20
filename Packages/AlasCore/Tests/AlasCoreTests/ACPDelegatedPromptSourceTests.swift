@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import AlasCore
+@testable import AlasHostCore
 
 struct ACPDelegatedPromptSourceTests {
     @Test("app actions keep their attribution through queue and transcript persistence", arguments: [

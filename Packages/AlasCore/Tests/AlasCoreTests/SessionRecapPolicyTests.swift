@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 @testable import AlasCore
+@testable import AlasHostCore
 
 struct SessionRecapPolicyTests {
     struct Case: Sendable {

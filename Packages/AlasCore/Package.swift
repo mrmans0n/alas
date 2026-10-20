@@ -34,15 +34,15 @@ let package = Package(
             dependencies: ["AlasFoundation", "AlasModel", "AlasPlatform", "AlasFeatures", "AlasCode"]
         ),
         .target(
+            name: "AlasHostCore",
+            dependencies: ["AlasFoundation", "AlasModel", "AlasPlatform", "AlasFeatures", "AlasCode", "AlasAgents"]
+        ),
+        // The umbrella: re-exports every module, so the app imports one.
+        .target(
             name: "AlasCore",
             dependencies: [
-                "AlasFoundation",
-                "AlasModel",
-                "AlasPlatform",
-                "AlasFeatures",
-                "AlasCode",
-                "AlasAgents",
-                .product(name: "SwiftTreeSitter", package: "swift-tree-sitter"),
+                "AlasFoundation", "AlasModel", "AlasPlatform", "AlasFeatures", "AlasCode", "AlasAgents",
+                "AlasHostCore",
             ]
         ),
         .executableTarget(name: "alas-host", dependencies: ["AlasCore"]),

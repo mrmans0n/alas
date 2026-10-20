@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import AlasCore
+@testable import AlasHostCore
 
 struct HostProtocolTests {
     private static let worktreePath = URL(fileURLWithPath: "/srv/feature")

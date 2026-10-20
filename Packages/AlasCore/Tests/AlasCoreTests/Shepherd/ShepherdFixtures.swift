@@ -1,5 +1,6 @@
 import Foundation
 @testable import AlasCore
+@testable import AlasHostCore
 
 /// Builders shared by the shepherd suites. Values go through the real
 /// initializers so the fixtures break loudly when a model changes.

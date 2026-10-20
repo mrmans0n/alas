@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import AlasCore
+@testable import AlasHostCore
 
 struct ScratchProfileTests {
     /// The tests run on a scratch profile, never the everyday one: every

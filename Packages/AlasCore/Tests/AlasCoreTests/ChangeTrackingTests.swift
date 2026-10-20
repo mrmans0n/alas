@@ -1,5 +1,6 @@
 import Testing
 @testable import AlasCore
+@testable import AlasHostCore
 
 @MainActor
 struct ChangeTrackingTests {

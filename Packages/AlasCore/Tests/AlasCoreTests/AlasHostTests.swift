@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @_spi(Testing) @testable import AlasCore
+@_spi(Testing) @testable import AlasHostCore
 
 @MainActor
 struct AlasHostTests {

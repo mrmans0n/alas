@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import AlasCore
+@testable import AlasHostCore
 
 struct RemoteVisualMCPBridgeTests {
     @Test("colliding MCP ids from concurrent exchanges reach their own callers with their JSON type")

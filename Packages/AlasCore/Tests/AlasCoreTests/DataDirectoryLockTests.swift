@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import AlasCore
+@testable import AlasHostCore
 
 struct DataDirectoryLockTests {
     /// One holder at a time: a second taker is told who holds the lock, and

@@ -6,3 +6,4 @@
 @_exported import AlasFeatures
 @_exported import AlasCode
 @_exported import AlasAgents
+@_exported import AlasHostCore

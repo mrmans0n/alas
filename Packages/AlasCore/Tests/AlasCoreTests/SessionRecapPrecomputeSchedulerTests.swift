@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import AlasCore
+@testable import AlasHostCore
 
 /// Every wait is on an event the scheduler must produce, so a regression
 /// would hang; the time limit turns that into a failure.

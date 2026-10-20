@@ -1,5 +1,6 @@
 import Testing
 @testable import AlasCore
+@testable import AlasHostCore
 
 struct AlasCLIReviewTargetResolverTests {
     @Test func parsesBareNumber() {
