@@ -51,7 +51,10 @@ struct ChangesTabView: View {
                     currentHeadSHA: rps.currentHeadSHA
                 ),
                 mutationError: rps.ggActionState.lastError,
-                reconciliationAction: Self.reconciliationAction(from: ggReadinessModel),
+                reconciliationAction: Self.reconciliationAction(
+                    from: ggReadinessModel,
+                    mutationDisabledReason: ggPreparationMutationDisabledReason
+                ),
                 landingStatus: landingStatus,
                 syncProgress: GGStackReadinessModel.syncProgress(
                     action: rps.ggActionState,
@@ -65,7 +68,13 @@ struct ChangesTabView: View {
                     } ?? rps.behindBase?.count ?? 0,
                     effectiveConfig: rps.ggEffectiveConfig
                 ),
-                canDismissSyncFailure: rps.ggActionState.canDismissCompletedSyncFailure
+                canDismissSyncFailure: rps.ggActionState.canDismissCompletedSyncFailure,
+                stackStatus: Self.ggPreparationStackStatus(
+                    loadState: rps.ggStackLoadState,
+                    stack: rps.ggStack,
+                    remoteError: rps.ggStackRemoteError,
+                    remoteEnrichmentPending: rps.ggStackRemoteEnrichmentPending
+                )
             )
         }
         let readiness = ReviewReadinessModel(
@@ -423,11 +432,49 @@ struct ChangesTabView: View {
     }
 
     static func reconciliationAction(
-        from readiness: GGStackReadinessModel?
+        from readiness: GGStackReadinessModel?,
+        mutationDisabledReason: String? = nil
     ) -> GGStackReadinessModel.Action? {
-        readiness?.primaryActions.first {
+        guard let readiness, !readiness.isPaused else { return nil }
+        if let recommended = readiness.primaryActions.first(where: {
             $0.kind == .sync || $0.kind == .rebase
+        }) {
+            return recommended
         }
+        return GGStackReadinessModel.Action(
+            kind: .sync,
+            title: "Sync stack",
+            detail: mutationDisabledReason,
+            isEnabled: mutationDisabledReason == nil,
+            isInFlight: false,
+            emphasis: .normal
+        )
+    }
+
+    static func ggPreparationStackStatus(
+        loadState: GGStackLoadState,
+        stack: GGStack?,
+        remoteError: String?,
+        remoteEnrichmentPending: Bool
+    ) -> ChangesPreparationModel.GGStackStatus {
+        switch loadState {
+        case .inactive, .failed:
+            return .unavailable
+        case .loading:
+            return .loading
+        case .empty:
+            return .empty
+        case .loaded:
+            break
+        }
+        guard let stack else { return .unavailable }
+        if remoteEnrichmentPending { return .refreshingRemote }
+        if remoteError != nil { return .remoteUnavailable }
+        let unsynced = max(0, stack.totalCommits - stack.syncedCommits)
+        if unsynced > 0 {
+            return .unsynced(commits: unsynced)
+        }
+        return .synced(commits: stack.syncedCommits)
     }
 
     static func landingStatus(

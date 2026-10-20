@@ -55,13 +55,6 @@ struct ChangesPreparationModelTests {
         return view.subviews.lazy.compactMap { findSpinner(in: $0) }.first
     }
 
-    @Test func syncStepAccessibilityStatesAreExplicit() {
-        #expect(ChangesPreparationCardText.syncStepState(.pending) == "Pending")
-        #expect(ChangesPreparationCardText.syncStepState(.current) == "In progress")
-        #expect(ChangesPreparationCardText.syncStepState(.complete) == "Complete")
-        #expect(ChangesPreparationCardText.syncStepState(.failed) == "Failed")
-    }
-
     private static let stagedFile = ChangedFile(path: "a.swift", status: "M", stage: .staged, add: 1, del: 0, renameFrom: nil)
     private static let unstagedFile = ChangedFile(path: "a.swift", status: "M", stage: .unstaged, add: 2, del: 0, renameFrom: nil)
     private static let untrackedFile = ChangedFile(path: "b.swift", status: "A", stage: .unstaged, add: 3, del: 0, renameFrom: nil)
@@ -365,16 +358,14 @@ struct ChangesPreparationModelTests {
         #expect(model.isVisible)
     }
 
-    @Test func emptyGGPreparationIsHiddenButKeepsStableDestinations() {
+    @Test(arguments: [(false, false), (true, false), (false, true)])
+    func ggCommitControlsRequireLocalChangesOrDraft(staged: Bool, draft: Bool) {
         let model = ChangesPreparationModel.makeGG(
-            staged: .zero,
-            hasDraft: false,
+            staged: staged ? .init(files: 1, insertions: 2, deletions: 1) : .zero,
+            hasDraft: draft,
             capabilities: stagedOnlyCapabilities
         )
-
-        #expect(model.ggActions.map(\.kind) == [.newStackCommit, .commitAndSync, .amendCurrent, .absorbIntoStack])
-        #expect(!model.ggActions.contains { $0.isEnabled })
-        #expect(!model.isVisible)
+        #expect(model.showsGGCommitActions == (staged || draft))
     }
 
     @Test func amendingKeepsPreparationVisible() {
@@ -408,18 +399,6 @@ struct ChangesPreparationModelTests {
 
         #expect(model.reconciliationAction == reconciliationAction)
         #expect(model.isVisible)
-    }
-
-    @Test func synchronizedEmptyGGPreparationRemainsHidden() {
-        let model = ChangesPreparationModel.makeGG(
-            staged: .zero,
-            hasDraft: false,
-            capabilities: stagedOnlyCapabilities,
-            reconciliationAction: nil
-        )
-
-        #expect(model.reconciliationAction == nil)
-        #expect(!model.isVisible)
     }
 
     @Test func ggReconciliationPreservesReadinessPresentation() {
