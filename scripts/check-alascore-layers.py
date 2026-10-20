@@ -89,7 +89,9 @@ def members(text):
     joined = []
     for line in lines:
         last = joined[-1] if joined else ""
-        open_case = CASES.match(last) and (last.rstrip().endswith(",") or last.count("(") > last.count(")"))
+        # Parentheses inside a string raw value do not open anything.
+        code = re.sub(r'"(?:[^"\\]|\\.)*"', '""', last)
+        open_case = CASES.match(code) and (code.rstrip().endswith(",") or code.count("(") > code.count(")"))
         if open_case:
             joined[-1] = joined[-1].rstrip() + " " + line.strip()
         else:
