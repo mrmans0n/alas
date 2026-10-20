@@ -150,8 +150,11 @@ public struct WhatsNewCatalog: Sendable {
         }
         if let media = entry.headline.media {
             guard !media.hasPrefix("/") else { return "Media path must be relative" }
-            let resolved = root.appendingPathComponent(media).standardizedFileURL
-            guard resolved.path.hasPrefix(root.path + "/") else {
+            // Resolve symlinks on both sides so a link inside the folder
+            // cannot point the shipped media outside it.
+            let realRoot = root.resolvingSymlinksInPath()
+            let resolved = root.appendingPathComponent(media).standardizedFileURL.resolvingSymlinksInPath()
+            guard resolved.path.hasPrefix(realRoot.path + "/") else {
                 return "Media path escapes the directory"
             }
             var isDirectory: ObjCBool = false

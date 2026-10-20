@@ -58,6 +58,8 @@ struct WhatsNewTests {
         let messageFragment: String
         /// File to create relative to the entries directory before loading.
         var extraFile: String? = nil
+        /// Symlink (path, destination) to create relative to the entries directory.
+        var symlink: (path: String, destination: String)? = nil
         var testDescription: String { name }
     }
 
@@ -84,6 +86,9 @@ struct WhatsNewTests {
         InvalidCase(
             name: "media is a directory", json: entryJSON(headlineExtra: ", \"media\": \"media\""),
             messageFragment: "directory", extraFile: "media/a.gif"),
+        InvalidCase(
+            name: "symlink escaping the directory", json: entryJSON(headlineExtra: ", \"media\": \"link.gif\""),
+            messageFragment: "escapes", extraFile: "../outside.gif", symlink: ("link.gif", "../outside.gif")),
         InvalidCase(name: "empty media path", json: entryJSON(headlineExtra: ", \"media\": \"\""), messageFragment: "escapes"),
     ]
 
@@ -95,6 +100,10 @@ struct WhatsNewTests {
             try FileManager.default.createDirectory(
                 at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             FileManager.default.createFile(atPath: url.path, contents: Data())
+        }
+        if let link = testCase.symlink {
+            try FileManager.default.createSymbolicLink(
+                atPath: dir.appendingPathComponent(link.path).path, withDestinationPath: link.destination)
         }
         let catalog = WhatsNewCatalog.load(directory: dir)
         #expect(catalog.entries.isEmpty)
