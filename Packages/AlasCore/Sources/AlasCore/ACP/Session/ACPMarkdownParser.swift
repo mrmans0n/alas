@@ -226,8 +226,16 @@ public enum ACPMarkdownParser: Sendable {
                     index = visibleEnd
                     if index == end { codeEnd = nil }
                 } else if inComment {
-                    guard let end = line[index...].range(of: "-->") else { break }
-                    index = end.upperBound
+                    let limit = isTable
+                        ? (line[index...].firstIndex(of: "|") ?? line.endIndex)
+                        : line.endIndex
+                    if let end = line[index..<limit].range(of: "-->") {
+                        index = end.upperBound
+                    } else if isTable {
+                        index = limit
+                    } else {
+                        break
+                    }
                     inComment = false
                 } else if line[index...].hasPrefix("<!--") {
                     inComment = true
@@ -265,6 +273,7 @@ public enum ACPMarkdownParser: Sendable {
                 }
             }
             result.append(visible)
+            if isTable { inComment = false }
         }
         return result.joined(separator: "\n")
     }

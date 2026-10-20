@@ -38,6 +38,17 @@ struct ACPMarkdownParserTests {
         #expect(visible == header + expected)
     }
 
+    @Test(arguments: [
+        ("| <!-- hidden | Visible |", [["", "Visible"]]),
+        ("| <!-- hidden | Visible --> |", [["", "Visible -->"]]),
+        ("| Visible | <!-- hidden\n| Next | Row |", [["Visible", ""], ["Next", "Row"]])
+    ])
+    func tableCellsHaveIndependentComments(row: String, expected: [[String]]) {
+        let header = "| First | Second |\n| --- | --- |\n"
+        let visible = ACPMarkdownParser.hidingHTMLComments(header + row)
+        #expect(ACPMarkdownParser.parse(visible) == [.table(header: ["First", "Second"], rows: expected)])
+    }
+
     @Test
     func prosePipesDoNotSplitMultilineCodeSpans() {
         let source = "`before | text\n<!-- literal -->\nafter`"
