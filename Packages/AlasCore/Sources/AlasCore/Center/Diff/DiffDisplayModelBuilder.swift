@@ -309,3 +309,33 @@ public enum DiffDisplayModelBuilder: Sendable {
         )
     }
 }
+
+extension DiffDisplayModelBuilder {
+    /// Builds one model per input off the main actor, several at a time,
+    /// returned in input order.
+    public static func buildConcurrently(
+        _ inputs: [(diff: ParsedDiff, filePath: String)],
+        maxConcurrency: Int = ProcessInfo.processInfo.activeProcessorCount
+    ) async throws -> [DiffDisplayModel] {
+        try await withThrowingTaskGroup(of: (Int, DiffDisplayModel).self) { group in
+            var models = [DiffDisplayModel?](repeating: nil, count: inputs.count)
+            var next = 0
+            func addNext() {
+                guard next < inputs.count else { return }
+                let index = next
+                let input = inputs[index]
+                next += 1
+                group.addTask(priority: .userInitiated) {
+                    try Task.checkCancellation()
+                    return (index, build(diff: input.diff, filePath: input.filePath))
+                }
+            }
+            for _ in 0..<max(1, maxConcurrency) { addNext() }
+            while let (index, model) = try await group.next() {
+                models[index] = model
+                addNext()
+            }
+            return models.map { $0! }
+        }
+    }
+}

@@ -48,6 +48,37 @@ struct ReviewChangesLoaderTests {
         #expect(session.summary.groups.map(\.title) == ["Unstaged", "Staged"])
     }
 
+    @Test(arguments: ["R", "C"])
+    func diffsRenamesAndCopiesSinglyEvenWhenTheBatchListsThem(status: String) async throws {
+        let copyDiff = ParsedDiff(hunks: [
+            ParsedDiff.Hunk(
+                header: "@@ -1 +1 @@",
+                oldStart: 1,
+                newStart: 1,
+                lines: [.init(kind: .add, text: "edited copy", oldNumber: nil, newNumber: 1)]
+            ),
+        ])
+        let wholeFileAdd = ParsedDiff(hunks: [
+            ParsedDiff.Hunk(
+                header: "@@ -0,0 +1 @@",
+                oldStart: 0,
+                newStart: 1,
+                lines: [.init(kind: .add, text: "whole file", oldNumber: nil, newNumber: 1)]
+            ),
+        ])
+        let git = FakeReviewChangesGitClient(
+            status: [
+                ChangedFile(path: "copy.swift", status: status, stage: .staged, add: 1, del: 0, renameFrom: "source.swift"),
+            ],
+            diffs: [.init(path: "copy.swift", staged: true, originalPath: "source.swift"): copyDiff],
+            batchedStaged: ["copy.swift": wholeFileAdd]
+        )
+
+        let session = try await ReviewChangesLoader(git: git).load(worktreePath: URL(fileURLWithPath: "/tmp/repo"))
+
+        #expect(session.files.map(\.parsedDiff) == [copyDiff])
+    }
+
     @Test func rendersSupportedImageFilesWithAnImageProvider() async throws {
         let git = FakeReviewChangesGitClient(
             status: [
@@ -279,6 +310,7 @@ private struct FakeReviewChangesGitClient: ReviewChangesGitClient {
     var status: [ChangedFile]
     var imageStatus: [ChangedFile] = []
     var diffs: [DiffKey: ParsedDiff]
+    var batchedStaged: [String: ParsedDiff] = [:]
     var snapshots: [DiffKey: DiffReviewFileContextSnapshot] = [:]
     var contextSnapshotCalls = ContextSnapshotCallRecorder()
     var imageProviderCalls = ImageProviderCallRecorder()
@@ -293,6 +325,10 @@ private struct FakeReviewChangesGitClient: ReviewChangesGitClient {
 
     func diff(worktreePath: URL, file: String, staged: Bool, originalPath: String?) async throws -> ParsedDiff {
         diffs[DiffKey(path: file, staged: staged, originalPath: originalPath), default: ParsedDiff(hunks: [])]
+    }
+
+    func workingCopyDiffsByFile(worktreePath: URL, staged: Bool, paths: [String]) async throws -> [String: ParsedDiff] {
+        staged ? batchedStaged.filter { paths.contains($0.key) } : [:]
     }
 
     func contextSnapshot(worktreePath: URL, file: String, staged: Bool, originalPath: String?) async throws -> DiffReviewFileContextSnapshot {

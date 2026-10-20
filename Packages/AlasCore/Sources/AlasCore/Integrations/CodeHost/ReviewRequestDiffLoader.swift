@@ -27,17 +27,29 @@ public struct ReviewRequestDiffLoader: Sendable {
             cwd: cwd
         )
 
-        var files: [DiffReviewFileSectionModel] = []
+        var parsedDiffs: [ParsedDiff] = []
         for section in sections {
             try Task.checkCancellation()
-            files.append(try await fileSection(
-                for: section,
+            parsedDiffs.append(DiffParser.parse(section.rawDiff))
+        }
+        let textIndices = sections.indices.filter { Self.canRenderText(sections[$0], diff: parsedDiffs[$0]) }
+        let textModels = try await DiffDisplayModelBuilder.buildConcurrently(
+            textIndices.map { (diff: parsedDiffs[$0], filePath: sections[$0].path) }
+        )
+        let displayModels = Dictionary(uniqueKeysWithValues: zip(textIndices, textModels))
+        try Task.checkCancellation()
+
+        let files = sections.indices.map { index in
+            fileSection(
+                for: sections[index],
+                parsed: parsedDiffs[index],
+                displayModel: displayModels[index],
                 namespace: namespace(for: remote.kind),
                 remote: remote,
                 request: request,
                 cwd: cwd,
                 imageRevisionContext: imageRevisionContext
-            ))
+            )
         }
 
         return DiffReviewLoadedSession(
@@ -46,20 +58,25 @@ public struct ReviewRequestDiffLoader: Sendable {
         )
     }
 
+    private static func canRenderText(_ section: ProviderDiffFileSection, diff: ParsedDiff) -> Bool {
+        !diff.hunks.isEmpty && !ImageFileType.isSupported(currentPath: section.path, originalPath: section.originalPath)
+    }
+
     private func fileSection(
         for section: ProviderDiffFileSection,
+        parsed: ParsedDiff,
+        displayModel: DiffDisplayModel?,
         namespace: String,
         remote: CodeHostRemote,
         request: ReviewRequest,
         cwd: URL,
         imageRevisionContext: HostedImageRevisionContext?
-    ) async throws -> DiffReviewFileSectionModel {
-        let parsed = DiffParser.parse(section.rawDiff)
+    ) -> DiffReviewFileSectionModel {
         let isImage = ImageFileType.isSupported(
             currentPath: section.path,
             originalPath: section.originalPath
         )
-        let canRenderText = !parsed.hunks.isEmpty && !isImage
+        let canRenderText = Self.canRenderText(section, diff: parsed)
         let counts = lineCounts(in: parsed)
         let summary = DiffReviewFileSummary(
             path: section.path,
@@ -76,9 +93,7 @@ public struct ReviewRequestDiffLoader: Sendable {
         return DiffReviewFileSectionModel(
             summary: summary,
             parsedDiff: parsed,
-            displayModel: canRenderText
-                ? try await buildDisplayModel(diff: parsed, filePath: section.path)
-                : nil,
+            displayModel: displayModel,
             placeholderMessage: (canRenderText || isImage) ? nil : placeholderMessage(for: section, diff: parsed),
             openFile: nil,
             contextProvider: nil,
@@ -311,15 +326,6 @@ public struct ReviewRequestDiffLoader: Sendable {
         flush()
 
         return sections
-    }
-
-    private func buildDisplayModel(diff: ParsedDiff, filePath: String) async throws -> DiffDisplayModel {
-        try Task.checkCancellation()
-        let model = await Task.detached(priority: .userInitiated) {
-            DiffDisplayModelBuilder.build(diff: diff, filePath: filePath)
-        }.value
-        try Task.checkCancellation()
-        return model
     }
 
     private func lineCounts(in diff: ParsedDiff) -> (additions: Int, deletions: Int) {
