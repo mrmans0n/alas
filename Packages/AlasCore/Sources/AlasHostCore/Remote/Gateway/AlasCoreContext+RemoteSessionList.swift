@@ -5,6 +5,7 @@ import AlasPlatform
 import AlasFeatures
 import AlasCode
 import AlasAgents
+import AlasACP
 
 extension AlasCoreContext {
     /// Every unarchived session of the loaded managers as a Remote list shows

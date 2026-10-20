@@ -6,6 +6,7 @@ import AlasPlatform
 import AlasFeatures
 import AlasCode
 import AlasAgents
+import AlasACP
 
 private let logger = Logger(subsystem: "io.nlopez.alas", category: "RemoteLists")
 

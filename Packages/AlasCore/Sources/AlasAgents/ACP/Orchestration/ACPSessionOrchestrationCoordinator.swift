@@ -4,6 +4,8 @@ import AlasModel
 import AlasPlatform
 import AlasFeatures
 import AlasCode
+import AlasACP
+import AlasSessions
 
 @MainActor
 public final class ACPSessionOrchestrationCoordinator {

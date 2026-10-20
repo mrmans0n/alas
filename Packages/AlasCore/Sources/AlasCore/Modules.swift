@@ -6,5 +6,8 @@
 @_exported import AlasFeatures
 @_exported import AlasIntegrations
 @_exported import AlasCode
+@_exported import AlasACP
+@_exported import AlasSessions
+@_exported import AlasAgentKit
 @_exported import AlasAgents
 @_exported import AlasHostCore

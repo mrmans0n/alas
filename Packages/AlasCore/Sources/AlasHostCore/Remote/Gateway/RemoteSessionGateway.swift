@@ -5,6 +5,9 @@ import AlasPlatform
 import AlasFeatures
 import AlasCode
 import AlasAgents
+import AlasACP
+import AlasAgentKit
+import AlasSessions
 
 /// Bridges one remote WebSocket connection to the in-process ACP world.
 ///

@@ -6,6 +6,8 @@ import AlasModel
 import AlasPlatform
 import AlasFeatures
 import AlasCode
+import AlasACP
+import AlasSessions
 
 /// Aggregates per-subsystem memory accounting across all attached
 /// `ACPSessionManager`s. Pull-model: the snapshot walks live state when

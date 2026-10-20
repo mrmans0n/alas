@@ -5,6 +5,7 @@ import AlasPlatform
 import AlasFeatures
 import AlasCode
 import AlasAgents
+import AlasACP
 
 /// One transcript message as sent to the web client. `text` carries the
 /// human-visible body for simple kinds; `json` carries a structured blob

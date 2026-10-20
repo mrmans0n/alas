@@ -5,6 +5,8 @@ import AlasPlatform
 import AlasFeatures
 import AlasCode
 import AlasAgents
+import AlasACP
+import AlasSessions
 
 /// Where a new session runs.
 public enum SessionTarget: Codable, Hashable, Sendable {

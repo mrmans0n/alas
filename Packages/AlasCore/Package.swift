@@ -1,6 +1,11 @@
 // swift-tools-version: 6.0
 import PackageDescription
 
+/// The modules below the agent ones, which each agent module depends on.
+let base: [Target.Dependency] = [
+    "AlasFoundation", "AlasModel", "AlasPlatform", "AlasFeatures", "AlasIntegrations", "AlasCode",
+]
+
 let package = Package(
     name: "AlasCore",
     platforms: [.macOS(.v15)],
@@ -33,21 +38,15 @@ let package = Package(
                 .product(name: "SwiftTreeSitter", package: "swift-tree-sitter"),
             ]
         ),
-        .target(
-            name: "AlasAgents",
-            dependencies: ["AlasFoundation", "AlasModel", "AlasPlatform", "AlasFeatures", "AlasIntegrations", "AlasCode"]
-        ),
-        .target(
-            name: "AlasHostCore",
-            dependencies: ["AlasFoundation", "AlasModel", "AlasPlatform", "AlasFeatures", "AlasIntegrations", "AlasCode", "AlasAgents"]
-        ),
+        .target(name: "AlasACP", dependencies: base),
+        .target(name: "AlasSessions", dependencies: base + ["AlasACP"]),
+        .target(name: "AlasAgentKit", dependencies: base + ["AlasACP", "AlasSessions"]),
+        .target(name: "AlasAgents", dependencies: base + ["AlasACP", "AlasSessions", "AlasAgentKit"]),
+        .target(name: "AlasHostCore", dependencies: base + ["AlasACP", "AlasSessions", "AlasAgentKit", "AlasAgents"]),
         // The umbrella: re-exports every module, so the app imports one.
         .target(
             name: "AlasCore",
-            dependencies: [
-                "AlasFoundation", "AlasModel", "AlasPlatform", "AlasFeatures", "AlasIntegrations", "AlasCode", "AlasAgents",
-                "AlasHostCore",
-            ]
+            dependencies: base + ["AlasACP", "AlasSessions", "AlasAgentKit", "AlasAgents", "AlasHostCore"]
         ),
         .executableTarget(name: "alas-host", dependencies: ["AlasCore"]),
         // Sets a scratch profile before the tests start; see profile.c.

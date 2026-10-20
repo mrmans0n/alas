@@ -5,6 +5,7 @@ import AlasPlatform
 import AlasFeatures
 import AlasCode
 import AlasAgents
+import AlasACP
 
 extension AlasHost {
     /// Sessions an agent's session delegates work to, with the coordinator's

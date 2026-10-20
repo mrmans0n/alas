@@ -5,6 +5,8 @@ import AlasPlatform
 import AlasFeatures
 import AlasCode
 import AlasAgents
+import AlasAgentKit
+import AlasSessions
 
 /// What a gateway asks of the host besides session verbs: the lists it
 /// serves and the sessions it creates. `host(_:caller:)` asks the host; tests

@@ -5,6 +5,7 @@ import AlasPlatform
 import AlasFeatures
 import AlasCode
 import AlasAgents
+import AlasACP
 
 /// Wire protocol version advertised in `hello`. Bump only for changes an
 /// older client or server cannot tolerate; additive optional fields do not

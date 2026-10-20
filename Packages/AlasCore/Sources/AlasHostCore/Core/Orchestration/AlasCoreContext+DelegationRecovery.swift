@@ -5,6 +5,7 @@ import AlasPlatform
 import AlasFeatures
 import AlasCode
 import AlasAgents
+import AlasSessions
 
 extension AlasCoreContext {
     /// Delivers the messages waiting for session `sessionID`, one delivery

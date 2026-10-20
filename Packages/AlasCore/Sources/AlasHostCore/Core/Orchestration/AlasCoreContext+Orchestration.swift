@@ -6,6 +6,9 @@ import AlasFeatures
 import AlasCode
 import AlasAgents
 import AlasIntegrations
+import AlasACP
+import AlasAgentKit
+import AlasSessions
 
 extension AlasCoreContext {
     func makeOrchestrationCoordinator() -> ACPSessionOrchestrationCoordinator {
