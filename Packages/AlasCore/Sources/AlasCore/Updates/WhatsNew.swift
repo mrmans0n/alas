@@ -152,3 +152,51 @@ public struct WhatsNewCatalog: Sendable {
         return nil
     }
 }
+
+/// Decides when the "What's new" card appears and what "seen" version to persist.
+public enum WhatsNewPolicy {
+    public struct LaunchDecision: Equatable, Sendable {
+        /// Card to show now.
+        public let entry: WhatsNewEntry?
+        /// Value to write immediately; nil leaves the stored value untouched.
+        public let seenVersionToStore: SemanticVersion?
+
+        public init(entry: WhatsNewEntry?, seenVersionToStore: SemanticVersion?) {
+            self.entry = entry
+            self.seenVersionToStore = seenVersionToStore
+        }
+    }
+
+    public static func onLaunch(
+        track: ReleaseTrack, current: SemanticVersion, lastSeen: SemanticVersion?,
+        isExistingInstall: Bool, entries: [WhatsNewEntry]
+    ) -> LaunchDecision {
+        guard track == .stable else { return LaunchDecision(entry: nil, seenVersionToStore: nil) }
+
+        let candidate: WhatsNewEntry?
+        if let lastSeen {
+            guard lastSeen < current else { return LaunchDecision(entry: nil, seenVersionToStore: nil) }
+            candidate = entries.filter { $0.version > lastSeen && $0.version <= current }
+                .max { $0.version < $1.version }
+        } else if isExistingInstall {
+            candidate = entries.first { $0.version == current }
+        } else {
+            return LaunchDecision(entry: nil, seenVersionToStore: current)
+        }
+        return LaunchDecision(entry: candidate, seenVersionToStore: candidate == nil ? current : nil)
+    }
+
+    /// Value to store when the card is dismissed or acted on.
+    public static func seenVersionAfterDismiss(
+        current: SemanticVersion, lastSeen: SemanticVersion?
+    ) -> SemanticVersion {
+        max(current, lastSeen ?? current)
+    }
+
+    /// Entry for Help > What's New: newest with version <= current.
+    public static func latestEntry(
+        current: SemanticVersion, entries: [WhatsNewEntry]
+    ) -> WhatsNewEntry? {
+        entries.filter { $0.version <= current }.max { $0.version < $1.version }
+    }
+}

@@ -102,4 +102,58 @@ struct WhatsNewTests {
         #expect(catalog.entries.count == 1)
         #expect(catalog.problems.isEmpty)
     }
+
+    // MARK: - Policy
+
+    private static func v(_ raw: String) -> SemanticVersion { SemanticVersion(parsing: raw)! }
+
+    private static let fixtureEntries: [WhatsNewEntry] = ["0.21.0", "0.22.0", "0.23.0"].map {
+        WhatsNewEntry(version: v($0), headline: WhatsNewHeadline(title: "T", body: "B"))
+    }
+
+    struct LaunchCase: Sendable, CustomTestStringConvertible {
+        let name: String
+        let track: ReleaseTrack
+        let current: String
+        let lastSeen: String?
+        let existing: Bool
+        let expectedEntry: String?
+        let expectedStore: String?
+        var testDescription: String { name }
+    }
+
+    static let launchCases: [LaunchCase] = [
+        LaunchCase(name: "fresh install", track: .stable, current: "0.22.0", lastSeen: nil, existing: false, expectedEntry: nil, expectedStore: "0.22.0"),
+        LaunchCase(name: "existing user, first release with feature", track: .stable, current: "0.22.0", lastSeen: nil, existing: true, expectedEntry: "0.22.0", expectedStore: nil),
+        LaunchCase(name: "existing user, no entry for current", track: .stable, current: "0.22.1", lastSeen: nil, existing: true, expectedEntry: nil, expectedStore: "0.22.1"),
+        LaunchCase(name: "update with entry", track: .stable, current: "0.22.0", lastSeen: "0.21.0", existing: true, expectedEntry: "0.22.0", expectedStore: nil),
+        LaunchCase(name: "multi-version jump fills from skipped", track: .stable, current: "0.22.1", lastSeen: "0.21.5", existing: true, expectedEntry: "0.22.0", expectedStore: nil),
+        LaunchCase(name: "update without entry in range", track: .stable, current: "0.21.3", lastSeen: "0.21.0", existing: true, expectedEntry: nil, expectedStore: "0.21.3"),
+        LaunchCase(name: "entry newer than build ignored", track: .stable, current: "0.22.5", lastSeen: "0.22.0", existing: true, expectedEntry: nil, expectedStore: "0.22.5"),
+        LaunchCase(name: "same version", track: .stable, current: "0.22.0", lastSeen: "0.22.0", existing: true, expectedEntry: nil, expectedStore: nil),
+        LaunchCase(name: "downgrade", track: .stable, current: "0.21.0", lastSeen: "0.22.0", existing: true, expectedEntry: nil, expectedStore: nil),
+        LaunchCase(name: "nightly", track: .nightly, current: "0.22.0", lastSeen: "0.21.0", existing: true, expectedEntry: nil, expectedStore: nil),
+    ]
+
+    @Test(arguments: launchCases) func launchDecision(_ c: LaunchCase) {
+        let decision = WhatsNewPolicy.onLaunch(
+            track: c.track, current: Self.v(c.current), lastSeen: c.lastSeen.map(Self.v),
+            isExistingInstall: c.existing, entries: Self.fixtureEntries)
+        #expect(decision.entry?.version == c.expectedEntry.map(Self.v))
+        #expect(decision.seenVersionToStore == c.expectedStore.map(Self.v))
+    }
+
+    @Test func dismissNeverLowersTheSeenVersion() {
+        let high = Self.v("0.22.0")
+        #expect(WhatsNewPolicy.seenVersionAfterDismiss(current: Self.v("0.21.0"), lastSeen: high) == high)
+        #expect(WhatsNewPolicy.seenVersionAfterDismiss(current: high, lastSeen: Self.v("0.21.0")) == high)
+        #expect(WhatsNewPolicy.seenVersionAfterDismiss(current: high, lastSeen: nil) == high)
+    }
+
+    @Test func helpMenuSkipsEntriesNewerThanTheBuild() {
+        #expect(
+            WhatsNewPolicy.latestEntry(current: Self.v("0.22.4"), entries: Self.fixtureEntries)?.version
+                == Self.v("0.22.0"))
+        #expect(WhatsNewPolicy.latestEntry(current: Self.v("0.20.0"), entries: Self.fixtureEntries) == nil)
+    }
 }
