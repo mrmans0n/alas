@@ -164,6 +164,143 @@ public enum ACPMarkdownParser: Sendable {
         )
     }
 
+    private static func startsParagraphBoundary(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        return trimmed.isEmpty || matchFence(line) != nil || trimmed.hasPrefix(">")
+            || matchHeading(trimmed) != nil || matchTaskItem(line) != nil || matchImage(trimmed) != nil
+    }
+
+    private static func inlineBlockEnd(in lines: [Substring], at start: Int) -> String.Index {
+        let first = String(lines[start])
+        let trimmed = first.trimmingCharacters(in: .whitespaces)
+        // Headings, task items and standalone images are rendered separately.
+        if trimmed.isEmpty || matchHeading(trimmed) != nil || matchTaskItem(first) != nil || matchImage(trimmed) != nil {
+            return lines[start].endIndex
+        }
+        let isQuote = trimmed.hasPrefix(">")
+        var end = start
+        while end + 1 < lines.count {
+            let next = String(lines[end + 1])
+            if isQuote {
+                if !next.trimmingCharacters(in: .whitespaces).hasPrefix(">") { break }
+            } else if startsParagraphBoundary(next) {
+                break
+            }
+            end += 1
+        }
+        return lines[end].endIndex
+    }
+
+    /// Display-only filtering for review bodies. Code literals retain HTML comments.
+    public static func hidingHTMLComments(_ text: String) -> String {
+        guard text.contains("<!--") else { return text }
+        var fence: FenceDelimiter?
+        var inComment = false
+        var codeEnd: String.Index?
+        var result: [String] = []
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        let tableLines = lines.map(String.init)
+        var blockEnd = text.startIndex
+        var isTable = false
+        for (lineNumber, line) in lines.enumerated() {
+            if let opening = fence {
+                result.append(String(line))
+                if closesFence(String(line), opening) { fence = nil }
+                continue
+            }
+            if line.startIndex >= blockEnd {
+                inComment = false
+            }
+            if !inComment, codeEnd == nil, let opening = matchFence(String(line)) {
+                fence = opening
+                result.append(String(line))
+                continue
+            }
+            if line.startIndex >= blockEnd {
+                if let (_, _, consumed) = matchTable(from: tableLines, at: lineNumber) {
+                    blockEnd = lines[lineNumber + consumed - 1].endIndex
+                    isTable = true
+                } else {
+                    blockEnd = inlineBlockEnd(in: lines, at: lineNumber)
+                    isTable = false
+                }
+            }
+            var visible = ""
+            var index = line.startIndex
+            // Quote prefixes are structure, not part of the inline comment.
+            if inComment {
+                let leading = line.prefix(while: { $0 == " " || $0 == "\t" })
+                let marker = line.index(line.startIndex, offsetBy: leading.count)
+                if marker < line.endIndex, line[marker] == ">" {
+                    index = line.index(after: marker)
+                    if index < line.endIndex, line[index] == " " {
+                        index = line.index(after: index)
+                    }
+                    visible += line[..<index]
+                }
+            }
+            while index < line.endIndex {
+                if let end = codeEnd {
+                    let visibleEnd = min(end, line.endIndex)
+                    visible += line[index..<visibleEnd]
+                    index = visibleEnd
+                    if index == end { codeEnd = nil }
+                } else if inComment {
+                    let limit = isTable
+                        ? (line[index...].firstIndex(of: "|") ?? line.endIndex)
+                        : line.endIndex
+                    if let end = line[index..<limit].range(of: "-->") {
+                        index = end.upperBound
+                    } else if isTable {
+                        index = limit
+                    } else {
+                        break
+                    }
+                    inComment = false
+                } else if line[index...].hasPrefix("<!--") {
+                    inComment = true
+                    index = line.index(index, offsetBy: 4)
+                } else if line[index] == "\\" {
+                    visible.append(line[index])
+                    index = line.index(after: index)
+                    if index < line.endIndex {
+                        visible.append(line[index])
+                        index = line.index(after: index)
+                    }
+                } else if line[index] == "`" {
+                    let run = line[index...].prefix(while: { $0 == "`" })
+                    let afterRun = line.index(index, offsetBy: run.count)
+                    let limit = isTable
+                        ? (line[afterRun...].firstIndex(of: "|") ?? line.endIndex)
+                        : blockEnd
+                    var search = afterRun
+                    var closing: String.Index?
+                    while search < limit {
+                        guard let tick = text[search..<limit].firstIndex(of: "`") else { break }
+                        let count = text[tick...].prefix(while: { $0 == "`" }).count
+                        search = text.index(tick, offsetBy: count)
+                        if count == run.count {
+                            closing = search
+                            break
+                        }
+                    }
+                    if let closing {
+                        codeEnd = closing
+                    } else {
+                        visible += line[index..<afterRun]
+                        index = afterRun
+                    }
+                } else {
+                    visible.append(line[index])
+                    index = line.index(after: index)
+                }
+            }
+            result.append(visible)
+            if isTable { inComment = false }
+        }
+        return result.joined(separator: "\n")
+    }
+
     public static func parse(_ text: String) -> [Block] {
         var blocks: [Block] = []
         var i = 0
@@ -255,9 +392,7 @@ public enum ACPMarkdownParser: Sendable {
             var para: [String] = [line]
             i += 1
             while i < lines.count {
-                let next = lines[i].trimmingCharacters(in: .whitespaces)
-                if next.isEmpty { break }
-                if matchFence(lines[i]) != nil || next.hasPrefix(">") || matchHeading(next) != nil || matchTaskItem(lines[i]) != nil || matchImage(next) != nil { break }
+                if startsParagraphBoundary(lines[i]) { break }
                 para.append(lines[i])
                 i += 1
             }
