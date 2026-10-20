@@ -969,9 +969,9 @@ private struct ACPSessionView: View {
             manager: manager,
             worktreeRoot: worktree.path,
             sendOnEnter: state.config.harness.acpSendOnEnter,
-            dictationLocale: state.config.harness.acpDictationLocale,
-            onSelectDictationLocale: { [state] identifier in
-                state.config.harness.acpDictationLocale = identifier
+            dictationPreferences: state.config.harness.dictationPreferences,
+            onChangeDictationPreferences: { [state] preferences in
+                state.config.harness.dictationPreferences = preferences
                 state.saveConfig()
             },
             focusRequest: composerFocusRequest,
@@ -1669,8 +1669,8 @@ private struct ACPSessionView: View {
             ""
         }
         return HStack(spacing: 8) {
-            Image(systemName: "clock.badge.exclamationmark")
-                .foregroundStyle(theme.color("warn"))
+            LovebirdView(pose: .sleeping, size: 40)
+                .padding(.vertical, -8)
             Text(detail.isEmpty ? "Usage limit reached" : "Usage limit reached · \(detail)")
                 .font(.system(size: 12))
                 .textSelection(.enabled)

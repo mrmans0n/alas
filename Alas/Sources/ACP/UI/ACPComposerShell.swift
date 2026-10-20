@@ -21,7 +21,7 @@ enum ACPComposerControlPresentation {
     /// first, then the installed languages by name. A language the user
     /// picked in Settings but hasn't downloaded yet is included too, so the
     /// menu never contradicts the actual setting.
-    static func dictationMenuItems(installed: [String], selected: String) -> [ACPDictationMenuItem] {
+    static func languageMenuItems(installed: [String], selected: String) -> [ACPDictationMenuItem] {
         var identifiers = installed
         let normalizedSelection = selected.replacingOccurrences(of: "-", with: "_")
         if !normalizedSelection.isEmpty,
@@ -30,17 +30,52 @@ enum ACPComposerControlPresentation {
         }
         let items = ACPDictationLocaleFormatter.sortedByDisplayName(identifiers).map { identifier in
             ACPDictationMenuItem(
-                localeIdentifier: identifier,
+                identifier: identifier,
                 title: ACPDictationLocaleFormatter.displayName(for: identifier),
                 isSelected: identifier.replacingOccurrences(of: "-", with: "_") == normalizedSelection
             )
         }
         let automatic = ACPDictationMenuItem(
-            localeIdentifier: ACPDictationLocaleFormatter.automaticIdentifier,
+            identifier: ACPDictationLocaleFormatter.automaticIdentifier,
             title: ACPDictationLocaleFormatter.displayName(for: ACPDictationLocaleFormatter.automaticIdentifier),
             isSelected: normalizedSelection.isEmpty
         )
         return [automatic] + items
+    }
+
+    /// Entries for the microphone menu and Settings picker: the system
+    /// default first (empty identifier), then connected inputs by name. A
+    /// chosen microphone that isn't connected stays listed and selected, so
+    /// the menu never hides the actual setting.
+    static func microphoneMenuItems(
+        available: [ACPAudioInputDevice],
+        selected: DictationMicrophone?
+    ) -> [ACPDictationMenuItem] {
+        var items = available
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            .map { ACPDictationMenuItem(identifier: $0.uid, title: $0.name, isSelected: $0.uid == selected?.uid) }
+        if let selected, !available.contains(where: { $0.uid == selected.uid }) {
+            items.append(ACPDictationMenuItem(
+                identifier: selected.uid,
+                title: "\(selected.name) (not connected)",
+                isSelected: true
+            ))
+        }
+        let systemDefault = ACPDictationMenuItem(identifier: "", title: "System Default", isSelected: selected == nil)
+        return [systemDefault] + items
+    }
+
+    /// The microphone a `microphoneMenuItems` entry stands for; nil for the
+    /// system default.
+    static func microphone(
+        forMenuIdentifier identifier: String,
+        available: [ACPAudioInputDevice],
+        selected: DictationMicrophone?
+    ) -> DictationMicrophone? {
+        if let device = available.first(where: { $0.uid == identifier }) {
+            return DictationMicrophone(uid: device.uid, name: device.name)
+        }
+        return selected?.uid == identifier ? selected : nil
     }
 
     static func micHelp(for state: ACPDictationState) -> String {
@@ -175,11 +210,10 @@ struct ACPComposer: View {
     /// `ACPInputField` so its placeholder reflects whichever action ⏎
     /// triggers under the current mapping.
     let sendOnEnter: Bool
-    /// Current value of the `acpDictationLocale` setting. Empty means the
-    /// dictation engine picks a language automatically.
-    let dictationLocale: String
-    /// Persists a language chosen from the mic's context menu.
-    let onSelectDictationLocale: (String) -> Void
+    /// Current dictation language and microphone settings.
+    let dictationPreferences: ACPDictationPreferences
+    /// Persists a language or microphone chosen from the mic's context menu.
+    let onChangeDictationPreferences: (ACPDictationPreferences) -> Void
     let focusRequest: Int
     let dropRouter: ACPComposerDropRouter
     let placement: ACPComposerPlacement
@@ -211,16 +245,14 @@ struct ACPComposer: View {
     @State private var hasText: Bool = false
     @State private var composerNotice: String?
     @StateObject private var dictation = ACPDictationService(engine: ACPSpeechDictationEngine())
-    /// Languages ready to use without a download, for the mic's menu.
-    @State private var installedDictationLocales: [String] = []
 
     init(
         session: ACPSession,
         manager: ACPSessionManager,
         worktreeRoot: URL,
         sendOnEnter: Bool,
-        dictationLocale: String = "",
-        onSelectDictationLocale: @escaping (String) -> Void = { _ in },
+        dictationPreferences: ACPDictationPreferences = ACPDictationPreferences(),
+        onChangeDictationPreferences: @escaping (ACPDictationPreferences) -> Void = { _ in },
         focusRequest: Int = 0,
         dropRouter: ACPComposerDropRouter,
         placement: ACPComposerPlacement = .bottom,
@@ -247,8 +279,8 @@ struct ACPComposer: View {
         self.manager = manager
         self.worktreeRoot = worktreeRoot
         self.sendOnEnter = sendOnEnter
-        self.dictationLocale = dictationLocale
-        self.onSelectDictationLocale = onSelectDictationLocale
+        self.dictationPreferences = dictationPreferences
+        self.onChangeDictationPreferences = onChangeDictationPreferences
         self.focusRequest = focusRequest
         self.dropRouter = dropRouter
         self.placement = placement
@@ -473,20 +505,17 @@ struct ACPComposer: View {
                         if composerNotice == message { composerNotice = nil }
                     }
                 }
-                dictation.preferredLocaleIdentifier = dictationLocale
+                dictation.preferences = dictationPreferences
             }
-            .task {
-                installedDictationLocales = await dictation.installedLocaleIdentifiers()
-            }
-            .onChange(of: dictationLocale) { _, newValue in
+            .onChange(of: dictationPreferences) { _, newValue in
                 // Settings lives in its own window and can be open next to
                 // an actively dictating composer. Without stopping first,
-                // a language change made there would leave the running
-                // session transcribing under its original locale while the
-                // mic menu already shows the new one — mirrors the same
-                // guard the mic's own menu applies.
+                // a change made there would leave the running session on
+                // its original language or microphone while the mic menu
+                // already shows the new one — mirrors the same guard the
+                // mic's own menu applies.
                 dictation.stop()
-                dictation.preferredLocaleIdentifier = newValue
+                dictation.preferences = newValue
             }
             .onChange(of: composer.revision) { _, _ in
                 hasText = composer.draft.hasContent
@@ -735,10 +764,9 @@ struct ACPComposer: View {
     private var micButton: some View {
         ACPDictationMicButton(
             dictation: dictation,
-            installedLocales: installedDictationLocales,
-            selectedLocale: dictationLocale,
+            preferences: dictationPreferences,
             onWillToggle: dismissNextPromptOffer,
-            onSelectLocale: onSelectDictationLocale
+            onChangePreferences: onChangeDictationPreferences
         )
     }
 

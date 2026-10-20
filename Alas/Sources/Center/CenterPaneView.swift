@@ -798,6 +798,9 @@ struct CenterPaneView: View {
                 VStack(alignment: .trailing, spacing: 8) {
                     InAppNotificationStack(store: state.inAppNotifications, worktreeID: worktree.id)
                         .frame(maxWidth: 360)
+                        .onAppear {
+                            state.rightPaneStore.flushPendingBulkResolveNotifications(to: worktree.id)
+                        }
                     if !runScriptFailures.isEmpty {
                         ForEach(runScriptFailures, id: \.id) { failure in
                             RunScriptFailureBanner(

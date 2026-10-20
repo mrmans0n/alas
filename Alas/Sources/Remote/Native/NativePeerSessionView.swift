@@ -9,8 +9,8 @@ struct NativePeerSessionView: View {
     var typography: ACPChatTypography = .default
     var collapsesFinishedToolCalls = false
     var sendOnEnter = true
-    var dictationLocale = ""
-    var onSelectDictationLocale: (String) -> Void = { _ in }
+    var dictationPreferences = ACPDictationPreferences()
+    var onChangeDictationPreferences: (ACPDictationPreferences) -> Void = { _ in }
     @StateObject private var composerActions = ACPComposerActions()
     @Environment(\.theme) private var theme
     @Environment(\.openURL) private var openURL
@@ -30,7 +30,8 @@ struct NativePeerSessionView: View {
                             client: client, transcript: transcript, actions: composerActions,
                             composer: client.composerState(for: transcript.sessionId),
                             typography: typography, contentMaxWidth: contentMaxWidth,
-                            sendOnEnter: sendOnEnter, dictationLocale: dictationLocale, onSelectDictationLocale: onSelectDictationLocale
+                            sendOnEnter: sendOnEnter, dictationPreferences: dictationPreferences,
+                            onChangeDictationPreferences: onChangeDictationPreferences
                         )
                     }
                     .frame(width: proxy.size.width, height: proxy.size.height)
@@ -342,8 +343,8 @@ private struct NativePeerComposer: View {
     let typography: ACPChatTypography
     let contentMaxWidth: CGFloat
     let sendOnEnter: Bool
-    let dictationLocale: String
-    let onSelectDictationLocale: (String) -> Void
+    let dictationPreferences: ACPDictationPreferences
+    let onChangeDictationPreferences: (ACPDictationPreferences) -> Void
     @Environment(\.theme) private var theme
     @State private var composerFocused = false
     @StateObject private var dropRouter = ACPComposerDropRouter()
@@ -355,7 +356,6 @@ private struct NativePeerComposer: View {
     @State private var mentionScope: MentionScope = .all
     @State private var notice: String?
     @StateObject private var dictation = ACPDictationService(engine: ACPSpeechDictationEngine())
-    @State private var installedDictationLocales: [String] = []
     private var online: Bool { client.selectedPeer?.state.carriesSessions == true }
     private var canDrive: Bool { online && transcript.canDrive }
     private var editorContext: NativePeerComposerState.EditorContext {
@@ -424,13 +424,12 @@ private struct NativePeerComposer: View {
             dictation.onTranscriptUpdate = { actions.applyDictationTranscript?($0, $1) }
             dictation.onStop = { actions.cancelDictationRegion?() }
             dictation.onNotice = { showNotice($0) }
-            dictation.preferredLocaleIdentifier = dictationLocale
+            dictation.preferences = dictationPreferences
         }
         .onDisappear { dictation.stop() }
-        .task { installedDictationLocales = await dictation.installedLocaleIdentifiers() }
-        .onChange(of: dictationLocale) { _, locale in
+        .onChange(of: dictationPreferences) { _, preferences in
             dictation.stop()
-            dictation.preferredLocaleIdentifier = locale
+            dictation.preferences = preferences
         }
         .onChange(of: dictation.state) { _, state in
             if case .failed(let message) = state { showNotice(message) }
@@ -775,8 +774,8 @@ private struct NativePeerComposer: View {
 
     private var micButton: some View {
         ACPDictationMicButton(
-            dictation: dictation, installedLocales: installedDictationLocales,
-            selectedLocale: dictationLocale, onSelectLocale: onSelectDictationLocale)
+            dictation: dictation, preferences: dictationPreferences,
+            onChangePreferences: onChangeDictationPreferences)
         .disabled(!sessionOpen)
     }
 

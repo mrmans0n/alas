@@ -18,6 +18,7 @@ struct ChatPane: View {
         static let defaultLaunchSurface = "Default launch surface"
         static let sendOnEnter = "Follow-up behavior"
         static let dictationLanguage = "Dictation language"
+        static let dictationMicrophone = "Dictation microphone"
         static let confirmCloseChatTabs = "Confirm before closing chat tabs"
         static let autoRun = "⚡ Auto-run"
     }
@@ -43,12 +44,14 @@ struct ChatPane: View {
         RowLabels.confirmCloseChatTabs,
         RowLabels.autoRun,
         RowLabels.dictationLanguage,
+        RowLabels.dictationMicrophone,
     ]
 
     /// Languages the dictation engine can transcribe. Loaded asynchronously
     /// because the Speech framework resolves them off-disk; stays empty
-    /// below macOS 26, which also hides the row.
+    /// below macOS 26, which also hides both dictation rows.
     @State private var dictationLocales: [String] = []
+    @State private var microphones: [ACPAudioInputDevice] = []
 
     var body: some View {
         ScrollView {
@@ -122,6 +125,12 @@ struct ChatPane: View {
                         ) {
                             dictationLanguagePicker
                         }
+                        SettingsRow(
+                            name: RowLabels.dictationMicrophone,
+                            desc: "Input the 🎤 button records from. If it isn't connected when you dictate, the system default is used instead."
+                        ) {
+                            dictationMicrophonePicker
+                        }
                     }
                 }
 
@@ -155,6 +164,9 @@ struct ChatPane: View {
                 await ACPSpeechDictationEngine.supportedLocaleIdentifiers()
             )
         }
+        .task {
+            for await devices in ACPAudioInputDevices.updates() { microphones = devices }
+        }
     }
 
     private var dictationLanguagePicker: some View {
@@ -170,6 +182,27 @@ struct ChatPane: View {
             Divider()
             ForEach(dictationLocales, id: \.self) { identifier in
                 Text(ACPDictationLocaleFormatter.displayName(for: identifier)).tag(identifier)
+            }
+        }
+        .labelsHidden()
+        .frame(width: 220)
+    }
+
+    private var dictationMicrophonePicker: some View {
+        let selected = state.config.harness.acpDictationMicrophone
+        return Picker("", selection: Binding(
+            get: { selected?.uid ?? "" },
+            set: { identifier in
+                state.config.harness.acpDictationMicrophone = ACPComposerControlPresentation.microphone(
+                    forMenuIdentifier: identifier,
+                    available: microphones,
+                    selected: selected
+                )
+                state.saveConfig()
+            }
+        )) {
+            ForEach(ACPComposerControlPresentation.microphoneMenuItems(available: microphones, selected: selected)) { item in
+                Text(item.title).tag(item.identifier)
             }
         }
         .labelsHidden()

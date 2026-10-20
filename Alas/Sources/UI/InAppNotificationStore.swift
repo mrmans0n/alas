@@ -20,6 +20,7 @@ final class InAppNotificationStore {
         let id: UUID
         let worktreeID: String
         let message: String
+        let detail: String?
         let severity: InAppNotificationSeverity
         var expiresAt: Date?
         var pausedAt: Date?
@@ -30,11 +31,12 @@ final class InAppNotificationStore {
 
     @discardableResult
     func post(_ message: String, severity: InAppNotificationSeverity, worktreeID: String,
-              now: Date = Date(), cancel: (() -> Void)? = nil) -> UUID {
+              detail: String? = nil, now: Date = Date(), cancel: (() -> Void)? = nil) -> UUID {
         expire(now: now)
         let id = UUID()
-        entries.append(Entry(id: id, worktreeID: worktreeID, message: message, severity: severity,
-                             expiresAt: severity.duration.map { now.addingTimeInterval($0) }, cancel: cancel))
+        entries.append(Entry(id: id, worktreeID: worktreeID, message: message, detail: detail,
+                             severity: severity, expiresAt: severity.duration.map { now.addingTimeInterval($0) },
+                             cancel: cancel))
         // Bound bursts without evicting active operations or persistent run failures.
         let completed = entries.filter { $0.worktreeID == worktreeID && $0.severity != .progress }
         for entry in completed.dropLast(5) { dismiss(entry.id) }

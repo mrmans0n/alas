@@ -281,4 +281,61 @@ struct RightPaneStoreBaseBranchTests {
         try await Task.sleep(nanoseconds: 200_000_000)
         #expect(state.baseBranch == "develop")
     }
+
+    @Test func bulkResolveCompletionWaitsForAVisibleNotificationSurface() throws {
+        let project = ProjectConfig(
+            id: "test-project",
+            name: "Test",
+            path: "/repo",
+            color: "blue",
+            addedAt: Date()
+        )
+        let appState = AppState(
+            store: TestPersistenceStore(
+                ProjectsFile(projects: [project]),
+                AppConfig.defaults
+            )
+        )
+        let source = makeWorktree(
+            at: URL(fileURLWithPath: "/repo/worktrees/conflicts"),
+            branch: "feature/conflicts"
+        )
+        let visible = makeWorktree(
+            at: URL(fileURLWithPath: "/repo/worktrees/visible"),
+            branch: "feature/visible"
+        )
+        appState.projectsManager.insertOptimisticWorktree(source)
+        appState.projectsManager.insertOptimisticWorktree(visible)
+        appState.selectedWorktreeId = visible.id
+        let sourceState = appState.rightPaneStore.state(
+            for: source,
+            baseBranch: "main",
+            comparisonMode: .manual,
+            activates: false
+        )
+        sourceState.currentBranch = "feature/current"
+        appState.isPreviewingForestScenes = true
+
+        sourceState.bulkResolveDidFinish?(
+            BulkConflictResolveReport(
+                success: true,
+                remainingConflicts: 0,
+                summary: "All conflicts resolved.",
+                details: "Resolved App.swift by preserving both changes."
+            )
+        )
+        #expect(appState.inAppNotifications.notifications(in: visible.id).isEmpty)
+        #expect(appState.inAppNotifications.notifications(in: source.id).isEmpty)
+
+        appState.isPreviewingForestScenes = false
+        appState.rightPaneStore.flushPendingBulkResolveNotifications(to: visible.id)
+
+        let notification = try #require(
+            appState.inAppNotifications.notifications(in: visible.id).first
+        )
+        #expect(notification.message == "feature/current: All conflicts resolved.")
+        #expect(notification.severity == .success)
+        #expect(notification.detail == "Resolved App.swift by preserving both changes.")
+        #expect(appState.inAppNotifications.notifications(in: source.id).isEmpty)
+    }
 }
