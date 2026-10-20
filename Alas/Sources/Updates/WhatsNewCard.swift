@@ -4,6 +4,9 @@ import SwiftUI
 /// Non-modal corner card announcing a release's headline feature. It never
 /// takes keyboard focus and stays until one of its controls is used.
 struct WhatsNewCard: View {
+    private static let width: CGFloat = 320
+    private static let padding: CGFloat = 14
+
     let entry: WhatsNewEntry
     let mediaURL: URL?
     let onAction: (WhatsNewAction) -> Void
@@ -15,9 +18,8 @@ struct WhatsNewCard: View {
         VStack(alignment: .leading, spacing: 10) {
             header
             if let mediaURL {
-                WhatsNewMedia(url: mediaURL)
+                WhatsNewMedia(url: mediaURL, width: Self.width - 2 * Self.padding)
                     .id(mediaURL)
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
             }
             VStack(alignment: .leading, spacing: 4) {
                 Text(entry.headline.title)
@@ -37,8 +39,8 @@ struct WhatsNewCard: View {
             }
             actionRow
         }
-        .padding(14)
-        .frame(width: 320, alignment: .leading)
+        .padding(Self.padding)
+        .frame(width: Self.width, alignment: .leading)
         .background(theme.color("bg-1"))
         .overlay(
             RoundedRectangle(cornerRadius: 10)
@@ -84,19 +86,26 @@ struct WhatsNewCard: View {
 
 /// Scales the image to the card's width, keeping its aspect ratio. GIFs animate.
 private struct WhatsNewMedia: View {
+    private static let maxHeight: CGFloat = 200
+
     /// Loaded once per view identity; callers key the view by URL so a new file reloads.
     @State private var image: NSImage?
+    let width: CGFloat
 
-    init(url: URL) {
+    init(url: URL, width: CGFloat) {
         // Bundled and small, so a synchronous load is fine and avoids an empty first frame.
         _image = State(initialValue: NSImage(contentsOf: url))
+        self.width = width
     }
 
     var body: some View {
         if let image, image.size.width > 0, image.size.height > 0 {
+            // An explicit size: the NSImageView's intrinsic size would
+            // otherwise stretch the frame and letterbox the image.
+            let height = min(Self.maxHeight, width * image.size.height / image.size.width)
             AnimatedImageView(image: image)
-                .aspectRatio(image.size, contentMode: .fit)
-                .frame(maxHeight: 200)
+                .frame(width: height * image.size.width / image.size.height, height: height)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
                 .frame(maxWidth: .infinity)
         }
     }
