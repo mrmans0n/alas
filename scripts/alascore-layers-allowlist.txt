@@ -22,13 +22,6 @@ Integrations/GG/GGMCPInjection.swift ACPMCPServer
 Integrations/GG/GGMCPInjection.swift MCPAttachmentServerStatus
 Integrations/GG/GGService.swift ACPTerminal
 Integrations/GG/GGStreamingProcessTree.swift ACPTerminal
-Persistence/AppConfig.swift migrateLegacyYAMLNudgeState
-Persistence/Paths.swift AgentHookSocketServer
-Persistence/ProjectConfig.swift Worktree
-Persistence/RemotePathMigration.swift GGUndoMarkerStore
-Persistence/RemotePathMigration.swift PendingReview
-Persistence/RemotePathMigration.swift runSchedulesFile
-Persistence/RepoMCPTrust.swift MCPAttachmentPlanner
 Persistence/ShortcutAction.swift runScript
 Plugins/PluginCatalog.swift boundedFetch
 Plugins/PluginSettings.swift RemoteFileSecretStore

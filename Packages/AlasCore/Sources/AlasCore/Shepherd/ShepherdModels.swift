@@ -165,4 +165,3 @@ public struct ShepherdRecord: Codable, Equatable, Sendable {
 public enum ShepherdSessionState: Equatable, Sendable {
     case idle, busy, archived, missing
 }
-
