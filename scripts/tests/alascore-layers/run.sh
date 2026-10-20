@@ -85,9 +85,29 @@ done
 echo 'public struct LowThing {}' > "${sources}/Helpers/Low.swift"
 rm "${sources}/Core/Base+Host.swift" "${sources}/Helpers/Base.swift"
 
-# A comment naming a higher module's type is not a use.
-printf '/// See `HostThing`.\npublic struct LowThing {} // like HostThing\n/* HostThing */\n' > "${sources}/Helpers/Low.swift"
+# An enum case declared beside others is the lower module's own, not a use
+# of a higher extension's member of the same name.
+cat > "${sources}/Core/Process+Host.swift" <<'SWIFT'
+extension Process {
+    public static func hostRun() {}
+    public var hostOnly: Int { 0 }
+}
+SWIFT
+cat > "${sources}/Helpers/Low.swift" <<'SWIFT'
+public enum LowKind {
+    case first, hostOnly(Int), third
+}
+func low() -> LowKind { .hostOnly(1) }
+SWIFT
 python3 -I "${check}" --sources "${sources}" --allowlist "${allowlist}" > /dev/null
+for shape in '    case first,\n         hostOnly' '    case first(\n        value: Int\n    ), hostOnly' '    case first = \"(\"\n    case hostOnly' '    case first( // )\n        value: Int\n    ), hostOnly' '    case first( /* comment\n        ) */ value: Int\n    ), hostOnly'; do
+    printf "public enum LowKind {\n${shape}\n}\nfunc low() -> LowKind { .hostOnly }\n" > "${sources}/Helpers/Low.swift"
+    python3 -I "${check}" --sources "${sources}" --allowlist "${allowlist}" > /dev/null || { echo "rejected a case on a continuation line" >&2; exit 1; }
+done
+for cases in 'case first(value: Int), hostOnly(value: Int)' 'case first = 1, hostOnly = 2' 'case first = "https://example", hostOnly = "{host}"'; do
+    printf 'public enum LowKind: Int {\n    %s\n}\nfunc low() { _ = LowKind.self; _ = [.hostOnly] as [LowKind] }\n' "${cases}" > "${sources}/Helpers/Low.swift"
+    python3 -I "${check}" --sources "${sources}" --allowlist "${allowlist}" > /dev/null || { echo "rejected a local case: ${cases}" >&2; exit 1; }
+done
 echo 'public struct LowThing {}' > "${sources}/Helpers/Low.swift"
 
 # A folder without a module fails.
