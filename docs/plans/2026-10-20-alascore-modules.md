@@ -75,8 +75,8 @@ Bottom to top; each depends only on the ones before it.
 | `AlasModel` | `AppConfig` and every settings type it holds, `Paths`/`AlasProfile`, `PersistenceStore`, ACP launch and MCP specs, the helper wire types, `SessionOwnerID`, `Worktree`/`WorktreeRef` and other shared value types | ~15k |
 | `AlasPlatform` | SSH, Git, Search, RepoHooks, Zmx, Updates, LocalText | ~30k |
 | `AlasFeatures` | Integrations, Issues, Center, Shepherd, Checkpoints, Projects, Workspace, RunScripts, Schedules, Attention | ~60k |
-| `AlasAgents` | ACP (minus what moved down), Agents, Harness, Plugins, FailureBriefs | ~75k |
 | `AlasCode` | Code (LSP, symbols, highlighting) | ~12k |
+| `AlasAgents` | ACP (minus what moved down), Agents, Harness, Plugins, FailureBriefs | ~75k |
 | `AlasHostCore` | Core, Remote, the host extensions from feature folders | ~22k |
 | `AlasCore` | Umbrella: `@_exported import` of all of the above | — |
 
