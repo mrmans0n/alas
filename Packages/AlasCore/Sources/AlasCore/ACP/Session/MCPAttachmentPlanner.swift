@@ -1,30 +1,6 @@
 import CryptoKit
 import Foundation
 
-public enum MCPAttachmentSkipReason: Equatable, Sendable {
-    case unsupportedTransport
-    case missingVariable(String)
-    case invalidConfiguration(String)
-    /// A checkout snapshot retains the descriptor for diagnostics, but never
-    /// retargets it to whichever member currently has focus.
-    case unavailableMember
-    /// Repo-defined server the user has not approved.
-    case repoNotApproved
-    /// Repo-defined server the user explicitly declined, kept distinct so the
-    /// status control can offer a way to reconsider it.
-    case repoDeclined
-    /// Repo-defined server the user disabled for this project.
-    case repoDisabled
-    /// The SSH host cannot relay the built-in visual tool (e.g. an outdated
-    /// helper or lost session ownership).
-    case remoteRelayUnavailable(String)
-}
-
-public enum MCPAttachmentDisposition: Equatable, Sendable {
-    case requested
-    case skipped(MCPAttachmentSkipReason)
-}
-
 /// Project-scoped input that is deliberately fetched at attach time, so a
 /// fresh attach reflects the current project configuration without restarting
 /// an already connected session.
@@ -46,25 +22,6 @@ public struct MCPProjectContext: Equatable, Sendable {
         self.repoServers = repoServers
         self.disabledRepoServerNames = disabledRepoServerNames
         self.repoTrust = repoTrust
-    }
-}
-
-public struct MCPAttachmentServerStatus: Equatable, Identifiable, Sendable {
-    public let id: String
-    public let name: String
-    public let transport: MCPTransportKind
-    public let disposition: MCPAttachmentDisposition
-
-    public init(
-        id: String,
-        name: String,
-        transport: MCPTransportKind,
-        disposition: MCPAttachmentDisposition
-    ) {
-        self.id = id
-        self.name = name
-        self.transport = transport
-        self.disposition = disposition
     }
 }
 

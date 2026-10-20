@@ -1,20 +1,5 @@
 import Foundation
 
-public enum DiffReviewFileContextLines: Equatable, Sendable {
-    case unavailable
-    case available([String])
-}
-
-public struct DiffReviewFileContextSnapshot: Equatable, Sendable {
-    public let old: DiffReviewFileContextLines
-    public let new: DiffReviewFileContextLines
-
-    public init(old: DiffReviewFileContextLines, new: DiffReviewFileContextLines) {
-        self.old = old
-        self.new = new
-    }
-}
-
 public enum DiffContextExpansionMode: Equatable, Sendable {
     case chunk(size: Int)
     case all
