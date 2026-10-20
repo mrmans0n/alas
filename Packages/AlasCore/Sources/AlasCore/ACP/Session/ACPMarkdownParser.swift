@@ -274,7 +274,10 @@ public enum ACPMarkdownParser: Sendable {
                         guard let tick = text[search..<limit].firstIndex(of: "`") else { break }
                         let count = text[tick...].prefix(while: { $0 == "`" }).count
                         search = text.index(tick, offsetBy: count)
-                        if count == run.count { closing = search; break }
+                        if count == run.count {
+                            closing = search
+                            break
+                        }
                     }
                     if let closing {
                         codeEnd = closing

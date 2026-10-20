@@ -3,7 +3,7 @@ import Foundation
 /// A chat session to open on a new worktree, decided before the worktree
 /// exists so a retry reuses the same ids instead of queueing twice.
 public struct PreparedWorktreeACPPrompt: Equatable, Sendable {
-    public let sessionID: ACPSession.ID
+    public let sessionID: String
     public let promptID: UUID
     public let text: String
     /// Queued to go out as soon as the agent is ready, or left in the
@@ -15,7 +15,7 @@ public struct PreparedWorktreeACPPrompt: Equatable, Sendable {
     /// Shown in place of `text` in the transcript; nil for typed prompts.
     public var card: ACPPromptCard? = nil
 
-    public init(sessionID: ACPSession.ID, promptID: UUID, text: String, sendsAutomatically: Bool = true, modelID: String? = nil, card: ACPPromptCard? = nil) {
+    public init(sessionID: String, promptID: UUID, text: String, sendsAutomatically: Bool = true, modelID: String? = nil, card: ACPPromptCard? = nil) {
         self.sessionID = sessionID
         self.promptID = promptID
         self.text = text

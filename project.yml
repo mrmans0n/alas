@@ -40,6 +40,9 @@ packages:
   BeautifulMermaidSwift:
     url: https://github.com/lukilabs/beautiful-mermaid-swift
     from: 1.0.4
+  Lottie:
+    url: https://github.com/airbnb/lottie-spm
+    exactVersion: 4.6.1
 
 targets:
   Alas:
@@ -57,6 +60,8 @@ targets:
         buildPhase: resources
         optional: true
       - path: Alas/Resources/mason-lsps.json
+        buildPhase: resources
+      - path: Alas/Resources/Lottie
         buildPhase: resources
       - path: Alas/Resources/MCPLogo-LICENSE.txt
         buildPhase: resources
@@ -128,6 +133,8 @@ targets:
         product: Markdown
       - package: BeautifulMermaidSwift
         product: BeautifulMermaid
+      - package: Lottie
+        product: Lottie
     settings:
       base:
         ARCHS: $(ALAS_APP_ARCHS)
