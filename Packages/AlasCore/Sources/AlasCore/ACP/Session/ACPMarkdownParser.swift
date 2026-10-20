@@ -164,22 +164,28 @@ public enum ACPMarkdownParser: Sendable {
         guard text.contains("<!--") else { return text }
         var fence: FenceDelimiter?
         var inComment = false
+        var codeEnd: String.Index?
         var result: [String] = []
-        for line in text.components(separatedBy: "\n") {
+        for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
             if let opening = fence {
-                result.append(line)
-                if closesFence(line, opening) { fence = nil }
+                result.append(String(line))
+                if closesFence(String(line), opening) { fence = nil }
                 continue
             }
-            if !inComment, let opening = matchFence(line) {
+            if !inComment, codeEnd == nil, let opening = matchFence(String(line)) {
                 fence = opening
-                result.append(line)
+                result.append(String(line))
                 continue
             }
             var visible = ""
             var index = line.startIndex
             while index < line.endIndex {
-                if inComment {
+                if let end = codeEnd {
+                    let visibleEnd = min(end, line.endIndex)
+                    visible += line[index..<visibleEnd]
+                    index = visibleEnd
+                    if index == end { codeEnd = nil }
+                } else if inComment {
                     guard let end = line[index...].range(of: "-->") else { break }
                     index = end.upperBound
                     inComment = false
@@ -198,15 +204,18 @@ public enum ACPMarkdownParser: Sendable {
                     let afterRun = line.index(index, offsetBy: run.count)
                     var search = afterRun
                     var closing: String.Index?
-                    while search < line.endIndex {
-                        guard let tick = line[search...].firstIndex(of: "`") else { break }
-                        let count = line[tick...].prefix(while: { $0 == "`" }).count
-                        search = line.index(tick, offsetBy: count)
+                    while search < text.endIndex {
+                        guard let tick = text[search...].firstIndex(of: "`") else { break }
+                        let count = text[tick...].prefix(while: { $0 == "`" }).count
+                        search = text.index(tick, offsetBy: count)
                         if count == run.count { closing = search; break }
                     }
-                    let end = closing ?? afterRun
-                    visible += line[index..<end]
-                    index = end
+                    if let closing {
+                        codeEnd = closing
+                    } else {
+                        visible += line[index..<afterRun]
+                        index = afterRun
+                    }
                 } else {
                     visible.append(line[index])
                     index = line.index(after: index)

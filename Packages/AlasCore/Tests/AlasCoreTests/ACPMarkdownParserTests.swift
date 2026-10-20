@@ -9,6 +9,9 @@ struct ACPMarkdownParserTests {
         ("Visible<!-- unfinished", "Visible"),
         ("`<!-- literal -->`<!-- hidden -->", "`<!-- literal -->`"),
         ("`` `<!-- literal -->` ``<!-- hidden -->", "`` `<!-- literal -->` ``"),
+        ("`before\n<!-- literal -->\nafter`<!-- hidden -->", "`before\n<!-- literal -->\nafter`"),
+        ("``before\n`<!-- literal -->`\nafter``", "``before\n`<!-- literal -->`\nafter``"),
+        ("`unmatched\n<!-- hidden -->", "`unmatched\n"),
         ("```html\n<!-- literal -->\n```\n<!-- hidden -->", "```html\n<!-- literal -->\n```\n"),
         ("~~~html\n<!-- literal -->\n~~~\n<!-- hidden -->", "~~~html\n<!-- literal -->\n~~~\n"),
         (#"\<!-- literal -->"#, #"\<!-- literal -->"#)
