@@ -10,26 +10,42 @@ struct ReviewSessionProviderLoadedSession {
     let providerContext: ReviewSessionProviderContext
 }
 
+/// A diff another tab already loaded for `target`, so a review session
+/// opened from it can publish immediately instead of reloading.
+struct ReviewSessionSeed {
+    let target: ReviewSessionTarget
+    let session: DiffReviewLoadedSession
+    let selectedFileID: DiffReviewFileID?
+}
+
 struct ReviewSessionLoadedContext {
     let session: DiffReviewLoadedSession
     let feedbackTarget: ReviewFeedbackTarget
     let providerContext: ReviewSessionProviderContext?
+}
+
+extension ReviewSessionLoadedContext {
+    init(
+        session: DiffReviewLoadedSession,
+        target: ReviewSessionTarget,
+        providerContext: ReviewSessionProviderContext?
+    ) {
+        self.session = session
+        self.feedbackTarget = ReviewFeedbackTarget(
+            title: target.title,
+            repositoryPath: target.repositoryPath.path,
+            providerDescription: target.providerDescription,
+            sourceDescription: target.sourceDescription,
+            sessionDescription: "Review session: \(target.title)",
+            revisionDescription: target.revisionDescription,
+            priorHandoffDescription: nil,
+            reopenAction: .reviewSession(target)
+        )
+        self.providerContext = providerContext
+    }
 
     func replacingFeedbackTarget(for target: ReviewSessionTarget) -> ReviewSessionLoadedContext {
-        ReviewSessionLoadedContext(
-            session: session,
-            feedbackTarget: ReviewFeedbackTarget(
-                title: target.title,
-                repositoryPath: target.repositoryPath.path,
-                providerDescription: target.providerDescription,
-                sourceDescription: target.sourceDescription,
-                sessionDescription: "Review session: \(target.title)",
-                revisionDescription: target.revisionDescription,
-                priorHandoffDescription: nil,
-                reopenAction: .reviewSession(target)
-            ),
-            providerContext: providerContext
-        )
+        ReviewSessionLoadedContext(session: session, target: target, providerContext: providerContext)
     }
 }
 
@@ -263,20 +279,7 @@ struct ReviewSessionLoader: @unchecked Sendable {
 
         try Task.checkCancellation()
 
-        return ReviewSessionLoadedContext(
-            session: session,
-            feedbackTarget: ReviewFeedbackTarget(
-                title: target.title,
-                repositoryPath: target.repositoryPath.path,
-                providerDescription: target.providerDescription,
-                sourceDescription: target.sourceDescription,
-                sessionDescription: "Review session: \(target.title)",
-                revisionDescription: target.revisionDescription,
-                priorHandoffDescription: nil,
-                reopenAction: .reviewSession(target)
-            ),
-            providerContext: providerContext
-        )
+        return ReviewSessionLoadedContext(session: session, target: target, providerContext: providerContext)
     }
 
     private static func openFileAction(

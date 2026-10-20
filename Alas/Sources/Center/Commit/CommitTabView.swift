@@ -421,9 +421,16 @@ struct CommitTabView: View {
             target: target,
             findActive: { try store.findActive(targetID: $0) },
             save: { try store.save($0) },
-            open: {
+            open: { record in
                 reviewSessionLaunchError = nil
-                appState.tabs.openOrFocusReviewSession(worktreeId: worktreeId, record: $0)
+                appState.tabs.replaceCommitWithReviewSession(
+                    worktreeId: worktreeId,
+                    commitTabId: tabState.id,
+                    record: record,
+                    seed: reviewSession.map {
+                        ReviewSessionSeed(target: record.target, session: $0, selectedFileID: selectedReviewFileID)
+                    }
+                )
             },
             onFailure: { reviewSessionLaunchError = $0.localizedDescription }
         )
