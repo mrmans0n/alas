@@ -62,9 +62,13 @@ struct GitServiceBatchedDiffTests {
         }
     }
 
-    @Test func workingCopyDiffsByFileMatchesPerFileDiffsAndLeavesUntrackedOut() async throws {
+    /// Every file `git status` lists without a rename source diffs the same
+    /// batched as singly, whether or not status detects renames.
+    @Test(arguments: [true, false])
+    func workingCopyDiffsByFileMatchesPerFileDiffs(statusDetectsRenames: Bool) async throws {
         let repo = try makeRepository()
         defer { try? FileManager.default.removeItem(at: repo.deletingLastPathComponent()) }
+        try git(["config", "status.renames", statusDetectsRenames ? "true" : "false"], in: repo)
         try write("one\ntwo\n", "staged.txt", in: repo)
         try write("alpha\nbeta\n", "both.txt", in: repo)
         try write(String(repeating: "moved line\n", count: 20), "moved.txt", in: repo)
@@ -89,12 +93,12 @@ struct GitServiceBatchedDiffTests {
             paths: changes.filter { $0.stage == .staged }.map(\.path)
         )
 
-        #expect(Set(unstaged.keys) == ["both.txt"])
-        #expect(Set(staged.keys) == ["staged.txt", "both.txt", "moved again.txt"])
-        for change in changes where change.path != "untracked.txt" {
+        #expect(changes.contains { $0.renameFrom == "moved.txt" } == statusDetectsRenames)
+        #expect(unstaged["untracked.txt"] == nil)
+        for change in changes where change.renameFrom == nil && change.path != "untracked.txt" {
             let single = try await service.diff(
                 worktreePath: repo, file: change.path,
-                staged: change.stage == .staged, originalPath: change.renameFrom
+                staged: change.stage == .staged, originalPath: nil
             )
             let batched = change.stage == .staged ? staged[change.path] : unstaged[change.path]
             #expect(batched == single, "\(change.stage) \(change.path)")

@@ -48,7 +48,8 @@ struct ReviewChangesLoaderTests {
         #expect(session.summary.groups.map(\.title) == ["Unstaged", "Staged"])
     }
 
-    @Test func diffsCopiesSinglyEvenWhenTheBatchListsThem() async throws {
+    @Test(arguments: ["R", "C"])
+    func diffsRenamesAndCopiesSinglyEvenWhenTheBatchListsThem(status: String) async throws {
         let copyDiff = ParsedDiff(hunks: [
             ParsedDiff.Hunk(
                 header: "@@ -1 +1 @@",
@@ -67,7 +68,7 @@ struct ReviewChangesLoaderTests {
         ])
         let git = FakeReviewChangesGitClient(
             status: [
-                ChangedFile(path: "copy.swift", status: "C", stage: .staged, add: 1, del: 0, renameFrom: "source.swift"),
+                ChangedFile(path: "copy.swift", status: status, stage: .staged, add: 1, del: 0, renameFrom: "source.swift"),
             ],
             diffs: [.init(path: "copy.swift", staged: true, originalPath: "source.swift"): copyDiff],
             batchedStaged: ["copy.swift": wholeFileAdd]

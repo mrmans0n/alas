@@ -42,9 +42,9 @@ struct ReviewChangesLoader {
 
         let git = git
         let keys = changes.map(ReviewChangesDiffKey.init)
-        // The batch detects renames only, so a copy (`status.renames=copies`)
-        // would come back as a whole-file add; copies diff singly with `-C`.
-        let batchedKeys = keys.filter { !$0.isCopy }
+        // The batch pairs no paths, so files `git status` reports as renamed
+        // or copied diff singly against their source.
+        let batchedKeys = keys.filter { $0.renameFrom == nil }
         let diffs = try await DiffReviewBatchLoading.diffs(
             for: keys,
             batched: {
@@ -226,13 +226,11 @@ private struct ReviewChangesDiffKey: Hashable, Sendable {
     let path: String
     let stage: ChangeStage
     let renameFrom: String?
-    let isCopy: Bool
 
     init(_ change: ChangedFile) {
         path = change.path
         stage = change.stage
         renameFrom = change.renameFrom
-        isCopy = change.status == "C"
     }
 }
 

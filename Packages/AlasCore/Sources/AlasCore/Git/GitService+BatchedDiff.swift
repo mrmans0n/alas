@@ -28,12 +28,13 @@ extension GitService {
     }
 
     /// Unstaged (worktree vs index) or staged (index vs HEAD) diffs, matching
-    /// `diff(worktreePath:file:staged:originalPath:)`. Untracked files never
-    /// appear in `git diff`, so they are always left to the per-file path.
-    /// Rename detection only (`-M`): that is what `git status` reports, and a
-    /// per-file diff never sees a copy source outside its own pathspec.
+    /// `diff(worktreePath:file:staged:originalPath:)` for files `git status`
+    /// reports without a rename or copy source. Such a per-file diff never
+    /// pairs paths outside its own pathspec, so neither does the batch,
+    /// whatever the rename config says; renamed and copied files belong on
+    /// the per-file path. Untracked files never appear in `git diff`.
     public func workingCopyDiffsByFile(worktreePath: URL, staged: Bool, paths: [String]) async throws -> [String: ParsedDiff] {
-        var args = ["-c", "core.quotePath=false", "diff", "--no-color", "-M"]
+        var args = ["-c", "core.quotePath=false", "diff", "--no-color", "--no-renames"]
         if staged {
             args.append("--cached")
             if try await hasHead(worktreePath: worktreePath) { args.append("HEAD") }
