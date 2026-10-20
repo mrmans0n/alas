@@ -7,6 +7,7 @@ struct WhatsNewTests {
     private func makeDirectory(_ files: [String: String], mediaFiles: [String] = []) throws -> URL {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("whats-new-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("entries", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         for (name, content) in files {
             try content.write(to: dir.appendingPathComponent(name), atomically: true, encoding: .utf8)
@@ -20,17 +21,20 @@ struct WhatsNewTests {
         return dir
     }
 
-    private func entryJSON(version: String, extra: String = "", headlineExtra: String = "") -> String {
+    private static func entryJSON(
+        version: String = "0.22.0", title: String = "T", body: String = "B",
+        extra: String = "", headlineExtra: String = ""
+    ) -> String {
         """
-        {"version": "\(version)", "headline": {"title": "T", "body": "B"\(headlineExtra)}\(extra)}
+        {"version": "\(version)", "headline": {"title": "\(title)", "body": "\(body)"\(headlineExtra)}\(extra)}
         """
     }
 
     private func version(_ raw: String) -> SemanticVersion { SemanticVersion(parsing: raw)! }
 
     @Test func loadsAValidEntryWithOptionalFieldsMissing() throws {
-        let dir = try makeDirectory(["0.22.0.json": entryJSON(version: "0.22.0")])
-        defer { try? FileManager.default.removeItem(at: dir) }
+        let dir = try makeDirectory(["0.22.0.json": Self.entryJSON(version: "0.22.0")])
+        defer { try? FileManager.default.removeItem(at: dir.deletingLastPathComponent()) }
         let catalog = WhatsNewCatalog.load(directory: dir)
         #expect(catalog.entries.count == 1)
         #expect(catalog.entries.first?.also == [])
@@ -39,8 +43,8 @@ struct WhatsNewTests {
     }
 
     @Test func headerAndReleaseNotesUseTheEntryVersion() throws {
-        let dir = try makeDirectory(["0.22.1.json": entryJSON(version: "0.22.1")])
-        defer { try? FileManager.default.removeItem(at: dir) }
+        let dir = try makeDirectory(["0.22.1.json": Self.entryJSON(version: "0.22.1")])
+        defer { try? FileManager.default.removeItem(at: dir.deletingLastPathComponent()) }
         let entry = try #require(WhatsNewCatalog.load(directory: dir).entries.first)
         #expect(entry.headerTitle == "New in 0.22")
         #expect(
@@ -51,43 +55,49 @@ struct WhatsNewTests {
     struct InvalidCase: Sendable, CustomTestStringConvertible {
         let name: String
         let json: String
+        let messageFragment: String
+        /// File to create relative to the entries directory before loading.
+        var extraFile: String? = nil
         var testDescription: String { name }
     }
 
-    static let invalidCases: [InvalidCase] = {
-        func json(_ version: String = "0.22.0", headline: String = "", extra: String = "") -> String {
-            """
-            {"version": "\(version)", "headline": {"title": "T", "body": "B"\(headline)}\(extra)}
-            """
-        }
-        return [
-            InvalidCase(name: "filename mismatch", json: json("0.22.1")),
-            InvalidCase(name: "missing media", json: json(headline: ", \"media\": \"media/missing.gif\"")),
-            InvalidCase(name: "relative escape", json: json(headline: ", \"media\": \"../escape.gif\"")),
-            InvalidCase(name: "absolute path", json: json(headline: ", \"media\": \"/tmp/x.gif\"")),
-            InvalidCase(name: "unknown action", json: json(headline: ", \"action\": \"launchMissiles\"")),
-            InvalidCase(
-                name: "too many also",
-                json: json(extra: ", \"also\": [{\"title\":\"a\"},{\"title\":\"b\"},{\"title\":\"c\"}]")),
-            InvalidCase(name: "malformed JSON", json: "{ not json"),
-        ]
-    }()
+    static let invalidCases: [InvalidCase] = [
+        InvalidCase(name: "filename mismatch", json: entryJSON(version: "0.22.1"), messageFragment: "does not match"),
+        InvalidCase(name: "missing media", json: entryJSON(headlineExtra: ", \"media\": \"media/missing.gif\""), messageFragment: "does not exist"),
+        InvalidCase(
+            name: "relative escape", json: entryJSON(headlineExtra: ", \"media\": \"../escape.gif\""),
+            messageFragment: "escapes", extraFile: "../escape.gif"),
+        InvalidCase(name: "absolute path", json: entryJSON(headlineExtra: ", \"media\": \"/tmp/x.gif\""), messageFragment: "relative"),
+        InvalidCase(name: "unknown action", json: entryJSON(headlineExtra: ", \"action\": \"launchMissiles\""), messageFragment: "decode"),
+        InvalidCase(
+            name: "too many also",
+            json: entryJSON(extra: ", \"also\": [{\"title\":\"a\"},{\"title\":\"b\"},{\"title\":\"c\"}]"),
+            messageFragment: "also"),
+        InvalidCase(name: "malformed JSON", json: "{ not json", messageFragment: "decode"),
+        InvalidCase(name: "blank title", json: entryJSON(title: "  "), messageFragment: "title"),
+        InvalidCase(name: "blank body", json: entryJSON(body: " "), messageFragment: "body"),
+    ]
 
     @Test(arguments: invalidCases) func rejectsInvalidEntries(_ testCase: InvalidCase) throws {
-        let dir = try makeDirectory(["0.22.0.json": testCase.json])
-        defer { try? FileManager.default.removeItem(at: dir) }
+        let dir = try makeDirectory(["0.22.0.json": testCase.json], mediaFiles: [])
+        defer { try? FileManager.default.removeItem(at: dir.deletingLastPathComponent()) }
+        if let extra = testCase.extraFile {
+            let url = dir.appendingPathComponent(extra).standardizedFileURL
+            FileManager.default.createFile(atPath: url.path, contents: Data())
+        }
         let catalog = WhatsNewCatalog.load(directory: dir)
         #expect(catalog.entries.isEmpty)
         #expect(catalog.problems.count == 1)
         #expect(catalog.problems.first?.file == "0.22.0.json")
+        #expect(catalog.problems.first?.message.contains(testCase.messageFragment) == true)
     }
 
     @Test func keepsValidEntriesWhenAnotherIsBroken() throws {
         let dir = try makeDirectory([
-            "0.21.0.json": entryJSON(version: "0.21.0"),
+            "0.21.0.json": Self.entryJSON(version: "0.21.0"),
             "0.22.0.json": "{ broken",
         ])
-        defer { try? FileManager.default.removeItem(at: dir) }
+        defer { try? FileManager.default.removeItem(at: dir.deletingLastPathComponent()) }
         let catalog = WhatsNewCatalog.load(directory: dir)
         #expect(catalog.entries.map(\.version) == [version("0.21.0")])
         #expect(catalog.problems.count == 1)
@@ -95,9 +105,9 @@ struct WhatsNewTests {
 
     @Test func ignoresNonJSONFilesAndMediaFolder() throws {
         let dir = try makeDirectory(
-            ["README.md": "hi", "0.22.0.json": entryJSON(version: "0.22.0")],
+            ["README.md": "hi", "0.22.0.json": Self.entryJSON(version: "0.22.0")],
             mediaFiles: ["media/a.gif"])
-        defer { try? FileManager.default.removeItem(at: dir) }
+        defer { try? FileManager.default.removeItem(at: dir.deletingLastPathComponent()) }
         let catalog = WhatsNewCatalog.load(directory: dir)
         #expect(catalog.entries.count == 1)
         #expect(catalog.problems.isEmpty)

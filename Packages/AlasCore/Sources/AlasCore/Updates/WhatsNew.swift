@@ -136,6 +136,12 @@ public struct WhatsNewCatalog: Sendable {
         guard stem == entry.version.description else {
             return "File name does not match version \(entry.version)"
         }
+        guard !entry.headline.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return "Headline title must not be empty"
+        }
+        guard !entry.headline.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return "Headline body must not be empty"
+        }
         guard entry.also.count <= maxAlsoItems else {
             return "At most \(maxAlsoItems) also items are allowed"
         }
