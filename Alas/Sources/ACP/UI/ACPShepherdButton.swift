@@ -300,9 +300,24 @@ private struct ShepherdPopover: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             .accessibilityElement(children: .combine)
-            Text("Attempt \(record.fixAttempts) of \(ShepherdPolicy.maxFixAttempts) · Rules: \(rulesUnreadable ? "unreadable" : rules.sourceLabel ?? "none")")
-                .font(.system(size: 10.5))
-                .foregroundStyle(theme.color("fg-muted"))
+            HStack(spacing: 4) {
+                Text("Attempt \(record.fixAttempts) of \(record.fixAttemptBudget)")
+                Stepper(
+                    "Fix attempts",
+                    value: Binding(
+                        get: { record.fixAttemptBudget },
+                        set: { state.reviewShepherd.setMaxFixAttempts($0, for: record.id) }
+                    ),
+                    in: ShepherdDefaults.fixAttemptRange
+                )
+                .labelsHidden()
+                .controlSize(.mini)
+                .disabled(record.phase.isTerminal)
+                .help("Fix prompts sent before the shepherd stops and asks for you")
+                Text("· Rules: \(rulesUnreadable ? "unreadable" : rules.sourceLabel ?? "none")")
+            }
+            .font(.system(size: 10.5))
+            .foregroundStyle(theme.color("fg-muted"))
             ShepherdSwitchRow(
                 title: "Auto-fix",
                 detail: "CI failures, conflicts and reviewer threads go back to this session",

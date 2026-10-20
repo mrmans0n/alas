@@ -315,6 +315,7 @@ extension AlasCoreContext {
             baseBranch: request.baseRefName,
             autoFix: current?.autoFix ?? defaults.autoFix,
             autoMerge: current?.autoMerge ?? defaults.autoMerge,
+            maxFixAttempts: current?.fixAttemptBudget ?? defaults.maxFixAttempts,
             contextRules: nil
         )
     }

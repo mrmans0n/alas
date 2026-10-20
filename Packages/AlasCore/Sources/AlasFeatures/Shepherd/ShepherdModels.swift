@@ -104,6 +104,9 @@ public struct ShepherdRecord: Codable, Equatable, Sendable {
     /// before this field existed.
     public var handledThreadRevisions: [String]?
     public var fixAttempts: Int
+    /// Fix prompts allowed before escalating. Nil in records saved before
+    /// this field existed; read it through `fixAttemptBudget`.
+    public var maxFixAttempts: Int?
     public var lastSeenHeadSHA: String?
     /// Consecutive polls that saw `lastSeenHeadSHA` with no pending or
     /// unknown check,
@@ -131,6 +134,7 @@ public struct ShepherdRecord: Codable, Equatable, Sendable {
         baseBranch: String,
         autoFix: Bool,
         autoMerge: Bool,
+        maxFixAttempts: Int = ShepherdDefaults.defaultMaxFixAttempts,
         now: Date
     ) {
         self.id = id
@@ -145,6 +149,7 @@ public struct ShepherdRecord: Codable, Equatable, Sendable {
         self.viewerCommentIDsAtDispatch = nil
         self.handledThreadRevisions = nil
         self.fixAttempts = 0
+        self.maxFixAttempts = ShepherdDefaults.clampedFixAttempts(maxFixAttempts)
         self.lastSeenHeadSHA = nil
         self.stableHeadPolls = 0
         self.headFirstSeenAt = nil
@@ -155,6 +160,18 @@ public struct ShepherdRecord: Codable, Equatable, Sendable {
     }
 
     public var owner: SessionOwnerID { .worktree(id.worktreeID) }
+
+    public var fixAttemptBudget: Int { maxFixAttempts ?? ShepherdDefaults.defaultMaxFixAttempts }
+
+    /// Sets the budget, clamped to `ShepherdDefaults.fixAttemptRange`. A record
+    /// that escalated for running out of attempts goes back to watching when
+    /// the new budget leaves room for another, keeping the attempts it used.
+    public mutating func setFixAttemptBudget(_ budget: Int) {
+        maxFixAttempts = ShepherdDefaults.clampedFixAttempts(budget)
+        if phase == .escalated(.attemptsExhausted), fixAttempts < fixAttemptBudget {
+            phase = .watching
+        }
+    }
 
     /// When the policy first saw `headSHA`: the lower bound for timestamped
     /// review evidence on that head. Nil for any head other than the one this

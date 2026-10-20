@@ -261,6 +261,7 @@ extension AppState {
             baseBranch: request.baseRefName,
             autoFix: toggles.autoFix,
             autoMerge: toggles.autoMerge,
+            maxFixAttempts: toggles.maxFixAttempts,
             contextRules: rules
         )
     }
@@ -329,6 +330,7 @@ extension AppState {
             baseBranch: request.baseRefName,
             autoFix: toggles.autoFix,
             autoMerge: toggles.autoMerge,
+            maxFixAttempts: toggles.maxFixAttempts,
             contextRules: nil
         )
     }
@@ -351,13 +353,16 @@ extension AppState {
         }
     }
 
-    private func shepherdToggles(worktree: Worktree, request: ReviewRequest) -> (autoFix: Bool, autoMerge: Bool) {
+    private func shepherdToggles(
+        worktree: Worktree,
+        request: ReviewRequest
+    ) -> (autoFix: Bool, autoMerge: Bool, maxFixAttempts: Int) {
         let id = ShepherdRecordID(worktreeID: worktree.id, request: request)
         if let record = reviewShepherd.records[id], !record.phase.isTerminal {
-            return (record.autoFix, record.autoMerge)
+            return (record.autoFix, record.autoMerge, record.fixAttemptBudget)
         }
         let defaults = config.changes.shepherd
-        return (defaults.autoFix, defaults.autoMerge)
+        return (defaults.autoFix, defaults.autoMerge, defaults.maxFixAttempts)
     }
 
     private func shepherdWorktreeContext(_ worktreeID: String) -> ReviewShepherd.WorktreeContext? {
@@ -476,7 +481,7 @@ extension AppState {
             let subject = title.map { "\(shepherdReference(record)) \"\($0)\"" } ?? shepherdReference(record)
             let cli = record.id.providerKind == .github ? "gh" : "glab"
             let detail: String = switch reason {
-            case .attemptsExhausted: "still has problems after \(ShepherdPolicy.maxFixAttempts) fix attempts."
+            case .attemptsExhausted: "still has problems after \(record.fixAttempts) fix attempts."
             case .noProgress: "has not moved since the last fix prompt."
             case .deliveryFailed: "could not reach its chat session."
             case .ownerGone: "lost its chat session. Pick another one in Changes."
