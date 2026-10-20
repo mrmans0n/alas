@@ -75,11 +75,11 @@ public actor RemoteVisualMCPBridge {
         self.onRegistration = onRegistration
     }
 
-    /// The tools a route serves: what the helper can relay, narrowed to
-    /// `visual_show` for sessions that cannot use the PR shepherd, such as
-    /// Workspace Checkouts.
-    public static func toolScope(helper: BuiltInMCPToolScope, allowsPRTools: Bool) -> BuiltInMCPToolScope {
-        allowsPRTools ? helper : .visualOnly
+    /// The tools a route serves: the PR shepherd tools join `visual_show` only
+    /// when the helper's relay waits long enough for them and the session can
+    /// use them (Workspace Checkouts cannot).
+    public static func toolScope(helperRelaysPRTools: Bool, allowsPRTools: Bool) -> BuiltInMCPToolScope {
+        helperRelaysPRTools && allowsPRTools ? .remote : .visualOnly
     }
 
     /// Opens a fenced route on the helper and starts serving it, with a
@@ -95,7 +95,7 @@ public actor RemoteVisualMCPBridge {
         onRegistration: @escaping RegistrationEvidence
     ) async throws -> PreparedBuiltInMCPAttachment {
         let opened = try await client.openMCPRoute(fence: fence)
-        let toolScope = toolScope(helper: opened.toolScope, allowsPRTools: allowsPRTools)
+        let toolScope = toolScope(helperRelaysPRTools: opened.relaysPRTools, allowsPRTools: allowsPRTools)
         let bridge = RemoteVisualMCPBridge(
             route: opened.handle,
             events: opened.events,

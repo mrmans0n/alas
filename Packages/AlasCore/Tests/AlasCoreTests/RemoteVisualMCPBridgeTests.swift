@@ -57,15 +57,16 @@ struct RemoteVisualMCPBridgeTests {
     }
 
     @Test(
-        "a session that cannot use the PR shepherd gets visual_show only, whatever the helper relays",
+        "PR tools need both a helper that relays them and a session that can use them",
         arguments: [
-            (BuiltInMCPToolScope.remote, true, BuiltInMCPToolScope.remote),
-            (.remote, false, .visualOnly),
-            (.visualOnly, true, .visualOnly),
+            (true, true, BuiltInMCPToolScope.remote),
+            (true, false, .visualOnly),
+            (false, true, .visualOnly),
         ]
     )
-    func routeToolScope(helper: BuiltInMCPToolScope, allowsPRTools: Bool, expected: BuiltInMCPToolScope) {
-        #expect(RemoteVisualMCPBridge.toolScope(helper: helper, allowsPRTools: allowsPRTools) == expected)
+    func routeToolScope(helperRelaysPRTools: Bool, allowsPRTools: Bool, expected: BuiltInMCPToolScope) {
+        #expect(RemoteVisualMCPBridge.toolScope(
+            helperRelaysPRTools: helperRelaysPRTools, allowsPRTools: allowsPRTools) == expected)
     }
 
     @Test(

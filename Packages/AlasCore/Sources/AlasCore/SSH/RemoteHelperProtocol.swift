@@ -42,11 +42,6 @@ public struct RemoteHelperCapabilities: Codable, Equatable, Sendable {
     /// sessions can also get the PR shepherd tools.
     public var remoteMCPTools: Int? = nil
 
-    /// The built-in tools an SSH session's relay can serve.
-    public var relayedMCPToolScope: BuiltInMCPToolScope {
-        remoteMCPTools == 1 ? .remote : .visualOnly
-    }
-
     public init(watchKinds: [RemoteHelperWatchKind], fs: RemoteHelperFSCapabilities, search: Bool?, proc: Bool?, acp: Bool?, ping: Bool, sessionCoordination: Int? = nil, visualMCPRelay: Int? = nil) {
         self.watchKinds = watchKinds
         self.fs = fs

@@ -605,7 +605,7 @@ public actor RemoteHelperClient {
     public func openMCPRoute(fence: RemoteSessionFence) async throws -> (
         handle: RemoteMCPRouteHandle,
         descriptor: RemoteMCPRouteDescriptor,
-        toolScope: BuiltInMCPToolScope,
+        relaysPRTools: Bool,
         events: AsyncStream<RemoteMCPRelayEvent>
     ) {
         _ = try ensureStarted()
@@ -619,7 +619,7 @@ public actor RemoteHelperClient {
         mcpRoutes[handle] = ActiveRemoteMCPRoute(fence: fence, continuation: continuation)
         do {
             let descriptor = try await registerMCPRoute(handle)
-            return (handle, descriptor, capabilities.relayedMCPToolScope, events)
+            return (handle, descriptor, capabilities.remoteMCPTools == 1, events)
         } catch {
             mcpRoutes.removeValue(forKey: handle)
             continuation.finish()
