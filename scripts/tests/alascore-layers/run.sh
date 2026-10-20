@@ -50,6 +50,21 @@ fi
 grep -Fq "Helpers/Low.swift: hostFetch (AlasFoundation -> AlasHostCore)" "${tmp}/out"
 echo 'public struct LowThing {}' > "${sources}/Helpers/Low.swift"
 
+# So does a member a higher module's extension adds, written with its type.
+cat > "${sources}/Core/Process+Host.swift" <<'SWIFT'
+extension Process {
+    public static func hostRun() {}
+}
+SWIFT
+cat > "${sources}/Helpers/Low.swift" <<'SWIFT'
+public struct LowThing { func run() { Process.hostRun() } }
+SWIFT
+if python3 -I "${check}" --sources "${sources}" --allowlist "${allowlist}" > "${tmp}/out" 2>&1; then
+    echo "accepted an upward extension member" >&2; exit 1
+fi
+grep -Fq "Helpers/Low.swift: hostRun (AlasFoundation -> AlasHostCore)" "${tmp}/out"
+echo 'public struct LowThing {}' > "${sources}/Helpers/Low.swift"
+
 # A folder without a module fails.
 : > "${allowlist}"
 mkdir -p "${sources}/Mystery"

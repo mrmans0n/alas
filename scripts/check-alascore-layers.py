@@ -14,9 +14,11 @@ entry that is no longer a violation, so the list only shrinks.
 
 A declaration counts when it is at the top level of a file in exactly one
 module: a type (`struct`, `class`, `enum`, `protocol`, `actor`, `typealias`),
-a function, or a global `let` or `var`. A use is any occurrence of a type's or
-a global's name, and a call of a function's, comments included: precise enough
-to guide the moves, and the compiler takes over once the targets exist.
+a function, or a global `let` or `var`; or a member an extension adds, when no
+other module declares a member of that name. A use is any occurrence of a
+type's or a global's name, a call of a function's, and `.name` for an extension
+member, comments included: precise enough to guide the moves, and the compiler
+takes over once the targets exist.
 
 Usage: check-alascore-layers.py [--sources DIR] [--allowlist FILE] [--update]
   --update rewrites the allowlist to the current violations.
@@ -59,6 +61,32 @@ GLOBAL = re.compile(
 )
 CALL = re.compile(r"\b([a-z_]\w*)\s*\(")
 LOWER_WORD = re.compile(r"\b[a-z_]\w*\b")
+# Members, at the first level of indentation, of a type or an extension.
+MEMBER = re.compile(
+    r"^    (?:@\w+(?:\([^)]*\))?\s+)*(?:(?:public|internal|package|private|fileprivate|static|class|"
+    r"final|override|nonisolated|mutating|lazy|weak|convenience|required)\s+)*"
+    r"(?:func|var|let)\s+([a-zA-Z_]\w*)",
+)
+EXTENSION = re.compile(r"^(?:(?:public|internal|package)\s+)?extension\s+([A-Z]\w*)")
+MEMBER_USE = re.compile(r"\.([a-zA-Z_]\w*)\b")
+QUALIFIED_USE = re.compile(r"\b([A-Z]\w*)\.([a-zA-Z_]\w*)\b")
+
+
+def members(text):
+    """The members a file declares, and which of them, with the type they
+    extend, are in extensions."""
+    all_members, in_extensions = set(), set()
+    extended = None
+    for line in text.splitlines():
+        if line and not line[0].isspace():
+            match = EXTENSION.match(line)
+            extended = match.group(1) if match else None
+        match = MEMBER.match(line)
+        if match:
+            all_members.add(match.group(1))
+            if extended:
+                in_extensions.add((extended, match.group(1)))
+    return all_members, in_extensions
 
 
 def module_of(folder):
@@ -91,11 +119,34 @@ def violations(sources):
                 declared.setdefault(match.group(1), set()).add(module)
         return {name: next(iter(modules)) for name, modules in declared.items() if len(modules) == 1}
 
+    # An extension's member belongs to its module when no other module
+    # declares a member of that name, in an extension or a type: an ordinary
+    # name such as `path` or `run` cannot say which one a use means.
+    # A member written with its type, as `Process.git` or `Paths.x`, belongs
+    # to the module whose extension of that type adds it.
+    member_modules = {}
+    qualified_modules = {}
+    for module, text in files.values():
+        declared, extended = members(text)
+        for member in declared:
+            member_modules.setdefault(member, set()).add(module)
+        for pair in extended:
+            qualified_modules.setdefault(pair, set()).add(module)
+    extension_owner = {
+        member: next(iter(member_modules[member]))
+        for (_, member) in qualified_modules if len(member_modules[member]) == 1
+    }
+    qualified_owner = {
+        f"{extended}.{member}": next(iter(modules))
+        for (extended, member), modules in qualified_modules.items() if len(modules) == 1
+    }
+
     # Each kind of declaration, and how a use of it appears in a file.
     kinds = [
         (owners(DECLARATION), WORD),
         (owners(FUNCTION), CALL),
         (owners(GLOBAL), LOWER_WORD),
+        (extension_owner, MEMBER_USE),
     ]
     found = set()
     for relative, ((level, name), text) in files.items():
@@ -104,6 +155,11 @@ def violations(sources):
                 target = owner.get(word)
                 if target and target[0] > level:
                     found.add((relative, word, name, target[1]))
+        for extended, member in set(QUALIFIED_USE.findall(text)):
+            qualified = f"{extended}.{member}"
+            target = qualified_owner.get(qualified)
+            if target and target[0] > level and member not in extension_owner:
+                found.add((relative, qualified, name, target[1]))
     return found, unmapped
 
 
