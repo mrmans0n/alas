@@ -49,7 +49,7 @@ enum GGLandingPresentation {
             if let error = outcome.error { return error }
             switch outcome.action {
             case "merged": return "Merged"
-            case "queued": return "Queued"
+            case "queued", "already_queued": return "Queued"
             default: return outcome.action?.replacingOccurrences(of: "_", with: " ").capitalized ?? "Completed"
             }
         }
@@ -113,7 +113,7 @@ enum GGLandingPresentation {
             guard let outcome = row.outcome, outcome.error == nil else { continue }
             counts.completed += 1
             if outcome.action == "merged" { counts.merged += 1 }
-            if outcome.action == "queued" { counts.queued += 1 }
+            if outcome.action == "queued" || outcome.action == "already_queued" { counts.queued += 1 }
         }
         counts.remaining = session.result?.remaining ?? max(0, counts.total - counts.completed)
         return counts
@@ -229,7 +229,7 @@ enum GGLandingPresentation {
             if outcome.error != nil { return .failed }
             switch outcome.action {
             case "merged": return .merged
-            case "queued": return .queued
+            case "queued", "already_queued": return .queued
             default: return .completed
             }
         }

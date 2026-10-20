@@ -67,6 +67,23 @@ struct GGLandingPresentationTests {
         #expect(GGLandingPresentation.counts(for: session).remaining == 0)
     }
 
+    @Test(arguments: ["queued", "already_queued"])
+    func queuedEntriesNeverAppearMerged(action: String) {
+        var session = session()
+        for index in session.rows.indices {
+            session.rows[index].outcome = .init(
+                position: session.rows[index].position,
+                prNumber: session.rows[index].prNumber,
+                action: action
+            )
+        }
+        session.phase = .succeeded
+        session.result = .init(landed: session.rows.compactMap(\.outcome), remaining: 0)
+        #expect(GGLandingPresentation.counts(for: session) == .init(total: 3, completed: 3, merged: 0, queued: 3, remaining: 0))
+        #expect(GGLandingPresentation.status(for: session) == .queued)
+        #expect(session.rows.allSatisfy { GGLandingPresentation.rowStatus(for: $0, in: session) == .queued })
+    }
+
     @Test func terminalDiagnosticsKeepBothSessionAndResultInformation() {
         var session = session()
         session.phase = .failed
