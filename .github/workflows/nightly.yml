@@ -399,7 +399,13 @@ jobs:
         # prompt that stalls headless builds — see build.yml's Build for
         # testing step. Missing it here breaks on mlx-swift-lm's
         # MLXHuggingFaceMacros with "must be enabled before it can be used".
+        # Samples each Swift compile's resident memory every 2 s, for the
+        # module-size budget in docs/plans/2026-10-20-alascore-modules.md.
         run: |
+          while sleep 2; do
+            ps -axww -o rss=,command= | awk '/swift-frontend/ { for (i = 2; i < NF; i++) if ($i == "-module-name") print $1, $(i + 1) }'
+          done > "$RUNNER_TEMP/swift-frontend-rss.txt" &
+          trap "kill $!" EXIT
           xcodebuild -project Alas.xcodeproj -scheme Alas \
             -configuration Release \
             -derivedDataPath build \
@@ -407,6 +413,14 @@ jobs:
             -destination 'platform=macOS,arch=arm64' \
             -skipMacroValidation -skipPackagePluginValidation \
             -quiet build
+
+      - name: Summarize Swift compile memory
+        if: ${{ !cancelled() && steps.skip-check.outputs.skip != 'true' }}
+        run: |
+          echo "### Peak memory per Swift module" >> "$GITHUB_STEP_SUMMARY"
+          sort -k2,2 -k1,1nr "$RUNNER_TEMP/swift-frontend-rss.txt" \
+            | awk '!seen[$2]++ { printf "%.2f GB %s\n", $1 / 1048576, $2 }' \
+            | sort -rn | head -20 | tee -a "$GITHUB_STEP_SUMMARY"
 
       # Gate signing on main-built refs only — non-main workflow_dispatch
       # checks out (and runs scripts from) the dispatched ref, so handing
