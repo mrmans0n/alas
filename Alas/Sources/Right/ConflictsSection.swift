@@ -6,9 +6,6 @@ struct ConflictsSection: View {
     /// resolve button flips into Cancel and a spinner row appears below
     /// the header.
     let bulkInFlight: Bool
-    /// Final outcome of the last bulk-resolve run. Surfaced as a
-    /// transient banner the user can dismiss.
-    let bulkReport: BulkConflictResolveReport?
     /// True when at least one enabled AI tool is configured for the
     /// Changes section. Gates the bulk action — disabled with a tooltip
     /// otherwise.
@@ -23,8 +20,6 @@ struct ConflictsSection: View {
     /// Triggered while a bulk resolve is in flight; the same button
     /// flips into a cancel action.
     let onCancelBulkResolve: () -> Void
-    /// Triggered when the user closes the post-run banner.
-    let onDismissBulkReport: () -> Void
     var dragPayload: ((ChangedFile) -> DragOutPayload?)? = nil
 
     @State private var pendingBothDeletedConfirm: ChangedFile?
@@ -34,16 +29,13 @@ struct ConflictsSection: View {
         // so the spinner + Cancel stay visible even if conflicts drop
         // to zero mid-run (e.g. an intermediate refresh after the
         // agent stages a file).
-        if conflicts.isEmpty, bulkReport == nil, !bulkInFlight {
+        if conflicts.isEmpty, !bulkInFlight {
             EmptyView()
         } else {
             VStack(alignment: .leading, spacing: 2) {
                 header
                 if bulkInFlight {
                     progressRow
-                }
-                if let report = bulkReport {
-                    reportRow(report)
                 }
                 ForEach(conflicts) { file in
                     row(for: file)
@@ -108,43 +100,6 @@ struct ConflictsSection: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 3)
-    }
-
-    private func reportRow(_ report: BulkConflictResolveReport) -> some View {
-        HStack(alignment: .top, spacing: 6) {
-            Image(systemName: reportIcon(for: report))
-                .foregroundColor(reportColor(for: report))
-                .font(.system(size: 10))
-                .padding(.top, 1)
-            Text(report.summary)
-                .font(.system(size: 10))
-                .foregroundColor(.secondary)
-                .lineLimit(3)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Button(action: onDismissBulkReport) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 8, weight: .medium))
-                    .foregroundColor(.secondary)
-                    .padding(.top, 1)
-            }
-            .buttonStyle(.plain)
-            .help("Dismiss")
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 3)
-        .help(report.details.isEmpty ? report.summary : report.details)
-    }
-
-    private func reportIcon(for report: BulkConflictResolveReport) -> String {
-        if !report.success { return "exclamationmark.triangle.fill" }
-        return report.remainingConflicts == 0
-            ? "checkmark.circle.fill"
-            : "exclamationmark.circle.fill"
-    }
-
-    private func reportColor(for report: BulkConflictResolveReport) -> Color {
-        if !report.success { return .red }
-        return report.remainingConflicts == 0 ? .green : .orange
     }
 
     @ViewBuilder

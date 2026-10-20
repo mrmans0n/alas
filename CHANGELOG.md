@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixes
+
+- Show bulk conflict-resolution results as in-app notifications instead of inline Changes-tab messages.
+
 ## [0.21.9] - 2026-10-20
 
 ### ✨ Features

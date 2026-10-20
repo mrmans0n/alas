@@ -197,6 +197,22 @@ final class RightPaneStore {
             new.lastEffectiveBaseBranch = rawDefault
             new.comparisonMode = comparisonMode
             new.isAwaitingBaseBranchProbe = shouldDeferInitialRefresh
+            new.bulkResolveDidFinish = { [weak self] report in
+                guard let app = self?.appState else { return }
+                let severity: InAppNotificationSeverity
+                if !report.success {
+                    severity = .error
+                } else if report.remainingConflicts == 0 {
+                    severity = .success
+                } else {
+                    severity = .information
+                }
+                app.inAppNotifications.post(
+                    report.summary,
+                    severity: severity,
+                    worktreeID: id
+                )
+            }
             new.closeDiffTabs = { [weak self] paths in
                 guard let app = self?.appState else { return }
                 app.tabs.closeDiffTabs(worktreeId: id, relativePaths: paths)

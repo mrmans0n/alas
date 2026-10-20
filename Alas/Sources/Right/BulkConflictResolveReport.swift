@@ -1,10 +1,5 @@
-import Foundation
-
-/// Result of `RightPaneState.resolveAllConflicts(using:)`. Surfaced in
-/// the Conflicts section as a transient banner after the agent's
-/// workspace-level run finishes. The actual "did it work?" signal is
-/// the post-refresh conflict count — this banner just lets the user
-/// see the agent's narrative for what it did.
+/// Result of `RightPaneState.resolveAllConflicts(using:)`, delivered when the
+/// workspace-level agent run finishes.
 struct BulkConflictResolveReport: Equatable {
     /// True when the agent invocation itself succeeded (process exit 0,
     /// no Swift-side error). False on launch failure, timeout, or
@@ -14,9 +9,6 @@ struct BulkConflictResolveReport: Equatable {
     /// Conflicts remaining after the refresh that followed the run.
     /// Zero means the agent reconciled everything.
     let remainingConflicts: Int
-    /// Subject line from the agent's stdout, surfaced as the banner
-    /// headline. Empty when the agent produced no usable output.
+    /// Message shown in the worktree's in-app notification.
     let summary: String
-    /// Optional full body, shown in the banner tooltip.
-    let details: String
 }

@@ -499,10 +499,9 @@ final class RightPaneState: GGSplitCommitServicing {
     /// resolve button flips into Cancel.
     var bulkResolveInFlight: Bool = false
 
-    /// Last completed bulk-resolve outcome, or nil when none has run
-    /// since this state was created (or since the user dismissed the
-    /// banner). Cleared by `dismissBulkResolveReport`.
-    var bulkResolveReport: BulkConflictResolveReport? = nil
+    /// Delivers the completed bulk-resolve outcome to the owning store.
+    @ObservationIgnored
+    var bulkResolveDidFinish: ((BulkConflictResolveReport) -> Void)? = nil
 
     /// Task handle for the in-flight bulk resolve so the user can
     /// cancel the agent (SIGTERM via Process cancellation).
@@ -4632,14 +4631,13 @@ final class RightPaneState: GGSplitCommitServicing {
         guard !checkpointMutationsDisabled else { return }
         guard bulkResolveTask == nil else { return }
         guard changes.contains(where: { $0.conflict != nil }) else { return }
-        bulkResolveReport = nil
         bulkResolveInFlight = true
         bulkResolveTask = Task { @MainActor [weak self] in
             guard let self else { return }
             var report: BulkConflictResolveReport
             do {
                 guard await self.checkpointMutationAllowedAfterJournalRevalidation() else { return }
-                let agentOutput = try await MergeAgent.resolveAllInWorkspace(
+                _ = try await MergeAgent.resolveAllInWorkspace(
                     agent: agent,
                     prompt: prompt,
                     worktreePath: self.worktree.path,
@@ -4656,8 +4654,7 @@ final class RightPaneState: GGSplitCommitServicing {
                 report = BulkConflictResolveReport(
                     success: true,
                     remainingConflicts: remaining,
-                    summary: headline,
-                    details: agentOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+                    summary: headline
                 )
             } catch let runError as AgentRunError {
                 if case .binaryNotFound = runError,
@@ -4669,8 +4666,7 @@ final class RightPaneState: GGSplitCommitServicing {
                 report = BulkConflictResolveReport(
                     success: false,
                     remainingConflicts: remaining,
-                    summary: "Agent failed: \(runError.localizedDescription)",
-                    details: ""
+                    summary: "Agent failed: \(runError.localizedDescription)"
                 )
             } catch {
                 await self.refresh()
@@ -4678,13 +4674,12 @@ final class RightPaneState: GGSplitCommitServicing {
                 report = BulkConflictResolveReport(
                     success: false,
                     remainingConflicts: remaining,
-                    summary: "Agent failed: \(error.localizedDescription)",
-                    details: ""
+                    summary: "Agent failed: \(error.localizedDescription)"
                 )
             }
             self.bulkResolveInFlight = false
-            self.bulkResolveReport = report
             self.bulkResolveTask = nil
+            self.bulkResolveDidFinish?(report)
         }
     }
 
@@ -4693,13 +4688,6 @@ final class RightPaneState: GGSplitCommitServicing {
     @MainActor
     func cancelBulkResolve() {
         bulkResolveTask?.cancel()
-    }
-
-    /// Clears the post-run banner so it doesn't linger after the user
-    /// has acknowledged the outcome.
-    @MainActor
-    func dismissBulkResolveReport() {
-        bulkResolveReport = nil
     }
 
     /// On `.conflict`, auto-open the first conflicted file via the injected
