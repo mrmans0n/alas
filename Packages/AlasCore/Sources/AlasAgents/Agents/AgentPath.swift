@@ -1,0 +1,80 @@
+import Foundation
+import AlasFoundation
+import AlasModel
+import AlasPlatform
+import AlasFeatures
+import AlasCode
+
+/// Computes a PATH string suitable for finding agent CLIs from inside Alas.
+/// Needed because a macOS GUI app inherits launchd's minimal PATH (typically
+/// `/usr/bin:/bin:/usr/sbin:/sbin` + `/etc/paths.d/*`) and therefore can't see
+/// tools the user installed into `/opt/homebrew/bin`, `~/.local/bin`, etc.
+public enum AgentPath: Sendable {
+    /// Well-known directories where agent CLIs are commonly installed.
+    /// Order is preserved when appending. Tilde-form entries are expanded
+    /// at lookup time.
+    public static let wellKnownDirectories: [String] = [
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        "~/.local/bin",
+        "~/.bun/bin",
+        "~/.cargo/bin",
+        "~/.deno/bin",
+        "~/Library/pnpm",
+        "~/.npm-global/bin",
+        "~/.volta/bin",
+    ]
+
+    /// Returns `base` (or the process PATH if `base` is nil) with the
+    /// well-known directories appended.
+    public static func augmented(base: String? = nil) -> String {
+        let basePath = base ?? ProcessInfo.processInfo.environment["PATH"] ?? ""
+        return augment(base: basePath, wellKnown: wellKnownDirectories)
+    }
+
+    /// Absolute path of the first executable named `name` found by scanning
+    /// `augment(base:wellKnown:)`, or nil. Shared by the setup checker and the
+    /// launch-path resolver so both resolve binaries identically.
+    public static func resolveExecutable(
+        named name: String,
+        base: String?,
+        wellKnown: [String] = wellKnownDirectories
+    ) -> String? {
+        if name.contains("/") {
+            let expanded = (name as NSString).expandingTildeInPath
+            return FileManager.default.isExecutableFile(atPath: expanded) ? expanded : nil
+        }
+        let pathValue = augment(base: base ?? "", wellKnown: wellKnown)
+        for dir in pathValue.split(separator: ":") {
+            let candidate = "\(dir)/\(name)"
+            if FileManager.default.isExecutableFile(atPath: candidate) { return candidate }
+        }
+        return nil
+    }
+
+    /// Pure: tilde-expands each `wellKnown` entry, drops those that don't
+    /// exist on disk, drops those whose expanded form already appears in
+    /// `base`, and appends the rest to `base` in order.
+    public static func augment(base: String, wellKnown: [String]) -> String {
+        let baseEntries = base
+            .split(separator: ":", omittingEmptySubsequences: true)
+            .map(String.init)
+        var seen = Set(baseEntries)
+        var appended: [String] = []
+        let fm = FileManager.default
+        for entry in wellKnown {
+            let expanded = (entry as NSString).expandingTildeInPath
+            if seen.contains(expanded) { continue }
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: expanded, isDirectory: &isDir), isDir.boolValue else {
+                continue
+            }
+            appended.append(expanded)
+            seen.insert(expanded)
+        }
+        let normalizedBase = baseEntries.joined(separator: ":")
+        if normalizedBase.isEmpty { return appended.joined(separator: ":") }
+        if appended.isEmpty { return normalizedBase }
+        return normalizedBase + ":" + appended.joined(separator: ":")
+    }
+}

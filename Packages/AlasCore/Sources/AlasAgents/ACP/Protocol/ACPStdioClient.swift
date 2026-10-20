@@ -1,0 +1,732 @@
+import Foundation
+import AlasFoundation
+import AlasModel
+import AlasPlatform
+import AlasFeatures
+import AlasCode
+
+public final class ACPStdioClient: ACPClient, @unchecked Sendable {
+    private let transport: JSONRPCStdioTransporting
+    private let updatesCont: AsyncStream<ACPSessionUpdateParams>.Continuation
+    private let permsCont: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>.Continuation
+    private let cancelRequestsCont: AsyncStream<JSONRPCID>.Continuation
+    private let questionsCont: AsyncStream<ACPQuestionRequest>.Continuation
+    private let plansCont: AsyncStream<ACPCursorPlanRequest>.Continuation
+    private let elicitationsCont: AsyncStream<ACPElicitationRequest>.Continuation
+    private let elicitationCompletionsCont: AsyncStream<ACPElicitationCompleteParams>.Continuation
+    private let filesCont: AsyncStream<ACPFileRequest>.Continuation
+    private let terminalsCont: AsyncStream<ACPTerminalRequest>.Continuation
+    private let stderrCont: AsyncStream<Data>.Continuation
+    private let authStatusCont: AsyncStream<ACPAuthStatusEvent>.Continuation
+    private let sessionListChangesCont: AsyncStream<ACPSessionListChanges>.Continuation
+
+    public let incomingUpdates: AsyncStream<ACPSessionUpdateParams>
+    public var yieldedUpdateCount: Int {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return _yieldedUpdateCount
+    }
+    public let permissionRequests: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>
+    public let cancelRequests: AsyncStream<JSONRPCID>
+    public let questionRequests: AsyncStream<ACPQuestionRequest>
+    public let planRequests: AsyncStream<ACPCursorPlanRequest>
+    public let elicitationRequests: AsyncStream<ACPElicitationRequest>
+    public let elicitationCompletions: AsyncStream<ACPElicitationCompleteParams>
+    public let fileRequests: AsyncStream<ACPFileRequest>
+    public let terminalRequests: AsyncStream<ACPTerminalRequest>
+    public let incomingStderr: AsyncStream<Data>
+    public let authStatusUpdates: AsyncStream<ACPAuthStatusEvent>
+    public let sessionListChanges: AsyncStream<ACPSessionListChanges>
+
+    private let stateLock = NSLock()
+    private var nextId: Int = 0
+    private var _yieldedUpdateCount = 0
+    private var pending: [JSONRPCID: CheckedContinuation<ACPResponse, Error>] = [:]
+    private var pendingInboundConsumptions: [JSONRPCID: ACPDurableConsumptionAcknowledgement] = [:]
+    private var cursorTodosByToolCallId: [String: [ACPCursorTodo]] = [:]
+    private var didDrainPending = false
+    private var dispatchTask: Task<Void, Never>?
+
+    public init(executable: URL, arguments: [String], environment: [String: String]?) throws {
+        self.transport = JSONRPCStdioTransport(
+            executable: executable,
+            arguments: arguments,
+            environment: environment,
+            framing: .newline,
+            // ACPProcessEnvironment.sanitizedForACP has already produced the
+            // full env with Claude-specific markers scrubbed. Tell the transport not
+            // to re-overlay against the parent process's env (which would
+            // re-introduce CLAUDECODE).
+            replaceEnv: true
+        )
+
+        var uC: AsyncStream<ACPSessionUpdateParams>.Continuation!
+        self.incomingUpdates = AsyncStream { uC = $0 }
+        self.updatesCont = uC
+
+        var pC: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>.Continuation!
+        self.permissionRequests = AsyncStream { pC = $0 }
+        self.permsCont = pC
+
+        var cC: AsyncStream<JSONRPCID>.Continuation!
+        self.cancelRequests = AsyncStream { cC = $0 }
+        self.cancelRequestsCont = cC
+
+        var qC: AsyncStream<ACPQuestionRequest>.Continuation!
+        self.questionRequests = AsyncStream { qC = $0 }
+        self.questionsCont = qC
+
+        var planC: AsyncStream<ACPCursorPlanRequest>.Continuation!
+        self.planRequests = AsyncStream { planC = $0 }
+        self.plansCont = planC
+
+        var elC: AsyncStream<ACPElicitationRequest>.Continuation!
+        self.elicitationRequests = AsyncStream { elC = $0 }
+        self.elicitationsCont = elC
+
+        var ecC: AsyncStream<ACPElicitationCompleteParams>.Continuation!
+        self.elicitationCompletions = AsyncStream { ecC = $0 }
+        self.elicitationCompletionsCont = ecC
+
+        var fC: AsyncStream<ACPFileRequest>.Continuation!
+        self.fileRequests = AsyncStream { fC = $0 }
+        self.filesCont = fC
+
+        var tC: AsyncStream<ACPTerminalRequest>.Continuation!
+        self.terminalRequests = AsyncStream { tC = $0 }
+        self.terminalsCont = tC
+
+        var eC: AsyncStream<Data>.Continuation!
+        self.incomingStderr = AsyncStream { eC = $0 }
+        self.stderrCont = eC
+
+        var asC: AsyncStream<ACPAuthStatusEvent>.Continuation!
+        self.authStatusUpdates = AsyncStream { asC = $0 }
+        self.authStatusCont = asC
+
+        var slC: AsyncStream<ACPSessionListChanges>.Continuation!
+        self.sessionListChanges = AsyncStream { slC = $0 }
+        self.sessionListChangesCont = slC
+    }
+
+    /// Accepts a pre-built transport directly, skipping the local
+    /// subprocess setup (remote channels and tests).
+    public init(transport: JSONRPCStdioTransporting) {
+        self.transport = transport
+
+        var uC: AsyncStream<ACPSessionUpdateParams>.Continuation!
+        self.incomingUpdates = AsyncStream { uC = $0 }
+        self.updatesCont = uC
+
+        var pC: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>.Continuation!
+        self.permissionRequests = AsyncStream { pC = $0 }
+        self.permsCont = pC
+
+        var cC: AsyncStream<JSONRPCID>.Continuation!
+        self.cancelRequests = AsyncStream { cC = $0 }
+        self.cancelRequestsCont = cC
+
+        var qC: AsyncStream<ACPQuestionRequest>.Continuation!
+        self.questionRequests = AsyncStream { qC = $0 }
+        self.questionsCont = qC
+
+        var planC: AsyncStream<ACPCursorPlanRequest>.Continuation!
+        self.planRequests = AsyncStream { planC = $0 }
+        self.plansCont = planC
+
+        var elC: AsyncStream<ACPElicitationRequest>.Continuation!
+        self.elicitationRequests = AsyncStream { elC = $0 }
+        self.elicitationsCont = elC
+
+        var ecC: AsyncStream<ACPElicitationCompleteParams>.Continuation!
+        self.elicitationCompletions = AsyncStream { ecC = $0 }
+        self.elicitationCompletionsCont = ecC
+
+        var fC: AsyncStream<ACPFileRequest>.Continuation!
+        self.fileRequests = AsyncStream { fC = $0 }
+        self.filesCont = fC
+
+        var tC: AsyncStream<ACPTerminalRequest>.Continuation!
+        self.terminalRequests = AsyncStream { tC = $0 }
+        self.terminalsCont = tC
+
+        var eC: AsyncStream<Data>.Continuation!
+        self.incomingStderr = AsyncStream { eC = $0 }
+        self.stderrCont = eC
+
+        var asC: AsyncStream<ACPAuthStatusEvent>.Continuation!
+        self.authStatusUpdates = AsyncStream { asC = $0 }
+        self.authStatusCont = asC
+
+        var slC: AsyncStream<ACPSessionListChanges>.Continuation!
+        self.sessionListChanges = AsyncStream { slC = $0 }
+        self.sessionListChangesCont = slC
+    }
+
+    /// Convenience factory for tests — wraps `init(transport:)`.
+    public static func makeForTesting(transport: JSONRPCStdioTransporting) -> ACPStdioClient {
+        ACPStdioClient(transport: transport)
+    }
+
+    public func start() throws {
+        try transport.start()
+        dispatchTask = Task { [weak self] in
+            guard let self else { return }
+            for await event in self.transport.incoming {
+                self.handle(event)
+            }
+        }
+    }
+
+    private func handle(_ event: JSONRPCStdioTransport.Incoming) {
+        switch event {
+        case .frame(let data, let onConsumed):
+            handleFrame(data, onConsumed: onConsumed)
+        case .stderr(let data):
+            stderrCont.yield(data)
+        case .exited:
+            drainPending(with: ACPClientError.notRunning)
+            updatesCont.finish()
+            permsCont.finish()
+            cancelRequestsCont.finish()
+            questionsCont.finish()
+            plansCont.finish()
+            elicitationsCont.finish()
+            elicitationCompletionsCont.finish()
+            filesCont.finish()
+            terminalsCont.finish()
+            stderrCont.finish()
+            authStatusCont.finish()
+            sessionListChangesCont.finish()
+        }
+    }
+
+    private struct AnyEnvelopeHead: Decodable {
+        let id: JSONRPCID?
+        let method: String?
+
+        public init(id: JSONRPCID?, method: String?) {
+            self.id = id
+            self.method = method
+        }
+    }
+
+    private func handleFrame(_ data: Data, onConsumed: (@Sendable () -> Void)?) {
+        var acknowledgeAfterDispatch = true
+        defer {
+            if acknowledgeAfterDispatch {
+                onConsumed?()
+            }
+        }
+        guard let head = try? JSONDecoder().decode(AnyEnvelopeHead.self, from: data) else { return }
+        if let id = head.id, head.method == nil {
+            stateLock.lock()
+            let cont = pending.removeValue(forKey: id)
+            stateLock.unlock()
+            guard let cont else { return }
+            if let env = try? JSONDecoder().decode(JSONRPCErrorEnvelope.self, from: data),
+               let err = env.error {
+                cont.resume(throwing: ACPClientError.jsonrpc(err))
+                return
+            }
+            if let raw = Self.extractResultBytes(from: data) {
+                acknowledgeAfterDispatch = false
+                cont.resume(returning: ACPResponse(
+                    body: raw,
+                    durableConsumptionAcknowledgement: onConsumed
+                ))
+            } else {
+                cont.resume(throwing: ACPClientError.decoding("no result/error in response"))
+            }
+            return
+        }
+        guard let method = head.method else { return }
+        switch method {
+        case "session/update":
+            // One frame is usually one update; the revised subagent form can
+            // normalize to several, and the durable acknowledgement belongs
+            // to the LAST one, as for OpenCode's child updates below.
+            if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPSessionUpdateFrame>.self, from: data),
+               let frame = env.params, !frame.updates.isEmpty {
+                stateLock.lock()
+                _yieldedUpdateCount += frame.updates.count
+                stateLock.unlock()
+                acknowledgeAfterDispatch = false
+                for (offset, p) in frame.updates.enumerated() {
+                    let isLast = offset == frame.updates.count - 1
+                    updatesCont.yield(.init(
+                        sessionId: p.sessionId,
+                        update: p.update,
+                        durableConsumptionAcknowledgement: isLast ? onConsumed : nil
+                    ))
+                }
+            }
+        case ACPOpenCodeChildUpdate.method:
+            // One notification normalizes to several standard updates; the
+            // durable acknowledgement belongs to the LAST one, so the frame
+            // is only acked once the whole batch has been applied.
+            if let env = try? JSONDecoder().decode(JSONRPCEnvelope<AnyCodable>.self, from: data),
+               let raw = env.params,
+               let payload = try? JSONEncoder().encode(raw) {
+                let normalized = ACPOpenCodeChildUpdate.normalize(params: payload)
+                guard !normalized.isEmpty else { break }
+                stateLock.lock()
+                _yieldedUpdateCount += normalized.count
+                stateLock.unlock()
+                acknowledgeAfterDispatch = false
+                for (offset, update) in normalized.enumerated() {
+                    let isLast = offset == normalized.count - 1
+                    updatesCont.yield(.init(
+                        sessionId: update.sessionId,
+                        update: update.update,
+                        durableConsumptionAcknowledgement: isLast ? onConsumed : nil
+                    ))
+                }
+            }
+        case "session/request_permission":
+            if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPPermissionRequestParams>.self, from: data),
+               let id = env.id, let p = env.params {
+                acknowledgeAfterDispatch = false
+                deferInboundConsumption(id: id, acknowledgement: onConsumed)
+                permsCont.yield((id, p))
+            }
+        case "$/cancel_request":
+            if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPCancelRequestParams>.self, from: data),
+               let p = env.params {
+                cancelRequestsCont.yield(p.id)
+            }
+        case "cursor/ask_question":
+            if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPQuestionRequestParams>.self, from: data),
+               let id = env.id, let p = env.params {
+                acknowledgeAfterDispatch = false
+                deferInboundConsumption(id: id, acknowledgement: onConsumed)
+                questionsCont.yield(.init(id: id, params: p))
+            }
+        case "elicitation/create":
+            if let env = try? JSONDecoder().decode(
+                JSONRPCEnvelope<ACPElicitationRequestParams>.self,
+                from: data
+            ), let id = env.id, let p = env.params {
+                acknowledgeAfterDispatch = false
+                deferInboundConsumption(id: id, acknowledgement: onConsumed)
+                elicitationsCont.yield(.init(id: id, params: p))
+            }
+        case "elicitation/complete":
+            if let env = try? JSONDecoder().decode(
+                JSONRPCEnvelope<ACPElicitationCompleteParams>.self,
+                from: data
+            ), let p = env.params {
+                elicitationCompletionsCont.yield(p)
+            }
+        case "_auth/status_update":
+            if let env = try? JSONDecoder().decode(
+                JSONRPCEnvelope<ACPAuthStatusUpdateParams>.self,
+                from: data
+            ), let p = env.params {
+                acknowledgeAfterDispatch = false
+                authStatusCont.yield(.init(
+                    status: p.authStatus,
+                    durableConsumptionAcknowledgement: onConsumed
+                ))
+            }
+        case "_session/list/changes":
+            if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPSessionListChanges>.self, from: data),
+               let p = env.params {
+                sessionListChangesCont.yield(p)
+            }
+        case "fs/read_text_file":
+            if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPFsReadParams>.self, from: data),
+               let id = env.id, let p = env.params {
+                acknowledgeAfterDispatch = false
+                deferInboundConsumption(id: id, acknowledgement: onConsumed)
+                filesCont.yield(.read(id: id, params: p))
+            }
+        case "fs/write_text_file":
+            if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPFsWriteParams>.self, from: data),
+               let id = env.id, let p = env.params {
+                acknowledgeAfterDispatch = false
+                deferInboundConsumption(id: id, acknowledgement: onConsumed)
+                filesCont.yield(.write(id: id, params: p))
+            }
+        case "terminal/create":
+            if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPTerminalCreateParams>.self, from: data),
+               let id = env.id, let p = env.params {
+                acknowledgeAfterDispatch = false
+                deferInboundConsumption(id: id, acknowledgement: onConsumed)
+                terminalsCont.yield(.create(id: id, params: p))
+            }
+        case "terminal/output":
+            if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPTerminalOutputParams>.self, from: data),
+               let id = env.id, let p = env.params {
+                acknowledgeAfterDispatch = false
+                deferInboundConsumption(id: id, acknowledgement: onConsumed)
+                terminalsCont.yield(.output(id: id, params: p))
+            }
+        case "terminal/wait_for_exit":
+            if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPTerminalIdParams>.self, from: data),
+               let id = env.id, let p = env.params {
+                acknowledgeAfterDispatch = false
+                deferInboundConsumption(id: id, acknowledgement: onConsumed)
+                terminalsCont.yield(.waitForExit(id: id, params: p))
+            }
+        case "terminal/kill":
+            if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPTerminalIdParams>.self, from: data),
+               let id = env.id, let p = env.params {
+                acknowledgeAfterDispatch = false
+                deferInboundConsumption(id: id, acknowledgement: onConsumed)
+                terminalsCont.yield(.kill(id: id, params: p))
+            }
+        case "terminal/release":
+            if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPTerminalIdParams>.self, from: data),
+               let id = env.id, let p = env.params {
+                acknowledgeAfterDispatch = false
+                deferInboundConsumption(id: id, acknowledgement: onConsumed)
+                terminalsCont.yield(.release(id: id, params: p))
+            }
+        case "cursor/create_plan":
+            if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPCursorCreatePlanParams>.self, from: data),
+               let id = env.id, let params = env.params {
+                acknowledgeAfterDispatch = false
+                deferInboundConsumption(id: id, acknowledgement: onConsumed)
+                plansCont.yield(.init(id: id, params: params))
+            } else if let id = head.id {
+                acknowledgeAfterDispatch = false
+                deferInboundConsumption(id: id, acknowledgement: onConsumed)
+                respondFile(id: id, result: .failure(.init(code: -32602, message: "Invalid params", data: nil)))
+            }
+        case "cursor/update_todos":
+            if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPCursorUpdateTodosParams>.self, from: data),
+               let id = env.id, let params = env.params {
+                acknowledgeAfterDispatch = false
+                deferInboundConsumption(id: id, acknowledgement: onConsumed)
+                respondToCursorUpdateTodos(id: id, params: params)
+            } else if let id = head.id {
+                acknowledgeAfterDispatch = false
+                deferInboundConsumption(id: id, acknowledgement: onConsumed)
+                respondFile(id: id, result: .failure(.init(code: -32602, message: "Invalid params", data: nil)))
+            }
+        case "cursor/task":
+            if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPCursorTaskParams>.self, from: data),
+               let id = env.id, let params = env.params {
+                acknowledgeAfterDispatch = false
+                deferInboundConsumption(id: id, acknowledgement: onConsumed)
+                respondToCursorTask(id: id, params: params)
+            } else if let id = head.id {
+                acknowledgeAfterDispatch = false
+                deferInboundConsumption(id: id, acknowledgement: onConsumed)
+                respondFile(id: id, result: .failure(.init(code: -32602, message: "Invalid params", data: nil)))
+            }
+        case "cursor/generate_image":
+            if let id = head.id {
+                acknowledgeAfterDispatch = false
+                deferInboundConsumption(id: id, acknowledgement: onConsumed)
+                respondFile(
+                    id: id,
+                    result: .failure(.init(
+                        code: -32000,
+                        message: "cursor/generate_image is not supported",
+                        data: nil
+                    ))
+                )
+            }
+        default:
+            if let id = head.id {
+                acknowledgeAfterDispatch = false
+                deferInboundConsumption(id: id, acknowledgement: onConsumed)
+                respondFile(
+                    id: id,
+                    result: .failure(.init(code: -32601, message: "Method not found", data: nil))
+                )
+            }
+        }
+    }
+
+    /// Extracts the raw JSON bytes of the `result` field from a full envelope.
+    private static func extractResultBytes(from envelope: Data) -> Data? {
+        guard let obj = try? JSONSerialization.jsonObject(with: envelope) as? [String: Any],
+              let result = obj["result"]
+        else { return nil }
+        return try? JSONSerialization.data(withJSONObject: result, options: [.fragmentsAllowed])
+    }
+
+    // MARK: - Outbound
+
+    public func send(_ request: ACPRequest) async throws -> ACPResponse {
+        try await send(request, onRequestHandoff: {})
+    }
+
+    public func send(
+        _ request: ACPRequest,
+        onRequestHandoff: @Sendable () -> Void
+    ) async throws -> ACPResponse {
+        let id = nextRequestID()
+
+        let body = try Self.encode(envelopeFor: request, id: id)
+        return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<ACPResponse, Error>) in
+            stateLock.lock()
+            if didDrainPending {
+                stateLock.unlock()
+                onRequestHandoff()
+                cont.resume(throwing: ACPClientError.notRunning)
+                return
+            }
+            pending[id] = cont
+            stateLock.unlock()
+            do {
+                try transport.send(body)
+                onRequestHandoff()
+            } catch {
+                stateLock.lock()
+                // If a concurrent drainPending (shutdown()/`.exited`) already
+                // removed and resumed this entry, `removeValue` returns nil
+                // here — in that case `cont` has already been resumed and we
+                // must not resume it again (that would trap).
+                let stillPending = pending.removeValue(forKey: id) != nil
+                stateLock.unlock()
+                if stillPending { cont.resume(throwing: error) }
+                onRequestHandoff()
+            }
+        }
+    }
+
+    private func nextRequestID() -> JSONRPCID {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        nextId += 1
+        if let prefix = transport.requestIDPrefix {
+            return .string("\(prefix):\(nextId)")
+        }
+        return .number(nextId)
+    }
+
+    private static func encode(envelopeFor request: ACPRequest, id: JSONRPCID) throws -> Data {
+        var dict: [String: Any] = ["jsonrpc": "2.0", "id": id.asJSON, "method": request.method]
+        if let p = request.params {
+            let pData = try JSONEncoder().encode(AnyEncodableBox(p))
+            dict["params"] = try JSONSerialization.jsonObject(with: pData)
+        }
+        return try JSONSerialization.data(withJSONObject: dict)
+    }
+
+    /// JSON-RPC notification envelope — no `id` field, so no response
+    /// is expected and the caller doesn't suspend on a continuation.
+    public func notify(_ request: ACPRequest) async throws {
+        var dict: [String: Any] = ["jsonrpc": "2.0", "method": request.method]
+        if let p = request.params {
+            let pData = try JSONEncoder().encode(AnyEncodableBox(p))
+            dict["params"] = try JSONSerialization.jsonObject(with: pData)
+        }
+        let body = try JSONSerialization.data(withJSONObject: dict)
+        try transport.send(body)
+    }
+
+    public func respondToPermission(id: JSONRPCID, response: ACPPermissionResponse) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let body = try JSONEncoder().encode(response)
+                try self.respond(id: id, body: body)
+            } catch {
+                // Best-effort; caller side has no error path for this.
+            }
+        }
+    }
+
+    public func respondToQuestion(id: JSONRPCID, response: ACPQuestionResponse) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let body = try JSONEncoder().encode(response)
+                try self.respond(id: id, body: body)
+            } catch {
+                // Best-effort; caller side has no error path for this.
+            }
+        }
+    }
+
+    public func respondToPlan(id: JSONRPCID, response: ACPCursorPlanResponse) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try self.respond(id: id, body: JSONEncoder().encode(response))
+            } catch {}
+        }
+    }
+
+    public func respondToElicitation(
+        id: JSONRPCID,
+        result: Result<ACPElicitationResponse, JSONRPCError>
+    ) {
+        Task { [weak self] in
+            guard let self else { return }
+            switch result {
+            case .success(let response):
+                do {
+                    try self.respond(id: id, body: JSONEncoder().encode(response))
+                } catch {}
+            case .failure(let error):
+                self.respondFile(id: id, result: .failure(error))
+            }
+        }
+    }
+
+    private func respondToCursorUpdateTodos(id: JSONRPCID, params: ACPCursorUpdateTodosParams) {
+        let todos = mergedCursorTodos(for: params)
+        respondCursorExtension(
+            id: id,
+            response: ACPCursorUpdateTodosResponse(outcome: .init(todos: todos))
+        )
+    }
+
+    private func mergedCursorTodos(for params: ACPCursorUpdateTodosParams) -> [ACPCursorTodo] {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        let todos = params.mergedTodos(with: cursorTodosByToolCallId[params.toolCallId] ?? [])
+        cursorTodosByToolCallId[params.toolCallId] = todos
+        return todos
+    }
+
+    private func respondToCursorTask(id: JSONRPCID, params: ACPCursorTaskParams) {
+        respondCursorExtension(
+            id: id,
+            response: ACPCursorTaskResponse(
+                outcome: .init(agentId: params.agentId, durationMs: params.durationMs)
+            )
+        )
+    }
+
+    private func respondCursorExtension<Response: Encodable>(id: JSONRPCID, response: Response) {
+        guard let body = try? JSONEncoder().encode(response) else { return }
+        try? respond(id: id, body: body)
+    }
+
+    public func respondToFileRequest(id: JSONRPCID, result: Result<Data, JSONRPCError>) {
+        Task { [weak self] in
+            guard let self else { return }
+            self.respondFile(id: id, result: result)
+        }
+    }
+
+    public func respondToTerminalRequest(id: JSONRPCID, result: Result<Data, JSONRPCError>) {
+        Task { [weak self] in
+            guard let self else { return }
+            self.respondFile(id: id, result: result)
+        }
+    }
+
+    public func hasPendingOutboundRequest(id: JSONRPCID) -> Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return pending[id] != nil
+    }
+
+    private func respond(id: JSONRPCID, body: Data) throws {
+        var dict: [String: Any] = ["jsonrpc": "2.0", "id": id.asJSON]
+        dict["result"] = try JSONSerialization.jsonObject(with: body)
+        let payload = try JSONSerialization.data(withJSONObject: dict)
+        try transport.send(payload, onWritten: { [weak self] in
+            self?.acknowledgeInboundConsumption(id: id)
+        })
+    }
+
+    private func respondFile(id: JSONRPCID, result: Result<Data, JSONRPCError>) {
+        do {
+            var dict: [String: Any] = ["jsonrpc": "2.0", "id": id.asJSON]
+            switch result {
+            case .success(let data):
+                // Allow top-level `null` (the ACP spec for
+                // `fs/write_text_file`'s success result) by passing
+                // `.fragmentsAllowed`. Without it Foundation throws,
+                // the surrounding catch swallows the error, and we
+                // never send back any reply — leaving the agent
+                // waiting on a successful write.
+                dict["result"] = try JSONSerialization.jsonObject(
+                    with: data, options: [.fragmentsAllowed]
+                )
+            case .failure(let err):
+                dict["error"] = ["code": err.code, "message": err.message]
+            }
+            let payload = try JSONSerialization.data(withJSONObject: dict)
+            try transport.send(payload, onWritten: { [weak self] in
+                self?.acknowledgeInboundConsumption(id: id)
+            })
+        } catch {}
+    }
+
+    private func deferInboundConsumption(
+        id: JSONRPCID,
+        acknowledgement: ACPDurableConsumptionAcknowledgement?
+    ) {
+        guard let acknowledgement else { return }
+        stateLock.lock()
+        if pendingInboundConsumptions[id] == nil {
+            pendingInboundConsumptions[id] = acknowledgement
+        }
+        stateLock.unlock()
+    }
+
+    private func acknowledgeInboundConsumption(id: JSONRPCID) {
+        stateLock.lock()
+        let acknowledgement = pendingInboundConsumptions.removeValue(forKey: id)
+        stateLock.unlock()
+        acknowledgement?()
+    }
+
+    /// Resumes and clears every pending outbound continuation exactly once.
+    /// Safe to call from both `shutdown()` and the `.exited` handler; the
+    /// second caller is a no-op (double-resuming a CheckedContinuation traps).
+    /// This can also race a concurrent `send(_:)` whose `transport.send`
+    /// subsequently throws for the same `id`; `send(_:)` guards against
+    /// double-resuming in that case by only resuming if its own
+    /// `pending.removeValue` still found the entry.
+    private func drainPending(with error: Error) {
+        stateLock.lock()
+        if didDrainPending {
+            stateLock.unlock()
+            return
+        }
+        didDrainPending = true
+        let snapshot = pending
+        pending.removeAll()
+        stateLock.unlock()
+        for (_, cont) in snapshot { cont.resume(throwing: error) }
+    }
+
+    public func shutdown() async {
+        drainPending(with: ACPClientError.notRunning)
+        transport.terminate()
+        dispatchTask?.cancel()
+        discardPendingInboundConsumptions()
+    }
+
+    private func discardPendingInboundConsumptions() {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        pendingInboundConsumptions.removeAll()
+    }
+}
+
+// MARK: - Private helpers
+
+private struct JSONRPCErrorEnvelope: Decodable {
+    let error: JSONRPCError?
+
+    public init(error: JSONRPCError?) {
+        self.error = error
+    }
+}
+
+private struct AnyEncodableBox: Encodable {
+    let value: Encodable
+    init(_ value: Encodable) { self.value = value }
+    func encode(to encoder: Encoder) throws { try value.encode(to: encoder) }
+}
+
+private extension JSONRPCID {
+    var asJSON: Any {
+        switch self {
+        case .number(let n): return n
+        case .string(let s): return s
+        }
+    }
+}

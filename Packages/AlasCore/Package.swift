@@ -30,6 +30,10 @@ let package = Package(
             ]
         ),
         .target(
+            name: "AlasAgents",
+            dependencies: ["AlasFoundation", "AlasModel", "AlasPlatform", "AlasFeatures", "AlasCode"]
+        ),
+        .target(
             name: "AlasCore",
             dependencies: [
                 "AlasFoundation",
@@ -37,6 +41,7 @@ let package = Package(
                 "AlasPlatform",
                 "AlasFeatures",
                 "AlasCode",
+                "AlasAgents",
                 .product(name: "SwiftTreeSitter", package: "swift-tree-sitter"),
             ]
         ),

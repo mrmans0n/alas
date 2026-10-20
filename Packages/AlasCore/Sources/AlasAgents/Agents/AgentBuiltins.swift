@@ -1,0 +1,158 @@
+import AlasFoundation
+import AlasModel
+import AlasPlatform
+import AlasFeatures
+import AlasCode
+/// Hard-coded catalog of agents Alas ships knowledge for. The order here is
+/// the order they appear in the Agents pane. The fields live in code (not
+/// persistence) so app updates can fix CLI flag changes for every user
+/// without a config migration.
+public enum AgentBuiltins: Sendable {
+    public static let catalog: [AgentDefinition] = [
+        // Verified against `claude --help` v2.1.133 (2026-05-16). -p is the
+        // documented non-interactive prompt flag; --dangerously-skip-permissions
+        // is the documented "skip all permission prompts" flag.
+        AgentDefinition(
+            id: "claude",
+            displayName: "Claude Code",
+            binary: "claude",
+            binaryOverride: nil,
+            promptModeArgs: ["-p"],
+            bypassPermissionsFlag: "--dangerously-skip-permissions",
+            extraTerminalArgs: nil,
+            isBuiltin: true,
+            isEnabled: true,
+            builtinLogoAssetName: "agent-claude"
+        ),
+        // Verified against `codex --help` and `codex exec --help` v0.130.0
+        // (2026-05-16). The `exec` subcommand is the non-interactive entry
+        // point; --dangerously-bypass-approvals-and-sandbox disables all
+        // sandboxing and approval prompts. (The previously-assumed
+        // `--full_auto` flag does not exist.)
+        AgentDefinition(
+            id: "codex",
+            displayName: "Codex",
+            binary: "codex",
+            binaryOverride: nil,
+            promptModeArgs: ["exec"],
+            bypassPermissionsFlag: "--dangerously-bypass-approvals-and-sandbox",
+            extraTerminalArgs: nil,
+            isBuiltin: true,
+            isEnabled: true,
+            builtinLogoAssetName: "agent-codex"
+        ),
+        // Verified against cursor.com/docs/cli (2026-05-16). The installed
+        // binary is `cursor-agent`. -p / --print enables headless mode;
+        // --force auto-approves file changes without confirmation.
+        AgentDefinition(
+            id: "cursor-agent",
+            displayName: "Cursor CLI",
+            binary: "cursor-agent",
+            binaryOverride: nil,
+            promptModeArgs: ["-p"],
+            bypassPermissionsFlag: "--force",
+            extraTerminalArgs: nil,
+            isBuiltin: true,
+            isEnabled: true,
+            builtinLogoAssetName: "agent-cursor"
+        ),
+        // Verified against `pi --help` v0.74.0 (2026-05-16). -p is the
+        // non-interactive prompt flag. No bypass-permissions equivalent
+        // exists in this CLI.
+        AgentDefinition(
+            id: "pi",
+            displayName: "Pi",
+            binary: "pi",
+            binaryOverride: nil,
+            promptModeArgs: ["-p"],
+            bypassPermissionsFlag: nil,
+            extraTerminalArgs: nil,
+            isBuiltin: true,
+            isEnabled: true,
+            builtinLogoAssetName: "agent-pi"
+        ),
+        // Verified against `omp --help` v18.1.17 (2026-09-11).
+        AgentDefinition(
+            id: "omp",
+            displayName: "OMP",
+            binary: "omp",
+            binaryOverride: nil,
+            promptModeArgs: ["-p"],
+            bypassPermissionsFlag: "--auto-approve",
+            extraTerminalArgs: nil,
+            isBuiltin: true,
+            isEnabled: true,
+            builtinLogoAssetName: "agent-omp"
+        ),
+        // Verified against `opencode run --help` v1.15.1 (2026-05-16). The
+        // `run` subcommand is the non-interactive entry point. There is
+        // NO top-level "skip permissions" flag — `--dangerously-skip-permissions`
+        // is documented only under `opencode run`, so it can't be appended
+        // to a TUI auto-launch. Leave bypass nil: the AgentsPane toggle
+        // is gated on this field being non-nil, so the user can't enable
+        // a flag that would just fail.
+        AgentDefinition(
+            id: "opencode",
+            displayName: "opencode",
+            binary: "opencode",
+            binaryOverride: nil,
+            promptModeArgs: ["run"],
+            bypassPermissionsFlag: nil,
+            extraTerminalArgs: nil,
+            isBuiltin: true,
+            isEnabled: true,
+            builtinLogoAssetName: "agent-opencode"
+        ),
+        // Verified against google-gemini/gemini-cli source
+        // (packages/cli/src/config/config.ts, main branch, 2026-05-16).
+        // -p / --prompt is the non-interactive flag; --yolo auto-approves
+        // all tool calls.
+        AgentDefinition(
+            id: "gemini",
+            displayName: "Gemini CLI",
+            binary: "gemini",
+            binaryOverride: nil,
+            promptModeArgs: ["-p"],
+            bypassPermissionsFlag: "--yolo",
+            extraTerminalArgs: nil,
+            isBuiltin: true,
+            isEnabled: true,
+            builtinLogoAssetName: "agent-gemini"
+        ),
+        // Antigravity CLI (`agy`) succeeds Gemini CLI for non-Enterprise
+        // users. Verified against antigravity.google/docs/cli (2026-10-05):
+        // -p / --print is the non-interactive flag; there is no --yolo, and
+        // --dangerously-skip-permissions auto-approves every action.
+        AgentDefinition(
+            id: "antigravity",
+            displayName: "Antigravity",
+            binary: "agy",
+            binaryOverride: nil,
+            promptModeArgs: ["-p"],
+            bypassPermissionsFlag: "--dangerously-skip-permissions",
+            extraTerminalArgs: nil,
+            isBuiltin: true,
+            isEnabled: true,
+            builtinLogoAssetName: "agent-antigravity"
+        ),
+        // Recorded from the Task 5 built-in catalog requirements (2026-05-20).
+        // -i is the prompt-mode arg; --allow-tool=write scopes write access.
+        AgentDefinition(
+            id: "copilot",
+            displayName: "Copilot",
+            binary: "copilot",
+            binaryOverride: nil,
+            promptModeArgs: ["-i"],
+            bypassPermissionsFlag: "--allow-tool=write",
+            extraTerminalArgs: nil,
+            isBuiltin: true,
+            isEnabled: true,
+            builtinLogoAssetName: "agent-copilot"
+        ),
+    ]
+
+    /// Look up a catalog entry by id; nil for unknown ids.
+    public static func entry(id: String) -> AgentDefinition? {
+        catalog.first(where: { $0.id == id })
+    }
+}
