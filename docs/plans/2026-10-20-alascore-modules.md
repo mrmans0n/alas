@@ -85,7 +85,13 @@ the 2 GB budget, Phase 4 splits it along `ACP/Session` and `ACP/Adapter`, which
 the same analysis can check.
 
 Cross-module references use the `package` access level, which keeps them out
-of the public API the app sees; anything the app uses is already `public`. The
+of the public API the app sees; anything the app uses is already `public`.
+Tests are the exception the umbrella cannot cover: `@testable import AlasCore`
+does not reach the internals of the modules it re-exports, and `package` only
+reaches test targets inside the package. A test that uses an internal
+declaration, as `ACPSessionRunnerTests` uses `remoteFileWriteForTesting`, adds
+`@testable import` of the module that defines it; package targets are built
+with testing enabled in Debug, as `AlasCore` is today. The
 `@_spi(AppHost)` and `@_spi(Testing)` symbols (in 18 files) keep their SPI
 names, which work across modules.
 
@@ -107,7 +113,8 @@ Each phase is one or more PRs that build and pass on their own.
    installs the app's.
 3. **Create the targets, bottom up,** one PR per module: move its folders under
    `Sources/<Module>`, add the target, change `internal` to `package` where the
-   compiler asks, and re-export it from `AlasCore`. The layering check becomes
+   compiler asks, re-export it from `AlasCore`, and add `@testable import` of the
+   new module to the app and package tests that use its internals. The layering check becomes
    the compiler's job and its allowlist is deleted once all targets exist.
 4. **Measure and, if needed, split `AlasAgents`.** Record each module's peak
    compiler memory and the nightly's build step; split further only if a module
@@ -132,4 +139,5 @@ Each phase is one or more PRs that build and pass on their own.
 - **Seven modules** as listed, split further only where Phase 4's measurements
   ask for it.
 - **The umbrella stays:** `AlasCore` re-exports the modules, and the app and
-  the tests keep importing `AlasCore`.
+  the tests keep importing `AlasCore`; only tests that use a module's internals
+  also import that module.
