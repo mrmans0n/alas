@@ -136,11 +136,14 @@ public struct WhatsNewCatalog: Sendable {
         guard stem == entry.version.description else {
             return "File name does not match version \(entry.version)"
         }
-        guard !entry.headline.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return "Headline title must not be empty"
+        func isBlank(_ text: String) -> Bool { text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        guard !isBlank(entry.headline.title) else { return "Headline title must not be empty" }
+        guard !isBlank(entry.headline.body) else { return "Headline body must not be empty" }
+        if let label = entry.headline.actionLabel, isBlank(label) {
+            return "Action label must not be empty"
         }
-        guard !entry.headline.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return "Headline body must not be empty"
+        guard !entry.also.contains(where: { isBlank($0.title) }) else {
+            return "Also titles must not be empty"
         }
         guard entry.also.count <= maxAlsoItems else {
             return "At most \(maxAlsoItems) also items are allowed"
@@ -151,9 +154,11 @@ public struct WhatsNewCatalog: Sendable {
             guard resolved.path.hasPrefix(root.path + "/") else {
                 return "Media path escapes the directory"
             }
-            guard fileManager.fileExists(atPath: resolved.path) else {
+            var isDirectory: ObjCBool = false
+            guard fileManager.fileExists(atPath: resolved.path, isDirectory: &isDirectory) else {
                 return "Media file \(media) does not exist"
             }
+            guard !isDirectory.boolValue else { return "Media path \(media) is a directory" }
         }
         return nil
     }

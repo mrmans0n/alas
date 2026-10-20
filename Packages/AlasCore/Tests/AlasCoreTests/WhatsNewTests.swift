@@ -76,6 +76,15 @@ struct WhatsNewTests {
         InvalidCase(name: "malformed JSON", json: "{ not json", messageFragment: "decode"),
         InvalidCase(name: "blank title", json: entryJSON(title: "  "), messageFragment: "title"),
         InvalidCase(name: "blank body", json: entryJSON(body: " "), messageFragment: "body"),
+        InvalidCase(
+            name: "blank action label",
+            json: entryJSON(headlineExtra: ", \"action\": \"openPluginSettings\", \"actionLabel\": \" \""),
+            messageFragment: "label"),
+        InvalidCase(name: "blank also title", json: entryJSON(extra: ", \"also\": [{\"title\":\" \"}]"), messageFragment: "Also"),
+        InvalidCase(
+            name: "media is a directory", json: entryJSON(headlineExtra: ", \"media\": \"media\""),
+            messageFragment: "directory", extraFile: "media/a.gif"),
+        InvalidCase(name: "empty media path", json: entryJSON(headlineExtra: ", \"media\": \"\""), messageFragment: "escapes"),
     ]
 
     @Test(arguments: invalidCases) func rejectsInvalidEntries(_ testCase: InvalidCase) throws {
@@ -83,6 +92,8 @@ struct WhatsNewTests {
         defer { try? FileManager.default.removeItem(at: dir.deletingLastPathComponent()) }
         if let extra = testCase.extraFile {
             let url = dir.appendingPathComponent(extra).standardizedFileURL
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             FileManager.default.createFile(atPath: url.path, contents: Data())
         }
         let catalog = WhatsNewCatalog.load(directory: dir)
