@@ -10,6 +10,14 @@ struct ReviewSessionProviderLoadedSession {
     let providerContext: ReviewSessionProviderContext
 }
 
+/// A diff another tab already loaded for `target`, so a review session
+/// opened from it can publish immediately instead of reloading.
+struct ReviewSessionSeed {
+    let target: ReviewSessionTarget
+    let session: DiffReviewLoadedSession
+    let selectedFileID: DiffReviewFileID?
+}
+
 struct ReviewSessionLoadedContext {
     let session: DiffReviewLoadedSession
     let feedbackTarget: ReviewFeedbackTarget
@@ -18,20 +26,34 @@ struct ReviewSessionLoadedContext {
     /// side is the whole working tree. Sending feedback on it advances the
     /// worktree's "since last review" baseline; nil leaves the baseline alone.
     var reviewedWorkingTree: String? = nil
+}
+
+extension ReviewSessionLoadedContext {
+    init(
+        session: DiffReviewLoadedSession,
+        target: ReviewSessionTarget,
+        providerContext: ReviewSessionProviderContext?,
+        reviewedWorkingTree: String? = nil
+    ) {
+        self.session = session
+        self.feedbackTarget = ReviewFeedbackTarget(
+            title: target.title,
+            repositoryPath: target.repositoryPath.path,
+            providerDescription: target.providerDescription,
+            sourceDescription: target.sourceDescription,
+            sessionDescription: "Review session: \(target.title)",
+            revisionDescription: target.revisionDescription,
+            priorHandoffDescription: nil,
+            reopenAction: .reviewSession(target)
+        )
+        self.providerContext = providerContext
+        self.reviewedWorkingTree = reviewedWorkingTree
+    }
 
     func replacingFeedbackTarget(for target: ReviewSessionTarget) -> ReviewSessionLoadedContext {
         ReviewSessionLoadedContext(
             session: session,
-            feedbackTarget: ReviewFeedbackTarget(
-                title: target.title,
-                repositoryPath: target.repositoryPath.path,
-                providerDescription: target.providerDescription,
-                sourceDescription: target.sourceDescription,
-                sessionDescription: "Review session: \(target.title)",
-                revisionDescription: target.revisionDescription,
-                priorHandoffDescription: nil,
-                reopenAction: .reviewSession(target)
-            ),
+            target: target,
             providerContext: providerContext,
             reviewedWorkingTree: reviewedWorkingTree
         )
@@ -326,16 +348,7 @@ struct ReviewSessionLoader: @unchecked Sendable {
 
         return ReviewSessionLoadedContext(
             session: session,
-            feedbackTarget: ReviewFeedbackTarget(
-                title: target.title,
-                repositoryPath: target.repositoryPath.path,
-                providerDescription: target.providerDescription,
-                sourceDescription: target.sourceDescription,
-                sessionDescription: "Review session: \(target.title)",
-                revisionDescription: target.revisionDescription,
-                priorHandoffDescription: nil,
-                reopenAction: .reviewSession(target)
-            ),
+            target: target,
             providerContext: providerContext,
             reviewedWorkingTree: reviewedWorkingTree
         )
