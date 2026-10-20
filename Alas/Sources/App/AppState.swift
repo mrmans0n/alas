@@ -1012,6 +1012,7 @@ final class AppState {
     @ObservationIgnored lazy var updates = UpdateController(
         isEnabled: { [weak self] in self?.config.general.autoUpdate ?? true }
     )
+    @ObservationIgnored lazy var whatsNew = WhatsNewController()
 
     var isSearchOpen: Bool = false
     var isRepoSelectorOpen: Bool = false

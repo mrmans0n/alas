@@ -731,6 +731,7 @@ private struct RootPresentationHandlers: ViewModifier {
             .modifier(RootReviewMergePresentationHandlers(state: state))
             .modifier(RootGGPresentationHandlers(state: state))
             .modifier(RootUpdatePresentationHandlers(state: state))
+            .modifier(RootWhatsNewPresentation(state: state))
             .modifier(RootRepoHookApprovalPresentationHandler(state: state))
     }
 }
@@ -950,6 +951,41 @@ private struct RootUpdatePresentationHandlers: ViewModifier {
                 .environment(\.theme, state.themeStore.current)
                 .modifier(RepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue))
             }
+    }
+}
+
+/// Bottom-right "What's new" card. An overlay rather than a sheet so it never
+/// takes focus from the workspace; held back while an update sheet is up.
+private struct RootWhatsNewPresentation: ViewModifier {
+    @Bindable var state: AppState
+
+    func body(content: Content) -> some View {
+        content
+            .overlay(alignment: .bottomTrailing) {
+                if let entry = state.whatsNew.presented,
+                   state.updates.presentedUpdate == nil,
+                   !state.presentUpdateProgress {
+                    WhatsNewCard(
+                        entry: entry,
+                        mediaURL: state.whatsNew.catalog.mediaURL(for: entry),
+                        onAction: { action in
+                            state.whatsNew.dismiss()
+                            switch action {
+                            case .openPluginSettings:
+                                NotificationCenter.default.post(name: .alasOpenSettings, object: SettingsSection.plugins)
+                            }
+                        },
+                        onReleaseNotes: {
+                            state.whatsNew.dismiss()
+                            NSWorkspace.shared.open(entry.releaseNotesURL)
+                        },
+                        onDismiss: { state.whatsNew.dismiss() }
+                    )
+                    .environment(\.theme, state.themeStore.current)
+                    .padding(16)
+                }
+            }
+            .task { state.whatsNew.evaluateOnLaunch() }
     }
 }
 
