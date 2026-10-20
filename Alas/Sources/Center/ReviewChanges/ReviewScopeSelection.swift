@@ -2,9 +2,12 @@ import Foundation
 
 enum ReviewScopeChoice: Equatable {
     case workingTree
+    case staged
     case commit(CommitInfo)
     case range(older: CommitInfo, newer: CommitInfo)
     case branch(name: String)
+    /// `branch(name:)` plus every uncommitted change.
+    case branchWithLocalChanges(name: String)
 }
 
 enum ReviewScopeSelection {
@@ -18,6 +21,8 @@ enum ReviewScopeSelection {
         switch choice {
         case .workingTree:
             return .localChanges(worktreeID: worktreeID, repositoryPath: repositoryPath, scope: .all)
+        case .staged:
+            return .localChanges(worktreeID: worktreeID, repositoryPath: repositoryPath, scope: .staged)
         case .commit(let info):
             return .commit(
                 worktreeID: worktreeID,
@@ -51,6 +56,13 @@ enum ReviewScopeSelection {
                 base: branchBaseSHA ?? name,
                 head: headSHA ?? "HEAD",
                 title: "Review HEAD against \(name)"
+            )
+        case .branchWithLocalChanges(let name):
+            return .branchWithLocalChanges(
+                worktreeID: worktreeID,
+                repositoryPath: repositoryPath,
+                base: branchBaseSHA ?? name,
+                title: "Review HEAD + uncommitted against \(name)"
             )
         }
     }

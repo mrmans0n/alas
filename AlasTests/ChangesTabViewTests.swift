@@ -367,13 +367,27 @@ struct ChangesTabViewTests {
         ))
     }
 
-    @Test func changesPreparationCardVisibilityDoesNotDependOnGGDrawer() {
-        #expect(ChangesTabView.shouldShowChangesPreparationCard(
-            preparationIsVisible: true
-        ))
-        #expect(!ChangesTabView.shouldShowChangesPreparationCard(
-            preparationIsVisible: false
-        ))
+    @Test func preparationCardFallsBackToAReviewButtonOnlyWhenScopesExist() {
+        let visible = ChangesPreparationModel(
+            changes: [ChangedFile(path: "a.swift", status: "M", stage: .unstaged, add: 1, del: 0, renameFrom: nil)],
+            hasDraft: false,
+            draftNonEmpty: false,
+            readinessActions: []
+        )
+        let hidden = ChangesPreparationModel.makeGG(
+            staged: .zero,
+            hasDraft: false,
+            capabilities: GGCapabilities(structuredSplit: false, keepCurrentUnstack: false),
+            newCommitDisabledReason: "Nothing to commit"
+        )
+        #expect(!hidden.isVisible)
+
+        #expect(ChangesTabView.changesPreparationCardModel(preparation: visible, hasReviewScopes: false) == visible)
+        #expect(ChangesTabView.changesPreparationCardModel(preparation: hidden, hasReviewScopes: false) == nil)
+        // A hidden gg card must not resurface its disabled actions.
+        let fallback = ChangesTabView.changesPreparationCardModel(preparation: hidden, hasReviewScopes: true)
+        #expect(fallback?.ggActions.isEmpty == true)
+        #expect(fallback?.reviewAction == nil)
     }
 
     @Test func regularGitOperationDisablesGGPreparationMutations() {

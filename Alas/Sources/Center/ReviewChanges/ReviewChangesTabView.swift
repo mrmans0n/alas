@@ -95,6 +95,9 @@ struct ReviewChangesTabView: View {
     @State private var reviewSessionLaunchError: String?
     @State private var wrapLines = false
     @State private var showWhitespace = false
+    /// The working tree as of the loaded diff; feedback sent on it becomes
+    /// the worktree's "since last review" baseline.
+    @State private var reviewedWorkingTree: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -454,12 +457,18 @@ struct ReviewChangesTabView: View {
         }
 
         do {
+            // Snapshot before loading: an edit landing in between then shows
+            // in this review and again in the next, rather than in neither.
+            let tree = worktree.path.isRemoteAlasPath
+                ? nil
+                : (try? await GitService().localChangesReviewSnapshot(worktreePath: worktree.path)) ?? nil
             let loaded = try await loader.load(worktreePath: worktree.path)
             guard
                 requestedLoadToken.isActive(activeKey: activeLoadKey, activeID: activeLoadID),
                 !Task.isCancelled
             else { return false }
             session = loaded
+            reviewedWorkingTree = tree
             selectedFileID = selectedFileID.flatMap { selected in
                 loaded.summary.files.contains { $0.id == selected } ? selected : loaded.summary.files.first?.id
             } ?? loaded.summary.files.first?.id
@@ -487,6 +496,7 @@ struct ReviewChangesTabView: View {
 
     private var reviewFeedbackAgentSender: ReviewFeedbackAgentSender {
         ReviewFeedbackAgentSender.production(appState: appState, worktreeID: worktree.id)
+            .recordingReviewedWorkingTree(reviewedWorkingTree, worktreeID: worktree.id)
     }
 
     @MainActor

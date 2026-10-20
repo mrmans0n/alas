@@ -22,13 +22,18 @@ struct ReviewSessionLoadedContext {
     let session: DiffReviewLoadedSession
     let feedbackTarget: ReviewFeedbackTarget
     let providerContext: ReviewSessionProviderContext?
+    /// The working tree this diff showed, as a git tree, when its right-hand
+    /// side is the whole working tree. Sending feedback on it advances the
+    /// worktree's "since last review" baseline; nil leaves the baseline alone.
+    var reviewedWorkingTree: String? = nil
 }
 
 extension ReviewSessionLoadedContext {
     init(
         session: DiffReviewLoadedSession,
         target: ReviewSessionTarget,
-        providerContext: ReviewSessionProviderContext?
+        providerContext: ReviewSessionProviderContext?,
+        reviewedWorkingTree: String? = nil
     ) {
         self.session = session
         self.feedbackTarget = ReviewFeedbackTarget(
@@ -42,10 +47,16 @@ extension ReviewSessionLoadedContext {
             reopenAction: .reviewSession(target)
         )
         self.providerContext = providerContext
+        self.reviewedWorkingTree = reviewedWorkingTree
     }
 
     func replacingFeedbackTarget(for target: ReviewSessionTarget) -> ReviewSessionLoadedContext {
-        ReviewSessionLoadedContext(session: session, target: target, providerContext: providerContext)
+        ReviewSessionLoadedContext(
+            session: session,
+            target: target,
+            providerContext: providerContext,
+            reviewedWorkingTree: reviewedWorkingTree
+        )
     }
 }
 
@@ -62,6 +73,14 @@ struct ReviewSessionLoader: @unchecked Sendable {
     var commit: (ReviewSessionTarget) async throws -> DiffReviewLoadedSession
     var commitRange: (ReviewSessionTarget) async throws -> DiffReviewLoadedSession
     var branch: (ReviewSessionTarget) async throws -> DiffReviewLoadedSession
+    /// Diffs from a fixed left side to `current`, the working tree snapshot:
+    /// `.branchWithLocalChanges` and `.sinceSnapshot` targets.
+    var workingTreeRange: (_ target: ReviewSessionTarget, _ current: String) async throws -> DiffReviewLoadedSession
+    /// Writes the working tree as a git tree object.
+    var snapshotWorkingTree: (URL) async throws -> String
+    /// The snapshot a full local-changes review shows, nil when it hides
+    /// conflicted files the snapshot would include.
+    var snapshotLocalChanges: (URL) async throws -> String?
     var reviewRequest: (ReviewSessionTarget) async throws -> ReviewSessionProviderLoadedSession
     var draftReviewRequest: (ReviewSessionTarget) async throws -> DiffReviewLoadedSession
 
@@ -71,6 +90,9 @@ struct ReviewSessionLoader: @unchecked Sendable {
         commit: @escaping (ReviewSessionTarget) async throws -> DiffReviewLoadedSession = { _ in throw ReviewSessionLoaderError.unsupportedTarget },
         commitRange: @escaping (ReviewSessionTarget) async throws -> DiffReviewLoadedSession = { _ in throw ReviewSessionLoaderError.unsupportedTarget },
         branch: @escaping (ReviewSessionTarget) async throws -> DiffReviewLoadedSession = { _ in throw ReviewSessionLoaderError.unsupportedTarget },
+        workingTreeRange: @escaping (ReviewSessionTarget, String) async throws -> DiffReviewLoadedSession = { _, _ in throw ReviewSessionLoaderError.unsupportedTarget },
+        snapshotWorkingTree: @escaping (URL) async throws -> String = { _ in throw ReviewSessionLoaderError.unsupportedTarget },
+        snapshotLocalChanges: @escaping (URL) async throws -> String? = { _ in nil },
         reviewRequest: @escaping (ReviewSessionTarget) async throws -> ReviewSessionProviderLoadedSession = { _ in throw ReviewSessionLoaderError.unsupportedTarget },
         draftReviewRequest: @escaping (ReviewSessionTarget) async throws -> DiffReviewLoadedSession = { _ in throw ReviewSessionLoaderError.unsupportedTarget }
     ) {
@@ -79,6 +101,9 @@ struct ReviewSessionLoader: @unchecked Sendable {
         self.commit = commit
         self.commitRange = commitRange
         self.branch = branch
+        self.workingTreeRange = workingTreeRange
+        self.snapshotWorkingTree = snapshotWorkingTree
+        self.snapshotLocalChanges = snapshotLocalChanges
         self.reviewRequest = reviewRequest
         self.draftReviewRequest = draftReviewRequest
     }
@@ -158,6 +183,36 @@ struct ReviewSessionLoader: @unchecked Sendable {
                         openFileAction(appState: appState, worktreeID: target.worktreeID, worktreePath: target.repositoryPath, relativePath: path)
                     }
                 )
+            },
+            workingTreeRange: { target, current in
+                // Both sides are trees: a plain `git diff <ref>` goes through
+                // the index and misreads untracked files on the left as deleted.
+                let left: String
+                switch target.payload {
+                case .branchWithLocalChanges(let base):
+                    left = try await git.resolvedRangeTrees(
+                        worktreePath: target.repositoryPath, base: base, head: "HEAD", threeDot: true
+                    ).before
+                case .sinceSnapshot(let tree):
+                    left = tree
+                default:
+                    throw ReviewSessionLoaderError.unsupportedTarget
+                }
+                let files = try await git.rangeChangedFiles(at: target.repositoryPath, base: left, head: current, threeDot: false)
+                return try await rangeLoader.load(
+                    worktreePath: target.repositoryPath,
+                    base: left, head: current, threeDot: false,
+                    files: files,
+                    openFileForPath: { path in
+                        openFileAction(appState: appState, worktreeID: target.worktreeID, worktreePath: target.repositoryPath, relativePath: path)
+                    }
+                )
+            },
+            snapshotWorkingTree: { path in
+                try await git.workingTreeSnapshot(worktreePath: path)
+            },
+            snapshotLocalChanges: { path in
+                try await git.localChangesReviewSnapshot(worktreePath: path)
             },
             reviewRequest: { target in
                 guard case .reviewRequest(let providerKind, let host, let repositorySlug, let number, _) = target.payload,
@@ -249,8 +304,15 @@ struct ReviewSessionLoader: @unchecked Sendable {
 
         let session: DiffReviewLoadedSession
         let providerContext: ReviewSessionProviderContext?
+        var reviewedWorkingTree: String?
         switch target.kind {
         case .localChanges:
+            // Only the full local diff shows the whole working tree. Snapshot
+            // before loading: an edit landing in between then shows in this
+            // review and again in the next, rather than in neither.
+            if case .localChanges(.all) = target.payload, !target.repositoryPath.isRemoteAlasPath {
+                reviewedWorkingTree = (try? await snapshotLocalChanges(target.repositoryPath)) ?? nil
+            }
             session = try await localChanges(target)
             providerContext = nil
         case .draftCommit:
@@ -268,6 +330,11 @@ struct ReviewSessionLoader: @unchecked Sendable {
         case .branch:
             session = try await branch(target)
             providerContext = nil
+        case .branchWithLocalChanges, .sinceSnapshot:
+            let current = try await snapshotWorkingTree(target.repositoryPath)
+            session = try await workingTreeRange(target, current)
+            reviewedWorkingTree = current
+            providerContext = nil
         case .reviewRequest:
             let loaded = try await reviewRequest(target)
             session = loaded.loadedSession
@@ -279,7 +346,12 @@ struct ReviewSessionLoader: @unchecked Sendable {
 
         try Task.checkCancellation()
 
-        return ReviewSessionLoadedContext(session: session, target: target, providerContext: providerContext)
+        return ReviewSessionLoadedContext(
+            session: session,
+            target: target,
+            providerContext: providerContext,
+            reviewedWorkingTree: reviewedWorkingTree
+        )
     }
 
     private static func openFileAction(

@@ -211,6 +211,8 @@ private struct ACPSessionView: View {
     var nextPromptInputBlocked: () -> Bool = { false }
     /// The recap next action the user accepted or dismissed as a ghost prompt.
     @State private var dismissedRecapNextAction: String?
+    /// The agent message whose Ship offer the user accepted or dismissed.
+    @State private var dismissedShipOfferMessage: UUID?
     @State private var pendingComposerDrops = 0
     /// Global frame of the chat area, side column included; drop zones and
     /// dock sizes are measured against it.
@@ -478,6 +480,48 @@ private struct ACPSessionView: View {
             ),
             dismissed: dismissedRecapNextAction
         )
+    }
+
+    /// The agent's closing message when it ends the transcript.
+    private var closingAgentMessage: (id: UUID, text: String)? {
+        for message in session.transcript.messages.reversed() {
+            switch message {
+            case .user: return nil
+            case .agent(let id, _, let buffer):
+                let text = buffer.value.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !text.isEmpty else { continue }
+                return (id, String(text.suffix(ACPTurnCompletion.lastAgentTextLimit)))
+            default: continue
+            }
+        }
+        return nil
+    }
+
+    /// `/ship`, offered as the ghost prompt while the agent's last reply ends
+    /// by offering to open a PR and Ship would open one. With no cached
+    /// status, `/ship` fetches it and explains if it can't run.
+    private var shipGhostOffer: (messageID: UUID, action: ACPNextPromptAction)? {
+        guard offersShipCommand, session.transcript.streamingState == .idle,
+              let closing = closingAgentMessage, closing.id != dismissedShipOfferMessage,
+              ShepherdShipOffer.isOffered(in: closing.text) else { return nil }
+        let context = ShepherdSessionContext(sessionID: sessionId, worktree: worktree, state: state)
+        let detail: String
+        switch ShepherdShipAction.resolve(
+            record: context.record, otherRecord: context.otherRecord, request: context.request,
+            snapshot: context.snapshot, isBusy: false
+        ) {
+        case .create(let kind):
+            detail = kind == .gitlab ? "Create merge request" : "Create pull request"
+        case .unavailable where context.snapshot == nil && context.record == nil && context.otherRecord == nil:
+            detail = "Open a PR for \(worktree.branch)"
+        default:
+            return nil
+        }
+        let messageID = closing.id
+        return (messageID, ACPNextPromptAction(detail: detail, title: "Ship") {
+            dismissedShipOfferMessage = messageID
+            Task { @MainActor in await state.shipFromCommand(session: session, worktree: worktree) }
+        })
     }
 
     /// `/ship` is offered wherever the toolbar shows the Ship pill.
@@ -969,8 +1013,13 @@ private struct ACPSessionView: View {
             // A checkout's runner resolves symbol paths against the checkout
             // root, but `worktree` is the focused member repo.
             symbolMentions: isWorkspaceCheckoutOwner ? nil : symbolMentions,
-            nextPromptOffer: recapGhostOffer ?? nextPromptOffer,
+            nextPromptOffer: shipGhostOffer != nil ? ACPAlasSlashCommand.shipSuggestion.command : recapGhostOffer ?? nextPromptOffer,
+            nextPromptAction: shipGhostOffer?.action,
             takeNextPromptOffer: {
+                if let ship = shipGhostOffer {
+                    dismissedShipOfferMessage = ship.messageID
+                    return ACPAlasSlashCommand.shipSuggestion.command
+                }
                 if let recap = recapGhostOffer {
                     dismissedRecapNextAction = recap
                     return recap
@@ -978,9 +1027,11 @@ private struct ACPSessionView: View {
                 return takeNextPromptOffer()
             },
             dismissNextPromptOffer: {
-                // Dismissing the recap's next action leaves the model's
-                // suggestion intact so it can take the ghost slot back.
-                if let recap = recapGhostOffer {
+                // Dismissing the Ship offer or the recap's next action leaves
+                // the model's suggestion intact so it can take the ghost slot back.
+                if let ship = shipGhostOffer {
+                    dismissedShipOfferMessage = ship.messageID
+                } else if let recap = recapGhostOffer {
                     dismissedRecapNextAction = recap
                 } else {
                     dismissNextPromptOffer()
@@ -994,7 +1045,8 @@ private struct ACPSessionView: View {
                 onNextPromptStateChange(environment)
             },
             nextPromptInputBlocked: {
-                (recapGhostOffer == nil && nextPromptInputBlocked()) || pendingComposerDrops > 0 || !composerCanAcceptInput
+                (shipGhostOffer == nil && recapGhostOffer == nil && nextPromptInputBlocked())
+                    || pendingComposerDrops > 0 || !composerCanAcceptInput
             },
             offersShip: offersShipCommand,
             pluginPrompts: pluginPrompts.map(\.suggestion),

@@ -806,7 +806,10 @@ struct ReviewSessionTabView: View {
         let handoffOriginRecordID = record?.id
         var actions = ReviewDraftWorkspaceActions.make(
             controller: draftCommentController,
-            sender: feedbackSender,
+            sender: feedbackSender.recordingReviewedWorkingTree(
+                persistsState ? loaded.reviewedWorkingTree : nil,
+                worktreeID: tabState.worktreeId
+            ),
             sessionID: tabState.sessionID,
             recordHandoff: { handoff in
                 recordSessionHandoff(handoff, originRecordID: handoffOriginRecordID)
@@ -1187,7 +1190,8 @@ struct ReviewSessionTabView: View {
             providerContext: ReviewSessionProviderContext(
                 remote: providerContext.remote,
                 reviewRequest: reviewRequest
-            )
+            ),
+            reviewedWorkingTree: current.reviewedWorkingTree
         )
     }
 

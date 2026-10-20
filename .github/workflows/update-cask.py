@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the alas Homebrew cask file for both arm64 and x86_64."""
+"""Generate the alas and alas-host Homebrew casks for both arm64 and x86_64."""
 import os
 import pathlib
 import re
@@ -8,12 +8,19 @@ import sys
 VERSION = os.environ["VERSION"]
 SHA_ARM = os.environ["SHA_ARM"]
 SHA_INTEL = os.environ["SHA_INTEL"]
+SHA_HOST_ARM = os.environ["SHA_HOST_ARM"]
+SHA_HOST_INTEL = os.environ["SHA_HOST_INTEL"]
 
 # Reject anything that isn't a 64-char lowercase hex digest. Catches the
 # zero-byte-download failure mode where one of the curl steps in release.yml
 # silently produced an empty file, which would otherwise ship a useless cask.
 _SHA_RE = re.compile(r"[a-f0-9]{64}")
-for name, value in (("SHA_ARM", SHA_ARM), ("SHA_INTEL", SHA_INTEL)):
+for name, value in (
+    ("SHA_ARM", SHA_ARM),
+    ("SHA_INTEL", SHA_INTEL),
+    ("SHA_HOST_ARM", SHA_HOST_ARM),
+    ("SHA_HOST_INTEL", SHA_HOST_INTEL),
+):
     if not _SHA_RE.fullmatch(value):
         sys.exit(f"error: {name} is not a 64-char lowercase hex sha256 ({value!r})")
 
@@ -43,6 +50,7 @@ cask "alas" do
   desc "AI parallel agent orchestrator"
   homepage "https://github.com/mrmans0n/alas"
 
+  conflicts_with cask: "alas-host"
   depends_on macos: :sonoma
 
   app "Alas.app"
@@ -66,6 +74,38 @@ cask "alas" do
 end
 '''
 
+# The headless host alone, for a Mac that runs no app: the host and its web
+# client, as package-alas-host.sh lays them out. It links the same command as
+# the app's cask, so the two conflict.
+HOST_CASK = f'''\
+cask "alas-host" do
+  version "{VERSION}"
+
+  on_arm do
+    sha256 "{SHA_HOST_ARM}"
+
+    url "https://github.com/mrmans0n/alas/releases/download/v#{{version}}/alas-host-#{{version}}-arm64.zip"
+  end
+  on_intel do
+    sha256 "{SHA_HOST_INTEL}"
+
+    url "https://github.com/mrmans0n/alas/releases/download/v#{{version}}/alas-host-#{{version}}-x86_64.zip"
+  end
+
+  name "Alas host"
+  desc "Headless Alas host serving projects, sessions and runs"
+  homepage "https://github.com/mrmans0n/alas"
+
+  conflicts_with cask: "alas"
+  depends_on macos: :sonoma
+
+  binary "alas-host/alas-host"
+
+  zap launchctl: ["io.nlopez.alas.host", "io.nlopez.alas.host.*"],
+      trash:     "~/Library/LaunchAgents/io.nlopez.alas.host*.plist"
+end
+'''
+
 # Path is relative to cwd — run from the homebrew-tap repo root.
 # release.yml sets `working-directory: homebrew-tap` for this step; the
 # Task 3 dry-run in the plan writes a stray Casks/ alongside this repo,
@@ -73,4 +113,5 @@ end
 path = pathlib.Path("Casks/alas.rb")
 path.parent.mkdir(parents=True, exist_ok=True)
 path.write_text(CASK)
-print(f"Updated cask to {VERSION}")
+path.with_name("alas-host.rb").write_text(HOST_CASK)
+print(f"Updated casks to {VERSION}")

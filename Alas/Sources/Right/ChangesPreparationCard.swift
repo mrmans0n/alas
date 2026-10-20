@@ -5,6 +5,9 @@ enum ChangesPreparationCardText {
     static let reviewScopeMenuTitle = "Review Something Else…"
     static let reviewScopeButtonTitle = "Review…"
     static let reviewScopeButtonSubtitle = "Commit, range, or branch"
+    static let hostedReviewsMenuTitle = "Review Stack Requests"
+    /// Stack requests beyond this count move into a submenu.
+    static let inlineHostedReviewLimit = 3
 
     static func landingTitle(_ landing: ChangesPreparationModel.GGLandingStatus) -> String {
         "Landing \(landing.completed) of \(landing.total)"
@@ -74,6 +77,9 @@ struct ChangesPreparationCard: View {
     let onReviewChanges: () -> Void
     /// Opens the review target palette (the ⇧⌘R action).
     let onChooseReviewScope: () -> Void
+    /// Review targets listed above the palette entry in the split menu.
+    let reviewScopeOptions: [ChangesReviewScopeOption]
+    let onReviewScopeOption: (ChangesReviewScopeOption) -> Void
     /// Effective binding of the palette action, shown next to its entrypoints.
     let reviewScopeShortcut: ShortcutBinding?
     let onDraftCommit: () -> Void
@@ -284,8 +290,7 @@ struct ChangesPreparationCard: View {
             .accessibilityIdentifier("changes-preparation-review")
 
             Menu {
-                Button(ChangesPreparationCardText.reviewScopeMenuTitle, action: onChooseReviewScope)
-                    .keyboardShortcut(reviewScopeShortcut?.asKeyboardShortcut())
+                reviewScopeMenuContent
             } label: {
                 Icon(name: "chev-down", size: 10, color: theme.color("bg-0").opacity(0.72))
                     .frame(width: 26, height: 44)
@@ -303,8 +308,43 @@ struct ChangesPreparationCard: View {
         .clipShape(RoundedRectangle(cornerRadius: 7))
     }
 
+    /// The scopes, grouped local first and hosted requests after, then the
+    /// palette catch-all.
+    @ViewBuilder
+    private var reviewScopeMenuContent: some View {
+        let local = reviewScopeOptions.filter { if case .hostedReview = $0 { false } else { true } }
+        let hosted = reviewScopeOptions.filter { if case .hostedReview = $0 { true } else { false } }
+        ForEach(local, id: \.id) { option in
+            reviewScopeOptionButton(option)
+        }
+        if !local.isEmpty {
+            Divider()
+        }
+        if hosted.count > ChangesPreparationCardText.inlineHostedReviewLimit {
+            Menu(ChangesPreparationCardText.hostedReviewsMenuTitle) {
+                ForEach(hosted, id: \.id) { option in
+                    reviewScopeOptionButton(option)
+                }
+            }
+            Divider()
+        } else if !hosted.isEmpty {
+            ForEach(hosted, id: \.id) { option in
+                reviewScopeOptionButton(option)
+            }
+            Divider()
+        }
+        Button(ChangesPreparationCardText.reviewScopeMenuTitle, action: onChooseReviewScope)
+            .keyboardShortcut(reviewScopeShortcut?.asKeyboardShortcut())
+    }
+
+    private func reviewScopeOptionButton(_ option: ChangesReviewScopeOption) -> some View {
+        Button(option.title()) { onReviewScopeOption(option) }
+            .accessibilityIdentifier(option.accessibilityIdentifier)
+    }
+
     /// Stands in for the split button when there are no uncommitted changes
-    /// to review, so the palette stays reachable.
+    /// to review, so the palette stays reachable. Scopes that apply anyway,
+    /// such as branch commits or stack requests, sit behind a trailing chevron.
     private var secondaryReviewScopeButton: some View {
         secondaryButton(
             title: ChangesPreparationCardText.reviewScopeButtonTitle,
@@ -313,9 +353,28 @@ struct ChangesPreparationCard: View {
             showsDot: false,
             isEnabled: true,
             help: reviewScopeHelp(ChangesPreparationCardText.reviewScopeButtonTitle),
+            trailingAccessoryWidth: reviewScopeOptions.isEmpty ? 0 : 22,
             action: onChooseReviewScope
         )
         .accessibilityIdentifier("changes-preparation-review-scope")
+        .overlay(alignment: .trailing) {
+            if !reviewScopeOptions.isEmpty {
+                Menu {
+                    reviewScopeMenuContent
+                } label: {
+                    Icon(name: "chev-down", size: 10, color: theme.color("fg-dim"))
+                        .frame(width: 26, height: 40)
+                        .contentShape(Rectangle())
+                }
+                .menuStyle(.button)
+                .buttonStyle(.plain)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help(reviewScopeHelp(ChangesPreparationCardText.reviewScopeMenuTitle))
+                .accessibilityLabel(ChangesPreparationCardText.reviewScopeMenuTitle)
+                .accessibilityIdentifier("changes-preparation-review-scope-secondary-menu")
+            }
+        }
     }
 
     private func reviewScopeHelp(_ title: String) -> String {
@@ -577,6 +636,8 @@ struct ChangesPreparationCard: View {
         isEnabled: Bool,
         isInFlight: Bool = false,
         help: String? = nil,
+        /// Room kept clear at the trailing edge for an overlaid control.
+        trailingAccessoryWidth: CGFloat = 0,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
@@ -605,7 +666,7 @@ struct ChangesPreparationCard: View {
                         .foregroundColor(theme.color("fg-faint"))
                         .lineLimit(1)
                 }
-                Spacer(minLength: 4)
+                Spacer(minLength: 4 + trailingAccessoryWidth)
             }
             .padding(.horizontal, 8)
             .frame(height: 40)

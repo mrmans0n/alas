@@ -97,4 +97,47 @@ private let presentationCases: [ShepherdPresentationCase] = [
         )
         #expect(action == expected)
     }
+
+    @Test(
+        "an agent's closing offer to ship is recognized",
+        arguments: [
+            ("Done.\n\nWant me to open a PR?", true),
+            ("Tests pass. Want me to open a PR with these changes, or keep iterating on the edge cases?", true),
+            ("Should I commit this and push the branch?", true),
+            ("Shall I create a draft pull request for review?", true),
+            ("**Ready to raise the MR?**", true),
+            ("Let me know if you want me to open a PR.", true),
+            ("Want me to ship it?", true),
+            ("Want me to open a PR?\n\nFor context, the fix touches two files.", false),
+            ("Want me to open a PR? I can also add more tests first.", false),
+            ("I opened a PR. Want me to add tests too?", false),
+            ("Did you already open a PR for this?", false),
+            ("Can you open a PR when you're ready?", false),
+            ("Could you commit and push from your machine?", false),
+            ("Should I not open a PR yet?", false),
+            ("Would you rather I don't create a PR?", false),
+            ("Is there already an open PR?", false),
+            ("Should I check whether there's an open PR first?", false),
+            ("Want me to check if I can open a PR?", false),
+            ("Want me to show you how to open a PR?", false),
+            ("I can help you open a PR?", false),
+            ("I can open a PR after we add tests; should I add them first?", false),
+            ("All green: want me to open a PR?", true),
+            ("Want me to open the existing PR in your browser?", false),
+            ("Want me to send you the PR link?", false),
+            ("Should I file a comment on the PR?", false),
+            ("Want me to create a PR template?", false),
+            ("Should I commit or push?", false),
+            ("Should I commit these changes and push back on the reviewer?", false),
+            ("Want me to commit to this approach and push for broader adoption?", false),
+            ("Want me to commit the fix and push the branch to origin?", true),
+            ("Want me to go ahead and commit these changes and open a pull request?", true),
+            ("Want me to commit these changes?", false),
+            ("Should I update the PR description?", false),
+            ("I'll open a PR once the tests pass.", false),
+        ]
+    )
+    func shipOffer(text: String, expected: Bool) {
+        #expect(ShepherdShipOffer.isOffered(in: text) == expected)
+    }
 }

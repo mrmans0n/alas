@@ -383,7 +383,7 @@ public struct ReviewsAPI {
         switch sessionID.sourceKind {
         case .commit, .trackedCommit:
             return .resolved("commit")
-        case .commitRange, .branch:
+        case .commitRange, .branch, .branchWithLocalChanges, .sinceSnapshot:
             return .resolved("range")
         case .draftCommit:
             return .resolved(ChangeStage.staged.rawValue)
