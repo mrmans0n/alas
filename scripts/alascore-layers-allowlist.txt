@@ -3,12 +3,6 @@ ACP/Session/ACPSessionManager.swift RemoteQueueProjection
 Attention/AttentionProducer.swift ActivityState
 Attention/AttentionProducer.swift AgentKind
 Checkpoints/CheckpointWriterLeaseStore.swift ACPProcessLiveness
-Diagnostics/MemoryDiagnostics.swift ACPSession
-Diagnostics/MemoryDiagnostics.swift ACPSessionManager
-Diagnostics/MemoryDiagnostics.swift markdownCacheByteEstimate
-Diagnostics/MemoryDiagnostics.swift transcriptByteEstimate
-Dialogs/ProjectIconImageStaging.swift Paths
-Dialogs/ProjectIconImageStaging.swift projectIconsRoot
 Git/GitService+RemoteChanges.swift RemoteWorktreeFileAccess
 Git/GitService+ReviewLoop.swift GitRemote
 Git/GitService+WorkingTreeSnapshot.swift LiveCheckpointGitRunner
@@ -46,10 +40,5 @@ SSH/RemoteHelperClient.swift ACPBrokerRespondParams
 SSH/RemoteHelperClient.swift ACPBrokerSendParams
 SSH/RemoteHelperClient.swift ACPBrokerSendResult
 SSH/RemoteHelperClient.swift ACPBrokerSimpleOK
-Schedules/RunSchedule.swift ACPTurnCompletion
-Schedules/RunSchedulePresentation.swift ACPLaunchCatalog
 Shepherd/ShepherdPromptBuilder.swift ACPPromptCard
 Updates/SelfUpdater.swift InstallerHost
-Watch/ProjectGitWatcher.swift HeadReader
-Watch/ProjectGitWatcher.swift Process.git
-Watch/WorktreeWatcher.swift Process.git

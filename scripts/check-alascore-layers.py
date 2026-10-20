@@ -32,13 +32,13 @@ import sys
 # Bottom to top. A folder not listed here fails the check, so a new folder
 # gets a module when it is created.
 MODULES = [
-    ("AlasFoundation", ["Helpers", "SQLiteKit", "JSONRPC", "Watch", "Dialogs", "Diagnostics"]),
-    ("AlasModel", ["Persistence", "Model"]),
-    ("AlasPlatform", ["SSH", "Git", "Search", "RepoHooks", "Zmx", "Updates", "LocalText"]),
+    ("AlasFoundation", ["Helpers", "SQLiteKit", "JSONRPC"]),
+    ("AlasModel", ["Persistence", "Model", "Dialogs"]),
+    ("AlasPlatform", ["SSH", "Git", "Search", "RepoHooks", "Zmx", "Updates", "LocalText", "Watch"]),
     ("AlasFeatures", ["Integrations", "Issues", "Center", "Shepherd", "Checkpoints", "Projects",
-                      "Workspace", "RunScripts", "Schedules", "Attention"]),
+                      "Workspace", "RunScripts", "Attention"]),
     ("AlasCode", ["Code"]),
-    ("AlasAgents", ["ACP", "Agents", "Harness", "Plugins", "FailureBriefs", "Right"]),
+    ("AlasAgents", ["ACP", "Agents", "Harness", "Plugins", "FailureBriefs", "Right", "Diagnostics", "Schedules"]),
     ("AlasHostCore", ["Core", "Remote"]),
 ]
 
