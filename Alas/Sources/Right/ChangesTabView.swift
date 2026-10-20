@@ -546,17 +546,15 @@ struct ChangesTabView: View {
             })
         }
 
-        if !conflicts.isEmpty || rps.bulkResolveInFlight || rps.bulkResolveReport != nil {
+        if !conflicts.isEmpty || rps.bulkResolveInFlight {
             let token = String(reflecting: conflicts)
                 + String(reflecting: rps.bulkResolveInFlight)
-                + String(reflecting: rps.bulkResolveReport)
                 + String(reflecting: resolvedBulkAgent)
                 + appState.config.changes.mergeBulkResolvePrompt
             rows.append(appKitRow(id: "changes-conflicts", token: token, estimatedHeight: 120) {
                 ConflictsSection(
                     conflicts: conflicts,
                     bulkInFlight: rps.bulkResolveInFlight,
-                    bulkReport: rps.bulkResolveReport,
                     hasAgent: resolvedBulkAgent != nil,
                     onSelect: { file in rps.openConflict?(file.path) },
                     onUseOurs: { rps.useOurs(file: $0) },
@@ -579,7 +577,6 @@ struct ChangesTabView: View {
                         )
                     },
                     onCancelBulkResolve: { rps.cancelBulkResolve() },
-                    onDismissBulkReport: { rps.dismissBulkResolveReport() },
                     dragPayload: { file in
                         .workingTreeFile(worktreePath: rps.worktree.path, relativePath: file.path)
                     }
