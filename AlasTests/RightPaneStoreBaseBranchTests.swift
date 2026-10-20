@@ -342,5 +342,4 @@ struct RightPaneStoreBaseBranchTests {
         #expect(notification.detail == "Resolved App.swift by preserving both changes.")
         #expect(appState.inAppNotifications.notifications(in: source.id).isEmpty)
     }
-
 }
