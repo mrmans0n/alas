@@ -3,3 +3,4 @@
 @_exported import AlasFoundation
 @_exported import AlasModel
 @_exported import AlasPlatform
+@_exported import AlasFeatures

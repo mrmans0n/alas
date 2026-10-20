@@ -1,5 +1,6 @@
 import Foundation
 import os
+@_spi(Testing) import AlasFeatures
 
 private let removalLogger = Logger(subsystem: "io.nlopez.alas", category: "WorktreeRemoval")
 

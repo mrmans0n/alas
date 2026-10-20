@@ -1,0 +1,154 @@
+import Foundation
+import AlasFoundation
+import AlasModel
+import AlasPlatform
+
+public struct CodeHostIssueSuggestion: Equatable, Sendable, Identifiable {
+    public let provider: CodeHostKind
+    public let number: Int
+    public let title: String
+    public let canonicalURL: URL
+    public let createdAt: Date
+
+    public var id: String { "\(provider.rawValue):\(canonicalURL.absoluteString)" }
+
+    public init(provider: CodeHostKind, number: Int, title: String, canonicalURL: URL, createdAt: Date) {
+        self.provider = provider
+        self.number = number
+        self.title = title
+        self.canonicalURL = canonicalURL
+        self.createdAt = createdAt
+    }
+}
+
+public protocol CodeHostIssueProviding: Sendable {
+    var kind: CodeHostKind { get }
+    var executable: String { get }
+
+    func isAvailable(cwd: URL) async -> Bool
+    func isAuthenticated(remote: CodeHostRemote, cwd: URL) async -> Bool
+    func issue(remote: CodeHostRemote, number: Int, cwd: URL) async throws -> CodeHostIssueSnapshot
+    func openIssues(remote: CodeHostRemote, limit: Int, cwd: URL) async throws -> [CodeHostIssueSuggestion]
+}
+
+public enum CodeHostIssueProviderError: LocalizedError, Equatable, Sendable {
+    case notFound(provider: CodeHostKind, repositorySlug: String, number: Int)
+    case permissionDenied(host: String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .notFound(let provider, let repositorySlug, let number):
+            return "\(provider.displayName) issue #\(number) was not found in \(repositorySlug)."
+        case .permissionDenied(let host):
+            return "Permission to read issues on \(host) was denied."
+        }
+    }
+
+    public static func classification(
+        provider: CodeHostKind,
+        remote: CodeHostRemote,
+        number: Int,
+        result: ProcessResult
+    ) -> Self? {
+        let status = structuredStatus(in: result.stdout)
+            ?? structuredStatus(in: result.stderr)
+            ?? httpStatus(in: "\(result.stdout)\n\(result.stderr)")
+        switch status {
+        case 404:
+            return .notFound(provider: provider, repositorySlug: remote.repositorySlug, number: number)
+        case 403:
+            return .permissionDenied(host: remote.host)
+        default:
+            return nil
+        }
+    }
+
+    private static func structuredStatus(in output: String) -> Int? {
+        guard let data = output.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data),
+              let dictionary = object as? [String: Any]
+        else {
+            return nil
+        }
+        for key in ["status", "code"] {
+            if let status = dictionary[key] as? Int { return status }
+            if let status = dictionary[key] as? String, let value = Int(status) { return value }
+        }
+        guard let message = dictionary["message"] as? String else { return nil }
+        return leadingStatus(in: message)
+    }
+
+    private static func httpStatus(in output: String) -> Int? {
+        for status in [403, 404] where output.range(
+            of: "\\b(?:HTTP(?:\\s+status)?|status(?:\\s+code)?)\\s*[:=]?\\s*\(status)\\b",
+            options: [.regularExpression, .caseInsensitive]
+        ) != nil {
+            return status
+        }
+        for line in output.split(whereSeparator: \.isNewline) {
+            if let status = leadingStatus(in: String(line)) {
+                return status
+            }
+        }
+        for status in [403, 404] where output.range(
+            of: "\\b\(status)\\s+(?:Forbidden|Not\\s+Found)\\b",
+            options: [.regularExpression, .caseInsensitive]
+        ) != nil {
+            return status
+        }
+        return nil
+    }
+
+    private static func leadingStatus(in value: String) -> Int? {
+        for status in [403, 404] where value.range(
+            of: "^\\s*\(status)\\b",
+            options: .regularExpression
+        ) != nil {
+            return status
+        }
+        return nil
+    }
+}
+
+extension CodeHostRemote {
+    public func codeHostIssueIdentity(number: Int) -> CodeHostIssueIdentity {
+        let host = host.lowercased()
+        let repositorySlug: String
+        switch kind {
+        case .github:
+            repositorySlug = self.repositorySlug.lowercased()
+        case .gitlab:
+            repositorySlug = self.repositorySlug.lowercased()
+        }
+        return CodeHostIssueIdentity(provider: kind, host: host, repositorySlug: repositorySlug, number: number)
+    }
+}
+
+extension CodeHostKind {
+    public var issueProviderID: IssueProviderID {
+        switch self {
+        case .github: .github
+        case .gitlab: .gitlab
+        }
+    }
+}
+
+public struct CodeHostIssueProviderRegistry: Sendable {
+    private let providersByKind: [String: any CodeHostIssueProviding]
+
+    public init(_ providers: [any CodeHostIssueProviding]) {
+        providersByKind = Dictionary(uniqueKeysWithValues: providers.map { ($0.kind.rawValue, $0) })
+    }
+
+    public var supportedKinds: Set<CodeHostKind> {
+        Set(providersByKind.keys.compactMap(CodeHostKind.init(rawValue:)))
+    }
+
+    public func provider(for kind: CodeHostKind) -> (any CodeHostIssueProviding)? {
+        providersByKind[kind.rawValue]
+    }
+
+    public static func live() -> Self {
+        .init([GitHubCLIProvider(), GitLabCLIProvider()])
+    }
+}

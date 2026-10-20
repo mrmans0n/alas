@@ -1,0 +1,420 @@
+import Foundation
+import Observation
+import AlasFoundation
+import AlasModel
+import AlasPlatform
+
+public enum GGLandingPhase: Equatable, Sendable {
+    case running, cancelling, cancelled, succeeded, failed
+}
+
+public struct GGLandingRow: Equatable, Identifiable, Sendable {
+    public let position: Int
+    public let title: String
+    public let ggId: String?
+    public var stableID: String? = nil
+    public let prNumber: Int?
+    public var wait: GGLandWait? = nil
+    public var outcome: GGLandedEntry? = nil
+
+    public var id: Int { position }
+
+    public init(position: Int, title: String, ggId: String?, stableID: String? = nil, prNumber: Int?, wait: GGLandWait? = nil, outcome: GGLandedEntry? = nil) {
+        self.position = position
+        self.title = title
+        self.ggId = ggId
+        self.stableID = stableID
+        self.prNumber = prNumber
+        self.wait = wait
+        self.outcome = outcome
+    }
+}
+
+public struct GGLandingSession: Equatable, Identifiable, Sendable {
+    public struct Seed: Equatable, Sendable {
+        public let projectId: String
+        public let worktreeId: String
+        public let stack: String
+        public let base: String
+        public let target: String
+        public var rows: [GGLandingRow]
+
+        public init(projectId: String, worktreeId: String, stack: String, base: String, target: String, rows: [GGLandingRow]) {
+            self.projectId = projectId
+            self.worktreeId = worktreeId
+            self.stack = stack
+            self.base = base
+            self.target = target
+            self.rows = rows
+        }
+    }
+
+    public let id: UUID
+    public let projectId: String
+    public let worktreeId: String
+    public let stack: String
+    public let base: String
+    public let target: String
+    public var confirmedScope: Seed
+    public let startedAt: Date
+    public var rows: [GGLandingRow]
+    public var phase: GGLandingPhase
+    /// True between opening the session and gg emitting its first event: the
+    /// stack re-validation (`gg ls`) that precedes `gg land` hits the forge
+    /// and can take seconds, and the tab is already on screen by then.
+    public var isPreparing: Bool = false
+    public var activeWait: GGLandWait?
+    public var warning: String?
+    public var result: GGLandResult?
+    public var error: String?
+    public var completedIDs: Set<String>
+    public var endedAt: Date? = nil
+
+    public init(id: UUID, projectId: String, worktreeId: String, stack: String, base: String, target: String, confirmedScope: Seed, startedAt: Date, rows: [GGLandingRow], phase: GGLandingPhase, isPreparing: Bool = false, activeWait: GGLandWait? = nil, warning: String? = nil, result: GGLandResult? = nil, error: String? = nil, completedIDs: Set<String>, endedAt: Date? = nil) {
+        self.id = id
+        self.projectId = projectId
+        self.worktreeId = worktreeId
+        self.stack = stack
+        self.base = base
+        self.target = target
+        self.confirmedScope = confirmedScope
+        self.startedAt = startedAt
+        self.rows = rows
+        self.phase = phase
+        self.isPreparing = isPreparing
+        self.activeWait = activeWait
+        self.warning = warning
+        self.result = result
+        self.error = error
+        self.completedIDs = completedIDs
+        self.endedAt = endedAt
+    }
+}
+
+@MainActor
+@Observable
+public final class GGLandingStore {
+    private struct Operation {
+        let id: UUID
+        let monitor: Task<Void, Never>
+        let cancel: @MainActor () -> Void
+        var cancellationRequested = false
+
+        public init(id: UUID, monitor: Task<Void, Never>, cancel: @escaping @MainActor () -> Void, cancellationRequested: Bool = false) {
+            self.id = id
+            self.monitor = monitor
+            self.cancel = cancel
+            self.cancellationRequested = cancellationRequested
+        }
+    }
+
+    public static let shared = GGLandingStore()
+
+    public private(set) var sessions: [String: GGLandingSession] = [:]
+    @ObservationIgnored private var operations: [String: Operation] = [:]
+    @ObservationIgnored private var preparations: [String: Task<Void, Never>] = [:]
+    @ObservationIgnored private var isCancellingAll = false
+
+    @discardableResult
+    public func begin(
+        _ seed: GGLandingSession.Seed,
+        completedIDs: Set<String> = [],
+        now: Date = Date()
+    ) -> Bool {
+        guard !isCancellingAll, operations[seed.projectId] == nil else { return false }
+        if let session = sessions[seed.projectId],
+           session.phase == .running || session.phase == .cancelling
+        {
+            return false
+        }
+        sessions[seed.projectId] = GGLandingSession(
+            id: UUID(),
+            projectId: seed.projectId,
+            worktreeId: seed.worktreeId,
+            stack: seed.stack,
+            base: seed.base,
+            target: seed.target,
+            confirmedScope: seed,
+            startedAt: now,
+            rows: seed.rows,
+            phase: .running,
+            isPreparing: true,
+            activeWait: nil,
+            warning: nil,
+            result: nil,
+            error: nil,
+            completedIDs: completedIDs
+        )
+        return true
+    }
+
+    /// Corrects the displayed rows from a fresh preflight and reconciles
+    /// `confirmedScope`, the baseline a later `restartGGLand` rebuilds from.
+    /// Updating `rows` alone leaves `confirmedScope` pinned to the original
+    /// (possibly stale) seed, so a drift this session already absorbed would
+    /// make every retry fail with `staleConfirmation`.
+    ///
+    /// A row from the old scope survives only if the fresh preflight still
+    /// reports it, or it's in `completedIDs` (already landed in a prior
+    /// attempt and expected to have dropped out of the live stack). Any other
+    /// row the old scope had — cached data that turned out stale before this
+    /// session ever executed anything — is replaced, not preserved: nothing
+    /// ran against it, so there's nothing to protect. Newly discovered rows
+    /// widen the scope.
+    public func reconcilePreflightSeed(_ seed: GGLandingSession.Seed, projectId: String) {
+        guard let session = sessions[projectId], session.phase == .running else { return }
+        sessions[projectId]?.rows = seed.rows
+        func id(_ row: GGLandingRow) -> String { row.stableID ?? row.ggId ?? "\(row.position)" }
+        let freshIDs = Set(seed.rows.map(id))
+        let retainedOldRows = session.confirmedScope.rows.filter { row in
+            freshIDs.contains(id(row)) || session.completedIDs.contains(id(row))
+        }
+        let knownIDs = Set(retainedOldRows.map(id))
+        let newRows = seed.rows.filter { !knownIDs.contains(id($0)) }
+        var reconciled = session.confirmedScope
+        reconciled.rows = (retainedOldRows + newRows).sorted { $0.position < $1.position }
+        sessions[projectId]?.confirmedScope = reconciled
+    }
+
+    @discardableResult
+    public func receive(_ event: GGLandEvent, projectId: String) -> Bool {
+        guard var session = sessions[projectId] else { return true }
+        let streamFailedAfterSummary: Bool
+        if case .error = event {
+            streamFailedAfterSummary = session.phase == .succeeded && operations[projectId] != nil
+        } else {
+            streamFailedAfterSummary = false
+        }
+        guard session.phase == .running || session.phase == .cancelling || streamFailedAfterSummary
+        else { return true }
+        // Any land event means gg is live; the pre-launch revalidation is over.
+        session.isPreparing = false
+
+        switch event {
+        case .start(let stack, let base, let totalEntries):
+            guard stack == session.confirmedScope.stack,
+                  base == session.confirmedScope.base,
+                  totalEntries == session.rows.count
+            else {
+                session.phase = .failed
+                session.activeWait = nil
+                session.warning = nil
+                session.error = "gg land started for a different stack. Refresh and try again."
+                session.endedAt = Date()
+                sessions[projectId] = session
+                return false
+            }
+
+        case .wait(let wait):
+            guard let index = session.rows.firstIndex(where: { $0.position == wait.position }),
+                  Self.row(session.rows[index], matches: wait)
+            else {
+                Self.rejectStreamMismatch(&session)
+                sessions[projectId] = session
+                return false
+            }
+            session.activeWait = wait
+            session.warning = wait.error
+            session.rows[index].wait = wait
+
+        case .entry(let entry):
+            guard let index = session.rows.firstIndex(where: { $0.position == entry.position }),
+                  Self.row(session.rows[index], matches: entry)
+            else {
+                Self.rejectStreamMismatch(&session)
+                sessions[projectId] = session
+                return false
+            }
+            session.rows[index].wait = nil
+            session.rows[index].outcome = entry
+            if entry.error == nil, let id = Self.completedID(for: session.rows[index]) {
+                session.completedIDs.insert(id)
+            }
+            if session.activeWait?.position == entry.position {
+                session.activeWait = nil
+                session.warning = nil
+            }
+
+        case .summary(let result):
+            for entry in result.landed {
+                guard let index = session.rows.firstIndex(where: { $0.position == entry.position }),
+                      Self.row(session.rows[index], matches: entry)
+                else {
+                    Self.rejectStreamMismatch(&session)
+                    sessions[projectId] = session
+                    return false
+                }
+            }
+            session.result = result
+            session.activeWait = nil
+            session.warning = nil
+            for entry in result.landed {
+                if let index = session.rows.firstIndex(where: { $0.position == entry.position }) {
+                    session.rows[index].wait = nil
+                    session.rows[index].outcome = entry
+                    if let id = Self.completedID(for: session.rows[index]) {
+                        if entry.error == nil {
+                            session.completedIDs.insert(id)
+                        } else {
+                            session.completedIDs.remove(id)
+                        }
+                    }
+                }
+            }
+            if session.phase == .running {
+                session.phase = result.error == nil ? .succeeded : .failed
+                session.error = result.error
+            }
+
+        case .error(let message):
+            if session.phase != .cancelling {
+                session.phase = .failed
+                session.activeWait = nil
+                session.warning = nil
+                session.error = message
+            }
+        }
+
+        if session.phase == .succeeded || session.phase == .failed {
+            session.endedAt = Date()
+        }
+        sessions[projectId] = session
+        return true
+    }
+
+    private static func completedID(for row: GGLandingRow) -> String? {
+        row.stableID ?? row.ggId
+    }
+
+    private static func rejectStreamMismatch(_ session: inout GGLandingSession) {
+        session.phase = .failed
+        session.activeWait = nil
+        session.warning = nil
+        session.error = "gg land reported progress for a different stack. Refresh and try again."
+        session.endedAt = Date()
+    }
+
+    private static func row(_ row: GGLandingRow, matches wait: GGLandWait) -> Bool {
+        row.prNumber == nil || row.prNumber == wait.prNumber
+    }
+
+    private static func row(_ row: GGLandingRow, matches entry: GGLandedEntry) -> Bool {
+        if let prNumber = row.prNumber, prNumber != entry.prNumber { return false }
+        if let ggId = entry.ggId, ggId != row.stableID, ggId != row.ggId { return false }
+        if row.ggId == nil, row.prNumber == nil, entry.sha != row.stableID { return false }
+        return true
+    }
+
+    public func attach(
+        projectId: String,
+        task: Task<Void, Error>,
+        cancel: @escaping @MainActor () -> Void
+    ) {
+        guard !isCancellingAll, let session = sessions[projectId],
+              session.phase == .running || session.phase == .cancelling,
+              operations[projectId] == nil
+        else {
+            cancel()
+            return
+        }
+
+        let sessionId = session.id
+        let operationId = UUID()
+        let monitor = Task { @MainActor [weak self] in
+            let result = await task.result
+            guard let self, self.operations[projectId]?.id == operationId else { return }
+            self.operations[projectId] = nil
+            guard self.sessions[projectId]?.id == sessionId else { return }
+
+            guard let phase = self.sessions[projectId]?.phase else { return }
+            if phase == .cancelling {
+                self.sessions[projectId]?.phase = .cancelled
+                self.sessions[projectId]?.isPreparing = false
+                self.sessions[projectId]?.endedAt = Date()
+                self.sessions[projectId]?.activeWait = nil
+                self.sessions[projectId]?.warning = nil
+                self.sessions[projectId]?.error = nil
+            } else if phase == .running {
+                switch result {
+                case .success:
+                    self.fail(projectId: projectId, message: "gg land ended without a summary.")
+                case .failure(let error):
+                    self.fail(projectId: projectId, message: GGErrorPresentation.message(for: error))
+                }
+            }
+        }
+        operations[projectId] = Operation(id: operationId, monitor: monitor, cancel: cancel)
+        if session.phase == .cancelling {
+            requestCancellation(projectId: projectId)
+        }
+    }
+
+    public func cancel(projectId: String) {
+        guard var session = sessions[projectId], session.phase == .running else { return }
+        session.phase = .cancelling
+        sessions[projectId] = session
+        requestCancellation(projectId: projectId)
+    }
+
+    public func cancelAllAndWait() async {
+        isCancellingAll = true
+        defer { isCancellingAll = false }
+        let activeOperations = operations
+        let activePreparations = preparations
+        for projectId in Set(activeOperations.keys).union(activePreparations.keys) {
+            if sessions[projectId]?.phase == .running {
+                sessions[projectId]?.phase = .cancelling
+            }
+            requestCancellation(projectId: projectId)
+        }
+        for operation in activeOperations.values {
+            await operation.monitor.value
+        }
+        for preparation in activePreparations.values {
+            await preparation.value
+        }
+    }
+
+    public func startPreparation(projectId: String, operation: @escaping @MainActor () async -> Void) {
+        guard !isCancellingAll, preparations[projectId] == nil else { return }
+        preparations[projectId] = Task { @MainActor in
+            defer { preparations[projectId] = nil }
+            await operation()
+        }
+    }
+
+    public func waitForOperation(projectId: String) async {
+        await operations[projectId]?.monitor.value
+    }
+
+    public func fail(projectId: String, message: String) {
+        guard var session = sessions[projectId],
+              session.phase == .running || (session.phase == .cancelling && operations[projectId] == nil)
+        else { return }
+        session.phase = session.phase == .cancelling ? .cancelled : .failed
+        session.isPreparing = false
+        session.activeWait = nil
+        session.warning = nil
+        session.error = session.phase == .cancelled ? nil : message
+        session.endedAt = Date()
+        sessions[projectId] = session
+    }
+
+    public func prune(keepingProjectIds: Set<String>) {
+        let removedProjectIds = sessions.keys.filter { !keepingProjectIds.contains($0) }
+        for projectId in removedProjectIds {
+            requestCancellation(projectId: projectId)
+            sessions[projectId] = nil
+        }
+    }
+
+    private func requestCancellation(projectId: String) {
+        preparations[projectId]?.cancel()
+        guard var operation = operations[projectId], !operation.cancellationRequested else { return }
+        operation.cancellationRequested = true
+        operations[projectId] = operation
+        operation.cancel()
+    }
+
+    public init() {}
+}

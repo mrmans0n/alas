@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import AlasCore
+@testable import AlasFeatures
 
 struct ShepherdRulesResolveCase: Sendable, CustomTestStringConvertible {
     let testDescription: String
