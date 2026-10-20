@@ -327,7 +327,8 @@ unavailable without sending it an unknown method.
 
 A helper that also advertises `remoteMCPTools: 1` waits long enough for
 `pr_create`, so Alas relays `visual_show`, `pr_create`, and `pr_status` and runs
-`alas mcp --remote` for the session. Behind a helper without it, Alas relays
+`alas mcp --remote` for the session. Behind a helper without it, and for
+Workspace Checkout sessions, which the PR shepherd does not support, Alas relays
 `visual_show` only and runs `alas mcp --visual-only`. The relay itself is the
 same in both cases.
 
