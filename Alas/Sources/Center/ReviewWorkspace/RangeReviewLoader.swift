@@ -5,6 +5,12 @@ protocol RangeReviewGitClient: Sendable {
     func rangeDiff(worktreePath: URL, revisions: (before: String, after: String), file: String, originalPath: String?) async throws -> ParsedDiff
     func rangeContextSnapshot(worktreePath: URL, base: String, head: String, threeDot: Bool, file: String, originalPath: String?) async throws -> DiffReviewFileContextSnapshot
     func rangeImageProvider(worktreePath: URL, revisions: (before: String, after: String), file: CommitChangedFile) -> DiffReviewImageProvider
+    func treeDiffsByFile(worktreePath: URL, revisions: (before: String, after: String), paths: [String]) async throws -> [String: ParsedDiff]
+}
+
+extension RangeReviewGitClient {
+    /// No batch: every file takes the per-file `rangeDiff` path.
+    func treeDiffsByFile(worktreePath: URL, revisions: (before: String, after: String), paths: [String]) async throws -> [String: ParsedDiff] { [:] }
 }
 
 extension GitService: RangeReviewGitClient {
@@ -27,6 +33,7 @@ struct RangeReviewLoader {
         self.git = git
     }
 
+    /// `onFileList` receives the files as pending sections before any diff loads.
     @MainActor
     func load(
         worktreePath: URL,
@@ -34,34 +41,47 @@ struct RangeReviewLoader {
         head: String,
         threeDot: Bool,
         files: [CommitChangedFile],
-        openFileForPath: @escaping @MainActor (String) -> (() -> Void)?
+        openFileForPath: @escaping @MainActor (String) -> (() -> Void)?,
+        onFileList: (@MainActor (DiffReviewLoadedSession) -> Void)? = nil
     ) async throws -> DiffReviewLoadedSession {
-        var sections: [DiffReviewFileSectionModel] = []
+        onFileList?(DiffReviewBatchLoading.pendingSession(files: files, namespace: "range"))
         let revisions = try await git.resolvedRangeTrees(
             worktreePath: worktreePath,
             base: base,
             head: head,
             threeDot: threeDot
         )
+        try Task.checkCancellation()
 
-        for file in files {
-            try Task.checkCancellation()
-            let diff = try await git.rangeDiff(
-                worktreePath: worktreePath, revisions: revisions,
-                file: file.path, originalPath: file.originalPath
-            )
-            try Task.checkCancellation()
+        let git = git
+        let diffs = try await DiffReviewBatchLoading.diffs(
+            for: files,
+            batched: {
+                let byPath = try await git.treeDiffsByFile(worktreePath: worktreePath, revisions: revisions, paths: files.map(\.path))
+                return Dictionary(files.compactMap { file in byPath[file.path].map { (file, $0) } }, uniquingKeysWith: { first, _ in first })
+            },
+            single: { file in
+                try await git.rangeDiff(worktreePath: worktreePath, revisions: revisions, file: file.path, originalPath: file.originalPath)
+            }
+        )
+        let displayModels = try await DiffReviewBatchLoading.displayModels(
+            for: files.compactMap { file in
+                diffs[file].flatMap { Self.canRenderText(file, diff: $0) ? (key: file, diff: $0, filePath: file.path) : nil }
+            }
+        )
 
-            sections.append(try await fileSection(
+        let sections = files.map { file in
+            fileSection(
                 for: file,
-                diff: diff,
+                diff: diffs[file] ?? ParsedDiff(hunks: []),
+                displayModel: displayModels[file],
                 worktreePath: worktreePath,
                 revisions: revisions,
                 base: base,
                 head: head,
                 threeDot: threeDot,
                 openFile: openFileForPath(file.path)
-            ))
+            )
         }
 
         return DiffReviewLoadedSession(
@@ -70,24 +90,32 @@ struct RangeReviewLoader {
         )
     }
 
+    private static func isImage(_ file: CommitChangedFile) -> Bool {
+        ImageFileType.isSupported(relativePath: file.path)
+            || file.originalPath.map(ImageFileType.isSupported(relativePath:)) == true
+    }
+
+    private static func canRenderText(_ file: CommitChangedFile, diff: ParsedDiff) -> Bool {
+        !diff.hunks.isEmpty && !isImage(file)
+    }
+
     private func fileSection(
         for file: CommitChangedFile,
         diff: ParsedDiff,
+        displayModel: DiffDisplayModel?,
         worktreePath: URL,
         revisions: (before: String, after: String),
         base: String,
         head: String,
         threeDot: Bool,
         openFile: (() -> Void)?
-    ) async throws -> DiffReviewFileSectionModel {
-        let isImage = ImageFileType.isSupported(relativePath: file.path)
-            || file.originalPath.map(ImageFileType.isSupported(relativePath:)) == true
-        let imageProvider = isImage
+    ) -> DiffReviewFileSectionModel {
+        let imageProvider = Self.isImage(file)
             ? git.rangeImageProvider(worktreePath: worktreePath, revisions: revisions, file: file)
             : nil
-        let canRenderText = !diff.hunks.isEmpty && !isImage
+        let canRenderText = Self.canRenderText(file, diff: diff)
         let canRender = canRenderText || imageProvider != nil
-        let counts = lineCounts(in: diff)
+        let counts = DiffReviewBatchLoading.lineCounts(in: diff)
         let summary = DiffReviewFileSummary(
             path: file.path,
             namespace: "range",
@@ -103,9 +131,7 @@ struct RangeReviewLoader {
         return DiffReviewFileSectionModel(
             summary: summary,
             parsedDiff: diff,
-            displayModel: canRenderText
-                ? try await buildDisplayModel(diff: diff, filePath: file.path)
-                : nil,
+            displayModel: displayModel,
             placeholderMessage: canRender ? nil : placeholderMessage(for: file, diff: diff),
             openFile: openFile,
             contextProvider: DiffReviewContextProvider {
@@ -117,30 +143,6 @@ struct RangeReviewLoader {
             },
             imageProvider: imageProvider
         )
-    }
-
-    private func buildDisplayModel(diff: ParsedDiff, filePath: String) async throws -> DiffDisplayModel {
-        try Task.checkCancellation()
-        let model = await Task.detached(priority: .userInitiated) {
-            DiffDisplayModelBuilder.build(diff: diff, filePath: filePath)
-        }.value
-        try Task.checkCancellation()
-        return model
-    }
-
-    private func lineCounts(in diff: ParsedDiff) -> (additions: Int, deletions: Int) {
-        diff.hunks.reduce(into: (additions: 0, deletions: 0)) { counts, hunk in
-            for line in hunk.lines {
-                switch line.kind {
-                case .add:
-                    counts.additions += 1
-                case .delete:
-                    counts.deletions += 1
-                case .context:
-                    break
-                }
-            }
-        }
     }
 
     private func placeholderMessage(for file: CommitChangedFile, diff: ParsedDiff) -> String {

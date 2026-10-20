@@ -606,7 +606,7 @@ extension GitService {
         return (before, after)
     }
 
-    private func firstParentOrEmptyTree(worktreePath: URL, sha: String) async throws -> String {
+    func firstParentOrEmptyTree(worktreePath: URL, sha: String) async throws -> String {
         let parentsResult = try await Process.git(
             ["rev-list", "--parents", "-n", "1", sha],
             cwd: worktreePath

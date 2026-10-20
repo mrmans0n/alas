@@ -1,5 +1,5 @@
 {
-  "originHash" : "4317a09013376be6633d43827d3c563e53c692b1485b773a891a9daa115a1829",
+  "originHash" : "9d1a2f46a208e839b7dd36d77fe8daa25cfbac78fd22620823c02809ab59da0a",
   "pins" : [
     {
       "identity" : "beautiful-mermaid-swift",
@@ -26,6 +26,15 @@
       "state" : {
         "revision" : "86b5096ac59ab46e66bd1f6377c604bc1dab0bc2",
         "version" : "1.5.1"
+      }
+    },
+    {
+      "identity" : "lottie-spm",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/airbnb/lottie-spm",
+      "state" : {
+        "revision" : "0aff16288f8dc1e3dab35cbf5cf45979673fd3df",
+        "version" : "4.6.1"
       }
     },
     {
