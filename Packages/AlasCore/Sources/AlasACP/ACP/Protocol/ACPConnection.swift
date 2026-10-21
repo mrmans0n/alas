@@ -170,6 +170,10 @@ public final class ACPConnection: @unchecked Sendable {
     /// Set after `initialize` from `ACPSessionInstructionsPolicy`. Sent as
     /// `_meta.systemPrompt.append` on session/new, load, resume, and fork.
     public var sessionInstructions: String?
+    /// Enable before initialize only for a verified managed downstream launch.
+    public var codexHooksReviewEnabled = false
+    public private(set) var negotiatedCodexHooks = false
+    public var codexHooksReviewToken: String?
 
     public init(client: ACPClient, sessionMeta: ACPSessionMeta? = nil) {
         self.client = client
@@ -183,6 +187,9 @@ public final class ACPConnection: @unchecked Sendable {
         if let mcpStartupAwaitTimeoutMs, let mcpServers, !mcpServers.isEmpty {
             meta.mcpStartupAwaitTimeoutMs = mcpStartupAwaitTimeoutMs
         }
+        if negotiatedCodexHooks, let codexHooksReviewToken {
+            meta.codexHooks = .init(reviewToken: codexHooksReviewToken)
+        }
         if let sessionInstructions {
             meta.systemPrompt = .init(append: sessionInstructions)
         }
@@ -193,18 +200,31 @@ public final class ACPConnection: @unchecked Sendable {
     /// missing prompt capability fields to false and missing auth methods to empty.
     @discardableResult
     public func initialize(brokerOperationKey: String? = nil) async throws -> ACPInitializeOutcome {
+        codexHooksReviewToken = nil
+        negotiatedCodexHooks = false
+        let meta = ACPClientCapabilitiesMeta(
+            terminalAuth: true,
+            parameterizedModelPicker: true,
+            openCodeChildSessionUpdates: true,
+            asyncTasks: true,
+            contextUsage: true,
+            codexHooks: codexHooksReviewEnabled ? .init() : nil
+        )
         let req = ACPRequest(method: "initialize",
                              params: ACPInitializeParams(
                                 protocolVersion: ACPProtocolVersion.current,
                                 clientCapabilities: .init(
                                     fs: .init(readTextFile: true, writeTextFile: true),
                                     terminal: client.advertisesTerminalCapability,
-                                    meta: .terminalAuth)),
+                                    meta: meta)),
                              brokerOperationKey: brokerOperationKey)
         let resp = try await client.send(req)
         defer { resp.acknowledgeDurableConsumption() }
         let result = try JSONDecoder().decode(ACPInitializeResult.self, from: resp.body)
         let capabilities = result.agentCapabilities
+        negotiatedCodexHooks = codexHooksReviewEnabled
+            && ACPCodexHooksCapability.supports(agentInfo: result.agentInfo)
+            && result.meta?.codexHooks?.isSupported == true
         negotiatedSessionIndex = result.meta?.sessionIndex?.support
         return ACPInitializeOutcome(
             promptCapabilities: capabilities?.promptCapabilities ?? .init(),
@@ -248,6 +268,8 @@ public final class ACPConnection: @unchecked Sendable {
     }
 
     public func authenticate(methodId: String) async throws {
+        codexHooksReviewToken = nil
+        defer { codexHooksReviewToken = nil }
         let resp = try await client.send(ACPRequest(
             method: "authenticate",
             params: ACPAuthenticateParams(methodId: methodId)
@@ -450,9 +472,11 @@ public final class ACPConnection: @unchecked Sendable {
         } else {
             normalizedObjective = nil
         }
+        var params = ACPGoalControlParams(sessionId: sessionId, action: action, objective: normalizedObjective)
+        if action == .set || action == .resume { params.meta = hookRequestMeta }
         let response = try await client.send(ACPRequest(
             method: capability.controlMethod,
-            params: ACPGoalControlParams(sessionId: sessionId, action: action, objective: normalizedObjective)
+            params: params
         ))
         defer { response.acknowledgeDurableConsumption() }
         _ = try JSONDecoder().decode(EmptyObject.self, from: response.body)
@@ -468,12 +492,16 @@ public final class ACPConnection: @unchecked Sendable {
     }
 
     public func setProvider(_ params: ACPProviderSetParams) async throws -> [ACPProviderInfo] {
+        codexHooksReviewToken = nil
+        defer { codexHooksReviewToken = nil }
         let response = try await client.send(ACPRequest(method: "providers/set", params: params))
         response.acknowledgeDurableConsumption()
         return try await listProviders()
     }
 
     public func disableProvider(providerId: String) async throws -> [ACPProviderInfo] {
+        codexHooksReviewToken = nil
+        defer { codexHooksReviewToken = nil }
         let response = try await client.send(ACPRequest(
             method: "providers/disable",
             params: ACPProviderDisableParams(providerId: providerId)
@@ -511,9 +539,11 @@ public final class ACPConnection: @unchecked Sendable {
         beforeRequestHandoff: (@Sendable (ACPBrokerGeneration?) async throws -> Void)? = nil,
         onRequestHandoffDidOccur: (@Sendable () throws -> Void)? = nil
     ) async throws -> ACPPromptOutcome {
+        var params = ACPSessionPromptParams(sessionId: sessionId, prompt: blocks)
+        params.meta = hookRequestMeta
         let request = ACPRequest(
             method: "session/prompt",
-            params: ACPSessionPromptParams(sessionId: sessionId, prompt: blocks),
+            params: params,
             brokerOperationKey: brokerOperationKey
         )
         let resp: ACPResponse
@@ -556,9 +586,11 @@ public final class ACPConnection: @unchecked Sendable {
         brokerOperationKey: String? = nil,
         onRequestHandoff: (@Sendable () -> Void)? = nil
     ) async throws -> ACPSteeringResult {
+        var params = ACPSteeringParams(sessionId: sessionId, prompt: blocks)
+        if negotiatedCodexHooks, let codexHooksReviewToken { params.meta["codexHooks"] = ["reviewToken": codexHooksReviewToken] }
         let request = ACPRequest(
             method: "_session/steering",
-            params: ACPSteeringParams(sessionId: sessionId, prompt: blocks),
+            params: params,
             brokerOperationKey: brokerOperationKey
         )
         let handoff = onRequestHandoff.map(ACPRequestHandoff.init)
@@ -605,7 +637,31 @@ public final class ACPConnection: @unchecked Sendable {
         durableResponseLock.unlock()
     }
 
-    public func shutdown() async { await client.shutdown() }
+    private var hookRequestMeta: ACPSessionMeta? {
+        guard negotiatedCodexHooks, let codexHooksReviewToken else { return nil }
+        var meta = ACPSessionMeta()
+        meta.codexHooks = .init(reviewToken: codexHooksReviewToken)
+        return meta
+    }
 
-    public func detach() async { await client.detach() }
+    public func listCodexHooks(cwd: String) async throws -> ACPCodexHooksList {
+        guard negotiatedCodexHooks else { throw ACPClientError.decoding("Codex hook review was not negotiated") }
+        struct Params: Encodable { let cwd: String }
+        let response = try await client.send(ACPRequest(method: "_codex/hooks/list", params: Params(cwd: cwd)))
+        defer { response.acknowledgeDurableConsumption() }
+        return try JSONDecoder().decode(ACPCodexHooksList.self, from: response.body)
+    }
+
+    public func trustCodexHooks(cwd: String, reviewToken: String, hooks: [ACPCodexHookIdentity]) async throws -> Bool {
+        guard negotiatedCodexHooks else { throw ACPClientError.decoding("Codex hook review was not negotiated") }
+        struct Params: Encodable { let cwd: String; let reviewToken: String; let hooks: [ACPCodexHookIdentity] }
+        struct Response: Decodable { let trusted: Bool }
+        let response = try await client.send(ACPRequest(method: "_codex/hooks/trust", params: Params(cwd: cwd, reviewToken: reviewToken, hooks: hooks)))
+        defer { response.acknowledgeDurableConsumption() }
+        return try JSONDecoder().decode(Response.self, from: response.body).trusted
+    }
+
+    public func shutdown() async { codexHooksReviewToken = nil; await client.shutdown() }
+
+    public func detach() async { codexHooksReviewToken = nil; await client.detach() }
 }

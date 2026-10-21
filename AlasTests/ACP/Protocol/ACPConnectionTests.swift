@@ -30,6 +30,95 @@ struct ACPConnectionTests {
         _ = try await ACPConnection(client: mock).initialize()
     }
 
+    @Test("hook review requires managed launch, verified release and neutral capability", arguments: [
+        (true, "@alas-ide/codex-acp", "2.2.2-alas.4", #"{"version":1,"reviewToken":true}"#, true),
+        (false, "@alas-ide/codex-acp", "2.2.2-alas.4", #"{"version":1,"reviewToken":true}"#, false),
+        (true, "@alas-ide/codex-acp", "2.2.2-alas.3", #"{"version":1,"reviewToken":true}"#, false),
+        (true, "codex-acp", "2.2.2-alas.4", #"{"version":1,"reviewToken":true}"#, false),
+        (true, "@alas-ide/codex-acp", "2.2.2-alas.4", #"{"version":true,"reviewToken":true}"#, false),
+        (true, "@alas-ide/codex-acp", "2.2.2-alas.4", #"{"version":2,"reviewToken":true}"#, false),
+        (true, "@alas-ide/codex-acp", "2.2.2-alas.4", #"{"version":1,"reviewToken":false}"#, false),
+        (true, "@alas-ide/codex-acp", "2.2.2-alas.4", "null", false),
+    ])
+    func hookReviewNegotiation(enabled: Bool, name: String, version: String, advertisement: String, supported: Bool) async throws {
+        let mock = ACPMockClient()
+        mock.script(method: "initialize") { request in
+            let params = try #require(request.params as? ACPInitializeParams)
+            #expect((params.clientCapabilities.meta.codexHooks != nil) == enabled)
+            return Data("""
+            {"protocolVersion":1,"agentInfo":{"name":"\(name)","version":"\(version)"},"_meta":{"codexHooks":\(advertisement),"steering":{"supported":true}}}
+            """.utf8)
+        }
+        let connection = ACPConnection(client: mock)
+        connection.codexHooksReviewEnabled = enabled
+        let outcome = try await connection.initialize()
+        #expect(connection.negotiatedCodexHooks == supported)
+        #expect(outcome.supportsSteering)
+    }
+
+    @Test("review token covers execution requests and is invalidated before authentication")
+    func hookReviewExecutionMetadata() async throws {
+        let mock = ACPMockClient()
+        mock.script(method: "initialize") { _ in Data(#"{"protocolVersion":1,"agentInfo":{"name":"@alas-ide/codex-acp","version":"2.2.2-alas.4"},"_meta":{"codexHooks":{"version":1,"reviewToken":true}}}"#.utf8) }
+        let connection = ACPConnection(client: mock)
+        connection.codexHooksReviewEnabled = true
+        try await connection.initialize()
+        connection.codexHooksReviewToken = "reviewed"
+        for method in ["session/new", "session/load", "session/resume", "session/fork", "session/prompt", "_session/goal", "_session/steering"] {
+            mock.script(method: method) { request in
+                let params = try #require(request.params)
+                let json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(params)) as? [String: Any])
+                let meta = try #require(json["_meta"] as? [String: Any])
+                #expect((meta["codexHooks"] as? [String: String]) == ["reviewToken": "reviewed"])
+                return Data(#"{"sessionId":"s","outcome":"injected"}"#.utf8)
+            }
+        }
+        _ = try await connection.newSession(cwd: "/p", mcpServers: [])
+        _ = try await connection.loadSession(cwd: "/p", sessionId: "s", mcpServers: [])
+        _ = try await connection.resumeSession(cwd: "/p", sessionId: "s", mcpServers: [])
+        _ = try await connection.forkSession(cwd: "/p", sessionId: "s", mcpServers: [])
+        _ = try await connection.prompt(sessionId: "s", blocks: [])
+        _ = try await connection.steer(sessionId: "s", blocks: [])
+        for action in [ACPGoalAction.set, .resume] {
+            try await connection.controlGoal(sessionId: "s", capability: .init(version: 1, controlMethod: "_session/goal", actions: [.set, .resume]), action: action, objective: "goal")
+        }
+        mock.script(method: "authenticate") { _ in
+            #expect(connection.codexHooksReviewToken == nil)
+            connection.codexHooksReviewToken = "during-auth"
+            throw ACPClientError.notRunning
+        }
+        await #expect(throws: ACPClientError.self) { try await connection.authenticate(methodId: "login") }
+        #expect(connection.codexHooksReviewToken == nil)
+    }
+
+    @Test("hook list preserves diagnostics and trust sends only selected pairs")
+    func hookReviewRPC() async throws {
+        let mock = ACPMockClient()
+        mock.script(method: "initialize") { _ in Data(#"{"protocolVersion":1,"agentInfo":{"name":"@alas-ide/codex-acp","version":"2.2.2-alas.4"},"_meta":{"codexHooks":{"version":1,"reviewToken":true}}}"#.utf8) }
+        mock.script(method: "_codex/hooks/list") { request in
+            let params = try #require(request.params)
+            let json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(params)) as? [String: Any])
+            #expect(json["cwd"] as? String == "/remote/project")
+            return Data(#"{"cwd":"/remote/project","hooks":[],"warnings":["warning"],"errors":[{"path":"/remote/bad","message":"bad config"}],"reviewToken":"token","codexHome":"/remote/codex"}"#.utf8)
+        }
+        mock.script(method: "_codex/hooks/trust") { request in
+            let params = try #require(request.params)
+            let json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(params)) as? [String: Any])
+            #expect(json["reviewToken"] as? String == "token")
+            #expect(json["hooks"] as? [[String: String]] == [["key": "selected", "currentHash": "reviewed"]])
+            return Data(#"{"trusted":false}"#.utf8)
+        }
+        let connection = ACPConnection(client: mock)
+        connection.codexHooksReviewEnabled = true
+        try await connection.initialize()
+        let snapshot = try await connection.listCodexHooks(cwd: "/remote/project")
+        #expect(snapshot.warnings == ["warning"])
+        #expect(snapshot.errors.first?.message == "bad config")
+        #expect(snapshot.codexHome == "/remote/codex")
+        let trusted = try await connection.trustCodexHooks(cwd: snapshot.cwd, reviewToken: snapshot.reviewToken, hooks: [.init(key: "selected", currentHash: "reviewed")])
+        #expect(trusted == false)
+    }
+
     @Test("task controls require the exact advertised contract", arguments: [
         (#"{"async-tasks":{"version":1,"controlMethod":"_session/async_task/stop","actions":["stop"]}}"#, true),
         (#"{"async-tasks":{"version":1,"controlMethod":"_session/async_task/stop","actions":["future","stop"]}}"#, true),

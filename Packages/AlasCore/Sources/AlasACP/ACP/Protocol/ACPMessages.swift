@@ -190,6 +190,8 @@ public struct ACPGoalControlParams: Encodable, Sendable {
     public let sessionId: String
     public let action: ACPGoalAction
     public let objective: String?
+    public var meta: ACPSessionMeta? = nil
+    public enum CodingKeys: String, CodingKey { case sessionId, action, objective; case meta = "_meta" }
 
     public init(sessionId: String, action: ACPGoalAction, objective: String?) {
         self.sessionId = sessionId
@@ -262,8 +264,9 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
     public let asyncTasks: Bool
     /// Asks our Claude adapter fork to serve `_alas/context_usage`.
     public let contextUsage: Bool
-    /// Asks our Claude and Codex adapter forks for the client-neutral session
-    /// index (see `ACPSessionIndex.swift`).
+    /// Opts a managed Codex launch into process-bound hook review.
+    public let codexHooks: ACPCodexHooksDeclaration?
+    /// Asks our Claude and Codex adapter forks for the client-neutral session index.
     public let sessionIndex: ACPSessionIndexDeclaration
 
     public init(
@@ -273,7 +276,8 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
         goal: EmptyObject = .init(),
         asyncTasks: Bool = false,
         contextUsage: Bool = false,
-        sessionIndex: ACPSessionIndexDeclaration = .init()
+        sessionIndex: ACPSessionIndexDeclaration = .init(),
+        codexHooks: ACPCodexHooksDeclaration? = nil
     ) {
         self.terminalAuth = terminalAuth
         self.parameterizedModelPicker = parameterizedModelPicker
@@ -282,10 +286,11 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
         self.asyncTasks = asyncTasks
         self.contextUsage = contextUsage
         self.sessionIndex = sessionIndex
+        self.codexHooks = codexHooks
     }
 
     public enum CodingKeys: String, CodingKey, Sendable {
-        case contextUsage, sessionIndex
+        case contextUsage, sessionIndex, codexHooks
         case terminalAuth = "terminal-auth"
         case parameterizedModelPicker
         case openCodeChildSessionUpdates = "opencode/child-session-updates"
@@ -302,6 +307,7 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
         goal = try c.decodeIfPresent(EmptyObject.self, forKey: .goal) ?? .init()
         asyncTasks = try c.decodeIfPresent(Bool.self, forKey: .asyncTasks) ?? false
         contextUsage = try c.decodeIfPresent(Bool.self, forKey: .contextUsage) ?? false
+        codexHooks = try? c.decodeIfPresent(ACPCodexHooksDeclaration.self, forKey: .codexHooks)
         sessionIndex = (try? c.decodeIfPresent(ACPSessionIndexDeclaration.self, forKey: .sessionIndex)) ?? .init()
     }
 }
@@ -383,9 +389,10 @@ public struct ACPInitializeResult: Codable, Equatable, Sendable {
         public let systemPrompt: SystemPromptCapability?
         /// Client-neutral session index (our Claude and Codex adapter forks).
         public let sessionIndex: ACPSessionIndexCapability?
+        public let codexHooks: ACPCodexHooksCapability?
 
         public enum CodingKeys: String, CodingKey, Sendable {
-            case goal, steering, contextUsage, systemPrompt, sessionIndex
+            case goal, steering, contextUsage, systemPrompt, sessionIndex, codexHooks
             case asyncTasks = "async-tasks"
         }
 
@@ -397,6 +404,7 @@ public struct ACPInitializeResult: Codable, Equatable, Sendable {
             contextUsage = try? c.decodeIfPresent(Steering.self, forKey: .contextUsage)
             systemPrompt = try? c.decodeIfPresent(SystemPromptCapability.self, forKey: .systemPrompt)
             sessionIndex = try? c.decodeIfPresent(ACPSessionIndexCapability.self, forKey: .sessionIndex)
+            codexHooks = try? c.decodeIfPresent(ACPCodexHooksCapability.self, forKey: .codexHooks)
         }
 
         public struct SystemPromptCapability: Codable, Equatable, Sendable {
@@ -755,6 +763,7 @@ public struct ACPSessionMeta: Codable, Equatable, Sendable {
     /// Read by `codex-acp`. See `ACPMCPStartupWaitPolicy`.
     public var mcpStartupAwaitTimeoutMs: Int? = nil
     public var systemPrompt: SystemPrompt? = nil
+    public var codexHooks: ACPCodexHookReviewMetadata? = nil
 
     public init(
         claudeCode: ClaudeCode? = nil,
@@ -1227,6 +1236,8 @@ public struct ACPProviderDisableParams: Codable, Equatable, Sendable {
 public struct ACPSessionPromptParams: Codable, Equatable, Sendable {
     public let sessionId: String
     public let prompt: [ACPContentBlock]
+    public var meta: ACPSessionMeta? = nil
+    public enum CodingKeys: String, CodingKey { case sessionId, prompt; case meta = "_meta" }
 
     public init(sessionId: String, prompt: [ACPContentBlock]) {
         self.sessionId = sessionId
