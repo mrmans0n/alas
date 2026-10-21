@@ -526,7 +526,8 @@ public final class StackShepherd {
         let fetched: [Int: ReviewRequest]
         do {
             fetched = try await readRequests(
-                numbers: reconciled.openEntries.map(\.requestNumber),
+                // Closed entries are read too: a reopened request is watched again.
+                numbers: reconciled.entries.filter { $0.shepherd.phase != .merged }.map(\.requestNumber),
                 remote: reconciled.remote,
                 worktreePath: context.path
             )

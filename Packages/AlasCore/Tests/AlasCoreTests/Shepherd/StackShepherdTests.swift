@@ -293,11 +293,51 @@ struct StackShepherdTests {
             #expect(!edited.isPublished && edited.hasUnpublishedEntries == true)
         }
 
-        // On another stack: nothing is known about this one's entries, and
-        // edits still keep the worktree from being ready to land.
+        // On another stack nothing is known about this one: not ready, and no
+        // verdict on unpublished work, so a stack last seen with an
+        // unpublished entry cannot be announced from a clean stack B.
         let away = StackShepherdPolicy.publication(of: nil, local: clean)
-        #expect(away.isPublished && away.hasUnpublishedEntries == nil)
+        #expect(!away.isPublished && away.hasUnpublishedEntries == nil)
         #expect(!StackShepherdPolicy.publication(of: nil, local: Self.dirty()).isPublished)
+    }
+
+    /// A request closed and then reopened is a live entry again; left closed
+    /// it would block the ready gate until the user stopped and restarted.
+    @Test func aReopenedEntryIsWatchedAgain() {
+        var record = Self.record([41, 42])
+        record = StackShepherdPolicy.decide(record, Self.observation(
+            [Self.request(41, state: .closed), Self.request(42)], now: F.earlier
+        )).record
+        #expect(record.entries[0].shepherd.phase == .closed)
+
+        let reopened = StackShepherdPolicy.decide(record, Self.observation([Self.request(41), Self.request(42)]))
+
+        #expect(reopened.record.entries[0].shepherd.phase == .watching)
+        #expect(reopened.record.entries[0].shepherd.finishedAt == nil)
+        #expect(reopened.record.openEntries.count == 2)
+
+        // Still closed: stays closed, and a merged entry never comes back.
+        let still = StackShepherdPolicy.decide(record, Self.observation([Self.request(41, state: .closed), Self.request(42)]))
+        #expect(still.record.entries[0].shepherd.phase == .closed)
+    }
+
+    @Test func thePollReadsClosedEntriesSoAReopenedOneIsSeen() async throws {
+        // Entry 41 closed while 42 stays open, so the record is still live.
+        var closed = Self.record([41, 42])
+        closed.entries[0].shepherd.phase = .closed
+        closed.entries[0].shepherd.finishedAt = F.now
+        let fileURL = URL(fileURLWithPath: "/memory/stack-shepherds.json")
+        let store = MemoryStore()
+        try store.write(StackShepherdsFile(records: [closed]), to: fileURL)
+        let stack = Self.stack([41, 42])
+        // Request 41 is open again at the provider.
+        let shepherd = makeShepherd(requests: [Self.request(41), Self.request(42)], stack: stack, store: store)
+        let id = closed.id
+        #expect(shepherd.records[id]?.entries[0].shepherd.phase == .closed)
+
+        await shepherd.evaluateNow(id)
+
+        #expect(shepherd.records[id]?.entries[0].shepherd.phase == .watching)
     }
 
     @Test(arguments: [
@@ -397,11 +437,12 @@ struct StackShepherdTests {
         requests: [ReviewRequest],
         stack: GGStack,
         contextStackName: String? = "auth",
+        store: MemoryStore = MemoryStore(),
         deliverPrompt: @escaping @MainActor (String) -> Void = { _ in },
         archive: @escaping @MainActor () -> Void = {}
     ) -> StackShepherd {
         let shepherd = StackShepherd(
-            store: MemoryStore(),
+            store: store,
             fileURL: URL(fileURLWithPath: "/memory/stack-shepherds.json"),
             providerRegistry: CodeHostProviderRegistry(providers: [
                 .github: FakeProvider(requests: Dictionary(uniqueKeysWithValues: requests.map { ($0.number, $0) })),

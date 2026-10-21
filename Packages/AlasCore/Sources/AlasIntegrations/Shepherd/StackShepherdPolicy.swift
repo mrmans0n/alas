@@ -22,11 +22,12 @@ public struct StackShepherdObservation: Sendable {
     /// The worktree is on this stack with no gg or git operation paused, so
     /// the session can move between entries. Fix turns wait otherwise.
     public let canDispatch: Bool
-    /// The requests describe what is in the worktree: every local entry has a
-    /// request, gg reports the stack synced, and nothing is uncommitted. False
-    /// while a commit is unpublished, an entry was rewritten after its last
-    /// sync, or the worktree has edits, when green requests say nothing about
-    /// the code that would land. See `StackShepherdPolicy.publication`.
+    /// The requests describe what is in the worktree: the worktree is on this
+    /// stack, every local entry has a request, gg reports the stack synced,
+    /// and nothing is uncommitted. False while a commit is unpublished, an
+    /// entry was rewritten after its last sync, the worktree has edits, or it
+    /// is on another stack, when green requests say nothing about the code
+    /// that would land. See `StackShepherdPolicy.publication`.
     public let isStackPublished: Bool
     /// gg lists a local entry with no request yet, or the worktree has
     /// uncommitted edits. Nil while the worktree is on another stack: the
@@ -113,7 +114,9 @@ public enum StackShepherdPolicy {
         local: ReviewLoopLocalState
     ) -> (isPublished: Bool, hasUnpublishedEntries: Bool?) {
         let hasEdits = local.hasWorkingTreeChanges || local.hasStagedChanges
-        guard let stack else { return (!hasEdits, nil) }
+        // Off the stack nothing is known about its publication: not ready,
+        // and no verdict on unpublished work either.
+        guard let stack else { return (false, nil) }
         let hasUnpublished = stack.entries.contains { $0.prNumber == nil } || hasEdits
         let isSynced = stack.syncedCommits == stack.totalCommits
         return (!hasUnpublished && isSynced, hasUnpublished)
@@ -197,6 +200,15 @@ public enum StackShepherdPolicy {
             // Removed from the stack: gg no longer lists it. A merged entry
             // stays as landed history; anything else is no longer part of it.
             let isAbsent = observation.presentEntryIDs.map { !$0.contains(entry.entryID) } ?? false
+            // A closed request that is open again is a live entry once more,
+            // starting fresh as a newly bound one does.
+            if entry.shepherd.phase == .closed, !isAbsent, observation.requests[entry.requestNumber]?.state == .open {
+                entry.shepherd.phase = .watching
+                entry.shepherd.finishedAt = nil
+                entry.shepherd.fixAttempts = 0
+                entry.shepherd.lastDispatchedFingerprint = nil
+                entry.shepherd.viewerCommentIDsAtDispatch = nil
+            }
             guard !entry.shepherd.phase.isTerminal,
                   let request = observation.requests[entry.requestNumber]
             else {
