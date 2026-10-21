@@ -219,6 +219,21 @@ struct StackShepherdTests {
         #expect(published.record.isFinished)
     }
 
+    /// A merged entry is landed, but a closed one never will be: gg land can't
+    /// get past it, so the entries above it are not ready however green.
+    @Test(arguments: [(ReviewRequestState.merged, true), (.closed, false)])
+    func readinessAllowsAMergedEntryBelowButNotAClosedOne(below: ReviewRequestState, ready: Bool) {
+        let requests = [Self.request(41, state: below), Self.request(42)]
+        var record = Self.record([41, 42])
+        // The head gate needs a head seen on consecutive polls.
+        record = StackShepherdPolicy.decide(record, Self.observation(requests, now: F.earlier)).record
+
+        let decision = StackShepherdPolicy.decide(record, Self.observation(requests))
+
+        #expect(decision.gatePasses == ready)
+        #expect(decision.notifyReady == ready)
+    }
+
     private static func stack(published: [Bool], synced: Int? = nil) -> GGStack {
         GGStack(
             name: "auth", base: "main", totalCommits: published.count, syncedCommits: synced ?? published.count,

@@ -238,7 +238,10 @@ public enum StackShepherdPolicy {
         next.entries = entries
         if let unpublished = observation.hasUnpublishedEntries { next.hasUnpublishedEntries = unpublished }
         let open = next.openEntries
-        decision.gatePasses = observation.isStackPublished && !open.isEmpty && open.allSatisfy { entry in
+        // Merged entries are landed; a closed one never will be, and gg land
+        // can't get past it, so the stack is not ready however green the rest is.
+        let hasClosedEntry = next.entries.contains { $0.shepherd.phase == .closed }
+        decision.gatePasses = observation.isStackPublished && !hasClosedEntry && !open.isEmpty && open.allSatisfy { entry in
             guard entry.shepherd.phase == .watching,
                   let request = observation.requests[entry.requestNumber]
             else { return false }
