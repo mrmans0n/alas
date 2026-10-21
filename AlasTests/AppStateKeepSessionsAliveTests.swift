@@ -157,10 +157,7 @@ struct AppStateKeepSessionsAliveTests {
         let restoreTask = Task {
             try await state.restoreTerminalTabIfNeededAsync(worktreeId: worktree.id, tabId: tab.id)
         }
-        let deadline = Date().addingTimeInterval(10)
-        while migration.runCount == 0, Date() < deadline {
-            try await Task.sleep(nanoseconds: 10_000_000)
-        }
+        await migration.untilARunStarts()
         #expect(migration.runCount == 1)
         #expect(state.tabs.tabs(forWorktree: worktree.id).map(\.id) == [tab.id])
 
@@ -472,13 +469,15 @@ struct AppStateKeepSessionsAliveTests {
 
 /// A zmx migration runner that records the socket names of each run and
 /// returns the scripted results in order (then empty ones). When blocked it
-/// parks runs until `release()`. Declared outside the main-actor suite so the
-/// runner is not main-actor isolated when it runs on its own thread.
+/// parks runs until `release()`; `untilARunStarts()` awaits a run's entry.
+/// Declared outside the main-actor suite so the runner is not main-actor
+/// isolated when it runs on its own thread.
 private final class ZmxMigrationGate: @unchecked Sendable {
     private let lock = NSLock()
     private let gate: DispatchSemaphore
     private var runs: [Set<String>?] = []
     private var results: [ZmxPreFreezeMigration.Result]
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(blocked: Bool, results: [ZmxPreFreezeMigration.Result] = []) {
         gate = DispatchSemaphore(value: blocked ? 0 : 1)
@@ -491,12 +490,28 @@ private final class ZmxMigrationGate: @unchecked Sendable {
 
     func release() { gate.signal() }
 
+    /// Returns once a run has started, even while the gate parks it.
+    func untilARunStarts() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let started = lock.withLock { () -> Bool in
+                if !runs.isEmpty { return true }
+                startWaiters.append(continuation)
+                return false
+            }
+            if started { continuation.resume() }
+        }
+    }
+
     var runner: AppState.ZmxMigrationRunner {
         { _, names in
-            let result = self.lock.withLock { () -> ZmxPreFreezeMigration.Result in
+            let (result, waiters) = self.lock.withLock {
+                () -> (ZmxPreFreezeMigration.Result, [CheckedContinuation<Void, Never>]) in
                 self.runs.append(names)
-                return self.results.isEmpty ? ZmxPreFreezeMigration.Result() : self.results.removeFirst()
+                let waiters = self.startWaiters
+                self.startWaiters = []
+                return (self.results.isEmpty ? ZmxPreFreezeMigration.Result() : self.results.removeFirst(), waiters)
             }
+            for waiter in waiters { waiter.resume() }
             self.gate.wait()
             self.gate.signal()
             return result
