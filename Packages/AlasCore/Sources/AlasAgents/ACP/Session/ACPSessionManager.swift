@@ -1760,6 +1760,12 @@ public final class ACPSessionManager: ChangeTracking {
     package var hasStartingSession: Bool {
         !awaitingFirstAttach.isEmpty || !attachmentAttempts.isEmpty
     }
+
+    /// Stops counting a created session as starting when nothing will attach
+    /// it: removed, torn down, or its start given up before `attach`.
+    package func abandonFirstAttach(of id: ACPSession.ID) {
+        awaitingFirstAttach.remove(id)
+    }
     /// Invalidates takeover work suspended while mirroring the final writer snapshot.
     private var takeoverAttemptIDs: [ACPSession.ID: UUID] = [:]
     /// Identifies the latest connection generation after its attach task has
@@ -3000,6 +3006,7 @@ public final class ACPSessionManager: ChangeTracking {
     }
 
     public func closeSession(id: ACPSession.ID) {
+        abandonFirstAttach(of: id)
         cancelAutoReconnect(sessionId: id)
         scheduledReconnectTasks.removeValue(forKey: id)?.task.cancel()
         // Flush any pending draft write before dropping the in-memory
@@ -3069,6 +3076,7 @@ public final class ACPSessionManager: ChangeTracking {
     }
 
     private func forgetSession(id: ACPSession.ID) {
+        abandonFirstAttach(of: id)
         killRemoteHelperACPProcIfPossible(sessionId: id)
         onSessionEnded?(id)
         builtInMCPSessionState.forget(sessionId: id)
@@ -10168,6 +10176,7 @@ extension ACPSessionManager {
     }
 
     private func tearDownSession(sessionId: ACPSession.ID, closeRemote: Bool) async throws {
+        abandonFirstAttach(of: sessionId)
         sessions[sessionId]?.nextPromptActivity.send()
         teardownCounts[sessionId, default: 0] += 1
         takeoverAttemptIDs.removeValue(forKey: sessionId)

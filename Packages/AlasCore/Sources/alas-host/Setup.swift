@@ -77,12 +77,7 @@ enum HostSetup {
     /// check that PATH too if agents found here fail to start under launchd.
     private static func missingAdapterCommands(_ config: AppConfig) -> [String: String] {
         let path = ProcessInfo.processInfo.environment["PATH"]
-        var missing: [String: String] = [:]
-        for spec in ACPLaunchCatalog.builtinSpecs + config.agents.registry.map(\.launchSpec)
-            where AgentPath.resolveExecutable(named: spec.command, base: path) == nil {
-            missing[spec.agentID] = spec.command
-        }
-        return missing
+        return HostSetupModel.missingAdapterCommands(config) { AgentPath.resolveExecutable(named: $0, base: path) != nil }
     }
 
     /// Asks whether to restart the running host now; Escape means later.

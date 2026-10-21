@@ -69,20 +69,52 @@ public enum HostProfileWrite {
     }
 
     /// Applies the `before` -> `after` change to `base`: only values that differ between
-    /// `before` and `after` are written (objects merge recursively), keys `change` cleared
-    /// are removed, and everything else in `base` keeps its raw value.
+    /// `before` and `after` are written (objects merge recursively, and so do arrays of
+    /// objects with an identity key), keys `change` cleared are removed, and everything
+    /// else in `base` keeps its raw value.
     static func apply(from before: [String: Any], to after: [String: Any], onto base: [String: Any]) -> [String: Any] {
         var result = base
         for (key, value) in after {
             if let nested = value as? [String: Any], let baseNested = base[key] as? [String: Any] {
                 result[key] = apply(from: before[key] as? [String: Any] ?? [:], to: nested, onto: baseNested)
             } else if before[key].map({ ($0 as AnyObject).isEqual(value) }) != true {
-                result[key] = value
+                result[key] = (value as? [Any]).flatMap { array in
+                    (base[key] as? [Any]).flatMap { apply(from: before[key] as? [Any] ?? [], to: array, onto: $0) }
+                } ?? value
             }
         }
         for key in before.keys where after[key] == nil {
             result[key] = nil
         }
         return result
+    }
+
+    /// Merges arrays whose elements are all objects with a unique identity
+    /// (`registryID` for installed registry agents, else `id`) element by element:
+    /// matching elements merge like objects, elements `change` added are appended,
+    /// ones it removed are dropped, and the rest of `base` stays. Nil when the
+    /// elements have no such identity, so the whole array is replaced.
+    private static func apply(from before: [Any], to after: [Any], onto base: [Any]) -> [Any]? {
+        for key in ["registryID", "id"] {
+            guard let before = keyed(before, by: key), let after = keyed(after, by: key), let base = keyed(base, by: key)
+            else { continue }
+            let old = Dictionary(uniqueKeysWithValues: before)
+            let new = Dictionary(uniqueKeysWithValues: after)
+            let baseIDs = Set(base.map(\.id))
+            let kept: [Any] = base.compactMap { id, object in
+                guard let next = new[id] else { return old[id] == nil ? object : nil }
+                return apply(from: old[id] ?? [:], to: next, onto: object)
+            }
+            return kept + after.filter { !baseIDs.contains($0.id) }.map(\.object)
+        }
+        return nil
+    }
+
+    private static func keyed(_ array: [Any], by key: String) -> [(id: String, object: [String: Any])]? {
+        let keyed = array.compactMap { element -> (id: String, object: [String: Any])? in
+            guard let object = element as? [String: Any], let id = object[key] as? String else { return nil }
+            return (id, object)
+        }
+        return keyed.count == array.count && Set(keyed.map(\.id)).count == keyed.count ? keyed : nil
     }
 }

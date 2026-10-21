@@ -133,4 +133,17 @@ struct HostSettingTests {
         press([.enter], on: &model)
         #expect(!model.view.rows[0].contains("not found"))
     }
+
+    /// Missing adapters are keyed by the id in the agent's setting key, so a
+    /// registry agent's entry is found under its registry id.
+    @Test func missingAdapterCommandsUseTheSettingID() {
+        var config = AppConfig.defaults
+        config.agents.registry = [ACPRegistryInstalledAgent(
+            registryID: "acme", displayName: "Acme", version: "1", command: "acme-acp",
+            arguments: [], environment: [:], isEnabled: true
+        )]
+        let missing = HostSetupModel.missingAdapterCommands(config) { $0 != "acme-acp" }
+        #expect(missing == ["acme": "acme-acp"])
+        #expect(HostSettingCatalog.all(for: config).contains { $0.key == "agents.acme.enabled" })
+    }
 }

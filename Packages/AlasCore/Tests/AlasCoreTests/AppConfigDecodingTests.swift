@@ -84,6 +84,12 @@ struct AppConfigDecodingTests {
         seed.themeId = "x"
         seed.remote.enabled = true
         seed.terminal.fontSize = 17
+        seed.agents.registry = ["acme", "other"].map {
+            ACPRegistryInstalledAgent(
+                registryID: $0, displayName: $0, version: "1", command: "\($0)-acp",
+                arguments: [], environment: [:], isEnabled: true
+            )
+        }
         try PersistenceStore().write(seed, to: file)
         // Keys a newer app wrote that this build does not model.
         var raw = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
@@ -94,9 +100,13 @@ struct AppConfigDecodingTests {
         var worktrees = try #require(raw["worktrees"] as? [String: Any])
         worktrees["defaultOrdering"] = "someFutureMode"
         raw["worktrees"] = worktrees
+        var agents = try #require(raw["agents"] as? [String: Any])
+        agents["registry"] = try #require(agents["registry"] as? [[String: Any]]).map { $0.merging(["someFutureField": 1]) { $1 } }
+        raw["agents"] = agents
         try JSONSerialization.data(withJSONObject: raw).write(to: file)
 
         try HostProfileWrite.update({ try HostSettingCatalog.named("host.port", in: $0).set("9999", in: &$0) }, file: file)
+        try HostProfileWrite.update({ try HostSettingCatalog.named("agents.acme.enabled", in: $0).set("false", in: &$0) }, file: file)
 
         let config = try #require(try PersistenceStore().readIfExists(AppConfig.self, from: file))
         #expect(config.host.port == 9999)
@@ -107,5 +117,8 @@ struct AppConfigDecodingTests {
         #expect((written["someFutureSection"] as? [String: Any])?["flag"] as? Bool == true)
         #expect((written["remote"] as? [String: Any])?["someFutureKey"] as? String == "kept")
         #expect((written["worktrees"] as? [String: Any])?["defaultOrdering"] as? String == "someFutureMode")
+        #expect(config.agents.registry.map(\.isEnabled) == [false, true])
+        let registry = (written["agents"] as? [String: Any])?["registry"] as? [[String: Any]]
+        #expect(registry?.map { $0["someFutureField"] as? Int } == [1, 1])
     }
 }

@@ -1,3 +1,4 @@
+import AlasACP
 import AlasModel
 import Foundation
 
@@ -87,6 +88,19 @@ public struct HostSetupModel: Equatable {
         changedConfig = config
         self.projects = projects
         self.missingCommands = missingCommands
+    }
+
+    /// The adapter command of each agent `isFound` rejects, keyed by the id in
+    /// its `agents.<id>.enabled` setting: a registry agent's registry id.
+    public static func missingAdapterCommands(_ config: AppConfig, isFound: (String) -> Bool) -> [String: String] {
+        var missing: [String: String] = [:]
+        for spec in ACPLaunchCatalog.builtinSpecs where !isFound(spec.command) {
+            missing[spec.agentID] = spec.command
+        }
+        for installed in config.agents.registry where !isFound(installed.command) {
+            missing[installed.registryID] = installed.command
+        }
+        return missing
     }
 
     /// Whether any setting differs from what the profile had: a setting set

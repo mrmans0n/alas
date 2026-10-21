@@ -317,6 +317,21 @@ struct HostProtocolServerTests {
         try await eventually { @MainActor in !manager.runners.isEmpty }
     }
 
+    /// A session archived before it ever attached no longer keeps its
+    /// project from being removed.
+    @Test func removeProjectAfterAnUnattachedSessionIsArchived() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        fixture.core.sessionAttachScheduler = { _, _ in }
+        let worktree = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
+        let session = try await fixture.host.sessions.create(
+            .worktree(WorktreeRef(projectID: fixture.projectID, path: worktree.path.path)), agentID: "gemini", caller: .app
+        )
+        try await fixture.host.sessions.archive(session.id, caller: .app)
+
+        #expect(try await fixture.request(.removeProject(projectID: fixture.projectID)) == .done)
+    }
+
     /// A host over a real repository, persisting to a scratch directory,
     /// whose sessions talk to a scripted agent.
     @MainActor

@@ -187,8 +187,10 @@ let keepAwake = RemoteKeepAwakeController()
 var config = (try? PersistenceStore().readIfExists(AppConfig.self, from: Paths.appConfigFile)) ?? .defaults
 if let listen = config.hostRemoteListen {
     if config.remote.ensureServerId() {
+        // Only the new id is written: keys this build does not model stay.
+        let serverId = config.remote.serverId
         do {
-            try PersistenceStore().write(config, to: Paths.appConfigFile)
+            try HostProfileWrite.update { $0.remote.serverId = serverId }
         } catch {
             fail("cannot save \(Paths.appConfigFile.path): \(error.localizedDescription)")
         }

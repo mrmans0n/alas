@@ -154,7 +154,9 @@ struct AlasHostExecutableTests {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             var config = AppConfig.defaults
             configure(&config)
-            try PersistenceStore().write(config, to: directory.appendingPathComponent("app.json"))
+            var json = try JSONSerialization.jsonObject(with: PersistenceStore().encode(config)) as? [String: Any] ?? [:]
+            json["fromANewerApp"] = 1
+            try JSONSerialization.data(withJSONObject: json).write(to: directory.appendingPathComponent("app.json"))
             return directory
         }
         let port = try freePort()
@@ -167,6 +169,10 @@ struct AlasHostExecutableTests {
         #expect(loopback.output.split(separator: "\n").contains("remote http://127.0.0.1:\(port)"), "\(loopback.errorOutput)")
         loopback.process.terminate()
         #expect(try await loopback.exitStatus() == 0)
+        // Saving the assigned server id keeps settings this build does not model.
+        let saved = try JSONSerialization.jsonObject(with: Data(contentsOf: root.appendingPathComponent("loopback/app.json"))) as? [String: Any]
+        #expect(saved?["fromANewerApp"] as? Int == 1)
+        #expect(((saved?["remote"] as? [String: Any])?["serverId"] as? String)?.isEmpty == false)
 
         let off = try AlasHostProcess(dataDirectory: profile("off") {
             $0.remote.enabled = true
