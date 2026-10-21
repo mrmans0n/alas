@@ -187,7 +187,8 @@ import Testing
             probe: { ZmxIPCSocket.probe(path: $0, timeout: .milliseconds(300)) },
             kill: { ZmxIPCSocket.killPreFreeze(path: $0, timeout: .seconds(2)) },
             signal: { pid, _ in signalled.append(pid) },
-            isAlive: { _ in false }
+            isAlive: { _ in false },
+            processStart: { _ in zmxDaemonStart }
         )
 
         #expect(result == ZmxPreFreezeMigration.Result(
@@ -273,20 +274,25 @@ import Testing
     /// The socket goes only once the daemon has exited. A daemon that keeps
     /// running gets `SIGTERM` (unless the `Kill` fallback already sent it),
     /// then `SIGKILL`; one that outlives both, or a pid that cannot be
-    /// watched, leaves the socket in place.
+    /// watched, leaves the socket in place. A pid that names a process
+    /// started after the probe belongs to another process once the daemon
+    /// has exited: it never gets a signal, and the socket goes.
     @Test(arguments: [
-        (pid: Int32(4242), killHangsUp: false, exitsOn: SIGTERM, signals: [SIGTERM]),
-        (pid: Int32(4242), killHangsUp: false, exitsOn: SIGKILL, signals: [SIGTERM, SIGKILL]),
-        (pid: Int32(4242), killHangsUp: true, exitsOn: SIGKILL, signals: [SIGTERM, SIGKILL]),
-        (pid: Int32(4242), killHangsUp: false, exitsOn: 0, signals: [SIGTERM, SIGKILL]),
-        (pid: Int32(1), killHangsUp: false, exitsOn: SIGTERM, signals: [Int32]()),
+        (pid: Int32(4242), killHangsUp: false, exitsOn: SIGTERM, start: ZmxProbedStart.stable, signals: [SIGTERM]),
+        (pid: Int32(4242), killHangsUp: false, exitsOn: SIGKILL, start: .stable, signals: [SIGTERM, SIGKILL]),
+        (pid: Int32(4242), killHangsUp: true, exitsOn: SIGKILL, start: .stable, signals: [SIGTERM, SIGKILL]),
+        (pid: Int32(4242), killHangsUp: false, exitsOn: 0, start: .stable, signals: [SIGTERM, SIGKILL]),
+        (pid: Int32(1), killHangsUp: false, exitsOn: SIGTERM, start: .stable, signals: [Int32]()),
+        (pid: Int32(4242), killHangsUp: false, exitsOn: 0, start: .reusedAfterProbe, signals: []),
+        (pid: Int32(4242), killHangsUp: false, exitsOn: SIGTERM, start: .unreadable, signals: []),
     ])
     func migrationEscalatesSignalsUntilTheDaemonExits(
-        daemon shape: (pid: Int32, killHangsUp: Bool, exitsOn: Int32, signals: [Int32])
+        daemon shape: (pid: Int32, killHangsUp: Bool, exitsOn: Int32, start: ZmxProbedStart, signals: [Int32])
     ) throws {
         let daemon = try ZmxFakeDaemonListener(name: "alas-s", scripts: [.silent])
         defer { daemon.tearDown() }
         let signalled = ZmxEventLog<[Int32]>()
+        let startReads = ZmxEventLog<Int32>()
         let result = ZmxPreFreezeMigration.run(
             directory: URL(fileURLWithPath: daemon.directory),
             sessionPrefix: "",
@@ -296,9 +302,21 @@ import Testing
             signal: { pid, signal in signalled.append([pid, signal]) },
             // Exits on `exitsOn`; 0 never comes, so that daemon never exits.
             isAlive: { _ in !signalled.all.contains { $0.last == shape.exitsOn } },
+            processStart: { pid in
+                startReads.append(pid)
+                switch shape.start {
+                case .stable: return zmxDaemonStart
+                case .unreadable: return nil
+                case .reusedAfterProbe:
+                    return startReads.all.count == 1
+                        ? zmxDaemonStart
+                        : ZmxPreFreezeMigration.ProcessStart(seconds: 2_000, microseconds: 0)
+                }
+            },
             exitTimeout: .milliseconds(100)
         )
-        let restarted = shape.pid > 1 && shape.exitsOn != 0
+        let restarted = shape.pid > 1 && shape.start != .unreadable
+            && (shape.exitsOn != 0 || shape.start == .reusedAfterProbe)
         #expect(signalled.all == shape.signals.map { [shape.pid, $0] })
         #expect(FileManager.default.fileExists(atPath: daemon.path) == !restarted)
         #expect(result == (restarted
@@ -339,7 +357,8 @@ import Testing
                 return true
             },
             signal: { _, signal in signalled.append(signal) },
-            isAlive: { _ in false }
+            isAlive: { _ in false },
+            processStart: { _ in zmxDaemonStart }
         )
         #expect(replacements.all.count == 1)
         #expect(FileManager.default.fileExists(atPath: daemon.path))
@@ -534,6 +553,17 @@ import Testing
         #expect(!FileManager.default.fileExists(atPath: path))
     }
 }
+
+/// How the start time of the pid a probe reports reads from then on.
+enum ZmxProbedStart: Sendable {
+    case stable
+    /// The daemon exited after the probe and the system gave its pid to a
+    /// process that started later.
+    case reusedAfterProbe
+    case unreadable
+}
+
+let zmxDaemonStart = ZmxPreFreezeMigration.ProcessStart(seconds: 1_000, microseconds: 1)
 
 final class ZmxEventLog<Event: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
