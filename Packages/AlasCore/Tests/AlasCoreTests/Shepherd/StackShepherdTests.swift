@@ -609,19 +609,61 @@ struct StackShepherdTests {
         await shepherd.evaluateNow(record.id)
         let fresh = Dictionary(uniqueKeysWithValues: green.map { ($0.number, $0) })
         #expect(shepherd.gatePasses[record.id] == true)
-        #expect(shepherd.isReadyToLand(record.id, freshRequests: fresh))
+        func ready(
+            _ requests: [Int: ReviewRequest], stack: GGStack? = Self.stack([41, 42]),
+            reviewers: [Int: Set<String>] = [:], rules: ShepherdRules = .none
+        ) async -> Bool {
+            await shepherd.isReadyToLand(
+                record.id, freshRequests: requests, stack: stack, headReviewers: reviewers, rules: rules
+            )
+        }
+        #expect(await ready(fresh))
 
         var republished = fresh
         republished[42] = Self.request(42, head: F.newHead)
-        #expect(!shepherd.isReadyToLand(record.id, freshRequests: republished))
+        #expect(await !ready(republished))
 
         var failing = fresh
         failing[41] = Self.request(41, checks: [F.failing])
-        #expect(!shepherd.isReadyToLand(record.id, freshRequests: failing))
+        #expect(await !ready(failing))
 
         var missing = fresh
         missing[42] = nil
-        #expect(!shepherd.isReadyToLand(record.id, freshRequests: missing))
+        #expect(await !ready(missing))
+
+        // The stack changed since the poll: a commit gg has not published or
+        // synced, with the requests untouched.
+        #expect(await !ready(fresh, stack: Self.stack(published: [true, true, false])))
+        #expect(await !ready(fresh, stack: Self.stack(published: [true, true], synced: 1)))
+
+        // A required reviewer that no longer covers the head, with no head change.
+        let required = ShepherdRules(source: .projectSettings, instructions: "", requiredReviewers: ["codex"])
+        #expect(await !ready(fresh, reviewers: [41: ["codex"], 42: []], rules: required))
+        #expect(await ready(fresh, reviewers: [41: ["codex"], 42: ["codex"]], rules: required))
+    }
+
+    /// When the last entry is dropped or unstacked and gg lists nothing left
+    /// to publish, the record has no stack to watch: it is removed, or it
+    /// would stay bound and make stack_ship refuse the next stack.
+    @Test(arguments: [(false as Bool?, true), (true as Bool?, false), (nil as Bool?, false)])
+    func aRecordWithNoEntriesLeftIsRetiredOnlyWhenNothingUnpublishedRemains(unpublished: Bool?, retired: Bool) {
+        let decision = StackShepherdPolicy.decide(
+            Self.record([41]), Self.observation([Self.request(41)], present: [], hasUnpublishedEntries: unpublished)
+        )
+
+        #expect(decision.record.entries.isEmpty)
+        #expect(decision.isRetired == retired)
+    }
+
+    @Test func theServiceRemovesARecordWhoseStackWasEmptied() async {
+        let emptied = Self.stack([])
+        let shepherd = makeShepherd(requests: [Self.request(41)], stack: emptied)
+        let record = await bind(shepherd, session: "session-1", stack: Self.stack([41]))
+        #expect(shepherd.records[record.id] != nil)
+
+        await shepherd.evaluateNow(record.id)
+
+        #expect(shepherd.records[record.id] == nil)
     }
 
     /// A late fix turn for stack A must not publish stack B, which would drop

@@ -230,21 +230,30 @@ public final class StackShepherd {
         records.values.first { $0.id.worktreeID == worktreeID && $0.id.stackName == stackName && !$0.isFinished }
     }
 
-    /// Whether `id` is ready to land on `freshRequests`, just read from the
-    /// provider. The gate from the last poll is only a starting point: a
-    /// republish or a rerun changes heads and checks between polls, so every
-    /// open entry must still be on the head the poll saw and still be
-    /// mergeable, or a status read would report ready with a failing check.
-    public func isReadyToLand(_ id: StackShepherdRecordID, freshRequests: [Int: ReviewRequest]) -> Bool {
-        guard gatePasses[id] == true, let record = records[id], !record.isFinished,
-              let provider = providerRegistry.provider(for: record.remote.kind)
+    /// Whether `id` is ready to land on inputs read just now: `freshRequests`
+    /// and `headReviewers` from the provider, `stack` from gg, and the
+    /// worktree's own state probed here. It runs the same gate as a poll
+    /// (`StackShepherdPolicy.isReady`) over the record's last poll, so a
+    /// republish, a rerun, an unsynced commit, uncommitted edits or a lost
+    /// required reviewer between polls cannot read as ready.
+    public func isReadyToLand(
+        _ id: StackShepherdRecordID,
+        freshRequests: [Int: ReviewRequest],
+        stack: GGStack?,
+        headReviewers: [Int: Set<String>],
+        rules: ShepherdRules
+    ) async -> Bool {
+        guard let record = records[id], !record.isFinished,
+              let context = effects?.worktreeContext(id.worktreeID),
+              let provider = providerRegistry.provider(for: record.remote.kind),
+              let probed = try? await localProbe.probe(context.path, record.base),
+              let latest = records[id], !latest.isFinished
         else { return false }
-        return record.openEntries.allSatisfy { entry in
-            guard let request = freshRequests[entry.requestNumber],
-                  request.headSHA == entry.shepherd.lastSeenHeadSHA
-            else { return false }
-            return ReviewReadinessModel.requestIsMergeReady(request, capabilities: provider.capabilities)
-        }
+        return StackShepherdPolicy.isReady(
+            latest, requests: freshRequests,
+            isStackPublished: StackShepherdPolicy.publication(of: stack, local: probed.local).isPublished,
+            capabilities: provider.capabilities, rules: rules, headReviewers: headReviewers, now: now()
+        )
     }
 
     private static func preferred(_ candidates: [StackShepherdRecord]) -> StackShepherdRecord? {
@@ -566,6 +575,11 @@ public final class StackShepherd {
             now: now()
         )
         let decision = StackShepherdPolicy.decide(current, observation)
+        if decision.isRetired {
+            stackShepherdLogger.notice("Retiring stack shepherd record \(id.storageKey, privacy: .private): no entries are left")
+            remove(id)
+            return
+        }
         requests[id] = fetched
         gatePasses[id] = decision.gatePasses
         if decision.record != current { put(decision.record) }

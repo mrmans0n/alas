@@ -91,6 +91,8 @@ public struct StackShepherdDecision: Equatable, Sendable {
     public var gatePasses = false
     /// Set on the poll that saw the last entry merge or close.
     public var finished: ShepherdOutcome?
+    /// Nothing is left to shepherd: the record should be removed.
+    public var isRetired = false
 
     public init(record: StackShepherdRecord) {
         self.record = record
@@ -241,20 +243,12 @@ public enum StackShepherdPolicy {
         var next = record
         next.entries = entries
         if let unpublished = observation.hasUnpublishedEntries { next.hasUnpublishedEntries = unpublished }
+        decision.gatePasses = isReady(
+            next, requests: observation.requests, isStackPublished: observation.isStackPublished,
+            capabilities: observation.capabilities, rules: observation.rules,
+            headReviewers: observation.headReviewers, now: observation.now
+        )
         let open = next.openEntries
-        // Merged entries are landed; a closed one never will be, and gg land
-        // can't get past it, so the stack is not ready however green the rest is.
-        let hasClosedEntry = next.entries.contains { $0.shepherd.phase == .closed }
-        decision.gatePasses = observation.isStackPublished && !hasClosedEntry && !open.isEmpty && open.allSatisfy { entry in
-            guard entry.shepherd.phase == .watching,
-                  let request = observation.requests[entry.requestNumber]
-            else { return false }
-            return ReviewReadinessModel.requestIsMergeReady(request, capabilities: observation.capabilities)
-                && ShepherdPolicy.headGatePasses(
-                    entry.shepherd, request: request, rules: observation.rules,
-                    headReviewers: observation.headReviewers[entry.requestNumber], now: observation.now
-                )
-        }
         if decision.gatePasses {
             let heads = open.map { "\($0.requestNumber):\(observation.requests[$0.requestNumber]?.headSHA ?? "")" }
             if next.notifiedReadyHeads != heads {
@@ -262,6 +256,10 @@ public enum StackShepherdPolicy {
                 decision.notifyReady = true
             }
         }
+        // Every entry was dropped or unstacked and gg lists no local work
+        // either: there is no stack left to watch. Unknown (off the stack)
+        // keeps the record, as does work that has not been published yet.
+        decision.isRetired = next.entries.isEmpty && observation.hasUnpublishedEntries == false
         if next.isFinished {
             next.finishedAt = next.finishedAt ?? observation.now
             decision.finished = next.phase == .merged ? .merged : .closed
@@ -269,5 +267,32 @@ public enum StackShepherdPolicy {
         if next != record { next.updatedAt = observation.now }
         decision.record = next
         return decision
+    }
+
+    /// Whether the stack is ready to land: every open entry is watching, on a
+    /// head the shepherd has seen settle, mergeable on its request, and past
+    /// its required reviewers; no entry closed; the stack published. Shared by
+    /// each poll and by a status read with fresh inputs.
+    public static func isReady(
+        _ record: StackShepherdRecord,
+        requests: [Int: ReviewRequest],
+        isStackPublished: Bool,
+        capabilities: CodeHostProviderCapabilities,
+        rules: ShepherdRules,
+        headReviewers: [Int: Set<String>],
+        now: Date
+    ) -> Bool {
+        let open = record.openEntries
+        // Merged entries are landed; a closed one never will be, and gg land
+        // can't get past it, so the stack is not ready however green the rest is.
+        let hasClosedEntry = record.entries.contains { $0.shepherd.phase == .closed }
+        return isStackPublished && !hasClosedEntry && !open.isEmpty && open.allSatisfy { entry in
+            guard entry.shepherd.phase == .watching, let request = requests[entry.requestNumber] else { return false }
+            return ReviewReadinessModel.requestIsMergeReady(request, capabilities: capabilities)
+                && ShepherdPolicy.headGatePasses(
+                    entry.shepherd, request: request, rules: rules,
+                    headReviewers: headReviewers[entry.requestNumber], now: now
+                )
+        }
     }
 }

@@ -226,25 +226,28 @@ extension AlasCoreContext {
                 numbers: bound.entries.map(\.requestNumber), remote: bound.remote, path: context.path
             )
             var entries: [StackStatusWire.Entry] = []
+            var reviewers: [Int: Set<String>] = [:]
             for entry in bound.entries {
-                let pullRequest = await statusRequest(
+                let status = await statusRequest(
                     requests[entry.requestNumber], rules: rules, path: context.path,
                     notBefore: { entry.shepherd.headFirstSeenAt(of: $0.headSHA) }
                 )
+                if let logins = status.headReviewers { reviewers[entry.requestNumber] = logins }
                 entries.append(.init(
                     position: entry.position, entryId: entry.entryID, title: entry.title,
-                    pullRequest: pullRequest, phase: PRStatusWire.Shepherd.wireName(entry.shepherd.phase)
+                    pullRequest: status.wire, phase: PRStatusWire.Shepherd.wireName(entry.shepherd.phase)
                 ))
             }
+            // Ready is judged on what was just read, not on the last poll.
+            let freshStack = try? await effects.loadStack(context.path)
+            let readyToLand = await stackShepherd.isReadyToLand(
+                bound.id, freshRequests: requests, stack: freshStack, headReviewers: reviewers, rules: rules
+            )
             // The record may have changed while the fetch ran; report it as it is now.
             let latest = stackShepherd.records[bound.id] ?? bound
             return StackStatusWire(
                 stack: .init(name: bound.id.stackName, base: latest.base, entries: entries),
-                shepherd: .init(
-                    record: latest,
-                    readyToLand: stackShepherd.isReadyToLand(bound.id, freshRequests: requests),
-                    rules: rules
-                )
+                shepherd: .init(record: latest, readyToLand: readyToLand, rules: rules)
             )
         }
         guard let stack = try await loadStack(effects, path: context.path) else { return nil }
@@ -263,26 +266,29 @@ extension AlasCoreContext {
         }
         var entries: [StackStatusWire.Entry] = []
         for entry in stack.entries.sorted(by: { $0.position < $1.position }) {
-            let pullRequest = await statusRequest(
+            let status = await statusRequest(
                 entry.prNumber.flatMap { requests[$0] }, rules: rules, path: context.path, notBefore: { _ in nil }
             )
-            entries.append(.init(position: entry.position, entryId: entry.id, title: entry.title, pullRequest: pullRequest, phase: nil))
+            entries.append(.init(position: entry.position, entryId: entry.id, title: entry.title, pullRequest: status.wire, phase: nil))
         }
         return StackStatusWire(stack: .init(name: stack.name, base: stack.base, entries: entries), shepherd: nil)
     }
 
+    /// The request's `pr_status` entry, with the logins that reviewed its
+    /// head when the rules name required reviewers (nil when none were
+    /// needed or the provider could not say).
     private func statusRequest(
         _ request: ReviewRequest?,
         rules: ShepherdRules,
         path: URL,
         notBefore: (ReviewRequest) -> Date?
-    ) async -> PRStatusWire.PullRequest? {
-        guard let request else { return nil }
+    ) async -> (wire: PRStatusWire.PullRequest?, headReviewers: Set<String>?) {
+        guard let request else { return (nil, nil) }
         var headReviewers: Set<String>?
         if !rules.requiredReviewers.isEmpty {
             headReviewers = await stackShepherd.headReviewers(for: request, worktreePath: path, notBefore: notBefore(request))
         }
-        return PRStatusWire.PullRequest(request: request, rules: rules, headReviewers: headReviewers)
+        return (PRStatusWire.PullRequest(request: request, rules: rules, headReviewers: headReviewers), headReviewers)
     }
 }
 
