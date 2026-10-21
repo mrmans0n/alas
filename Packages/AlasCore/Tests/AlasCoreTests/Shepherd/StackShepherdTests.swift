@@ -636,6 +636,15 @@ struct StackShepherdTests {
         #expect(await !ready(fresh, stack: Self.stack(published: [true, true, false])))
         #expect(await !ready(fresh, stack: Self.stack(published: [true, true], synced: 1)))
 
+        // Nothing known about this stack: the load failed, or the worktree is
+        // on another stack that happens to be clean and synced.
+        #expect(await !ready(fresh, stack: nil))
+        let other = GGStack(
+            name: "other", base: "main", totalCommits: 1, syncedCommits: 1, currentPosition: 1, behindBase: 0,
+            entries: [GGStackEntry(position: 1, sha: "x", title: "t", prNumber: 77)]
+        )
+        #expect(await !ready(fresh, stack: other))
+
         // A required reviewer that no longer covers the head, with no head change.
         let required = ShepherdRules(source: .projectSettings, instructions: "", requiredReviewers: ["codex"])
         #expect(await !ready(fresh, reviewers: [41: ["codex"], 42: []], rules: required))

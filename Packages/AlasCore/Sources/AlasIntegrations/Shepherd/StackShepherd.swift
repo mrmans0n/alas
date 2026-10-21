@@ -235,7 +235,9 @@ public final class StackShepherd {
     /// worktree's own state probed here. It runs the same gate as a poll
     /// (`StackShepherdPolicy.isReady`) over the record's last poll, so a
     /// republish, a rerun, an unsynced commit, uncommitted edits or a lost
-    /// required reviewer between polls cannot read as ready.
+    /// required reviewer between polls cannot read as ready. `stack` must be
+    /// the record's own stack: a failed load or another checked-out stack says
+    /// nothing about this one's publication, so the answer is no.
     public func isReadyToLand(
         _ id: StackShepherdRecordID,
         freshRequests: [Int: ReviewRequest],
@@ -244,6 +246,7 @@ public final class StackShepherd {
         rules: ShepherdRules
     ) async -> Bool {
         guard let record = records[id], !record.isFinished,
+              let stack, stack.name == id.stackName,
               let context = effects?.worktreeContext(id.worktreeID),
               let provider = providerRegistry.provider(for: record.remote.kind),
               let probed = try? await localProbe.probe(context.path, record.base),
