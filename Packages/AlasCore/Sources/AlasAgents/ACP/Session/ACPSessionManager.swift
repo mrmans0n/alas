@@ -6267,12 +6267,16 @@ extension ACPSessionManager {
                 attempt.hookReviewTaskID = taskID
                 attempt.hookReviewTask = task
             }
+            let reviewedCoordinator = attempt.hookReview
             let token = await task.value
-            try Task.checkCancellation()
             guard hookReviewOwners[sessionId] === attempt, connectionOwnerIDs[sessionId] == attempt.id,
                   sessions[sessionId] === session, attempt.connection === connection else { throw CancellationError() }
             // Provider changes and SSH reattachment keep the operation pending for a fresh review.
             if generation != attempt.hookReviewGeneration { continue }
+            // Completing a review retires its surface even when its sole waiter
+            // was cancelled. Cancellation still fences token installation/send.
+            if let reviewedCoordinator, session.codexHooksReview === reviewedCoordinator { session.codexHooksReview = nil }
+            try Task.checkCancellation()
             if attempt.hookReviewTaskID == taskID {
                 attempt.hookReviewTask = nil
                 attempt.hookReviewTaskID = nil

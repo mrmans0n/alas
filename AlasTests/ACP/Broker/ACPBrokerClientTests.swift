@@ -1608,6 +1608,42 @@ struct ACPBrokerClientTests {
     // like the abandoned-operation case, but this one WILL be retried.
     // `preRegisterAwaitedOperationKeys` closes that gap by registering
     // interest before `start()` runs at all.
+    @Test(arguments: [false, true])
+    func oldReviewRejectionPreservesReplacementSuccessUntilConsumption(paged: Bool) async throws {
+        let service = MockBrokerService()
+        let key = "queued-hook-review"
+        let rejection = ACPBrokerEvent(cursor: .init(rawValue: 1), kind: .operationCompleted(operationKey: .init(rawValue: key), outcome: .init(
+            result: nil, error: .init(code: -32044, message: "Review required", data: AnyCodable(["kind": "codex_hook_review_required"]))
+        )))
+        let success = ACPBrokerRPCOutcome(result: .object(["stopReason": .string("end_turn")]), error: nil)
+        let replacement = ACPBrokerEvent(cursor: .init(rawValue: 2), kind: .operationCompleted(operationKey: .init(rawValue: key), outcome: success))
+        let update = ACPBrokerEvent(cursor: .init(rawValue: 3), kind: .adapterNotification(method: "session/update", params: .object([
+            "sessionId": .string("remote"), "update": .object([
+                "sessionUpdate": .string("agent_message_chunk"),
+                "content": .object(["type": .string("text"), "text": .string("later")])
+            ])
+        ])))
+        if paged {
+            await service.enqueueAttach(events: [rejection], snapshotJournalTail: .init(rawValue: 3), hasMoreEvents: true)
+        }
+        await service.enqueueAttach(events: (paged ? [] : [rejection]) + [replacement, update], snapshotJournalTail: .init(rawValue: 3), snapshotOperations: [
+            .init(operationKey: .init(rawValue: key), adapterRequestId: .init(rawValue: 2), method: "session/prompt", terminalOutcome: success)
+        ])
+        let client = makeClient(service: service)
+        defer { Task { await client.detach() } }
+        client.preRegisterAwaitedOperationKeys([key])
+        try await client.start()
+        let delivered = try await nextUpdate(from: client.incomingUpdates)
+        delivered.durableConsumptionAcknowledgement?()
+        #expect(client.terminalOutcome(forPreRegisteredOperationKey: key) == success)
+        let completion = try #require(client.replayedCompletion(forPreRegisteredOperationKey: key))
+        #expect(await service.sent.isEmpty)
+        #expect(await service.acks.allSatisfy { $0.cursor.rawValue < 2 })
+        completion.acknowledgeDurableConsumption()
+        try await waitUntil { await service.acks.contains { $0.cursor.rawValue == 3 } }
+        #expect(client.replayedCompletion(forPreRegisteredOperationKey: key) == nil)
+    }
+
     @Test func rejectedReviewCompletionReleasesRegistrationWithoutSkippingEarlierUpdates() async throws {
         let service = MockBrokerService()
         let key = "queued-hook-review"
@@ -1640,6 +1676,51 @@ struct ACPBrokerClientTests {
         ])
         try await client.notify(ACPRequest(method: "test/poll", params: EmptyObject()))
         #expect(client.replayedCompletion(forPreRegisteredOperationKey: key) == nil)
+    }
+
+    @Test func rejectionReconciliationKeepsAnotherLiveSendProtected() async throws {
+        let service = MockBrokerService()
+        let key = "shared-review-operation"
+        let success = ACPBrokerRPCOutcome(result: .null, error: nil)
+        await service.enqueueAttach(events: [
+            .init(cursor: .init(rawValue: 3), kind: .operationCompleted(operationKey: .init(rawValue: key), outcome: success))
+        ])
+        let consumed = PendingAcknowledgementBox()
+        let client = makeClient(service: service, onEventDispatchedForTesting: { cursor in
+            if cursor.rawValue == 1 { consumed.invoke() }
+        })
+        defer { Task { await client.detach() } }
+        client.preRegisterAwaitedOperationKeys([key])
+        try await client.start()
+        let completion = try #require(client.replayedCompletion(forPreRegisteredOperationKey: key))
+        consumed.store { completion.acknowledgeDurableConsumption() }
+        let handoff = BrokerTestGate()
+        let sending = Task {
+            try await client.send(ACPRequest(method: "session/prompt", params: EmptyObject(), brokerOperationKey: key), beforeRequestHandoff: { _ in await handoff.wait() }, onRequestHandoff: {})
+        }
+        try await waitUntil { await handoff.hasEntered }
+        // An overlapping replay's older snapshot arrives after success has been
+        // delivered. Its callback consumes the preregistration before reconciliation.
+        await service.enqueueAttach(events: [
+            .init(cursor: .init(rawValue: 1), kind: .operationCompleted(operationKey: .init(rawValue: key), outcome: .init(result: nil, error: .init(code: -32044, message: "Review", data: AnyCodable(["kind": "codex_hook_changed"])))))
+        ], snapshotJournalTail: .init(rawValue: 1))
+        try await client.notify(ACPRequest(method: "test/poll", params: EmptyObject()))
+        #expect(client.replayedCompletion(forPreRegisteredOperationKey: key) == nil)
+        await service.enqueueAttach(events: [
+            .init(cursor: .init(rawValue: 4), kind: .operationCompleted(operationKey: .init(rawValue: key), outcome: success)),
+            sessionUpdateEvent(cursor: .init(rawValue: 5), text: "later")
+        ])
+        try await client.notify(ACPRequest(method: "test/poll", params: EmptyObject()))
+        let later = try await nextUpdate(from: client.incomingUpdates)
+        later.durableConsumptionAcknowledgement?()
+        #expect(await service.acks.allSatisfy { $0.cursor.rawValue < 4 })
+        await handoff.release()
+        let response = try await sending.value
+        response.acknowledgeDurableConsumption()
+        try await waitUntil { await service.acks.contains { $0.cursor.rawValue == 5 } }
+        // The first ACK covering this sender must be its own consumption,
+        // even when the asynchronous ACK task was not observable above yet.
+        #expect(await service.acks.first { $0.cursor.rawValue >= 4 }?.cursor.rawValue == 4)
     }
 
     @Test func preRegisteredOperationKeyProtectsCompletionReplayedDuringStart() async throws {

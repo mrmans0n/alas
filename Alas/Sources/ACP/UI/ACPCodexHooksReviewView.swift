@@ -78,6 +78,7 @@ struct ACPCodexHooksReviewView: View {
             }
             DisclosureGroup("Details") {
                 VStack(alignment: .leading, spacing: 3) {
+                    Text(target(hook)).font(.caption.monospaced()).fixedSize(horizontal: false, vertical: true)
                     Text("Hash: \(hook.currentHash)")
                     if let matcher = hook.matcher { Text("Matcher: \(matcher)") }
                     Text("Timeout: \(hook.timeoutSec) seconds")

@@ -71,6 +71,7 @@ struct ACPCodexHooksTests {
             review.continueWithoutTrusting(presentationID: id)
             await attach.value
             #expect(mock.sent.filter { $0.method == "session/new" }.count == 1)
+            #expect(session.codexHooksReview == nil)
             try await eventually { await session.queue.isEmpty }
             #expect(mock.sent.filter { $0.method == "session/prompt" }.count == 1)
             await connection.invalidateCodexHooksReview()
@@ -88,9 +89,20 @@ struct ACPCodexHooksTests {
             active.continueWithoutTrusting(presentationID: active.presentation?.id)
             _ = try await prompt.value
             _ = try await concurrent.value
+            #expect(session.codexHooksReview == nil)
             let delivered = mock.sent.filter { $0.method == "session/prompt" }.count
             #expect(delivered == 3)
             #expect(session.queue.isEmpty)
+            await connection.invalidateCodexHooksReview()
+            let cancelled = Task { try await connection.prompt(sessionId: "remote", blocks: []) }
+            try await eventually { await session.codexHooksReview?.presentation?.isBusy == false }
+            let soleReview = try #require(session.codexHooksReview)
+            cancelled.cancel()
+            soleReview.continueWithoutTrusting(presentationID: soleReview.presentation?.id)
+            await #expect(throws: CancellationError.self) { try await cancelled.value }
+            #expect(session.codexHooksReview == nil)
+            #expect(connection.codexHooksReviewToken == nil)
+            #expect(mock.sent.filter { $0.method == "session/prompt" }.count == delivered)
         }
         await manager.detach(sessionId: session.id)
     }
@@ -108,6 +120,157 @@ struct ACPCodexHooksTests {
         }
         await #expect(throws: ACPClientError.self) { try await connection.prompt(sessionId: "s", blocks: []) }
         #expect(mock.sent.filter { $0.method == "session/prompt" }.count == 1)
+    }
+
+    @Test(arguments: [false, true])
+    @MainActor func automaticAttachmentReviewReleasesPresentation(trusted: Bool) async throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("hook-automatic-\(UUID()).sqlite")
+        defer { try? FileManager.default.removeItem(at: path) }
+        let mock = ACPMockClient()
+        mock.script(method: "initialize") { _ in Data(#"{"protocolVersion":1,"agentInfo":{"name":"@alas-ide/codex-acp","version":"2.2.2-alas.4"},"_meta":{"codexHooks":{"version":1,"reviewToken":true}}}"#.utf8) }
+        let hooks = trusted ? #"[{"key":"k","currentHash":"h","eventName":"sessionStart","timeoutSec":10,"sourcePath":"/hooks.json","source":"sessionFlags","displayOrder":0,"enabled":true,"isManaged":false,"trustStatus":"trusted","handlerType":"command","command":"true","async":false}]"# : "[]"
+        mock.script(method: "_codex/hooks/list") { _ in Data("{\"cwd\":\"/p\",\"hooks\":\(hooks),\"warnings\":[],\"errors\":[],\"reviewToken\":\"token\"}".utf8) }
+        mock.script(method: "session/new") { _ in Data(#"{"sessionId":"remote"}"#.utf8) }
+        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/p", persistence: ACPSessionPersistence(path: path.path), setupEvaluator: { _ in .ready }, connectionFactory: { _, _, _ in ACPConnection(client: mock) })
+        defer { manager.shutdownBackgroundTasks() }
+        let session = manager.createSession(agentId: "codex", autoRunDefault: false)
+        await manager.attach(to: session.id, freshlyCreated: true)
+        #expect(mock.sent.filter { $0.method == "session/new" }.count == 1)
+        // The top overlay is available to ordinary side questions after automatic completion.
+        #expect(session.codexHooksReview == nil)
+        await manager.detach(sessionId: session.id)
+    }
+
+    @Test(arguments: ["authenticate", "providers/set", "providers/disable"])
+    @MainActor func failedConfigurationChangeInvalidatesReviewAtEntryAndSettlement(method: String) async throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("hook-change-\(UUID()).sqlite")
+        defer { try? FileManager.default.removeItem(at: path) }
+        let mock = ACPMockClient()
+        mock.script(method: "initialize") { _ in Data(#"{"protocolVersion":1,"agentInfo":{"name":"@alas-ide/codex-acp","version":"2.2.2-alas.4"},"_meta":{"codexHooks":{"version":1,"reviewToken":true}}}"#.utf8) }
+        mock.script(method: "_codex/hooks/list") { _ in Data(#"{"cwd":"/p","hooks":[],"warnings":["Review configuration"],"errors":[],"reviewToken":"token"}"#.utf8) }
+        mock.script(method: "session/new") { _ in Data(#"{"sessionId":"remote"}"#.utf8) }
+        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        let gate = ExecutionReviewGate()
+        mock.scriptAsync(method: method) { _ in
+            _ = await gate.review()
+            throw ACPClientError.jsonrpc(.init(code: -32603, message: "configuration failed", data: nil))
+        }
+        let connection = ACPConnection(client: mock)
+        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/p", persistence: ACPSessionPersistence(path: path.path), setupEvaluator: { _ in .ready }, connectionFactory: { _, _, _ in connection })
+        defer { manager.shutdownBackgroundTasks() }
+        let session = manager.createSession(agentId: "codex", autoRunDefault: false)
+        let attach = Task { await manager.attach(to: session.id, freshlyCreated: true) }
+        try await eventually { await session.codexHooksReview?.presentation?.isBusy == false }
+        let startup = try #require(session.codexHooksReview)
+        startup.continueWithoutTrusting()
+        await attach.value
+        let change = Task {
+            switch method {
+            case "authenticate": try await connection.authenticate(methodId: "login")
+            case "providers/set": _ = try await connection.setProvider(.init(providerId: "p", apiType: "openai", baseUrl: "https://example.invalid"))
+            default: _ = try await connection.disableProvider(providerId: "p")
+            }
+        }
+        var entered = gate.entered.stream.makeAsyncIterator()
+        await entered.next()
+        #expect(connection.codexHooksReviewToken == nil)
+        #expect(startup.continueWithoutTrusting() == nil)
+        let submitted = manager.submit(sessionId: session.id, text: "pending configuration review", attachments: [], intent: .auto, onCompleted: { _ in })
+        #expect(submitted)
+        try await eventually { await session.codexHooksReview?.presentation?.isBusy == false }
+        let beforeFailure = try #require(session.codexHooksReview)
+        let queued = session.queue
+        gate.release?.resume(returning: "failed")
+        await #expect(throws: ACPClientError.self) { try await change.value }
+        try await eventually { await MainActor.run { session.codexHooksReview !== beforeFailure && session.codexHooksReview?.presentation?.isBusy == false } }
+        #expect(beforeFailure.continueWithoutTrusting() == nil)
+        #expect(session.queue == queued)
+        #expect(mock.sent.allSatisfy { $0.method != "session/prompt" })
+        let current = try #require(session.codexHooksReview)
+        current.continueWithoutTrusting(presentationID: current.presentation?.id)
+        try await eventually { await session.queue.isEmpty && mock.sent.filter { $0.method == "session/prompt" }.count == 1 }
+        #expect(mock.sent.filter { $0.method == "session/prompt" }.count == 1)
+        await manager.detach(sessionId: session.id)
+    }
+
+    @Test(arguments: [false, true])
+    @MainActor func attachmentReplacementRetiresVisibleReview(restart: Bool) async throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("hook-replace-\(UUID()).sqlite")
+        defer { try? FileManager.default.removeItem(at: path) }
+        let mocks = [ACPMockClient(), ACPMockClient()]
+        for mock in mocks {
+            mock.script(method: "initialize") { _ in Data(#"{"protocolVersion":1,"agentInfo":{"name":"@alas-ide/codex-acp","version":"2.2.2-alas.4"},"_meta":{"codexHooks":{"version":1,"reviewToken":true}}}"#.utf8) }
+            mock.script(method: "_codex/hooks/list") { _ in Data(#"{"cwd":"/p","hooks":[],"warnings":["Review configuration"],"errors":[],"reviewToken":"token"}"#.utf8) }
+            mock.script(method: "session/new") { _ in Data(#"{"sessionId":"remote"}"#.utf8) }
+            mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        }
+        var created = 0
+        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/p", persistence: ACPSessionPersistence(path: path.path), setupEvaluator: { _ in .ready }, connectionFactory: { _, _, _ in
+            let client = mocks[min(created, 1)]; created += 1
+            return ACPConnection(client: client)
+        })
+        defer { manager.shutdownBackgroundTasks() }
+        let session = manager.createSession(agentId: "codex", autoRunDefault: false)
+        session.enqueue(blocks: [.text("preserved draft")])
+        let queued = session.queue
+        let attach = Task { await manager.attach(to: session.id, freshlyCreated: true) }
+        try await eventually { await session.codexHooksReview?.presentation?.isBusy == false }
+        let old = try #require(session.codexHooksReview)
+        if restart {
+            let replacement = Task { await manager.restartConnection(to: session.id) }
+            try await eventually { await MainActor.run { session.codexHooksReview !== old && session.codexHooksReview?.presentation?.isBusy == false } }
+            #expect(old.continueWithoutTrusting() == nil)
+            #expect(session.queue == queued)
+            let current = try #require(session.codexHooksReview)
+            current.continueWithoutTrusting()
+            await replacement.value
+            try await eventually { await session.queue.isEmpty }
+            #expect(mocks[1].sent.filter { $0.method == "session/prompt" }.count == 1)
+        }
+        await manager.detach(sessionId: session.id)
+        await attach.value
+        #expect(old.continueWithoutTrusting() == nil)
+        #expect(mocks[0].sent.allSatisfy { $0.method != "session/new" && $0.method != "session/prompt" })
+        if !restart { #expect(session.queue == queued) }
+        #expect(session.codexHooksReview == nil)
+    }
+
+    @Test(arguments: [false, true])
+    @MainActor func hiddenSideQuestionPublishesItsOwnReviewBeforeDispatch(cancel: Bool) async throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("hook-side-\(UUID()).sqlite")
+        defer { try? FileManager.default.removeItem(at: path) }
+        let mock = ACPMockClient()
+        mock.script(method: "initialize") { _ in Data(#"{"protocolVersion":1,"agentInfo":{"name":"@alas-ide/codex-acp","version":"2.2.2-alas.4"},"_meta":{"codexHooks":{"version":1,"reviewToken":true}}}"#.utf8) }
+        mock.script(method: "_codex/hooks/list") { _ in Data(#"{"cwd":"/p","hooks":[],"warnings":["Review child configuration"],"errors":[],"reviewToken":"child-token"}"#.utf8) }
+        mock.script(method: "session/new") { _ in Data(#"{"sessionId":"side","modes":{"currentModeId":"read-only","availableModes":[{"id":"read-only","name":"Read only","_meta":{"kind":"standard"}}]}}"#.utf8) }
+        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/p", persistence: ACPSessionPersistence(path: path.path), setupEvaluator: { _ in .ready }, connectionFactory: { _, _, _ in ACPConnection(client: mock) })
+        defer { manager.shutdownBackgroundTasks() }
+        let parent = manager.createSession(agentId: "codex", autoRunDefault: false)
+        let asking = Task { try await manager.startSideQuestion(parentID: parent.id, question: "why?") }
+        try await eventually { await MainActor.run {
+            guard let id = manager.sideQuestions[parent.id]?.sessionID else { return false }
+            return manager.liveSession(for: id)?.codexHooksReview?.presentation?.isBusy == false
+        } }
+        let id = try #require(manager.sideQuestions[parent.id]?.sessionID)
+        let child = try #require(manager.liveSession(for: id))
+        let review = try #require(child.codexHooksReview)
+        #expect(parent.codexHooksReview == nil)
+        #expect(mock.sent.allSatisfy { $0.method != "session/new" && $0.method != "session/prompt" })
+        if cancel {
+            review.cancel(presentationID: review.presentation?.id)
+            await #expect(throws: (any Error).self) { try await asking.value }
+            #expect(manager.sideQuestions[parent.id]?.error != nil)
+            #expect(mock.sent.allSatisfy { $0.method != "session/new" && $0.method != "session/prompt" })
+        } else {
+            review.continueWithoutTrusting(presentationID: review.presentation?.id)
+            _ = try await asking.value
+            try await eventually { mock.sent.contains { $0.method == "session/prompt" } }
+            #expect(mock.sent.filter { $0.method == "session/new" }.count == 1)
+            #expect(child.codexHooksReview == nil)
+            #expect(manager.sideQuestions[parent.id]?.isSubmitted == true)
+        }
+        await manager.dismissSideQuestion(parentID: parent.id)
     }
 
     @Test @MainActor func cancelledReviewWaiterCannotDispatchAfterSharedContinuation() async throws {
