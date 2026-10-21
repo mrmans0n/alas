@@ -74,16 +74,50 @@ import Testing
         ("0628020000000000", ZmxDaemonStatus.preFreeze(pid: 4242)),
     ])
     func probeReplyClassifiesTheCapturedInfoHeaders(headerHex: String, expected: ZmxDaemonStatus) {
-        var payload = Data(count: 552)
-        payload.replaceSubrange(8..<12, with: withUnsafeBytes(of: Int32(4242).littleEndian, Array.init))
-        let header = Data(stride(from: 0, to: headerHex.count, by: 2).map { index in
-            let start = headerHex.index(headerHex.startIndex, offsetBy: index)
-            return UInt8(headerHex[start..<headerHex.index(start, offsetBy: 2)], radix: 16)!
-        })
-        let reply = header + payload
+        let reply = zmxInfoReply(headerHex: headerHex)
         #expect(ZmxIPC.classifyProbeReply(reply.prefix(300)) == nil)
         #expect(ZmxIPC.classifyProbeReply(reply) == expected)
         #expect(Array(ZmxIPC.versionProbe) == [6, 1, 0, 0, 0, 0, 0, 0, 0])
+    }
+
+    // MARK: Probe
+
+    @Test(arguments: [
+        (zmxV1InfoHeaderHex, ZmxDaemonStatus.v1(pid: 4242), Int.max),
+        (zmxPreFreezeInfoHeaderHex, ZmxDaemonStatus.preFreeze(pid: 4242), Int.max),
+        (zmxV1InfoHeaderHex, ZmxDaemonStatus.v1(pid: 4242), 7),
+        (zmxPreFreezeInfoHeaderHex, ZmxDaemonStatus.preFreeze(pid: 4242), 7),
+    ])
+    func probeClassifiesEachDaemonFromItsInfoReply(headerHex: String, expected: ZmxDaemonStatus, chunkSize: Int) throws {
+        let reply = zmxInfoReply(headerHex: headerHex)
+        let daemon = try ZmxFakeDaemonListener(
+            script: chunkSize == Int.max ? .reply(reply) : .replyInChunks(reply, size: chunkSize))
+        defer { daemon.tearDown() }
+        #expect(ZmxIPCSocket.probe(path: daemon.path) == expected)
+        #expect(daemon.received == ZmxIPC.versionProbe)
+    }
+
+    @Test func probeReportsUnreachableWithinItsTimeout() throws {
+        let silent = try ZmxFakeDaemonListener(script: .silent)
+        defer { silent.tearDown() }
+        for path in ["/tmp/zmxt-missing/s", silent.path] {
+            let clock = ContinuousClock()
+            let start = clock.now
+            let status = ZmxIPCSocket.probe(path: path, timeout: .milliseconds(200))
+            #expect(status == .unreachable)
+            #expect(clock.now - start < .seconds(2))
+        }
+    }
+
+    @Test func preFreezeKillSendsTheOldFrameAndWaitsForHangup() throws {
+        let closing = try ZmxFakeDaemonListener(script: .closeAfterReceiving(count: 8))
+        defer { closing.tearDown() }
+        #expect(ZmxIPCSocket.killPreFreeze(path: closing.path))
+        #expect(closing.received == Data([5, 0, 0, 0, 0, 0, 0, 0]))
+
+        let silent = try ZmxFakeDaemonListener(script: .silent)
+        defer { silent.tearDown() }
+        #expect(!ZmxIPCSocket.killPreFreeze(path: silent.path, timeout: .milliseconds(200)))
     }
 
     // MARK: Snapshot ordering
@@ -219,6 +253,114 @@ final class ZmxEventLog<Event: Sendable>: @unchecked Sendable {
 }
 
 private typealias EventLog = ZmxEventLog<ZmxPassiveClient.Event>
+
+let zmxV1InfoHeaderHex = "0601000028020000"
+let zmxPreFreezeInfoHeaderHex = "0628020000000000"
+
+/// A full `Info` reply (header plus 552-byte payload) for pid 4242.
+func zmxInfoReply(headerHex: String) -> Data {
+    var payload = Data(count: 552)
+    payload.replaceSubrange(8..<12, with: withUnsafeBytes(of: Int32(4242).littleEndian, Array.init))
+    let header = Data(stride(from: 0, to: headerHex.count, by: 2).map { index in
+        let start = headerHex.index(headerHex.startIndex, offsetBy: index)
+        return UInt8(headerHex[start..<headerHex.index(start, offsetBy: 2)], radix: 16)!
+    })
+    return header + payload
+}
+
+/// Accepts one connection on a Unix socket in a short temp dir, records every
+/// byte until the peer closes, and plays a scripted reply.
+final class ZmxFakeDaemonListener: @unchecked Sendable {
+    enum Script: Sendable {
+        case reply(Data)
+        case silent
+        case replyInChunks(Data, size: Int)
+        case closeAfterReceiving(count: Int)
+    }
+
+    let path: String
+    private let directory: String
+    private let listener: Int32
+    private let lock = NSLock()
+    private var buffer = Data()
+    private let finished = DispatchSemaphore(value: 0)
+
+    init(script: Script) throws {
+        var template = Array("/tmp/zmxt-XXXXXX".utf8CString)
+        guard let dir = template.withUnsafeMutableBufferPointer({ mkdtemp($0.baseAddress) }).map({ String(cString: $0) })
+        else { throw POSIXError(.EIO) }
+        directory = dir
+        path = dir + "/s"
+        listener = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard listener >= 0 else { throw POSIXError(.EIO) }
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: Array(path.utf8)) }
+        let bound = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.bind(listener, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        guard bound == 0, Darwin.listen(listener, 1) == 0 else {
+            Darwin.close(listener)
+            try? FileManager.default.removeItem(atPath: dir)
+            throw POSIXError(.EADDRINUSE)
+        }
+        let listener = listener
+        Thread { [self] in serve(listener: listener, script: script) }.start()
+    }
+
+    /// Everything received, once the peer has closed (or after 5 seconds).
+    var received: Data {
+        _ = finished.wait(timeout: .now() + 5)
+        finished.signal()
+        return lock.withLock { buffer }
+    }
+
+    func tearDown() {
+        Darwin.shutdown(listener, SHUT_RDWR)
+        Darwin.close(listener)
+        try? FileManager.default.removeItem(atPath: directory)
+    }
+
+    private func serve(listener: Int32, script: Script) {
+        defer { finished.signal() }
+        let client = Darwin.accept(listener, nil, nil)
+        guard client >= 0 else { return }
+        defer { Darwin.close(client) }
+        func send(_ data: Data) {
+            _ = data.withUnsafeBytes { Darwin.write(client, $0.baseAddress, $0.count) }
+        }
+        var replied = false
+        var chunk = [UInt8](repeating: 0, count: 4096)
+        while true {
+            let n = Darwin.read(client, &chunk, chunk.count)
+            if n <= 0 { return }
+            let total = lock.withLock { () -> Int in
+                buffer.append(contentsOf: chunk[0..<n])
+                return buffer.count
+            }
+            switch script {
+            case .silent:
+                break
+            case .reply(let data):
+                if !replied { replied = true; send(data) }
+            case .replyInChunks(let data, let size):
+                if !replied {
+                    replied = true
+                    var offset = 0
+                    while offset < data.count {
+                        send(data[offset..<min(offset + size, data.count)])
+                        offset += size
+                        usleep(2_000)
+                    }
+                }
+            case .closeAfterReceiving(let count):
+                if total >= count { return }
+            }
+        }
+    }
+}
 
 /// A connected Unix socket pair; `client` is handed to the code under test
 /// and the other end plays the zmx daemon.

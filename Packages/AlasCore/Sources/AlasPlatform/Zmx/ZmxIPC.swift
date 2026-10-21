@@ -319,6 +319,56 @@ public final class ZmxIPCSocket: @unchecked Sendable {
         }
     }
 
+    /// Asks a daemon which wire it speaks. Always uses its own connection and
+    /// closes it before returning: a v1 daemon keeps the probe's ninth byte
+    /// buffered as a partial frame, so this connection can carry nothing else.
+    /// Anything but a recognized `Info` reply (connect failure, EOF, read
+    /// error, unrecognized bytes, deadline) is `.unreachable`.
+    public static func probe(path: String, timeout: DispatchTimeInterval = .seconds(1)) -> ZmxDaemonStatus {
+        let deadline = DispatchTime.now() + timeout
+        guard let socket = try? connect(path: path) else { return .unreachable }
+        defer { socket.shutdown() }
+        guard socket.write(ZmxIPC.versionProbe) else { return .unreachable }
+        var reply = Data()
+        while true {
+            guard socket.waitReadable(until: deadline),
+                  let chunk = socket.read(), !chunk.isEmpty else { return .unreachable }
+            reply.append(chunk)
+            if let status = ZmxIPC.classifyProbeReply(reply) { return status }
+            // A reply that is already a full frame's worth of bytes yet
+            // unclassifiable will never become valid.
+            if reply.count > ZmxIPC.headerSize + 552 { return .unreachable }
+        }
+    }
+
+    /// Sends a pre-freeze `Kill` and waits for the daemon to hang up, which it
+    /// does once it has shut down. False on connect failure, error, or deadline.
+    public static func killPreFreeze(path: String, timeout: DispatchTimeInterval = .seconds(3)) -> Bool {
+        let deadline = DispatchTime.now() + timeout
+        guard let socket = try? connect(path: path) else { return false }
+        defer { socket.shutdown() }
+        guard socket.write(ZmxIPC.encode(.kill, wire: .preFreeze)) else { return false }
+        while true {
+            guard socket.waitReadable(until: deadline), let chunk = socket.read() else { return false }
+            if chunk.isEmpty { return true }
+        }
+    }
+
+    /// `poll(2)` until the descriptor is readable (data or hangup) or the
+    /// deadline passes. EINTR retries with the remaining time.
+    private func waitReadable(until deadline: DispatchTime) -> Bool {
+        var descriptor = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+        while true {
+            let now = DispatchTime.now().uptimeNanoseconds
+            let remaining = deadline.uptimeNanoseconds > now ? deadline.uptimeNanoseconds - now : 0
+            let milliseconds = Int32(clamping: (remaining + 999_999) / 1_000_000)
+            let result = Darwin.poll(&descriptor, 1, milliseconds)
+            if result > 0 { return true }
+            if result == 0 { return false }
+            if errno != EINTR { return false }
+        }
+    }
+
     /// Unblocks a pending `read` and stops further I/O.
     public func shutdown() {
         _ = Darwin.shutdown(fd, SHUT_RDWR)
