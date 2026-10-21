@@ -437,9 +437,7 @@ struct AgentLauncherDialog: View {
             .onChange(of: appState.agentLauncher.scrollToSelectionTick) { _, _ in
                 let index = appState.agentLauncher.selectedIndex
                 if agents.indices.contains(index) {
-                    withAnimation(.easeOut(duration: 0.15)) {
-                        proxy.scrollTo(agents[index].id, anchor: .center)
-                    }
+                    scrollStrip(proxy, to: agents[index].id)
                 }
             }
             // ←→ in the session browser moves `chatAgent`, not
@@ -447,10 +445,14 @@ struct AgentLauncherDialog: View {
             // active tile on screen when the strip overflows.
             .onChange(of: chatAgent?.id) { _, id in
                 guard let id else { return }
-                withAnimation(.easeOut(duration: 0.15)) {
-                    proxy.scrollTo(id, anchor: .center)
-                }
+                scrollStrip(proxy, to: id)
             }
+        }
+    }
+
+    private func scrollStrip(_ proxy: ScrollViewProxy, to id: String) {
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) {
+            proxy.scrollTo(id, anchor: .center)
         }
     }
 
