@@ -222,7 +222,9 @@ if let listen = config.hostRemoteListen {
             RemoteDiagnosticsSnapshot(
                 appName: "Alas",
                 port: port,
-                addresses: settings.advertisedAddresses(port: port, interfaces: interfaces, tailnetHTTPSHost: nil),
+                addresses: settings.advertisedAddresses(
+                    port: port, interfaces: interfaces, tailnetHTTPSHost: nil, loopbackOnly: listen.loopbackOnly
+                ),
                 usesPlainHTTP: true,
                 pairedDeviceCount: pairing.devices.count,
                 serverId: settings.serverId,
