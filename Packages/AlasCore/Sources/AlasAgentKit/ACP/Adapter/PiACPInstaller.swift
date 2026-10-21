@@ -15,7 +15,7 @@ public struct PiACPInstaller: ACPAdapterInstaller {
     }
 
     public func installState() async -> ACPSetupResult {
-        await ACPSetupChecker(env: ProcessInfo.processInfo.environment)
+        await ACPSetupChecker(env: ACPProcessEnvironment.baseEnvironment())
             .evaluate(.binaryOnPathOrNpmPackage(
                 binary: ACPManagedAdapterDescriptor.pi.binaryName,
                 npmPackage: ACPManagedAdapterDescriptor.pi.packageName))

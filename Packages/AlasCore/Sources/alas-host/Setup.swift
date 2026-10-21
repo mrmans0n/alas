@@ -14,7 +14,7 @@ enum HostSetup {
         _ = try HostCommands.writableHolder()
         let config = HostCommands.readConfig()
         var model = HostSetupModel(
-            config: config, projects: try await HostCommands.listProjects(), missingCommands: missingAdapterCommands(config)
+            config: config, projects: try await HostCommands.listProjects(), missingCommands: await missingAdapterCommands(config)
         )
 
         Terminal.enter()
@@ -72,11 +72,12 @@ enum HostSetup {
     }
 
     /// The adapter command of each agent whose command is not found the way
-    /// the host launches it: this process's PATH plus the well-known directories.
-    /// ponytail: setup's PATH, not a launch agent's (launchd's minimal one);
-    /// check that PATH too if agents found here fail to start under launchd.
-    private static func missingAdapterCommands(_ config: AppConfig) -> [String: String] {
-        let path = ProcessInfo.processInfo.environment["PATH"]
+    /// the host launches it: the login shell's PATH, then this process's,
+    /// plus the well-known directories.
+    private static func missingAdapterCommands(_ config: AppConfig) async -> [String: String] {
+        ShellEnvResolver.shared.resolve()
+        await ShellEnvResolver.shared.waitUntilResolved()
+        let path = ACPProcessEnvironment.baseEnvironment()["PATH"]
         return HostSetupModel.missingAdapterCommands(config) { AgentPath.resolveExecutable(named: $0, base: path) != nil }
     }
 

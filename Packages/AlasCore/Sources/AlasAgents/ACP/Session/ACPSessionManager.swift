@@ -1916,7 +1916,8 @@ public final class ACPSessionManager: ChangeTracking {
         _ = hydratorPath
         self.resolvesManagedLaunchPath = setupEvaluator == nil
         self.setupEvaluator = setupEvaluator ?? { spec in
-            let checker = ACPSetupChecker(env: ProcessInfo.processInfo.environment)
+            await ShellEnvResolver.shared.waitUntilResolved()
+            let checker = ACPSetupChecker(env: ACPProcessEnvironment.baseEnvironment())
             return await checker.evaluate(spec.setupCheck)
         }
         self.remoteAdapterResolver = remoteAdapterResolver ?? { host, descriptor, setupCheck in
@@ -9833,7 +9834,9 @@ extension ACPSessionManager {
             // injected transports use virtual commands without consulting the
             // host filesystem a second time.
             guard resolvesManagedLaunchPath else { return spec }
-            let env = ProcessInfo.processInfo.environment
+            // An adapter on the login shell's PATH only is found once it resolved.
+            await ShellEnvResolver.shared.waitUntilResolved()
+            let env = ACPProcessEnvironment.baseEnvironment()
             let resolver = ACPLaunchPathResolver(
                 env: env,
                 additionalPathDirectories: AgentPath.wellKnownDirectories,

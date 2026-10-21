@@ -40,6 +40,22 @@ struct ACPLaunchSpecTests {
         #expect(overridden.npmPackageName == "@agentclientprotocol/codex-acp")
     }
 
+    /// A host started by launchd inherits launchd's minimal PATH; adapters
+    /// installed through nvm, fnm, asdf or mise live only on the login
+    /// shell's, and Node-based ones need its `node` to run.
+    @Test(arguments: [
+        ("/opt/nvm/bin:/usr/bin", "/usr/bin:/bin", "/opt/nvm/bin:/usr/bin:/bin"),
+        (nil, "/usr/bin:/bin", "/usr/bin:/bin"),
+        ("/opt/nvm/bin", nil, "/opt/nvm/bin"),
+    ] as [(String?, String?, String)])
+    func adapterEnvironmentStartsFromTheLoginShellPath(shellPath: String?, processPath: String?, expected: String) {
+        var environment = ["HOME": "/Users/me"]
+        environment["PATH"] = processPath
+        let base = ACPProcessEnvironment.baseEnvironment(environment, shellPath: shellPath)
+        #expect(base["PATH"] == expected)
+        #expect(base["HOME"] == "/Users/me")
+    }
+
     @Test("remote ACP env preserves the remote shell environment")
     func remoteOverridesForACP() {
         let overrides = ACPProcessEnvironment.remoteOverridesForACP(extra: [
