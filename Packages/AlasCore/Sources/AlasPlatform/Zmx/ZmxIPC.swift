@@ -109,8 +109,9 @@ public enum ZmxIPC: Sendable {
     static let infoPidOffset = 8
 
     /// Classifies a daemon from everything it sent after `versionProbe`.
-    /// Nil until an `Info` frame is complete; `.unreachable` once the bytes
-    /// cannot lead to one. See `ZmxProbeReader`.
+    /// Nil until an `Info` frame is complete and the other wire is ruled out;
+    /// `.unreachable` once the bytes cannot lead to a verdict. See
+    /// `ZmxProbeReader`.
     public static func classifyProbeReply(_ bytes: some Collection<UInt8>) -> ZmxDaemonStatus? {
         var reader = ZmxProbeReader()
         return reader.push(bytes)
@@ -203,16 +204,30 @@ public struct ZmxFrameDecoder: Sendable {
 /// zmx broadcasts `Output` (and other frames) to every connected client,
 /// including one that never sent `Init`, so on a busy session the `Info`
 /// reply can arrive behind any number of other frames. Like upstream's own
-/// probe, this skips them: the bytes go to one decoder per wire, a decoder
-/// that hits invalid framing is dropped, and the first `Info` frame of the
-/// right size names the wire.
+/// probe, this skips them: the bytes go to one decoder per wire and a decoder
+/// that hits invalid framing is dropped.
+///
+/// An `Info` frame of the right size names its wire only once the other
+/// wire's decoder has been ruled out. Crafted streams can be framed by both
+/// wires for a while (a v1 frame with an empty payload reads pre-freeze as a
+/// one-byte frame), and callers kill daemons on a `.preFreeze` verdict, so an
+/// `Info` seen while the other decoder still frames the stream keeps the
+/// reader going until that decoder throws, the byte cap passes, or the
+/// caller gives up (`.unreachable`).
 public struct ZmxProbeReader: Sendable {
-    /// Bytes read without finding the `Info` reply before giving up.
+    /// Bytes read without reaching a verdict before giving up.
     public static let maxProbeBytes = 256 * 1024
 
-    private var decoders: [(wire: ZmxIPC.Wire, decoder: ZmxFrameDecoder)] = [
-        (.preFreeze, ZmxFrameDecoder(wire: .preFreeze)),
-        (.v1, ZmxFrameDecoder(wire: .v1)),
+    private struct Candidate: Sendable {
+        var wire: ZmxIPC.Wire
+        var decoder: ZmxFrameDecoder
+        /// Set once this decoder has produced an `Info` frame.
+        var status: ZmxDaemonStatus?
+    }
+
+    private var candidates: [Candidate] = [
+        Candidate(wire: .preFreeze, decoder: ZmxFrameDecoder(wire: .preFreeze)),
+        Candidate(wire: .v1, decoder: ZmxFrameDecoder(wire: .v1)),
     ]
     private var totalBytes = 0
     private var verdict: ZmxDaemonStatus?
@@ -220,26 +235,29 @@ public struct ZmxProbeReader: Sendable {
     public init() {}
 
     /// Feeds the next bytes read. Returns the daemon's status once known:
-    /// `.v1` or `.preFreeze` from its `Info` frame, or `.unreachable` once no
-    /// wire can frame the stream or `maxProbeBytes` pass without an `Info`.
-    /// Nil while more bytes are needed.
+    /// `.v1` or `.preFreeze` from its `Info` frame once the other wire cannot
+    /// frame the stream, or `.unreachable` once no wire can frame it or
+    /// `maxProbeBytes` pass without a verdict. Nil while more bytes are needed.
     public mutating func push(_ bytes: some Collection<UInt8>) -> ZmxDaemonStatus? {
         if let verdict { return verdict }
         totalBytes += bytes.count
-        var survivors: [(wire: ZmxIPC.Wire, decoder: ZmxFrameDecoder)] = []
-        for var entry in decoders {
-            guard let frames = try? entry.decoder.push(bytes) else { continue }
-            if let info = frames.first(where: {
+        candidates = candidates.compactMap { candidate in
+            var candidate = candidate
+            // A decoder that throws is ruled out, even after its own `Info`.
+            guard let frames = try? candidate.decoder.push(bytes) else { return nil }
+            if candidate.status == nil, let info = frames.first(where: {
                 $0.tag == ZmxIPC.Tag.info.rawValue && $0.payload.count == ZmxIPC.infoPayloadSize
             }) {
                 let pid = Self.pid(fromInfo: info.payload)
-                verdict = entry.wire == .v1 ? .v1(pid: pid) : .preFreeze(pid: pid)
-                return verdict
+                candidate.status = candidate.wire == .v1 ? .v1(pid: pid) : .preFreeze(pid: pid)
             }
-            survivors.append(entry)
+            return candidate
         }
-        decoders = survivors
-        if decoders.isEmpty || totalBytes > Self.maxProbeBytes { verdict = .unreachable }
+        if candidates.count == 1, let status = candidates[0].status {
+            verdict = status
+        } else if candidates.isEmpty || totalBytes > Self.maxProbeBytes {
+            verdict = .unreachable
+        }
         return verdict
     }
 
@@ -367,8 +385,9 @@ public final class ZmxIPCSocket: @unchecked Sendable {
     /// closes it before returning: a v1 daemon keeps the probe's ninth byte
     /// buffered as a partial frame, so this connection can carry nothing else.
     /// Broadcast frames ahead of the reply are skipped (`ZmxProbeReader`).
-    /// Anything but a recognized `Info` reply (connect failure, EOF, read
-    /// error, unframeable bytes, byte cap, deadline) is `.unreachable`.
+    /// Anything but an unambiguous `Info` reply (connect failure, EOF, read
+    /// error, unframeable bytes, a stream both wires still frame, byte cap,
+    /// deadline) is `.unreachable`.
     public static func probe(path: String, timeout: DispatchTimeInterval = .seconds(1)) -> ZmxDaemonStatus {
         let deadline = DispatchTime.now() + timeout
         guard let socket = try? connect(path: path) else { return .unreachable }
