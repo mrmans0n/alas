@@ -8019,8 +8019,8 @@ extension ACPSessionManager {
                 await releaseWriterLease(sessionId: sessionId, attempt: attempt)
                 return
             }
-            if pendingRecovery, !hasRestorableContext {
-                // Replacing an empty remote session needs no context transfer.
+            if pendingRecovery, session.hydrationState == .ready, !hasRestorableContext {
+                // Only a hydrated transcript can establish that no context needs transfer.
                 persistContextRecoveryPending(sessionId: sessionId, pending: false)
             }
             let localModelAfterRemoteIdPersist = session.currentModel

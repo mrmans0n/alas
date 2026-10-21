@@ -5887,6 +5887,32 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(!row.contextRecoveryPending)
     }
 
+    @Test("attach preserves pending recovery until the transcript is hydrated",
+          arguments: [ACPSession.HydrationState.loading, .failed("Read failed")])
+    func attachPreservesPendingRecoveryUntilTranscriptIsHydrated(hydrationState: ACPSession.HydrationState) async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: nil))
+        try store.setContextRecoveryPending(sessionId: "local", pending: true)
+        try appendMessage(.user(id: UUID(), text: "Persisted context", attachments: []), to: store, seq: 0)
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
+        let manager = manager(store: store, client: client)
+        let session = try #require(manager.placeholderSession(id: "local"))
+        session.hydrationState = hydrationState
+
+        await manager.attach(to: session.id, freshlyCreated: false)
+        await manager.flushAllPersistence()
+
+        #expect(session.agentState == .ready)
+        #expect(try store.loadSession(id: session.id)?.contextRecoveryPending == true)
+        session.hydrationState = .loading
+        await manager.hydrateIfNeeded(id: session.id)
+        #expect(session.hasConversationTranscript)
+        #expect(session.contextRestoreWarning?.canSendTranscript == true)
+        await manager.detach(sessionId: session.id)
+    }
+
     @Test("missing remote id warns and sends transcript recovery for nonempty session")
     func missingRemoteIdWarnsAndSendsTranscriptRecoveryForNonemptySession() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
