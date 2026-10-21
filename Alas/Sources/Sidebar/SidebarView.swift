@@ -5,8 +5,9 @@ struct SidebarAttentionPresentation {
     let count: Int
 
     init(aggregation: AttentionAggregation, peerRows: [RemoteSessionSummary] = [], pluginUpdateCount: Int = 0,
-         appUpdate: ReleaseInfo? = nil) {
+         appUpdate: ReleaseInfo? = nil, cleanupReminderCount: Int = 0) {
         count = aggregation.unresolvedCount + peerRows.count + pluginUpdateCount + (appUpdate == nil ? 0 : 1)
+            + cleanupReminderCount
     }
 }
 
@@ -515,9 +516,11 @@ private struct SidebarAttentionHeader: View {
         let peerRows = state.nativePeerSessions?.snapshot.attentionRows ?? []
         let pluginUpdates = state.pluginManager?.catalogUpdates ?? []
         let appUpdate = state.updates.availableUpdate
+        let cleanupReminders = state.worktreeCleanupReminders
         let presentation = SidebarAttentionPresentation(
             aggregation: aggregation,
-            peerRows: peerRows, pluginUpdateCount: pluginUpdates.count, appUpdate: appUpdate
+            peerRows: peerRows, pluginUpdateCount: pluginUpdates.count, appUpdate: appUpdate,
+            cleanupReminderCount: cleanupReminders.count
         )
         SidebarHeaderView(
             onSettings: onSettings,
@@ -532,6 +535,7 @@ private struct SidebarAttentionHeader: View {
             peerAttentionRows: peerRows,
             pluginUpdates: pluginUpdates,
             appUpdate: appUpdate,
+            cleanupReminders: cleanupReminders,
             attentionLoadError: state.attentionStore.loadError?.localizedDescription,
             attentionWriteError: state.attentionStore.writeError?.localizedDescription,
             attentionNavigationErrors: state.attentionNavigationErrors,
@@ -550,6 +554,11 @@ private struct SidebarAttentionHeader: View {
                 state.isAttentionInboxOpen = false
                 state.updates.presentAvailableUpdate()
             },
+            onOpenWorktreeCleanup: { projectId in
+                state.isAttentionInboxOpen = false
+                state.presentWorktreeCleanup(projectId: projectId)
+            },
+            onDismissWorktreeCleanup: { state.dismissWorktreeCleanupReminder(projectId: $0) },
             attentionRollUpSummarizer: state.makeAttentionRollUpSummarizer()
         )
         // The catalog throttles itself, so a long-running app picks up new releases without fetching on every open.

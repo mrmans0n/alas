@@ -12,47 +12,58 @@ struct MergedReviewRequestTests {
         webURL: URL(string: "https://github.com/mrmans0n/alas")!
     )
 
-    @Test func parsesGitHubMergedPRList() throws {
+    @Test func parsesGitHubMergedPullRequestPages() throws {
         let json = """
-        [
-          {"number": 42, "headRefName": "feature/a", "url": "https://github.com/mrmans0n/alas/pull/42", "headRefOid": "abc123"},
-          {"number": 43, "headRefName": "feature/b", "url": "https://github.com/mrmans0n/alas/pull/43", "headRefOid": "def456"}
-        ]
+        {"data": {"repository": {
+          "b0": {"pageInfo": {"hasNextPage": true, "endCursor": "p2"},
+                 "nodes": [{"number": 42, "headRefName": "feature/a", "url": "https://github.com/mrmans0n/alas/pull/42", "headRefOid": "abc123"}]},
+          "b1": {"pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": []}
+        }}}
         """
-        let refs = try GitHubCLIProvider.parseMergedPRList(json)
-        #expect(refs.count == 2)
-        #expect(refs[0] == MergedReviewRequestRef(
-            number: 42,
-            headRefName: "feature/a",
-            url: URL(string: "https://github.com/mrmans0n/alas/pull/42")!,
-            headSHA: "abc123"
-        ))
-        #expect(refs[1].headRefName == "feature/b")
-        #expect(refs[1].headSHA == "def456")
+        let pages = try GitHubCLIProvider.parseMergedPullRequests(json)
+        #expect(pages == [
+            "b0": .init(
+                refs: [MergedReviewRequestRef(
+                    number: 42,
+                    headRefName: "feature/a",
+                    url: URL(string: "https://github.com/mrmans0n/alas/pull/42")!,
+                    headSHA: "abc123"
+                )],
+                nextCursor: "p2"
+            ),
+            "b1": .init(refs: [], nextCursor: nil),
+        ])
     }
 
-    @Test func parsesEmptyGitHubList() throws {
-        #expect(try GitHubCLIProvider.parseMergedPRList("[]").isEmpty)
-    }
-
-    @Test func rejectsMalformedGitHubOutput() {
+    /// A missing repository (renamed, no access) must fail, not read as
+    /// "nothing merged".
+    @Test(arguments: ["not json", #"{"data": {"repository": null}}"#])
+    func rejectsMalformedGitHubOutput(json: String) {
         #expect(throws: CodeHostProviderError.self) {
-            _ = try GitHubCLIProvider.parseMergedPRList("not json")
+            _ = try GitHubCLIProvider.parseMergedPullRequests(json)
         }
     }
 
-    @Test func parsesGitLabMergedMRList() throws {
+    @Test func parsesGitLabMergedMergeRequestsPage() throws {
         let json = """
-        [
-          {"iid": 7, "source_branch": "feature/a", "web_url": "https://gitlab.com/o/r/-/merge_requests/7", "sha": "abc123"}
-        ]
+        {"data": {"project": {"mergeRequests": {
+          "pageInfo": {"hasNextPage": true, "endCursor": "c1"},
+          "nodes": [
+            {"iid": "7", "webUrl": "https://gitlab.com/o/r/-/merge_requests/7", "sourceBranch": "feature/a", "diffHeadSha": "abc123"},
+            {"iid": "8", "webUrl": "https://gitlab.com/o/r/-/merge_requests/8", "sourceBranch": "feature/b", "diffHeadSha": null}
+          ]
+        }}}}
         """
-        let refs = try GitLabCLIProvider.parseMergedMRList(json)
-        #expect(refs.count == 1)
-        #expect(refs[0].number == 7)
-        #expect(refs[0].headRefName == "feature/a")
-        #expect(refs[0].url == URL(string: "https://gitlab.com/o/r/-/merge_requests/7")!)
-        #expect(refs[0].headSHA == "abc123")
+        let page = try GitLabCLIProvider.parseMergedMergeRequests(json)
+        // A merge request without a head SHA can never pass the scanner's
+        // SHA check, so it is dropped rather than carried with a fake one.
+        #expect(page.refs == [MergedReviewRequestRef(
+            number: 7,
+            headRefName: "feature/a",
+            url: URL(string: "https://gitlab.com/o/r/-/merge_requests/7")!,
+            headSHA: "abc123"
+        )])
+        #expect(page.nextCursor == "c1")
     }
 
     @Test func parsesGitHubForkParent() throws {
@@ -129,24 +140,63 @@ struct MergedReviewRequestTests {
         #expect(parent == nil)
     }
 
-    @Test func gitHubProviderIssuesOneBatchedQuery() async throws {
-        let runner = RecordingRunner(stdout: """
-        [{"number": 42, "headRefName": "feature/a", "url": "https://github.com/mrmans0n/alas/pull/42", "headRefOid": "abc123"}]
-        """)
+    /// Branch names travel as GraphQL variables, never in the query text, and
+    /// a long list is split so no single request grows unbounded.
+    @Test func gitHubProviderBatchesBranchesAsVariables() async throws {
+        let runner = GitHubGraphQLRunner { body in
+            Self.pullRequestsResponse(body.variables.keys.filter { $0.hasPrefix("b") }.map { ($0, [], nil) })
+        }
         let provider = GitHubCLIProvider(runner: runner)
-        let refs = try await provider.mergedReviewRequests(
+        let branches = (0...GitHubCLIProvider.mergedPullRequestsBranchBatchSize).map { "feature/\"\($0)" }
+        _ = try await provider.mergedReviewRequests(
             remote: Self.remote,
-            limit: 200,
+            headBranches: branches + [branches[0]],
             cwd: URL(fileURLWithPath: "/tmp")
         )
-        #expect(refs.count == 1)
-        #expect(refs[0].headSHA == "abc123")
-        let invocations = await runner.invocations
-        #expect(invocations.count == 1)
-        #expect(invocations[0].args.contains("--state"))
-        #expect(invocations[0].args.contains("merged"))
-        #expect(invocations[0].args.contains("200"))
-        #expect(invocations[0].args.contains { $0.contains("headRefOid") })
+        let requests = await runner.requests
+        #expect(requests.count == 2)
+        #expect(requests.allSatisfy { !$0.query.contains("feature/") })
+        let sent = requests.flatMap { $0.variables.filter { $0.key.hasPrefix("b") }.values }
+        #expect(Set(sent) == Set(branches))
+        #expect(sent.count == branches.count)
+    }
+
+    /// A branch name reused across more merged pull requests than one page
+    /// holds is followed to its last page; the matching head can be older.
+    @Test func gitHubProviderFollowsEachBranchToItsLastPage() async throws {
+        let runner = GitHubGraphQLRunner { body in
+            let aliases = body.variables.keys.filter { $0.hasPrefix("b") }
+            return Self.pullRequestsResponse(aliases.map { alias in
+                let cursor = body.variables["c" + alias.dropFirst()]
+                switch (body.variables[alias], cursor) {
+                case ("feature/a", nil): return (alias, [1], "p2")
+                case ("feature/a", "p2"): return (alias, [2], nil)
+                default: return (alias, [], nil)
+                }
+            })
+        }
+        let refs = try await GitHubCLIProvider(runner: runner).mergedReviewRequests(
+            remote: Self.remote,
+            headBranches: ["feature/a", "feature/b"],
+            cwd: URL(fileURLWithPath: "/tmp")
+        )
+        #expect(refs.map(\.number).sorted() == [1, 2])
+        let requests = await runner.requests
+        #expect(requests.count == 2)
+        // Only the branch with more pages is asked again, from its cursor.
+        #expect(requests.last?.variables == ["owner": "mrmans0n", "repo": "alas", "b0": "feature/a", "c0": "p2"])
+    }
+
+    private static func pullRequestsResponse(_ connections: [(alias: String, numbers: [Int], nextCursor: String?)]) -> String {
+        let body = connections.map { alias, numbers, nextCursor in
+            let nodes = numbers.map {
+                #"{"number": \#($0), "headRefName": "feature/a", "url": "https://github.com/o/r/pull/\#($0)", "headRefOid": "sha\#($0)"}"#
+            }.joined(separator: ",")
+            let pageInfo = nextCursor.map { #"{"hasNextPage": true, "endCursor": "\#($0)"}"# }
+                ?? #"{"hasNextPage": false, "endCursor": null}"#
+            return #""\#(alias)": {"pageInfo": \#(pageInfo), "nodes": [\#(nodes)]}"#
+        }.joined(separator: ",")
+        return #"{"data": {"repository": {\#(body)}}}"#
     }
 
     @Test func gitHubProviderThrowsOnNonZeroExit() async {
@@ -155,7 +205,7 @@ struct MergedReviewRequestTests {
         await #expect(throws: CodeHostProviderError.self) {
             _ = try await provider.mergedReviewRequests(
                 remote: Self.remote,
-                limit: 200,
+                headBranches: ["feature/a"],
                 cwd: URL(fileURLWithPath: "/tmp")
             )
         }
@@ -169,7 +219,7 @@ struct MergedReviewRequestTests {
         await #expect(throws: CodeHostProviderError.self) {
             _ = try await provider.mergedReviewRequests(
                 remote: Self.remote,
-                limit: 10,
+                headBranches: ["feature/a"],
                 cwd: URL(fileURLWithPath: "/tmp")
             )
         }
@@ -184,69 +234,53 @@ struct MergedReviewRequestTests {
         webURL: URL(string: "https://gitlab.com/o/r")!
     )
 
-    private static func mrPageJSON(count: Int, startingAt: Int) -> String {
-        let items = (0..<count).map { offset -> String in
-            let number = startingAt + offset
-            return """
-            {"iid": \(number), "source_branch": "feature/\(number)", "web_url": "https://gitlab.com/o/r/-/merge_requests/\(number)", "sha": "sha\(number)"}
-            """
-        }
-        return "[\(items.joined(separator: ","))]"
+    private static func mergeRequestsPageJSON(number: Int, nextCursor: String?) -> String {
+        let pageInfo = nextCursor.map { #"{"hasNextPage": true, "endCursor": "\#($0)"}"# }
+            ?? #"{"hasNextPage": false, "endCursor": null}"#
+        return """
+        {"data": {"project": {"mergeRequests": {"pageInfo": \(pageInfo), "nodes": [
+          {"iid": "\(number)", "webUrl": "https://gitlab.com/o/r/-/merge_requests/\(number)", "sourceBranch": "feature/\(number)", "diffHeadSha": "sha\(number)"}
+        ]}}}}
+        """
     }
 
-    /// `glab mr list` fetches exactly one page per invocation — unlike `gh
-    /// pr list --limit`, it has no built-in concept of "keep fetching until
-    /// N items." A repository with more merged MRs than one page (100, the
-    /// API's own cap) must be paginated manually.
-    @Test func gitLabProviderPaginatesBeyondOnePage() async throws {
-        let runner = PagedRunner { page in
-            switch page {
-            case 1: return Self.mrPageJSON(count: 100, startingAt: 1)
-            case 2: return Self.mrPageJSON(count: 5, startingAt: 101)
-            default: return "[]"
+    @Test func gitLabProviderFollowsCursorUntilLastPage() async throws {
+        let runner = CursorRunner { cursor in
+            switch cursor {
+            case nil: return Self.mergeRequestsPageJSON(number: 1, nextCursor: "c1")
+            case "c1": return Self.mergeRequestsPageJSON(number: 2, nextCursor: nil)
+            default: return Self.mergeRequestsPageJSON(number: 99, nextCursor: nil)
             }
         }
         let provider = GitLabCLIProvider(runner: runner)
         let refs = try await provider.mergedReviewRequests(
             remote: Self.gitlabRemote,
-            limit: 1000,
+            headBranches: ["feature/1", "feature/2"],
             cwd: URL(fileURLWithPath: "/tmp")
         )
-        #expect(refs.count == 105)
-        #expect(refs.last?.number == 105)
-        let invocations = await runner.invocations
-        #expect(invocations.count == 2)   // stops at the short second page
-    }
-
-    @Test func gitLabProviderStopsAtTheRequestedLimitAcrossPages() async throws {
-        let runner = PagedRunner { page in
-            Self.mrPageJSON(count: 100, startingAt: (page - 1) * 100 + 1)
-        }
-        let provider = GitLabCLIProvider(runner: runner)
-        let refs = try await provider.mergedReviewRequests(
-            remote: Self.gitlabRemote,
-            limit: 150,
-            cwd: URL(fileURLWithPath: "/tmp")
-        )
-        #expect(refs.count == 150)
-        let invocations = await runner.invocations
-        #expect(invocations.count == 2)   // two full pages reach 200 >= 150
+        #expect(refs.map(\.number) == [1, 2])
+        #expect(await runner.cursors == [nil, "c1"])
     }
 }
 
-/// Returns a page of canned JSON keyed off the `--page` argument, so tests
-/// can exercise `GitLabCLIProvider`'s own pagination loop without a network.
-private actor PagedRunner: CodeHostCommandRunning {
-    struct Invocation: Sendable {
-        let executable: String
-        let args: [String]
+private struct GraphQLBody: Decodable {
+    let query: String
+    let variables: [String: String]
+}
+
+/// Answers GitLab GraphQL requests by the `after` cursor in the request body,
+/// so tests exercise `GitLabCLIProvider`'s own paging loop without a network.
+private actor CursorRunner: CodeHostCommandRunning {
+    private struct Body: Decodable {
+        struct Variables: Decodable { let after: String? }
+        let variables: Variables
     }
 
-    private(set) var invocations: [Invocation] = []
-    private let responseForPage: @Sendable (Int) -> String
+    private(set) var cursors: [String?] = []
+    private let responseForCursor: @Sendable (String?) -> String
 
-    init(responseForPage: @escaping @Sendable (Int) -> String) {
-        self.responseForPage = responseForPage
+    init(responseForCursor: @escaping @Sendable (String?) -> String) {
+        self.responseForCursor = responseForCursor
     }
 
     func run(
@@ -255,19 +289,39 @@ private actor PagedRunner: CodeHostCommandRunning {
         cwd: URL?,
         stdin: String?
     ) async throws -> ProcessResult {
-        invocations.append(Invocation(executable: executable, args: args))
-        let page: Int
-        if let pageIndex = args.firstIndex(of: "--page"), args.indices.contains(pageIndex + 1) {
-            page = Int(args[pageIndex + 1]) ?? 1
-        } else {
-            page = 1
-        }
-        return ProcessResult(exitCode: 0, stdout: responseForPage(page), stderr: "")
+        let cursor = try JSONDecoder().decode(Body.self, from: Data((stdin ?? "").utf8)).variables.after
+        cursors.append(cursor)
+        return ProcessResult(exitCode: 0, stdout: responseForCursor(cursor), stderr: "")
     }
 
     func runData(_ executable: String, args: [String], cwd: URL?) async throws -> ProcessResultData {
-        invocations.append(Invocation(executable: executable, args: args))
-        return ProcessResultData(exitCode: 0, stdout: Data(), stderr: "")
+        ProcessResultData(exitCode: 0, stdout: Data(), stderr: "")
+    }
+}
+
+/// Answers GitHub GraphQL requests from their decoded body, so tests can
+/// respond per alias and per page cursor.
+private actor GitHubGraphQLRunner: CodeHostCommandRunning {
+    private(set) var requests: [GraphQLBody] = []
+    private let respond: @Sendable (GraphQLBody) -> String
+
+    init(respond: @escaping @Sendable (GraphQLBody) -> String) {
+        self.respond = respond
+    }
+
+    func run(
+        _ executable: String,
+        args: [String],
+        cwd: URL?,
+        stdin: String?
+    ) async throws -> ProcessResult {
+        let body = try JSONDecoder().decode(GraphQLBody.self, from: Data((stdin ?? "").utf8))
+        requests.append(body)
+        return ProcessResult(exitCode: 0, stdout: respond(body), stderr: "")
+    }
+
+    func runData(_ executable: String, args: [String], cwd: URL?) async throws -> ProcessResultData {
+        ProcessResultData(exitCode: 0, stdout: Data(), stderr: "")
     }
 }
 
@@ -275,6 +329,7 @@ private actor RecordingRunner: CodeHostCommandRunning {
     struct Invocation: Sendable {
         let executable: String
         let args: [String]
+        let stdin: String?
     }
 
     private(set) var invocations: [Invocation] = []
@@ -294,12 +349,12 @@ private actor RecordingRunner: CodeHostCommandRunning {
         cwd: URL?,
         stdin: String?
     ) async throws -> ProcessResult {
-        invocations.append(Invocation(executable: executable, args: args))
+        invocations.append(Invocation(executable: executable, args: args, stdin: stdin))
         return ProcessResult(exitCode: exitCode, stdout: stdout, stderr: stderr)
     }
 
     func runData(_ executable: String, args: [String], cwd: URL?) async throws -> ProcessResultData {
-        invocations.append(Invocation(executable: executable, args: args))
+        invocations.append(Invocation(executable: executable, args: args, stdin: nil))
         return ProcessResultData(exitCode: exitCode, stdout: Data(stdout.utf8), stderr: stderr)
     }
 }
