@@ -5860,10 +5860,11 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(try store.loadSession(id: session.id)?.contextRecoveryPending == false)
     }
 
-    @Test("missing remote id falls back to session/new without warning for empty session")
-    func missingRemoteIdFallsBackToNewWithoutWarningForEmptySession() async throws {
+    @Test("missing remote id falls back to session/new without warning for empty session", arguments: [false, true])
+    func missingRemoteIdFallsBackToNewWithoutWarningForEmptySession(recoveryPending: Bool) async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
         try store.upsertSession(row(remoteSessionId: nil))
+        try store.setContextRecoveryPending(sessionId: "local", pending: recoveryPending)
         let client = ACPMockClient()
         scriptInitialize(client)
         scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
@@ -5871,12 +5872,16 @@ struct ACPSessionManagerAttachRestoreTests {
 
         let session = try #require(manager.placeholderSession(id: "local"))
         await manager.hydrateIfNeeded(id: "local")
+        #expect(session.contextRestoreWarning == nil)
+        #expect(session.contextRecoveryStatus == nil)
         await manager.attach(to: session.id, freshlyCreated: false)
 
         let methods = client.sent.map(\.method)
         #expect(methods == ["initialize", "session/new"])
         #expect(session.remoteSessionId == "remote-new")
         #expect(session.contextRestoreWarning == nil)
+        #expect(session.contextRecoveryStatus == nil)
+        await manager.flushAllPersistence()
         let row = try #require(try store.loadSession(id: "local"))
         #expect(row.remoteSessionId == "remote-new")
         #expect(!row.contextRecoveryPending)
@@ -5957,12 +5962,8 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(try store.loadSession(id: "local")?.contextRecoveryPending == false)
     }
 
-    @Test("session/load -32602 surfaces the agent's own message instead of a generic one")
-    func loadInvalidParamsSurfacesReadableMessage() async throws {
-        // OpenCode v2 returns -32602 from session/load when `cwd` no longer
-        // matches the session's stored directory. No local transcript means
-        // there is nothing to auto-resend, so the warning this sets is not
-        // immediately cleared and can be asserted directly.
+    @Test("session/load failure does not warn when there is no context to restore")
+    func loadFailureDoesNotWarnForEmptySession() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
         try store.upsertSession(row(remoteSessionId: "remote-old"))
         try store.setContextRecoveryPending(sessionId: "local", pending: true)
@@ -5981,7 +5982,10 @@ struct ACPSessionManagerAttachRestoreTests {
         try await waitUntil {
             client.sent.map(\.method) == ["initialize", "session/load", "session/new"]
         }
-        #expect(session.contextRestoreWarning?.message.contains("cwd mismatch") == true)
+        #expect(session.contextRestoreWarning == nil)
+        #expect(session.contextRecoveryStatus == nil)
+        await manager.flushAllPersistence()
+        #expect(try store.loadSession(id: session.id)?.contextRecoveryPending == false)
     }
 
     @Test("attach retry clears stale warning before setup failure")

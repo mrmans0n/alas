@@ -2789,11 +2789,11 @@ public final class ACPSessionManager: ChangeTracking {
             // permanently disable the "Send transcript" action — the
             // warning is set once and never recomputed after backfill.
             let canSendTranscript = Self.wireMessagesHaveConversation(result.wireMessages)
-            session.contextRestoreWarning = .init(
-                message: "Agent context could not be restored.",
-                canSendTranscript: canSendTranscript
-            )
             if canSendTranscript {
+                session.contextRestoreWarning = .init(
+                    message: "Agent context could not be restored.",
+                    canSendTranscript: true
+                )
                 session.contextRecoveryStatus = .sendingTranscript
             }
         }
@@ -7398,8 +7398,7 @@ extension ACPSessionManager {
             var createdFreshRemoteSession = false
             let result: ACPSessionNewResult
             var restoreWarning: ACPSession.ContextRestoreWarning?
-            let hasRestorableContext = pendingRecovery
-                || (!hasPendingForkContext && session.hasConversationTranscript)
+            let hasRestorableContext = !hasPendingForkContext && session.hasConversationTranscript
             var shouldHoldQueueForRecovery = pendingRecovery
                 && !hasPendingForkContext
                 && session.hasConversationTranscript
@@ -7777,7 +7776,7 @@ extension ACPSessionManager {
                     session.contextRecoveryStatus = .sendingTranscript
                 }
             }
-            if restoreWarning == nil, pendingRecovery {
+            if restoreWarning == nil, pendingRecovery, hasRestorableContext {
                 restoreWarning = .init(
                     message: "Agent context could not be restored.",
                     canSendTranscript: session.hasConversationTranscript
@@ -8019,6 +8018,10 @@ extension ACPSessionManager {
                 if !isDisposed { beginMirroring(sessionId: sessionId) }
                 await releaseWriterLease(sessionId: sessionId, attempt: attempt)
                 return
+            }
+            if pendingRecovery, !hasRestorableContext {
+                // Replacing an empty remote session needs no context transfer.
+                persistContextRecoveryPending(sessionId: sessionId, pending: false)
             }
             let localModelAfterRemoteIdPersist = session.currentModel
             connection.acknowledgeDurableSessionResponses()
