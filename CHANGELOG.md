@@ -6,21 +6,37 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.21.10] - 2026-10-21
+
 ### ✨ Features
 
-- Turn a commit tab into its review session in place when pressing "Review This Commit", reusing the diff already loaded instead of opening a new tab and reloading it.
-- Choose the microphone chat dictation records from, in Settings → Chat or from the mic button's right-click menu. Falls back to the system default, with a notice, when the chosen microphone isn't connected.
+- Relay PR creation and status requests from SSH-hosted sessions so remote agents can open and shepherd reviews (#2142).
+- Show a one-time, hand-curated What's New card after stable updates, with optional media, actions, and additional highlights (#2149).
+- Configure the PR shepherd's fix-attempt limit globally or per PR, and resume escalated reviews by raising it (#2147).
+- Give project icon squircles preset or custom gradient backgrounds, with safe fallback to their solid color (#2148).
+- Choose the microphone chat dictation records from in Settings or the mic button's context menu, with fallback when it is disconnected (#2146).
+- Add animated lovebird poses for new chats, connection waits, and usage-limit banners (#2145).
+- Animate a lovebird on the empty tab view (#2141).
+- Show gg landing progress in the source worktree's sidebar and make waiting, cancellation, failures, merged entries, and queued entries clearer (#2136).
+- Guide compatible agents toward `visual_show` with concrete triggers for diagrams and visual explanations (#2137).
+- Turn a commit tab into its review session in place, reusing the diff that is already loaded (#2134).
+- Render goal changes as structured transcript cards (#2133).
 
-### Changed
+### 🐛 Fixes
 
-- Show gg landing progress in the source worktree's sidebar subtitle, with a shortcut back to landing details. Restyle the landing pane to match gg inbox, use Alas spinners, and distinguish waiting, cancellation, failures, merged entries, and queued entries.
+- Treat GitLab entries already on the merge train as queued in landing counts, status, and rows instead of completed merges (#2136).
+- Hide HTML comment metadata in review cards while preserving code literals, quotes, and Markdown structure (#2140).
+- Show bulk conflict-resolution results as in-app notifications instead of inline Changes-tab messages (#2143).
+- Keep Prepare available on clean GG stacks, with manual Sync and Review actions and clearer unpublished-commit status (#2138).
 
-### Fixed
+### 🏗️ Internal
 
-- Treat GitLab entries already on the merge train as queued in landing counts, status, and rows rather than showing them as completed merges.
-- Hide HTML comment metadata in review cards while preserving the original bodies, code literals, and quote structure. Keep inline-code spans and unfinished comments within their rendered Markdown block or table cell.
-- Show bulk conflict-resolution results as in-app notifications instead of inline Changes-tab messages.
-- Keep Prepare visible on clean GG stacks with manual Sync and Review actions, compact sync status, and commit controls only when there are local changes or a draft. Treat unpublished commits as unsynced, not as a remote-status outage.
+- Split agent infrastructure into `AlasACP`, `AlasSessions`, `AlasAgentKit`, and a smaller `AlasAgents` module to reduce release-build memory (#2152).
+- Split integrations, issues, projects, and shepherding out of `AlasFeatures` into `AlasIntegrations` (#2151).
+- Split AlasCore into seven layered SwiftPM module targets with dependency-boundary CI (#2144).
+- Show review sessions before their diffs finish loading (#2139).
+- Move misplaced AlasCore types into their owning layers (#2135).
+- Move host extensions from feature folders into Core (#2132).
 
 ## [0.21.9] - 2026-10-20
 
