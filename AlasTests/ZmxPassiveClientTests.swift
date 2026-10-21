@@ -191,19 +191,22 @@ import Testing
     /// another Alas sharing the directory may be using it.
     @Test func migrationDoesNothingWhileTheBundledZmxIsPreFreeze() throws {
         let daemon = try ZmxFakeDaemonListener(script: .reply(zmxInfoReply(wire: .preFreeze)))
+        defer { daemon.tearDown() }
+        let probed = ZmxEventLog<String>()
         let result = ZmxPreFreezeMigration.run(
             directory: URL(fileURLWithPath: daemon.directory),
             bundledWire: .preFreeze,
+            probe: { path in
+                probed.append(path)
+                return ZmxIPCSocket.probe(path: path)
+            },
             kill: { _ in true },
             signal: { _, _ in },
             isAlive: { _ in false }
         )
         #expect(result == ZmxPreFreezeMigration.Result())
+        #expect(probed.all.isEmpty)
         #expect(FileManager.default.fileExists(atPath: daemon.path))
-        // Nothing connected: tearing down unblocks the accept, and the
-        // listener reports no connection at all.
-        daemon.tearDown()
-        #expect(daemon.receivedPerConnection.isEmpty)
     }
 
     /// Recovering one pane re-runs the migration for its socket alone.
