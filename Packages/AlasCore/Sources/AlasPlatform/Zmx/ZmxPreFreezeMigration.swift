@@ -176,8 +176,15 @@ public enum ZmxPreFreezeMigration {
             }
             return true
         }
+        // Once the probed socket has left the path, the old daemon has too,
+        // and whatever is bound there now is a fresh session, such as one
+        // another Alas started: `Kill` would reach and stop it instead.
+        guard socketIdentity(path) == identity else { return .restarted }
         let hungUp = kill(path)
-        if !hungUp { signal(pid, SIGTERM) }
+        if !hungUp {
+            guard socketIdentity(path) == identity else { return .restarted }
+            signal(pid, SIGTERM)
+        }
         var exited = exits(within: exitTimeout)
         if !exited, hungUp {
             signal(pid, SIGTERM)

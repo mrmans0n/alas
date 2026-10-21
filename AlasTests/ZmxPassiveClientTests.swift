@@ -306,30 +306,43 @@ import Testing
 
     /// Another Alas may start a fresh daemon under the same name once the
     /// old one left its socket. That socket is not the one probed: it stays
-    /// bound, and the old session counts as restarted.
-    @Test func migrationLeavesASocketReboundDuringTheStop() throws {
+    /// bound, and the old session counts as restarted. Rebound before the
+    /// stop, it never gets the `Kill` or a signal meant for the old daemon.
+    @Test(arguments: [true, false])
+    func migrationLeavesASocketReboundDuringTheStop(reboundBeforeKill: Bool) throws {
         let daemon = try ZmxFakeDaemonListener(name: "alas-s", scripts: [.silent])
         defer { daemon.tearDown() }
         let replacements = ZmxEventLog<ZmxFakeDaemonListener>()
         defer { replacements.all.forEach { $0.tearDown() } }
+        let rebind: @Sendable (String) -> Void = { path in
+            _ = unlink(path)
+            if let fresh = try? ZmxFakeDaemonListener(
+                directory: (path as NSString).deletingLastPathComponent, name: "alas-s", scripts: [.silent]) {
+                replacements.append(fresh)
+            }
+        }
+        let killed = ZmxEventLog<String>()
+        let signalled = ZmxEventLog<Int32>()
         let result = ZmxPreFreezeMigration.run(
             directory: URL(fileURLWithPath: daemon.directory),
             sessionPrefix: "",
             bundledWire: .v1,
-            probe: { _ in .preFreeze(pid: 4242) },
+            probe: { path in
+                if reboundBeforeKill { rebind(path) }
+                return .preFreeze(pid: 4242)
+            },
             kill: { path in
-                _ = unlink(path)
-                if let fresh = try? ZmxFakeDaemonListener(
-                    directory: (path as NSString).deletingLastPathComponent, name: "alas-s", scripts: [.silent]) {
-                    replacements.append(fresh)
-                }
+                killed.append(path)
+                if !reboundBeforeKill { rebind(path) }
                 return true
             },
-            signal: { _, _ in },
+            signal: { _, signal in signalled.append(signal) },
             isAlive: { _ in false }
         )
         #expect(replacements.all.count == 1)
         #expect(FileManager.default.fileExists(atPath: daemon.path))
+        #expect(killed.all.count == (reboundBeforeKill ? 0 : 1))
+        #expect(signalled.all.isEmpty)
         #expect(result == ZmxPreFreezeMigration.Result(restarted: ["alas-s"]))
     }
 
