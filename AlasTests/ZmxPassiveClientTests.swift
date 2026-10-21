@@ -6,22 +6,27 @@ import Testing
 @Suite struct ZmxPassiveClientTests {
     // MARK: Codec
 
-    @Test func tagValuesAndHeaderLayoutAreFrozen() {
+    @Test func tagValuesAreFrozen() {
         let tags: [(ZmxIPC.Tag, UInt8)] = [
-            (.input, 0), (.output, 1), (.resize, 2), (.initialize, 7), (.send, 18), (.capture, 22),
+            (.input, 0), (.output, 1), (.resize, 2), (.kill, 5), (.info, 6), (.initialize, 7),
+            (.send, 18), (.capture, 22), (.unsupported, 255),
         ]
         for (tag, raw) in tags { #expect(tag.rawValue == raw) }
-
-        let frame = ZmxIPC.encode(.send, Data(repeating: 0x41, count: 0x0102_03))
-        #expect(Array(frame.prefix(8)) == [18, 0x03, 0x02, 0x01, 0x00, 0, 0, 0])
-        #expect(frame.count == 8 + 0x0102_03)
-
-        #expect(Array(ZmxIPC.captureRequest(scrollbackRows: 0x0A0B_0C0D))
-            == [22, 8, 0, 0, 0, 0, 0, 0, 1, 0x0D, 0x0C, 0x0B, 0x0A, 0, 0, 0])
     }
 
-    @Test(arguments: [1, 3, 7, 8, 9, 64])
-    func decoderReassemblesFramesAcrossArbitraryReads(chunkSize: Int) throws {
+    @Test func headerAndCaptureLayoutsMatchEachWire() {
+        let payload = Data(repeating: 0x41, count: 0x0102_03)
+        #expect(Array(ZmxIPC.encode(.send, payload, wire: .preFreeze).prefix(8)) == [18, 0x03, 0x02, 0x01, 0x00, 0, 0, 0])
+        #expect(Array(ZmxIPC.encode(.send, payload, wire: .v1).prefix(8)) == [18, 1, 0, 0, 0x03, 0x02, 0x01, 0x00])
+        #expect(Array(ZmxIPC.captureRequest(scrollbackRows: 0x0A0B_0C0D, wire: .preFreeze))
+            == [22, 8, 0, 0, 0, 0, 0, 0, 1, 0x0D, 0x0C, 0x0B, 0x0A, 0, 0, 0])
+        #expect(Array(ZmxIPC.captureRequest(scrollbackRows: 0x0A0B_0C0D, wire: .v1))
+            == [22, 1, 0, 0, 8, 0, 0, 0, 1, 0, 0, 0, 0x0D, 0x0C, 0x0B, 0x0A])
+        #expect(Array(ZmxIPC.encode(.kill, wire: .preFreeze)) == [5, 0, 0, 0, 0, 0, 0, 0])
+    }
+
+    @Test(arguments: [ZmxIPC.Wire.preFreeze, .v1], [1, 3, 7, 8, 9, 64])
+    func decoderReassemblesFramesAcrossArbitraryReads(wire: ZmxIPC.Wire, chunkSize: Int) throws {
         let expected = [
             ZmxFrame(tag: 1, payload: Data("hello".utf8)),
             ZmxFrame(tag: 99, payload: Data([1, 2, 3])),
@@ -29,11 +34,11 @@ import Testing
             ZmxFrame(tag: 1, payload: Data(repeating: 0xFF, count: 300)),
         ]
         let stream = expected.reduce(into: Data()) { data, frame in
-            var header = ZmxIPC.encode(.output, frame.payload)
+            var header = ZmxIPC.encode(.output, frame.payload, wire: wire)
             header[0] = frame.tag
             data.append(header)
         }
-        var decoder = ZmxFrameDecoder()
+        var decoder = ZmxFrameDecoder(wire: wire)
         var frames: [ZmxFrame] = []
         var offset = 0
         while offset < stream.count {
@@ -46,13 +51,105 @@ import Testing
         #expect(decoder.bufferedByteCount == 0)
     }
 
-    @Test(arguments: [UInt32(1025), UInt32.max])
-    func decoderRejectsOversizedPayloadFromHeaderAlone(declared: UInt32) {
-        var decoder = ZmxFrameDecoder(maxPayloadLength: 1024)
-        let header: [UInt8] = [1] + withUnsafeBytes(of: declared.littleEndian, Array.init) + [0, 0, 0]
+    @Test(arguments: [ZmxIPC.Wire.preFreeze, .v1], [UInt32(1025), UInt32.max])
+    func decoderRejectsOversizedPayloadFromHeaderAlone(wire: ZmxIPC.Wire, declared: UInt32) {
+        var decoder = ZmxFrameDecoder(wire: wire, maxPayloadLength: 1024)
+        var header = ZmxIPC.encode(.output, wire: wire)
+        let offset = wire == .v1 ? 4 : 1
+        header.replaceSubrange(offset..<(offset + 4), with: withUnsafeBytes(of: declared.littleEndian, Array.init))
         #expect(throws: ZmxFrameDecoder.Failure.payloadTooLarge(declared: declared)) {
             _ = try decoder.push(header)
         }
+    }
+
+    @Test func v1DecoderRejectsAFrameFromAnotherProtocolVersion() {
+        var decoder = ZmxFrameDecoder(wire: .v1)
+        #expect(throws: ZmxFrameDecoder.Failure.unsupportedVersion(0x28)) {
+            _ = try decoder.push(ZmxIPC.encode(.output, Data(repeating: 0, count: 0x28), wire: .preFreeze))
+        }
+    }
+
+    @Test(arguments: [ZmxIPC.Wire.preFreeze, .v1])
+    func probeReplyClassifiesTheCapturedInfoHeaders(wire: ZmxIPC.Wire) {
+        let reply = zmxInfoReply(wire: wire)
+        let expected = zmxInfoStatus(wire)
+        let output = ZmxIPC.encode(.output, Data(repeating: 0x41, count: 600), wire: wire)
+        #expect(ZmxIPC.classifyProbeReply(reply.prefix(300)) == nil)
+        #expect(ZmxIPC.classifyProbeReply(output) == nil)
+        #expect(ZmxIPC.classifyProbeReply(reply) == expected)
+        #expect(ZmxIPC.classifyProbeReply(output + reply) == expected)
+        // Neither wire can frame a v1 header with another version byte and
+        // a pre-freeze length above the payload ceiling.
+        let unframeable: [UInt8] = [1, 0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0]
+        #expect(ZmxIPC.classifyProbeReply(unframeable) == .unreachable)
+        #expect(Array(ZmxIPC.versionProbe) == [6, 1, 0, 0, 0, 0, 0, 0, 0])
+    }
+
+    /// A pre-freeze verdict kills the daemon, so an `Info` counts only once
+    /// the other wire's decoder has thrown.
+    @Test func probeReplyNamesAWireOnlyOnceTheOtherIsRuledOut() {
+        // Pre-freeze reads an empty v1 frame as a one-byte frame and is only
+        // ruled out inside the v1 `Info` header that follows.
+        let emptyOutput = ZmxIPC.encode(.output, Data(), wire: .v1)
+        #expect(ZmxIPC.classifyProbeReply(emptyOutput + zmxInfoReply(wire: .v1)) == zmxInfoStatus(.v1))
+        #expect(ZmxIPC.classifyProbeReply(zmxAmbiguousInfoReply()) == nil)
+    }
+
+    // MARK: Probe
+
+    /// Whole or 7-byte chunks, each with and without a broadcast `Output`
+    /// frame ahead of the `Info` reply (zmx broadcasts to un-`Init`ed clients).
+    @Test(arguments: [ZmxIPC.Wire.preFreeze, .v1], [
+        (chunkSize: Int.max, precededByOutput: false),
+        (chunkSize: 7, precededByOutput: false),
+        (chunkSize: Int.max, precededByOutput: true),
+        (chunkSize: 7, precededByOutput: true),
+    ])
+    func probeClassifiesEachDaemonFromItsInfoReply(wire: ZmxIPC.Wire, shape: (chunkSize: Int, precededByOutput: Bool)) throws {
+        let info = zmxInfoReply(wire: wire)
+        let reply = shape.precededByOutput
+            ? ZmxIPC.encode(.output, Data(repeating: 0x41, count: 600), wire: wire) + info
+            : info
+        let daemon = try ZmxFakeDaemonListener(
+            script: shape.chunkSize == Int.max ? .reply(reply) : .replyInChunks(reply, size: shape.chunkSize))
+        defer { daemon.tearDown() }
+        // Paced chunks take a while to arrive; the deadline is not under test.
+        #expect(ZmxIPCSocket.probe(path: daemon.path, timeout: .seconds(5)) == zmxInfoStatus(wire))
+        #expect(daemon.received == ZmxIPC.versionProbe)
+    }
+
+    @Test func probeReportsUnreachableWithinItsTimeout() throws {
+        let silent = try ZmxFakeDaemonListener(script: .silent)
+        defer { silent.tearDown() }
+        let ambiguous = try ZmxFakeDaemonListener(script: .reply(zmxAmbiguousInfoReply()))
+        defer { ambiguous.tearDown() }
+        for path in ["/tmp/zmxt-missing/s", silent.path, ambiguous.path] {
+            let clock = ContinuousClock()
+            let start = clock.now
+            let status = ZmxIPCSocket.probe(path: path, timeout: .milliseconds(200))
+            #expect(status == .unreachable)
+            #expect(clock.now - start < .seconds(2))
+        }
+    }
+
+    @Test func preFreezeKillSendsTheOldFrameAndWaitsForHangup() throws {
+        let closing = try ZmxFakeDaemonListener(script: .closeAfterReceiving(count: 8))
+        defer { closing.tearDown() }
+        #expect(ZmxIPCSocket.killPreFreeze(path: closing.path))
+        #expect(closing.received == Data([5, 0, 0, 0, 0, 0, 0, 0]))
+
+        let silent = try ZmxFakeDaemonListener(script: .silent)
+        defer { silent.tearDown() }
+        #expect(!ZmxIPCSocket.killPreFreeze(path: silent.path, timeout: .milliseconds(200)))
+
+        // A daemon that keeps broadcasting output while its shutdown stalls
+        // (~2 s of 64-byte chunks) must not hold the kill past its deadline.
+        let chatty = try ZmxFakeDaemonListener(script: .replyInChunks(Data(repeating: 0x41, count: 64 * 1000), size: 64))
+        defer { chatty.tearDown() }
+        let clock = ContinuousClock()
+        let start = clock.now
+        #expect(!ZmxIPCSocket.killPreFreeze(path: chatty.path, timeout: .milliseconds(200)))
+        #expect(clock.now - start < .seconds(1))
     }
 
     // MARK: Snapshot ordering
@@ -76,27 +173,31 @@ import Testing
 
     // MARK: Passive client over a socket pair
 
-    @Test func passiveAttachCapturesFirstAndOrdersStreamAroundTheSnapshot() async throws {
+    @Test(arguments: [ZmxIPC.Wire.preFreeze, .v1])
+    func passiveAttachCapturesFirstAndOrdersStreamAroundTheSnapshot(wire: ZmxIPC.Wire) async throws {
         let pair = try ZmxSocketPair()
         let events = EventLog()
-        let client = ZmxPassiveClient(socket: ZmxIPCSocket(fd: pair.client), scrollbackRows: 500) {
-            events.append($0)
-        }
+        let client = ZmxPassiveClient(
+            socket: ZmxIPCSocket(fd: pair.client),
+            probe: { probeStatus(wire) },
+            scrollbackRows: 500
+        ) { events.append($0) }
         client.start()
 
-        // The only bytes a passive attach writes are one Capture request.
-        var daemon = ZmxFrameDecoder()
+        // The only bytes a passive attach writes are one Capture request,
+        // encoded for the probed wire.
+        var daemon = ZmxFrameDecoder(wire: wire)
         let request = try pair.readFrames(&daemon, count: 1)
-        #expect(request == [ZmxFrame(tag: 22, payload: ZmxIPC.captureRequest(scrollbackRows: 500).dropFirst(8))])
+        #expect(request == [ZmxFrame(tag: 22, payload: ZmxIPC.captureRequest(scrollbackRows: 500, wire: wire).dropFirst(8))])
 
-        pair.write(ZmxIPC.encode(.output, Data("before".utf8)))
-        pair.write(ZmxIPC.encode(.capture, Data("snapshot".utf8)) + ZmxIPC.encode(.output, Data("after".utf8)))
+        pair.write(ZmxIPC.encode(.output, Data("before".utf8), wire: wire))
+        pair.write(ZmxIPC.encode(.capture, Data("snapshot".utf8), wire: wire) + ZmxIPC.encode(.output, Data("after".utf8), wire: wire))
         try await eventually("snapshot and live output") { events.all.count == 2 }
 
         #expect(client.requestResync())
         #expect(!client.requestResync())
         #expect(try pair.readFrames(&daemon, count: 1).map(\.tag) == [22])
-        pair.write(ZmxIPC.encode(.output, Data("dropped".utf8)) + ZmxIPC.encode(.capture, Data("again".utf8)))
+        pair.write(ZmxIPC.encode(.output, Data("dropped".utf8), wire: wire) + ZmxIPC.encode(.capture, Data("again".utf8), wire: wire))
 
         #expect(client.send(Data("ls\r".utf8)))
         #expect(try pair.readFrames(&daemon, count: 1) == [ZmxFrame(tag: 18, payload: Data("ls\r".utf8))])
@@ -111,16 +212,18 @@ import Testing
         ])
     }
 
-    @Test func daemonThatIgnoresCaptureIsReportedUnsupported() async throws {
+    @Test(arguments: [ZmxIPC.Wire.preFreeze, .v1])
+    func daemonThatIgnoresCaptureIsReportedUnsupported(wire: ZmxIPC.Wire) async throws {
         let pair = try ZmxSocketPair()
         let events = EventLog()
         let client = ZmxPassiveClient(
             socket: ZmxIPCSocket(fd: pair.client),
+            probe: { probeStatus(wire) },
             scrollbackRows: 0,
             captureTimeout: .milliseconds(50)
         ) { events.append($0) }
         client.start()
-        pair.write(ZmxIPC.encode(.output, Data("ignored".utf8)))
+        pair.write(ZmxIPC.encode(.output, Data("ignored".utf8), wire: wire))
         try await eventually("capture deadline") { !events.all.isEmpty }
         #expect(events.all == [.closed(.captureUnsupported)])
         #expect(!client.send(Data("x".utf8)))
@@ -129,18 +232,40 @@ import Testing
     @Test func oversizedFrameDetachesAsOverflow() async throws {
         let pair = try ZmxSocketPair()
         let events = EventLog()
-        let client = ZmxPassiveClient(socket: ZmxIPCSocket(fd: pair.client), scrollbackRows: 0) {
-            events.append($0)
-        }
+        let client = ZmxPassiveClient(
+            socket: ZmxIPCSocket(fd: pair.client),
+            probe: { .preFreeze(pid: 1) },
+            scrollbackRows: 0
+        ) { events.append($0) }
         client.start()
         pair.write(Data([1, 0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0]))
         try await eventually("overflow") { !events.all.isEmpty }
         #expect(events.all == [.closed(.overflow)])
     }
 
+    @Test func unreachableProbeClosesWithoutSendingAnything() async throws {
+        let pair = try ZmxSocketPair()
+        let events = EventLog()
+        let client = ZmxPassiveClient(
+            socket: ZmxIPCSocket(fd: pair.client),
+            probe: { .unreachable },
+            scrollbackRows: 0
+        ) { events.append($0) }
+        client.start()
+        try await eventually("closed") { !events.all.isEmpty }
+        #expect(events.all == [.closed(.unreachable)])
+        #expect(try pair.readUntilEOF().isEmpty)
+        #expect(!client.requestResync())
+        #expect(!client.send(Data("x".utf8)))
+    }
+
     @Test func inputToAStalledDaemonNeverBlocksAndRevokedInputIsDropped() throws {
         let pair = try ZmxSocketPair()
-        let client = ZmxPassiveClient(socket: ZmxIPCSocket(fd: pair.client), scrollbackRows: 0) { _ in }
+        let client = ZmxPassiveClient(
+            socket: ZmxIPCSocket(fd: pair.client),
+            probe: { .preFreeze(pid: 1) },
+            scrollbackRows: 0
+        ) { _ in }
         client.start()
         defer { client.close() }
 
@@ -155,7 +280,7 @@ import Testing
 
         client.discardQueuedInput()
         #expect(client.send(Data("END".utf8)))
-        var decoder = ZmxFrameDecoder()
+        var decoder = ZmxFrameDecoder(wire: .preFreeze)
         var delivered = 0
         var sawEnd = false
         while !sawEnd {
@@ -189,6 +314,141 @@ final class ZmxEventLog<Event: Sendable>: @unchecked Sendable {
 
 private typealias EventLog = ZmxEventLog<ZmxPassiveClient.Event>
 
+private func probeStatus(_ wire: ZmxIPC.Wire) -> ZmxDaemonStatus {
+    wire == .v1 ? .v1(pid: 1) : .preFreeze(pid: 1)
+}
+
+/// The status a probe reports for `zmxInfoReply(wire:)`.
+func zmxInfoStatus(_ wire: ZmxIPC.Wire) -> ZmxDaemonStatus {
+    wire == .v1 ? .v1(pid: 4242) : .preFreeze(pid: 4242)
+}
+
+/// A full `Info` reply for pid 4242: the header captured from a real daemon
+/// of each wire plus a `ZmxIPC.infoPayloadSize` payload.
+func zmxInfoReply(wire: ZmxIPC.Wire) -> Data {
+    let headerHex = wire == .v1 ? "0601000028020000" : "0628020000000000"
+    var payload = Data(count: ZmxIPC.infoPayloadSize)
+    payload.replaceSubrange(8..<12, with: withUnsafeBytes(of: Int32(4242).littleEndian, Array.init))
+    let header = Data(stride(from: 0, to: headerHex.count, by: 2).map { index in
+        let start = headerHex.index(headerHex.startIndex, offsetBy: index)
+        return UInt8(headerHex[start..<headerHex.index(start, offsetBy: 2)], radix: 16)!
+    })
+    return header + payload
+}
+
+/// A v1 `Info` behind a v1 `Output` that the pre-freeze decoder can still
+/// frame: it reads the `Output` header as a one-byte frame, then a 1 MiB
+/// frame header planted in that payload, so it is still waiting for bytes
+/// when the v1 `Info` completes.
+func zmxAmbiguousInfoReply() -> Data {
+    var payload = Data(count: 256)
+    payload.replaceSubrange(1..<9, with: [1, 0, 0, 0x10, 0, 0, 0, 0])
+    return ZmxIPC.encode(.output, payload, wire: .v1) + zmxInfoReply(wire: .v1)
+}
+
+/// Accepts one connection on a Unix socket in a short temp dir, records every
+/// byte until the peer closes, and plays a scripted reply.
+final class ZmxFakeDaemonListener: @unchecked Sendable {
+    enum Script: Sendable {
+        case reply(Data)
+        case silent
+        case replyInChunks(Data, size: Int)
+        case closeAfterReceiving(count: Int)
+    }
+
+    let path: String
+    private let directory: String
+    private let listener: Int32
+    private let lock = NSLock()
+    private var buffer = Data()
+    private let finished = DispatchSemaphore(value: 0)
+
+    init(script: Script) throws {
+        var template = Array("/tmp/zmxt-XXXXXX".utf8CString)
+        guard let dir = template.withUnsafeMutableBufferPointer({ mkdtemp($0.baseAddress) }).map({ String(cString: $0) })
+        else { throw POSIXError(.EIO) }
+        directory = dir
+        path = dir + "/s"
+        listener = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard listener >= 0 else { throw POSIXError(.EIO) }
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: Array(path.utf8)) }
+        let bound = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.bind(listener, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        guard bound == 0, Darwin.listen(listener, 1) == 0 else {
+            Darwin.close(listener)
+            try? FileManager.default.removeItem(atPath: dir)
+            throw POSIXError(.EADDRINUSE)
+        }
+        // A distinct name: Swift 6.2 rejects the closures above if a local
+        // shadows the `listener` property later in this initializer.
+        let listenerFD = listener
+        Thread { [self] in serve(listener: listenerFD, script: script) }.start()
+    }
+
+    /// Everything received, once the peer has closed (or after 5 seconds).
+    var received: Data {
+        _ = finished.wait(timeout: .now() + 5)
+        finished.signal()
+        return lock.withLock { buffer }
+    }
+
+    func tearDown() {
+        Darwin.shutdown(listener, SHUT_RDWR)
+        Darwin.close(listener)
+        try? FileManager.default.removeItem(atPath: directory)
+    }
+
+    private func serve(listener: Int32, script: Script) {
+        defer { finished.signal() }
+        let client = Darwin.accept(listener, nil, nil)
+        guard client >= 0 else { return }
+        defer { Darwin.close(client) }
+        // The code under test may hang up while a reply is still streaming.
+        var on: Int32 = 1
+        setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+        @discardableResult
+        func send(_ data: Data) -> Bool {
+            data.withUnsafeBytes { Darwin.write(client, $0.baseAddress, $0.count) } == data.count
+        }
+        var replied = false
+        var chunk = [UInt8](repeating: 0, count: 4096)
+        while true {
+            let n = Darwin.read(client, &chunk, chunk.count)
+            if n <= 0 { return }
+            let total = lock.withLock { () -> Int in
+                buffer.append(contentsOf: chunk[0..<n])
+                return buffer.count
+            }
+            switch script {
+            case .silent:
+                break
+            case .reply(let data):
+                if !replied {
+                    replied = true
+                    send(data)
+                }
+            case .replyInChunks(let data, let size):
+                if !replied {
+                    replied = true
+                    var offset = 0
+                    while offset < data.count {
+                        guard send(data[offset..<min(offset + size, data.count)]) else { return }
+                        offset += size
+                        usleep(2_000)
+                    }
+                }
+            case .closeAfterReceiving(let count):
+                if total >= count { return }
+            }
+        }
+    }
+}
+
 /// A connected Unix socket pair; `client` is handed to the code under test
 /// and the other end plays the zmx daemon.
 final class ZmxSocketPair: @unchecked Sendable {
@@ -218,6 +478,18 @@ final class ZmxSocketPair: @unchecked Sendable {
             frames += try decoder.push(buffer[0..<n])
         }
         return frames
+    }
+
+    /// Everything the client end wrote until it shut down; throws on timeout.
+    func readUntilEOF() throws -> Data {
+        var received = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while true {
+            let n = Darwin.read(daemon, &buffer, buffer.count)
+            if n == 0 { return received }
+            guard n > 0 else { throw POSIXError(.ETIMEDOUT) }
+            received.append(contentsOf: buffer[0..<n])
+        }
     }
 
     func closeDaemonEnd() {
@@ -328,9 +600,11 @@ private struct PassiveViewer {
     init(path: String) throws {
         let events = ZmxEventLog<ZmxPassiveClient.Event>()
         self.events = events
-        client = ZmxPassiveClient(socket: try ZmxIPCSocket.connect(path: path), scrollbackRows: 0) {
-            events.append($0)
-        }
+        client = ZmxPassiveClient(
+            socket: try ZmxIPCSocket.connect(path: path),
+            probe: { ZmxIPCSocket.probe(path: path) },
+            scrollbackRows: 0
+        ) { events.append($0) }
         client.start()
     }
 
@@ -379,34 +653,43 @@ private struct PassiveViewer {
 }
 
 /// A raw zmx client standing in for a terminal: answers zmx dimension
-/// requests (an empty `Resize`) with its own size.
+/// requests (an empty `Resize`) with its own size. Speaks whichever wire the
+/// bundled daemon answers the probe with.
 private final class ProbeTerminalClient: @unchecked Sendable {
     private let socket: ZmxIPCSocket
+    private let wire: ZmxIPC.Wire
     private let size: Data
     private let requests = ZmxEventLog<Int>()
 
     var dimensionRequests: Int { requests.all.count }
 
     init(path: String, rows: UInt16, cols: UInt16, sendInit: Bool) throws {
+        switch ZmxIPCSocket.probe(path: path) {
+        case .v1: wire = .v1
+        case .preFreeze: wire = .preFreeze
+        case .unreachable:
+            Issue.record("the zmx daemon at \(path) did not answer the wire probe")
+            throw POSIXError(.ECONNREFUSED)
+        }
         socket = try ZmxIPCSocket.connect(path: path)
         size = ZmxIPC.sizePayload(rows: rows, cols: cols)
-        Thread { [socket, size, requests] in
-            var decoder = ZmxFrameDecoder()
+        Thread { [socket, wire, size, requests] in
+            var decoder = ZmxFrameDecoder(wire: wire)
             while let chunk = socket.read(), !chunk.isEmpty {
                 guard let frames = try? decoder.push(chunk) else { return }
                 for frame in frames where frame.knownTag == .resize && frame.payload.isEmpty {
                     requests.append(0)
-                    socket.write(ZmxIPC.encode(.resize, size))
+                    socket.write(ZmxIPC.encode(.resize, size, wire: wire))
                 }
             }
         }.start()
-        if sendInit { socket.write(ZmxIPC.encode(.initialize, size)) }
+        if sendInit { socket.write(ZmxIPC.encode(.initialize, size, wire: wire)) }
     }
 
-    func sendResize() { socket.write(ZmxIPC.encode(.resize, size)) }
+    func sendResize() { socket.write(ZmxIPC.encode(.resize, size, wire: wire)) }
 
     /// A bare CR counts as user input to zmx and claims leadership.
-    func claimWithInput() { socket.write(ZmxIPC.encode(.input, Data("\r".utf8))) }
+    func claimWithInput() { socket.write(ZmxIPC.encode(.input, Data("\r".utf8), wire: wire)) }
 
     func close() { socket.shutdown() }
 }
