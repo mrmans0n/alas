@@ -78,6 +78,9 @@ import Testing
         #expect(ZmxIPC.classifyProbeReply(output) == nil)
         #expect(ZmxIPC.classifyProbeReply(reply) == expected)
         #expect(ZmxIPC.classifyProbeReply(output + reply) == expected)
+        // `clients_len` leads the payload.
+        let busy = 0x0102_0304_0506_0708 as UInt64
+        #expect(ZmxIPC.classifyProbeReply(zmxInfoReply(wire: wire, clients: busy)) == zmxInfoStatus(wire, clients: busy))
         // Neither wire can frame a v1 header with another version byte and
         // a pre-freeze length above the payload ceiling.
         let unframeable: [UInt8] = [1, 0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0]
@@ -156,6 +159,10 @@ import Testing
         defer { preFreeze.tearDown() }
         let silent = try ZmxFakeDaemonListener(directory: directory, name: "c", scripts: [.silent])
         defer { silent.tearDown() }
+        // A pre-freeze daemon another client is attached to: an older Alas.
+        let inUse = try ZmxFakeDaemonListener(
+            directory: directory, name: "e", scripts: [.reply(zmxInfoReply(wire: .preFreeze, clients: 2))])
+        defer { inUse.tearDown() }
         #expect(FileManager.default.createFile(atPath: directory + "/d", contents: Data("log".utf8)))
         try FileManager.default.createDirectory(atPath: directory + "/logs", withIntermediateDirectories: false)
 
@@ -165,14 +172,16 @@ import Testing
             bundledWire: .v1,
             probe: { ZmxIPCSocket.probe(path: $0, timeout: .milliseconds(300)) },
             kill: { ZmxIPCSocket.killPreFreeze(path: $0, timeout: .seconds(2)) },
-            signal: { signalled.append($0) },
+            signal: { pid, _ in signalled.append(pid) },
             isAlive: { _ in false }
         )
 
-        #expect(result == ZmxPreFreezeMigration.Result(restarted: ["b"], failed: []))
+        #expect(result == ZmxPreFreezeMigration.Result(restarted: ["b"], failed: [], inUse: ["e"]))
         #expect(signalled.all.isEmpty)
         #expect(preFreeze.receivedPerConnection == [ZmxIPC.versionProbe, Data([5, 0, 0, 0, 0, 0, 0, 0])])
         #expect(!FileManager.default.fileExists(atPath: preFreeze.path))
+        #expect(inUse.receivedPerConnection == [ZmxIPC.versionProbe])
+        #expect(FileManager.default.fileExists(atPath: inUse.path))
         for name in ["a", "c", "d", "logs"] {
             #expect(FileManager.default.fileExists(atPath: directory + "/" + name), "\(name)")
         }
@@ -186,7 +195,7 @@ import Testing
             directory: URL(fileURLWithPath: daemon.directory),
             bundledWire: .preFreeze,
             kill: { _ in true },
-            signal: { _ in },
+            signal: { _, _ in },
             isAlive: { _ in false }
         )
         #expect(result == ZmxPreFreezeMigration.Result())
@@ -197,29 +206,35 @@ import Testing
         #expect(daemon.receivedPerConnection.isEmpty)
     }
 
-    /// The socket goes only once the daemon has exited; a daemon that never
-    /// exits, or a pid that cannot be watched, leaves it in place.
+    /// The socket goes only once the daemon has exited. A daemon that keeps
+    /// running gets `SIGTERM` (unless the `Kill` fallback already sent it),
+    /// then `SIGKILL`; one that outlives both, or a pid that cannot be
+    /// watched, leaves the socket in place.
     @Test(arguments: [
-        (pid: Int32(4242), exits: true),
-        (pid: Int32(4242), exits: false),
-        (pid: Int32(1), exits: true),
+        (pid: Int32(4242), killHangsUp: false, exitsOn: SIGTERM, signals: [SIGTERM]),
+        (pid: Int32(4242), killHangsUp: false, exitsOn: SIGKILL, signals: [SIGTERM, SIGKILL]),
+        (pid: Int32(4242), killHangsUp: true, exitsOn: SIGKILL, signals: [SIGTERM, SIGKILL]),
+        (pid: Int32(4242), killHangsUp: false, exitsOn: 0, signals: [SIGTERM, SIGKILL]),
+        (pid: Int32(1), killHangsUp: false, exitsOn: SIGTERM, signals: [Int32]()),
     ])
-    func migrationFallsBackToSignallingThePid(daemon shape: (pid: Int32, exits: Bool)) throws {
+    func migrationEscalatesSignalsUntilTheDaemonExits(
+        daemon shape: (pid: Int32, killHangsUp: Bool, exitsOn: Int32, signals: [Int32])
+    ) throws {
         let daemon = try ZmxFakeDaemonListener(script: .silent)
         defer { daemon.tearDown() }
-        let signalled = ZmxEventLog<Int32>()
+        let signalled = ZmxEventLog<[Int32]>()
         let result = ZmxPreFreezeMigration.run(
             directory: URL(fileURLWithPath: daemon.directory),
             bundledWire: .v1,
             probe: { _ in .preFreeze(pid: shape.pid) },
-            kill: { _ in false },
-            signal: { signalled.append($0) },
-            // Exits on the signal, or never.
-            isAlive: { _ in !shape.exits || signalled.all.isEmpty },
+            kill: { _ in shape.killHangsUp },
+            signal: { pid, signal in signalled.append([pid, signal]) },
+            // Exits on `exitsOn`; 0 never comes, so that daemon never exits.
+            isAlive: { _ in !signalled.all.contains { $0.last == shape.exitsOn } },
             exitTimeout: .milliseconds(100)
         )
-        let restarted = shape.pid > 1 && shape.exits
-        #expect(signalled.all == (shape.pid > 1 ? [shape.pid] : []))
+        let restarted = shape.pid > 1 && shape.exitsOn != 0
+        #expect(signalled.all == shape.signals.map { [shape.pid, $0] })
         #expect(FileManager.default.fileExists(atPath: daemon.path) == !restarted)
         #expect(result == (restarted
             ? ZmxPreFreezeMigration.Result(restarted: ["s"], failed: [])
@@ -251,7 +266,7 @@ import Testing
                 killed.append(path)
                 return false
             },
-            signal: { _ in }
+            signal: { _, _ in }
         )
         #expect(clock.now - start < .seconds(1))
         #expect(statuses.all == Array(repeating: .unreachable, count: 8))
@@ -425,16 +440,18 @@ private func probeStatus(_ wire: ZmxIPC.Wire) -> ZmxDaemonStatus {
     wire == .v1 ? .v1(pid: 1) : .preFreeze(pid: 1)
 }
 
-/// The status a probe reports for `zmxInfoReply(wire:)`.
-func zmxInfoStatus(_ wire: ZmxIPC.Wire) -> ZmxDaemonStatus {
-    wire == .v1 ? .v1(pid: 4242) : .preFreeze(pid: 4242)
+/// The status a probe reports for `zmxInfoReply(wire:clients:)`.
+func zmxInfoStatus(_ wire: ZmxIPC.Wire, clients: UInt64 = 0) -> ZmxDaemonStatus {
+    wire == .v1 ? .v1(pid: 4242, clients: clients) : .preFreeze(pid: 4242, clients: clients)
 }
 
-/// A full `Info` reply for pid 4242: the header captured from a real daemon
-/// of each wire plus a `ZmxIPC.infoPayloadSize` payload.
-func zmxInfoReply(wire: ZmxIPC.Wire) -> Data {
+/// A full `Info` reply for pid 4242 with `clients` other clients attached:
+/// the header captured from a real daemon of each wire plus a
+/// `ZmxIPC.infoPayloadSize` payload.
+func zmxInfoReply(wire: ZmxIPC.Wire, clients: UInt64 = 0) -> Data {
     let headerHex = wire == .v1 ? "0601000028020000" : "0628020000000000"
     var payload = Data(count: ZmxIPC.infoPayloadSize)
+    payload.replaceSubrange(0..<8, with: withUnsafeBytes(of: clients.littleEndian, Array.init))
     payload.replaceSubrange(8..<12, with: withUnsafeBytes(of: Int32(4242).littleEndian, Array.init))
     let header = Data(stride(from: 0, to: headerHex.count, by: 2).map { index in
         let start = headerHex.index(headerHex.startIndex, offsetBy: index)

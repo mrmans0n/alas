@@ -111,8 +111,10 @@ public enum ZmxIPC: Sendable {
     /// low length byte, so it answers with a pre-freeze `Info` frame instead.
     public static let versionProbe = Data([Tag.info.rawValue, protocolVersion, 0, 0, 0, 0, 0, 0, 0])
 
-    /// `ipc.Info` is 552 bytes; the daemon pid is an `i32` at payload offset 8.
+    /// `ipc.Info` is 552 bytes: `clients_len` is a `u64` at payload offset 0
+    /// and the daemon pid an `i32` at offset 8.
     public static let infoPayloadSize = 552
+    static let infoClientsOffset = 0
     static let infoPidOffset = 8
 
     /// Classifies a daemon from everything it sent after `versionProbe`.
@@ -136,10 +138,12 @@ public enum ZmxIPC: Sendable {
     }
 }
 
-/// What a probe learned about a session daemon.
+/// What a probe learned about a session daemon. `clients` is the number of
+/// clients attached besides the probe itself: zmx's `Info` reports
+/// `clients.len - 1` for the asking connection.
 public enum ZmxDaemonStatus: Equatable, Sendable {
-    case v1(pid: Int32)
-    case preFreeze(pid: Int32)
+    case v1(pid: Int32, clients: UInt64 = 0)
+    case preFreeze(pid: Int32, clients: UInt64 = 0)
     case unreachable
 }
 
@@ -255,8 +259,11 @@ public struct ZmxProbeReader: Sendable {
             if candidate.status == nil, let info = frames.first(where: {
                 $0.tag == ZmxIPC.Tag.info.rawValue && $0.payload.count == ZmxIPC.infoPayloadSize
             }) {
-                let pid = Self.pid(fromInfo: info.payload)
-                candidate.status = candidate.wire == .v1 ? .v1(pid: pid) : .preFreeze(pid: pid)
+                let pid = Int32(bitPattern: Self.littleEndian(info.payload, at: ZmxIPC.infoPidOffset, as: UInt32.self))
+                let clients = Self.littleEndian(info.payload, at: ZmxIPC.infoClientsOffset, as: UInt64.self)
+                candidate.status = candidate.wire == .v1
+                    ? .v1(pid: pid, clients: clients)
+                    : .preFreeze(pid: pid, clients: clients)
             }
             return candidate
         }
@@ -268,10 +275,11 @@ public struct ZmxProbeReader: Sendable {
         return verdict
     }
 
-    private static func pid(fromInfo payload: Data) -> Int32 {
-        let start = payload.startIndex + ZmxIPC.infoPidOffset
-        let raw = (0..<4).reduce(UInt32(0)) { $0 | UInt32(payload[start + $1]) << (8 * UInt32($1)) }
-        return Int32(bitPattern: raw)
+    private static func littleEndian<Value: FixedWidthInteger & UnsignedInteger>(
+        _ payload: Data, at offset: Int, as _: Value.Type
+    ) -> Value {
+        let start = payload.startIndex + offset
+        return (0..<MemoryLayout<Value>.size).reduce(Value(0)) { $0 | Value(payload[start + $1]) << (8 * $1) }
     }
 }
 
