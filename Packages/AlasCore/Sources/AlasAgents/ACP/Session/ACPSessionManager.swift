@@ -2795,6 +2795,9 @@ public final class ACPSessionManager: ChangeTracking {
                     canSendTranscript: true
                 )
                 session.contextRecoveryStatus = .sendingTranscript
+            } else if isWriter(for: session.id) {
+                // Hydration may finish after attach deferred recovery cleanup.
+                persistContextRecoveryPending(sessionId: session.id, pending: false)
             }
         }
         session.pendingMCPPreamble = result.row.mcpPreamblePending

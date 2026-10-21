@@ -5887,13 +5887,17 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(!row.contextRecoveryPending)
     }
 
-    @Test("attach preserves pending recovery until the transcript is hydrated",
-          arguments: [ACPSession.HydrationState.loading, .failed("Read failed")])
-    func attachPreservesPendingRecoveryUntilTranscriptIsHydrated(hydrationState: ACPSession.HydrationState) async throws {
+    @Test("late hydration retains recovery only when the persisted transcript has context",
+          arguments: [ACPSession.HydrationState.loading, .failed("Read failed")], [false, true])
+    func lateHydrationRetainsRecoveryOnlyWhenPersistedTranscriptHasContext(
+        hydrationState: ACPSession.HydrationState, hasContext: Bool
+    ) async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
         try store.upsertSession(row(remoteSessionId: nil))
         try store.setContextRecoveryPending(sessionId: "local", pending: true)
-        try appendMessage(.user(id: UUID(), text: "Persisted context", attachments: []), to: store, seq: 0)
+        if hasContext {
+            try appendMessage(.user(id: UUID(), text: "Persisted context", attachments: []), to: store, seq: 0)
+        }
         let client = ACPMockClient()
         scriptInitialize(client)
         scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
@@ -5908,8 +5912,15 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(try store.loadSession(id: session.id)?.contextRecoveryPending == true)
         session.hydrationState = .loading
         await manager.hydrateIfNeeded(id: session.id)
-        #expect(session.hasConversationTranscript)
-        #expect(session.contextRestoreWarning?.canSendTranscript == true)
+        #expect(session.hasConversationTranscript == hasContext)
+        if hasContext {
+            #expect(session.contextRestoreWarning?.canSendTranscript == true)
+        } else {
+            #expect(session.contextRestoreWarning == nil)
+            #expect(session.contextRecoveryStatus == nil)
+        }
+        await manager.flushAllPersistence()
+        #expect(try store.loadSession(id: session.id)?.contextRecoveryPending == hasContext)
         await manager.detach(sessionId: session.id)
     }
 
