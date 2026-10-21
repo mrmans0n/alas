@@ -1,6 +1,6 @@
 # Codex hook trust verification for issue #2044
 
-The published adapter and Alas integration were verified against source commit `6e3e6f2947489379ddfa3448118d6fcfcc17913a`. This note records the exact release, live and native results, reproducible procedure, and limits. It does not claim a real-provider smoke test, live SSH run, or green main-Alas CI.
+The published adapter and Alas integration were verified against source commit `564797465c8c60fa079ebb3c43b577c7b51451fa`. This note records the exact release, live and native results, reproducible procedure, and limits. It does not claim a real-provider smoke test, live SSH run, or green main-Alas CI.
 
 ## Negotiated contract
 
@@ -21,13 +21,13 @@ Read-only discovery and deletion do not opt into execution review.
 
 The reviewed downstream change merged as [fork PR #12](https://github.com/mrmans0n/codex-acp/pull/12). The exact published package is [`@alas-ide/codex-acp@2.2.2-alas.4`](https://www.npmjs.com/package/@alas-ide/codex-acp/v/2.2.2-alas.4), based on upstream `2.2.2` at `202e66e63343ec4f5a5e35ab590251d813d129ca`, with published source/gitHead `4b517e7e77ece05ef63f34c890bc853b7fb96a43`.
 
-The [required CI run 39584966318](https://github.com/mrmans0n/codex-acp/actions/runs/39584966318) reports 1,717 unit tests passed and 36 skipped. The [release run 39585698241](https://github.com/mrmans0n/codex-acp/actions/runs/39585698241) completed publication and provenance readback. The npm manifest's immutable tarball integrity is:
+The [required CI run 39584966318](https://github.com/mrmans0n/codex-acp/actions/runs/39584966318) succeeded. The publication job in [release run 39585698241](https://github.com/mrmans0n/codex-acp/actions/runs/39585698241) recorded 1,717 unit tests passed and 36 skipped, then completed publication and provenance readback. The npm manifest's immutable tarball integrity is:
 
 ```text
 sha512-rDd7j8RTJyuVYpW6xr5+0oHCDyId1NzLgPJeYxkUpjAZnyZr+lTOSASLL31ZO5We27fo1nrh1ISr1otNaZLQDw==
 ```
 
-The controller checked source/tag, provenance, and the downloaded tarball's integrity before install; no local checkout build was used. The release workflow's real-provider E2E job was waived because its provider secret was unavailable.
+Verification covered source/tag, provenance, and the downloaded tarball's integrity before install; no local checkout build was used. The release workflow's real-provider E2E job was waived because its provider secret was unavailable.
 
 The adapter's final broad local suite reported four failures: three 5-second sync-review timeouts reproduced on unchanged base, and one ledger invariant later corrected. Focused ledger checks passed after correction; the broad suite was not rerun. Required fork CI and release records above are the CI evidence.
 
@@ -82,17 +82,17 @@ The native selected key was `/<session-flags>/config.toml:session_start:0:0`, wi
 
 After changing the first command and restarting with the same scratch trust home, Alas showed a modified hash `sha256:66f28734fbcdd008674a2f6b12d1e165fba4a4bb710a0bdcbb5429e862e79dcb`, empty selection, and disabled trust. The 1,176-character command remained untrusted; continuing without trust changed no config or marker.
 
-After the Task 3 repair, Details showed the entire long command as selectable wrapped text. Parent continuation without trust restored the top-docked `/btw` card; the child showed its own modified/untrusted scope with empty selection and continued without trust. A fresh `hooks={}` startup completed automatically and kept the card visible. No extra trust was granted; config was unchanged, selected marker count stayed two, unselected stayed zero. No live SSH endpoint was available.
+After the review presentation repair, Details showed the entire long command as selectable wrapped text. Parent continuation without trust restored the top-docked `/btw` card; the child showed its own modified/untrusted scope with empty selection and continued without trust. A fresh `hooks={}` startup completed automatically and kept the card visible. No extra trust was granted; config was unchanged, selected marker count stayed two, unselected stayed zero. No live SSH endpoint was available.
 
 ## Alas validation and limits
 
-The final integrated source commit is `6e3e6f2947489379ddfa3448118d6fcfcc17913a` (`fix(acp): preserve replay authority and review presentation`). Final checks recorded for that source were:
+The final integrated source commit is `564797465c8c60fa079ebb3c43b577c7b51451fa` (`fix(acp): preserve success after delayed review rejection`). Final checks recorded for that source were:
 
 | Area | Command | Result |
 | --- | --- | --- |
-| Core | `rtk swift test --package-path Packages/AlasCore --scratch-path /private/tmp/alas-2044-core-build --jobs 4` | 277 test definitions in 42 suites passed. Log: `/private/tmp/alas-2044-task3-fix1-package-verified.log`. |
-| App | `rtk proxy xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS,arch=arm64' -derivedDataPath /private/tmp/alas-2044-derived-data -resultBundlePath /private/tmp/alas-2044-task3-fix1-app-accepted.xcresult -skipPackagePluginValidation -skipMacroValidation -only-testing:AlasTests/ACPConnectionTests -only-testing:AlasTests/ACPBrokerClientTests -only-testing:AlasTests/ACPSessionManagerTests -only-testing:AlasTests/ACPSessionRunnerQueueTests -only-testing:AlasTests/RemoteHelperClientTests -jobs 4 -quiet test` | Passed: 315 definitions, 457 executions, zero failures or skips. Result bundle: `/private/tmp/alas-2044-task3-fix1-app-accepted.xcresult`. |
+| Core | `rtk swift test --package-path Packages/AlasCore --scratch-path /private/tmp/alas-2044-core-build --jobs 4` | 277 test definitions in 42 suites passed. Log: `/private/tmp/alas-2044-final-fix-package.log`. |
+| App | `rtk proxy xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS,arch=arm64' -derivedDataPath /private/tmp/alas-2044-derived-data -resultBundlePath /private/tmp/alas-2044-final-fix-app.xcresult -skipPackagePluginValidation -skipMacroValidation -only-testing:AlasTests/ACPConnectionTests -only-testing:AlasTests/ACPBrokerClientTests -only-testing:AlasTests/ACPSessionManagerTests -only-testing:AlasTests/ACPSessionRunnerQueueTests -only-testing:AlasTests/RemoteHelperClientTests -jobs 4 -quiet test` | Passed: 316 definitions, 458 executions, zero failures or skips. Result bundle: `/private/tmp/alas-2044-final-fix-app.xcresult`. |
 | Helper protocol | `DEVELOPER_DIR=/Applications/Xcode-26.6.0.app/Contents/Developer cargo test --manifest-path AlasHelper/Cargo.toml --target-dir /private/tmp/alas-2044-helper-tests --test acp_broker_protocol` | 23 protocol tests passed. No helper source changed in the final repair. |
 | Helper process handler | `DEVELOPER_DIR=/Applications/Xcode-26.6.0.app/Contents/Developer cargo test --manifest-path AlasHelper/Cargo.toml --target-dir /private/tmp/alas-2044-helper-tests reviewed_operation_replay_preserves_success_and_delivers_rejection_before_eviction` | 1 process-handler test passed. No helper source changed in the final repair. |
 
-One earlier frozen full core run reported `.notWriter` in `HostSessionsTests.archivingJustAfterCreatingSticks`. Its exact isolated rerun and unchanged full rerun passed, followed by the final 277/42 run. The cause of that intermittent failure was not established and no archive/lease code was changed. The focused app log also contains an `ImplicitStrongCapture` warning at `ACPSessionManager.swift:7349`, outside the fix diff; it is left for the final whole-branch review. These results do not claim repository-wide Alas CI is green.
+One earlier frozen full core run reported `.notWriter` in `HostSessionsTests.archivingJustAfterCreatingSticks`. Its exact isolated rerun and unchanged full rerun passed, followed by the final 277/42 run. The cause of that intermittent failure was not established and no archive/lease code was changed. The focused core log `/private/tmp/alas-2044-task3-fix1-cancel-green.log:5-12` records an `ImplicitStrongCapture` warning at `ACPSessionManager.swift:7349`. The identical closure exists at base `3b2f93831` lines 7250–7265; the warning predates these changes. These results do not claim repository-wide Alas CI is green.
