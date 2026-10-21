@@ -367,6 +367,21 @@ final class AppState {
     @ObservationIgnored private var workspaceSpaceCheckpointTask: Task<Void, Never>?
     @ObservationIgnored private var worktreeStatusRescanTask: Task<Void, Never>?
     @ObservationIgnored private var archivedWorktreePruneTask: Task<Void, Never>?
+    @ObservationIgnored var worktreeCleanupReminderTask: Task<Void, Never>?
+    @ObservationIgnored var worktreeCleanupReminderScannedAt: [String: Date] = [:]
+    /// Project id → worktrees the cleanup sheet would preselect, from the
+    /// latest background scan.
+    var worktreeCleanupReadyIds: [String: Set<String>] = [:]
+    /// Project id → the ready set the user dismissed the reminder for.
+    var worktreeCleanupDismissedIds = WorktreeCleanupReminderPolicy.loadDismissals()
+    var worktreeCleanupPresentation: WorktreeCleanupPresentation? {
+        didSet {
+            // Whatever the sheet removed changes the reminder, so rescan on close.
+            if let closed = oldValue, worktreeCleanupPresentation?.id != closed.id {
+                Task { await refreshWorktreeCleanupReminder(projectId: closed.projectId) }
+            }
+        }
+    }
     @ObservationIgnored private lazy var ggSidebarRefresh = GGSidebarRefreshController()
     @ObservationIgnored private var ggSidebarPreparationTask: Task<Void, Never>?
     private var ggSidebarSnapshots: [String: GGConfigReader.SidebarSnapshot] = [:]
@@ -10298,10 +10313,9 @@ final class AppState {
     }
 
     /// Delete several worktrees in one pass, reusing the single-item deletion
-    /// path so every existing protection applies. Runs sequentially: git
-    /// worktree mutations on one repository serialize anyway, and sequential
-    /// execution keeps per-item results in a predictable order. A failure is
-    /// recorded and the batch continues.
+    /// path so every existing protection applies. Up to
+    /// `worktreeCleanupConcurrency` items run at once; results keep the input
+    /// order. A failure is recorded and the batch continues.
     ///
     /// Callers are responsible for confirming with the user first — this method
     /// deletes without prompting. Unsaved editor buffers are checked across the
@@ -10358,198 +10372,30 @@ final class AppState {
             }
         }
 
-        var results: [WorktreeBatchResult] = []
-        var touchedProjectIds: Set<String> = []
-        var removed: [(worktree: Worktree, claim: UUID)] = []
-
-        for worktree in worktrees {
-            guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
-                results.append(WorktreeBatchResult(
-                    worktreeId: worktree.id,
-                    branch: worktree.branch,
-                    outcome: .failed(message: "Could not find the project for this worktree.")
-                ))
-                continue
-            }
-            guard !projectsManager.isMain(worktree, in: project) else {
-                results.append(WorktreeBatchResult(
-                    worktreeId: worktree.id,
-                    branch: worktree.branch,
-                    outcome: .skipped(reason: "Main worktree")
-                ))
-                continue
-            }
-            // Re-check right before deleting. This closes two gaps at once:
-            // the scan that selected this worktree (or even the whole-batch
-            // dirty-buffer prompt above) can be stale by the time the user
-            // confirms, and — because each `await performDeleteWorktree`
-            // below suspends and yields the main actor — a *later* item in
-            // this very loop can pick up a buffer edited or a session opened
-            // while an *earlier* item was still being removed. Only
-            // dirtiness the confirmation didn't already cover counts: a tab
-            // dirty at confirmation time and discarded is expected here, but
-            // a tab that turned dirty, or was edited again since being
-            // acknowledged, must not be torn down.
-            let currentDirtyGenerations = dirtyTabGenerations(worktreeId: worktree.id)
-            let knownDirtyGenerations = dirtyTabsAtConfirmation[worktree.id] ?? [:]
-            guard Self.hasOnlyAcknowledgedDirtiness(
-                current: currentDirtyGenerations,
-                acknowledgedAtConfirmation: knownDirtyGenerations
-            ) else {
-                results.append(WorktreeBatchResult(
-                    worktreeId: worktree.id,
-                    branch: worktree.branch,
-                    outcome: .skipped(reason: "Has unsaved changes since this list was scanned")
-                ))
-                continue
-            }
-            let sessionStateIsAcknowledged: Bool
-            if let authorization {
-                sessionStateIsAcknowledged = worktreeCleanupSessionIDs(worktreeId: worktree.id)
-                    .isSubset(of: authorization.sessionIDsByWorktree[worktree.id] ?? [])
-            } else {
-                sessionStateIsAcknowledged = !hasLiveSessions(worktreeId: worktree.id)
-            }
-            let ownershipIsValid = authorization == nil || (
-                workspacesManager.canMutate && worktreeCleanupWorkspaceOwners(for: worktree).isEmpty
-            )
-            guard sessionStateIsAcknowledged,
-                  WorktreeOperationState.admitsLifecycleOperation(projectsManager.operationState(for: worktree)),
-                  ownershipIsValid
-            else {
-                results.append(WorktreeBatchResult(
-                    worktreeId: worktree.id,
-                    branch: worktree.branch,
-                    outcome: .skipped(reason: "Worktree changed since confirmation")
-                ))
-                continue
-            }
-            // Re-read the worktree's actual current branch immediately before
-            // removal — the cached `Worktree.branch` from the scan could be
-            // stale if something switched this checkout to a detached HEAD
-            // (or a different branch entirely) in the meantime. A detached
-            // worktree's commits are reachable only via its own HEAD, so
-            // removing one on stale information risks orphaning commits that
-            // did not exist, or were not detached, at scan time.
-            guard WorktreeService.localBranchName(forWorktreeAt: worktree.path) == worktree.branch else {
-                results.append(WorktreeBatchResult(
-                    worktreeId: worktree.id,
-                    branch: worktree.branch,
-                    outcome: .skipped(reason: "Branch changed since this list was scanned")
-                ))
-                continue
-            }
-
-            let force: Bool
-            if let authorization {
-                do {
-                    let preflight = try await Task.detached {
-                        try await WorktreeService().deletePreflight(worktreePath: worktree.path)
-                    }.value
-                    guard let acknowledgedPreflight = authorization.preflightByWorktree[worktree.id],
-                          preflight.reasons.isSubset(of: acknowledgedPreflight.reasons),
-                          !preflight.requiresForce
-                              || authorization.forceWorktreeIDs.contains(worktree.id)
-                    else {
-                        results.append(WorktreeBatchResult(
-                            worktreeId: worktree.id,
-                            branch: worktree.branch,
-                            outcome: .skipped(reason: "Git deletion risks changed since confirmation")
-                        ))
-                        continue
-                    }
-                    if let acknowledgedFingerprint = authorization.contentFingerprintsByWorktree[worktree.id] {
-                        let currentFingerprint = try await Self.worktreeDeleteContentFingerprint(
-                            worktreePath: worktree.path
-                        )
-                        guard currentFingerprint == acknowledgedFingerprint else {
-                            results.append(WorktreeBatchResult(
-                                worktreeId: worktree.id,
-                                branch: worktree.branch,
-                                outcome: .skipped(reason: "Git deletion risks changed since confirmation")
-                            ))
-                            continue
-                        }
-                    }
-                    let postPreflightDirtyIsAcknowledged = Self.hasOnlyAcknowledgedDirtiness(
-                        current: dirtyTabGenerations(worktreeId: worktree.id),
-                        acknowledgedAtConfirmation: dirtyTabsAtConfirmation[worktree.id] ?? [:]
-                    )
-                    let postPreflightSessionsAreAcknowledged = worktreeCleanupSessionIDs(worktreeId: worktree.id)
-                        .isSubset(of: authorization.sessionIDsByWorktree[worktree.id] ?? [])
-                    let postPreflightOwnershipIsValid = workspacesManager.canMutate && worktreeCleanupWorkspaceOwners(for: worktree).isEmpty
-                    let postPreflightBranchMatches =
-                        WorktreeService.localBranchName(forWorktreeAt: worktree.path) == worktree.branch
-                    guard postPreflightDirtyIsAcknowledged,
-                          postPreflightSessionsAreAcknowledged,
-                          postPreflightBranchMatches,
-                          WorktreeOperationState.admitsLifecycleOperation(projectsManager.operationState(for: worktree)),
-                          postPreflightOwnershipIsValid
-                    else {
-                        results.append(WorktreeBatchResult(
-                            worktreeId: worktree.id,
-                            branch: worktree.branch,
-                            outcome: .skipped(reason: "Worktree changed since confirmation")
-                        ))
-                        continue
-                    }
-                    force = preflight.requiresForce
-                } catch {
-                    results.append(WorktreeBatchResult(
-                        worktreeId: worktree.id,
-                        branch: worktree.branch,
-                        outcome: .skipped(reason: (error as? LocalizedError)?.errorDescription ?? "\(error)")
-                    ))
-                    continue
-                }
-            } else {
-                force = false
-            }
-
-            let removedIndex = projectsManager.visibleWorktrees(projectId: worktree.projectId)
-                .firstIndex(where: { $0.id == worktree.id }) ?? 0
-            let claim: UUID
-            do {
-                claim = try host.worktrees.beginDelete(worktree, caller: .app)
-            } catch {
-                results.append(WorktreeBatchResult(
-                    worktreeId: worktree.id,
-                    branch: worktree.branch,
-                    outcome: .skipped(reason: WorktreeRemovalResult.changedSinceConfirmationMessage)
-                ))
-                continue
-            }
-            host.worktrees.confirmDelete(claim, for: worktree)
-
-            let outcome = await performDeleteWorktree(
-                worktree: worktree,
-                claim: claim,
-                repoPath: URL(fileURLWithPath: project.path),
-                deleteBranchIfMerged: Self.resolveDeleteBranchIfMerged(
-                    globalDeleteOnRemove: config.worktrees.deleteBranchOnRemove,
-                    keepBranch: keepBranch
-                ),
-                force: force,
-                removedIndex: removedIndex,
-                // One refresh at the end, not one per item.
-                refreshAfter: false,
-                promptsForForce: false,
-                isBatch: true,
-                authorizedDeleteContentFingerprint: authorization?.contentFingerprintsByWorktree[worktree.id],
+        // The git removal itself still serializes per project inside
+        // `ProjectMutationGate`; what overlaps is the work around it —
+        // preflights, fingerprints, and stopping each worktree's sessions.
+        // Every item re-checks its own state right before it mutates, so
+        // interleaving with its siblings is no different from interleaving
+        // with any other main-actor work.
+        let deleteBranchIfMerged = Self.resolveDeleteBranchIfMerged(
+            globalDeleteOnRemove: config.worktrees.deleteBranchOnRemove,
+            keepBranch: keepBranch
+        )
+        let outcomes = await boundedConcurrentMap(worktrees, limit: Self.worktreeCleanupConcurrency) { @MainActor worktree in
+            await self.deleteCleanupBatchItem(
+                worktree,
+                deleteBranchIfMerged: deleteBranchIfMerged,
+                authorization: authorization,
                 acknowledgedDirtyTabs: dirtyTabsAtConfirmation[worktree.id] ?? [:],
                 verifiedMergedBranchSHA: forgeConfirmedMergedBranchSHAs[worktree.id]
             )
-
-            results.append(WorktreeBatchResult(
-                worktreeId: worktree.id,
-                branch: worktree.branch,
-                outcome: outcome
-            ))
-            if outcome == .deleted {
-                removed.append((worktree, claim))
-            }
-            touchedProjectIds.insert(worktree.projectId)
         }
+        let results = outcomes.map(\.result)
+        let removed = zip(worktrees, outcomes).compactMap { worktree, outcome in
+            outcome.removedClaim.map { (worktree: worktree, claim: $0) }
+        }
+        let touchedProjectIds = Set(zip(worktrees, outcomes).filter(\.1.attemptedRemoval).map(\.0.projectId))
 
         // The removals' claims are held until their projects are refreshed.
         do {
@@ -10570,91 +10416,251 @@ final class AppState {
         return results
     }
 
+    private struct CleanupDeleteItemOutcome: Sendable {
+        let result: WorktreeBatchResult
+        /// Held until the batch refreshes the project.
+        var removedClaim: UUID?
+        /// Git was asked to remove it, so the project listing may have changed.
+        var attemptedRemoval = false
+
+        static func skipped(_ worktree: Worktree, _ outcome: WorktreeBatchOutcome) -> Self {
+            .init(result: WorktreeBatchResult(worktreeId: worktree.id, branch: worktree.branch, outcome: outcome))
+        }
+    }
+
+    /// One item of `batchDeleteWorktrees`, re-validated right before removal.
+    private func deleteCleanupBatchItem(
+        _ worktree: Worktree,
+        deleteBranchIfMerged: Bool,
+        authorization: WorktreeCleanupDeleteAuthorization?,
+        acknowledgedDirtyTabs: [TabID: Int],
+        verifiedMergedBranchSHA: String?
+    ) async -> CleanupDeleteItemOutcome {
+        guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
+            return .skipped(worktree, .failed(message: "Could not find the project for this worktree."))
+        }
+        guard !projectsManager.isMain(worktree, in: project) else {
+            return .skipped(worktree, .skipped(reason: "Main worktree"))
+        }
+        // Re-check right before deleting. This closes two gaps at once: the
+        // scan that selected this worktree (or even the whole-batch
+        // dirty-buffer prompt) can be stale by the time the user confirms,
+        // and — because every item suspends and yields the main actor — this
+        // item can pick up a buffer edited or a session opened while a
+        // sibling was being removed. Only dirtiness the confirmation didn't
+        // already cover counts: a tab dirty at confirmation time and
+        // discarded is expected here, but a tab that turned dirty, or was
+        // edited again since being acknowledged, must not be torn down.
+        guard Self.hasOnlyAcknowledgedDirtiness(
+            current: dirtyTabGenerations(worktreeId: worktree.id),
+            acknowledgedAtConfirmation: acknowledgedDirtyTabs
+        ) else {
+            return .skipped(worktree, .skipped(reason: "Has unsaved changes since this list was scanned"))
+        }
+        let sessionStateIsAcknowledged: Bool
+        if let authorization {
+            sessionStateIsAcknowledged = worktreeCleanupSessionIDs(worktreeId: worktree.id)
+                .isSubset(of: authorization.sessionIDsByWorktree[worktree.id] ?? [])
+        } else {
+            sessionStateIsAcknowledged = !hasLiveSessions(worktreeId: worktree.id)
+        }
+        let ownershipIsValid = authorization == nil || (
+            workspacesManager.canMutate && worktreeCleanupWorkspaceOwners(for: worktree).isEmpty
+        )
+        guard sessionStateIsAcknowledged,
+              WorktreeOperationState.admitsLifecycleOperation(projectsManager.operationState(for: worktree)),
+              ownershipIsValid
+        else {
+            return .skipped(worktree, .skipped(reason: "Worktree changed since confirmation"))
+        }
+        // Re-read the worktree's actual current branch immediately before
+        // removal — the cached `Worktree.branch` from the scan could be
+        // stale if something switched this checkout to a detached HEAD (or a
+        // different branch entirely) in the meantime. A detached worktree's
+        // commits are reachable only via its own HEAD, so removing one on
+        // stale information risks orphaning commits.
+        guard WorktreeService.localBranchName(forWorktreeAt: worktree.path) == worktree.branch else {
+            return .skipped(worktree, .skipped(reason: "Branch changed since this list was scanned"))
+        }
+
+        let force: Bool
+        if let authorization {
+            do {
+                let preflight = try await Task.detached {
+                    try await WorktreeService().deletePreflight(worktreePath: worktree.path)
+                }.value
+                guard let acknowledgedPreflight = authorization.preflightByWorktree[worktree.id],
+                      preflight.reasons.isSubset(of: acknowledgedPreflight.reasons),
+                      !preflight.requiresForce
+                          || authorization.forceWorktreeIDs.contains(worktree.id)
+                else {
+                    return .skipped(worktree, .skipped(reason: "Git deletion risks changed since confirmation"))
+                }
+                if let acknowledgedFingerprint = authorization.contentFingerprintsByWorktree[worktree.id] {
+                    let currentFingerprint = try await Self.worktreeDeleteContentFingerprint(
+                        worktreePath: worktree.path
+                    )
+                    guard currentFingerprint == acknowledgedFingerprint else {
+                        return .skipped(worktree, .skipped(reason: "Git deletion risks changed since confirmation"))
+                    }
+                }
+                let postPreflightDirtyIsAcknowledged = Self.hasOnlyAcknowledgedDirtiness(
+                    current: dirtyTabGenerations(worktreeId: worktree.id),
+                    acknowledgedAtConfirmation: acknowledgedDirtyTabs
+                )
+                let postPreflightSessionsAreAcknowledged = worktreeCleanupSessionIDs(worktreeId: worktree.id)
+                    .isSubset(of: authorization.sessionIDsByWorktree[worktree.id] ?? [])
+                let postPreflightOwnershipIsValid = workspacesManager.canMutate && worktreeCleanupWorkspaceOwners(for: worktree).isEmpty
+                let postPreflightBranchMatches =
+                    WorktreeService.localBranchName(forWorktreeAt: worktree.path) == worktree.branch
+                guard postPreflightDirtyIsAcknowledged,
+                      postPreflightSessionsAreAcknowledged,
+                      postPreflightBranchMatches,
+                      WorktreeOperationState.admitsLifecycleOperation(projectsManager.operationState(for: worktree)),
+                      postPreflightOwnershipIsValid
+                else {
+                    return .skipped(worktree, .skipped(reason: "Worktree changed since confirmation"))
+                }
+                force = preflight.requiresForce
+            } catch {
+                return .skipped(worktree, .skipped(reason: (error as? LocalizedError)?.errorDescription ?? "\(error)"))
+            }
+        } else {
+            force = false
+        }
+
+        let removedIndex = projectsManager.visibleWorktrees(projectId: worktree.projectId)
+            .firstIndex(where: { $0.id == worktree.id }) ?? 0
+        let claim: UUID
+        do {
+            claim = try host.worktrees.beginDelete(worktree, caller: .app)
+        } catch {
+            return .skipped(worktree, .skipped(reason: WorktreeRemovalResult.changedSinceConfirmationMessage))
+        }
+        host.worktrees.confirmDelete(claim, for: worktree)
+
+        let outcome = await performDeleteWorktree(
+            worktree: worktree,
+            claim: claim,
+            repoPath: URL(fileURLWithPath: project.path),
+            deleteBranchIfMerged: deleteBranchIfMerged,
+            force: force,
+            removedIndex: removedIndex,
+            // One refresh at the end, not one per item.
+            refreshAfter: false,
+            promptsForForce: false,
+            isBatch: true,
+            authorizedDeleteContentFingerprint: authorization?.contentFingerprintsByWorktree[worktree.id],
+            acknowledgedDirtyTabs: acknowledgedDirtyTabs,
+            verifiedMergedBranchSHA: verifiedMergedBranchSHA
+        )
+        return CleanupDeleteItemOutcome(
+            result: WorktreeBatchResult(worktreeId: worktree.id, branch: worktree.branch, outcome: outcome),
+            removedClaim: outcome == .deleted ? claim : nil,
+            attemptedRemoval: true
+        )
+    }
+
+    /// The worktrees cleanup considers: visible ones, minus the main checkout,
+    /// which is never removed and is the costliest to probe.
+    func worktreeCleanupScanTargets(project: ProjectConfig) -> [Worktree] {
+        projectsManager.visibleWorktrees(projectId: project.id)
+            .filter { !projectsManager.isMain($0, in: project) }
+    }
+
+    /// One live cleanup scan against git, the code host, and session state.
+    /// Shared by the cleanup sheet and the background monitor so both apply
+    /// the same rules.
+    func scanWorktreesForCleanup(
+        project: ProjectConfig,
+        worktrees: [Worktree],
+        onUpdate: @escaping @Sendable (WorktreeCleanupScanUpdate) async -> Void = { _ in }
+    ) async -> [WorktreeCleanupCandidate] {
+        let projectId = project.id
+        let idleThresholdDays = config.worktrees.cleanupIdleDays
+        // `config.worktrees.baseBranch` is a global default across every
+        // project and may not exist in this repository. Resolve it against the
+        // repo's real branches the way every other base-branch consumer does,
+        // and do it per scan: branches can change between scans.
+        let configuredDefault = config.worktrees.baseBranch
+        let availableBranches = (try? await GitService().branches(at: URL(fileURLWithPath: project.path))) ?? []
+        let baseBranch = NewWorktreeDialog.preferredBaseBranch(
+            availableBranches: availableBranches,
+            configuredDefault: configuredDefault
+        )
+        let scanner = WorktreeCleanupScanner(
+            dependencies: WorktreeCleanupScanner.Dependencies(
+                gitFacts: { worktree in
+                    await WorktreeCleanupScanner.gitFacts(
+                        worktreePath: worktree.path,
+                        branch: worktree.branch,
+                        baseBranch: baseBranch
+                    )
+                },
+                mergeIndex: { project, branches in
+                    await Self.forgeMergeIndex(project: project, baseBranch: baseBranch, branches: branches)
+                },
+                // These hop to the main actor: session and operation state are
+                // main-actor isolated, the scanner is not. The closures never
+                // outlive this call, so capturing `self` strongly is fine.
+                activeSessionCount: { worktreeId in
+                    await MainActor.run {
+                        self.worktreeCleanupSessionCounts(worktreeId: worktreeId).total
+                    }
+                },
+                busySessionCount: { worktreeId in
+                    await MainActor.run {
+                        self.worktreeCleanupSessionCounts(worktreeId: worktreeId).busy
+                    }
+                },
+                // A failed delete awaits retry, so it does not block selection.
+                operationInFlight: { worktreeId in
+                    await MainActor.run {
+                        !WorktreeOperationState.admitsLifecycleOperation(self.projectsManager.operationState(
+                            forWorktreeId: worktreeId,
+                            projectId: projectId
+                        ))
+                    }
+                },
+                workspaceOwners: { worktree in
+                    await MainActor.run {
+                        self.worktreeCleanupWorkspaceOwners(for: worktree)
+                    }
+                },
+                workspaceOwnershipAvailable: {
+                    await MainActor.run {
+                        self.workspacesManager.canMutate
+                    }
+                }
+            )
+        )
+        return await scanner.scan(
+            project: project,
+            worktrees: worktrees,
+            baseBranch: baseBranch,
+            now: Date(),
+            idleThresholdDays: idleThresholdDays,
+            onUpdate: onUpdate
+        )
+    }
+
     /// Builds a cleanup model wired to live git, code-host, and session state.
     /// Returns nil when the project no longer exists.
     func makeWorktreeCleanupModel(projectId: String) -> WorktreeCleanupModel? {
         guard let project = projects.first(where: { $0.id == projectId }), !project.isFolder else { return nil }
-        let initialWorktrees = projectsManager.visibleWorktrees(projectId: projectId)
-        let idleThresholdDays = config.worktrees.cleanupIdleDays
-        let repoPath = URL(fileURLWithPath: project.path)
-        // `config.worktrees.baseBranch` is a global default across every
-        // project and may not exist in this repository. Resolve it against the
-        // repo's real branches the way every other base-branch consumer does,
-        // and do it per scan rather than once here: branches can change while
-        // the sheet is open.
-        let configuredDefault = config.worktrees.baseBranch
 
         return WorktreeCleanupModel(
             projectId: projectId,
-            worktrees: initialWorktrees,
+            worktrees: worktreeCleanupScanTargets(project: project),
             keepBranches: !config.worktrees.deleteBranchOnRemove,
             loadWorktrees: { [weak self] in
-                self?.projectsManager.visibleWorktrees(projectId: projectId) ?? []
+                self?.worktreeCleanupScanTargets(project: project) ?? []
             },
             scan: { [weak self] worktrees, onUpdate in
                 guard let self else { return .success([]) }
-                let availableBranches = (try? await GitService().branches(at: repoPath)) ?? []
-                let baseBranch = NewWorktreeDialog.preferredBaseBranch(
-                    availableBranches: availableBranches,
-                    configuredDefault: configuredDefault
-                )
-                // Built here, not once per model, so all three dependencies
-                // close over the base branch resolved for *this* scan.
-                let scanner = WorktreeCleanupScanner(
-                    dependencies: WorktreeCleanupScanner.Dependencies(
-                        gitFacts: { worktree in
-                            await WorktreeCleanupScanner.gitFacts(
-                                worktreePath: worktree.path,
-                                branch: worktree.branch,
-                                baseBranch: baseBranch
-                            )
-                        },
-                        mergeIndex: { project in
-                            await Self.forgeMergeIndex(project: project, baseBranch: baseBranch)
-                        },
-                        // Both hop to the main actor: session and operation
-                        // state are main-actor isolated, the scanner is not.
-                        // `self` here is the outer `scan:` closure's
-                        // already-unwrapped strong binding, and these closures
-                        // never outlive that closure's body, so re-capturing it
-                        // weakly would only add a redundant weak box.
-                        activeSessionCount: { worktreeId in
-                            await MainActor.run {
-                                self.worktreeCleanupSessionCounts(worktreeId: worktreeId).total
-                            }
-                        },
-                        busySessionCount: { worktreeId in
-                            await MainActor.run {
-                                self.worktreeCleanupSessionCounts(worktreeId: worktreeId).busy
-                            }
-                        },
-                        // A failed delete awaits retry, so it does not block selection.
-                        operationInFlight: { worktreeId in
-                            await MainActor.run {
-                                !WorktreeOperationState.admitsLifecycleOperation(self.projectsManager.operationState(
-                                    forWorktreeId: worktreeId,
-                                    projectId: projectId
-                                ))
-                            }
-                        },
-                        workspaceOwners: { worktree in
-                            await MainActor.run {
-                                self.worktreeCleanupWorkspaceOwners(for: worktree)
-                            }
-                        },
-                        workspaceOwnershipAvailable: {
-                            await MainActor.run {
-                                self.workspacesManager.canMutate
-                            }
-                        }
-                    )
-                )
-                return .success(await scanner.scan(
+                return .success(await self.scanWorktreesForCleanup(
                     project: project,
                     worktrees: worktrees,
-                    baseBranch: baseBranch,
-                    now: Date(),
-                    idleThresholdDays: idleThresholdDays,
                     onUpdate: onUpdate
                 ))
             },
@@ -10802,6 +10808,7 @@ final class AppState {
         var unavailableReasons: [String: String] = [:]
         var contentFingerprintsByWorktree: [String: String] = [:]
 
+        var eligible: [Worktree] = []
         for worktree in worktrees {
             guard workspacesManager.canMutate else {
                 unavailableReasons[worktree.id] = "Workspace Checkout ownership could not be verified"
@@ -10815,27 +10822,27 @@ final class AppState {
                 unavailableReasons[worktree.id] = "Another operation is in progress"
                 continue
             }
+            eligible.append(worktree)
+        }
+
+        // Each preflight walks `git status` (and submodules); running them one
+        // by one kept the confirmation waiting on the slowest sum.
+        let inspections = await boundedConcurrentMap(eligible, limit: Self.worktreeCleanupConcurrency) { worktree in
+            await Self.inspectWorktreeForCleanupDelete(worktree.path)
+        }
+        for (worktree, inspection) in zip(eligible, inspections) {
             let preflight: WorktreeDeletePreflight
-            do {
-                preflight = try await Task.detached {
-                    try await WorktreeService().deletePreflight(worktreePath: worktree.path)
-                }.value
-            } catch {
+            switch inspection {
+            case .failure(let error):
                 unavailableReasons[worktree.id] = (error as? LocalizedError)?.errorDescription ?? "\(error)"
                 continue
+            case .success(let result):
+                preflight = result.preflight
+                contentFingerprintsByWorktree[worktree.id] = result.contentFingerprint
             }
             preflightByWorktree[worktree.id] = preflight
 
             if preflight.requiresForce {
-                do {
-                    contentFingerprintsByWorktree[worktree.id] = try await Self.worktreeDeleteContentFingerprint(
-                        worktreePath: worktree.path
-                    )
-                } catch {
-                    unavailableReasons[worktree.id] = (error as? LocalizedError)?.errorDescription ?? "\(error)"
-                    continue
-                }
-
                 forceWorktreeIDs.insert(worktree.id)
                 var reasons: [String] = []
                 if preflight.reasons.contains(.dirty) {
@@ -10859,6 +10866,25 @@ final class AppState {
             unavailableReasons: unavailableReasons,
             contentFingerprintsByWorktree: contentFingerprintsByWorktree
         )
+    }
+
+    /// Worktrees cleanup inspects or deletes at once. Git's own mutations stay
+    /// serialized per project by `ProjectMutationGate`; this bounds the work
+    /// around them (status walks, session teardown) and the processes spawned.
+    static let worktreeCleanupConcurrency = 4
+
+    /// The preflight, plus the content fingerprint a force-delete must later
+    /// match. A failure of either makes the worktree unavailable.
+    nonisolated private static func inspectWorktreeForCleanupDelete(
+        _ path: URL
+    ) async -> Result<(preflight: WorktreeDeletePreflight, contentFingerprint: String?), Error> {
+        do {
+            let preflight = try await WorktreeService().deletePreflight(worktreePath: path)
+            guard preflight.requiresForce else { return .success((preflight, nil)) }
+            return .success((preflight, try await worktreeDeleteContentFingerprint(worktreePath: path)))
+        } catch {
+            return .failure(error)
+        }
     }
 
     private func worktreeCleanupArchiveAuthorization(
@@ -10987,14 +11013,16 @@ final class AppState {
         return results
     }
 
-    /// One batched merged-review-request query per repository. Any failure —
-    /// no remote, no provider, CLI missing, auth expired — surfaces as a
-    /// `.failure` so the scanner can report `unknown` rather than inventing a
-    /// "not merged" answer.
+    /// One merged-review-request query per repository, scoped to `branches`.
+    /// Any failure — no remote, no provider, CLI missing, auth expired —
+    /// surfaces as a `.failure` so the scanner can report `unknown` rather
+    /// than inventing a "not merged" answer.
     nonisolated private static func forgeMergeIndex(
         project: ProjectConfig,
-        baseBranch: String
+        baseBranch: String,
+        branches: [String]
     ) async -> Result<WorktreeForgeMergeIndex, Error> {
+        guard !branches.isEmpty else { return .success(WorktreeForgeMergeIndex(refs: [])) }
         let repoPath = URL(fileURLWithPath: project.path)
         let registry = CodeHostProviderRegistry.live()
         do {
@@ -11021,15 +11049,9 @@ final class AppState {
             // fails or the provider doesn't support it, fall back to the
             // originally detected remote rather than failing the scan.
             let queryRemote = (try? await provider.repositoryParent(remote: remote, cwd: repoPath)) ?? remote
-            // `gh pr list --limit` paginates internally to satisfy any count;
-            // `glab mr list` now does the same via GitLabCLIProvider's own
-            // paging loop. A repository with more merged reviews than this
-            // still won't see the oldest of them, but 1000 covers even a
-            // very active project's last year or two without every scan
-            // paying for an unbounded, open-ended history query.
             let refs = try await provider.mergedReviewRequests(
                 remote: queryRemote,
-                limit: 1000,
+                headBranches: branches,
                 cwd: repoPath
             )
             return .success(WorktreeForgeMergeIndex(refs: refs))

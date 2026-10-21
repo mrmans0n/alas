@@ -29,84 +29,101 @@ public struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
         self.authorStandingCache = authorStandingCache
     }
 
+    static let mergedMergeRequestsQuery = """
+    query($path: ID!, $branches: [String!], $after: String) { project(fullPath: $path) { \
+    mergeRequests(sourceBranches: $branches, state: merged, first: 100, after: $after) { \
+    pageInfo { hasNextPage endCursor } nodes { iid webUrl sourceBranch diffHeadSha } } } }
+    """
+
     public func mergedReviewRequests(
         remote: CodeHostRemote,
-        limit: Int,
+        headBranches: [String],
         cwd: URL
     ) async throws -> [MergedReviewRequestRef] {
-        // Unlike `gh pr list --limit`, which fetches as many pages as needed
-        // to satisfy any requested count, `glab mr list` fetches exactly one
-        // page — bounded by `--per-page`, which GitLab's REST API caps at
-        // 100 regardless of what's requested (verified against `glab mr
-        // list --help`: `-p --page` and `-P --per-page` are independent,
-        // there is no total-count flag). Page manually until a short page
-        // signals the end, or `limit` is reached.
-        let perPage = 100
+        struct Variables: Encodable {
+            let path: String
+            let branches: [String]
+            let after: String?
+        }
+        struct Request: Encodable {
+            let query: String
+            let variables: Variables
+        }
+        let branches = Array(Set(headBranches)).sorted()
+        guard !branches.isEmpty else { return [] }
         var refs: [MergedReviewRequestRef] = []
-        var page = 1
-        while refs.count < limit {
+        var cursor: String?
+        repeat {
+            let body = try JSONEncoder().encode(Request(
+                query: Self.mergedMergeRequestsQuery,
+                variables: Variables(path: remote.repositorySlug, branches: branches, after: cursor)
+            ))
             let result = try await runner.run(
                 "glab",
                 args: [
-                    // glab spells this `--merged`; there is no `--state` flag
-                    // on `mr list` (verified against `glab mr list --help`).
-                    "mr", "list",
-                    "--merged",
-                    "--per-page", "\(perPage)",
-                    "--page", "\(page)",
-                    "--output", "json",
-                    "-R", remote.repositorySlug,
+                    "api", "graphql",
+                    "--hostname", remote.host,
+                    // glab omits the Content-Type header when the body comes from
+                    // --input, which makes GitLab reject the request with HTTP 415.
+                    "-H", "Content-Type: application/json",
+                    "--input", "-",
                 ],
-                cwd: cwd
+                cwd: cwd,
+                stdin: String(decoding: body, as: UTF8.self)
             )
             guard result.exitCode == 0 else {
                 throw CodeHostProviderError.commandFailed(
-                    command: "glab mr list",
+                    command: "glab api graphql",
                     stderr: result.stderr
                 )
             }
-            let pageRefs = try Self.parseMergedMRList(result.stdout)
-            refs.append(contentsOf: pageRefs)
-            guard pageRefs.count == perPage else { break }
-            page += 1
-        }
-        return Array(refs.prefix(limit))
+            let page = try Self.parseMergedMergeRequests(result.stdout)
+            refs.append(contentsOf: page.refs)
+            cursor = page.nextCursor
+        } while cursor != nil
+        return refs
     }
 
-    public static func parseMergedMRList(_ json: String) throws -> [MergedReviewRequestRef] {
-        struct Item: Decodable {
-            let iid: Int
-            let sourceBranch: String
-            let webURL: URL
-            // GitLab's merge request objects carry `sha`: the SHA of the
-            // most recent commit on the source branch as of the MR. `glab
-            // mr list --output json` has no field-selection flag, so this
-            // is already present in the full object without extra args.
-            let sha: String
-
-            enum CodingKeys: String, CodingKey {
-                case iid
-                case sourceBranch = "source_branch"
-                case webURL = "web_url"
-                case sha
+    public static func parseMergedMergeRequests(
+        _ json: String
+    ) throws -> (refs: [MergedReviewRequestRef], nextCursor: String?) {
+        struct Response: Decodable {
+            struct Body: Decodable { let project: Project? }
+            struct Project: Decodable { let mergeRequests: Connection }
+            struct Connection: Decodable {
+                let pageInfo: PageInfo
+                let nodes: [Node]
             }
+            struct PageInfo: Decodable {
+                let hasNextPage: Bool
+                let endCursor: String?
+            }
+            struct Node: Decodable {
+                // GraphQL serializes `iid` as a string.
+                let iid: String
+                let webUrl: URL
+                let sourceBranch: String
+                let diffHeadSha: String?
+            }
+            let data: Body?
         }
-        do {
-            return try JSONDecoder()
-                .decode([Item].self, from: Data(json.utf8))
-                .map {
-                    MergedReviewRequestRef(
-                        number: $0.iid,
-                        headRefName: $0.sourceBranch,
-                        url: $0.webURL,
-                        headSHA: $0.sha
-                    )
-                }
-        } catch {
-            throw CodeHostProviderError.malformedOutput(
-                "Unable to parse glab mr list output"
+        guard let response = try? JSONDecoder().decode(Response.self, from: Data(json.utf8)),
+              let connection = response.data?.project?.mergeRequests
+        else {
+            throw CodeHostProviderError.malformedOutput("Unable to parse merged merge requests")
+        }
+        // A node without a head SHA cannot pass the scanner's SHA check.
+        let refs = connection.nodes.compactMap { node -> MergedReviewRequestRef? in
+            guard let number = Int(node.iid), let sha = node.diffHeadSha else { return nil }
+            return MergedReviewRequestRef(
+                number: number,
+                headRefName: node.sourceBranch,
+                url: node.webUrl,
+                headSHA: sha
             )
         }
+        let nextCursor = connection.pageInfo.hasNextPage ? connection.pageInfo.endCursor : nil
+        return (refs, nextCursor)
     }
 
     public func repositoryParent(remote: CodeHostRemote, cwd: URL) async throws -> CodeHostRemote? {
