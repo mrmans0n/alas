@@ -1454,7 +1454,8 @@ public final class ACPSessionRunner {
     }
 
     private func dismissInterruptedTurnRecoveryAfterLiveActivity(_ touchedIndices: Set<Int>) {
-        guard holdsLeaseForWrite(),
+        guard activePromptID == nil,
+              holdsLeaseForWrite(),
               touchedIndices.contains(where: {
                   session.transcript.messages.indices.contains($0)
                       && session.transcript.messages[$0].isAgentSideProgress
