@@ -366,53 +366,83 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
         self.runner = runner
     }
 
+    /// Branches per GraphQL request. Each is an aliased connection of at most
+    /// `mergedPullRequestsPerBranch` nodes, far below GitHub's node limit.
+    public static let mergedPullRequestsBranchBatchSize = 50
+    /// A branch name reused across this many merged pull requests is rare;
+    /// the scanner only needs the one whose head matches the local `HEAD`.
+    static let mergedPullRequestsPerBranch = 20
+
     public func mergedReviewRequests(
         remote: CodeHostRemote,
-        limit: Int,
+        headBranches: [String],
         cwd: URL
     ) async throws -> [MergedReviewRequestRef] {
-        let result = try await runner.run(
-            "gh",
-            args: [
-                "pr", "list",
-                "--state", "merged",
-                "--limit", "\(limit)",
-                "--json", "number,headRefName,url,headRefOid",
-                "-R", Self.highLevelRepositorySelector(remote: remote),
-            ],
-            cwd: cwd
-        )
-        guard result.exitCode == 0 else {
-            throw CodeHostProviderError.commandFailed(
-                command: "gh pr list",
-                stderr: result.stderr
+        let branches = Array(Set(headBranches)).sorted()
+        var refs: [MergedReviewRequestRef] = []
+        for start in stride(from: 0, to: branches.count, by: Self.mergedPullRequestsBranchBatchSize) {
+            let batch = Array(branches[start..<min(start + Self.mergedPullRequestsBranchBatchSize, branches.count)])
+            var variables = ["owner": remote.owner, "repo": remote.repository]
+            for (index, branch) in batch.enumerated() {
+                variables["b\(index)"] = branch
+            }
+            let result = try await runner.run(
+                "gh",
+                args: ["api", "graphql", "--hostname", remote.host, "--input", "-"],
+                cwd: cwd,
+                stdin: try Self.graphQLInput(
+                    query: Self.mergedPullRequestsQuery(branchCount: batch.count),
+                    variables: variables
+                )
             )
+            guard result.exitCode == 0 else {
+                throw CodeHostProviderError.commandFailed(
+                    command: "gh api graphql",
+                    stderr: result.stderr
+                )
+            }
+            refs.append(contentsOf: try Self.parseMergedPullRequests(result.stdout))
         }
-        return try Self.parseMergedPRList(result.stdout)
+        return refs
     }
 
-    public static func parseMergedPRList(_ json: String) throws -> [MergedReviewRequestRef] {
-        struct Item: Decodable {
-            let number: Int
-            let headRefName: String
-            let url: URL
-            let headRefOid: String
+    /// One aliased `pullRequests` connection per branch (`b0`, `b1`, …), each
+    /// bound to a `$bN` variable so branch names never reach the query text.
+    static func mergedPullRequestsQuery(branchCount: Int) -> String {
+        let parameters = (0..<branchCount).map { ", $b\($0): String!" }.joined()
+        let connections = (0..<branchCount).map {
+            "b\($0): pullRequests(headRefName: $b\($0), states: MERGED, first: \(mergedPullRequestsPerBranch), "
+                + "orderBy: {field: UPDATED_AT, direction: DESC}) { nodes { number url headRefName headRefOid } }"
+        }.joined(separator: " ")
+        return "query($owner: String!, $repo: String!\(parameters)) { repository(owner: $owner, name: $repo) { \(connections) } }"
+    }
+
+    public static func parseMergedPullRequests(_ json: String) throws -> [MergedReviewRequestRef] {
+        struct Response: Decodable {
+            struct Body: Decodable { let repository: [String: Connection]? }
+            struct Connection: Decodable { let nodes: [Node] }
+            struct Node: Decodable {
+                let number: Int
+                let url: URL
+                let headRefName: String
+                let headRefOid: String
+            }
+            let data: Body?
         }
-        do {
-            return try JSONDecoder()
-                .decode([Item].self, from: Data(json.utf8))
-                .map {
-                    MergedReviewRequestRef(
-                        number: $0.number,
-                        headRefName: $0.headRefName,
-                        url: $0.url,
-                        headSHA: $0.headRefOid
-                    )
-                }
-        } catch {
-            throw CodeHostProviderError.malformedOutput(
-                "Unable to parse gh pr list output"
-            )
+        guard let response = try? JSONDecoder().decode(Response.self, from: Data(json.utf8)),
+              let connections = response.data?.repository
+        else {
+            throw CodeHostProviderError.malformedOutput("Unable to parse merged pull requests")
+        }
+        return connections.values.flatMap { connection in
+            connection.nodes.map {
+                MergedReviewRequestRef(
+                    number: $0.number,
+                    headRefName: $0.headRefName,
+                    url: $0.url,
+                    headSHA: $0.headRefOid
+                )
+            }
         }
     }
 

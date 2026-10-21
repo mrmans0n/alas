@@ -9,6 +9,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### ✨ Features
 
 - Dictate into the focused chat composer with ⌃⌥D: tap to start or stop, or hold to talk until you let go. Rebind it under Settings → Shortcuts → Chat.
+- Suggest cleaning up a project in the inbox when five or more of its worktrees look ready to remove, checked in the background with the same rules as the cleanup sheet.
+
+### 🎨 Changed
+
+- Speed up worktree cleanup: skip the main checkout, ask the code host only about the scanned branches, and inspect and delete selected worktrees four at a time.
 
 ## [0.21.10] - 2026-10-21
 

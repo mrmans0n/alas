@@ -75,13 +75,16 @@ struct AttentionInboxPresentation {
     let peerRows: [RemoteSessionSummary]
     let pluginUpdates: [PluginManager.CatalogUpdate]
     let appUpdate: ReleaseInfo?
+    let cleanupReminders: [WorktreeCleanupReminder]
     let historyRows: [AttentionInboxRowPresentation]
     let errors: [PersistenceError]
-    var totalCount: Int { activeRows.count + peerRows.count + pluginUpdates.count + (appUpdate == nil ? 0 : 1) }
+    var totalCount: Int {
+        activeRows.count + peerRows.count + pluginUpdates.count + (appUpdate == nil ? 0 : 1) + cleanupReminders.count
+    }
     var emptyTitle: String? { totalCount == 0 ? "Nothing needs attention" : nil }
     var acknowledgeLabel: String? {
         guard !activeRows.isEmpty else { return nil }
-        return peerRows.isEmpty && pluginUpdates.isEmpty && appUpdate == nil ? "Acknowledge all" : "Acknowledge local"
+        return activeRows.count == totalCount ? "Acknowledge all" : "Acknowledge local"
     }
 
     /// Label for the collapsed-by-default history section, used for both the tooltip and VoiceOver.
@@ -92,11 +95,12 @@ struct AttentionInboxPresentation {
 
     init(aggregation: AttentionAggregation, loadError: String?, writeError: String? = nil,
          peerRows: [RemoteSessionSummary] = [], pluginUpdates: [PluginManager.CatalogUpdate] = [],
-         appUpdate: ReleaseInfo? = nil, now: Date = Date()) {
+         appUpdate: ReleaseInfo? = nil, cleanupReminders: [WorktreeCleanupReminder] = [], now: Date = Date()) {
         activeRows = aggregation.items.map { AttentionInboxRowPresentation(item: $0, now: now) }
         self.peerRows = peerRows
         self.pluginUpdates = pluginUpdates
         self.appUpdate = appUpdate
+        self.cleanupReminders = cleanupReminders
         historyRows = aggregation.history.map { AttentionInboxRowPresentation(item: $0, now: now) }
         errors = [
             loadError.map { PersistenceError(title: "History could not be loaded", message: $0) },
@@ -110,6 +114,7 @@ struct AttentionInboxView: View {
     let peerRows: [RemoteSessionSummary]
     var pluginUpdates: [PluginManager.CatalogUpdate] = []
     var appUpdate: ReleaseInfo? = nil
+    var cleanupReminders: [WorktreeCleanupReminder] = []
     let loadError: String?
     let writeError: String?
     let navigationErrors: [UUID: String]
@@ -118,6 +123,8 @@ struct AttentionInboxView: View {
     let onOpenPeer: (RemoteSessionSummary) -> Void
     var onOpenPluginSettings: () -> Void = {}
     var onOpenAppUpdate: () -> Void = {}
+    var onOpenWorktreeCleanup: (String) -> Void = { _ in }
+    var onDismissWorktreeCleanup: (String) -> Void = { _ in }
     /// Nil hides the roll-up entirely, leaving the ordinary inbox.
     var rollUpSummarizer: AttentionRollUpSummarizer? = nil
     @Environment(\.theme) private var theme
@@ -134,7 +141,8 @@ struct AttentionInboxView: View {
         TimelineView(.periodic(from: .now, by: 60)) { context in
             let presentation = AttentionInboxPresentation(
                 aggregation: aggregation, loadError: loadError, writeError: writeError,
-                peerRows: peerRows, pluginUpdates: pluginUpdates, appUpdate: appUpdate, now: context.date
+                peerRows: peerRows, pluginUpdates: pluginUpdates, appUpdate: appUpdate,
+                cleanupReminders: cleanupReminders, now: context.date
             )
             VStack(spacing: 0) {
                 HStack(spacing: 9) {
@@ -184,7 +192,9 @@ struct AttentionInboxView: View {
                                            navigationErrors: navigationErrors, onDismiss: onDismiss,
                                            onOpen: onOpen, onOpenPeer: onOpenPeer,
                                            onOpenPluginSettings: onOpenPluginSettings,
-                                           onOpenAppUpdate: onOpenAppUpdate)
+                                           onOpenAppUpdate: onOpenAppUpdate,
+                                           onOpenWorktreeCleanup: onOpenWorktreeCleanup,
+                                           onDismissWorktreeCleanup: onDismissWorktreeCleanup)
                     }
                     .padding(14)
                 }
@@ -230,6 +240,8 @@ struct AttentionInboxList: View {
     var onOpenPeer: (RemoteSessionSummary) -> Void = { _ in }
     var onOpenPluginSettings: () -> Void = {}
     var onOpenAppUpdate: () -> Void = {}
+    var onOpenWorktreeCleanup: (String) -> Void = { _ in }
+    var onDismissWorktreeCleanup: (String) -> Void = { _ in }
     @Environment(\.theme) private var theme
 
     var body: some View {
@@ -300,6 +312,32 @@ struct AttentionInboxList: View {
                 }
                 .padding(10)
                 .background(theme.color("bg-2"), in: RoundedRectangle(cornerRadius: 8))
+            }
+            if !presentation.cleanupReminders.isEmpty {
+                Text("Worktree cleanup")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(theme.color("fg-muted"))
+                    .padding(.top, 10)
+                ForEach(presentation.cleanupReminders) { reminder in
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: "archivebox")
+                            .foregroundStyle(theme.color("accent"))
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(reminder.projectName).font(.system(size: 13, weight: .medium))
+                            Text("\(reminder.readyCount) worktrees look ready to clean up")
+                                .font(.system(size: 11))
+                                .foregroundStyle(theme.color("fg-muted"))
+                        }
+                        Spacer()
+                        Button("Dismiss") { onDismissWorktreeCleanup(reminder.projectId) }
+                            .controlSize(.small)
+                            .help("Hide until more worktrees are ready to clean up")
+                        Button("Clean Up…") { onOpenWorktreeCleanup(reminder.projectId) }
+                            .controlSize(.small)
+                    }
+                    .padding(10)
+                    .background(theme.color("bg-2"), in: RoundedRectangle(cornerRadius: 8))
+                }
             }
             if !presentation.pluginUpdates.isEmpty {
                 Text("Plugin updates")

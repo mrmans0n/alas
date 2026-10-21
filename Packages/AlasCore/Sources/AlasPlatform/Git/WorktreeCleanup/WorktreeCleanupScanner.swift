@@ -93,8 +93,9 @@ public struct WorktreeCleanupScanner: Sendable {
     public struct Dependencies: Sendable {
         public var gitFacts: @Sendable (Worktree) async -> WorktreeCleanupGitFacts
         /// `Result` rather than an optional so a failure can carry its reason
-        /// into the `unknown` merge state the user sees.
-        public var mergeIndex: @Sendable (ProjectConfig) async -> Result<WorktreeForgeMergeIndex, Error>
+        /// into the `unknown` merge state the user sees. Receives the branches
+        /// of the worktrees being probed, so the query can stay that narrow.
+        public var mergeIndex: @Sendable (ProjectConfig, [String]) async -> Result<WorktreeForgeMergeIndex, Error>
         /// Async because the live implementations read `@MainActor` app state
         /// (open tabs, harness activity, in-flight operations) while the
         /// scanner itself is not main-actor isolated.
@@ -104,7 +105,7 @@ public struct WorktreeCleanupScanner: Sendable {
         public var workspaceOwners: @Sendable (Worktree) async -> [WorktreeCleanupWorkspaceOwner] = { _ in [] }
         public var workspaceOwnershipAvailable: @Sendable () async -> Bool = { true }
 
-        public init(gitFacts: @escaping @Sendable (Worktree) async -> WorktreeCleanupGitFacts, mergeIndex: @escaping @Sendable (ProjectConfig) async -> Result<WorktreeForgeMergeIndex, Error>, activeSessionCount: @escaping @Sendable (String) async -> Int, busySessionCount: @escaping @Sendable (String) async -> Int = { _ in 0 }, operationInFlight: @escaping @Sendable (String) async -> Bool, workspaceOwners: @escaping @Sendable (Worktree) async -> [WorktreeCleanupWorkspaceOwner] = { _ in [] }, workspaceOwnershipAvailable: @escaping @Sendable () async -> Bool = { true }) {
+        public init(gitFacts: @escaping @Sendable (Worktree) async -> WorktreeCleanupGitFacts, mergeIndex: @escaping @Sendable (ProjectConfig, [String]) async -> Result<WorktreeForgeMergeIndex, Error>, activeSessionCount: @escaping @Sendable (String) async -> Int, busySessionCount: @escaping @Sendable (String) async -> Int = { _ in 0 }, operationInFlight: @escaping @Sendable (String) async -> Bool, workspaceOwners: @escaping @Sendable (Worktree) async -> [WorktreeCleanupWorkspaceOwner] = { _ in [] }, workspaceOwnershipAvailable: @escaping @Sendable () async -> Bool = { true }) {
             self.gitFacts = gitFacts
             self.mergeIndex = mergeIndex
             self.activeSessionCount = activeSessionCount
@@ -124,14 +125,19 @@ public struct WorktreeCleanupScanner: Sendable {
     /// `baseBranch` must be the same branch the `gitFacts` probe compared
     /// against, since it is what the `.mergedLocally` signal names back to the
     /// user. Passing it explicitly keeps the label and the check from drifting.
+    ///
+    /// The main worktree is never a cleanup candidate, so it is left out of
+    /// the result without probing: `git status` on the primary checkout is
+    /// often the slowest probe in the scan.
     public func scan(
         project: ProjectConfig,
-        worktrees: [Worktree],
+        worktrees allWorktrees: [Worktree],
         baseBranch: String,
         now: Date,
         idleThresholdDays: Int,
         onUpdate: @escaping @Sendable (WorktreeCleanupScanUpdate) async -> Void = { _ in }
     ) async -> [WorktreeCleanupCandidate] {
+        let worktrees = allWorktrees.filter { !Self.isMainWorktree($0, of: project) }
         // Remote/SSH projects are out of scope for cleanup: excluded up front,
         // with no probes run at all.
         if project.host != nil {
@@ -159,8 +165,9 @@ public struct WorktreeCleanupScanner: Sendable {
         // probe results into a buffer while the network request runs, then
         // publish buffered and future rows as soon as forge evidence exists.
         let (probeResults, probeTask) = localProbeResults(for: worktrees)
+        let branches = worktrees.map(\.branch).filter { !$0.isEmpty }
         let mergeIndexTask = Task {
-            await dependencies.mergeIndex(project)
+            await dependencies.mergeIndex(project, branches)
         }
         defer {
             probeTask.cancel()
@@ -306,6 +313,13 @@ public struct WorktreeCleanupScanner: Sendable {
 
     public static func reason(for error: Error) -> String {
         (error as? LocalizedError)?.errorDescription ?? "\(error)"
+    }
+
+    /// Same rule as `ProjectsManager.isMain`: git's own flag when the topology
+    /// recorded it, otherwise the checkout at the project's path.
+    public static func isMainWorktree(_ worktree: Worktree, of project: ProjectConfig) -> Bool {
+        worktree.isMainWorktree
+            ?? (Worktree.makeId(path: worktree.path) == Worktree.makeId(path: URL(fileURLWithPath: project.path)))
     }
 
     private static func remoteProbe(for worktree: Worktree) -> WorktreeCleanupProbe {
