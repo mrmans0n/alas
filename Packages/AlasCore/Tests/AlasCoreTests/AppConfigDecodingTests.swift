@@ -76,4 +76,22 @@ struct AppConfigDecodingTests {
         let lenient = try JSONDecoder().decode(AppConfig.self, from: Data(bad.utf8))
         #expect(lenient.host == HostSettings(reachability: Optional<HostReachability>.none, port: 1234))
     }
+
+    @Test func writeKeepsUntouchedSettings() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("alas-write-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: file) }
+        var seed = AppConfig.defaults
+        seed.themeId = "x"
+        seed.remote.enabled = true
+        seed.terminal.fontSize = 17
+        try PersistenceStore().write(seed, to: file)
+
+        try HostProfileWrite.update({ try HostSettingCatalog.named("host.port", in: $0).set("9999", in: &$0) }, file: file)
+
+        let config = try #require(try PersistenceStore().readIfExists(AppConfig.self, from: file))
+        #expect(config.host.port == 9999)
+        #expect(config.themeId == "x")
+        #expect(config.remote.enabled)
+        #expect(config.terminal.fontSize == 17)
+    }
 }
