@@ -39,4 +39,41 @@ struct AppConfigDecodingTests {
         let decoded = try JSONDecoder().decode(AppConfig.self, from: JSONEncoder().encode(config))
         #expect(decoded == config)
     }
+
+    @Test(arguments: [
+        (nil as HostReachability?, false, false, nil as HostRemoteListen?),
+        (nil, true, false, HostRemoteListen(port: 8765, loopbackOnly: true, tailscaleServe: false)),
+        (nil, true, true, HostRemoteListen(port: 8765, loopbackOnly: true, tailscaleServe: true)),
+        (.lan, false, false, HostRemoteListen(port: 8765, loopbackOnly: false, tailscaleServe: false)),
+        (.off, true, false, nil),
+        (.loopback, true, true, HostRemoteListen(port: 8765, loopbackOnly: true, tailscaleServe: false)),
+    ])
+    func resolvesReachability(
+        reachability: HostReachability?, enabled: Bool, serve: Bool, expected: HostRemoteListen?
+    ) {
+        var config = AppConfig.defaults
+        config.host.reachability = reachability
+        config.remote.enabled = enabled
+        config.remote.tailscaleServe = serve
+        #expect(config.hostRemoteListen == expected)
+    }
+
+    @Test func hostSectionAbsentKeepsSharedRemoteBehavior() throws {
+        let json = #"{"remote":{"enabled":true,"port":9000}}"#
+        let config = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
+        #expect(config.host == HostSettings())
+        #expect(config.hostPort == 9000)
+        #expect(config.hostReachability == .loopback)
+    }
+
+    @Test func hostSectionRoundTrips() throws {
+        var config = AppConfig.defaults
+        config.host = HostSettings(reachability: .lan, port: 18765)
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: JSONEncoder().encode(config))
+        #expect(decoded.host == config.host)
+
+        let bad = #"{"host":{"reachability":"wide-open","port":1234}}"#
+        let lenient = try JSONDecoder().decode(AppConfig.self, from: Data(bad.utf8))
+        #expect(lenient.host == HostSettings(reachability: Optional<HostReachability>.none, port: 1234))
+    }
 }
