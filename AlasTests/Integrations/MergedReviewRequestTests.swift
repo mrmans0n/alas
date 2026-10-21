@@ -12,29 +12,26 @@ struct MergedReviewRequestTests {
         webURL: URL(string: "https://github.com/mrmans0n/alas")!
     )
 
-    @Test func parsesGitHubMergedPullRequests() throws {
+    @Test func parsesGitHubMergedPullRequestPages() throws {
         let json = """
         {"data": {"repository": {
-          "b0": {"nodes": [{"number": 42, "headRefName": "feature/a", "url": "https://github.com/mrmans0n/alas/pull/42", "headRefOid": "abc123"}]},
-          "b1": {"nodes": []},
-          "b2": {"nodes": [{"number": 43, "headRefName": "feature/b", "url": "https://github.com/mrmans0n/alas/pull/43", "headRefOid": "def456"}]}
+          "b0": {"pageInfo": {"hasNextPage": true, "endCursor": "p2"},
+                 "nodes": [{"number": 42, "headRefName": "feature/a", "url": "https://github.com/mrmans0n/alas/pull/42", "headRefOid": "abc123"}]},
+          "b1": {"pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": []}
         }}}
         """
-        let refs = try GitHubCLIProvider.parseMergedPullRequests(json)
-            .sorted { $0.number < $1.number }
-        #expect(refs == [
-            MergedReviewRequestRef(
-                number: 42,
-                headRefName: "feature/a",
-                url: URL(string: "https://github.com/mrmans0n/alas/pull/42")!,
-                headSHA: "abc123"
+        let pages = try GitHubCLIProvider.parseMergedPullRequests(json)
+        #expect(pages == [
+            "b0": .init(
+                refs: [MergedReviewRequestRef(
+                    number: 42,
+                    headRefName: "feature/a",
+                    url: URL(string: "https://github.com/mrmans0n/alas/pull/42")!,
+                    headSHA: "abc123"
+                )],
+                nextCursor: "p2"
             ),
-            MergedReviewRequestRef(
-                number: 43,
-                headRefName: "feature/b",
-                url: URL(string: "https://github.com/mrmans0n/alas/pull/43")!,
-                headSHA: "def456"
-            ),
+            "b1": .init(refs: [], nextCursor: nil),
         ])
     }
 
@@ -146,7 +143,9 @@ struct MergedReviewRequestTests {
     /// Branch names travel as GraphQL variables, never in the query text, and
     /// a long list is split so no single request grows unbounded.
     @Test func gitHubProviderBatchesBranchesAsVariables() async throws {
-        let runner = RecordingRunner(stdout: #"{"data": {"repository": {}}}"#)
+        let runner = GitHubGraphQLRunner { body in
+            Self.pullRequestsResponse(body.variables.keys.filter { $0.hasPrefix("b") }.map { ($0, [], nil) })
+        }
         let provider = GitHubCLIProvider(runner: runner)
         let branches = (0...GitHubCLIProvider.mergedPullRequestsBranchBatchSize).map { "feature/\"\($0)" }
         _ = try await provider.mergedReviewRequests(
@@ -154,19 +153,50 @@ struct MergedReviewRequestTests {
             headBranches: branches + [branches[0]],
             cwd: URL(fileURLWithPath: "/tmp")
         )
-        let invocations = await runner.invocations
-        #expect(invocations.count == 2)
-        for invocation in invocations {
-            let body = try #require(invocation.stdin)
-            let request = try JSONDecoder().decode(GraphQLBody.self, from: Data(body.utf8))
-            #expect(!request.query.contains("feature/"))
-        }
-        let sent = try invocations.flatMap { invocation in
-            try JSONDecoder().decode(GraphQLBody.self, from: Data(invocation.stdin!.utf8))
-                .variables.filter { $0.key.hasPrefix("b") }.values
-        }
+        let requests = await runner.requests
+        #expect(requests.count == 2)
+        #expect(requests.allSatisfy { !$0.query.contains("feature/") })
+        let sent = requests.flatMap { $0.variables.filter { $0.key.hasPrefix("b") }.values }
         #expect(Set(sent) == Set(branches))
         #expect(sent.count == branches.count)
+    }
+
+    /// A branch name reused across more merged pull requests than one page
+    /// holds is followed to its last page; the matching head can be older.
+    @Test func gitHubProviderFollowsEachBranchToItsLastPage() async throws {
+        let runner = GitHubGraphQLRunner { body in
+            let aliases = body.variables.keys.filter { $0.hasPrefix("b") }
+            return Self.pullRequestsResponse(aliases.map { alias in
+                let cursor = body.variables["c" + alias.dropFirst()]
+                switch (body.variables[alias], cursor) {
+                case ("feature/a", nil): return (alias, [1], "p2")
+                case ("feature/a", "p2"): return (alias, [2], nil)
+                default: return (alias, [], nil)
+                }
+            })
+        }
+        let refs = try await GitHubCLIProvider(runner: runner).mergedReviewRequests(
+            remote: Self.remote,
+            headBranches: ["feature/a", "feature/b"],
+            cwd: URL(fileURLWithPath: "/tmp")
+        )
+        #expect(refs.map(\.number).sorted() == [1, 2])
+        let requests = await runner.requests
+        #expect(requests.count == 2)
+        // Only the branch with more pages is asked again, from its cursor.
+        #expect(requests.last?.variables == ["owner": "mrmans0n", "repo": "alas", "b0": "feature/a", "c0": "p2"])
+    }
+
+    private static func pullRequestsResponse(_ connections: [(alias: String, numbers: [Int], nextCursor: String?)]) -> String {
+        let body = connections.map { alias, numbers, nextCursor in
+            let nodes = numbers.map {
+                #"{"number": \#($0), "headRefName": "feature/a", "url": "https://github.com/o/r/pull/\#($0)", "headRefOid": "sha\#($0)"}"#
+            }.joined(separator: ",")
+            let pageInfo = nextCursor.map { #"{"hasNextPage": true, "endCursor": "\#($0)"}"# }
+                ?? #"{"hasNextPage": false, "endCursor": null}"#
+            return #""\#(alias)": {"pageInfo": \#(pageInfo), "nodes": [\#(nodes)]}"#
+        }.joined(separator: ",")
+        return #"{"data": {"repository": {\#(body)}}}"#
     }
 
     @Test func gitHubProviderThrowsOnNonZeroExit() async {
@@ -262,6 +292,32 @@ private actor CursorRunner: CodeHostCommandRunning {
         let cursor = try JSONDecoder().decode(Body.self, from: Data((stdin ?? "").utf8)).variables.after
         cursors.append(cursor)
         return ProcessResult(exitCode: 0, stdout: responseForCursor(cursor), stderr: "")
+    }
+
+    func runData(_ executable: String, args: [String], cwd: URL?) async throws -> ProcessResultData {
+        ProcessResultData(exitCode: 0, stdout: Data(), stderr: "")
+    }
+}
+
+/// Answers GitHub GraphQL requests from their decoded body, so tests can
+/// respond per alias and per page cursor.
+private actor GitHubGraphQLRunner: CodeHostCommandRunning {
+    private(set) var requests: [GraphQLBody] = []
+    private let respond: @Sendable (GraphQLBody) -> String
+
+    init(respond: @escaping @Sendable (GraphQLBody) -> String) {
+        self.respond = respond
+    }
+
+    func run(
+        _ executable: String,
+        args: [String],
+        cwd: URL?,
+        stdin: String?
+    ) async throws -> ProcessResult {
+        let body = try JSONDecoder().decode(GraphQLBody.self, from: Data((stdin ?? "").utf8))
+        requests.append(body)
+        return ProcessResult(exitCode: 0, stdout: respond(body), stderr: "")
     }
 
     func runData(_ executable: String, args: [String], cwd: URL?) async throws -> ProcessResultData {
