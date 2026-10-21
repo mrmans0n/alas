@@ -14,7 +14,9 @@ struct StackShepherdSessionContext {
 
     init(sessionID: String, worktree: Worktree, state: AppState) {
         let shepherd = state.stackShepherd
-        let own = shepherd.record(forSession: sessionID).flatMap { $0.id.worktreeID == worktree.id ? $0 : nil }
+        let own = shepherd.record(
+            forSession: sessionID, worktreeID: worktree.id, currentStackName: state.shepherdStackName(for: worktree)
+        )
         record = own
         if own == nil, let other = shepherd.record(forWorktree: worktree.id),
            other.sessionID != sessionID, !other.isFinished {

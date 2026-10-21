@@ -214,6 +214,15 @@ public final class StackShepherd {
         Self.preferred(records.values.filter { $0.sessionID == sessionID })
     }
 
+    /// `record(forSession:)` for the stack the worktree is on now: a finished
+    /// record counts only while `currentStackName` is its own stack. After a
+    /// stack lands, the worktree can move to a new one, and the old record
+    /// must not stand in for it.
+    public func record(forSession sessionID: String, worktreeID: String, currentStackName: String?) -> StackShepherdRecord? {
+        guard let record = record(forSession: sessionID), record.id.worktreeID == worktreeID else { return nil }
+        return record.isFinished && record.id.stackName != currentStackName ? nil : record
+    }
+
     public func record(forWorktree worktreeID: String) -> StackShepherdRecord? {
         Self.preferred(records.values.filter { $0.id.worktreeID == worktreeID })
     }
@@ -530,6 +539,9 @@ public final class StackShepherd {
             headReviewers: reviewers,
             session: session,
             canDispatch: onStack != nil && !operationInProgress(context.path),
+            isStackPublished: onStack.map { stack in
+                stack.entries.allSatisfy { $0.prNumber != nil } && stack.syncedCommits == stack.totalCommits
+            } ?? true,
             rules: rules,
             now: now()
         )

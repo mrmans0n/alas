@@ -142,9 +142,9 @@ extension AppState {
     /// `/ship` in a gg stack worktree: what the Ship stack popover offers.
     func shipStackFromCommand(session: ACPSession, worktree: Worktree) async {
         let context = StackShepherdSessionContext(sessionID: session.id, worktree: worktree, state: self)
-        let stack = context.record == nil && context.otherRecord == nil
-            ? try? await stackShepherd.effects?.loadStack(worktree.path)
-            : nil
+        // A finished record is not this session's stack: load what gg lists.
+        let hasLiveRecord = context.record?.isFinished == false || context.otherRecord != nil
+        let stack = hasLiveRecord ? nil : try? await stackShepherd.effects?.loadStack(worktree.path)
         switch StackShipAction.resolve(
             record: context.record,
             otherRecord: context.otherRecord,

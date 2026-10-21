@@ -22,6 +22,12 @@ public struct StackShepherdObservation: Sendable {
     /// The worktree is on this stack with no gg or git operation paused, so
     /// the session can move between entries. Fix turns wait otherwise.
     public let canDispatch: Bool
+    /// Every local entry has a request and gg reports the stack synced, so
+    /// the requests describe what is in the worktree. False while a commit is
+    /// unpublished or an entry was rewritten after its last sync, when green
+    /// requests say nothing about the code that would land. Unknown (true)
+    /// while the worktree is on another stack.
+    public let isStackPublished: Bool
     public let rules: ShepherdRules
     public let now: Date
 
@@ -33,6 +39,7 @@ public struct StackShepherdObservation: Sendable {
         headReviewers: [Int: Set<String>],
         session: ShepherdSessionState,
         canDispatch: Bool,
+        isStackPublished: Bool = true,
         rules: ShepherdRules,
         now: Date
     ) {
@@ -43,6 +50,7 @@ public struct StackShepherdObservation: Sendable {
         self.headReviewers = headReviewers
         self.session = session
         self.canDispatch = canDispatch
+        self.isStackPublished = isStackPublished
         self.rules = rules
         self.now = now
     }
@@ -209,7 +217,7 @@ public enum StackShepherdPolicy {
         next.entries = entries
 
         let open = next.openEntries
-        decision.gatePasses = !open.isEmpty && open.allSatisfy { entry in
+        decision.gatePasses = observation.isStackPublished && !open.isEmpty && open.allSatisfy { entry in
             guard entry.shepherd.phase == .watching,
                   let request = observation.requests[entry.requestNumber]
             else { return false }

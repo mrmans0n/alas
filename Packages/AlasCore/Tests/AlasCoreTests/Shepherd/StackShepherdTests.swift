@@ -56,6 +56,7 @@ struct StackShepherdTests {
         _ requests: [ReviewRequest],
         present: Set<String>? = nil,
         canDispatch: Bool = true,
+        isStackPublished: Bool = true,
         now: Date = F.now
     ) -> StackShepherdObservation {
         StackShepherdObservation(
@@ -66,6 +67,7 @@ struct StackShepherdTests {
             headReviewers: [:],
             session: .idle,
             canDispatch: canDispatch,
+            isStackPublished: isStackPublished,
             rules: .none,
             now: now
         )
@@ -117,11 +119,31 @@ struct StackShepherdTests {
         let pending = StackShepherdPolicy.decide(record, Self.observation([green[0], Self.request(42, checks: [F.pending])]))
         #expect(!pending.gatePasses)
 
+        // Green requests say nothing about a commit gg has not published yet.
+        let unpublished = StackShepherdPolicy.decide(record, Self.observation(green, isStackPublished: false))
+        #expect(!unpublished.gatePasses && !unpublished.notifyReady)
+
         let ready = StackShepherdPolicy.decide(record, Self.observation(green))
         let again = StackShepherdPolicy.decide(ready.record, Self.observation(green))
 
         #expect(ready.gatePasses && ready.notifyReady)
         #expect(again.gatePasses && !again.notifyReady)
+    }
+
+    /// After a stack lands the worktree can move to a new one; the finished
+    /// record only counts while the worktree is still on its own stack.
+    @Test func aFinishedRecordDoesNotStandInForTheStackTheWorktreeMovedTo() throws {
+        var finished = Self.record([41])
+        finished.entries[0].shepherd.phase = .merged
+        finished.finishedAt = Date()
+        let fileURL = URL(fileURLWithPath: "/memory/stack-shepherds.json")
+        let store = MemoryStore()
+        try store.write(StackShepherdsFile(records: [finished]), to: fileURL)
+        let shepherd = StackShepherd(store: store, fileURL: fileURL)
+
+        #expect(shepherd.record(forSession: "session-1", worktreeID: "wt-1", currentStackName: "auth")?.isFinished == true)
+        #expect(shepherd.record(forSession: "session-1", worktreeID: "wt-1", currentStackName: "other") == nil)
+        #expect(shepherd.record(forSession: "session-1", worktreeID: "wt-2", currentStackName: "auth") == nil)
     }
 
     @Test func reconcileKeepsEntryStateAcrossRewritesAndRestartsWhenTheRequestChanges() {
