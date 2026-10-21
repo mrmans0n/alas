@@ -7,8 +7,9 @@ func withChildHolding<T>(_ descriptor: Int32, _ body: () throws -> T) throws -> 
     var actions: posix_spawn_file_actions_t?
     posix_spawn_file_actions_init(&actions)
     defer { posix_spawn_file_actions_destroy(&actions) }
-    // dup2 onto another number clears close-on-exec on the child's copy.
-    posix_spawn_file_actions_adddup2(&actions, descriptor, 3)
+    // dup2 onto another number clears close-on-exec on the child's copy; onto
+    // the same number it does nothing, and exec would close it.
+    posix_spawn_file_actions_adddup2(&actions, descriptor, descriptor == 3 ? 4 : 3)
     var pid: pid_t = 0
     let command: [String] = ["/bin/sleep", "60"]
     let arguments: [UnsafeMutablePointer<CChar>?] = command.map { strdup($0) } + [nil]
