@@ -1803,6 +1803,7 @@ fn broker_send(runtime: &Runtime, params: Option<Value>) -> Result<Value, AcpBro
                     "replayed": true,
                 });
                 apply_outcome_fields(&mut response, outcome);
+                state.broker.consume_hook_review_rejection(&params.operation_key, operation.adapter_request_id);
                 return Ok(response);
             }
         } else {
@@ -2699,6 +2700,52 @@ fn broker_error(code: i64, message: impl Into<String>) -> AcpBrokerProcessError 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reviewed_operation_replay_preserves_success_and_delivers_rejection_before_eviction() {
+        for (rejection_kind, acknowledge_replay) in [
+            (None, false),
+            (Some("codex_hook_review_required"), false),
+            (Some("codex_hook_review_required"), true),
+            (Some("codex_hook_changed"), true),
+        ] {
+            let mut state = steering_runtime_state();
+            let key = OperationKey::new("reviewed");
+            let params = |token: &str| json!({"sessionId":"root","_meta":{"codexHooks":{"reviewToken":token}}});
+            let started = state.broker.begin_operation(key.clone(), "session/fork", params("old")).unwrap();
+            let outcome = if let Some(kind) = rejection_kind {
+                AdapterRPCOutcome::error(JSONRPCErrorObject {
+                    code: -32044, message: "Review required".into(),
+                    data: Some(json!({"kind":kind})),
+                })
+            } else { AdapterRPCOutcome::result(json!({"sessionId":"forked"})) };
+            state.broker.complete_operation(&key, outcome).unwrap();
+            if acknowledge_replay {
+                // Replay may ACK the rejection while the caller still holds a
+                // pending send response. The next poll must receive the error.
+                state.broker.ack(state.broker.journal_tail()).unwrap();
+            }
+            let journal = state.broker.replay_after_ack();
+            // Closed stdin makes an accidental adapter re-dispatch fail this test.
+            let mut child = Command::new("/usr/bin/true").stdin(Stdio::piped()).spawn().unwrap();
+            let stdin = child.stdin.take().unwrap();
+            child.wait().unwrap();
+            let runtime = Runtime {
+                state: Arc::new((Mutex::new(state), Condvar::new())),
+                adapter_stdin: Arc::new(Mutex::new(stdin)),
+            };
+            let response = broker_send(&runtime, Some(json!({
+                "brokerId":"steering", "generation":1, "operationKey":"reviewed",
+                "method":"session/fork", "params":params(if acknowledge_replay { "old" } else { "fresh" })
+            }))).unwrap();
+            assert_eq!(response["requestId"], started.adapter_request_id.value());
+            assert_eq!(response["replayed"], true);
+            assert_eq!(response.get("error").is_some(), rejection_kind.is_some());
+            let state = lock_runtime(&runtime);
+            assert_eq!(state.broker.replay_after_ack(), journal);
+            assert_eq!(state.broker.snapshot().operations.is_empty(), rejection_kind.is_some());
+        }
+    }
 
     #[test]
     fn attach_pages_progress_without_acknowledging_or_dropping_large_events() {

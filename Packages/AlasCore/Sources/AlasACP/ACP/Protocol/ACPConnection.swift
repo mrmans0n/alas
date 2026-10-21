@@ -170,6 +170,107 @@ public final class ACPConnection: @unchecked Sendable {
     /// Set after `initialize` from `ACPSessionInstructionsPolicy`. Sent as
     /// `_meta.systemPrompt.append` on session/new, load, resume, and fork.
     public var sessionInstructions: String?
+    private struct CodexHooksState {
+        var enabled = false
+        var negotiated = false
+        var token: String?
+        var brokerMismatch = false
+        var review: (@MainActor @Sendable () async throws -> Void)?
+        var invalidate: (@Sendable () async -> Void)?
+    }
+    private let codexHooksLock = NSLock()
+    private var codexHooksState = CodexHooksState()
+
+    /// Hook state changes during active operations, unlike startup-only session metadata.
+    /// Snapshot under the lock and release it before callbacks or transport awaits.
+    public var codexHooksReviewEnabled: Bool {
+        get { codexHooksLock.withLock { codexHooksState.enabled } }
+        set { codexHooksLock.withLock { codexHooksState.enabled = newValue } }
+    }
+    public private(set) var negotiatedCodexHooks: Bool {
+        get { codexHooksLock.withLock { codexHooksState.negotiated } }
+        set { codexHooksLock.withLock { codexHooksState.negotiated = newValue } }
+    }
+    public var codexHooksReviewToken: String? {
+        get { codexHooksLock.withLock { codexHooksState.token } }
+        set { codexHooksLock.withLock { codexHooksState.token = newValue } }
+    }
+    /// The attachment installs its token under its current owner/generation fence.
+    public var reviewCodexHooks: (@MainActor @Sendable () async throws -> Void)? {
+        get { codexHooksLock.withLock { codexHooksState.review } }
+        set { codexHooksLock.withLock { codexHooksState.review = newValue } }
+    }
+    public var onCodexHooksInvalidated: (@Sendable () async -> Void)? {
+        get { codexHooksLock.withLock { codexHooksState.invalidate } }
+        set { codexHooksLock.withLock { codexHooksState.invalidate = newValue } }
+    }
+    private var codexHooksBrokerMismatch: Bool {
+        get { codexHooksLock.withLock { codexHooksState.brokerMismatch } }
+        set { codexHooksLock.withLock { codexHooksState.brokerMismatch = newValue } }
+    }
+    private var reviewedCodexHooksToken: String? {
+        codexHooksLock.withLock { codexHooksState.negotiated ? codexHooksState.token : nil }
+    }
+
+    @MainActor public func invalidateCodexHooksReview() async {
+        codexHooksReviewToken = nil
+        await onCodexHooksInvalidated?()
+    }
+
+    private func withCodexHooksInvalidation<T: Sendable>(_ operation: @Sendable () async throws -> T) async throws -> T {
+        guard negotiatedCodexHooks || onCodexHooksInvalidated != nil else {
+            codexHooksReviewToken = nil
+            defer { codexHooksReviewToken = nil }
+            return try await operation()
+        }
+        return try await withActiveCodexHooksInvalidation(operation)
+    }
+
+    @MainActor private func withActiveCodexHooksInvalidation<T: Sendable>(_ operation: @Sendable () async throws -> T) async throws -> T {
+        await invalidateCodexHooksReview()
+        do {
+            let result = try await operation()
+            await invalidateCodexHooksReview()
+            return result
+        } catch {
+            await invalidateCodexHooksReview()
+            throw error
+        }
+    }
+
+    private func withCodexHooksReview<T: Sendable>(required: Bool = true, _ operation: @Sendable () async throws -> T) async throws -> T {
+        // Ordinary adapters keep their original executor and transport path.
+        guard required, negotiatedCodexHooks, let reviewCodexHooks else { return try await operation() }
+        return try await withActiveCodexHooksReview(review: reviewCodexHooks, operation)
+    }
+
+    @MainActor private func withActiveCodexHooksReview<T: Sendable>(
+        review: @MainActor @Sendable () async throws -> Void,
+        _ operation: @Sendable () async throws -> T
+    ) async throws -> T {
+        while true {
+            try Task.checkCancellation()
+            if codexHooksBrokerMismatch { throw ACPCodexHooksBrokerMismatchError() }
+            if codexHooksReviewToken == nil {
+                try await review()
+                try Task.checkCancellation()
+                guard codexHooksReviewToken != nil else { continue }
+            }
+            let attemptedToken = codexHooksReviewToken
+            try Task.checkCancellation()
+            do { return try await operation() }
+            catch {
+                if case RemoteHelperClientError.jsonrpc(let rpc) = error,
+                   rpc.code == -32076, rpc.message == "broker state error: OperationKeyPayloadMismatch" {
+                    codexHooksBrokerMismatch = true
+                    throw ACPCodexHooksBrokerMismatchError()
+                }
+                guard ACPCodexHookReviewError.classify(error) != nil else { throw error }
+                // A concurrent operation may already have reviewed the replacement.
+                if codexHooksReviewToken == attemptedToken { codexHooksReviewToken = nil }
+            }
+        }
+    }
 
     public init(client: ACPClient, sessionMeta: ACPSessionMeta? = nil) {
         self.client = client
@@ -183,6 +284,9 @@ public final class ACPConnection: @unchecked Sendable {
         if let mcpStartupAwaitTimeoutMs, let mcpServers, !mcpServers.isEmpty {
             meta.mcpStartupAwaitTimeoutMs = mcpStartupAwaitTimeoutMs
         }
+        if let token = reviewedCodexHooksToken {
+            meta.codexHooks = .init(reviewToken: token)
+        }
         if let sessionInstructions {
             meta.systemPrompt = .init(append: sessionInstructions)
         }
@@ -193,18 +297,31 @@ public final class ACPConnection: @unchecked Sendable {
     /// missing prompt capability fields to false and missing auth methods to empty.
     @discardableResult
     public func initialize(brokerOperationKey: String? = nil) async throws -> ACPInitializeOutcome {
+        codexHooksReviewToken = nil
+        negotiatedCodexHooks = false
+        let meta = ACPClientCapabilitiesMeta(
+            terminalAuth: true,
+            parameterizedModelPicker: true,
+            openCodeChildSessionUpdates: true,
+            asyncTasks: true,
+            contextUsage: true,
+            codexHooks: codexHooksReviewEnabled ? .init() : nil
+        )
         let req = ACPRequest(method: "initialize",
                              params: ACPInitializeParams(
                                 protocolVersion: ACPProtocolVersion.current,
                                 clientCapabilities: .init(
                                     fs: .init(readTextFile: true, writeTextFile: true),
                                     terminal: client.advertisesTerminalCapability,
-                                    meta: .terminalAuth)),
+                                    meta: meta)),
                              brokerOperationKey: brokerOperationKey)
         let resp = try await client.send(req)
         defer { resp.acknowledgeDurableConsumption() }
         let result = try JSONDecoder().decode(ACPInitializeResult.self, from: resp.body)
         let capabilities = result.agentCapabilities
+        negotiatedCodexHooks = codexHooksReviewEnabled
+            && ACPCodexHooksCapability.supports(agentInfo: result.agentInfo)
+            && result.meta?.codexHooks?.isSupported == true
         negotiatedSessionIndex = result.meta?.sessionIndex?.support
         return ACPInitializeOutcome(
             promptCapabilities: capabilities?.promptCapabilities ?? .init(),
@@ -232,27 +349,31 @@ public final class ACPConnection: @unchecked Sendable {
         mcpServers: [ACPMCPServer],
         brokerOperationKey: String? = nil
     ) async throws -> ACPSessionNewResult {
-        let req = ACPRequest(method: "session/new",
-                             params: ACPSessionNewParams(cwd: cwd, mcpServers: mcpServers, meta: requestMeta(mcpServers: mcpServers)),
-                             brokerOperationKey: brokerOperationKey)
-        let resp = try await client.send(req)
-        let result = try JSONDecoder().decode(ACPSessionNewResult.self, from: resp.body)
-        guard !result.sessionId.isEmpty else {
-            throw DecodingError.dataCorrupted(.init(
-                codingPath: [],
-                debugDescription: "session/new response is missing sessionId"
-            ))
+        return try await withCodexHooksReview() {
+            let req = ACPRequest(method: "session/new",
+                                 params: ACPSessionNewParams(cwd: cwd, mcpServers: mcpServers, meta: requestMeta(mcpServers: mcpServers)),
+                                 brokerOperationKey: brokerOperationKey)
+            let resp = try await client.send(req)
+            let result = try JSONDecoder().decode(ACPSessionNewResult.self, from: resp.body)
+            guard !result.sessionId.isEmpty else {
+                throw DecodingError.dataCorrupted(.init(
+                    codingPath: [],
+                    debugDescription: "session/new response is missing sessionId"
+                ))
+            }
+            deferDurableSessionResponse(resp)
+            return result
         }
-        deferDurableSessionResponse(resp)
-        return result
     }
 
     public func authenticate(methodId: String) async throws {
-        let resp = try await client.send(ACPRequest(
-            method: "authenticate",
-            params: ACPAuthenticateParams(methodId: methodId)
-        ))
-        resp.acknowledgeDurableConsumption()
+        return try await withCodexHooksInvalidation {
+            let resp = try await client.send(ACPRequest(
+                method: "authenticate",
+                params: ACPAuthenticateParams(methodId: methodId)
+            ))
+            resp.acknowledgeDurableConsumption()
+                }
     }
 
     public func loadSession(
@@ -261,13 +382,15 @@ public final class ACPConnection: @unchecked Sendable {
         mcpServers: [ACPMCPServer],
         brokerOperationKey: String? = nil
     ) async throws -> ACPSessionNewResult {
-        let req = ACPRequest(method: "session/load",
-                             params: ACPSessionLoadParams(cwd: cwd, sessionId: sessionId, mcpServers: mcpServers, meta: requestMeta(mcpServers: nil)),
-                             brokerOperationKey: brokerOperationKey)
-        let resp = try await client.send(req)
-        let result = try JSONDecoder().decode(ACPSessionNewResult.self, from: resp.body)
-        deferDurableSessionResponse(resp)
-        return result.sessionId.isEmpty ? result.withSessionId(sessionId) : result
+        return try await withCodexHooksReview() {
+            let req = ACPRequest(method: "session/load",
+                                 params: ACPSessionLoadParams(cwd: cwd, sessionId: sessionId, mcpServers: mcpServers, meta: requestMeta(mcpServers: nil)),
+                                 brokerOperationKey: brokerOperationKey)
+            let resp = try await client.send(req)
+            let result = try JSONDecoder().decode(ACPSessionNewResult.self, from: resp.body)
+            deferDurableSessionResponse(resp)
+            return result.sessionId.isEmpty ? result.withSessionId(sessionId) : result
+        }
     }
 
     public func resumeSession(
@@ -276,15 +399,17 @@ public final class ACPConnection: @unchecked Sendable {
         mcpServers: [ACPMCPServer],
         brokerOperationKey: String? = nil
     ) async throws -> ACPSessionNewResult {
-        let req = ACPRequest(
-            method: "session/resume",
-            params: ACPSessionResumeParams(cwd: cwd, sessionId: sessionId, mcpServers: mcpServers, meta: requestMeta(mcpServers: mcpServers)),
-            brokerOperationKey: brokerOperationKey
-        )
-        let resp = try await client.send(req)
-        let result = try JSONDecoder().decode(ACPSessionNewResult.self, from: resp.body)
-        deferDurableSessionResponse(resp)
-        return result.sessionId.isEmpty ? result.withSessionId(sessionId) : result
+        return try await withCodexHooksReview() {
+            let req = ACPRequest(
+                method: "session/resume",
+                params: ACPSessionResumeParams(cwd: cwd, sessionId: sessionId, mcpServers: mcpServers, meta: requestMeta(mcpServers: mcpServers)),
+                brokerOperationKey: brokerOperationKey
+            )
+            let resp = try await client.send(req)
+            let result = try JSONDecoder().decode(ACPSessionNewResult.self, from: resp.body)
+            deferDurableSessionResponse(resp)
+            return result.sessionId.isEmpty ? result.withSessionId(sessionId) : result
+        }
     }
 
     /// `index` asks for the session index page; send it only to an agent
@@ -344,21 +469,23 @@ public final class ACPConnection: @unchecked Sendable {
         mcpServers: [ACPMCPServer],
         brokerOperationKey: String? = nil
     ) async throws -> ACPSessionNewResult {
-        let req = ACPRequest(
-            method: "session/fork",
-            params: ACPSessionForkParams(cwd: cwd, sessionId: sessionId, mcpServers: mcpServers, meta: requestMeta(mcpServers: mcpServers)),
-            brokerOperationKey: brokerOperationKey
-        )
-        let resp = try await client.send(req)
-        deferDurableSessionResponse(resp)
-        let result = try JSONDecoder().decode(ACPSessionNewResult.self, from: resp.body)
-        guard !result.sessionId.isEmpty else {
-            throw DecodingError.dataCorrupted(.init(
-                codingPath: [],
-                debugDescription: "session/fork response is missing sessionId"
-            ))
+        return try await withCodexHooksReview() {
+            let req = ACPRequest(
+                method: "session/fork",
+                params: ACPSessionForkParams(cwd: cwd, sessionId: sessionId, mcpServers: mcpServers, meta: requestMeta(mcpServers: mcpServers)),
+                brokerOperationKey: brokerOperationKey
+            )
+            let resp = try await client.send(req)
+            deferDurableSessionResponse(resp)
+            let result = try JSONDecoder().decode(ACPSessionNewResult.self, from: resp.body)
+            guard !result.sessionId.isEmpty else {
+                throw DecodingError.dataCorrupted(.init(
+                    codingPath: [],
+                    debugDescription: "session/fork response is missing sessionId"
+                ))
+            }
+            return result
         }
-        return result
     }
 
     public func closeSession(sessionId: String) async throws {
@@ -439,23 +566,27 @@ public final class ACPConnection: @unchecked Sendable {
         action: ACPGoalAction,
         objective: String? = nil
     ) async throws {
-        guard capability.actions.contains(action) else {
-            throw ACPGoalControlError.unsupportedAction(action)
+        return try await withCodexHooksReview(required: action == .set || action == .resume) {
+            guard capability.actions.contains(action) else {
+                throw ACPGoalControlError.unsupportedAction(action)
+            }
+            let normalizedObjective: String?
+            if action == .set {
+                let trimmed = objective?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                guard !trimmed.isEmpty else { throw ACPGoalControlError.objectiveRequired }
+                normalizedObjective = trimmed
+            } else {
+                normalizedObjective = nil
+            }
+            var params = ACPGoalControlParams(sessionId: sessionId, action: action, objective: normalizedObjective)
+            if action == .set || action == .resume { params.meta = hookRequestMeta }
+            let response = try await client.send(ACPRequest(
+                method: capability.controlMethod,
+                params: params
+            ))
+            defer { response.acknowledgeDurableConsumption() }
+            _ = try JSONDecoder().decode(EmptyObject.self, from: response.body)
         }
-        let normalizedObjective: String?
-        if action == .set {
-            let trimmed = objective?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            guard !trimmed.isEmpty else { throw ACPGoalControlError.objectiveRequired }
-            normalizedObjective = trimmed
-        } else {
-            normalizedObjective = nil
-        }
-        let response = try await client.send(ACPRequest(
-            method: capability.controlMethod,
-            params: ACPGoalControlParams(sessionId: sessionId, action: action, objective: normalizedObjective)
-        ))
-        defer { response.acknowledgeDurableConsumption() }
-        _ = try JSONDecoder().decode(EmptyObject.self, from: response.body)
     }
 
     public func listProviders() async throws -> [ACPProviderInfo] {
@@ -468,18 +599,22 @@ public final class ACPConnection: @unchecked Sendable {
     }
 
     public func setProvider(_ params: ACPProviderSetParams) async throws -> [ACPProviderInfo] {
-        let response = try await client.send(ACPRequest(method: "providers/set", params: params))
-        response.acknowledgeDurableConsumption()
-        return try await listProviders()
+        return try await withCodexHooksInvalidation {
+            let response = try await client.send(ACPRequest(method: "providers/set", params: params))
+            response.acknowledgeDurableConsumption()
+            return try await listProviders()
+                }
     }
 
     public func disableProvider(providerId: String) async throws -> [ACPProviderInfo] {
-        let response = try await client.send(ACPRequest(
-            method: "providers/disable",
-            params: ACPProviderDisableParams(providerId: providerId)
-        ))
-        response.acknowledgeDurableConsumption()
-        return try await listProviders()
+        return try await withCodexHooksInvalidation {
+            let response = try await client.send(ACPRequest(
+                method: "providers/disable",
+                params: ACPProviderDisableParams(providerId: providerId)
+            ))
+            response.acknowledgeDurableConsumption()
+            return try await listProviders()
+                }
     }
 
     /// Sends a config-option change and returns the agent's refreshed
@@ -511,44 +646,48 @@ public final class ACPConnection: @unchecked Sendable {
         beforeRequestHandoff: (@Sendable (ACPBrokerGeneration?) async throws -> Void)? = nil,
         onRequestHandoffDidOccur: (@Sendable () throws -> Void)? = nil
     ) async throws -> ACPPromptOutcome {
-        let request = ACPRequest(
-            method: "session/prompt",
-            params: ACPSessionPromptParams(sessionId: sessionId, prompt: blocks),
-            brokerOperationKey: brokerOperationKey
-        )
-        let resp: ACPResponse
         let handoff = onRequestHandoff.map(ACPRequestHandoff.init)
         let handoffBoundary = onRequestHandoffDidOccur.map(ACPRequestHandoffBoundary.init)
-        do {
-            if let beforeRequestHandoff,
-               let preparingClient = client as? ACPRequestHandoffPreparing {
-                resp = try await preparingClient.send(
-                    request,
-                    beforeRequestHandoff: beforeRequestHandoff,
-                    onRequestHandoff: {
-                        try handoffBoundary?.fire()
+        return try await withCodexHooksReview() {
+            var params = ACPSessionPromptParams(sessionId: sessionId, prompt: blocks)
+            params.meta = hookRequestMeta
+            let request = ACPRequest(
+                method: "session/prompt",
+                params: params,
+                brokerOperationKey: brokerOperationKey
+            )
+            let resp: ACPResponse
+            do {
+                if let beforeRequestHandoff,
+                   let preparingClient = client as? ACPRequestHandoffPreparing {
+                    resp = try await preparingClient.send(
+                        request,
+                        beforeRequestHandoff: beforeRequestHandoff,
+                        onRequestHandoff: {
+                            try handoffBoundary?.fire()
+                            onTransportHandoff?()
+                            handoff?.fire()
+                        }
+                    )
+                } else if handoff != nil || onTransportHandoff != nil {
+                    resp = try await client.send(request, onRequestHandoff: {
                         onTransportHandoff?()
                         handoff?.fire()
-                    }
-                )
-            } else if handoff != nil || onTransportHandoff != nil {
-                resp = try await client.send(request, onRequestHandoff: {
-                    onTransportHandoff?()
-                    handoff?.fire()
-                })
-            } else {
-                resp = try await client.send(request)
+                    })
+                } else {
+                    resp = try await client.send(request)
+                }
+            } catch {
+                handoff?.fire()
+                throw error
             }
-        } catch {
-            handoff?.fire()
-            throw error
+            let quota = (try? JSONDecoder().decode(ACPSessionPromptResult.self, from: resp.body))?.quota
+            if acknowledgeDurableConsumption {
+                resp.acknowledgeDurableConsumption()
+                return ACPPromptOutcome(acknowledgement: nil, quota: quota)
+            }
+            return ACPPromptOutcome(acknowledgement: resp.durableConsumptionAcknowledgement, quota: quota)
         }
-        let quota = (try? JSONDecoder().decode(ACPSessionPromptResult.self, from: resp.body))?.quota
-        if acknowledgeDurableConsumption {
-            resp.acknowledgeDurableConsumption()
-            return ACPPromptOutcome(acknowledgement: nil, quota: quota)
-        }
-        return ACPPromptOutcome(acknowledgement: resp.durableConsumptionAcknowledgement, quota: quota)
     }
 
     public func steer(
@@ -556,36 +695,40 @@ public final class ACPConnection: @unchecked Sendable {
         brokerOperationKey: String? = nil,
         onRequestHandoff: (@Sendable () -> Void)? = nil
     ) async throws -> ACPSteeringResult {
-        let request = ACPRequest(
-            method: "_session/steering",
-            params: ACPSteeringParams(sessionId: sessionId, prompt: blocks),
-            brokerOperationKey: brokerOperationKey
-        )
         let handoff = onRequestHandoff.map(ACPRequestHandoff.init)
-        let response: ACPResponse
-        func dispatch() async throws -> ACPResponse {
-            if let handoff {
-                return try await client.send(request, onRequestHandoff: { handoff.fire() })
+        return try await withCodexHooksReview() {
+            var params = ACPSteeringParams(sessionId: sessionId, prompt: blocks)
+            if let token = reviewedCodexHooksToken { params.meta["codexHooks"] = ["reviewToken": token] }
+            let request = ACPRequest(
+                method: "_session/steering",
+                params: params,
+                brokerOperationKey: brokerOperationKey
+            )
+            let response: ACPResponse
+            func dispatch() async throws -> ACPResponse {
+                if let handoff {
+                    return try await client.send(request, onRequestHandoff: { handoff.fire() })
+                }
+                return try await client.send(request)
             }
-            return try await client.send(request)
-        }
-        do {
             do {
-                response = try await dispatch()
+                do {
+                    response = try await dispatch()
+                } catch {
+                    // The broker already completed this exact operation. Reusing
+                    // its saved key recovers the outcome without another delivery.
+                    guard brokerOperationKey != nil, error is ACPBrokerDurableCompletionReplayError else { throw error }
+                    response = try await dispatch()
+                }
             } catch {
-                // The broker already completed this exact operation. Reusing
-                // its saved key recovers the outcome without another delivery.
-                guard brokerOperationKey != nil, error is ACPBrokerDurableCompletionReplayError else { throw error }
-                response = try await dispatch()
+                handoff?.fire()
+                throw error
             }
-        } catch {
-            handoff?.fire()
-            throw error
+            struct DecodedResult: Decodable { let outcome: ACPSteeringOutcome }
+            return ACPSteeringResult(
+                outcome: Result { try JSONDecoder().decode(DecodedResult.self, from: response.body).outcome },
+                acknowledgement: response.durableConsumptionAcknowledgement)
         }
-        struct DecodedResult: Decodable { let outcome: ACPSteeringOutcome }
-        return ACPSteeringResult(
-            outcome: Result { try JSONDecoder().decode(DecodedResult.self, from: response.body).outcome },
-            acknowledgement: response.durableConsumptionAcknowledgement)
     }
 
     public func acknowledgeDurableSessionResponses() {
@@ -605,7 +748,41 @@ public final class ACPConnection: @unchecked Sendable {
         durableResponseLock.unlock()
     }
 
-    public func shutdown() async { await client.shutdown() }
+    private var hookRequestMeta: ACPSessionMeta? {
+        guard let token = reviewedCodexHooksToken else { return nil }
+        var meta = ACPSessionMeta()
+        meta.codexHooks = .init(reviewToken: token)
+        return meta
+    }
 
-    public func detach() async { await client.detach() }
+    public func listCodexHooks(cwd: String) async throws -> ACPCodexHooksList {
+        guard negotiatedCodexHooks else { throw ACPClientError.decoding("Codex hook review was not negotiated") }
+        struct Params: Encodable { let cwd: String }
+        let response = try await client.send(ACPRequest(method: "_codex/hooks/list", params: Params(cwd: cwd)))
+        defer { response.acknowledgeDurableConsumption() }
+        return try JSONDecoder().decode(ACPCodexHooksList.self, from: response.body)
+    }
+
+    public func trustCodexHooks(cwd: String, reviewToken: String, hooks: [ACPCodexHookIdentity]) async throws -> Bool {
+        guard negotiatedCodexHooks else { throw ACPClientError.decoding("Codex hook review was not negotiated") }
+        struct Params: Encodable {
+            let cwd: String
+            let reviewToken: String
+            let hooks: [ACPCodexHookIdentity]
+        }
+        struct Response: Decodable { let trusted: Bool }
+        let response = try await client.send(ACPRequest(method: "_codex/hooks/trust", params: Params(cwd: cwd, reviewToken: reviewToken, hooks: hooks)))
+        defer { response.acknowledgeDurableConsumption() }
+        return try JSONDecoder().decode(Response.self, from: response.body).trusted
+    }
+
+    public func shutdown() async {
+        await invalidateCodexHooksReview()
+        await client.shutdown()
+    }
+
+    public func detach() async {
+        await invalidateCodexHooksReview()
+        await client.detach()
+    }
 }

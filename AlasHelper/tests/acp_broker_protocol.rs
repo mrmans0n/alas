@@ -723,3 +723,49 @@ fn journal_contains_semantic_events_for_protocol_replay() {
         BrokerEventKind::OperationCompleted { .. }
     ));
 }
+
+#[test]
+fn fresh_hook_token_replays_pending_and_successful_operations_without_dispatch() {
+    for method in ["session/fork", "session/prompt"] {
+        let mut broker = broker();
+        let key = OperationKey::new("reviewed-operation");
+        let params = |token: &str| json!({"sessionId":"s","prompt":[],"_meta":{"codexHooks":{"reviewToken":token},"other":true}});
+        let first = broker.begin_operation(key.clone(), method, params("old")).unwrap();
+        let pending = broker.begin_operation(key.clone(), method, params("fresh")).unwrap();
+        assert!(pending.replayed);
+        assert_eq!(pending.adapter_request_id, first.adapter_request_id);
+        broker.complete_operation(&key, AdapterRPCOutcome::result(json!({"sessionId":"forked"}))).unwrap();
+        let completed = broker.begin_operation(key.clone(), method, params("fresh")).unwrap();
+        assert!(completed.replayed);
+        assert_eq!(completed.adapter_request_id, first.adapter_request_id);
+        let mut changed = params("fresh");
+        changed["sessionId"] = json!("another");
+        assert_eq!(broker.begin_operation(key.clone(), method, changed).unwrap_err().kind(), BrokerErrorKind::OperationKeyPayloadMismatch);
+        for token in [json!(""), Value::Null, json!(true)] {
+            let mut invalid = params("fresh");
+            invalid["_meta"]["codexHooks"]["reviewToken"] = token;
+            assert_eq!(broker.begin_operation(key.clone(), method, invalid).unwrap_err().kind(), BrokerErrorKind::OperationKeyPayloadMismatch);
+        }
+        let mut changed = params("fresh");
+        changed["_meta"]["other"] = json!(false);
+        assert_eq!(broker.begin_operation(key.clone(), method, changed).unwrap_err().kind(), BrokerErrorKind::OperationKeyPayloadMismatch);
+        let mut changed = params("fresh");
+        changed["prompt"] = json!(["different"]);
+        assert_eq!(broker.begin_operation(key.clone(), method, changed).unwrap_err().kind(), BrokerErrorKind::OperationKeyPayloadMismatch);
+        assert_eq!(broker.begin_operation(key, "session/load", params("fresh")).unwrap_err().kind(), BrokerErrorKind::OperationKeyPayloadMismatch);
+    }
+}
+
+#[test]
+fn delivered_hook_rejection_releases_cache_without_pruning_journal() {
+    for (code, kind, releasable) in [(-32044, "codex_hook_changed", true), (-32044, "codex_hook_review_required", true), (-32603, "codex_hook_changed", false), (1001, "codex_hook_changed", false), (-32044, "unknown", false)] {
+        let mut broker = broker();
+        let key = OperationKey::new("reviewed-operation");
+        let first = broker.begin_operation(key.clone(), "session/prompt", json!({})).unwrap();
+        broker.complete_operation(&key, AdapterRPCOutcome::error(JSONRPCErrorObject { code, message: "rejected".into(), data: Some(json!({"kind":kind})) })).unwrap();
+        let journal = broker.replay_after_ack();
+        broker.consume_hook_review_rejection(&key, first.adapter_request_id);
+        assert_eq!(broker.replay_after_ack(), journal);
+        assert_eq!(broker.begin_operation(key, "session/prompt", json!({})).unwrap().replayed, !releasable);
+    }
+}

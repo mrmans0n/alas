@@ -1123,6 +1123,59 @@ struct RemoteHelperClientTests {
         #expect((try await unsubscribe.value).ok)
     }
 
+    @Test func establishedACPTransportInvalidatesReviewBeforeReattachedWrites() async throws {
+        let first = FakeJSONRPCTransport()
+        let second = FakeJSONRPCTransport()
+        let queue = RemoteHelperTransportQueue([first, second])
+        let client = RemoteHelperClient(host: "devbox", idleShutdownNanoseconds: 0, transportFactory: { queue.next() })
+        let invalidations = AsyncStream<Void>.makeStream()
+        var reviewToken: String? = "initial"
+        let transport = RemoteHelperACPTransport(
+            host: "devbox", procId: "reviewed-proc", command: "codex-acp", arguments: [], cwd: "/repo", environment: [:],
+            onReattached: {
+                reviewToken = nil
+                invalidations.continuation.yield(())
+            },
+            clientProvider: { _ in client }
+        )
+        defer {
+            transport.terminate()
+            Task { await client.shutdown() }
+        }
+        try transport.start()
+        try await waitUntil { first.sentFrames.count == 1 }
+        first.send(frame: Data(#"{"jsonrpc":"2.0","id":1,"result":{"name":"alas-helper","protocolVersion":1,"binaryVersion":"0.3.0","capabilities":{"watchKinds":[],"fs":{"read":true,"write":true,"stat":true},"ping":true,"proc":true}}}"#.utf8))
+        try await waitUntil { first.sentFrames.count == 2 }
+        first.send(frame: Data(#"{"jsonrpc":"2.0","id":2,"result":{"procId":"reviewed-proc","running":true,"exitCode":null,"spawned":false}}"#.utf8))
+        try await waitUntil { first.sentFrames.count == 3 }
+        let attached = #"{"procId":"reviewed-proc","running":true,"exitCode":null,"stdinOffset":0,"stdoutOffset":0,"stderrOffset":0,"stdoutFrames":[],"stderrChunks":[]}"#
+        first.send(frame: Data("{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":\(attached)}".utf8))
+        let written = AsyncStream<Void>.makeStream()
+        try transport.send(Data(#"{"id":1,"method":"initialize"}"#.utf8), onWritten: { written.continuation.yield(()) })
+        try await waitUntil { first.sentFrames.count == 4 }
+        #expect(reviewToken == "initial") // Initial availability does not invalidate startup review.
+        first.send(frame: Data(#"{"jsonrpc":"2.0","id":4,"result":{"ok":true,"stdinOffset":40}}"#.utf8))
+        var writes = written.stream.makeAsyncIterator()
+        await writes.next()
+        first.send(exitStatus: 1)
+        var changes = invalidations.stream.makeAsyncIterator()
+        await changes.next()
+        #expect(reviewToken == nil)
+        // A provisional decision made while disconnected must also be invalidated
+        // on adoption of the surviving remote process before queued writes resume.
+        try transport.send(Data(#"{"id":2,"method":"session/prompt"}"#.utf8), onWritten: { written.continuation.yield(()) })
+        try await waitUntil(timeout: .seconds(5)) { second.sentFrames.count == 1 }
+        let attachRequest = try #require(JSONSerialization.jsonObject(with: second.sentFrames[0]) as? [String: Any])
+        #expect(attachRequest["method"] as? String == "proc/attach")
+        let id = try #require(attachRequest["id"] as? Int)
+        reviewToken = "while disconnected"
+        second.send(frame: Data("{\"jsonrpc\":\"2.0\",\"id\":\(id),\"result\":\(attached)}".utf8))
+        try await waitUntil { second.sentFrames.count == 2 }
+        #expect(reviewToken == nil)
+        let writeRequest = try #require(JSONSerialization.jsonObject(with: second.sentFrames[1]) as? [String: Any])
+        #expect(writeRequest["method"] as? String == "proc/write")
+    }
+
     @Test func restartReplaysAllSubscriptionsBeforeConcurrentRead() async throws {
         let firstTransport = FakeJSONRPCTransport()
         let secondTransport = FakeJSONRPCTransport()

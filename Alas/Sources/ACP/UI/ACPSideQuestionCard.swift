@@ -163,6 +163,7 @@ struct ACPSideQuestionCard: View {
             transcript.pendingPermission != nil || transcript.pendingPlan != nil
                 || !transcript.pendingUserInputs.isEmpty || !transcript.urlElicitationWaits.isEmpty
                 || showsAwaitingInputNotice
+                || side.codexHooksReview != nil
         }
 
         private var awaitingInputNotice: some View {
@@ -205,10 +206,10 @@ struct ACPSideQuestionCard: View {
                 modelName: side.currentModelDisplayName,
                 enforcesReadOnly: enforcesReadOnly,
                 needsAttention: transcript.pendingPermission != nil || transcript.pendingPlan != nil
-                    || !transcript.pendingUserInputs.isEmpty,
+                    || !transcript.pendingUserInputs.isEmpty || side.codexHooksReview != nil,
                 hasPendingInput: hasPendingInput,
                 answer: latestAnswer.isEmpty ? nil : latestAnswer,
-                hasContent: !ownMessages.isEmpty || !side.readOnlyBlockedTools.isEmpty || !side.queue.isEmpty,
+                hasContent: !ownMessages.isEmpty || !side.readOnlyBlockedTools.isEmpty || !side.queue.isEmpty || side.codexHooksReview != nil,
                 // A follow-up before the first question is sent would run first.
                 canAsk: entry.isSubmitted,
                 blocked: ACPSideQuestionBlockedSummary(latestBlocked),
@@ -250,6 +251,9 @@ struct ACPSideQuestionCard: View {
                 }
             } prompt: {
                 VStack(alignment: .leading, spacing: 6) {
+                    if let coordinator = side.codexHooksReview {
+                        ACPCodexHooksReviewView(coordinator: coordinator)
+                    }
                     if let pendingPlan = transcript.pendingPlan {
                         ACPPlanApprovalPrompt(plan: pendingPlan.params) { response in
                             inputActions.onPlan(pendingPlan.id, response)

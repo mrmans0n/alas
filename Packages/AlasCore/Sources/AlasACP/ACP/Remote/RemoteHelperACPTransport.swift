@@ -26,6 +26,8 @@ public final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTr
     private let environment: [String: String]
     private let pathPrefixDirectories: [String]
     private let onFreshProcSpawn: @MainActor @Sendable () async -> Void
+    private let onReattached: @MainActor @Sendable () -> Void
+    private let clientProvider: @Sendable (String) async -> RemoteHelperClient
     private let onOutputOffsetsChanged: @MainActor @Sendable (OutputOffsets) -> Void
     private let outputConsumption: OutputConsumptionTracker
     private let initializationRecovery = InitializationRecoveryTracker()
@@ -48,21 +50,25 @@ public final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTr
         pathPrefixDirectories: [String] = [],
         initialOutputOffsets: OutputOffsets? = nil,
         onFreshProcSpawn: @escaping @MainActor @Sendable () async -> Void = {},
+        onReattached: @escaping @MainActor @Sendable () -> Void = {},
         onOutputOffsetsChanged: @escaping @MainActor @Sendable (OutputOffsets) -> Void = { _ in },
         leaseFence: RemoteSessionFence? = nil,
-        onLeaseLost: @escaping @MainActor @Sendable () async -> Void = {}
+        onLeaseLost: @escaping @MainActor @Sendable () async -> Void = {},
+        clientProvider: @escaping @Sendable (String) async -> RemoteHelperClient = { await RemoteHelperClientPool.shared.client(for: $0) }
     ) {
         let launch = Self.homeExpandedLaunch(command: command, arguments: arguments)
         self.host = host
         self.procId = procId
         self.leaseFence = leaseFence
         self.onLeaseLost = onLeaseLost
+        self.clientProvider = clientProvider
         self.command = launch.command
         self.arguments = launch.arguments
         self.cwd = cwd
         self.environment = environment
         self.pathPrefixDirectories = pathPrefixDirectories
         self.onFreshProcSpawn = onFreshProcSpawn
+        self.onReattached = onReattached
         self.onOutputOffsetsChanged = onOutputOffsetsChanged
         self.outputConsumption = OutputConsumptionTracker(
             stdoutOffset: initialOutputOffsets?.stdout,
@@ -112,8 +118,8 @@ public final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTr
         guard state.markTerminated() else { return }
         attachTask?.cancel()
         let offsets = outputConsumption.snapshot()
-        Task { [host, procId, attachmentId, offsets] in
-            let client = await RemoteHelperClientPool.shared.client(for: host)
+        Task { [host, procId, attachmentId, offsets, clientProvider] in
+            let client = await clientProvider(host)
             await client.detachProc(
                 procId: procId,
                 attachmentId: attachmentId,
@@ -127,12 +133,13 @@ public final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTr
 
     private func runAttachLoop() async {
         var didSpawn = false
+        var attachedPreviously = false
         var attachFreshSpawnFromStart = false
         var attempt = 0
         attachLoop: while !Task.isCancelled && !state.isTerminated {
             do {
                 state.setWritesEnabled(false)
-                let client = await RemoteHelperClientPool.shared.client(for: host)
+                let client = await clientProvider(host)
                 if !didSpawn {
                     let hello = try await client.hello()
                     guard hello.capabilities.proc == true else {
@@ -200,11 +207,14 @@ public final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTr
                     guard !Task.isCancelled, !state.isTerminated else { return }
                     switch event {
                     case .available:
+                        if attachedPreviously { await onReattached() }
+                        attachedPreviously = true
                         didBecomeAvailable = true
                         state.setWritesEnabled(true)
                         await flushPendingWrites()
                     case .unavailable:
                         state.setWritesEnabled(false)
+                        if attachedPreviously { await onReattached() }
                         throw RemoteHelperClientError.notRunning
                     case .stdout(let data, let offset):
                         guard let consumptionToken = outputConsumption.registerStdout(offset: offset) else {
@@ -262,6 +272,7 @@ public final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTr
             } catch {
                 guard !Task.isCancelled, !state.isTerminated else { return }
                 state.setWritesEnabled(false)
+                if attachedPreviously { await onReattached() }
                 await Self.sleepBeforeRetry(attempt: &attempt)
             }
         }
@@ -384,7 +395,7 @@ public final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTr
                 }
                 let expectedStdinOffset = next.expectedStdinOffset ?? stdinOffset
                 do {
-                    let client = await RemoteHelperClientPool.shared.client(for: host)
+                    let client = await clientProvider(host)
                     stdinOffset = try await client.writeProc(
                         procId: procId,
                         data: Self.frameForProcWrite(next.data),

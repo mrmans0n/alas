@@ -300,6 +300,30 @@ struct OperationFingerprint {
     params: Value,
 }
 
+impl OperationFingerprint {
+    fn differs_only_in_hook_review_token(&self, other: &Self) -> bool {
+        if self.method != other.method { return false; }
+        let hook_capable = matches!(self.method.as_str(), "session/new" | "session/load" | "session/resume" | "session/fork" | "session/prompt" | "_session/steering")
+            || (matches!(self.method.as_str(), "_session/goal" | "_codex/session/goal_control")
+                && matches!(self.params.get("action").and_then(Value::as_str), Some("set" | "resume")));
+        if !hook_capable { return false; }
+        let token = |params: &Value| params.pointer("/_meta/codexHooks/reviewToken").and_then(Value::as_str).filter(|token| !token.is_empty()).map(str::to_owned);
+        let (Some(previous), Some(current)) = (token(&self.params), token(&other.params)) else { return false; };
+        if previous == current { return false; }
+        let mut compared = other.params.clone();
+        compared["_meta"]["codexHooks"]["reviewToken"] = Value::String(previous);
+        compared == self.params
+    }
+}
+
+impl AdapterRPCOutcome {
+    pub fn is_hook_review_rejection(&self) -> bool {
+        self.error.as_ref().is_some_and(|error| error.code == -32044
+            && matches!(error.data.as_ref().and_then(|data| data.get("kind")).and_then(Value::as_str),
+                Some("codex_hook_review_required" | "codex_hook_changed")))
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct OperationRecord {
@@ -397,7 +421,8 @@ impl ACPBrokerState {
         };
 
         if let Some(record) = self.operations.get(&operation_key) {
-            if record.fingerprint != fingerprint {
+            if record.fingerprint != fingerprint
+                && !record.fingerprint.differs_only_in_hook_review_token(&fingerprint) {
                 return Err(BrokerError::new(
                     BrokerErrorKind::OperationKeyPayloadMismatch,
                     "operation key was reused with a different payload",
@@ -434,6 +459,15 @@ impl ACPBrokerState {
             replayed: false,
             terminal_outcome: None,
         })
+    }
+
+    /// Rejections certify no execution. Keep their ordered journal delivery,
+    /// but release deduplication authority once the polling caller receives it.
+    pub fn consume_hook_review_rejection(&mut self, key: &OperationKey, request_id: AdapterRequestId) {
+        let rejected = self.operations.get(key).is_some_and(|record|
+            record.adapter_request_id == request_id
+                && record.terminal_outcome.as_ref().is_some_and(AdapterRPCOutcome::is_hook_review_rejection));
+        if rejected { self.operations.remove(key); }
     }
 
     pub fn complete_operation(
@@ -586,10 +620,16 @@ impl ACPBrokerState {
         self.acknowledged_cursor = cursor;
         self.journal.retain(|event| event.cursor > cursor);
         self.operations.retain(|_, record| {
+            // Replay delivery does not mean the polling send has received this
+            // rejection. Only consume_hook_review_rejection may release it.
             record
-                .completed_cursor
-                .map(|completed_cursor| completed_cursor > cursor)
-                .unwrap_or(true)
+                .terminal_outcome
+                .as_ref()
+                .is_some_and(AdapterRPCOutcome::is_hook_review_rejection)
+                || record
+                    .completed_cursor
+                    .map(|completed_cursor| completed_cursor > cursor)
+                    .unwrap_or(true)
         });
         Ok(())
     }

@@ -1725,8 +1725,12 @@ public final class ACPSessionManager: ChangeTracking {
     }
     /// Attempt identity is separate from the session ID: a replaced attempt
     /// may resume after a new one has already claimed the same chat.
-    private final class AttachmentAttempt {
+    @MainActor private final class AttachmentAttempt {
         let id = UUID()
+        var hookReview: ACPCodexHooksReviewCoordinator?
+        var hookReviewTask: Task<String?, Never>?
+        var hookReviewTaskID: UUID?
+        var hookReviewGeneration = 0
         var waiters: [AttachmentWaiter] = []
         var leaseToken: String?
         var requiresFreshBrokerNamespace = false
@@ -1750,6 +1754,8 @@ public final class ACPSessionManager: ChangeTracking {
         public init() {}
     }
     private var attachmentAttempts: [ACPSession.ID: AttachmentAttempt] = [:]
+    // Successful attachments leave attachmentAttempts; their review owner lives until teardown.
+    private var hookReviewOwners: [ACPSession.ID: AttachmentAttempt] = [:]
     /// Sessions created here whose first `attach` has not returned yet:
     /// starting, though no attempt or runner exists for them so far.
     private var awaitingFirstAttach: Set<ACPSession.ID> = []
@@ -4835,6 +4841,7 @@ public final class ACPSessionManager: ChangeTracking {
                 // selects transcript fallback and its replayed cursor must be
                 // consumed there. A plain transport error may have happened
                 // before the broker accepted the send and also falls back.
+                if error is CancellationError || error is ACPCodexHooksBrokerMismatchError { throw error }
                 let durableReplay = error as? ACPBrokerDurableCompletionReplayError
                 if let durableReplay, durableReplay.outcome.error == nil {
                     throw error
@@ -5008,7 +5015,8 @@ public final class ACPSessionManager: ChangeTracking {
         onRemoteLeaseLost: @escaping @MainActor @Sendable () async -> Void = {},
         initialHelperProcOffsets: RemoteHelperACPTransport.OutputOffsets? = nil,
         onFreshHelperProcSpawn: @escaping @MainActor @Sendable () async -> Void = {},
-        onHelperProcOffsetsChanged: @escaping @MainActor @Sendable (RemoteHelperACPTransport.OutputOffsets) -> Void = { _ in }
+        onHelperProcOffsetsChanged: @escaping @MainActor @Sendable (RemoteHelperACPTransport.OutputOffsets) -> Void = { _ in },
+        onHelperProcReattached: @escaping @MainActor @Sendable () -> Void = {}
     ) throws -> ACPConnection {
         let client: ACPStdioClient
         if let host, useHelperProc, let sessionId {
@@ -5022,6 +5030,7 @@ public final class ACPSessionManager: ChangeTracking {
                 pathPrefixDirectories: spec.remoteNodeBinDirectory.map { [$0] } ?? [],
                 initialOutputOffsets: initialHelperProcOffsets,
                 onFreshProcSpawn: onFreshHelperProcSpawn,
+                onReattached: onHelperProcReattached,
                 onOutputOffsetsChanged: onHelperProcOffsetsChanged,
                 leaseFence: remoteLeaseFence,
                 onLeaseLost: onRemoteLeaseLost
@@ -5639,6 +5648,7 @@ extension ACPSessionManager {
     /// in-flight prompt, tear down the runner/agent, and become a mirror.
     private func standDown(sessionId: ACPSession.ID, leaseToken: String) async {
         guard _ownedLeases.contains(sessionId), ownedLeaseTokens[sessionId] == leaseToken else { return }
+        invalidateHookReview(sessionId: sessionId, retire: true)
         retireBuiltInMCPAttachment(sessionId: sessionId)
         stopHeartbeat(sessionId: sessionId)
         stopWriterWatch(sessionId: sessionId)
@@ -5763,6 +5773,7 @@ extension ACPSessionManager {
     /// Remote writer heartbeats end with their lease release, not with preparation.
     public func prepareForDisposal() {
         isDisposed = true   // must be first: in-flight attach resumes after this and checks the flag
+        for sid in Array(hookReviewOwners.keys) { invalidateHookReview(sessionId: sid, retire: true) }
         for sid in Array(builtInMCPAttachments.keys) { retireBuiltInMCPAttachment(sessionId: sid) }
         for session in sessions.values {
             session.nextPromptActivity.send()
@@ -6151,6 +6162,7 @@ extension ACPSessionManager {
         }
         await performAttach(to: sessionId, freshlyCreated: freshlyCreated, attempt: attempt)
         if connectionOwnerIDs[sessionId] != attempt.id || runners[sessionId] == nil {
+            invalidateHookReview(sessionId: sessionId, ownerID: attempt.id, retire: true)
             retireBuiltInMCPAttachment(sessionId: sessionId, ownerID: attempt.id)
         }
         await detachRetiringConnectionIfNeeded(for: attempt, sessionId: sessionId)
@@ -6234,7 +6246,71 @@ extension ACPSessionManager {
         }
     }
 
+    private func invalidateHookReview(sessionId: ACPSession.ID, ownerID: UUID? = nil, retire: Bool = false) {
+        guard let owner = hookReviewOwners[sessionId] ?? attachmentAttempts[sessionId],
+              ownerID == nil || owner.id == ownerID else { return }
+        owner.hookReviewGeneration += 1
+        owner.connection?.codexHooksReviewToken = nil
+        owner.hookReview?.invalidate()
+        owner.hookReviewTask?.cancel()
+        owner.hookReviewTask = nil
+        owner.hookReviewTaskID = nil
+        if sessions[sessionId]?.codexHooksReview === owner.hookReview { sessions[sessionId]?.codexHooksReview = nil }
+        owner.hookReview = nil
+        if retire { hookReviewOwners.removeValue(forKey: sessionId) }
+    }
+
+    private func reviewCodexHooks(sessionId: ACPSession.ID, attempt: AttachmentAttempt, connection: ACPConnection, host: String?) async throws {
+        while true {
+            try Task.checkCancellation()
+            guard !isDisposed,
+                  hookReviewOwners[sessionId] === attempt, connectionOwnerIDs[sessionId] == attempt.id,
+                  let session = sessions[sessionId], attempt.connection === connection else { throw CancellationError() }
+            let generation = attempt.hookReviewGeneration
+            let task: Task<String?, Never>
+            let taskID: UUID
+            if let current = attempt.hookReviewTask, let currentID = attempt.hookReviewTaskID {
+                task = current
+                taskID = currentID
+            } else {
+                let cwd = worktreePath
+                let coordinator = ACPCodexHooksReviewCoordinator(
+                    context: .init(host: host ?? "This Mac", cwd: cwd),
+                    list: { try await connection.listCodexHooks(cwd: cwd) },
+                    trust: { token, pairs in try await connection.trustCodexHooks(cwd: cwd, reviewToken: token, hooks: pairs) }
+                )
+                attempt.hookReview = coordinator
+                session.codexHooksReview = coordinator
+                taskID = UUID()
+                task = Task { await coordinator.review() }
+                attempt.hookReviewTaskID = taskID
+                attempt.hookReviewTask = task
+            }
+            let reviewedCoordinator = attempt.hookReview
+            let token = await task.value
+            guard hookReviewOwners[sessionId] === attempt, connectionOwnerIDs[sessionId] == attempt.id,
+                  sessions[sessionId] === session, attempt.connection === connection else { throw CancellationError() }
+            // Provider changes and SSH reattachment keep the operation pending for a fresh review.
+            if generation != attempt.hookReviewGeneration { continue }
+            // Completing a review retires its surface even when its sole waiter
+            // was cancelled. Cancellation still fences token installation/send.
+            if let reviewedCoordinator, session.codexHooksReview === reviewedCoordinator { session.codexHooksReview = nil }
+            if attempt.hookReviewTaskID == taskID {
+                attempt.hookReviewTask = nil
+                attempt.hookReviewTaskID = nil
+            } else if token == nil || attempt.hookReview?.reviewToken != token {
+                throw CancellationError()
+            }
+            try Task.checkCancellation()
+            guard let token else { throw CancellationError() }
+            // Install under the same actor/owner fence, so a late callback cannot restore an invalidated token.
+            connection.codexHooksReviewToken = token
+            return
+        }
+    }
+
     private func supersedeAttachmentAttempt(for sessionId: ACPSession.ID) -> AttachmentAttempt? {
+        invalidateHookReview(sessionId: sessionId, retire: true)
         guard let attempt = attachmentAttempts.removeValue(forKey: sessionId) else { return nil }
         let waiters = attempt.waiters
         attempt.waiters.removeAll()
@@ -6661,9 +6737,14 @@ extension ACPSessionManager {
                     },
                     onHelperProcOffsetsChanged: { [weak self] offsets in
                         self?.persistHelperProcOffsets(sessionId: sessionId, offsets: offsets)
+                    },
+                    onHelperProcReattached: { [weak self] in
+                        self?.invalidateHookReview(sessionId: sessionId, ownerID: attempt.id)
                     }
                 )
             }
+            connection.codexHooksReviewEnabled = launchSpec.agentID == "codex"
+                && launchSpec.setupCheck == .npxPackage(name: "@alas-ide/codex-acp")
         } catch {
             guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { return }
             let durableForkRetry = (error as? ACPBrokerDurableCompletionReplayError).flatMap {
@@ -6816,6 +6897,17 @@ extension ACPSessionManager {
                 }
                 await releaseWriterLease(sessionId: sessionId, attempt: attempt)
                 return
+            }
+            if connection.negotiatedCodexHooks {
+                hookReviewOwners[sessionId] = attempt
+                connection.reviewCodexHooks = { [weak self, weak attempt, weak connection] in
+                    guard let self, let attempt, let connection else { throw CancellationError() }
+                    try await self.reviewCodexHooks(sessionId: sessionId, attempt: attempt, connection: connection, host: host)
+                }
+                connection.onCodexHooksInvalidated = { [weak self, weak attempt] in
+                    guard let attempt else { return }
+                    await self?.invalidateHookReview(sessionId: sessionId, ownerID: attempt.id)
+                }
             }
             attempt.connectionIsInitializedForRemoteClose = true
             attempt.sessionCapabilities = initialized.sessionCapabilities
@@ -7353,6 +7445,7 @@ extension ACPSessionManager {
                                           },
                                           leaseFenceProvider: { runnerLeaseFence })
             runner.onUnexpectedDisconnect = { [weak self] in
+                self?.invalidateHookReview(sessionId: sessionId, ownerID: runnerConnectionOwnerID)
                 Task { @MainActor in
                     guard let self,
                           self.connectionOwnerIDs[sessionId] == runnerConnectionOwnerID
@@ -8357,6 +8450,17 @@ extension ACPSessionManager {
                 await connection.shutdown()
                 return
             }
+            if error is CancellationError {
+                invalidateHookReview(sessionId: sessionId, retire: true)
+                startedRunner?.stop()
+                await startedRunner?.flushPersistence()
+                if connection.client is ACPBrokerClient { await connection.detach() } else { await connection.shutdown() }
+                session.agentState = .disconnected
+                session.lastError = nil
+                stderrTask.cancel()
+                await releaseWriterLease(sessionId: sessionId, attempt: attempt)
+                return
+            }
             let durableReplay = error as? ACPBrokerDurableCompletionReplayError
             let durableRetry = durableReplay.flatMap {
                 $0.outcome.error == nil ? $0 : nil
@@ -8366,7 +8470,7 @@ extension ACPSessionManager {
             }
             let wasNegotiatingFork = session.forkRecord?.phase == .negotiatingNative
             var downgradePersistenceError: (any Error)?
-            if durableRetry == nil {
+            if durableRetry == nil, !(error is ACPCodexHooksBrokerMismatchError) {
                 do {
                     try await downgradeNegotiatingForkToTranscript(session: session)
                     guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
@@ -10177,6 +10281,7 @@ extension ACPSessionManager {
 
     private func tearDownSession(sessionId: ACPSession.ID, closeRemote: Bool) async throws {
         abandonFirstAttach(of: sessionId)
+        invalidateHookReview(sessionId: sessionId, retire: true)
         sessions[sessionId]?.nextPromptActivity.send()
         teardownCounts[sessionId, default: 0] += 1
         takeoverAttemptIDs.removeValue(forKey: sessionId)

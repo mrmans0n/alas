@@ -149,6 +149,9 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, @unchecked Senda
     // later client will replay the cursor before consuming the result.
     private var preRegisteredOperationTerminalOutcomes:
         [ACPBrokerOperationKey: ACPBrokerRPCOutcome] = [:]
+    // A rejection settles its journal event, but only the final replay snapshot
+    // can tell whether the stable key already belongs to a newer retry.
+    private var reviewRejectionsAwaitingSnapshot: [ACPBrokerOperationKey: ACPBrokerEventCursor] = [:]
     /// Ref-counted (not a plain `Set`) so two calls that happen to share an
     /// explicit `brokerOperationKey` — unlikely, but the type permits it —
     /// don't have one call's exit clear the flag out from under the other.
@@ -515,20 +518,12 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, @unchecked Senda
             }
             if let error = result.error {
                 clearPendingOutboundRequest(id: result.requestId.jsonRPCID)
-                // A terminal JSON-RPC error IS this operationKey's final,
-                // authoritative outcome — unlike an incidental failure
-                // elsewhere in this call (the case the surrounding defer
-                // deliberately no longer acks for, see above), there is no
-                // successful result a caller could still receive for this
-                // operationKey, so nothing else will ever call
-                // `ackOperationCompletion` for it. The `attachAndReplay()` just above
-                // may have already dispatched this exact completion (with
-                // its error outcome) and, since this call registered
-                // interest before the RPC, protected its cursor — ack it
-                // now or it stays "unacknowledged" forever, deferring every
-                // later durable event behind a completion nobody is coming
-                // back for.
-                if let cursor = currentOperationCompletionCursor(for: operationKey) {
+                // Ordinary terminal errors settle this key. Review rejection
+                // events are consumed individually by dispatch: their response
+                // can arrive after a newer same-key success, whose cursor and
+                // preregistration still belong to its successful consumer.
+                if ACPCodexHookReviewError.classify(error) == nil,
+                   let cursor = currentOperationCompletionCursor(for: operationKey) {
                     ackOperationCompletion(operationKey: operationKey, cursor: cursor)
                 }
                 throw ACPClientError.jsonrpc(error)
@@ -729,6 +724,7 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, @unchecked Senda
             for request in snapshot.pendingRequests {
                 dispatchPendingRequest(request, cursor: snapshot.acknowledgedCursor)
             }
+            releaseRejectedRegistrations(after: snapshot)
             return snapshot
         }
     }
@@ -850,7 +846,13 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, @unchecked Senda
                 unacknowledgedDurableEventCursors.insert(event.cursor)
             }
         case .operationCompleted(let operationKey, let outcome):
-            operationCompletionCursors[operationKey] = event.cursor
+            operationCompletionCursors[operationKey] = max(operationCompletionCursors[operationKey] ?? event.cursor, event.cursor)
+            if let error = outcome.error, ACPCodexHookReviewError.classify(error) != nil {
+                if preRegisteredOperationKeyRefCounts[operationKey] != nil {
+                    reviewRejectionsAwaitingSnapshot[operationKey] = max(reviewRejectionsAwaitingSnapshot[operationKey] ?? event.cursor, event.cursor)
+                }
+                break
+            }
             // Protect this cursor from `ackAfterEarlierDurableEvents`
             // immediately, at the moment ANY caller observes it — not only
             // once `send()`'s own retry loop gets around to noticing it.
@@ -875,7 +877,8 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, @unchecked Senda
             if awaitedOperationKeyRefCounts[operationKey] != nil {
                 unacknowledgedDurableEventCursors.insert(event.cursor)
             }
-            if preRegisteredOperationKeyRefCounts[operationKey] != nil {
+            if preRegisteredOperationKeyRefCounts[operationKey] != nil,
+               preRegisteredOperationCompletions[operationKey].map({ $0.cursor < event.cursor }) ?? true {
                 preRegisteredOperationCompletions[operationKey] = (outcome, event.cursor)
                 preRegisteredOperationTerminalOutcomes[operationKey] = outcome
             }
@@ -883,6 +886,12 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, @unchecked Senda
             break
         }
         stateLock.unlock()
+        if case .operationCompleted(_, let outcome) = event.kind,
+           let error = outcome.error, ACPCodexHookReviewError.classify(error) != nil {
+            // Retain any replacement authority and its registration. Only this
+            // no-execution event was consumed; earlier durable events still gate ACK.
+            ackDurableEvent(cursor: event.cursor)
+        }
         onEventDispatchedForTesting?(event.cursor)
 
         switch event.kind {
@@ -1270,6 +1279,25 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, @unchecked Senda
         ackAfterEarlierDurableEvents(cursor: cursor)
     }
 
+    private func releaseRejectedRegistrations(after snapshot: ACPBrokerSnapshot) {
+        stateLock.withLock {
+            for (key, cursor) in reviewRejectionsAwaitingSnapshot where cursor <= snapshot.journalTail {
+                let replacement = snapshot.operations.contains { operation in
+                    guard operation.operationKey == key else { return false }
+                    return operation.terminalOutcome?.error.map { ACPCodexHookReviewError.classify($0) == nil } ?? true
+                }
+                // A concurrent replay may have delivered success beyond this snapshot.
+                if !replacement, preRegisteredOperationCompletions[key] == nil,
+                   preRegisteredOperationTerminalOutcomes[key] == nil,
+                   preRegisteredOperationKeyRefCounts[key] != nil {
+                    Self.decrementRefCount(&preRegisteredOperationKeyRefCounts, for: key)
+                    Self.decrementRefCount(&awaitedOperationKeyRefCounts, for: key)
+                }
+                reviewRejectionsAwaitingSnapshot.removeValue(forKey: key)
+            }
+        }
+    }
+
     private func ackAfterEarlierDurableEvents(cursor: ACPBrokerEventCursor) {
         stateLock.lock()
         let shouldDefer = unacknowledgedDurableEventCursors.contains(where: { $0 < cursor })
@@ -1316,7 +1344,8 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, @unchecked Senda
             let id = operation.adapterRequestId.jsonRPCID
             if let terminalOutcome = operation.terminalOutcome {
                 pendingOutboundRequestIds.remove(id)
-                if preRegisteredOperationKeyRefCounts[operation.operationKey] != nil {
+                if preRegisteredOperationKeyRefCounts[operation.operationKey] != nil,
+                   terminalOutcome.error.map({ ACPCodexHookReviewError.classify($0) == nil }) ?? true {
                     preRegisteredOperationTerminalOutcomes[operation.operationKey] = terminalOutcome
                 }
             } else {

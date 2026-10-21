@@ -10,7 +10,9 @@ public final class ACPMockClient: ACPRequestHandoffPreparing, @unchecked Sendabl
     public var brokerGenerationForTesting: ACPBrokerGeneration?
     public let providesDurableOperationKeyDeduplication: Bool
 
-    public private(set) var sent: [ACPRequest] = []
+    private let sentLock = NSLock()
+    private var recordedRequests: [ACPRequest] = []
+    public var sent: [ACPRequest] { sentLock.withLock { recordedRequests } }
     private var scripts: [String: (ACPRequest) throws -> Data] = [:]
     private var asyncScripts: [String: (ACPRequest) async throws -> Data] = [:]
     private var responseScripts: [String: (ACPRequest) async throws -> ACPResponse] = [:]
@@ -101,7 +103,7 @@ public final class ACPMockClient: ACPRequestHandoffPreparing, @unchecked Sendabl
             requestsAfterShutdownCount += 1
             throw ACPClientError.notRunning
         }
-        sent.append(request)
+        sentLock.withLock { recordedRequests.append(request) }
         onRequestHandoff()
         if let script = responseScripts[request.method] {
             return try await script(request)
@@ -129,7 +131,7 @@ public final class ACPMockClient: ACPRequestHandoffPreparing, @unchecked Sendabl
     /// `sent` (which holds both requests and notifications in arrival
     /// order) without needing to script a reply.
     public func notify(_ request: ACPRequest) async throws {
-        sent.append(request)
+        sentLock.withLock { recordedRequests.append(request) }
         if let script = notificationAsyncScripts[request.method] {
             try await script(request)
         }

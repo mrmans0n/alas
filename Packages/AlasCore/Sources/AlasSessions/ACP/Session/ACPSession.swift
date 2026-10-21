@@ -245,6 +245,8 @@ public final class ACPSession: ChangeTracking, Identifiable {
     /// Persisted fork lineage hydrated with the session. A nil value means
     /// this session was not created as a fork.
     @Tracked public var forkRecord: ACPSessionForkRecord? { willSet { nextPromptActivity.send() } }
+    /// The current attachment's ephemeral hook review. Never persisted as consent.
+    @Tracked public var codexHooksReview: ACPCodexHooksReviewCoordinator?
     /// Auth methods learned from ACP `initialize`.
     /// Runtime-only: re-learned on each attach and used when an agent asks
     /// the client to authenticate before ACP can continue.
