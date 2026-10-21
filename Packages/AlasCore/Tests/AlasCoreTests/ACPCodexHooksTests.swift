@@ -107,6 +107,60 @@ struct ACPCodexHooksTests {
         await manager.detach(sessionId: session.id)
     }
 
+    @Test(arguments: [false, true], [false, true])
+    @MainActor func cancelledActiveReviewAllowsNextPromptWithoutReconnect(providerChange: Bool, cancelWaiter: Bool) async throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("hook-cancel-retry-\(UUID()).sqlite")
+        defer { try? FileManager.default.removeItem(at: path) }
+        let mock = ACPMockClient()
+        mock.script(method: "initialize") { _ in Data(#"{"protocolVersion":1,"agentInfo":{"name":"@alas-ide/codex-acp","version":"2.2.2-alas.4"},"_meta":{"codexHooks":{"version":1,"reviewToken":true}}}"#.utf8) }
+        mock.script(method: "_codex/hooks/list") { @Sendable [weak mock] _ in
+            let mock = try #require(mock)
+            let inspection = mock.sent.filter { $0.method == "_codex/hooks/list" }.count
+            return Data("""
+            {"cwd":"/p","hooks":[],"warnings":\(inspection == 1 ? "[]" : #"["Review configuration"]"#),"errors":[],"reviewToken":"review-\(inspection)"}
+            """.utf8)
+        }
+        mock.script(method: "session/new") { _ in Data(#"{"sessionId":"remote"}"#.utf8) }
+        mock.script(method: "providers/set") { _ in Data("{}".utf8) }
+        mock.script(method: "providers/list") { _ in Data(#"{"providers":[]}"#.utf8) }
+        mock.script(method: "session/prompt") { @Sendable [weak mock] _ in
+            let mock = try #require(mock)
+            if !providerChange && mock.sent.filter({ $0.method == "session/prompt" }).count == 1 {
+                throw ACPClientError.jsonrpc(.init(code: -32044, message: "Changed", data: AnyCodable(["kind": "codex_hook_changed"])))
+            }
+            return Data("{}".utf8)
+        }
+        let connection = ACPConnection(client: mock)
+        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/p", persistence: ACPSessionPersistence(path: path.path), setupEvaluator: { _ in .ready }, connectionFactory: { _, _, _ in connection })
+        defer { manager.shutdownBackgroundTasks() }
+        let session = manager.createSession(agentId: "codex", autoRunDefault: false)
+        await manager.attach(to: session.id, freshlyCreated: true)
+        if providerChange {
+            _ = try await connection.setProvider(.init(providerId: "p", apiType: "openai", baseUrl: "https://example.invalid"))
+        }
+        let cancelled = Task { try await connection.prompt(sessionId: "remote", blocks: []) }
+        try await eventually { await session.codexHooksReview?.presentation?.isBusy == false }
+        let review = try #require(session.codexHooksReview)
+        if cancelWaiter { cancelled.cancel() }
+        review.cancel(presentationID: review.presentation?.id)
+        await #expect(throws: CancellationError.self) { try await cancelled.value }
+        #expect(session.codexHooksReview == nil)
+        #expect(connection.codexHooksReviewToken == nil)
+        let dispatched = mock.sent.filter { $0.method == "session/prompt" }.count
+        #expect(dispatched == (providerChange ? 0 : 1))
+
+        let retry = Task { try await connection.prompt(sessionId: "remote", blocks: []) }
+        defer { retry.cancel() }
+        try await eventually { await session.codexHooksReview?.presentation?.isBusy == false }
+        let nextReview = try #require(session.codexHooksReview)
+        nextReview.continueWithoutTrusting(presentationID: nextReview.presentation?.id)
+        _ = try await retry.value
+        #expect(mock.sent.filter { $0.method == "session/prompt" }.count == dispatched + 1)
+        #expect(mock.sent.filter { $0.method == "initialize" }.count == 1)
+        #expect(mock.sent.filter { $0.method == "session/new" }.count == 1)
+        await manager.detach(sessionId: session.id)
+    }
+
     @Test(arguments: [-32603, 1001, -32044])
     @MainActor func ordinaryExecutionErrorsDoNotTriggerReviewReplay(code: Int) async throws {
         let mock = ACPMockClient()

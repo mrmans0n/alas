@@ -1730,7 +1730,6 @@ public final class ACPSessionManager: ChangeTracking {
         var hookReview: ACPCodexHooksReviewCoordinator?
         var hookReviewTask: Task<String?, Never>?
         var hookReviewTaskID: UUID?
-        var hookReviewCancelled = false
         var hookReviewGeneration = 0
         var waiters: [AttachmentWaiter] = []
         var leaseToken: String?
@@ -6236,7 +6235,6 @@ extension ACPSessionManager {
         owner.hookReviewTask?.cancel()
         owner.hookReviewTask = nil
         owner.hookReviewTaskID = nil
-        owner.hookReviewCancelled = false
         if sessions[sessionId]?.codexHooksReview === owner.hookReview { sessions[sessionId]?.codexHooksReview = nil }
         owner.hookReview = nil
         if retire { hookReviewOwners.removeValue(forKey: sessionId) }
@@ -6245,7 +6243,7 @@ extension ACPSessionManager {
     private func reviewCodexHooks(sessionId: ACPSession.ID, attempt: AttachmentAttempt, connection: ACPConnection, host: String?) async throws {
         while true {
             try Task.checkCancellation()
-            guard !isDisposed, !attempt.hookReviewCancelled,
+            guard !isDisposed,
                   hookReviewOwners[sessionId] === attempt, connectionOwnerIDs[sessionId] == attempt.id,
                   let session = sessions[sessionId], attempt.connection === connection else { throw CancellationError() }
             let generation = attempt.hookReviewGeneration
@@ -6277,17 +6275,14 @@ extension ACPSessionManager {
             // Completing a review retires its surface even when its sole waiter
             // was cancelled. Cancellation still fences token installation/send.
             if let reviewedCoordinator, session.codexHooksReview === reviewedCoordinator { session.codexHooksReview = nil }
-            try Task.checkCancellation()
             if attempt.hookReviewTaskID == taskID {
                 attempt.hookReviewTask = nil
                 attempt.hookReviewTaskID = nil
             } else if token == nil || attempt.hookReview?.reviewToken != token {
                 throw CancellationError()
             }
-            guard let token else {
-                attempt.hookReviewCancelled = true
-                throw CancellationError()
-            }
+            try Task.checkCancellation()
+            guard let token else { throw CancellationError() }
             // Install under the same actor/owner fence, so a late callback cannot restore an invalidated token.
             connection.codexHooksReviewToken = token
             return
