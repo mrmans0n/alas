@@ -223,8 +223,28 @@ public final class StackShepherd {
         return record.isFinished && record.id.stackName != currentStackName ? nil : record
     }
 
-    public func record(forWorktree worktreeID: String) -> StackShepherdRecord? {
-        Self.preferred(records.values.filter { $0.id.worktreeID == worktreeID })
+    /// The live record for `stackName` in the worktree, whoever owns it. A
+    /// worktree can hold records for several stacks; the one it is on now is
+    /// the only one a takeover from this worktree can act on.
+    public func liveRecord(forWorktree worktreeID: String, stackName: String) -> StackShepherdRecord? {
+        records.values.first { $0.id.worktreeID == worktreeID && $0.id.stackName == stackName && !$0.isFinished }
+    }
+
+    /// Whether `id` is ready to land on `freshRequests`, just read from the
+    /// provider. The gate from the last poll is only a starting point: a
+    /// republish or a rerun changes heads and checks between polls, so every
+    /// open entry must still be on the head the poll saw and still be
+    /// mergeable, or a status read would report ready with a failing check.
+    public func isReadyToLand(_ id: StackShepherdRecordID, freshRequests: [Int: ReviewRequest]) -> Bool {
+        guard gatePasses[id] == true, let record = records[id], !record.isFinished,
+              let provider = providerRegistry.provider(for: record.remote.kind)
+        else { return false }
+        return record.openEntries.allSatisfy { entry in
+            guard let request = freshRequests[entry.requestNumber],
+                  request.headSHA == entry.shepherd.lastSeenHeadSHA
+            else { return false }
+            return ReviewReadinessModel.requestIsMergeReady(request, capabilities: provider.capabilities)
+        }
     }
 
     private static func preferred(_ candidates: [StackShepherdRecord]) -> StackShepherdRecord? {

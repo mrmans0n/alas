@@ -36,6 +36,16 @@ extension AlasCoreContext {
         guard let stack = try await loadStack(effects, path: context.path) else {
             throw PRShepherdCLIError(message: "gg does not list a stack for this worktree. Check out the stack's branch, then call stack_ship again.")
         }
+        // A live record for another stack of this worktree means the user
+        // moved on while this session still shepherds that one: publishing
+        // this stack would drop it. Stop it first, or check it out again.
+        if let live = stackShepherd.record(forSession: sessionID),
+           live.id.worktreeID == worktreeID, !live.isFinished, live.id.stackName != stack.name {
+            throw PRShepherdCLIError(
+                message: "This session shepherds the gg stack \"\(live.id.stackName)\", but this worktree is on \"\(stack.name)\". "
+                    + "Check out \"\(live.id.stackName)\" and call stack_ship again, or stop shepherding it from the Ship popover first."
+            )
+        }
         guard !stack.entries.isEmpty else {
             throw PRShepherdCLIError(message: "The gg stack \"\(stack.name)\" has no commits yet. Commit the work into the stack, then call stack_ship again.")
         }
@@ -230,7 +240,11 @@ extension AlasCoreContext {
             let latest = stackShepherd.records[bound.id] ?? bound
             return StackStatusWire(
                 stack: .init(name: bound.id.stackName, base: latest.base, entries: entries),
-                shepherd: .init(record: latest, readyToLand: stackShepherd.gatePasses[bound.id] ?? false, rules: rules)
+                shepherd: .init(
+                    record: latest,
+                    readyToLand: stackShepherd.isReadyToLand(bound.id, freshRequests: requests),
+                    rules: rules
+                )
             )
         }
         guard let stack = try await loadStack(effects, path: context.path) else { return nil }

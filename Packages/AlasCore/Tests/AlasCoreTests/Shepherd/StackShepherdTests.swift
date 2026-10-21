@@ -364,6 +364,7 @@ struct StackShepherdTests {
     private struct FakeProvider: CodeHostProvider {
         let requests: [Int: ReviewRequest]
         var kind: CodeHostKind { .github }
+        var capabilities: CodeHostProviderCapabilities { .githubCLI }
 
         func isAvailable(cwd: URL) async -> Bool { true }
         func isAuthenticated(remote: CodeHostRemote, cwd: URL) async -> Bool { true }
@@ -566,5 +567,93 @@ struct StackShepherdTests {
         let status = try await core.shepherdedStackStatus(sessionID: "session-1", worktreeID: "wt-1")
 
         #expect(status == nil)
+    }
+
+    /// A worktree can hold records for several stacks; only the one it is on
+    /// can be taken over from there.
+    @Test func aTakeoverTargetIsTheLiveRecordOfTheStackTheWorktreeIsOn() throws {
+        var onB = Self.record([51])
+        onB = StackShepherdRecord(
+            id: StackShepherdRecordID(worktreeID: "wt-1", stackName: "b"), sessionID: "session-3",
+            remote: F.remote(), base: "main", autoFix: true, entries: onB.entries, now: F.earlier
+        )
+        var finishedB = onB
+        finishedB.entries[0].shepherd.phase = .merged
+        finishedB.finishedAt = Date()
+        let onA = Self.record([41])
+        let fileURL = URL(fileURLWithPath: "/memory/stack-shepherds.json")
+        let store = MemoryStore()
+        try store.write(StackShepherdsFile(records: [onA, onB]), to: fileURL)
+        let shepherd = StackShepherd(store: store, fileURL: fileURL)
+
+        #expect(shepherd.liveRecord(forWorktree: "wt-1", stackName: "auth")?.sessionID == "session-1")
+        #expect(shepherd.liveRecord(forWorktree: "wt-1", stackName: "b")?.sessionID == "session-3")
+        #expect(shepherd.liveRecord(forWorktree: "wt-1", stackName: "c") == nil)
+        #expect(shepherd.liveRecord(forWorktree: "wt-2", stackName: "auth") == nil)
+
+        let finishedStore = MemoryStore()
+        try finishedStore.write(StackShepherdsFile(records: [finishedB]), to: fileURL)
+        #expect(StackShepherd(store: finishedStore, fileURL: fileURL).liveRecord(forWorktree: "wt-1", stackName: "b") == nil)
+    }
+
+    /// `pr_status` reads fresh requests, so it must not report the cached
+    /// gate from the last poll: a republish or a rerun changes heads and
+    /// checks in between.
+    @Test func readyToLandIsRevalidatedAgainstFreshRequests() async {
+        let green = [Self.request(41), Self.request(42)]
+        let stack = Self.stack([41, 42])
+        let shepherd = makeShepherd(requests: green, stack: stack)
+        let record = await bind(shepherd, session: "session-1", stack: stack)
+        // The head gate needs a head seen on consecutive polls.
+        await shepherd.evaluateNow(record.id)
+        await shepherd.evaluateNow(record.id)
+        let fresh = Dictionary(uniqueKeysWithValues: green.map { ($0.number, $0) })
+        #expect(shepherd.gatePasses[record.id] == true)
+        #expect(shepherd.isReadyToLand(record.id, freshRequests: fresh))
+
+        var republished = fresh
+        republished[42] = Self.request(42, head: F.newHead)
+        #expect(!shepherd.isReadyToLand(record.id, freshRequests: republished))
+
+        var failing = fresh
+        failing[41] = Self.request(41, checks: [F.failing])
+        #expect(!shepherd.isReadyToLand(record.id, freshRequests: failing))
+
+        var missing = fresh
+        missing[42] = nil
+        #expect(!shepherd.isReadyToLand(record.id, freshRequests: missing))
+    }
+
+    /// A late fix turn for stack A must not publish stack B, which would drop
+    /// the record for A: the session stops shepherding A first, or goes back.
+    @Test func stackShipRefusesAWorktreeOnAnotherStackThanTheOneTheSessionShepherds() async throws {
+        let store = MemoryStore()
+        try store.write(StackShepherdsFile(records: [Self.record([41])]), to: Paths.stackShepherdsFile)
+        let core = makeCore(store: store)
+        var synced = 0
+        let otherStack = GGStack(
+            name: "b", base: "main", totalCommits: 1, syncedCommits: 0, currentPosition: 1, behindBase: 0,
+            entries: [GGStackEntry(position: 1, sha: "x", title: "t", prNumber: nil)]
+        )
+        core.stackShepherd.effects = StackShepherd.Effects(
+            worktreeContext: { .init(worktreeID: $0, path: URL(fileURLWithPath: "/tmp/\($0)"), stackName: "b", isEligible: true) },
+            loadStack: { _ in otherStack },
+            syncStack: { _ in synced += 1 },
+            sessionState: { _, _ in .idle },
+            deliverPrompt: { _, _, _, _ in .delivered },
+            rules: { _ in .none },
+            notify: { _ in },
+            archiveWorktreeIfAllowed: { _, _, _ in .declined }
+        )
+
+        let response = await core.shipStack(sessionID: "session-1", worktreeID: "wt-1")
+
+        guard case .error(let message) = response else {
+            Issue.record("expected a refusal, got \(response)")
+            return
+        }
+        #expect(message.contains("shepherds the gg stack \"auth\""))
+        #expect(synced == 0)
+        #expect(core.stackShepherd.record(forSession: "session-1")?.id.stackName == "auth")
     }
 }

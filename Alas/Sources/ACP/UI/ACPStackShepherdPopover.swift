@@ -14,12 +14,14 @@ struct StackShepherdSessionContext {
 
     init(sessionID: String, worktree: Worktree, state: AppState) {
         let shepherd = state.stackShepherd
-        let own = shepherd.record(
-            forSession: sessionID, worktreeID: worktree.id, currentStackName: state.shepherdStackName(for: worktree)
-        )
+        let currentStack = state.shepherdStackName(for: worktree)
+        let own = shepherd.record(forSession: sessionID, worktreeID: worktree.id, currentStackName: currentStack)
         record = own
-        if own == nil, let other = shepherd.record(forWorktree: worktree.id),
-           other.sessionID != sessionID, !other.isFinished {
+        // Only the stack the worktree is on can be taken over from here: the
+        // button binds that stack, whatever else the worktree has records for.
+        if own == nil, let currentStack,
+           let other = shepherd.liveRecord(forWorktree: worktree.id, stackName: currentStack),
+           other.sessionID != sessionID {
             otherRecord = other
         } else {
             otherRecord = nil
