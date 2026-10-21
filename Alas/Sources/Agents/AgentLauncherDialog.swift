@@ -11,6 +11,7 @@ struct AgentLauncherDialog: View {
     let selectedWorktree: () -> Worktree?
     var selectedWorkspaceCheckout: () -> WorkspaceCheckout? = { nil }
     @Environment(\.theme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var inputFocused: Bool
     @State private var chatAgent: AgentDefinition?
     @State private var discoveryModel: ACPSessionDiscoveryModel?
@@ -92,7 +93,7 @@ struct AgentLauncherDialog: View {
                 }
                 // Animates the panel's resize (and the session list's
                 // arrival) when entering or leaving the session browser.
-                .animation(.snappy(duration: 0.25), value: chatAgent == nil)
+                .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: chatAgent == nil)
                 .transition(.opacity.combined(with: .offset(y: -6)))
                 .onAppear {
                     requestInputFocus()
