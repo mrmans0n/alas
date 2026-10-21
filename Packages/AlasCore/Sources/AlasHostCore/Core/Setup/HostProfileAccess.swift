@@ -45,13 +45,43 @@ public struct HostProfileRefusal: LocalizedError {
 
 public enum HostProfileWrite {
     /// Reads the profile (defaults when absent), applies `change`, writes it back.
+    /// Only what `change` touched is rewritten: keys this build does not model
+    /// (a newer app's settings, values it cannot decode) stay as they were.
     public static func update(
         _ change: (inout AppConfig) throws -> Void,
         file: URL = Paths.appConfigFile,
         store: PersistenceStore = .init()
     ) throws {
+        let raw = (try? Data(contentsOf: file)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
         var config = try store.readIfExists(AppConfig.self, from: file) ?? .defaults
+        let before = try jsonObject(store.encode(config))
         try change(&config)
-        try store.write(config, to: file)
+        let after = try jsonObject(store.encode(config))
+        let merged = apply(from: before, to: after, onto: raw)
+        try store.write(
+            data: JSONSerialization.data(withJSONObject: merged, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]),
+            to: file
+        )
+    }
+
+    private static func jsonObject(_ data: Data) throws -> [String: Any] {
+        try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+    }
+
+    /// Applies the `before` -> `after` change to `base`: every value `after` holds wins
+    /// (objects merge recursively), keys `change` cleared are removed, the rest of `base` stays.
+    static func apply(from before: [String: Any], to after: [String: Any], onto base: [String: Any]) -> [String: Any] {
+        var result = base
+        for (key, value) in after {
+            if let nested = value as? [String: Any], let baseNested = base[key] as? [String: Any] {
+                result[key] = apply(from: before[key] as? [String: Any] ?? [:], to: nested, onto: baseNested)
+            } else {
+                result[key] = value
+            }
+        }
+        for key in before.keys where after[key] == nil {
+            result[key] = nil
+        }
+        return result
     }
 }

@@ -85,6 +85,13 @@ struct AppConfigDecodingTests {
         seed.remote.enabled = true
         seed.terminal.fontSize = 17
         try PersistenceStore().write(seed, to: file)
+        // Keys a newer app wrote that this build does not model.
+        var raw = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        raw["someFutureSection"] = ["flag": true]
+        var remote = try #require(raw["remote"] as? [String: Any])
+        remote["someFutureKey"] = "kept"
+        raw["remote"] = remote
+        try JSONSerialization.data(withJSONObject: raw).write(to: file)
 
         try HostProfileWrite.update({ try HostSettingCatalog.named("host.port", in: $0).set("9999", in: &$0) }, file: file)
 
@@ -93,5 +100,8 @@ struct AppConfigDecodingTests {
         #expect(config.themeId == "x")
         #expect(config.remote.enabled)
         #expect(config.terminal.fontSize == 17)
+        let written = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        #expect((written["someFutureSection"] as? [String: Any])?["flag"] as? Bool == true)
+        #expect((written["remote"] as? [String: Any])?["someFutureKey"] as? String == "kept")
     }
 }
