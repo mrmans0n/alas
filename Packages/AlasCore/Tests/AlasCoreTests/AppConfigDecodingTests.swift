@@ -4,6 +4,15 @@ import Testing
 @testable import AlasHostCore
 
 struct AppConfigDecodingTests {
+    @Test func computerUseSectionDefaultsOffAndRoundTrips() throws {
+        let absent = try JSONDecoder().decode(AppConfig.self, from: Data(#"{"remote":{"enabled":true}}"#.utf8))
+        #expect(absent.computerUse.enabled == false)
+        var config = absent
+        config.computerUse.enabled = true
+        let reloaded = try JSONDecoder().decode(AppConfig.self, from: JSONEncoder().encode(config))
+        #expect(reloaded.computerUse.enabled)
+    }
+
     /// A hand-written `app.json` names only what it changes: everything else
     /// is the default, not a reason to drop the whole file.
     @Test(arguments: [
