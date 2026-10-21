@@ -44,8 +44,12 @@ struct ACPMarkdownInlineTextView: NSViewRepresentable {
             chipping: context.environment.acpUpstreamReferenceChipping,
             chipsAbsolutePaths: context.environment.acpAbsolutePathChipping,
             pastedTextContents: context.environment.acpPastedTextContents,
-            commandSuggestions: context.environment.acpCommandSuggestions
+            commandSuggestions: context.environment.acpCommandSuggestions,
+            symbolMentions: context.environment.acpSymbolMentions
         )
+        // Outside the render guard: clicking a badge goes through the
+        // current action even when the text itself is unchanged.
+        (textView as? ACPMarkdownInlineNSTextView)?.openURL = context.environment.openURL
         guard context.coordinator.shouldRender(renderState) else { return }
 
         let rendered = ACPMarkdownInlineRenderer.makeAttributedString(
@@ -64,6 +68,11 @@ struct ACPMarkdownInlineTextView: NSViewRepresentable {
             })
         } ?? 0
         (textView as? ACPMarkdownInlineNSTextView)?.hasPastedTextChips = pastedChipCount > 0
+        let symbolChipCount = context.environment.acpSymbolMentions.map {
+            ACPTranscriptSymbolChip.chipify(rendered, mentions: $0)
+        } ?? 0
+        (textView as? ACPMarkdownInlineNSTextView)?.symbolHoverContext = symbolChipCount > 0
+            ? (context.environment.acpSymbolMentions?.root, typography, theme) : nil
         let commandChipCount = ACPTranscriptCommandChip.chipify(
             rendered, suggestions: context.environment.acpCommandSuggestions
         )
@@ -254,6 +263,7 @@ struct ACPMarkdownInlineTextView: NSViewRepresentable {
         let chipsAbsolutePaths: Bool
         let pastedTextContents: ACPPastedTextContents?
         var commandSuggestions: [ACPPromptSuggestion] = []
+        var symbolMentions: ACPTranscriptSymbolMentions?
     }
 }
 
@@ -276,6 +286,21 @@ final class ACPMarkdownInlineNSTextView: NSTextView {
         }
     }
 
+    private let symbolHover = ACPTranscriptSymbolChipHoverController()
+    /// Opens a symbol badge's declaration, routed like transcript links.
+    var openURL: OpenURLAction?
+    /// Set on paragraphs that render symbol badges; what their hover preview
+    /// reads (no preview without a root). It installs hover tracking.
+    var symbolHoverContext: (root: URL?, typography: ACPChatTypography, theme: Theme)? {
+        didSet {
+            // Any re-render replaces attachments and their metadata.
+            symbolHover.hide()
+            guard (symbolHoverContext == nil) != (oldValue == nil) else { return }
+            updateScrollObservation()
+            updateTrackingAreas()
+        }
+    }
+
     /// Set on paragraphs that render pasted-text chips; like
     /// `upstreamReferences`, it is what installs hover tracking.
     var hasPastedTextChips = false {
@@ -287,7 +312,9 @@ final class ACPMarkdownInlineNSTextView: NSTextView {
         }
     }
 
-    private var tracksChipHover: Bool { upstreamReferences != nil || hasPastedTextChips || hasCommandChips }
+    private var tracksChipHover: Bool {
+        upstreamReferences != nil || hasPastedTextChips || hasCommandChips || symbolHoverContext != nil
+    }
 
     private let upstreamReferenceHover = ACPUpstreamReferenceHoverController()
     var isShowingUpstreamReferenceCard: Bool { upstreamReferenceHover.isShowingCard }
@@ -338,6 +365,7 @@ final class ACPMarkdownInlineNSTextView: NSTextView {
                         self?.upstreamReferenceHover.hide()
                         self?.pastedTextHover.hide()
                         self?.commandHover.hide()
+                        self?.symbolHover.hide()
                     }
                 })
             }
@@ -398,6 +426,7 @@ final class ACPMarkdownInlineNSTextView: NSTextView {
             upstreamReferenceHover.hide()
             pastedTextHover.hide()
             commandHover.hide()
+            symbolHover.hide()
         }
         updateScrollObservation()
     }
@@ -421,6 +450,15 @@ final class ACPMarkdownInlineNSTextView: NSTextView {
         } else {
             commandHover.hide()
         }
+        if let context = symbolHoverContext, let root = context.root,
+           let hit = ACPTranscriptSymbolChip.hit(at: convert(event.locationInWindow, from: nil), in: self) {
+            symbolHover.scheduleShow(
+                range: hit.range, mention: hit.mention, root: root,
+                typography: context.typography, theme: context.theme, in: self
+            )
+        } else {
+            symbolHover.hide()
+        }
     }
 
     override func mouseExited(with event: NSEvent) {
@@ -428,11 +466,20 @@ final class ACPMarkdownInlineNSTextView: NSTextView {
         upstreamReferenceHover.hide()
         pastedTextHover.hideUnlessPinned()
         commandHover.hide()
+        symbolHover.hide()
     }
 
     override func mouseDown(with event: NSEvent) {
         if let hit = ACPPastedTextChip.hit(at: convert(event.locationInWindow, from: nil), in: self) {
             pastedTextHover.pin(hit.attachment, range: hit.range, in: self)
+            return
+        }
+        if symbolHoverContext != nil,
+           let hit = ACPTranscriptSymbolChip.hit(at: convert(event.locationInWindow, from: nil), in: self) {
+            symbolHover.hide()
+            if let url = ACPSymbolReference.openURL(for: hit.mention.target, snapshot: hit.mention.snapshot) {
+                openURL?(url)
+            }
             return
         }
         if let chip = ACPPathChip.hit(at: convert(event.locationInWindow, from: nil), in: self) {

@@ -2,7 +2,8 @@ import SwiftUI
 
 /// PR shepherd control in the ACP toolbar: a pill with a state symbol and
 /// the request number (or "Ship" without one) that opens the shepherd
-/// popover.
+/// popover. In a gg stack worktree the pill and popover work on the whole
+/// stack instead of the branch's PR.
 ///
 /// `session` is a plain reference on purpose: the pill reads only the
 /// shepherd records and the cached review snapshot, so streaming updates
@@ -20,8 +21,10 @@ struct ACPShepherdButton: View {
     private var isLit: Bool { hovering || open }
 
     var body: some View {
-        let context = ShepherdSessionContext(sessionID: session.id, worktree: worktree, state: state)
-        let presentation = context.presentation
+        let shipsStack = state.shipsStack(sessionID: session.id, worktree: worktree)
+        let presentation = shipsStack
+            ? StackShepherdSessionContext(sessionID: session.id, worktree: worktree, state: state).presentation
+            : ShepherdSessionContext(sessionID: session.id, worktree: worktree, state: state).presentation
         let badge = presentation.badge
         let tooltip = presentation.tooltip
         Button {
@@ -51,16 +54,26 @@ struct ACPShepherdButton: View {
         .buttonStyle(.toolbarControl)
         .onHover { hovering = $0 }
         .help(tooltip)
-        .accessibilityLabel("PR shepherd")
+        .accessibilityLabel(shipsStack ? "Stack shepherd" : "PR shepherd")
         .accessibilityValue(tooltip)
         .popover(isPresented: $open, arrowEdge: .top) {
-            ShepherdPopover(
-                session: session,
-                transcript: session.transcript,
-                worktree: worktree,
-                state: state,
-                onClose: { open = false }
-            )
+            if shipsStack {
+                StackShepherdPopover(
+                    session: session,
+                    transcript: session.transcript,
+                    worktree: worktree,
+                    state: state,
+                    onClose: { open = false }
+                )
+            } else {
+                ShepherdPopover(
+                    session: session,
+                    transcript: session.transcript,
+                    worktree: worktree,
+                    state: state,
+                    onClose: { open = false }
+                )
+            }
         }
     }
 }
@@ -149,16 +162,6 @@ extension ShepherdBadgeState {
         case .ready, .merging, .queued: theme.color("add")
         case .attention: theme.color("del")
         case .merged: Color(nsColor: .systemPurple)
-        }
-    }
-}
-
-extension ShepherdPhase {
-    /// Escalated and paused records wait for the user to press Resume.
-    var isResumable: Bool {
-        switch self {
-        case .escalated, .paused: true
-        default: false
         }
     }
 }

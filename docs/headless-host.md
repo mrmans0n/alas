@@ -45,36 +45,72 @@ directory open, `alas-host` exits and says which process holds it;
 
 ## Configure
 
-The host reads the profile's `app.json`. On a Mac without the app, write it by
-hand: name only the settings you change, and everything else takes its default.
-For example, to serve Remote:
-
-```json
-{
-  "remote": {
-    "enabled": true
-  }
-}
+```bash
+alas-host setup
 ```
 
+walks through reachability, agents, behavior, worktrees, projects and pairing in
+a full-screen terminal UI that opens on the current values. Rerun it to change
+them later. It warns about an enabled agent whose adapter it cannot find.
+
+To script it, or change one thing:
+
+```bash
+alas-host config list
+alas-host config get host.reachability
+alas-host config set host.reachability tailscale --restart
+alas-host project list
+alas-host project add ~/code/my-repo --name "My repo"
+alas-host project remove ~/code/my-repo
+alas-host restart
+```
+
+The settings are `host.reachability`, `host.port`, `remote.displayName`,
+`agents.<id>.enabled` (one per built-in or installed agent),
+`harness.acpAutoRunByDefault`, `harness.acpAutoResumeAfterUsageLimit`,
+`harness.acpContinueInterruptedSessions`, `worktrees.rootPath` and
+`worktrees.baseBranch`. Booleans take `true`/`false`, `on`/`off` or `yes`/`no`.
+They are stored in the profile's `app.json`; settings you never change take
+their defaults.
+
+`project remove` takes the id or path that `project list` prints. Reads work any time. Writes, including `project add` and `project remove`, are
+refused while the app, or any process other than the host, holds the profile.
+A change applies after a restart: `alas-host restart` restarts a host run by the
+launch agent (below), and `config set --restart` does both. A host run in a
+terminal must be stopped with Ctrl-C and started again.
+
 Agents come from the same file: the built-in ones you enable under `agents`, and
-agents installed from the ACP registry. Built-in agents need their adapters on
-the `PATH` of your login shell, which the host reads when it starts, so they
-work when it runs from launchd too.
+agents installed from the ACP registry. The host launches an adapter with its
+own `PATH` plus well-known directories such as Homebrew's, so an adapter must be
+on the host's `PATH` or in a location like `/opt/homebrew/bin`. The login
+shell's `PATH` does not apply, notably when launchd starts the host.
 
 ## Remote
 
-With `remote.enabled`, the host also serves Remote, and prints its address:
+Remote is served according to `host.reachability`:
+
+- `off`: not served.
+- `loopback`: `127.0.0.1` only.
+- `tailscale`: loopback, plus `tailscale serve` for the port.
+- `lan`: all interfaces, so other devices on the network reach it directly.
+
+`host.port` sets the port. Without `host.reachability`, the host follows
+`remote.enabled`, `remote.tailscaleServe` and `remote.port` as before: loopback,
+or Tailscale when serve is on. LAN is used only when you choose it. It serves
+plain HTTP, and Bonjour discovery stays off, so clients enter the address. A
+command-line program can serve the LAN without macOS's local network permission:
+accepting incoming TCP connections does not need it (Apple TN3179).
+
+The host prints its address:
 
 ```
 remote http://127.0.0.1:8765
 ```
 
-It listens on loopback only, because a command-line program cannot ask for
-macOS's local network permission. Reach it from other devices through:
+Other ways to reach a loopback host:
 
-- **Tailscale.** Set `remote.tailscaleServe` to `true`. When the tailnet has
-  HTTPS enabled, the host runs `tailscale serve` for its port and prints the
+- **Tailscale.** Choose `tailscale`. When the tailnet has HTTPS enabled, the
+  host runs `tailscale serve` for its port and prints the
   `https://<machine>.<tailnet>.ts.net` address to use.
 - **An SSH tunnel**, from the device or a machine it can reach:
   `ssh -L 8765:127.0.0.1:8765 <host-mac>`.

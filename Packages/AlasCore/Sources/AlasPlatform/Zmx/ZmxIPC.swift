@@ -3,25 +3,39 @@ import Foundation
 import AlasFoundation
 import AlasModel
 
-/// zmx's Unix-socket IPC wire format, mirrored from upstream `src/ipc.zig`.
+/// zmx's Unix-socket IPC wire formats, mirrored from upstream `src/ipc.zig`.
 ///
-/// zmx IPC is not yet a declared stable public API (neurosnap/zmx#127). Keep
-/// every wire detail in this file so the codec can later move to libzmx or an
-/// upstream client module without touching callers.
+/// Two layouts exist. Keep every wire detail in this file so the codec can
+/// later move to libzmx or an upstream client module without touching callers.
 ///
-/// Frame: an eight-byte header followed by the payload. Byte 0 is the tag,
-/// bytes 1...4 are the little-endian payload length, bytes 5...7 are padding
+/// Pre-freeze (daemons built before upstream froze the protocol): an
+/// eight-byte header followed by the payload. Byte 0 is the tag, bytes 1...4
+/// are the little-endian payload length, bytes 5...7 are padding
 /// (`packed struct { tag: u8, len: u32 }` occupies eight bytes).
+///
+/// v1 (frozen upstream): byte 0 is the tag, byte 1 is the protocol version
+/// (`protocolVersion`), bytes 2...3 are padding, and bytes 4...7 are the
+/// little-endian payload length. Payload structs are C-aligned, so `Capture`
+/// carries three padding bytes after its format byte.
 public enum ZmxIPC: Sendable {
+    /// Which header and payload layout a daemon speaks.
+    public enum Wire: Equatable, Sendable {
+        case preFreeze
+        case v1
+    }
+
     /// Tags Alas sends or reads. Values are frozen by upstream; unknown
     /// incoming tags are carried as raw bytes in `ZmxFrame` and skipped.
     public enum Tag: UInt8, Sendable {
         case input = 0
         case output = 1
         case resize = 2
+        case kill = 5
+        case info = 6
         case initialize = 7
         case send = 18
         case capture = 22
+        case unsupported = 255
     }
 
     /// `util.HistoryFormat` in upstream zmx.
@@ -31,7 +45,17 @@ public enum ZmxIPC: Sendable {
         case html = 2
     }
 
+    /// The wire spoken by the zmx binary bundled from `ThirdParty/zmx`. It
+    /// must always equal that binary's wire: the bump of the submodule to a
+    /// v1 zmx flips this to `.v1` in the same commit. While it is
+    /// `.preFreeze`, every live daemon is one the bundled zmx can still
+    /// drive, so nothing may stop them as pre-freeze.
+    public static let bundledWire: Wire = .preFreeze
+
     public static let headerSize = 8
+
+    /// The v1 header's protocol version byte.
+    public static let protocolVersion: UInt8 = 1
 
     /// Ceiling for a single incoming payload. Checked against the declared
     /// length before anything is buffered, so a corrupt header cannot make
@@ -39,26 +63,67 @@ public enum ZmxIPC: Sendable {
     /// base64 expansion.
     public static let maxPayloadLength = 8 * 1024 * 1024
 
-    public static func encode(_ tag: Tag, _ payload: Data = Data()) -> Data {
+    /// Offset of the little-endian payload length within the header.
+    static func lengthOffset(_ wire: Wire) -> Int {
+        switch wire {
+        case .preFreeze: 1
+        case .v1: 4
+        }
+    }
+
+    /// Offset of `Capture.rows` within its payload: packed after the format
+    /// byte pre-freeze, u32-aligned in v1.
+    private static func captureRowsOffset(_ wire: Wire) -> Int {
+        switch wire {
+        case .preFreeze: 1
+        case .v1: 4
+        }
+    }
+
+    public static func encode(_ tag: Tag, _ payload: Data = Data(), wire: Wire) -> Data {
         var frame = Data(count: headerSize)
         frame[0] = tag.rawValue
+        if wire == .v1 { frame[1] = protocolVersion }
         let length = UInt32(payload.count)
+        let offset = lengthOffset(wire)
         for byte in 0..<4 {
-            frame[1 + byte] = UInt8(truncatingIfNeeded: length >> (8 * UInt32(byte)))
+            frame[offset + byte] = UInt8(truncatingIfNeeded: length >> (8 * UInt32(byte)))
         }
         frame.append(payload)
         return frame
     }
 
-    /// `ipc.Capture` is `packed struct { format: u8, rows: u32 }`, eight bytes
-    /// on the wire. The daemon silently drops any other payload length.
-    public static func captureRequest(format: CaptureFormat = .vt, scrollbackRows: UInt32) -> Data {
+    /// `ipc.Capture` is eight bytes on the wire: the format byte and a
+    /// little-endian `rows: u32`, packed at offset 1 pre-freeze and aligned at
+    /// offset 4 in v1. The daemon silently drops any other payload length.
+    public static func captureRequest(format: CaptureFormat = .vt, scrollbackRows: UInt32, wire: Wire) -> Data {
         var payload = Data(count: 8)
         payload[0] = format.rawValue
+        let offset = captureRowsOffset(wire)
         for byte in 0..<4 {
-            payload[1 + byte] = UInt8(truncatingIfNeeded: scrollbackRows >> (8 * UInt32(byte)))
+            payload[offset + byte] = UInt8(truncatingIfNeeded: scrollbackRows >> (8 * UInt32(byte)))
         }
-        return encode(.capture, payload)
+        return encode(.capture, payload, wire: wire)
+    }
+
+    /// An empty-payload `Info` request in v1 framing. A pre-freeze daemon
+    /// reads its first header byte as the tag and byte 1 (the version) as the
+    /// low length byte, so it answers with a pre-freeze `Info` frame instead.
+    public static let versionProbe = Data([Tag.info.rawValue, protocolVersion, 0, 0, 0, 0, 0, 0, 0])
+
+    /// `ipc.Info` is 552 bytes: `clients_len` is a `u64` at payload offset 0
+    /// and the daemon pid an `i32` at offset 8.
+    public static let infoPayloadSize = 552
+    static let infoClientsOffset = 0
+    static let infoPidOffset = 8
+
+    /// Classifies a daemon from everything it sent after `versionProbe`.
+    /// Nil until an `Info` frame is complete and the other wire is ruled out;
+    /// `.unreachable` once the bytes cannot lead to a verdict. See
+    /// `ZmxProbeReader`.
+    public static func classifyProbeReply(_ bytes: some Collection<UInt8>) -> ZmxDaemonStatus? {
+        var reader = ZmxProbeReader()
+        return reader.push(bytes)
     }
 
     /// `ipc.Resize` is `packed struct { rows, cols, xpixel, ypixel: u16 }`;
@@ -71,6 +136,15 @@ public enum ZmxIPC: Sendable {
         payload[3] = UInt8(truncatingIfNeeded: cols >> 8)
         return payload
     }
+}
+
+/// What a probe learned about a session daemon. `clients` is the number of
+/// clients attached besides the probe itself: zmx's `Info` reports
+/// `clients.len - 1` for the asking connection.
+public enum ZmxDaemonStatus: Equatable, Sendable {
+    case v1(pid: Int32, clients: UInt64 = 0)
+    case preFreeze(pid: Int32, clients: UInt64 = 0)
+    case unreachable
 }
 
 public struct ZmxFrame: Equatable, Sendable {
@@ -90,13 +164,17 @@ public struct ZmxFrame: Equatable, Sendable {
 public struct ZmxFrameDecoder: Sendable {
     public enum Failure: Error, Equatable, Sendable {
         case payloadTooLarge(declared: UInt32)
+        /// A v1 header whose protocol byte is not `ZmxIPC.protocolVersion`.
+        case unsupportedVersion(UInt8)
     }
 
+    private let wire: ZmxIPC.Wire
     private let maxPayloadLength: Int
     private var buffer: [UInt8] = []
     private var head = 0
 
-    public init(maxPayloadLength: Int = ZmxIPC.maxPayloadLength) {
+    public init(wire: ZmxIPC.Wire, maxPayloadLength: Int = ZmxIPC.maxPayloadLength) {
+        self.wire = wire
         self.maxPayloadLength = maxPayloadLength
     }
 
@@ -106,9 +184,13 @@ public struct ZmxFrameDecoder: Sendable {
         buffer.append(contentsOf: bytes)
         var frames: [ZmxFrame] = []
         while buffer.count - head >= ZmxIPC.headerSize {
+            if wire == .v1, buffer[head + 1] != ZmxIPC.protocolVersion {
+                throw Failure.unsupportedVersion(buffer[head + 1])
+            }
+            let lengthOffset = ZmxIPC.lengthOffset(wire)
             var declared: UInt32 = 0
             for byte in 0..<4 {
-                declared |= UInt32(buffer[head + 1 + byte]) << (8 * UInt32(byte))
+                declared |= UInt32(buffer[head + lengthOffset + byte]) << (8 * UInt32(byte))
             }
             // Compare as UInt64 so a near-max length can never wrap.
             guard UInt64(declared) <= UInt64(maxPayloadLength) else {
@@ -125,6 +207,79 @@ public struct ZmxFrameDecoder: Sendable {
             head = 0
         }
         return frames
+    }
+}
+
+/// Reads a daemon's answer to `ZmxIPC.versionProbe`.
+///
+/// zmx broadcasts `Output` (and other frames) to every connected client,
+/// including one that never sent `Init`, so on a busy session the `Info`
+/// reply can arrive behind any number of other frames. Like upstream's own
+/// probe, this skips them: the bytes go to one decoder per wire and a decoder
+/// that hits invalid framing is dropped.
+///
+/// An `Info` frame of the right size names its wire only once the other
+/// wire's decoder has been ruled out. Crafted streams can be framed by both
+/// wires for a while (a v1 frame with an empty payload reads pre-freeze as a
+/// one-byte frame), and callers kill daemons on a `.preFreeze` verdict, so an
+/// `Info` seen while the other decoder still frames the stream keeps the
+/// reader going until that decoder throws, the byte cap passes, or the
+/// caller gives up (`.unreachable`).
+public struct ZmxProbeReader: Sendable {
+    /// Bytes read without reaching a verdict before giving up.
+    public static let maxProbeBytes = 256 * 1024
+
+    private struct Candidate: Sendable {
+        var wire: ZmxIPC.Wire
+        var decoder: ZmxFrameDecoder
+        /// Set once this decoder has produced an `Info` frame.
+        var status: ZmxDaemonStatus?
+    }
+
+    private var candidates: [Candidate] = [
+        Candidate(wire: .preFreeze, decoder: ZmxFrameDecoder(wire: .preFreeze)),
+        Candidate(wire: .v1, decoder: ZmxFrameDecoder(wire: .v1)),
+    ]
+    private var totalBytes = 0
+    private var verdict: ZmxDaemonStatus?
+
+    public init() {}
+
+    /// Feeds the next bytes read. Returns the daemon's status once known:
+    /// `.v1` or `.preFreeze` from its `Info` frame once the other wire cannot
+    /// frame the stream, or `.unreachable` once no wire can frame it or
+    /// `maxProbeBytes` pass without a verdict. Nil while more bytes are needed.
+    public mutating func push(_ bytes: some Collection<UInt8>) -> ZmxDaemonStatus? {
+        if let verdict { return verdict }
+        totalBytes += bytes.count
+        candidates = candidates.compactMap { candidate in
+            var candidate = candidate
+            // A decoder that throws is ruled out, even after its own `Info`.
+            guard let frames = try? candidate.decoder.push(bytes) else { return nil }
+            if candidate.status == nil, let info = frames.first(where: {
+                $0.tag == ZmxIPC.Tag.info.rawValue && $0.payload.count == ZmxIPC.infoPayloadSize
+            }) {
+                let pid = Int32(bitPattern: Self.littleEndian(info.payload, at: ZmxIPC.infoPidOffset, as: UInt32.self))
+                let clients = Self.littleEndian(info.payload, at: ZmxIPC.infoClientsOffset, as: UInt64.self)
+                candidate.status = candidate.wire == .v1
+                    ? .v1(pid: pid, clients: clients)
+                    : .preFreeze(pid: pid, clients: clients)
+            }
+            return candidate
+        }
+        if candidates.count == 1, let status = candidates[0].status {
+            verdict = status
+        } else if candidates.isEmpty || totalBytes > Self.maxProbeBytes {
+            verdict = .unreachable
+        }
+        return verdict
+    }
+
+    private static func littleEndian<Value: FixedWidthInteger & UnsignedInteger>(
+        _ payload: Data, at offset: Int, as _: Value.Type
+    ) -> Value {
+        let start = payload.startIndex + offset
+        return (0..<MemoryLayout<Value>.size).reduce(Value(0)) { $0 | Value(payload[start + $1]) << (8 * $1) }
     }
 }
 
@@ -238,6 +393,57 @@ public final class ZmxIPCSocket: @unchecked Sendable {
             let n = chunk.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress, maxLength) }
             if n >= 0 { return Data(chunk[0..<n]) }
             if errno != EINTR { return nil }
+        }
+    }
+
+    /// Asks a daemon which wire it speaks. Always uses its own connection and
+    /// closes it before returning: a v1 daemon keeps the probe's ninth byte
+    /// buffered as a partial frame, so this connection can carry nothing else.
+    /// Broadcast frames ahead of the reply are skipped (`ZmxProbeReader`).
+    /// Anything but an unambiguous `Info` reply (connect failure, EOF, read
+    /// error, unframeable bytes, a stream both wires still frame, byte cap,
+    /// deadline) is `.unreachable`.
+    public static func probe(path: String, timeout: DispatchTimeInterval = .seconds(1)) -> ZmxDaemonStatus {
+        let deadline = DispatchTime.now() + timeout
+        guard let socket = try? connect(path: path) else { return .unreachable }
+        defer { socket.shutdown() }
+        guard socket.write(ZmxIPC.versionProbe) else { return .unreachable }
+        var reader = ZmxProbeReader()
+        while true {
+            guard socket.waitReadable(until: deadline),
+                  let chunk = socket.read(), !chunk.isEmpty else { return .unreachable }
+            if let status = reader.push(chunk) { return status }
+        }
+    }
+
+    /// Sends a pre-freeze `Kill` and waits for the daemon to hang up, which it
+    /// does once it has shut down. False on connect failure, error, or deadline.
+    public static func killPreFreeze(path: String, timeout: DispatchTimeInterval = .seconds(3)) -> Bool {
+        let deadline = DispatchTime.now() + timeout
+        guard let socket = try? connect(path: path) else { return false }
+        defer { socket.shutdown() }
+        guard socket.write(ZmxIPC.encode(.kill, wire: .preFreeze)) else { return false }
+        while true {
+            guard socket.waitReadable(until: deadline), let chunk = socket.read() else { return false }
+            if chunk.isEmpty { return true }
+        }
+    }
+
+    /// `poll(2)` until the descriptor is readable (data or hangup) or the
+    /// deadline passes. EINTR retries with the remaining time. Once the
+    /// deadline has passed this is false even with bytes queued, so a peer
+    /// that keeps writing cannot hold a caller's loop past its deadline.
+    private func waitReadable(until deadline: DispatchTime) -> Bool {
+        var descriptor = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+        while true {
+            let now = DispatchTime.now().uptimeNanoseconds
+            guard deadline.uptimeNanoseconds > now else { return false }
+            let remaining = deadline.uptimeNanoseconds - now
+            let milliseconds = Int32(clamping: (remaining + 999_999) / 1_000_000)
+            let result = Darwin.poll(&descriptor, 1, milliseconds)
+            if result > 0 { return true }
+            if result == 0 { return false }
+            if errno != EINTR { return false }
         }
     }
 

@@ -13,6 +13,7 @@ struct SidebarHeaderView: View {
     var peerAttentionRows: [RemoteSessionSummary] = []
     var pluginUpdates: [PluginManager.CatalogUpdate] = []
     var appUpdate: ReleaseInfo? = nil
+    var cleanupReminders: [WorktreeCleanupReminder] = []
     var attentionLoadError: String? = nil
     var attentionWriteError: String? = nil
     var attentionNavigationErrors: [UUID: String] = [:]
@@ -21,6 +22,8 @@ struct SidebarHeaderView: View {
     var onOpenPeerSession: (RemoteSessionSummary) -> Void = { _ in }
     var onOpenPluginSettings: () -> Void = {}
     var onOpenAppUpdate: () -> Void = {}
+    var onOpenWorktreeCleanup: (String) -> Void = { _ in }
+    var onDismissWorktreeCleanup: (String) -> Void = { _ in }
     var attentionRollUpSummarizer: AttentionRollUpSummarizer? = nil
     init(onSettings: @escaping () -> Void,
          onAddProject: @escaping () -> Void,
@@ -34,6 +37,7 @@ struct SidebarHeaderView: View {
          peerAttentionRows: [RemoteSessionSummary] = [],
          pluginUpdates: [PluginManager.CatalogUpdate] = [],
          appUpdate: ReleaseInfo? = nil,
+         cleanupReminders: [WorktreeCleanupReminder] = [],
          attentionLoadError: String? = nil,
          attentionWriteError: String? = nil,
          attentionNavigationErrors: [UUID: String] = [:],
@@ -42,6 +46,8 @@ struct SidebarHeaderView: View {
          onOpenPeerSession: @escaping (RemoteSessionSummary) -> Void = { _ in },
          onOpenPluginSettings: @escaping () -> Void = {},
          onOpenAppUpdate: @escaping () -> Void = {},
+         onOpenWorktreeCleanup: @escaping (String) -> Void = { _ in },
+         onDismissWorktreeCleanup: @escaping (String) -> Void = { _ in },
          attentionRollUpSummarizer: AttentionRollUpSummarizer? = nil) {
         self.onSettings = onSettings
         self.onAddProject = onAddProject
@@ -55,6 +61,7 @@ struct SidebarHeaderView: View {
         self.peerAttentionRows = peerAttentionRows
         self.pluginUpdates = pluginUpdates
         self.appUpdate = appUpdate
+        self.cleanupReminders = cleanupReminders
         self.attentionLoadError = attentionLoadError
         self.attentionWriteError = attentionWriteError
         self.attentionNavigationErrors = attentionNavigationErrors
@@ -63,6 +70,8 @@ struct SidebarHeaderView: View {
         self.onOpenPeerSession = onOpenPeerSession
         self.onOpenPluginSettings = onOpenPluginSettings
         self.onOpenAppUpdate = onOpenAppUpdate
+        self.onOpenWorktreeCleanup = onOpenWorktreeCleanup
+        self.onDismissWorktreeCleanup = onDismissWorktreeCleanup
         self.attentionRollUpSummarizer = attentionRollUpSummarizer
     }
     @Environment(\.theme) private var theme
@@ -106,6 +115,7 @@ struct SidebarHeaderView: View {
                 peerRows: peerAttentionRows,
                 pluginUpdates: pluginUpdates,
                 appUpdate: appUpdate,
+                cleanupReminders: cleanupReminders,
                 loadError: attentionLoadError,
                 writeError: attentionWriteError,
                 navigationErrors: attentionNavigationErrors,
@@ -114,6 +124,8 @@ struct SidebarHeaderView: View {
                 onOpenPeer: onOpenPeerSession,
                 onOpenPluginSettings: onOpenPluginSettings,
                 onOpenAppUpdate: onOpenAppUpdate,
+                onOpenWorktreeCleanup: onOpenWorktreeCleanup,
+                onDismissWorktreeCleanup: onDismissWorktreeCleanup,
                 rollUpSummarizer: attentionRollUpSummarizer
             )
         }

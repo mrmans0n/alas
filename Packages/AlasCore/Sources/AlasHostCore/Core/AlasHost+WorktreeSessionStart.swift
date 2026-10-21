@@ -38,6 +38,9 @@ extension SessionsAPI {
         guard let manager = core.orchestrationManager(for: worktree) else {
             throw ACPWorktreeSessionBootstrapError(message: "Could not create ACP session manager.")
         }
+        // The bootstrap awaits its attach; a session it created and did not
+        // attach (refused, failed, or blocked by recovery) is not starting.
+        defer { manager.abandonFirstAttach(of: sessionID) }
         let bootstrapper = ACPWorktreeSessionBootstrapper(environment: .init(
             sessionExists: { _, id in
                 await manager.persistedSessionRow(id: id) != nil
@@ -141,6 +144,7 @@ extension SessionsAPI {
             )
         } catch {
             manager.liveSession(for: preparedPrompt.sessionID)?.lastError = error.localizedDescription
+            manager.abandonFirstAttach(of: preparedPrompt.sessionID)
         }
         await manager.flushPersistence()
     }

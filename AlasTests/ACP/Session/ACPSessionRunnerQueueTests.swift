@@ -786,6 +786,41 @@ struct ACPSessionRunnerQueueTests {
         #expect(!mock.sent.contains { $0.method == "session/prompt" })
     }
 
+    @Test("live activity from a direct send keeps its in-flight marker until completion")
+    func directSendActivityKeepsInFlightMarkerUntilCompletion() async throws {
+        let started = QueueTestGate()
+        let finish = QueueTestGate()
+        let (runner, mock, session, store) = try mkRunner()
+        defer {
+            runner.stop()
+            Task { await finish.open() }
+        }
+        mock.scriptAsync(method: "session/prompt") { _ in
+            await started.open()
+            await finish.wait()
+            return Data("null".utf8)
+        }
+
+        runner.send(blocks: [.text("hello")], intent: .auto)
+        await started.wait()
+        await runner.flushPersistence()
+        #expect(session.directTurnInFlight)
+        #expect(try store.loadSession(id: "s")?.directTurnInFlight == true)
+
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "s",
+            update: .agentMessageChunk(.text("Working."))
+        ))
+        await runner.flushPersistence()
+        #expect(session.directTurnInFlight)
+        #expect(try store.loadSession(id: "s")?.directTurnInFlight == true)
+
+        await finish.open()
+        try await waitUntil { !session.directTurnInFlight }
+        await runner.flushPersistence()
+        #expect(try store.loadSession(id: "s")?.directTurnInFlight == false)
+    }
+
     @Test("forced steering keeps the saved prompt when recovery persistence fails")
     func forcedSteeringKeepsSavedPromptUntilRecoveryCommit() async throws {
         let (runner, mock, session, store) = try mkRunner()
@@ -896,6 +931,33 @@ struct ACPSessionRunnerQueueTests {
         #expect(!mock.sent.contains { $0.method == "session/cancel" })
         #expect(session.transcript.streamingState == .streaming)
         #expect(session.lastError != nil)
+    }
+
+    @Test("live agent activity dismisses pending restart recovery")
+    func liveAgentActivityDismissesPendingRestartRecovery() async throws {
+        let (runner, _, session, store) = try mkRunner()
+        defer { runner.stop() }
+        let continuation = QueuedPrompt(
+            blocks: [.text(QueuedPrompt.interruptedTurnContinueText)],
+            interruptedTurnContinuation: true
+        )
+        let later = QueuedPrompt(blocks: [.text("later")])
+        session.directTurnInFlight = true
+        session.queue = [continuation, later]
+        runner.persistDirectTurnInFlight()
+        runner.persistQueue()
+        await runner.flushPersistence()
+
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "s",
+            update: .agentMessageChunk(.text("Still working."))
+        ))
+        await runner.flushPersistence()
+
+        #expect(!session.directTurnInFlight)
+        #expect(session.queue == [later])
+        #expect(try store.loadSession(id: "s")?.directTurnInFlight == false)
+        #expect(try store.loadQueue(sessionId: "s") == [later])
     }
 
     @Test("a force-sent restart continuation replaces the running turn and is recorded as a notice", arguments: [true, false])

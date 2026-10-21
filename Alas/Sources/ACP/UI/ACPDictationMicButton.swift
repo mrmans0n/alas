@@ -38,7 +38,10 @@ struct ACPDictationMicButton: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Dictate")
-        .help(ACPComposerControlPresentation.micHelp(for: dictation.state))
+        .help(ACPComposerControlPresentation.micHelp(
+            for: dictation.state,
+            shortcut: ACPDictationShortcutMonitor.currentBinding
+        ))
         .contextMenu {
             Section("Language") {
                 menuEntries(ACPComposerControlPresentation.languageMenuItems(

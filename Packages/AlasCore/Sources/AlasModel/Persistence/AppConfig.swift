@@ -79,6 +79,8 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public var agents: Agents
     public var files: Files
     public var remote: Remote = .init()
+    /// Host-only settings; the app never reads them.
+    public var host: HostSettings = .init()
     /// The `/btw` card's dock and per-dock size.
     public var sideQuestionDock: ACPSideQuestionDockPreferences = .init()
     public var nextPromptSuggestionsEnabled: Bool = false
@@ -917,6 +919,7 @@ extension AppConfig {
              agents,
              files,
              remote,
+             host,
              sideQuestionDock,
              nextPromptSuggestionsEnabled,
              sessionSummariesEnabled,
@@ -1184,6 +1187,7 @@ extension AppConfig {
         }
         // Older configs predate `remote`; default to disabled so they still load.
         remote = (try? c.decodeIfPresent(Remote.self, forKey: .remote)) ?? .init()
+        host = (try? c.decodeIfPresent(HostSettings.self, forKey: .host)) ?? .init()
         sideQuestionDock =
             (try? c.decodeIfPresent(ACPSideQuestionDockPreferences.self, forKey: .sideQuestionDock)) ?? .init()
         nextPromptSuggestionsEnabled = (try? c.decode(Bool.self, forKey: .nextPromptSuggestionsEnabled)) ?? false
@@ -1266,12 +1270,13 @@ private extension AppConfig {
     /// explicitly unbound; Settings can restore its default once the chord is
     /// free.
     ///
-    /// Covers the agent-launcher split (⌘⌥⇧C, ⌘⌥⇧T) and the right pane's rail
-    /// tabs (⌘⌃1–4).
+    /// Covers the agent-launcher split (⌘⌥⇧C, ⌘⌥⇧T), the right pane's rail
+    /// tabs (⌘⌃1–4) and Dictate (⌃⌥D).
     mutating func unbindNewActionDefaultsClaimedByOverrides() {
         let newActions: [ShortcutAction] = [
             .launchAgentInTerminal, .launchAgentInChat,
             .rightPaneChangesTab, .rightPaneFilesTab, .rightPaneAgentTab, .rightPaneRunTab, .rightPaneSchedulesTab,
+            .dictate,
         ]
         for action in newActions {
             guard !shortcutOverrides.keys.contains(action.rawValue) else { continue }

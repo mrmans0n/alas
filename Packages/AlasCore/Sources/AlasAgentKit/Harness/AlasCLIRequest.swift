@@ -35,6 +35,9 @@ public struct AlasCLIRequest: Equatable, Sendable {
         case prCreate(PRCreateParams)
         /// MCP-only: fresh status of the calling session's PR/MR.
         case prStatus
+        /// MCP-only: publish this worktree's gg stack with `gg sync` and bind
+        /// the stack shepherd to the calling session.
+        case stackShip
         case resolve
     }
 
@@ -616,6 +619,8 @@ public struct AlasCLIRequest: Equatable, Sendable {
             ))
         case "pr_status":
             command = .prStatus
+        case "stack_ship":
+            command = .stackShip
         case "agent_list":
             let params = try Self.decodeParams(AgentListParams.self, from: data)
             command = .agentList(worktree: try params.worktree.map(requiredNonEmpty))

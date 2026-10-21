@@ -90,7 +90,6 @@ struct ACPMCPPromptPreambleTests {
         #expect(text.contains("\"alas\""))
         #expect(!text.contains("Additional MCP servers"))
         #expect(text.contains("call it only after the user agrees or asks"))
-        #expect(text.contains("pr_create and pr_status are MCP-only"))
     }
 
     @Test(
@@ -167,7 +166,7 @@ struct ACPMCPPromptPreambleTests {
             "worktree_list", "worktree_switch", "worktree_new", "worktree_delete",
             "review", "review_comments", "review_reply", "review_resolve",
             "review_comment_add", "review_finish",
-            "pr_create", "pr_status",
+            "pr_create", "pr_status", "stack_ship",
             "preview_list", "preview_open", "preview_navigate", "preview_reload", "preview_back", "preview_forward",
             "preview_inspect", "preview_capture", "preview_console", "preview_click", "preview_type", "preview_scroll",
             "preview_wait", "preview_cancel",

@@ -37,4 +37,16 @@ struct DataDirectoryLockTests {
         let second = try await waiter.value
         #expect(second.url == directory.appendingPathComponent("host.lock"))
     }
+
+    @Test(arguments: [("alas-host", "host"), ("Alas", "app"), ("zsh", "unknown"), (nil, "unknown")] as [(String?, String)])
+    func classifiesHolder(name: String?, kind: String) {
+        let result = DataDirectoryHolder.classify(executableName: name, pid: 7)
+        let got = switch result {
+        case .host(pid: 7): "host"
+        case .app(pid: 7): "app"
+        case .unknown(pid: 7): "unknown"
+        default: "wrong"
+        }
+        #expect(got == kind)
+    }
 }

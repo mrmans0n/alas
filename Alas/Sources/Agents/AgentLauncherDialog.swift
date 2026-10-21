@@ -3,14 +3,15 @@ import SwiftUI
 /// A ⌘⇥-style switcher: a centered, content-width panel with a horizontal
 /// strip of large agent icons. ⌘⌥T shows Terminal/Chat picker above the
 /// strip; ⌘⌥⇧T and ⌘⌥⇧C lock the mode and show a static label instead.
-/// Selecting an agent in Chat mode drops a vertical session list under a
-/// shrunk, dimmed strip rather than replacing the panel — ←→ keeps roaming
-/// between agents from inside that second stage.
+/// Selecting an agent in Chat mode widens the panel and drops a vertical
+/// session list under the dimmed strip rather than replacing the panel — ←→
+/// keeps roaming between agents from inside that second stage.
 struct AgentLauncherDialog: View {
     @Bindable var appState: AppState
     let selectedWorktree: () -> Worktree?
     var selectedWorkspaceCheckout: () -> WorkspaceCheckout? = { nil }
     @Environment(\.theme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var inputFocused: Bool
     @State private var chatAgent: AgentDefinition?
     @State private var discoveryModel: ACPSessionDiscoveryModel?
@@ -37,7 +38,9 @@ struct AgentLauncherDialog: View {
     @State private var adapterInstallError: String?
 
     private let agentTileSize: CGFloat = 64
-    private let sessionStageTileSize: CGFloat = 36
+    /// Wide enough that the session browser's filter chips and hint line fit
+    /// unclipped, and long session titles keep most of their text.
+    private let sessionStageMinWidth: CGFloat = 440
     private let tileOuterPadding: CGFloat = 8   // matches AgentSwitcherTile's own padding
     private let tileSpacing: CGFloat = 10       // matches the strip HStack's spacing
     private let stripHorizontalInset: CGFloat = 20
@@ -88,6 +91,9 @@ struct AgentLauncherDialog: View {
                     .onTapGesture { }
                     .onKeyPress { press in handleKey(press) }
                 }
+                // Animates the panel's resize (and the session list's
+                // arrival) when entering or leaving the session browser.
+                .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: chatAgent == nil)
                 .transition(.opacity.combined(with: .offset(y: -6)))
                 .onAppear {
                     requestInputFocus()
@@ -182,12 +188,15 @@ struct AgentLauncherDialog: View {
         return appState.agentLauncher.pool(enabledAgents: availableAgents).count
     }
 
-    /// One fixed width for the whole panel, shared by both the agent strip
-    /// and the session list beneath it, so entering/leaving Chat mode's
-    /// session browser never resizes the dialog. Wide enough for at least
-    /// `minVisibleTileCount` full-size tiles, capped at `maxPanelWidth`.
+    /// One width for the whole panel, shared by the agent strip and the
+    /// content beneath it. Wide enough for at least `minVisibleTileCount`
+    /// tiles, and in the session browser for `sessionStageMinWidth`, capped
+    /// at `maxPanelWidth`. It never depends on the live query, so typing a
+    /// session search doesn't resize the dialog.
     private var panelWidth: CGFloat {
-        min(max(stripWidth(count: agentPoolCount), stripWidth(count: minVisibleTileCount)), maxPanelWidth)
+        let stripMin = max(stripWidth(count: agentPoolCount), stripWidth(count: minVisibleTileCount))
+        let stageMin = chatAgent == nil ? stripMin : max(stripMin, sessionStageMinWidth)
+        return min(stageMin, maxPanelWidth)
     }
 
     private func stripWidth(count: Int) -> CGFloat {
@@ -383,8 +392,7 @@ struct AgentLauncherDialog: View {
     }
 
     private func agentTileScroller(_ agents: [AgentDefinition]) -> some View {
-        let tileSize = chatAgent == nil ? agentTileSize : sessionStageTileSize
-        return ScrollViewReader { proxy in
+        ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 10) {
                     ForEach(Array(agents.enumerated()), id: \.element.id) { idx, agent in
@@ -396,7 +404,7 @@ struct AgentLauncherDialog: View {
                         let isSelected = chatAgent.map { $0.id == agent.id } ?? (idx == appState.agentLauncher.selectedIndex)
                         AgentSwitcherTile(
                             label: agent.displayName,
-                            size: tileSize,
+                            size: agentTileSize,
                             isSelected: isSelected,
                             isDimmed: chatAgent != nil && chatAgent?.id != agent.id,
                             onTap: {
@@ -411,7 +419,7 @@ struct AgentLauncherDialog: View {
                                 if chatAgent == nil { appState.agentLauncher.selectedIndex = idx }
                             }
                         ) {
-                            switcherLogo(for: agent, size: tileSize)
+                            switcherLogo(for: agent, size: agentTileSize)
                         }
                         .id(agent.id)
                     }
@@ -429,11 +437,22 @@ struct AgentLauncherDialog: View {
             .onChange(of: appState.agentLauncher.scrollToSelectionTick) { _, _ in
                 let index = appState.agentLauncher.selectedIndex
                 if agents.indices.contains(index) {
-                    withAnimation(.easeOut(duration: 0.15)) {
-                        proxy.scrollTo(agents[index].id, anchor: .center)
-                    }
+                    scrollStrip(proxy, to: agents[index].id)
                 }
             }
+            // ←→ in the session browser moves `chatAgent`, not
+            // `selectedIndex`, so it needs its own trigger to keep the
+            // active tile on screen when the strip overflows.
+            .onChange(of: chatAgent?.id) { _, id in
+                guard let id else { return }
+                scrollStrip(proxy, to: id)
+            }
+        }
+    }
+
+    private func scrollStrip(_ proxy: ScrollViewProxy, to id: String) {
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) {
+            proxy.scrollTo(id, anchor: .center)
         }
     }
 

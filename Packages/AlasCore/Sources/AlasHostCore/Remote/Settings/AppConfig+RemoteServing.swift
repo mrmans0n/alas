@@ -28,11 +28,13 @@ extension AppConfig.Remote {
 
     /// The addresses shown for pairing, best first; none until a port is bound.
     /// `tailnetHTTPSHost` is the tailnet name while `tailscale serve` fronts
-    /// `port`.
+    /// `port`. `loopbackOnly` overrides `listensOnLoopbackOnly` for a server
+    /// whose bind mode comes from elsewhere, as `alas-host`'s does.
     public func advertisedAddresses(
         port: UInt16?,
         interfaces: [RemoteNetworkInterface],
-        tailnetHTTPSHost: String?
+        tailnetHTTPSHost: String?,
+        loopbackOnly: Bool? = nil
     ) -> [RemoteAdvertisedAddress] {
         guard let port else { return [] }
         return RemoteNetwork.advertisedAddresses(
@@ -41,7 +43,7 @@ extension AppConfig.Remote {
             allowedHosts: allowedHosts,
             preferredHost: preferredAdvertisedHost,
             tailnetHTTPSHost: tailnetHTTPSHost,
-            tailnetHTTPSOnly: listensOnLoopbackOnly
+            tailnetHTTPSOnly: loopbackOnly ?? listensOnLoopbackOnly
         )
     }
 

@@ -34,6 +34,8 @@ public final class AlasCoreContext {
     public let runScheduler: RunScheduler
     /// Watches bound pull and merge requests; AppState installs its effects.
     public let reviewShepherd: ReviewShepherd
+    /// Watches every request of a bound gg stack; AppState installs its effects.
+    public let stackShepherd: StackShepherd
     /// Waits for a run's completion file. Injectable so tests can settle runs.
     @ObservationIgnored public let runCompletionWaiter: RunCompletionWaiter
     /// Runs whose completion is being waited for, keyed by run ID.
@@ -96,7 +98,7 @@ public final class AlasCoreContext {
     /// One per project: a free-name creation holds it from picking a free
     /// name until the worktree exists, so the next pick sees it.
     @ObservationIgnored var freeNameGates: [String: SerialGate] = [:]
-    /// The PR creation running for each worktree; one waits for another.
+    /// The PR or stack publish running for each worktree; one waits for another.
     @ObservationIgnored var prCreateTasks: [String: Task<AlasCLIResponse, Never>] = [:]
     /// Each repository's `.alas/config.json`, read once per change.
     @ObservationIgnored public let repoConfigStore = RepoConfigStore()
@@ -179,6 +181,7 @@ public final class AlasCoreContext {
         self.runs = runs
         self.runScheduler = runScheduler ?? RunScheduler(store: store)
         self.reviewShepherd = reviewShepherd ?? ReviewShepherd(store: store)
+        self.stackShepherd = StackShepherd(store: store)
         self.runCompletionWaiter = runCompletionWaiter
         self.runHistory = RunHistory(store: runHistoryStore)
         self.attention = AttentionIntake(store: attentionStore ?? AttentionStore())
@@ -262,6 +265,40 @@ public final class AlasCoreContext {
         return project
     }
 
+    /// Forgets project `id` and persists the list. Refuses (`projectBusy`)
+    /// while a session or run is live or starting in one of its worktrees; idle session
+    /// managers of the worktrees no other project lists are disposed. A
+    /// worktree it shadowed goes back to the project that lost it.
+    public func removeProject(id: String) async throws {
+        try refuseIfStopping()
+        guard projects.projects.contains(where: { $0.id == id }) else {
+            throw HostError.notFound(what: "project \(id)")
+        }
+        guard !projects.worktreeOperationStates.keys.contains(where: { $0.projectId == id }) else {
+            throw WorktreeOperationInProgress()
+        }
+        let worktreeIDs = Set(projects.worktrees(projectId: id).map(\.id))
+        let isLive = worktreeIDs.contains { id in
+            sessionManagers[.worktree(id)].map { !$0.runners.isEmpty || $0.hasStartingSession } == true
+        }
+            || processRuns.values.contains { $0.projectID == id || worktreeIDs.contains($0.worktreeID) }
+            || pendingRunLaunches.keys.contains { worktreeIDs.contains($0.worktreeID) }
+        guard !isLive else { throw HostError.projectBusy }
+        // Saved before anything is forgotten, so a failed save changes nothing.
+        try store.write(ProjectsFile(projects: projects.projects.filter { $0.id != id }), to: projectsFile)
+        let restored = projects.removeProject(id: id)
+        runScheduler.pruneSchedules(missingProjectIDs: [id])
+        let listed = Set(projects.projects.flatMap { projects.worktrees(projectId: $0.id).map(\.id) })
+        for worktreeID in worktreeIDs.subtracting(listed) {
+            await disposeSessionManager(owner: .worktree(worktreeID))
+        }
+        // The removal is committed; a restored project's refresh that fails
+        // is left to the next one.
+        for projectID in restored where (try? await environment.refreshProjectWorktrees(projectID, in: self)) == true {
+            try? saveProjects()
+        }
+    }
+
     /// The one coordinator for Workspace checkout lifecycles. It reads the
     /// authoritative store, never a display cache, when deciding which
     /// sessions to stop.
@@ -322,6 +359,23 @@ public final class AlasCoreContext {
             owner: owner,
             persistence: ACPSessionPersistence(path: Paths.acpSessionsDB(for: owner).path)
         )
+    }
+
+    /// `defaultSessionManager`, resuming after a usage limit and continuing
+    /// interrupted sessions as `config` says when each is decided.
+    public static func sessionManagerFactory(
+        config: @escaping @MainActor () -> AppConfig
+    ) -> @MainActor (SessionOwnerID, Worktree) -> ACPSessionManager {
+        { owner, worktree in
+            ACPSessionManager(
+                worktreeId: worktree.id,
+                worktreePath: worktree.path.path,
+                owner: owner,
+                persistence: ACPSessionPersistence(path: Paths.acpSessionsDB(for: owner).path),
+                autoResumeAfterUsageLimit: { config().harness.acpAutoResumeAfterUsageLimit },
+                continueInterruptedSessions: { config().harness.acpContinueInterruptedSessions }
+            )
+        }
     }
 
     /// The session manager for `worktree`, created on first use. None is

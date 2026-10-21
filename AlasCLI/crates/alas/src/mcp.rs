@@ -580,7 +580,12 @@ fn all_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "pr_status",
-            "description": "Show the pull/merge request Alas watches for this session, else the one for this worktree's branch, as JSON from a fresh provider fetch: state, head_sha, merge_state, check counts with failing checks, actionable threads from trusted reviewers, required reviewers still missing on the current head, and the shepherd's phase and settings. pull_request is null when there is none; shepherd is null when Alas is not watching it.",
+            "description": "Show the pull/merge request Alas watches for this session, else the one for this worktree's branch, as JSON from a fresh provider fetch: state, head_sha, merge_state, check counts with failing checks, actionable threads from trusted reviewers, required reviewers still missing on the current head, and the shepherd's phase and settings. pull_request is null when there is none; shepherd is null when Alas is not watching it. For a gg stack (one this session ships, or the worktree's stack in gg mode) it returns {stack, shepherd} instead: stack has name, base and its entries bottom-up, each with position, entry_id, title, its pull_request in the shape above (null until published) and the shepherd's phase for it; shepherd adds ready_to_land.",
+            "inputSchema": { "type": "object", "properties": {} }
+        }),
+        json!({
+            "name": "stack_ship",
+            "description": "The pr_create of a gg stacked-diffs worktree: publish its stack with gg sync, one pull/merge request per entry, and have Alas watch every one of them. Offer this when the stack is ready for review, and call it only after the user agrees or asks; call it again after fixing entries to publish the fixes. Run it from the top of the stack (gg last) with the work committed into stack entries. Alas later sends this session one turn listing every entry with failing CI, threads from trusted reviewers, or conflicts, bottom-up. It never lands: the user lands the stack with gg land. Returns JSON with stack, base, provider, entries (position, entry_id, title, number, url, state, draft), uncommitted_changes, and the shepherd's auto_fix setting.",
             "inputSchema": { "type": "object", "properties": {} }
         }),
     ];
@@ -1085,6 +1090,7 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
             },
         }),
         "pr_status" => Ok(Command::PrStatus),
+        "stack_ship" => Ok(Command::StackShip),
         "workspace_list" => Ok(Command::WorkspaceList),
         "workspace_show" => Ok(Command::WorkspaceShow {
             checkout_id: required_uuid(args, "checkout_id")?,
@@ -1508,11 +1514,10 @@ pub fn dispatch(env: &McpEnv, command: &Command) -> Result<Response, TransportEr
         Some(env.worktree_dir.clone()),
     );
     req.mcp_transport = Some(env.transport);
-    match command {
-        Command::PrCreate { .. } => {
-            alas_client::send_with_timeout(&env.socket, &req, PR_CREATE_READ_TIMEOUT)
-        }
-        _ => alas_client::send(&env.socket, &req),
+    if publishes(command) {
+        alas_client::send_with_timeout(&env.socket, &req, PR_CREATE_READ_TIMEOUT)
+    } else {
+        alas_client::send(&env.socket, &req)
     }
 }
 
@@ -1619,7 +1624,7 @@ fn success_message(command: &Command) -> String {
         Command::ReviewResolve { reopen: true, .. } => "Comment reopened.".into(),
         Command::ReviewCommentAdd { path, .. } => format!("Filed review comment on {path}."),
         Command::ReviewFinish { .. } => "Review finished.".into(),
-        Command::PrCreate { .. } | Command::PrStatus => "OK".into(),
+        Command::PrCreate { .. } | Command::PrStatus | Command::StackShip => "OK".into(),
         Command::AgentList { .. } => "No delegation agents found.".into(),
         Command::SessionList => "No delegated sessions found.".into(),
         Command::SessionNew { .. } => "Delegated session creation accepted.".into(),
@@ -1639,11 +1644,11 @@ fn success_message(command: &Command) -> String {
 }
 
 fn transport_error_result(command: &Command, err: &TransportError) -> Value {
-    // A pr_create that was sent but got no reply keeps running in the app, so
-    // its push and PR/MR may still land; never report that as a failure.
-    if matches!(command, Command::PrCreate { .. }) && matches!(err, TransportError::Io) {
+    // A publish that was sent but got no reply keeps running in the app, so
+    // its push and PR/MRs may still land; never report that as a failure.
+    if let Some(tool) = publish_tool(command).filter(|_| matches!(err, TransportError::Io)) {
         return text_result(
-            "Alas did not reply before the pr_create deadline; the push and PR/MR may still complete. Call pr_status before retrying.".into(),
+            format!("Alas did not reply before the {tool} deadline; the push and PR/MR(s) may still complete. Call pr_status before retrying."),
             true,
         );
     }
@@ -1745,7 +1750,22 @@ fn is_preview_command(command: &Command) -> bool {
 /// a worker so it keeps reading other calls and cancellations meanwhile.
 fn runs_on_worker(command: &Command) -> bool {
     is_preview_command(command)
-        || matches!(command, Command::SessionWait { .. } | Command::PrCreate { .. })
+        || publishes(command)
+        || matches!(command, Command::SessionWait { .. })
+}
+
+/// The calls that push and open pull/merge requests, which outlast the
+/// default read timeout: the tool name, or None for any other command.
+fn publish_tool(command: &Command) -> Option<&'static str> {
+    match command {
+        Command::PrCreate { .. } => Some("pr_create"),
+        Command::StackShip => Some("stack_ship"),
+        _ => None,
+    }
+}
+
+fn publishes(command: &Command) -> bool {
+    publish_tool(command).is_some()
 }
 
 /// Longest single `session_wait` request sent to the app by a worker.
@@ -2738,6 +2758,7 @@ mod tests {
                 "review_finish",
                 "pr_create",
                 "pr_status",
+                "stack_ship",
                 "preview_list",
                 "preview_open",
                 "preview_navigate",
@@ -2966,7 +2987,7 @@ mod tests {
     }
 
     #[test]
-    fn pr_create_without_a_reply_reports_an_unknown_outcome() {
+    fn a_publish_without_a_reply_reports_an_unknown_outcome() {
         let create = Command::PrCreate {
             title: "t".into(),
             body: "b".into(),
@@ -2980,8 +3001,10 @@ mod tests {
                 .to_string()
         };
         assert!(text(&create, TransportError::Io).contains("Call pr_status before retrying"));
+        assert!(text(&Command::StackShip, TransportError::Io).contains("stack_ship deadline"));
         // Nothing was sent, or the call is read-only: a plain failure.
         assert_eq!(text(&create, TransportError::Connect), "could not reach Alas");
+        assert_eq!(text(&Command::StackShip, TransportError::Connect), "could not reach Alas");
         assert_eq!(text(&Command::PrStatus, TransportError::Io), "could not reach Alas");
     }
 
@@ -3152,7 +3175,7 @@ mod tests {
         };
         let child = tool_names(Some("parent-session"), ToolScope::All);
         let checkout = tool_names(None, ToolScope::Workspace);
-        for tool in ["pr_create", "pr_status"] {
+        for tool in ["pr_create", "pr_status", "stack_ship"] {
             assert!(child.iter().any(|name| name == tool), "child lacks {tool}");
             assert!(!checkout.iter().any(|name| name == tool), "checkout exposes {tool}");
         }
@@ -3969,6 +3992,10 @@ mod tests {
         assert_eq!(
             command_for_tool("pr_status", &json!({}), "/wt").unwrap(),
             Command::PrStatus
+        );
+        assert_eq!(
+            command_for_tool("stack_ship", &json!({}), "/wt").unwrap(),
+            Command::StackShip
         );
     }
 

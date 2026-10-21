@@ -7,8 +7,12 @@ import Foundation
 
 let usage = """
 usage: alas-host [--wait-for-lock]
+       alas-host setup
        alas-host pair
        alas-host install-agent | uninstall-agent
+       alas-host config list | get [<key>] | set <key> <value> [--restart]
+       alas-host project list | add <path> [--name <name>] | remove <id|path>
+       alas-host restart
 
 Serves the Alas host protocol for the data directory ALAS_APP_SUPPORT_DIR
 (default: ~/Library/Application Support/Alas) on its local socket, and prints
@@ -19,12 +23,22 @@ the one in /Applications, or of ALAS_REMOTE_WEB_DIR. Stops on SIGINT or SIGTERM.
 With --wait-for-lock, waits while another process (the app) holds the data
 directory instead of exiting, and serves once it lets go.
 
+`alas-host setup` walks through the host's settings, projects and pairing in
+a full-screen terminal UI that opens on the current values; rerun it to change
+them later.
+
 `alas-host pair` asks the running host for a Remote pairing code, which a
 phone or browser redeems within two minutes, and prints it.
 
 `alas-host install-agent` installs and starts a launchd agent that runs this
 executable with --wait-for-lock at login, and restarts it after a crash;
 `uninstall-agent` stops and removes it. Each profile has its own agent.
+
+`alas-host config` reads and changes the host's settings in the profile's
+app.json; the running host applies a change once restarted. `alas-host project`
+lists, adds and removes the profile's projects, through the running host when
+one serves the profile. `alas-host restart` restarts the launch agent's host.
+Changes are refused while the app has the profile open.
 """
 
 func fail(_ message: String) -> Never {
@@ -59,6 +73,7 @@ if CommandLine.arguments.dropFirst().elementsEqual(["pair"]) {
     }
 }
 let arguments = Array(CommandLine.arguments.dropFirst())
+HostCommands.runIfCommand(arguments)
 if arguments == ["install-agent"] || arguments == ["uninstall-agent"] {
     // The path this was started as, links not resolved: Homebrew's link in
     // its `bin` outlives an upgrade, while what it points to (a versioned
@@ -75,17 +90,6 @@ if arguments == ["install-agent"] || arguments == ["uninstall-agent"] {
     let executable = URL(fileURLWithPath: started).standardizedFileURL
     let agent = HostLaunchAgent(executable: executable)
     let domain = "gui/\(getuid())"
-    @discardableResult
-    func launchctl(_ arguments: String...) -> Int32 {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-        process.arguments = arguments
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        guard (try? process.run()) != nil else { return -1 }
-        process.waitUntilExit()
-        return process.terminationStatus
-    }
     // 3 (ESRCH) is an agent that is not loaded: there is nothing to stop.
     let stopped = launchctl("bootout", "\(domain)/\(agent.label)")
     guard stopped == 0 || stopped == ESRCH else {
@@ -171,19 +175,22 @@ guard let socket = HostSocketServer(server: protocolServer) else {
 // One shutdown: a second signal must not exit while the first still flushes.
 var isStopping = false
 
-// Remote, when the profile enables it: loopback only, since a bare executable
-// has no local-network permission, reached from other devices through the
-// `tailscale serve` proxy run here, as the app runs it, or a tunnel. No peer
-// identity, federation or Bonjour: only another Mac asks for an identity
-// proof, and a headless host pairs with codes.
+// Remote, where the profile's host reachability says: loopback, reached from
+// other devices through the `tailscale serve` proxy run here, as the app runs
+// it, or a tunnel; or every interface when the LAN is chosen. Accepting
+// incoming TCP needs no local network permission, only Bonjour does (TN3179).
+// No peer identity, federation or Bonjour: only another Mac asks for an
+// identity proof, and a headless host pairs with codes.
 var remote: RemoteServer?
 var tailscaleServe: RemoteTailscaleServeProcess?
 let keepAwake = RemoteKeepAwakeController()
 var config = (try? PersistenceStore().readIfExists(AppConfig.self, from: Paths.appConfigFile)) ?? .defaults
-if config.remote.enabled {
+if let listen = config.hostRemoteListen {
     if config.remote.ensureServerId() {
+        // Only the new id is written: keys this build does not model stay.
+        let serverId = config.remote.serverId
         do {
-            try PersistenceStore().write(config, to: Paths.appConfigFile)
+            try HostProfileWrite.update { $0.remote.serverId = serverId }
         } catch {
             fail("cannot save \(Paths.appConfigFile.path): \(error.localizedDescription)")
         }
@@ -215,7 +222,9 @@ if config.remote.enabled {
             RemoteDiagnosticsSnapshot(
                 appName: "Alas",
                 port: port,
-                addresses: settings.advertisedAddresses(port: port, interfaces: interfaces, tailnetHTTPSHost: nil),
+                addresses: settings.advertisedAddresses(
+                    port: port, interfaces: interfaces, tailnetHTTPSHost: nil, loopbackOnly: listen.loopbackOnly
+                ),
                 usesPlainHTTP: true,
                 pairedDeviceCount: pairing.devices.count,
                 serverId: settings.serverId,
@@ -245,7 +254,7 @@ if config.remote.enabled {
             guard let status = try? await RemoteTailscale.status(), servedPort == port else { return }
             server.updateAccessPolicy(settings.accessPolicy(interfaces: interfaces, tailnetDNSName: status.dnsName))
             server.updateOriginPolicy(settings.originPolicy(interfaces: interfaces, tailnetDNSName: status.dnsName))
-            guard settings.tailscaleServe, status.httpsEnabled, !isStopping,
+            guard listen.tailscaleServe, status.httpsEnabled, !isStopping,
                   let executable = RemoteTailscale.executable() else { return }
             do {
                 tailscaleServe = try RemoteTailscaleServeProcess(executable: executable, port: port) { reason in
@@ -259,7 +268,7 @@ if config.remote.enabled {
         }
     }
     do {
-        try server.start(port: settings.preferredPort, loopbackOnly: true)
+        try server.start(port: listen.port, loopbackOnly: listen.loopbackOnly)
     } catch {
         fail("cannot serve Remote: \(error.localizedDescription)")
     }
