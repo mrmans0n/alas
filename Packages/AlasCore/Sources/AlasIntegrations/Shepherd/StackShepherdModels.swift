@@ -53,6 +53,10 @@ public struct StackShepherdRecord: Codable, Equatable, Sendable {
     /// `"<number>:<head>"` of every open entry when "ready to land" was last
     /// notified, so the same heads are announced once.
     public var notifiedReadyHeads: [String]?
+    /// gg lists a local entry with no request yet, as of the last poll that
+    /// saw the stack. Keeps the record alive after every tracked request has
+    /// merged, so unpublished work isn't reported as landed. Nil until seen.
+    public var hasUnpublishedEntries: Bool?
     public var finishedAt: Date?
     /// Every entry merged while the owner session was busy; the
     /// archive-after-merge step waits for its turn to end.
@@ -87,9 +91,9 @@ public struct StackShepherdRecord: Codable, Equatable, Sendable {
         entries.filter { !$0.shepherd.phase.isTerminal }
     }
 
-    /// Every entry merged or closed.
+    /// Every entry merged or closed, and no local entry is still unpublished.
     public var isFinished: Bool {
-        !entries.isEmpty && entries.allSatisfy { $0.shepherd.phase.isTerminal }
+        !entries.isEmpty && entries.allSatisfy { $0.shepherd.phase.isTerminal } && hasUnpublishedEntries != true
     }
 
     /// The phase that sums up the entries, most urgent first: finished,

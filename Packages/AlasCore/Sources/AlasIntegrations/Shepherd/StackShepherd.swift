@@ -542,6 +542,7 @@ public final class StackShepherd {
             isStackPublished: onStack.map { stack in
                 stack.entries.allSatisfy { $0.prNumber != nil } && stack.syncedCommits == stack.totalCommits
             } ?? true,
+            hasUnpublishedEntries: onStack.map { stack in stack.entries.contains { $0.prNumber == nil } },
             rules: rules,
             now: now()
         )

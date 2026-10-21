@@ -28,6 +28,9 @@ public struct StackShepherdObservation: Sendable {
     /// requests say nothing about the code that would land. Unknown (true)
     /// while the worktree is on another stack.
     public let isStackPublished: Bool
+    /// gg lists a local entry with no request yet. Nil while the worktree is
+    /// on another stack: the record keeps what it last saw.
+    public let hasUnpublishedEntries: Bool?
     public let rules: ShepherdRules
     public let now: Date
 
@@ -40,6 +43,7 @@ public struct StackShepherdObservation: Sendable {
         session: ShepherdSessionState,
         canDispatch: Bool,
         isStackPublished: Bool = true,
+        hasUnpublishedEntries: Bool? = nil,
         rules: ShepherdRules,
         now: Date
     ) {
@@ -51,6 +55,7 @@ public struct StackShepherdObservation: Sendable {
         self.session = session
         self.canDispatch = canDispatch
         self.isStackPublished = isStackPublished
+        self.hasUnpublishedEntries = hasUnpublishedEntries
         self.rules = rules
         self.now = now
     }
@@ -215,7 +220,7 @@ public enum StackShepherdPolicy {
         }
         var next = record
         next.entries = entries
-
+        if let unpublished = observation.hasUnpublishedEntries { next.hasUnpublishedEntries = unpublished }
         let open = next.openEntries
         decision.gatePasses = observation.isStackPublished && !open.isEmpty && open.allSatisfy { entry in
             guard entry.shepherd.phase == .watching,

@@ -57,6 +57,7 @@ struct StackShepherdTests {
         present: Set<String>? = nil,
         canDispatch: Bool = true,
         isStackPublished: Bool = true,
+        hasUnpublishedEntries: Bool? = nil,
         now: Date = F.now
     ) -> StackShepherdObservation {
         StackShepherdObservation(
@@ -68,6 +69,7 @@ struct StackShepherdTests {
             session: .idle,
             canDispatch: canDispatch,
             isStackPublished: isStackPublished,
+            hasUnpublishedEntries: hasUnpublishedEntries,
             rules: .none,
             now: now
         )
@@ -197,6 +199,24 @@ struct StackShepherdTests {
         let landed = StackShepherdPolicy.decide(decision.record, Self.observation([Self.request(43, state: .merged)]))
         #expect(landed.finished == .merged)
         #expect(landed.record.finishedAt == F.now)
+    }
+
+    /// Every tracked request merging is not the stack landing while gg still
+    /// lists a local entry with no request: that work was never published.
+    @Test func mergedRequestsDoNotFinishAStackThatStillHasUnpublishedWork() {
+        let landed = [Self.request(41, state: .merged)]
+
+        let waiting = StackShepherdPolicy.decide(Self.record([41]), Self.observation(landed, hasUnpublishedEntries: true))
+        #expect(waiting.finished == nil)
+        #expect(!waiting.record.isFinished)
+
+        // Off the stack the record keeps what it last saw.
+        let away = StackShepherdPolicy.decide(waiting.record, Self.observation(landed, hasUnpublishedEntries: nil))
+        #expect(!away.record.isFinished)
+
+        let published = StackShepherdPolicy.decide(waiting.record, Self.observation(landed, hasUnpublishedEntries: false))
+        #expect(published.finished == .merged)
+        #expect(published.record.isFinished)
     }
 
     @Test(arguments: [
