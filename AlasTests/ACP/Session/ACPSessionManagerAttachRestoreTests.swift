@@ -5888,10 +5888,8 @@ struct ACPSessionManagerAttachRestoreTests {
     }
 
     @Test("late hydration retains recovery only when the persisted transcript has context",
-          arguments: [ACPSession.HydrationState.loading, .failed("Read failed")], [false, true])
-    func lateHydrationRetainsRecoveryOnlyWhenPersistedTranscriptHasContext(
-        hydrationState: ACPSession.HydrationState, hasContext: Bool
-    ) async throws {
+          arguments: [false, true])
+    func lateHydrationRetainsRecoveryOnlyWhenPersistedTranscriptHasContext(hasContext: Bool) async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
         try store.upsertSession(row(remoteSessionId: nil))
         try store.setContextRecoveryPending(sessionId: "local", pending: true)
@@ -5903,7 +5901,7 @@ struct ACPSessionManagerAttachRestoreTests {
         scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
         let manager = manager(store: store, client: client)
         let session = try #require(manager.placeholderSession(id: "local"))
-        session.hydrationState = hydrationState
+        session.hydrationState = .failed("Read failed")
 
         await manager.attach(to: session.id, freshlyCreated: false)
         await manager.flushAllPersistence()
@@ -6467,6 +6465,61 @@ struct ACPSessionManagerAttachRestoreTests {
         session.transcript.streamingState = .idle
         session.enqueue(blocks: [.text("queued")])
         #expect(manager.sendTranscriptAsContext(sessionId: session.id, agentName: nil) == false)
+    }
+
+    @Test("direct attach hydrates conversation outside the tail before recovering context", arguments: [false, true])
+    func directAttachHydratesConversationOutsideTailBeforeRecoveringContext(overlappingInitialization: Bool) async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: nil))
+        try store.setContextRecoveryPending(sessionId: "local", pending: true)
+        try appendMessage(.user(id: UUID(), text: "Recover older context", attachments: []), to: store, seq: 0)
+        for i in 1...ACPTranscript.tailWindow {
+            try appendMessage(.toolCall(.init(toolCallId: "tool-\(i)", title: "Read file", kind: "read",
+                                             status: "completed", content: "done")), to: store, seq: Int64(i))
+        }
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
+        client.script(method: "session/prompt") { request in
+            let params = try #require(request.params as? ACPSessionPromptParams)
+            let block = try #require(params.prompt.first)
+            guard case .text(let text) = block else {
+                Issue.record("Expected recovery context")
+                return Data("null".utf8)
+            }
+            #expect(text.contains("Recover older context"))
+            return Data("null".utf8)
+        }
+        let manager = manager(store: store, client: client)
+        let session = try #require(manager.placeholderSession(id: "local"))
+        if overlappingInitialization {
+            let backfill = HydrationBackfillGate()
+            manager.beforeBackfill = {
+                if client.sent.map(\.method).contains("initialize") {
+                    await backfill.wait()
+                }
+            }
+            client.scriptAsync(method: "initialize") { [weak manager] _ in
+                await manager?.hydrateIfNeeded(id: session.id)
+                return try JSONEncoder().encode(ACPInitializeResult(
+                    protocolVersion: 1, agentCapabilities: nil, authMethods: []))
+            }
+            client.script(method: "session/new") { _ in
+                backfill.open()
+                return try JSONEncoder().encode(ACPSessionNewResult(
+                    sessionId: "remote-new", availableModels: [], availableModes: [],
+                    currentModel: nil, currentMode: nil, promptSuggestions: []))
+            }
+        }
+
+        await manager.attach(to: session.id, freshlyCreated: false)
+
+        try #require(session.hydrationState == .ready && session.hasConversationTranscript)
+        try await waitUntil { session.contextRecoveryStatus == .restored }
+        #expect(client.sent.map(\.method).contains("session/prompt"))
+        await manager.flushAllPersistence()
+        #expect(try store.loadSession(id: session.id)?.contextRecoveryPending == false)
+        await manager.detach(sessionId: session.id)
     }
 
     @Test("attach waits for tail-first hydration backfill before runner setup")

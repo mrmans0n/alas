@@ -6483,7 +6483,9 @@ extension ACPSessionManager {
         // row (or skip an append it should have made). Wait here so the
         // in-memory and persisted indices line up before any runner work —
         // including replayed load updates — touches the store. No-op once
-        // backfill is done.
+        // backfill is done. Start or join hydration first: a direct attach
+        // can arrive before hydration has scheduled its backfill.
+        await hydrateIfNeeded(id: sessionId)
         await awaitBackfill(id: sessionId)
         guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { return }
         let previousBackgroundTaskIds = Set(session.activeBackgroundTasks.map(\.id))
