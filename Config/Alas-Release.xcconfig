@@ -1,4 +1,5 @@
 // Release signing is applied by scripts/sign-and-notarize.sh.
 PRODUCT_BUNDLE_IDENTIFIER = io.nlopez.alas
 ALAS_DISPLAY_NAME = Alas
+CODE_SIGN_STYLE = Automatic
 CODE_SIGN_IDENTITY = -

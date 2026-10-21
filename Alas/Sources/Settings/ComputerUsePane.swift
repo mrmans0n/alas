@@ -5,7 +5,14 @@ import SwiftUI
 struct ComputerUsePane: View {
     @Bindable var state: AppState
     @Environment(\.theme) var theme
-    @State private var granted: Set<ComputerUsePermission> = []
+    @State private var granted: Set<ComputerUsePermission>
+    @State private var isAdHoc: Bool
+
+    init(state: AppState) {
+        self.state = state
+        _granted = State(initialValue: ComputerUsePlatform.shared.grantedPermissions())
+        _isAdHoc = State(initialValue: ComputerUsePlatform.shared.isAdHocSigned())
+    }
 
     var body: some View {
         ScrollView {
@@ -30,7 +37,7 @@ struct ComputerUsePane: View {
                     }
                 }
 
-                if ComputerUsePlatform.shared.isAdHocSigned() {
+                if isAdHoc {
                     SettingsGroup(title: "Development build") {
                         Text("This build is ad-hoc signed, so macOS forgets these permissions every time it is rebuilt. See \"Local signing for dev builds\" in AGENTS.md.")
                             .font(.system(size: 12))

@@ -2,6 +2,7 @@
 // (Screen Recording, Accessibility) never collide with the released app.
 PRODUCT_BUNDLE_IDENTIFIER = io.nlopez.alas.dev
 ALAS_DISPLAY_NAME = Alas Dev
+CODE_SIGN_STYLE = Automatic
 CODE_SIGN_IDENTITY = -
 // Optional, gitignored: a stable signing identity. See CLAUDE.md.
 #include? "Local.xcconfig"

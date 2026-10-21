@@ -34,7 +34,7 @@ enum ComputerUseSystemPermissions {
         var staticCode: SecStaticCode?
         guard SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode else { return true }
         var info: CFDictionary?
-        guard SecCodeCopySigningInformation(staticCode, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess,
+        guard SecCodeCopySigningInformation(staticCode, SecCSFlags(), &info) == errSecSuccess,
               let dict = info as? [String: Any],
               let flags = dict[kSecCodeInfoFlags as String] as? UInt32
         else { return true }

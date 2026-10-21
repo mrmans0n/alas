@@ -150,7 +150,6 @@ targets:
         PRODUCT_NAME: Alas
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ENABLE_HARDENED_RUNTIME: YES
-        CODE_SIGN_STYLE: Automatic
         HEADER_SEARCH_PATHS: $(inherited) $(SRCROOT)/.build/fff/include $(SRCROOT)/.build/treesitter-pack/include
         LIBRARY_SEARCH_PATHS: $(inherited) $(SRCROOT)/.build/fff/$(CURRENT_ARCH)/install/lib $(SRCROOT)/.build/fff/universal/install/lib $(SRCROOT)/.build/treesitter-pack/$(CURRENT_ARCH)/install/lib $(SRCROOT)/.build/treesitter-pack/universal/install/lib
         LD_RUNPATH_SEARCH_PATHS: $(inherited) @executable_path/../Frameworks
@@ -206,6 +205,8 @@ targets:
   AlasTests:
     type: bundle.unit-test
     platform: macOS
+    configFiles:
+      Debug: Config/AlasTests-Debug.xcconfig
     sources:
       - path: AlasTests
     dependencies:

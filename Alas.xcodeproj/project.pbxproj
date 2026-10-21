@@ -2521,6 +2521,7 @@
 		5DD723B8C15EF2413C5D935D /* BlockedLanguageServerNudgeResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockedLanguageServerNudgeResolver.swift; sourceTree = "<group>"; };
 		5DEE18D06DCB7DE3C8C8D91A /* EditorBufferExternalEditableTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorBufferExternalEditableTests.swift; sourceTree = "<group>"; };
 		5E08F2EB38561E3879D56908 /* DiffReviewLoadingSkeleton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffReviewLoadingSkeleton.swift; sourceTree = "<group>"; };
+		5E09E3093197A322B069B29A /* AlasTests-Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "AlasTests-Debug.xcconfig"; sourceTree = "<group>"; };
 		5E1771AD92007035C07C8938 /* RunScriptStackDetectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunScriptStackDetectorTests.swift; sourceTree = "<group>"; };
 		5E1EB687D28C92CCF23436D5 /* ACPSessionReferenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSessionReferenceTests.swift; sourceTree = "<group>"; };
 		5E21106B4804D62C1D3C7F62 /* AlasGhostty.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasGhostty.swift; sourceTree = "<group>"; };
@@ -3687,6 +3688,7 @@
 			children = (
 				16C40A4CE4430FC5D2AED6FE /* Alas-Debug.xcconfig */,
 				69E2411AF6278F9730712504 /* Alas-Release.xcconfig */,
+				5E09E3093197A322B069B29A /* AlasTests-Debug.xcconfig */,
 			);
 			path = Config;
 			sourceTree = "<group>";
@@ -8867,7 +8869,6 @@
 				ARCHS = "$(ALAS_APP_ARCHS)";
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Alas/Resources/Alas.entitlements;
-				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				FRAMEWORK_SEARCH_PATHS = (
@@ -8907,7 +8908,6 @@
 				ARCHS = "$(ALAS_APP_ARCHS)";
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Alas/Resources/Alas.entitlements;
-				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				FRAMEWORK_SEARCH_PATHS = (
@@ -8926,6 +8926,7 @@
 		};
 		A44471E1CAF592F80A45259A /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 5E09E3093197A322B069B29A /* AlasTests-Debug.xcconfig */;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				COMBINE_HIDPI_IMAGES = YES;

@@ -1,0 +1,3 @@
+// Optional, gitignored: lets the test bundle share the app's stable signing
+// identity so the hardened test host can load it. See CLAUDE.md.
+#include? "Local.xcconfig"
