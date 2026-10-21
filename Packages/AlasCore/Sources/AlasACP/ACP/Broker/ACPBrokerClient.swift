@@ -518,20 +518,12 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, @unchecked Senda
             }
             if let error = result.error {
                 clearPendingOutboundRequest(id: result.requestId.jsonRPCID)
-                // A terminal JSON-RPC error IS this operationKey's final,
-                // authoritative outcome — unlike an incidental failure
-                // elsewhere in this call (the case the surrounding defer
-                // deliberately no longer acks for, see above), there is no
-                // successful result a caller could still receive for this
-                // operationKey, so nothing else will ever call
-                // `ackOperationCompletion` for it. The `attachAndReplay()` just above
-                // may have already dispatched this exact completion (with
-                // its error outcome) and, since this call registered
-                // interest before the RPC, protected its cursor — ack it
-                // now or it stays "unacknowledged" forever, deferring every
-                // later durable event behind a completion nobody is coming
-                // back for.
-                if let cursor = currentOperationCompletionCursor(for: operationKey) {
+                // Ordinary terminal errors settle this key. Review rejection
+                // events are consumed individually by dispatch: their response
+                // can arrive after a newer same-key success, whose cursor and
+                // preregistration still belong to its successful consumer.
+                if ACPCodexHookReviewError.classify(error) == nil,
+                   let cursor = currentOperationCompletionCursor(for: operationKey) {
                     ackOperationCompletion(operationKey: operationKey, cursor: cursor)
                 }
                 throw ACPClientError.jsonrpc(error)

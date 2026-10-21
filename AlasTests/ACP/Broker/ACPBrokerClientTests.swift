@@ -1678,6 +1678,53 @@ struct ACPBrokerClientTests {
         #expect(client.replayedCompletion(forPreRegisteredOperationKey: key) == nil)
     }
 
+    @Test func delayedReviewRejectionCannotConsumeReplacementSuccess() async throws {
+        let service = MockBrokerService()
+        let key = "queued-reviewed-prompt"
+        let rejection = JSONRPCError(code: -32044, message: "Changed", data: AnyCodable(["kind": "codex_hook_changed"]))
+        let success = ACPBrokerRPCOutcome(result: .object(["stopReason": .string("end_turn")]), error: nil)
+        let client = makeClient(service: service)
+        defer { Task { await client.detach() } }
+        client.preRegisterAwaitedOperationKeys([key])
+        try await client.start()
+        let heldResponse = BrokerTestGate()
+        var metadata = ACPSessionMeta()
+        metadata.codexHooks = .init(reviewToken: "old")
+        let oldMeta = metadata
+        metadata.codexHooks = .init(reviewToken: "fresh")
+        let freshMeta = metadata
+        var params = ACPSessionPromptParams(sessionId: "remote", prompt: [.text("same prompt")])
+        params.meta = oldMeta
+        let oldParams = params
+        params.meta = freshMeta
+        let freshParams = params
+        await service.enqueueSendResult(.init(requestId: .init(rawValue: 1), replayed: false, error: rejection, pending: false))
+        await service.holdNextSendResponse(heldResponse)
+        let rejected = Task {
+            try await client.send(ACPRequest(method: "session/prompt", params: oldParams, brokerOperationKey: key))
+        }
+        try await waitUntil { await heldResponse.hasEntered }
+        await service.enqueueSendResult(.init(requestId: .init(rawValue: 2), replayed: false, result: success.result, pending: false))
+        await service.enqueueAttach(events: [
+            .init(cursor: .init(rawValue: 1), kind: .operationCompleted(operationKey: .init(rawValue: key), outcome: .init(result: nil, error: rejection))),
+            .init(cursor: .init(rawValue: 2), kind: .operationCompleted(operationKey: .init(rawValue: key), outcome: success)),
+            sessionUpdateEvent(cursor: .init(rawValue: 3), text: "after success")
+        ], snapshotOperations: [.init(operationKey: .init(rawValue: key), adapterRequestId: .init(rawValue: 2), method: "session/prompt", terminalOutcome: success)])
+        let successful = try await client.send(ACPRequest(method: "session/prompt", params: freshParams, brokerOperationKey: key))
+        let later = try await nextUpdate(from: client.incomingUpdates)
+        later.durableConsumptionAcknowledgement?()
+        #expect(client.terminalOutcome(forPreRegisteredOperationKey: key) == success)
+        await heldResponse.release()
+        await #expect(throws: ACPClientError.self) { try await rejected.value }
+        #expect(client.terminalOutcome(forPreRegisteredOperationKey: key) == success)
+        #expect(client.replayedCompletion(forPreRegisteredOperationKey: key)?.outcome == success)
+        #expect(await service.acks.allSatisfy { $0.cursor.rawValue < 2 })
+        successful.acknowledgeDurableConsumption()
+        try await waitUntil { await service.acks.contains { $0.cursor.rawValue == 3 } }
+        #expect(await service.acks.first { $0.cursor.rawValue >= 2 }?.cursor.rawValue == 2)
+        #expect(await service.sent.count == 2)
+    }
+
     @Test func rejectionReconciliationKeepsAnotherLiveSendProtected() async throws {
         let service = MockBrokerService()
         let key = "shared-review-operation"
@@ -2258,6 +2305,7 @@ private actor MockBrokerService: ACPBrokerServicing {
     var closed: [ACPBrokerCloseParams] = []
     private var attachReplies: [AttachReply] = []
     var sendResults: [ACPBrokerSendResult] = []
+    private var nextSendResponseGate: BrokerTestGate?
     var snapshotInitializeResult: ACPBrokerJSONValue?
     var snapshotRemoteSessionResult: ACPBrokerJSONValue?
     var openSnapshotTurnState: ACPBrokerTurnState = .idle
@@ -2375,7 +2423,7 @@ private actor MockBrokerService: ACPBrokerServicing {
 
     func send(_ params: ACPBrokerSendParams) async throws -> ACPBrokerSendResult {
         sent.append(params)
-        return sendResults.isEmpty
+        let result = sendResults.isEmpty
             ? ACPBrokerSendResult(
                 requestId: ACPBrokerAdapterRequestID(rawValue: 1),
                 replayed: false,
@@ -2383,7 +2431,13 @@ private actor MockBrokerService: ACPBrokerServicing {
                 pending: nil
             )
             : sendResults.removeFirst()
+        let gate = nextSendResponseGate
+        nextSendResponseGate = nil
+        await gate?.wait()
+        return result
     }
+
+    func holdNextSendResponse(_ gate: BrokerTestGate) { nextSendResponseGate = gate }
 
     func notify(_ params: ACPBrokerNotifyParams) async throws -> ACPBrokerSimpleOK {
         ACPBrokerSimpleOK(ok: true)
