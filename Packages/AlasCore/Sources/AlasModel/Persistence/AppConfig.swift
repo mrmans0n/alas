@@ -1266,12 +1266,13 @@ private extension AppConfig {
     /// explicitly unbound; Settings can restore its default once the chord is
     /// free.
     ///
-    /// Covers the agent-launcher split (⌘⌥⇧C, ⌘⌥⇧T) and the right pane's rail
-    /// tabs (⌘⌃1–4).
+    /// Covers the agent-launcher split (⌘⌥⇧C, ⌘⌥⇧T), the right pane's rail
+    /// tabs (⌘⌃1–4) and Dictate (⌃⌥D).
     mutating func unbindNewActionDefaultsClaimedByOverrides() {
         let newActions: [ShortcutAction] = [
             .launchAgentInTerminal, .launchAgentInChat,
             .rightPaneChangesTab, .rightPaneFilesTab, .rightPaneAgentTab, .rightPaneRunTab, .rightPaneSchedulesTab,
+            .dictate,
         ]
         for action in newActions {
             guard !shortcutOverrides.keys.contains(action.rawValue) else { continue }
