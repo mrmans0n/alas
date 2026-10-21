@@ -77,6 +77,7 @@ extension AlasHost {
         return AlasHost(core: AlasCoreContext(
             projects: ProjectsManager(persistedProjects: projects.projects, defaultOrdering: { ordering }),
             store: store,
+            makeSessionManager: AlasCoreContext.sessionManagerFactory(config: { environment.config }),
             environment: environment,
             usageHistory: try? UsageHistoryStore()
         ))

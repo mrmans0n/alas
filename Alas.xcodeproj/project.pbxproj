@@ -886,6 +886,7 @@
 		7DA7E036E4147E761D2EE709 /* solarized-dark.json in Resources */ = {isa = PBXBuildFile; fileRef = B8B0696364C297AEF3099F74 /* solarized-dark.json */; };
 		7DAAFE51C9C35BADB78B4A30 /* SSHIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C63CBD839A151565AE577AE /* SSHIntegrationTests.swift */; };
 		7DCDDC33E40307B36D741C74 /* WorktreeCleanupFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = F496C1472B52D466B3086184 /* WorktreeCleanupFixtures.swift */; };
+		7DEC9A6F82E021BF7FCEEB11 /* Setup.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6B9F8D6636B7CA2AABC04B4 /* Setup.swift */; };
 		7DEFB0A61614D65F509A11AE /* ImageDiffDifferenceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4246F7A17DCEC4D2A669BC43 /* ImageDiffDifferenceView.swift */; };
 		7E2E0B87C53DBAAE4AEF81E9 /* GGStackModelsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A948C5D9B5EB13DBAC21E538 /* GGStackModelsTests.swift */; };
 		7E3FC231CA6865CF6F172F26 /* NextPromptInferenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99ADB2CF3D4BF7E1BFC5ADC5 /* NextPromptInferenceTests.swift */; };
@@ -1084,6 +1085,7 @@
 		99CD435501BBBAAD8C4214D8 /* ProjectMCPServerEditorPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 178EAF6036A9BEAEA2C55082 /* ProjectMCPServerEditorPolicyTests.swift */; };
 		99FA7C60573A64C7F1B0C64E /* PluginWebPolicy+Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 739FF1D9DDC2DBC842F9A8B8 /* PluginWebPolicy+Theme.swift */; };
 		9AC7E08307DA010181E2DE58 /* ACPFirstRunConnectingPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B4BB6C10F3718F7D0A50BAE /* ACPFirstRunConnectingPolicy.swift */; };
+		9AE1F833F53003201629E98B /* Terminal.swift in Sources */ = {isa = PBXBuildFile; fileRef = E45285C08186F9F8AD8FD4D4 /* Terminal.swift */; };
 		9AF1201FF6DEF0238B2E7229 /* github-light.json in Resources */ = {isa = PBXBuildFile; fileRef = 45FF9E89611B9DE2D3E2DF4C /* github-light.json */; };
 		9B00878F781FADB428684B2D /* DiffDisplaySignatureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 283613E170E25F69521F64ED /* DiffDisplaySignatureTests.swift */; };
 		9B2B055195430A5A40BC7659 /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = 6E87310A663A034FC961EE3F /* MLXLMCommon */; };
@@ -1632,6 +1634,7 @@
 		E5E6CB61C4776CD48C3AF563 /* ACPDictationRegionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCD3B4EB4344DFAF081D72D5 /* ACPDictationRegionTests.swift */; };
 		E6426E94A57602E76D401D21 /* AlasActionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 005F92E45C7D391D8BD5A3FD /* AlasActionService.swift */; };
 		E6441AD06107907F8DAABEFF /* catppuccin-latte.json in Resources */ = {isa = PBXBuildFile; fileRef = B7A41D4B2167534CC33F7DE1 /* catppuccin-latte.json */; };
+		E650E30F71155FD6D6A1CA48 /* Commands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24B1CA8BBF19609C941B95CF /* Commands.swift */; };
 		E6A429E3423A9A40A9B36C97 /* RepoSelectorEnvironment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37C7F4710313BA1671A3AED0 /* RepoSelectorEnvironment.swift */; };
 		E6B5EDEA2C41C783ECA67FD9 /* ReviewSessionLoaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADC27B340A795F13EA4E0765 /* ReviewSessionLoaderTests.swift */; };
 		E6C5CD34C39ECF114DC3D4B4 /* WorktreeRowHeightTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6C27094E7804D975635EB11 /* WorktreeRowHeightTests.swift */; };
@@ -2102,6 +2105,7 @@
 		2463B784210156F489A13FAC /* initialize-response.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "initialize-response.json"; sourceTree = "<group>"; };
 		2468AD293C8215FAF390C907 /* ACPMessageWireTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPMessageWireTests.swift; sourceTree = "<group>"; };
 		246A2AF26902AB36730A4F44 /* GGUndoMarkerStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GGUndoMarkerStoreTests.swift; sourceTree = "<group>"; };
+		24B1CA8BBF19609C941B95CF /* Commands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Commands.swift; sourceTree = "<group>"; };
 		24D0D9D1F3513DA3BAD40D14 /* ayu-light.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "ayu-light.json"; sourceTree = "<group>"; };
 		24E0512A6C9A3BE43C8B796F /* DiffPaneRowPlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffPaneRowPlan.swift; sourceTree = "<group>"; };
 		2546045A3891B15BE3E483F3 /* RepoIconResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoIconResolverTests.swift; sourceTree = "<group>"; };
@@ -3431,6 +3435,7 @@
 		E43F9F04AF6A6FF0A4D328F4 /* CommitHeaderViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitHeaderViewTests.swift; sourceTree = "<group>"; };
 		E444D51CB35528C8E5AB150A /* FuzzyMatchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FuzzyMatchTests.swift; sourceTree = "<group>"; };
 		E44E6069340B934B9E70C1D8 /* RemotePeerStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemotePeerStoreTests.swift; sourceTree = "<group>"; };
+		E45285C08186F9F8AD8FD4D4 /* Terminal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Terminal.swift; sourceTree = "<group>"; };
 		E48ABFB9C3B49FA63F2A2D16 /* RemoteDiscoveryIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteDiscoveryIntegrationTests.swift; sourceTree = "<group>"; };
 		E49006251DFBE67CCD0C4008 /* ACPMentionPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPMentionPicker.swift; sourceTree = "<group>"; };
 		E4DF2130E463B27C55A72437 /* ACPTranscriptRowHostingPoolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPTranscriptRowHostingPoolTests.swift; sourceTree = "<group>"; };
@@ -3556,6 +3561,7 @@
 		F6855690ED51FFDCD8F82485 /* ACPChildBlockerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPChildBlockerTests.swift; sourceTree = "<group>"; };
 		F6883364648BF4B9F5DA131F /* EditorOverlayPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorOverlayPanel.swift; sourceTree = "<group>"; };
 		F68B06E93430D1C7B02F6BB2 /* ACPAuthNudgeBannerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPAuthNudgeBannerTests.swift; sourceTree = "<group>"; };
+		F6B9F8D6636B7CA2AABC04B4 /* Setup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Setup.swift; sourceTree = "<group>"; };
 		F6EDDD4D22267C26B496A6FF /* ACPFirstRunConnectingPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPFirstRunConnectingPolicyTests.swift; sourceTree = "<group>"; };
 		F721FB733081A583D4053DDA /* FileTypeIconView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileTypeIconView.swift; sourceTree = "<group>"; };
 		F748F06725644571785BF658 /* PendingStashDrop.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingStashDrop.swift; sourceTree = "<group>"; };
@@ -5274,7 +5280,10 @@
 		7493DF3E0751F3C1035C76CF /* alas-host */ = {
 			isa = PBXGroup;
 			children = (
+				24B1CA8BBF19609C941B95CF /* Commands.swift */,
 				60591506CA6F1CAED1BD0846 /* main.swift */,
+				F6B9F8D6636B7CA2AABC04B4 /* Setup.swift */,
+				E45285C08186F9F8AD8FD4D4 /* Terminal.swift */,
 			);
 			path = "alas-host";
 			sourceTree = "<group>";
@@ -7640,6 +7649,9 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E650E30F71155FD6D6A1CA48 /* Commands.swift in Sources */,
+				7DEC9A6F82E021BF7FCEEB11 /* Setup.swift in Sources */,
+				9AE1F833F53003201629E98B /* Terminal.swift in Sources */,
 				7E60FAE6FB762FA1353C3E0C /* main.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

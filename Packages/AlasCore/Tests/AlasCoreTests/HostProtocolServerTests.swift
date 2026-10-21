@@ -159,6 +159,7 @@ struct HostProtocolServerTests {
             )),
             HostError.worktreeDeletion(refusal: .changed("The worktree changed since it was listed."))
         ),
+        (HostClientMessage(id: 9, request: .removeProject(projectID: "missing")), HostError.notFound(what: "project missing")),
     ])
     func refusedRequestsAnswerWithTheirError(_ message: HostClientMessage, _ error: HostError) async throws {
         let fixture = try Fixture()
@@ -275,6 +276,121 @@ struct HostProtocolServerTests {
         #expect(client.messages == [.response(id: 1, result: .runStart(start: .refused(
             title: "Worktree archived", message: "Unarchive the worktree to run scripts in it."
         )))])
+    }
+
+    /// A removed project leaves the host and the persisted list.
+    @Test func removeProjectForgetsIt() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+
+        #expect(try await fixture.request(.removeProject(projectID: fixture.projectID)) == .done)
+
+        guard case .snapshot(let snapshot) = try await fixture.request(.snapshot) else {
+            Issue.record("expected a snapshot")
+            return
+        }
+        #expect(snapshot.projects.isEmpty)
+        let persisted = try #require(try PersistenceStore().readIfExists(ProjectsFile.self, from: fixture.projectsFile))
+        #expect(persisted.projects.isEmpty)
+    }
+
+    /// A project with a session in one of its worktrees stays, whether its
+    /// agent runs or is still starting.
+    @Test(arguments: [false, true])
+    func removeProjectRefusesWhileWorkIsLive(waitsForTheAgent: Bool) async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let core = fixture.core
+        let worktree = try #require(core.projects.worktrees(projectId: fixture.projectID).first)
+        _ = try await fixture.host.sessions.create(
+            .worktree(WorktreeRef(projectID: fixture.projectID, path: worktree.path.path)), agentID: "gemini", caller: .app
+        )
+        if waitsForTheAgent {
+            try await eventually { @MainActor in core.sessionManagers.values.contains { !$0.runners.isEmpty } }
+        }
+
+        #expect(try await fixture.request(.removeProject(projectID: fixture.projectID)) == .failure(error: .projectBusy))
+        #expect(core.projects.projects.map(\.id) == [fixture.projectID])
+        let persisted = try #require(try PersistenceStore().readIfExists(ProjectsFile.self, from: fixture.projectsFile))
+        #expect(persisted.projects.map(\.id) == [fixture.projectID])
+        let manager = try #require(core.sessionManagers[.worktree(worktree.id)])
+        try await eventually { @MainActor in !manager.runners.isEmpty }
+    }
+
+    /// A session archived before it ever attached no longer keeps its
+    /// project from being removed.
+    @Test func removeProjectAfterAnUnattachedSessionIsArchived() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        fixture.core.sessionAttachScheduler = { _, _ in }
+        let worktree = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
+        let session = try await fixture.host.sessions.create(
+            .worktree(WorktreeRef(projectID: fixture.projectID, path: worktree.path.path)), agentID: "gemini", caller: .app
+        )
+        try await fixture.host.sessions.archive(session.id, caller: .app)
+
+        #expect(try await fixture.request(.removeProject(projectID: fixture.projectID)) == .done)
+    }
+
+    /// A host over a real repository, persisting to a scratch directory,
+    /// whose sessions talk to a scripted agent.
+    @MainActor
+    private struct RepoFixture {
+        let root: URL
+        let projectsFile: URL
+        let core: AlasCoreContext
+        let host: AlasHost
+        let connection: HostProtocolConnection
+        let client = Client()
+        let projectID: String
+
+        init() async throws {
+            root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-remove-\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            let repo = root.appendingPathComponent("repo")
+            try GitTemplate.repository(at: repo)
+            projectsFile = root.appendingPathComponent("projects.json")
+            let agent = ACPMockClient()
+            agent.script(method: "initialize") { _ in Data(#"{"protocolVersion":1,"sessionCapabilities":{}}"#.utf8) }
+            agent.script(method: "session/new") { _ in Data(#"{"sessionId":"agent-1"}"#.utf8) }
+            let database = root.appendingPathComponent("sessions.sqlite")
+            core = AlasCoreContext(
+                projects: ProjectsManager(persistedProjects: []),
+                projectsFile: projectsFile,
+                runHistoryStore: nil,
+                workspaceStore: WorkspaceStore(url: root.appendingPathComponent("workspaces.json")),
+                attentionStore: .scratch(),
+                makeSessionManager: { owner, worktree in
+                    ACPSessionManager(
+                        worktreeId: worktree.id,
+                        worktreePath: worktree.path.path,
+                        owner: owner,
+                        persistence: ACPSessionPersistence(path: database.path),
+                        setupEvaluator: { _ in .ready },
+                        connectionFactory: { _, _, _ in ACPConnection(client: agent) }
+                    )
+                },
+                orchestrationPersistence: ACPOrchestrationPersistence(path: root.appendingPathComponent("orchestration.sqlite").path)
+            )
+            host = AlasHost(core: core)
+            connection = HostProtocolServer(host: host).connect(caller: .localUser(uid: 501), send: client.receive)
+            projectID = try await host.projects.add(path: repo, displayName: "repo", icon: .default(), caller: .app).id
+        }
+
+        func request(_ request: HostRequest) async throws -> HostResponse {
+            let id = client.messages.count + 1
+            await connection.receive(HostClientMessage(id: id, request: request))
+            guard case .response(id, let result) = client.messages.last else {
+                throw HostError.invalidRequest(reason: "no response to \(id)")
+            }
+            return result
+        }
+
+        func tearDown() {
+            connection.close()
+            core.sessionManagers.values.forEach { $0.shutdownBackgroundTasks() }
+            try? FileManager.default.removeItem(at: root)
+        }
     }
 
     @MainActor

@@ -40,9 +40,17 @@ public struct PersistenceStore: PersistenceStoreProtocol, Sendable {
         decoder.dateDecodingStrategy = .iso8601
     }
 
+    public func encode<T: Encodable>(_ value: T) throws -> Data {
+        try encoder.encode(value)
+    }
+
     public func write<T: Encodable>(_ value: T, to url: URL) throws {
+        try write(data: encoder.encode(value), to: url)
+    }
+
+    /// Atomically replaces `url` with `data`, creating its directory.
+    public func write(data: Data, to url: URL) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let data = try encoder.encode(value)
         let tmp = url.deletingLastPathComponent()
             .appendingPathComponent(".\(url.lastPathComponent).\(UUID().uuidString).tmp")
         defer { try? FileManager.default.removeItem(at: tmp) }

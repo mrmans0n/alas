@@ -143,6 +143,94 @@ struct AlasHostExecutableTests {
         #expect(try await host.exitStatus() == 0)
     }
 
+    /// The host listens where its own `host` settings say, over the shared
+    /// `remote` section: loopback with Remote off serves, off with Remote on
+    /// does not.
+    @Test func aHostServesTheReachabilityItsSettingsName() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-reach-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        func profile(_ name: String, _ configure: (inout AppConfig) -> Void) throws -> URL {
+            let directory = root.appendingPathComponent(name)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            var config = AppConfig.defaults
+            configure(&config)
+            var json = try JSONSerialization.jsonObject(with: PersistenceStore().encode(config)) as? [String: Any] ?? [:]
+            json["fromANewerApp"] = 1
+            try JSONSerialization.data(withJSONObject: json).write(to: directory.appendingPathComponent("app.json"))
+            return directory
+        }
+        let port = try freePort()
+        let loopback = try AlasHostProcess(dataDirectory: profile("loopback") {
+            $0.remote.enabled = false
+            $0.host = HostSettings(reachability: .loopback, port: port)
+        })
+        _ = try await loopback.socketPath()
+        try await eventually { [loopback] in loopback.output.contains("remote ") || !loopback.process.isRunning }
+        #expect(loopback.output.split(separator: "\n").contains("remote http://127.0.0.1:\(port)"), "\(loopback.errorOutput)")
+        loopback.process.terminate()
+        #expect(try await loopback.exitStatus() == 0)
+        // Saving the assigned server id keeps settings this build does not model.
+        let saved = try JSONSerialization.jsonObject(with: Data(contentsOf: root.appendingPathComponent("loopback/app.json"))) as? [String: Any]
+        #expect(saved?["fromANewerApp"] as? Int == 1)
+        #expect(((saved?["remote"] as? [String: Any])?["serverId"] as? String)?.isEmpty == false)
+
+        let off = try AlasHostProcess(dataDirectory: profile("off") {
+            $0.remote.enabled = true
+            $0.host = HostSettings(reachability: .off)
+        })
+        _ = try await off.socketPath()
+        off.process.terminate()
+        #expect(try await off.exitStatus() == 0)
+        #expect(!off.output.split(separator: "\n").contains { $0.hasPrefix("remote ") })
+    }
+
+    /// With no host running, settings and projects are changed in the
+    /// profile's files: an invalid value is refused and leaves the old one.
+    @Test func aProfileIsConfiguredFromTheCommandLine() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-config-\(UUID().uuidString)")
+        let dataDirectory = root.appendingPathComponent("data")
+        let repo = root.appendingPathComponent("repo")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: dataDirectory, withIntermediateDirectories: true)
+        try GitTemplate.repository(at: repo)
+        func run(_ arguments: String...) async throws -> (status: Int32, output: String, error: String) {
+            let process = try AlasHostProcess(dataDirectory: dataDirectory, arguments: arguments)
+            return (try await process.exitStatus(), process.output, process.errorOutput)
+        }
+
+        #expect(try await run("config", "set", "host.port", "18999").status == 0)
+        #expect(try await run("config", "get", "host.port").output == "18999\n")
+        let refused = try await run("config", "set", "host.port", "70000")
+        #expect(refused.status == 1)
+        #expect(refused.error.contains("host.port"))
+        #expect(try await run("config", "get", "host.port").output == "18999\n")
+
+        let added = try await run("project", "add", repo.path)
+        #expect(added.status == 0, "\(added.error)")
+        let listed = try await run("project", "list")
+        #expect(listed.output.contains("  repo  \(repo.standardizedFileURL.path)\n"), "\(listed.output)")
+        let removed = try await run("project", "remove", repo.path)
+        #expect(removed.status == 0, "\(removed.error)")
+        #expect(try await run("project", "list").output.isEmpty)
+    }
+
+    /// A port nothing listens on now, for a host to bind.
+    private func freePort() throws -> UInt16 {
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        defer { close(fd) }
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let bound = withUnsafeMutablePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                bind(fd, $0, length) == 0 && getsockname(fd, $0, &length) == 0
+            }
+        }
+        try #require(bound)
+        return UInt16(bigEndian: address.sin_port)
+    }
+
     /// Inside the app, the host serves the web client the app ships, beside
     /// its own directory, when started through a link as the cask installs it.
     @Test func aBundledHostServesTheWebClientBesideIt() async throws {

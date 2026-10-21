@@ -8,6 +8,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### ✨ Features
 
+- Set up the headless host from the command line: `alas-host setup`, `config`, `project` and `restart` change reachability (including LAN), agents, behavior, worktrees and projects.
 - Dictate into the focused chat composer with ⌃⌥D: tap to start or stop, or hold to talk until you let go. Rebind it under Settings → Shortcuts → Chat.
 - Ship whole gg stacks: in a stacked-diffs worktree the toolbar's Ship and `/ship` act on the stack, and the new `stack_ship` MCP tool publishes it with `gg sync` and has Alas shepherd every pull or merge request in it. Failing checks, trusted review threads and conflicts from any entry reach the owning session as one fix turn ordered from the bottom of the stack up, `pr_status` reports the whole stack, and Alas says when every entry is ready to land. `pr_create` refuses gg stack worktrees and points at `stack_ship`.
 - Suggest cleaning up a project in the inbox when five or more of its worktrees look ready to remove, checked in the background with the same rules as the cleanup sheet.

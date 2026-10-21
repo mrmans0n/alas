@@ -51,6 +51,8 @@ public enum HostRequest: Codable, Equatable, Sendable {
     case unsubscribe
     case listSessions
     case addProject(path: String, displayName: String, host: String?, kind: ProjectKind)
+    /// Forgets a project. A host before it answers `invalidRequest`.
+    case removeProject(projectID: String)
     case createWorktree(projectID: String, base: String, branch: String, destination: String)
     /// `lineageID` and `branch` are the worktree's as the client last saw
     /// it: a checkout replaced or switched since is refused as changed.
@@ -136,6 +138,8 @@ public enum HostError: Error, Codable, Equatable, Sendable {
     case notFound(what: String)
     /// Another operation holds the worktree.
     case operationInProgress
+    /// A session or run is live in one of the project's worktrees.
+    case projectBusy
     case project(error: ProjectCreationError)
     case worktreeCreation(refusal: WorktreeCreationRefusal)
     case worktreeCreationFailed(message: String)

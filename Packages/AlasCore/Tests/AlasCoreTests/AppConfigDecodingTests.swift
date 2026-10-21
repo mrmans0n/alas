@@ -39,4 +39,86 @@ struct AppConfigDecodingTests {
         let decoded = try JSONDecoder().decode(AppConfig.self, from: JSONEncoder().encode(config))
         #expect(decoded == config)
     }
+
+    @Test(arguments: [
+        (nil as HostReachability?, false, false, nil as HostRemoteListen?),
+        (nil, true, false, HostRemoteListen(port: 8765, loopbackOnly: true, tailscaleServe: false)),
+        (nil, true, true, HostRemoteListen(port: 8765, loopbackOnly: true, tailscaleServe: true)),
+        (.lan, false, false, HostRemoteListen(port: 8765, loopbackOnly: false, tailscaleServe: false)),
+        (.off, true, false, nil),
+        (.loopback, true, true, HostRemoteListen(port: 8765, loopbackOnly: true, tailscaleServe: false)),
+    ])
+    func resolvesReachability(
+        reachability: HostReachability?, enabled: Bool, serve: Bool, expected: HostRemoteListen?
+    ) {
+        var config = AppConfig.defaults
+        config.host.reachability = reachability
+        config.remote.enabled = enabled
+        config.remote.tailscaleServe = serve
+        #expect(config.hostRemoteListen == expected)
+    }
+
+    @Test func hostSectionAbsentKeepsSharedRemoteBehavior() throws {
+        let json = #"{"remote":{"enabled":true,"port":9000}}"#
+        let config = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
+        #expect(config.host == HostSettings())
+        #expect(config.hostPort == 9000)
+        #expect(config.hostReachability == .loopback)
+    }
+
+    @Test func hostSectionRoundTrips() throws {
+        var config = AppConfig.defaults
+        config.host = HostSettings(reachability: .lan, port: 18765)
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: JSONEncoder().encode(config))
+        #expect(decoded.host == config.host)
+
+        let bad = #"{"host":{"reachability":"wide-open","port":1234}}"#
+        let lenient = try JSONDecoder().decode(AppConfig.self, from: Data(bad.utf8))
+        #expect(lenient.host == HostSettings(reachability: Optional<HostReachability>.none, port: 1234))
+    }
+
+    @Test func writeKeepsUntouchedSettings() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("alas-write-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: file) }
+        var seed = AppConfig.defaults
+        seed.themeId = "x"
+        seed.remote.enabled = true
+        seed.terminal.fontSize = 17
+        seed.agents.registry = ["acme", "other"].map {
+            ACPRegistryInstalledAgent(
+                registryID: $0, displayName: $0, version: "1", command: "\($0)-acp",
+                arguments: [], environment: [:], isEnabled: true
+            )
+        }
+        try PersistenceStore().write(seed, to: file)
+        // Keys a newer app wrote that this build does not model.
+        var raw = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        raw["someFutureSection"] = ["flag": true]
+        var remote = try #require(raw["remote"] as? [String: Any])
+        remote["someFutureKey"] = "kept"
+        raw["remote"] = remote
+        var worktrees = try #require(raw["worktrees"] as? [String: Any])
+        worktrees["defaultOrdering"] = "someFutureMode"
+        raw["worktrees"] = worktrees
+        var agents = try #require(raw["agents"] as? [String: Any])
+        agents["registry"] = try #require(agents["registry"] as? [[String: Any]]).map { $0.merging(["someFutureField": 1]) { $1 } }
+        raw["agents"] = agents
+        try JSONSerialization.data(withJSONObject: raw).write(to: file)
+
+        try HostProfileWrite.update({ try HostSettingCatalog.named("host.port", in: $0).set("9999", in: &$0) }, file: file)
+        try HostProfileWrite.update({ try HostSettingCatalog.named("agents.acme.enabled", in: $0).set("false", in: &$0) }, file: file)
+
+        let config = try #require(try PersistenceStore().readIfExists(AppConfig.self, from: file))
+        #expect(config.host.port == 9999)
+        #expect(config.themeId == "x")
+        #expect(config.remote.enabled)
+        #expect(config.terminal.fontSize == 17)
+        let written = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        #expect((written["someFutureSection"] as? [String: Any])?["flag"] as? Bool == true)
+        #expect((written["remote"] as? [String: Any])?["someFutureKey"] as? String == "kept")
+        #expect((written["worktrees"] as? [String: Any])?["defaultOrdering"] as? String == "someFutureMode")
+        #expect(config.agents.registry.map(\.isEnabled) == [false, true])
+        let registry = (written["agents"] as? [String: Any])?["registry"] as? [[String: Any]]
+        #expect(registry?.map { $0["someFutureField"] as? Int } == [1, 1])
+    }
 }
