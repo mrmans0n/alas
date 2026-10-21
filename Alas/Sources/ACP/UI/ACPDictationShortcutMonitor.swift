@@ -2,15 +2,20 @@ import AppKit
 
 /// Routes the Dictate shortcut to the focused chat composer. Menu key
 /// equivalents only report the press, and hold-to-talk needs the release
-/// too, so this watches key-down and key-up directly. Events that aren't the
-/// shortcut, or arrive while no composer has focus, pass through untouched.
+/// too, so this watches key and modifier transitions directly. Events that
+/// aren't the shortcut, or arrive while no composer has focus, pass through
+/// untouched.
 @MainActor
 enum ACPDictationShortcutMonitor {
     private static var monitor: Any?
     private static var binding: @MainActor () -> ShortcutBinding? = { nil }
-    /// The composer the current press went to. Its release goes there even
-    /// if focus moved while the key was held.
+    /// The composer the current press went to, until the shortcut is
+    /// released. The release goes there even if focus moved meanwhile.
     private static weak var pressedTextView: ACPNSTextView?
+    /// The shortcut's key while it's physically down after a handled press.
+    /// Outlives the release when a modifier comes up first, so the key's
+    /// repeats and key-up still never reach the text.
+    private static var heldKey: String?
 
     /// The effective binding, for help text. Nil when unbound.
     static var currentBinding: ShortcutBinding? { binding() }
@@ -18,32 +23,45 @@ enum ACPDictationShortcutMonitor {
     static func install(binding: @escaping @MainActor () -> ShortcutBinding?) {
         self.binding = binding
         guard monitor == nil else { return }
-        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { event in
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp, .flagsChanged]) { event in
             MainActor.assumeIsolated { handle(event) } ? nil : event
         }
     }
 
-    /// Returns true when the event was the shortcut and has been handled.
+    /// Returns true when the event belonged to the shortcut and is consumed.
     private static func handle(_ event: NSEvent) -> Bool {
-        guard let binding = binding(),
-              let pressed = ShortcutRecorderSession.binding(from: event),
-              pressed.key == binding.key
-        else { return false }
+        guard let binding = binding() else { return false }
+        if event.type == .flagsChanged {
+            // Letting go of any of the shortcut's modifiers ends a hold, even
+            // with the key still down. Modifier changes always pass through.
+            let held = Set(ShortcutRecorderSession.modifiers(from: event.modifierFlags))
+            if !Set(binding.modifiers).isSubset(of: held) { release(at: event.timestamp) }
+            return false
+        }
+        guard let pressed = ShortcutRecorderSession.binding(from: event), pressed.key == binding.key else {
+            return false
+        }
         if event.type == .keyUp {
-            guard let textView = pressedTextView else { return false }
-            pressedTextView = nil
-            textView.onDictationShortcut(.released(at: event.timestamp))
+            guard heldKey == pressed.key else { return false }
+            heldKey = nil
+            release(at: event.timestamp)
             return true
         }
-        // Repeats while held would otherwise type the key, even after the
-        // modifiers are let go.
-        if event.isARepeat { return pressedTextView != nil }
+        if event.isARepeat { return heldKey == pressed.key }
+        heldKey = nil
         guard Set(pressed.modifiers) == Set(binding.modifiers),
               let textView = event.window?.firstResponder as? ACPNSTextView,
               textView.isEditable, !textView.hasMarkedText()
         else { return false }
         pressedTextView = textView
+        heldKey = pressed.key
         textView.onDictationShortcut(.pressed(at: event.timestamp))
         return true
+    }
+
+    private static func release(at timestamp: TimeInterval) {
+        guard let textView = pressedTextView else { return }
+        pressedTextView = nil
+        textView.onDictationShortcut(.released(at: timestamp))
     }
 }
