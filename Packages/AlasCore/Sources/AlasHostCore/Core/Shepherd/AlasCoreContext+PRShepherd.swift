@@ -330,7 +330,7 @@ extension AlasCoreContext {
         let current = reviewShepherd.records[ShepherdRecordID(worktreeID: worktreeID, request: request)]
             .flatMap { $0.sessionID == sessionID ? $0 : nil }
         let defaults = environment.configuration().changes.shepherd
-        releaseStackShepherd(ofSession: sessionID)
+        releaseStackShepherds(forStandaloneBindOf: request, sessionID: sessionID, worktreeID: worktreeID)
         return await reviewShepherd.bind(
             sessionID: sessionID,
             worktreeID: worktreeID,

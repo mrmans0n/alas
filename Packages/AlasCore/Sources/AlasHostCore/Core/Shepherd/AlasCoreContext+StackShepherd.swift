@@ -67,18 +67,30 @@ extension AlasCoreContext {
         return await bindStackShepherd(sessionID: sessionID, worktreeID: worktreeID, published: published, contextRules: contextRules)
     }
 
-    /// Stops the session's live stack record: a session shepherds one PR or
-    /// one stack, never both.
-    public func releaseStackShepherd(ofSession sessionID: String) {
-        for record in stackShepherd.records.values where record.sessionID == sessionID && !record.isFinished {
-            stackShepherd.stopShepherding(record.id)
+    /// Before a standalone PR bind: stops the session's live stack record (a
+    /// session shepherds one PR or one stack, never both) and any live stack
+    /// record in the worktree that still watches `request`, whoever owns it. A
+    /// request has one shepherd, or both would dispatch fixes for it.
+    public func releaseStackShepherds(forStandaloneBindOf request: ReviewRequest, sessionID: String, worktreeID: String) {
+        for record in stackShepherd.records.values where !record.isFinished {
+            let watchesRequest = record.id.worktreeID == worktreeID
+                && record.openEntries.contains { $0.requestNumber == request.number }
+            if record.sessionID == sessionID || watchesRequest {
+                stackShepherd.stopShepherding(record.id)
+            }
         }
     }
 
-    /// Stops the session's live PR records before it takes on a stack.
-    public func releasePRShepherd(ofSession sessionID: String) {
-        for record in reviewShepherd.records.values where record.sessionID == sessionID && !record.phase.isTerminal {
-            reviewShepherd.stopShepherding(record.id)
+    /// Before a stack bind: stops the session's live PR records, and every
+    /// live PR record in the worktree for one of the stack's requests, whoever
+    /// owns it. A standalone record with auto-merge on could otherwise merge
+    /// one entry, though a stack lands bottom-up through `gg land`.
+    func releasePRShepherds(forStackBindOf requestNumbers: Set<Int>, sessionID: String, worktreeID: String) {
+        for record in reviewShepherd.records.values where !record.phase.isTerminal {
+            let watchesEntry = record.id.worktreeID == worktreeID && requestNumbers.contains(record.id.requestNumber)
+            if record.sessionID == sessionID || watchesEntry {
+                reviewShepherd.stopShepherding(record.id)
+            }
         }
     }
 
@@ -92,7 +104,10 @@ extension AlasCoreContext {
     ) async -> StackShepherdRecord {
         let id = StackShepherdRecordID(worktreeID: worktreeID, stackName: published.stack.name)
         let current = stackShepherd.records[id].flatMap { $0.sessionID == sessionID && !$0.isFinished ? $0 : nil }
-        releasePRShepherd(ofSession: sessionID)
+        releasePRShepherds(
+            forStackBindOf: Set(published.stack.entries.compactMap(\.prNumber)),
+            sessionID: sessionID, worktreeID: worktreeID
+        )
         return await stackShepherd.bind(
             sessionID: sessionID,
             worktreeID: worktreeID,
@@ -186,7 +201,10 @@ extension AlasCoreContext {
     /// worktree's stack in gg mode. Nil when neither applies, or when the
     /// session shepherds a single PR in this worktree: the PR status answers.
     func shepherdedStackStatus(sessionID: String, worktreeID: String) async throws -> StackStatusWire? {
-        let bound = stackShepherd.record(forSession: sessionID).flatMap { $0.id.worktreeID == worktreeID ? $0 : nil }
+        // A finished record stays listed after its worktree moves on, so only
+        // a live one routes here; otherwise the worktree answers as it is now.
+        let bound = stackShepherd.record(forSession: sessionID)
+            .flatMap { $0.id.worktreeID == worktreeID && !$0.isFinished ? $0 : nil }
         if bound == nil {
             if reviewShepherd.record(forSession: sessionID)?.id.worktreeID == worktreeID { return nil }
             guard stackShepherd.effects?.worktreeContext(worktreeID)?.stackName != nil else { return nil }

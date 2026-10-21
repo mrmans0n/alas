@@ -261,7 +261,7 @@ extension AppState {
     /// the Settings defaults.
     func shepherdWithSession(_ sessionID: String, worktree: Worktree, request: ReviewRequest) async {
         guard let rules = await shepherdRulesForBinding(worktree: worktree) else { return }
-        core.releaseStackShepherd(ofSession: sessionID)
+        core.releaseStackShepherds(forStandaloneBindOf: request, sessionID: sessionID, worktreeID: worktree.id)
         let toggles = shepherdToggles(worktree: worktree, request: request)
         await reviewShepherd.bind(
             sessionID: sessionID,
@@ -331,6 +331,7 @@ extension AppState {
             )
             return
         }
+        core.releaseStackShepherds(forStandaloneBindOf: request, sessionID: prepared.sessionID, worktreeID: worktree.id)
         let toggles = shepherdToggles(worktree: worktree, request: request)
         await reviewShepherd.bind(
             sessionID: prepared.sessionID,

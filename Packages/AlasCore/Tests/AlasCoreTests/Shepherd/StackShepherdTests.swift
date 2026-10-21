@@ -355,4 +355,71 @@ struct StackShepherdTests {
         #expect(takenOver.entries[0].shepherd.lastDispatchedFingerprint == nil)
         #expect(takenOver.entries[0].shepherd.sessionID == "session-2")
     }
+
+    // MARK: Core routing
+
+    private func makeCore(store: MemoryStore = MemoryStore()) -> AlasCoreContext {
+        AlasCoreContext(
+            projects: ProjectsManager(persistedProjects: []), store: store,
+            runHistoryStore: nil, attentionStore: .scratch()
+        )
+    }
+
+    private func standalone(_ core: AlasCoreContext, number: Int, session: String, worktree: String) async {
+        await core.reviewShepherd.bind(
+            sessionID: session, worktreeID: worktree, request: Self.request(number), baseBranch: "main",
+            autoFix: true, autoMerge: true, contextRules: nil
+        )
+    }
+
+    /// A request has one shepherd: two would both dispatch fixes for it, and a
+    /// standalone record with auto-merge on could merge one entry of a stack.
+    @Test func aRequestHasOneShepherdWhicheverKindBindsLast() async {
+        let core = makeCore()
+        await standalone(core, number: 41, session: "other", worktree: "wt-1")
+        await standalone(core, number: 99, session: "other-2", worktree: "wt-1")
+        await standalone(core, number: 42, session: "other-3", worktree: "wt-2")
+
+        core.releasePRShepherds(forStackBindOf: [41, 42], sessionID: "session-1", worktreeID: "wt-1")
+
+        #expect(Set(core.reviewShepherd.records.keys.map(\.requestNumber)) == [99, 42])
+
+        let stack = Self.stack([41, 42])
+        await core.stackShepherd.bind(
+            sessionID: "session-1", worktreeID: "wt-1", stack: stack,
+            requests: [:], remote: F.remote(), autoFix: true, maxFixAttempts: 3, contextRules: nil
+        )
+        core.releaseStackShepherds(forStandaloneBindOf: Self.request(77), sessionID: "other", worktreeID: "wt-1")
+        #expect(core.stackShepherd.records.count == 1)
+        core.releaseStackShepherds(forStandaloneBindOf: Self.request(42), sessionID: "other", worktreeID: "wt-2")
+        #expect(core.stackShepherd.records.count == 1)
+        core.releaseStackShepherds(forStandaloneBindOf: Self.request(42), sessionID: "other", worktreeID: "wt-1")
+        #expect(core.stackShepherd.records.isEmpty)
+    }
+
+    /// A finished record stays listed after its worktree moves on; it must not
+    /// route `pr_status` into the stack path, which refuses a non-stack worktree.
+    @Test func prStatusIgnoresAFinishedStackRecordInAWorktreeOffTheStack() async throws {
+        var finished = Self.record([41])
+        finished.entries[0].shepherd.phase = .merged
+        finished.finishedAt = Date()
+        let store = MemoryStore()
+        try store.write(StackShepherdsFile(records: [finished]), to: Paths.stackShepherdsFile)
+        let core = makeCore(store: store)
+        #expect(core.stackShepherd.record(forSession: "session-1")?.isFinished == true)
+        core.stackShepherd.effects = StackShepherd.Effects(
+            worktreeContext: { .init(worktreeID: $0, path: URL(fileURLWithPath: "/tmp/\($0)"), stackName: nil, isEligible: true) },
+            loadStack: { _ in nil },
+            syncStack: { _ in },
+            sessionState: { _, _ in .idle },
+            deliverPrompt: { _, _, _, _ in .delivered },
+            rules: { _ in .none },
+            notify: { _ in },
+            archiveWorktreeIfAllowed: { _, _, _ in .declined }
+        )
+
+        let status = try await core.shepherdedStackStatus(sessionID: "session-1", worktreeID: "wt-1")
+
+        #expect(status == nil)
+    }
 }
