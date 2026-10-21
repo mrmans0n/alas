@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum SettingsSection: String, CaseIterable, Identifiable {
-    case agents, appearance, changes, chat, code, general, onDeviceAI, remote, shortcuts, spaces, terminal, worktrees, plugins, debug
+    case agents, appearance, changes, chat, code, computerUse, general, onDeviceAI, remote, shortcuts, spaces, terminal, worktrees, plugins, debug
     var id: String { rawValue }
     var label: String {
         switch self {
@@ -12,6 +12,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .changes:    return "Changes"
         case .chat:       return "Chat"
         case .code:       return "Code"
+        case .computerUse: return "Computer Use"
         case .general:    return "General"
         case .onDeviceAI: return "On-device AI"
         case .remote:     return "Remote"
@@ -30,6 +31,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .changes:    return "diff"
         case .chat:       return "message"
         case .code:       return "code"
+        case .computerUse: return "cursorarrow.rays"
         case .general:    return "gear"
         case .onDeviceAI: return "cpu"
         case .remote:     return "iphone.gen3"
