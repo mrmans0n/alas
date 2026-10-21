@@ -80,7 +80,8 @@ import Testing
         #expect(ZmxIPC.classifyProbeReply(output + reply) == expected)
         // Neither wire can frame a v1 header with another version byte and
         // a pre-freeze length above the payload ceiling.
-        #expect(ZmxIPC.classifyProbeReply([1, 0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0]) == .unreachable)
+        let unframeable: [UInt8] = [1, 0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0]
+        #expect(ZmxIPC.classifyProbeReply(unframeable) == .unreachable)
         #expect(Array(ZmxIPC.versionProbe) == [6, 1, 0, 0, 0, 0, 0, 0, 0])
     }
 
