@@ -226,11 +226,16 @@ public final class StackShepherd {
     // MARK: - Binding and controls
 
     /// Binds every published entry of `stack` to `sessionID`, creating the
-    /// record or moving it from another session. Entries start fresh, as a
-    /// rebound PR does; a new owner answers every trusted thread again. The
-    /// session's other live stack records are dropped. `requests` are the
-    /// entries' requests, read by the caller; with `contextRules` the session
-    /// is sent the context prompt built with them.
+    /// record or moving it from another session. A new record or a new owner
+    /// starts every entry fresh, as a rebound PR does, and a new owner answers
+    /// every trusted thread again. The current owner publishing fixes through
+    /// `stack_ship` keeps each entry's phase, attempts and dispatched
+    /// fingerprint: resetting them would dispatch a fix again before the
+    /// provider reports the push, and a persistently failing entry would
+    /// never reach its attempt budget. The session's other live stack records
+    /// are dropped. `requests` are the entries' requests, read by the caller;
+    /// with `contextRules` the session is sent the context prompt built with
+    /// them.
     @discardableResult
     public func bind(
         sessionID: String,
@@ -253,6 +258,7 @@ public final class StackShepherd {
             autoFix: autoFix, maxFixAttempts: maxFixAttempts, entries: [], now: now
         )
         let newOwner = record.sessionID != sessionID
+        let startsFresh = existing == nil || newOwner
         record.sessionID = sessionID
         record.remote = remote
         record.base = stack.base
@@ -262,15 +268,17 @@ public final class StackShepherd {
         record = StackShepherdPolicy.reconcile(record, with: stack, now: now)
         for index in record.entries.indices where !record.entries[index].shepherd.phase.isTerminal {
             var shepherd = record.entries[index].shepherd
-            if newOwner { shepherd.handledThreadRevisions = nil }
             shepherd.sessionID = sessionID
             shepherd.autoFix = autoFix
             shepherd.autoMerge = false
             shepherd.maxFixAttempts = record.maxFixAttempts
-            shepherd.phase = .watching
-            shepherd.fixAttempts = 0
-            shepherd.lastDispatchedFingerprint = nil
-            shepherd.viewerCommentIDsAtDispatch = nil
+            if startsFresh {
+                if newOwner { shepherd.handledThreadRevisions = nil }
+                shepherd.phase = .watching
+                shepherd.fixAttempts = 0
+                shepherd.lastDispatchedFingerprint = nil
+                shepherd.viewerCommentIDsAtDispatch = nil
+            }
             record.entries[index].shepherd = shepherd
         }
         record.updatedAt = now

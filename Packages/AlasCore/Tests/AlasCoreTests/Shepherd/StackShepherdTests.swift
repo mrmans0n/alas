@@ -267,14 +267,13 @@ struct StackShepherdTests {
         ) async throws {}
     }
 
-    @Test func onePollSendsOneFixTurnForEveryEntryInNeed() async throws {
-        let requests = [
-            Self.request(41, threads: [F.trustedThread]),
-            Self.request(42),
-            Self.request(43, checks: [F.failing]),
-        ]
-        let stack = Self.stack([41, 42, 43])
-        var delivered: [String] = []
+    /// A shepherd of `stack` serving `requests`, with a session that records
+    /// every prompt delivered to it.
+    private func makeShepherd(
+        requests: [ReviewRequest],
+        stack: GGStack,
+        deliverPrompt: @escaping @MainActor (String) -> Void = { _ in }
+    ) -> StackShepherd {
         let shepherd = StackShepherd(
             store: MemoryStore(),
             fileURL: URL(fileURLWithPath: "/memory/stack-shepherds.json"),
@@ -293,17 +292,35 @@ struct StackShepherdTests {
             syncStack: { _ in },
             sessionState: { _, _ in .idle },
             deliverPrompt: { _, _, prompt, _ in
-                delivered.append(prompt.text)
+                deliverPrompt(prompt.text)
                 return .delivered
             },
             rules: { _ in .none },
             notify: { _ in },
             archiveWorktreeIfAllowed: { _, _, _ in .declined }
         )
-        let record = await shepherd.bind(
-            sessionID: "session-1", worktreeID: "wt-1", stack: stack,
+        return shepherd
+    }
+
+    private func bind(_ shepherd: StackShepherd, session: String, stack: GGStack) async -> StackShepherdRecord {
+        await shepherd.bind(
+            sessionID: session, worktreeID: "wt-1", stack: stack,
             requests: [:], remote: F.remote(), autoFix: true, maxFixAttempts: 3, contextRules: nil
         )
+    }
+
+    @Test func onePollSendsOneFixTurnForEveryEntryInNeed() async throws {
+        let stack = Self.stack([41, 42, 43])
+        var delivered: [String] = []
+        let shepherd = makeShepherd(
+            requests: [
+                Self.request(41, threads: [F.trustedThread]),
+                Self.request(42),
+                Self.request(43, checks: [F.failing]),
+            ],
+            stack: stack
+        ) { delivered.append($0) }
+        let record = await bind(shepherd, session: "session-1", stack: stack)
 
         await shepherd.evaluateNow(record.id)
 
@@ -313,5 +330,29 @@ struct StackShepherdTests {
         let top = try #require(text.range(of: "# Entry 3 ·"))
         #expect(bottom.lowerBound < top.lowerBound)
         #expect(!text.contains("# Entry 2 ·"))
+    }
+
+    /// The fix prompt tells the agent to publish with `stack_ship`, which binds
+    /// again. That must not erase what the shepherd knows about the fix, or an
+    /// entry that keeps failing never runs out of attempts.
+    @Test func ownerRepublishingKeepsFixStateAndANewOwnerStartsFresh() async {
+        let stack = Self.stack([41])
+        let shepherd = makeShepherd(requests: [Self.request(41, checks: [F.failing])], stack: stack)
+        let record = await bind(shepherd, session: "session-1", stack: stack)
+        await shepherd.evaluateNow(record.id)
+        let dispatched = shepherd.records[record.id]?.entries[0].shepherd
+        #expect(dispatched?.fixAttempts == 1)
+        #expect(dispatched?.phase == .fixing(dispatchedAt: F.now))
+
+        let republished = await bind(shepherd, session: "session-1", stack: stack)
+        #expect(republished.entries[0].shepherd.fixAttempts == 1)
+        #expect(republished.entries[0].shepherd.phase == .fixing(dispatchedAt: F.now))
+        #expect(republished.entries[0].shepherd.lastDispatchedFingerprint == dispatched?.lastDispatchedFingerprint)
+
+        let takenOver = await bind(shepherd, session: "session-2", stack: stack)
+        #expect(takenOver.entries[0].shepherd.fixAttempts == 0)
+        #expect(takenOver.entries[0].shepherd.phase == .watching)
+        #expect(takenOver.entries[0].shepherd.lastDispatchedFingerprint == nil)
+        #expect(takenOver.entries[0].shepherd.sessionID == "session-2")
     }
 }
