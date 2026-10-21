@@ -39,15 +39,15 @@ over SSH on first setup.
 
 | Section | Setting | Notes |
 |---|---|---|
-| Reachability | mode: off / loopback / LAN / Tailscale | host-only, see below |
+| Reachability | mode: off / loopback / Tailscale / LAN (in that order) | host-only, see below |
 | | port | host-only; default 8765 |
 | | display name | `remote.displayName` (shared with the app) |
 | Agents | which agents are enabled | built-ins (`agents.builtinState`), plus registry installs already in `app.json` |
-| Projects | add / remove | see Goal 3 |
+| Projects | add / remove | see Goal 3; removal in setup asks for confirmation and is refused while the project has a running or starting session or run |
 | Unattended behavior | auto-run by default | `harness.acpAutoRunByDefault` |
 | | auto-resume after a usage limit | `harness.acpAutoResumeAfterUsageLimit` |
 | | continue interrupted sessions | `harness.acpContinueInterruptedSessions` |
-| Worktree defaults | root path, base branch, branch template | `worktrees.rootPath`, `.baseBranch`, `.branchTemplate` |
+| Worktree defaults | root path, base branch | `worktrees.rootPath`, `.baseBranch`; no branch template, since the host never applies one (host requests carry the final branch name) |
 | Pairing | show a pairing code at the end of setup | a QR in the terminal if cheap; the code alone is enough |
 
 Everything else stays app-only for now: themes, fonts, panes, the editor and
@@ -117,7 +117,7 @@ running agent sessions and runs, as a normal stop does; the prompt says so.
   (its socket), and directly in the profile's files when none is; either way
   the result is the same state the app would produce. The socket protocol
   needs a `removeProject` request.
-- When the app holds the data directory, `setup`, `config set` and the
+- When the app, or an unidentified process, holds the data directory, `setup`, `config set` and the
   project commands refuse and say so: the app keeps its settings in memory
   and would overwrite the change. Read-only commands (`config get`,
   `project list`) still work.

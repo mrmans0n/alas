@@ -61,7 +61,7 @@ alas-host config get host.reachability
 alas-host config set host.reachability tailscale --restart
 alas-host project list
 alas-host project add ~/code/my-repo --name "My repo"
-alas-host project remove my-repo
+alas-host project remove ~/code/my-repo
 alas-host restart
 ```
 
@@ -73,7 +73,7 @@ The settings are `host.reachability`, `host.port`, `remote.displayName`,
 They are stored in the profile's `app.json`; settings you never change take
 their defaults.
 
-Reads work any time. Writes, including `project add` and `project remove`, are
+`project remove` takes the id or path that `project list` prints. Reads work any time. Writes, including `project add` and `project remove`, are
 refused while the app, or any process other than the host, holds the profile.
 A change applies after a restart: `alas-host restart` restarts a host run by the
 launch agent (below), and `config set --restart` does both. A host run in a
