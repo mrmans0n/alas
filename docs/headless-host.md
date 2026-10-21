@@ -80,10 +80,11 @@ launch agent (below), and `config set --restart` does both. A host run in a
 terminal must be stopped with Ctrl-C and started again.
 
 Agents come from the same file: the built-in ones you enable under `agents`, and
-agents installed from the ACP registry. The host launches an adapter with its
-own `PATH` plus well-known directories such as Homebrew's, so an adapter must be
-on the host's `PATH` or in a location like `/opt/homebrew/bin`. The login
-shell's `PATH` does not apply, notably when launchd starts the host.
+agents installed from the ACP registry. The host reads the `PATH` of your shell
+when it starts (as an interactive login shell, so setup in `.zshrc` counts), and
+launches adapters with it ahead of its own plus well-known directories such as
+Homebrew's, so adapters installed through nvm, fnm, asdf or mise work, launchd
+agent included.
 
 ## Remote
 

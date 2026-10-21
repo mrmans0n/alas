@@ -15,7 +15,7 @@ public struct ClaudeCodeACPInstaller: ACPAdapterInstaller {
     }
 
     public func installState() async -> ACPSetupResult {
-        await ACPSetupChecker(env: ProcessInfo.processInfo.environment)
+        await ACPSetupChecker(env: ACPProcessEnvironment.baseEnvironment())
             .evaluate(.npxPackage(name: ACPManagedAdapterDescriptor.claude.packageName))
     }
 

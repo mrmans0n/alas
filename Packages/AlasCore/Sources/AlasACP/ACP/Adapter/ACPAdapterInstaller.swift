@@ -30,8 +30,26 @@ public enum ACPProcessEnvironment: Sendable {
         "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_SESSION_ID",
     ]
 
-    public static func augmented(
+    /// `environment` with the login shell's PATH ahead of its own. A process
+    /// started by launchd (the app, or `alas-host` as a launch agent) inherits
+    /// launchd's minimal PATH, while adapters installed through nvm, fnm, asdf
+    /// or mise, and the `node` they run on, are only on the login shell's.
+    /// `shellPath` is `ShellEnvResolver`'s, nil until it has resolved.
+    public static func baseEnvironment(
         _ environment: [String: String] = ProcessInfo.processInfo.environment,
+        shellPath: String? = ShellEnvResolver.shared.resolvedPath
+    ) -> [String: String] {
+        guard let shellPath, !shellPath.isEmpty else { return environment }
+        var env = environment
+        let shellEntries = shellPath.split(separator: ":").map(String.init)
+        let rest = (environment["PATH"] ?? "").split(separator: ":").map(String.init)
+            .filter { !shellEntries.contains($0) }
+        env["PATH"] = (shellEntries + rest).joined(separator: ":")
+        return env
+    }
+
+    public static func augmented(
+        _ environment: [String: String] = baseEnvironment(),
         additionalPathDirectories: [String] = AgentPath.wellKnownDirectories
     ) -> [String: String] {
         var env = environment
