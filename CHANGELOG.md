@@ -10,6 +10,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Dictate into the focused chat composer with ⌃⌥D: tap to start or stop, or hold to talk until you let go. Rebind it under Settings → Shortcuts → Chat.
 - Ship whole gg stacks: in a stacked-diffs worktree the toolbar's Ship and `/ship` act on the stack, and the new `stack_ship` MCP tool publishes it with `gg sync` and has Alas shepherd every pull or merge request in it. Failing checks, trusted review threads and conflicts from any entry reach the owning session as one fix turn ordered from the bottom of the stack up, `pr_status` reports the whole stack, and Alas says when every entry is ready to land. `pr_create` refuses gg stack worktrees and points at `stack_ship`.
+- Show symbol mentions as inline badges in sent messages, with the same hover preview and click-to-open as the badges above the bubble.
+
+### 🐛 Fixes
+
+- Keep automatic restart continuations out of the queue UI and discard them when live session activity makes them unnecessary.
 
 ## [0.21.10] - 2026-10-21
 
