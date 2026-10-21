@@ -106,6 +106,28 @@ code they cover should be able to justify it.
 - Do not run the entire test plan locally by default. CI owns repository-wide configured validation. Run broader local tests only when CI does not cover the affected behavior, the change is too cross-cutting for a reliable targeted selection, or the user requests it.
 - Report exactly which local checks ran. Do not claim CI is green unless its current run completed successfully.
 
+## Local signing for dev builds
+
+macOS ties Screen Recording and Accessibility grants to an app's code
+signature. Debug builds are therefore a separate app, "Alas Dev"
+(`io.nlopez.alas.dev`), so they never disturb the grants of the released
+`io.nlopez.alas`. By default they are ad-hoc signed, which means the signature
+changes on every build and macOS asks for those grants again.
+
+To keep grants across rebuilds, sign Debug builds with a stable Apple
+Development identity:
+
+1. Create the certificate in Xcode > Settings > Accounts > Manage Certificates.
+2. Copy `Config/Local.xcconfig.example` to `Config/Local.xcconfig` (gitignored)
+   and set `DEVELOPMENT_TEAM` to your team id, the value in parentheses in
+   `security find-identity -v -p codesigning`.
+3. Rebuild and check `codesign -dv Alas.app` shows a `TeamIdentifier=` line
+   rather than `Signature=adhoc`.
+
+If automatic signing fails because no Xcode account is signed in, add
+`CODE_SIGN_STYLE = Manual` to `Config/Local.xcconfig`. Release signing is
+unaffected; it stays in `scripts/sign-and-notarize.sh`.
+
 ## Pull request shepherding
 
 - Use the repo-scoped `lassie` skill when asked to babysit, shepherd, finish, or land a pull request.

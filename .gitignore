@@ -36,3 +36,6 @@ default.profraw
 
 # A local test benchmark installation, bound to its checkout.
 .alas/test-benchmark-explorer/
+
+# Per-developer signing overrides for Debug builds.
+Config/Local.xcconfig

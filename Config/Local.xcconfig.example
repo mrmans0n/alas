@@ -1,0 +1,4 @@
+// Copy this file to Config/Local.xcconfig (gitignored) to sign Debug builds
+// with a stable identity, so Screen Recording and Accessibility grants persist.
+DEVELOPMENT_TEAM = YOURTEAMID
+CODE_SIGN_IDENTITY = Apple Development

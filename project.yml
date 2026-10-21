@@ -48,6 +48,9 @@ targets:
   Alas:
     type: application
     platform: macOS
+    configFiles:
+      Debug: Config/Alas-Debug.xcconfig
+      Release: Config/Alas-Release.xcconfig
     sources:
       - path: Alas/Sources
       - path: Alas/Resources/Themes
@@ -88,6 +91,8 @@ targets:
         CFBundleDevelopmentRegion: en
         CFBundleShortVersionString: "0.21.10"
         CFBundleVersion: "1"
+        CFBundleName: "$(ALAS_DISPLAY_NAME)"
+        CFBundleDisplayName: "$(ALAS_DISPLAY_NAME)"
         LSMinimumSystemVersion: "15.0"
         NSHumanReadableCopyright: "Copyright © 2026 Nacho Lopez"
         NSPrincipalClass: NSApplication
@@ -142,12 +147,10 @@ targets:
       base:
         ARCHS: $(ALAS_APP_ARCHS)
         ALAS_APP_ARCHS: $(ARCHS_STANDARD)
-        PRODUCT_BUNDLE_IDENTIFIER: io.nlopez.alas
         PRODUCT_NAME: Alas
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ENABLE_HARDENED_RUNTIME: YES
         CODE_SIGN_STYLE: Automatic
-        CODE_SIGN_IDENTITY: "-"
         HEADER_SEARCH_PATHS: $(inherited) $(SRCROOT)/.build/fff/include $(SRCROOT)/.build/treesitter-pack/include
         LIBRARY_SEARCH_PATHS: $(inherited) $(SRCROOT)/.build/fff/$(CURRENT_ARCH)/install/lib $(SRCROOT)/.build/fff/universal/install/lib $(SRCROOT)/.build/treesitter-pack/$(CURRENT_ARCH)/install/lib $(SRCROOT)/.build/treesitter-pack/universal/install/lib
         LD_RUNPATH_SEARCH_PATHS: $(inherited) @executable_path/../Frameworks
