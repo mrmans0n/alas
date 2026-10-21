@@ -30,6 +30,14 @@ public final class ACPDictationService: ChangeTracking {
     public var preferences = ACPDictationPreferences()
 
     private let engine: ACPDictationEngine
+    /// When the press that started the current session went down, while
+    /// its release is still pending. Nil when the session started any other
+    /// way, so a release never stops a session it didn't start.
+    private var shortcutPressedAt: TimeInterval?
+
+    /// A shortcut press held at least this long is push-to-talk: dictation
+    /// stops on release. A shorter tap leaves it running until the next tap.
+    public nonisolated static let shortcutHoldThreshold: TimeInterval = 0.3
 
     public init(engine: ACPDictationEngine) {
         self.engine = engine
@@ -49,6 +57,29 @@ public final class ACPDictationService: ChangeTracking {
             stop()
         case .unavailable:
             break
+        }
+    }
+
+    /// Tap-or-hold handling for the Dictate shortcut. Times are the key
+    /// events' timestamps. A press while dictating stops it; otherwise it
+    /// starts, and the release stops it again if the key was held at least
+    /// `shortcutHoldThreshold`.
+    public func handleShortcut(_ event: ACPDictationShortcutEvent) {
+        switch event {
+        case .pressed(let time):
+            switch state {
+            case .preparing, .listening:
+                stop()
+            case .idle, .failed:
+                start()
+                shortcutPressedAt = state == .preparing ? time : nil
+            case .unavailable:
+                break
+            }
+        case .released(let time):
+            guard let pressedAt = shortcutPressedAt else { return }
+            shortcutPressedAt = nil
+            if time - pressedAt >= Self.shortcutHoldThreshold { stop() }
         }
     }
 
@@ -99,6 +130,8 @@ public final class ACPDictationService: ChangeTracking {
     }
 
     public func stop() {
+        // Any stop ends the session a pending shortcut release refers to.
+        shortcutPressedAt = nil
         guard state == .preparing || state == .listening else { return }
         engine.stop()
         state = .idle
@@ -109,4 +142,10 @@ public final class ACPDictationService: ChangeTracking {
         if case .failed = state { return true }
         return false
     }
+}
+
+/// A press or release of the Dictate shortcut, timestamped by its key event.
+public enum ACPDictationShortcutEvent: Equatable, Sendable {
+    case pressed(at: TimeInterval)
+    case released(at: TimeInterval)
 }

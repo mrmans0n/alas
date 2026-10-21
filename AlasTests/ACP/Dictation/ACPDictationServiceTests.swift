@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import Alas
 
@@ -237,5 +238,60 @@ struct ACPDictationServiceTests {
         engine.simulateSilence(deviceName: "Virtual Desktop Mic")
 
         #expect(notices.isEmpty)
+    }
+
+    // MARK: - Dictate shortcut
+
+    @Test(
+        "a short tap leaves dictation running; a hold stops it on release, even before it was ready",
+        arguments: [
+            (heldFor: 0.1, becomesReady: true, expected: ACPDictationState.listening),
+            (heldFor: 0.1, becomesReady: false, expected: .preparing),
+            (heldFor: 0.5, becomesReady: true, expected: .idle),
+            (heldFor: 0.5, becomesReady: false, expected: .idle),
+        ]
+    )
+    func shortcutTapKeepsRunningHoldStopsOnRelease(
+        heldFor: TimeInterval, becomesReady: Bool, expected: ACPDictationState
+    ) {
+        let engine = FakeDictationEngine()
+        let service = ACPDictationService(engine: engine)
+
+        service.handleShortcut(.pressed(at: 100))
+        if becomesReady { engine.simulateReady() }
+        service.handleShortcut(.released(at: 100 + heldFor))
+
+        #expect(engine.startCallCount == 1)
+        #expect(service.state == expected)
+    }
+
+    @Test("pressing the shortcut while dictating stops it, and that press's release does nothing")
+    func shortcutPressWhileDictatingStops() {
+        let engine = FakeDictationEngine()
+        let service = ACPDictationService(engine: engine)
+        service.handleShortcut(.pressed(at: 100))
+        engine.simulateReady()
+        service.handleShortcut(.released(at: 100.1))
+
+        service.handleShortcut(.pressed(at: 105))
+        service.handleShortcut(.released(at: 106))
+
+        #expect(service.state == .idle)
+        #expect(engine.startCallCount == 1)
+        #expect(engine.stopCallCount == 1)
+    }
+
+    @Test("releasing the shortcut never stops a session the mic button started")
+    func shortcutReleaseIgnoresOtherSessions() {
+        let engine = FakeDictationEngine()
+        let service = ACPDictationService(engine: engine)
+        service.handleShortcut(.pressed(at: 100))
+        service.stop()
+        service.toggle()
+        engine.simulateReady()
+
+        service.handleShortcut(.released(at: 101))
+
+        #expect(service.state == .listening)
     }
 }

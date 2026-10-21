@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### ✨ Features
+
+- Dictate into the focused chat composer with ⌃⌥D: tap to start or stop, or hold to talk until you let go. Rebind it under Settings → Shortcuts → Chat.
+
 ## [0.21.10] - 2026-10-21
 
 ### ✨ Features

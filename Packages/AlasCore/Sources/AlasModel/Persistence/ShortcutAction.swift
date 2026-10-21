@@ -2,10 +2,11 @@ import Foundation
 import AlasFoundation
 
 public enum ShortcutGroup: String, CaseIterable, Sendable {
-    case global, codeEditor, terminal, commit
+    case global, chat, codeEditor, terminal, commit
     public var label: String {
         switch self {
         case .global:     return "Global"
+        case .chat:       return "Chat"
         case .codeEditor: return "Code editor"
         case .terminal:   return "Terminal"
         case .commit:     return "Commit"
@@ -21,6 +22,8 @@ public enum ShortcutAction: String, CaseIterable, Codable, Sendable {
          launchAgent, launchAgentInTerminal, launchAgentInChat,
          openReviewPalette, runScript, selectPreviousTab, selectNextTab,
          increaseFontSize, decreaseFontSize, resetFontSize
+    // Chat
+    case dictate
     // Code editor
     case splitSelectionIntoLines, toggleMarkdownPreview, commitInComposer
     // Terminal
@@ -37,6 +40,8 @@ public enum ShortcutAction: String, CaseIterable, Codable, Sendable {
              .openReviewPalette, .runScript, .selectPreviousTab, .selectNextTab,
              .increaseFontSize, .decreaseFontSize, .resetFontSize:
             return .global
+        case .dictate:
+            return .chat
         case .splitSelectionIntoLines, .toggleMarkdownPreview:
             return .codeEditor
         case .commitInComposer:
@@ -75,6 +80,7 @@ public enum ShortcutAction: String, CaseIterable, Codable, Sendable {
         case .increaseFontSize:         return "Increase Font Size"
         case .decreaseFontSize:         return "Decrease Font Size"
         case .resetFontSize:            return "Reset Font Size"
+        case .dictate:                  return "Dictate"
         case .splitSelectionIntoLines:  return "Split Selection into Lines"
         case .toggleMarkdownPreview:    return "Toggle Markdown Preview"
         case .commitInComposer:         return "Commit draft"
@@ -103,6 +109,7 @@ public enum ShortcutAction: String, CaseIterable, Codable, Sendable {
         case .rightPaneChangesTab, .rightPaneFilesTab, .rightPaneAgentTab, .rightPaneRunTab, .rightPaneSchedulesTab:
             return "Opens the right sidebar on this tab; collapses it when the tab is already showing"
         case .commitInComposer:   return "In the draft commit tab"
+        case .dictate:            return "In the chat composer: tap to start or stop, hold to talk until you let go"
         default:                  return nil
         }
     }
@@ -114,7 +121,7 @@ public enum ShortcutAction: String, CaseIterable, Codable, Sendable {
     public var appliesInTerminal: Bool {
         switch self {
         case .splitSelectionIntoLines, .toggleMarkdownPreview,
-             .commitInComposer, .findAndReplace, .replaceInEditor:
+             .commitInComposer, .findAndReplace, .replaceInEditor, .dictate:
             return false
         default:
             return true
@@ -152,6 +159,9 @@ public enum ShortcutAction: String, CaseIterable, Codable, Sendable {
         case .increaseFontSize:         return .init(key: "=",          modifiers: [.command])
         case .decreaseFontSize:         return .init(key: "-",          modifiers: [.command])
         case .resetFontSize:            return .init(key: "0",          modifiers: [.command])
+        // ⌃⌘D is macOS Look Up and ⌥⌘D toggles the Dock. Modifiers follow
+        // the recorder's order so a re-recorded ⌃⌥D compares equal.
+        case .dictate:                  return .init(key: "d",          modifiers: [.option, .control])
         case .splitSelectionIntoLines:  return .init(key: "l",          modifiers: [.command, .shift])
         case .toggleMarkdownPreview:    return .init(key: "m",          modifiers: [.command, .shift])
         case .commitInComposer:         return .init(key: "return",     modifiers: [.command])
