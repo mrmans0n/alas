@@ -124,8 +124,11 @@ struct AppStateKeepSessionsAliveTests {
     /// A persisted session must not be attached, or killed, while pre-freeze
     /// daemons are still being stopped: attaching one shows a stuck terminal.
     /// With keep-alive off the restore closes the tab, so the tab surviving
-    /// while the migration runs shows the restore is waiting on it.
-    @Test func terminalRestoreWaitsForTheZmxMigration() async throws {
+    /// while the migration runs shows the restore is waiting on it. While the
+    /// bundled zmx is itself pre-freeze there is nothing to migrate: the
+    /// runner never runs and the restore goes ahead at once.
+    @Test(arguments: [ZmxIPC.Wire.v1, .preFreeze])
+    func terminalRestoreWaitsForTheZmxMigration(bundledWire: ZmxIPC.Wire) async throws {
         let repo = try await makeRepo(name: "zmx-migration")
         defer { try? FileManager.default.removeItem(at: repo) }
 
@@ -140,10 +143,17 @@ struct AppStateKeepSessionsAliveTests {
         let migration = ZmxMigrationGate(blocked: true)
         defer { migration.release() }
         state.zmxMigrationRunner = migration.runner
+        state.bundledZmxWire = bundledWire
         let tab = state.tabs.appendTerminal(
             worktreeId: worktree.id, title: "main", sessionId: "leaf-migration"
         )
 
+        guard bundledWire == .v1 else {
+            _ = try await state.restoreTerminalTabIfNeededAsync(worktreeId: worktree.id, tabId: tab.id)
+            #expect(migration.runCount == 0)
+            #expect(state.tabs.tabs(forWorktree: worktree.id).isEmpty)
+            return
+        }
         let restoreTask = Task {
             try await state.restoreTerminalTabIfNeededAsync(worktreeId: worktree.id, tabId: tab.id)
         }
@@ -163,6 +173,7 @@ struct AppStateKeepSessionsAliveTests {
         let state = AppState()
         let migration = ZmxMigrationGate(blocked: false)
         state.zmxMigrationRunner = migration.runner
+        state.bundledZmxWire = .v1
 
         state.reloadTabs()
         state.reloadTabs()

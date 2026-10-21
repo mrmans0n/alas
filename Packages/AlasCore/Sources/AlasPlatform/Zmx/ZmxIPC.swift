@@ -45,6 +45,13 @@ public enum ZmxIPC: Sendable {
         case html = 2
     }
 
+    /// The wire spoken by the zmx binary bundled from `ThirdParty/zmx`. It
+    /// must always equal that binary's wire: the bump of the submodule to a
+    /// v1 zmx flips this to `.v1` in the same commit. While it is
+    /// `.preFreeze`, every live daemon is one the bundled zmx can still
+    /// drive, so nothing may stop them as pre-freeze.
+    public static let bundledWire: Wire = .preFreeze
+
     public static let headerSize = 8
 
     /// The v1 header's protocol version byte.

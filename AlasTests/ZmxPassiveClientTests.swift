@@ -162,6 +162,7 @@ import Testing
         let signalled = ZmxEventLog<Int32>()
         let result = ZmxPreFreezeMigration.run(
             directory: URL(fileURLWithPath: directory),
+            bundledWire: .v1,
             probe: { ZmxIPCSocket.probe(path: $0, timeout: .milliseconds(300)) },
             kill: { ZmxIPCSocket.killPreFreeze(path: $0, timeout: .seconds(2)) },
             signal: { signalled.append($0) },
@@ -177,6 +178,25 @@ import Testing
         }
     }
 
+    /// Until the bundled zmx speaks v1, every daemon is one it can drive and
+    /// another Alas sharing the directory may be using it.
+    @Test func migrationDoesNothingWhileTheBundledZmxIsPreFreeze() throws {
+        let daemon = try ZmxFakeDaemonListener(script: .reply(zmxInfoReply(wire: .preFreeze)))
+        let result = ZmxPreFreezeMigration.run(
+            directory: URL(fileURLWithPath: daemon.directory),
+            bundledWire: .preFreeze,
+            kill: { _ in true },
+            signal: { _ in },
+            isAlive: { _ in false }
+        )
+        #expect(result == ZmxPreFreezeMigration.Result())
+        #expect(FileManager.default.fileExists(atPath: daemon.path))
+        // Nothing connected: tearing down unblocks the accept, and the
+        // listener reports no connection at all.
+        daemon.tearDown()
+        #expect(daemon.receivedPerConnection.isEmpty)
+    }
+
     /// The socket goes only once the daemon has exited; a daemon that never
     /// exits, or a pid that cannot be watched, leaves it in place.
     @Test(arguments: [
@@ -190,6 +210,7 @@ import Testing
         let signalled = ZmxEventLog<Int32>()
         let result = ZmxPreFreezeMigration.run(
             directory: URL(fileURLWithPath: daemon.directory),
+            bundledWire: .v1,
             probe: { _ in .preFreeze(pid: shape.pid) },
             kill: { _ in false },
             signal: { signalled.append($0) },
@@ -220,6 +241,7 @@ import Testing
         let start = clock.now
         let result = ZmxPreFreezeMigration.run(
             directory: URL(fileURLWithPath: directory),
+            bundledWire: .v1,
             probe: { path in
                 let status = ZmxIPCSocket.probe(path: path, timeout: .milliseconds(300))
                 statuses.append(status)
@@ -615,6 +637,19 @@ final class ZmxSocketPair: @unchecked Sendable {
 /// client hands it geometry. Runs in an isolated `ZMX_DIR`.
 @Suite(.enabled(if: ZmxEnv.resolve().binaryURL != nil, "requires the bundled zmx binary"))
 struct ZmxPassiveClientIntegrationTests {
+    /// The migration trusts `ZmxIPC.bundledWire`; a zmx bump that forgets to
+    /// flip it must fail here.
+    @Test func bundledWireMatchesTheBundledBinary() throws {
+        let session = try ZmxProbeSession()
+        defer { session.tearDown() }
+        let wire: ZmxIPC.Wire? = switch ZmxIPCSocket.probe(path: session.socketPath, timeout: .seconds(5)) {
+        case .v1: ZmxIPC.Wire.v1
+        case .preFreeze: ZmxIPC.Wire.preFreeze
+        case .unreachable: nil
+        }
+        #expect(wire == ZmxIPC.bundledWire)
+    }
+
     @Test func passiveViewerLeavesLeadershipAndGeometryWithTheHost() async throws {
         let session = try ZmxProbeSession()
         defer { session.tearDown() }

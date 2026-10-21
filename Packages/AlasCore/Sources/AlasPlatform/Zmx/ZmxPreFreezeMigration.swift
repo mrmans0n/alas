@@ -40,14 +40,20 @@ public enum ZmxPreFreezeMigration {
     /// cannot remove a socket a fresh daemon has since bound. A daemon still
     /// alive after `exitTimeout`, or one reporting an unusable pid, is left in
     /// place and reported failed. Blocking; run it off the main thread.
+    ///
+    /// Does nothing, without probing, while `bundledWire` is `.preFreeze`:
+    /// the bundled zmx still speaks to those daemons, and another Alas
+    /// sharing the directory may be using them.
     public static func run(
         directory: URL,
+        bundledWire: ZmxIPC.Wire = ZmxIPC.bundledWire,
         probe: @escaping @Sendable (String) -> ZmxDaemonStatus = { ZmxIPCSocket.probe(path: $0) },
         kill: @escaping @Sendable (String) -> Bool = { ZmxIPCSocket.killPreFreeze(path: $0) },
         signal: @escaping @Sendable (Int32) -> Void = { _ = Darwin.kill($0, SIGTERM) },
         isAlive: @escaping @Sendable (Int32) -> Bool = { processExists($0) },
         exitTimeout: DispatchTimeInterval = .seconds(2)
     ) -> Result {
+        guard bundledWire == .v1 else { return Result() }
         let directory = directory.path
         let names = socketNames(in: directory)
         guard !names.isEmpty else { return Result() }

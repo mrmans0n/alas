@@ -527,6 +527,10 @@ final class AppState {
     /// a test host; tests inject a runner instead.
     @ObservationIgnored
     var zmxMigrationRunner: ZmxMigrationRunner?
+    /// The wire of the bundled zmx. The migration runs only once it is v1;
+    /// tests override it to exercise either side of the zmx bump.
+    @ObservationIgnored
+    var bundledZmxWire: ZmxIPC.Wire = ZmxIPC.bundledWire
     /// The once-per-instance pre-freeze migration. Started by the first
     /// `awaitZmxMigration()` call; every restore of a persisted session and
     /// every orphan sweep awaits it.
@@ -2187,10 +2191,14 @@ final class AppState {
     }
 
     /// The blocking migration for this instance, or nil when there is no zmx
-    /// to migrate. An injected runner needs only the socket directory; the
-    /// default also needs the bundled binary and never runs in a test host,
-    /// which shares its socket directory with the Alas the developer runs.
+    /// to migrate. Nothing migrates while the bundled zmx is itself
+    /// pre-freeze: every daemon is one it can drive, and builds share the
+    /// socket directory, so stopping them would kill another Alas' shells.
+    /// An injected runner needs only the socket directory; the default also
+    /// needs the bundled binary and never runs in a test host, which shares
+    /// its socket directory with the Alas the developer runs.
     private func zmxMigrationWork() -> (@Sendable () -> ZmxPreFreezeMigration.Result)? {
+        guard bundledZmxWire == .v1 else { return nil }
         let env = terminal.zmxClient.env
         guard let directory = env.zmxDir else { return nil }
         if let runner = zmxMigrationRunner {
