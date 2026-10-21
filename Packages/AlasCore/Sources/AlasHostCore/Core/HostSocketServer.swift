@@ -25,7 +25,7 @@ public final class HostSocketServer: @unchecked Sendable {
     private let listenFD: Int32
     /// An exclusive `flock` on `<path>.lock`, held while serving: whoever
     /// holds it owns the path, and the kernel releases it if the process dies.
-    private let lockFD: Int32
+    let lockFD: Int32
     private let lock = NSLock()
     private var isStopped = false
     private let server: HostProtocolServer

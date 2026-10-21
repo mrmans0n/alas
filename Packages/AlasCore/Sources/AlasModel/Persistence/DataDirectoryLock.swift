@@ -21,7 +21,7 @@ public final class DataDirectoryLock: Sendable {
     }
 
     public let url: URL
-    private let fd: Int32
+    let fd: Int32
 
     private init(url: URL, fd: Int32) {
         self.url = url
