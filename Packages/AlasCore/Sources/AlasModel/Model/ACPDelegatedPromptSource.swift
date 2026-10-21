@@ -82,6 +82,18 @@ public struct ACPDelegatedPromptSource: Codable, Equatable, Sendable {
         return source
     }
 
+    public static func shipStack(stackName: String, kind: CodeHostKind, messageID: UUID) -> ACPDelegatedPromptSource {
+        var source = ACPDelegatedPromptSource(
+            sessionId: "alas:ship", messageId: messageID.uuidString,
+            senderRelationship: appActionRelationship)
+        let title = "Ship gg stack"
+        source.appAction = AppAction(title: title, source: "Ship")
+        source.card = ACPPromptCard(
+            origin: .ship, title: title,
+            facts: [.init(kind: .branch, text: stackName), .init(kind: .provider, text: kind.displayName)])
+        return source
+    }
+
     /// Review comments sent from a review surface. An app action, so the
     /// queue treats it like Ship: visible while pending and not editable.
     public static func reviewFeedback(card: ACPPromptCard, commentCount: Int, messageID: UUID) -> ACPDelegatedPromptSource {

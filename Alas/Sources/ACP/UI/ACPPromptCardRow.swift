@@ -14,10 +14,13 @@ struct ACPPromptCardContext {
     var shipStatus: (@MainActor () -> ACPShipStatus?)? = nil
 }
 
-/// What the `/ship` hover card shows about the session's PR.
+/// What the `/ship` hover card shows about the session's PR or gg stack.
 struct ACPShipStatus {
     let presentation: ShepherdPresentation
+    /// The branch, or the gg stack, Ship would publish.
     let branch: String
+    /// Leads `branch` while nothing is published.
+    var unshippedLabel = "No PR yet for"
 }
 
 private struct ACPPromptCardContextKey: EnvironmentKey {

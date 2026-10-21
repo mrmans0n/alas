@@ -575,7 +575,7 @@ struct ACPCommandHoverCard: View {
                 Text("· \(status.presentation.phaseLine)")
                     .foregroundStyle(.secondary)
             } else {
-                Text("No PR yet for")
+                Text(status.unshippedLabel)
                     .foregroundStyle(.secondary)
                 Text(status.branch)
                     .font(.system(size: 11.5, weight: .semibold, design: .monospaced))

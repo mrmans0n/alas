@@ -8,8 +8,9 @@ import AlasAgents
 import AlasIntegrations
 import AlasACP
 
-/// Agent-facing failure of `pr_create` / `pr_status`; `message` is returned verbatim.
-private struct PRShepherdCLIError: Error {
+/// Agent-facing failure of `pr_create`, `pr_status` and `stack_ship`;
+/// `message` is returned verbatim.
+struct PRShepherdCLIError: Error {
     let message: String
 }
 
@@ -29,21 +30,31 @@ extension AlasCoreContext {
         draft: Bool,
         base: String?
     ) async -> AlasCLIResponse {
-        // The caller that started a task clears it only after it resumes, so a
-        // finished task can still be listed: wait for each one once.
+        await serializedPublish(worktreeID: worktreeID) {
+            let result = try await self.createShepherdedPR(
+                sessionID: sessionID, worktreeID: worktreeID,
+                title: title, body: body, draft: draft, base: base
+            )
+            return ReviewCommentWireDTO.jsonLine(result)
+        }
+    }
+
+    /// Runs `publish` once every earlier publish of `worktreeID` (`pr_create`
+    /// or `stack_ship`) has finished, so two never push the same worktree at
+    /// once. The caller that started a task clears it only after it resumes,
+    /// so a finished task can still be listed: each one is waited for once.
+    func serializedPublish(
+        worktreeID: String,
+        _ publish: @escaping @MainActor () async throws -> String
+    ) async -> AlasCLIResponse {
         var finished: Task<AlasCLIResponse, Never>?
         while let running = prCreateTasks[worktreeID], running != finished {
             _ = await running.value
             finished = running
         }
-        let task = Task { @MainActor [weak self] () -> AlasCLIResponse in
-            guard let self else { return .error("Alas is not available.") }
+        let task = Task { @MainActor () -> AlasCLIResponse in
             do {
-                let result = try await self.createShepherdedPR(
-                    sessionID: sessionID, worktreeID: worktreeID,
-                    title: title, body: body, draft: draft, base: base
-                )
-                return .text([ReviewCommentWireDTO.jsonLine(result)])
+                return .text([try await publish()])
             } catch {
                 return .error(Self.prShepherdErrorMessage(error))
             }
@@ -62,10 +73,13 @@ extension AlasCoreContext {
         return Self.normalizedBaseBranch(base ?? context.baseBranch, remoteNames: Set(remotes.map(\.name)))
     }
 
-    /// Fresh status of the PR/MR bound to the calling session, else of the
-    /// worktree branch's PR/MR.
+    /// Fresh status of the gg stack or PR/MR bound to the calling session,
+    /// else of the worktree's stack in gg mode, else of its branch's PR/MR.
     func prStatus(sessionID: String, worktreeID: String) async -> AlasCLIResponse {
         do {
+            if let stack = try await shepherdedStackStatus(sessionID: sessionID, worktreeID: worktreeID) {
+                return .text([ReviewCommentWireDTO.jsonLine(stack)])
+            }
             let status = try await shepherdedPRStatus(sessionID: sessionID, worktreeID: worktreeID)
             return .text([ReviewCommentWireDTO.jsonLine(status)])
         } catch {
@@ -82,6 +96,12 @@ extension AlasCoreContext {
         base: String?
     ) async throws -> PRCreateResultWire {
         let (_, context) = try prShepherdTarget(worktreeID)
+        if let stackName = stackShepherd.effects?.worktreeContext(worktreeID)?.stackName {
+            throw PRShepherdCLIError(
+                message: "This worktree is the gg stack \"\(stackName)\", where every commit gets its own pull request. "
+                    + "Call stack_ship to publish the stack and have Alas watch every pull request in it."
+            )
+        }
         // The local probe fails outright on an unborn branch, so say so first.
         if let head = try? await Process.git(["rev-parse", "--verify", "--quiet", "HEAD"], cwd: context.path),
            head.exitCode == 1 {
@@ -310,6 +330,7 @@ extension AlasCoreContext {
         let current = reviewShepherd.records[ShepherdRecordID(worktreeID: worktreeID, request: request)]
             .flatMap { $0.sessionID == sessionID ? $0 : nil }
         let defaults = environment.configuration().changes.shepherd
+        releaseStackShepherds(forStandaloneBindOf: request, sessionID: sessionID, worktreeID: worktreeID)
         return await reviewShepherd.bind(
             sessionID: sessionID,
             worktreeID: worktreeID,

@@ -280,6 +280,19 @@ Use a disposable branch on a GitHub repository you can push to, with CI that run
 13. Archive the owning session of a shepherded PR with failing CI. Confirm a notification says the shepherd needs you and the drawer shows the escalation.
 14. Quit Alas mid-fix and relaunch. Confirm the record resumes and the phase moves on once the agent's push lands.
 
+### Stack shepherd
+
+Use a disposable gg stack (two or three commits) on a GitHub repository you can push to, with CI on pull requests, in a worktree where Stacked Diffs Mode is on.
+
+1. In an agent session in the stack worktree, confirm the toolbar pill reads "Ship" and its popover names the gg stack with its entry count and offers "Ship stack with agent". Press it and confirm the session receives a "Ship gg stack" prompt, folds its work into the stack, runs `gg last` and calls `stack_ship`, and that the pill then shows the request count.
+2. Ask the agent to call `pr_create` in the same worktree. Confirm it is refused with a message pointing at `stack_ship`.
+3. Confirm the popover lists every entry top of stack first, each with its request number, title and phase, plus the Auto-fix switch and the note that the stack lands with Land.
+4. Break a test in the bottom entry and leave a review thread from a second account on the top entry. Confirm one prompt captioned "Alas PR shepherd" arrives listing entry 1 before the top entry, each with `gg mv <entry id>`, and that the agent fixes both, returns with `gg last`, and calls `stack_ship` once.
+5. Call `pr_status` from the session. Confirm it returns the stack with every entry's request and phase, and `ready_to_land` in the shepherd block.
+6. Check out another stack in the worktree while a problem is open. Confirm no fix turn is sent until the worktree is back on the shepherded stack.
+7. Once every entry is green with no open threads, confirm a "Stack ready to land" notification arrives once and the pill shows the ready badge. Land the stack from the stack drawer and confirm a "Stack landed" notification after the last entry merges.
+8. With a stack already published by `gg sync`, open Ship in a fresh session. Confirm it offers "Shepherd stack from this session", and pressing it sends a context prompt and moves the stack to that session.
+
 ## Peer pairing by approval
 
 These checks need two Macs running Alas on a reachable LAN or tailnet. They

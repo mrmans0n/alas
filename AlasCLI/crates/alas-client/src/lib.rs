@@ -209,6 +209,9 @@ pub enum Command {
     },
     /// MCP-only: fresh status of the calling session's pull/merge request.
     PrStatus,
+    /// MCP-only: publish this worktree's gg stack with `gg sync` and have
+    /// Alas shepherd every request in it for the calling session.
+    StackShip,
     /// Read-only discovery of the ACP agents (and remembered model catalogs)
     /// the calling session could delegate to.
     AgentList {
@@ -576,6 +579,11 @@ pub fn build_request(
         }
         Command::PrStatus => {
             let mut r = Request::new("pr_status");
+            r.params = Some(serde_json::json!({}));
+            r
+        }
+        Command::StackShip => {
+            let mut r = Request::new("stack_ship");
             r.params = Some(serde_json::json!({}));
             r
         }
@@ -1767,6 +1775,10 @@ mod tests {
         let status = build_request(&Command::PrStatus, Some("acp-1".into()), Some("/wt".into()));
         assert_eq!(status.command, "pr_status");
         assert_eq!(status.params, Some(serde_json::json!({})));
+
+        let ship = build_request(&Command::StackShip, Some("acp-1".into()), Some("/wt".into()));
+        assert_eq!(ship.command, "stack_ship");
+        assert_eq!(ship.params, Some(serde_json::json!({})));
     }
 
     #[test]

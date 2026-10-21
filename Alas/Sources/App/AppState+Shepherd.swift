@@ -42,6 +42,7 @@ extension AppState {
     /// their worktrees against it.
     func startReviewShepherd() {
         reviewShepherd.start()
+        stackShepherd.start()
     }
 
     // MARK: - Eligibility, rules and base
@@ -156,7 +157,9 @@ extension AppState {
         // Stop, rebind or a newer decision while the session came up: the
         // queue is left alone.
         guard isStillWanted() else { return .superseded }
-        let recordKey = reviewShepherd.record(forSession: sessionID)?.id.storageKey ?? worktreeID
+        let recordKey = stackShepherd.record(forSession: sessionID).flatMap { $0.isFinished ? nil : $0.id.storageKey }
+            ?? reviewShepherd.record(forSession: sessionID)?.id.storageKey
+            ?? worktreeID
         let source = ACPDelegatedPromptSource.shepherd(recordKey: recordKey, messageID: UUID(), card: prompt.card)
         let queued = await manager.enqueueDelegatedPrompt(text: prompt.text, source: source, into: sessionID, requiringWriter: true)
         return queued ? .delivered : .failed
@@ -217,8 +220,13 @@ extension AppState {
     }
 
     /// `/ship`: runs what the Ship popover would offer this session, fetching
-    /// the branch's status first when nothing has it cached.
+    /// the branch's status first when nothing has it cached. In a gg stack
+    /// worktree that is the stack's Ship.
     func shipFromCommand(session: ACPSession, worktree: Worktree) async {
+        if shipsStack(sessionID: session.id, worktree: worktree) {
+            await shipStackFromCommand(session: session, worktree: worktree)
+            return
+        }
         var context = ShepherdSessionContext(sessionID: session.id, worktree: worktree, state: self)
         if context.request == nil, let bound = context.record ?? context.otherRecord {
             let fetched = await reviewShepherd.statusSnapshot(for: bound.id)
@@ -253,6 +261,7 @@ extension AppState {
     /// the Settings defaults.
     func shepherdWithSession(_ sessionID: String, worktree: Worktree, request: ReviewRequest) async {
         guard let rules = await shepherdRulesForBinding(worktree: worktree) else { return }
+        core.releaseStackShepherds(forStandaloneBindOf: request, sessionID: sessionID, worktreeID: worktree.id)
         let toggles = shepherdToggles(worktree: worktree, request: request)
         await reviewShepherd.bind(
             sessionID: sessionID,
@@ -322,6 +331,7 @@ extension AppState {
             )
             return
         }
+        core.releaseStackShepherds(forStandaloneBindOf: request, sessionID: prepared.sessionID, worktreeID: worktree.id)
         let toggles = shepherdToggles(worktree: worktree, request: request)
         await reviewShepherd.bind(
             sessionID: prepared.sessionID,
@@ -340,7 +350,7 @@ extension AppState {
     /// The rules a binding's context prompt carries, or nil after posting
     /// why they could not be read: binding without them would hide the
     /// repository's instructions from the session.
-    private func shepherdRulesForBinding(worktree: Worktree) async -> ShepherdRules? {
+    func shepherdRulesForBinding(worktree: Worktree) async -> ShepherdRules? {
         do {
             return try await shepherdRules(worktreeID: worktree.id)
         } catch {
@@ -456,7 +466,7 @@ extension AppState {
         }
     }
 
-    private func shepherdAgentKind(sessionID: String, worktreeID: String) -> AgentKind {
+    func shepherdAgentKind(sessionID: String, worktreeID: String) -> AgentKind {
         let manager = acpManager(forWorktreeId: worktreeID)
         let agentID = manager?.liveSession(for: sessionID)?.agentId
             ?? manager?.cachedPersistedSessionRow(id: sessionID)?.agentId
@@ -508,7 +518,7 @@ extension AppState {
     /// defers quietly: the shepherd tries again when its turn ends.
     /// `isStillWanted` false (the record was stopped or rebound while the
     /// owner's state was read) declines without archiving.
-    private func archiveShepherdWorktreeIfAllowed(
+    func archiveShepherdWorktreeIfAllowed(
         _ worktreeID: String,
         sessionID: String,
         isStillWanted: @MainActor () -> Bool
@@ -554,5 +564,6 @@ extension AppState {
 
     private func hasActiveShepherdRecord(worktreeID: String) -> Bool {
         reviewShepherd.records.values.contains { $0.id.worktreeID == worktreeID && !$0.phase.isTerminal }
+            || stackShepherd.records.values.contains { $0.id.worktreeID == worktreeID && !$0.isFinished }
     }
 }

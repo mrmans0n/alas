@@ -1738,12 +1738,14 @@ final class AppState {
         }
         installRunScheduleRunner()
         installReviewShepherdEffects()
+        installStackShepherdEffects()
         installSessionRecap()
         startLocalTextObservers()
         AlasTerminationCoordinator.shared.flush = { [weak self] in
             await self?.shutdownLocalTextFeatures()
             self?.runScheduler.stop()
             self?.reviewShepherd.stop()
+            self?.stackShepherd.stop()
             await GGLandingStore.shared.cancelAllAndWait()
             self?.cancelPendingRunScriptLaunches()
             self?.cancelAllRunScriptCompletionTasks()
@@ -12121,6 +12123,7 @@ final class AppState {
                 Task { @MainActor [weak self] in
                     self?.scheduledAgentTurns.deliver(completion)
                     self?.reviewShepherd.turnCompleted(sessionID: completion.sessionId)
+                    self?.stackShepherd.turnCompleted(sessionID: completion.sessionId)
                     await self?.acpOrchestration.childTurnCompleted(completion)
                 }
             },

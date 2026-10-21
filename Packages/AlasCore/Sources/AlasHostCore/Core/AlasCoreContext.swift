@@ -34,6 +34,8 @@ public final class AlasCoreContext {
     public let runScheduler: RunScheduler
     /// Watches bound pull and merge requests; AppState installs its effects.
     public let reviewShepherd: ReviewShepherd
+    /// Watches every request of a bound gg stack; AppState installs its effects.
+    public let stackShepherd: StackShepherd
     /// Waits for a run's completion file. Injectable so tests can settle runs.
     @ObservationIgnored public let runCompletionWaiter: RunCompletionWaiter
     /// Runs whose completion is being waited for, keyed by run ID.
@@ -96,7 +98,7 @@ public final class AlasCoreContext {
     /// One per project: a free-name creation holds it from picking a free
     /// name until the worktree exists, so the next pick sees it.
     @ObservationIgnored var freeNameGates: [String: SerialGate] = [:]
-    /// The PR creation running for each worktree; one waits for another.
+    /// The PR or stack publish running for each worktree; one waits for another.
     @ObservationIgnored var prCreateTasks: [String: Task<AlasCLIResponse, Never>] = [:]
     /// Each repository's `.alas/config.json`, read once per change.
     @ObservationIgnored public let repoConfigStore = RepoConfigStore()
@@ -179,6 +181,7 @@ public final class AlasCoreContext {
         self.runs = runs
         self.runScheduler = runScheduler ?? RunScheduler(store: store)
         self.reviewShepherd = reviewShepherd ?? ReviewShepherd(store: store)
+        self.stackShepherd = StackShepherd(store: store)
         self.runCompletionWaiter = runCompletionWaiter
         self.runHistory = RunHistory(store: runHistoryStore)
         self.attention = AttentionIntake(store: attentionStore ?? AttentionStore())
