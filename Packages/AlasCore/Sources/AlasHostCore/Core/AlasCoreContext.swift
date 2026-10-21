@@ -262,6 +262,38 @@ public final class AlasCoreContext {
         return project
     }
 
+    /// Forgets project `id` and persists the list. Refuses (`projectBusy`)
+    /// while a session or run is live in one of its worktrees; idle session
+    /// managers of the worktrees no other project lists are disposed. A
+    /// worktree it shadowed goes back to the project that lost it.
+    public func removeProject(id: String) async throws {
+        try refuseIfStopping()
+        guard projects.projects.contains(where: { $0.id == id }) else {
+            throw HostError.notFound(what: "project \(id)")
+        }
+        guard !projects.worktreeOperationStates.keys.contains(where: { $0.projectId == id }) else {
+            throw WorktreeOperationInProgress()
+        }
+        let worktreeIDs = Set(projects.worktrees(projectId: id).map(\.id))
+        let isLive = worktreeIDs.contains { sessionManagers[.worktree($0)]?.runners.isEmpty == false }
+            || processRuns.values.contains { $0.projectID == id || worktreeIDs.contains($0.worktreeID) }
+            || pendingRunLaunches.keys.contains { worktreeIDs.contains($0.worktreeID) }
+        guard !isLive else { throw HostError.projectBusy }
+        // Saved before anything is forgotten, so a failed save changes nothing.
+        try store.write(ProjectsFile(projects: projects.projects.filter { $0.id != id }), to: projectsFile)
+        let restored = projects.removeProject(id: id)
+        runScheduler.pruneSchedules(missingProjectIDs: [id])
+        let listed = Set(projects.projects.flatMap { projects.worktrees(projectId: $0.id).map(\.id) })
+        for worktreeID in worktreeIDs.subtracting(listed) {
+            await disposeSessionManager(owner: .worktree(worktreeID))
+        }
+        // The removal is committed; a restored project's refresh that fails
+        // is left to the next one.
+        for projectID in restored where (try? await environment.refreshProjectWorktrees(projectID, in: self)) == true {
+            try? saveProjects()
+        }
+    }
+
     /// The one coordinator for Workspace checkout lifecycles. It reads the
     /// authoritative store, never a display cache, when deciding which
     /// sessions to stop.

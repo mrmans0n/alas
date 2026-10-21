@@ -171,6 +171,9 @@ public final class HostProtocolConnection {
                 path: URL(fileURLWithPath: path), displayName: displayName, icon: .default(),
                 host: projectHost, kind: kind, caller: caller
             ))
+        case .removeProject(let projectID):
+            try await host.projects.remove(projectID: projectID, caller: caller)
+            return .done
         case .createWorktree(let projectID, let base, let branch, let destination):
             let request = WorktreeCreateRequest(
                 projectID: projectID, base: base, branch: branch, destination: URL(fileURLWithPath: destination)

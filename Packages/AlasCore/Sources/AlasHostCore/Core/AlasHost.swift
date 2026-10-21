@@ -196,6 +196,13 @@ public struct ProjectsAPI {
         caller.log("projects.add", path.path)
         return ProjectSnapshot(try await core.addProject(path: path, displayName: displayName, icon: icon, host: host, kind: kind))
     }
+
+    /// Forgets the project, refusing (`HostError.projectBusy`) while a
+    /// session or run is live in one of its worktrees.
+    public func remove(projectID: String, caller: HostCaller) async throws {
+        caller.log("projects.remove", projectID)
+        try await core.removeProject(id: projectID)
+    }
 }
 
 // MARK: - Worktrees
