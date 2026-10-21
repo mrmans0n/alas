@@ -646,11 +646,13 @@ final class ZmxFakeDaemonListener: @unchecked Sendable {
             if ownsDirectory { try? FileManager.default.removeItem(atPath: dir) }
             throw POSIXError(.EADDRINUSE)
         }
-        let listener = listener
+        // A distinct name: Swift 6.2 rejects the closures above if a local
+        // shadows the `listener` property later in this initializer.
+        let listenerFD = listener
         Thread { [self] in
             defer { finished.signal() }
             for script in scripts {
-                guard serve(listener: listener, script: script) else { return }
+                guard serve(listener: listenerFD, script: script) else { return }
             }
         }.start()
     }
