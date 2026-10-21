@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### 🐛 Fixes
+
+- Keep automatic restart continuations out of the queue UI and discard them when live session activity makes them unnecessary.
+
 ## [0.21.10] - 2026-10-21
 
 ### ✨ Features

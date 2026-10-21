@@ -898,6 +898,33 @@ struct ACPSessionRunnerQueueTests {
         #expect(session.lastError != nil)
     }
 
+    @Test("live agent activity dismisses pending restart recovery")
+    func liveAgentActivityDismissesPendingRestartRecovery() async throws {
+        let (runner, _, session, store) = try mkRunner()
+        defer { runner.stop() }
+        let continuation = QueuedPrompt(
+            blocks: [.text(QueuedPrompt.interruptedTurnContinueText)],
+            interruptedTurnContinuation: true
+        )
+        let later = QueuedPrompt(blocks: [.text("later")])
+        session.directTurnInFlight = true
+        session.queue = [continuation, later]
+        runner.persistDirectTurnInFlight()
+        runner.persistQueue()
+        await runner.flushPersistence()
+
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "s",
+            update: .agentMessageChunk(.text("Still working."))
+        ))
+        await runner.flushPersistence()
+
+        #expect(!session.directTurnInFlight)
+        #expect(session.queue == [later])
+        #expect(try store.loadSession(id: "s")?.directTurnInFlight == false)
+        #expect(try store.loadQueue(sessionId: "s") == [later])
+    }
+
     @Test("a force-sent restart continuation replaces the running turn and is recorded as a notice", arguments: [true, false])
     func forceSentContinuationIsSentAsQueueHead(supportsSteering: Bool) async throws {
         let (runner, mock, session, _) = try mkRunner()
