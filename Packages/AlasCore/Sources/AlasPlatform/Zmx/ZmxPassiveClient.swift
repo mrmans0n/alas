@@ -11,6 +11,9 @@ import AlasModel
 /// `Send`, which writes to the PTY without changing leadership. This type
 /// never sends `Init`, `Input`, or `Resize`.
 ///
+/// The daemon's wire format is probed on a separate connection before
+/// anything is written to or decoded from this socket.
+///
 /// A dedicated thread drains the socket continuously regardless of how fast
 /// `onEvent` consumers forward data, so zmx never accumulates a backlog for
 /// this client. `onEvent` runs on that thread and must not block; it fires
@@ -32,11 +35,14 @@ public final class ZmxPassiveClient: @unchecked Sendable {
         case captureUnsupported
         /// A frame declared a payload above `ZmxIPC.maxPayloadLength`.
         case overflow
+        /// The wire probe got no recognizable answer from the daemon.
+        case unreachable
         /// Invalid framing or a capture timeout after the first.
         case protocolError(String)
     }
 
     private let socket: ZmxIPCSocket
+    private let probe: @Sendable () -> ZmxDaemonStatus
     private let scrollbackRows: UInt32
     private let captureTimeout: DispatchTimeInterval
     private let onEvent: @Sendable (Event) -> Void
@@ -47,6 +53,12 @@ public final class ZmxPassiveClient: @unchecked Sendable {
     private var gate = ZmxSnapshotGate()
     private var captureCount = 0
     private var isClosed = false
+    /// Set by the probe, which runs first on `writer`, so every later writer
+    /// block sees it. Nil until then and forever if the probe fails.
+    private var wire: ZmxIPC.Wire?
+    /// Signaled once the probe resolves or the client closes; the reader
+    /// waits on it before decoding anything.
+    private let wireResolved = DispatchSemaphore(value: 0)
     /// Every write goes through this serial queue, so a daemon that stops
     /// draining blocks this queue, never the caller (the main actor).
     private let writer = DispatchQueue(label: "io.nlopez.alas.zmx-passive-writer")
@@ -58,21 +70,26 @@ public final class ZmxPassiveClient: @unchecked Sendable {
 
     public init(
         socket: ZmxIPCSocket,
+        probe: @escaping @Sendable () -> ZmxDaemonStatus,
         scrollbackRows: UInt32,
         captureTimeout: DispatchTimeInterval = .seconds(3),
         onEvent: @escaping @Sendable (Event) -> Void
     ) {
         self.socket = socket
+        self.probe = probe
         self.scrollbackRows = scrollbackRows
         self.captureTimeout = captureTimeout
         self.onEvent = onEvent
     }
 
-    /// Starts draining and requests the initial snapshot. Call once.
+    /// Probes the daemon's wire, then starts draining and requests the
+    /// initial snapshot. Returns immediately; the blocking probe runs on the
+    /// writer queue. Call once.
     public func start() {
         let thread = Thread { [self] in readLoop() }
         thread.name = "zmx-passive-reader"
         thread.start()
+        writer.async { [self] in resolveWire() }
         sendCapture()
     }
 
@@ -100,16 +117,15 @@ public final class ZmxPassiveClient: @unchecked Sendable {
             return inputEpoch
         }
         guard let epoch else { return false }
-        let frame = ZmxIPC.encode(.send, input, wire: .preFreeze)
         writer.async { [self] in
-            let current = lock.withLock { () -> Bool in
+            let wire = lock.withLock { () -> ZmxIPC.Wire? in
                 // Discarded input already gave its bytes back.
-                guard inputEpoch == epoch else { return false }
+                guard inputEpoch == epoch else { return nil }
                 queuedInputBytes -= input.count
-                return !isClosed
+                return isClosed ? nil : wire
             }
-            guard current else { return }
-            if !socket.write(frame) { finish(.targetExited) }
+            guard let wire else { return }
+            if !socket.write(ZmxIPC.encode(.send, input, wire: wire)) { finish(.targetExited) }
         }
         return true
     }
@@ -128,15 +144,39 @@ public final class ZmxPassiveClient: @unchecked Sendable {
         finish(.detached)
     }
 
+    /// Runs first on `writer`, so no frame is encoded before the wire is known.
+    private func resolveWire() {
+        guard !lock.withLock({ isClosed }) else { return }
+        let detected: ZmxIPC.Wire
+        switch probe() {
+        case .v1: detected = .v1
+        case .preFreeze: detected = .preFreeze
+        case .unreachable:
+            finish(.unreachable)
+            return
+        }
+        lock.withLock { wire = detected }
+        wireResolved.signal()
+    }
+
     private func sendCapture() {
         lock.lock()
         captureCount += 1
         let token = captureCount
         lock.unlock()
-        let frame = ZmxIPC.captureRequest(scrollbackRows: scrollbackRows, wire: .preFreeze)
+        // Resyncs only start after the first snapshot, so the wire is known
+        // and their deadline can run from now. The first capture's deadline
+        // starts once the probe is done, so a slow probe never eats it.
+        if token > 1 { scheduleCaptureDeadline(token: token) }
         writer.async { [self] in
+            guard let wire = lock.withLock({ isClosed ? nil : wire }) else { return }
+            if token == 1 { scheduleCaptureDeadline(token: token) }
+            let frame = ZmxIPC.captureRequest(scrollbackRows: scrollbackRows, wire: wire)
             if !socket.write(frame) { finish(.targetExited) }
         }
+    }
+
+    private func scheduleCaptureDeadline(token: Int) {
         DispatchQueue.global().asyncAfter(deadline: .now() + captureTimeout) { [weak self] in
             self?.captureDeadlinePassed(token: token)
         }
@@ -151,7 +191,11 @@ public final class ZmxPassiveClient: @unchecked Sendable {
     }
 
     private func readLoop() {
-        var decoder = ZmxFrameDecoder(wire: .preFreeze)
+        wireResolved.wait()
+        // No wire means the client already finished (unreachable or closed
+        // during the probe) and delivered `.closed`.
+        guard let wire = lock.withLock({ isClosed ? nil : wire }) else { return }
+        var decoder = ZmxFrameDecoder(wire: wire)
         while true {
             guard let chunk = socket.read(), !chunk.isEmpty else {
                 finish(.targetExited)
@@ -160,6 +204,9 @@ public final class ZmxPassiveClient: @unchecked Sendable {
             let frames: [ZmxFrame]
             do {
                 frames = try decoder.push(chunk)
+            } catch ZmxFrameDecoder.Failure.unsupportedVersion(let version) {
+                finish(.protocolError("unsupported zmx protocol version \(version)"))
+                return
             } catch {
                 finish(.overflow)
                 return
@@ -187,6 +234,8 @@ public final class ZmxPassiveClient: @unchecked Sendable {
         isClosed = true
         lock.unlock()
         guard first else { return }
+        // Unblocks a reader still waiting for the probe.
+        wireResolved.signal()
         socket.shutdown()
         delivery.lock()
         onEvent(.closed(reason))

@@ -93,6 +93,7 @@ import Testing
         var suppressed: [Bool] = []
         var terminated: [String] = []
         var known = ["c"]
+        private let daemon: ZmxDaemonStatus
         lazy var host = PeerConsoleHost(environment: .init(
             consoles: { [] },
             resolve: { [unowned self] id in
@@ -104,8 +105,13 @@ import Testing
                 known.removeAll { $0 == id }
             },
             // The host connects on the main actor.
-            connect: { [unowned self] _ in try MainActor.assumeIsolated { try self.makeSocket() } }
+            connect: { [unowned self] _ in try MainActor.assumeIsolated { try self.makeSocket() } },
+            probe: { [daemon] _ in daemon }
         ))
+
+        init(daemon: ZmxDaemonStatus = .v1(pid: 1)) {
+            self.daemon = daemon
+        }
 
         private func makeSocket() throws -> ZmxIPCSocket {
             connectCount += 1
@@ -121,6 +127,17 @@ import Testing
         fixture.host.handle(.attach(consoleId: "gone", attachmentId: "a", scrollbackRows: 0), from: peer.link)
         #expect(peer.events.all == [.detached(attachmentId: "a", reason: .unavailable)])
         #expect(fixture.connectCount == 0)
+    }
+
+    /// The socket connects, so the peer sees `attached` before the probe,
+    /// which runs off the main actor, finds no daemon behind it.
+    @Test func unreachableDaemonDetachesAsUnavailable() async throws {
+        let fixture = Fixture(daemon: .unreachable)
+        let peer = FakePeer()
+        fixture.host.handle(.attach(consoleId: "c", attachmentId: "a", scrollbackRows: 0), from: peer.link)
+        try await eventually("detached") { peer.events.all.count == 2 }
+        #expect(peer.events.all.last == .detached(attachmentId: "a", reason: .unavailable))
+        #expect(fixture.connectCount == 1)
     }
 
     @Test func attachmentsPerPeerAreBoundedBeforeAnySocketOpens() {
@@ -139,8 +156,8 @@ import Testing
         let peer = FakePeer()
         fixture.host.handle(.attach(consoleId: "c", attachmentId: "a", scrollbackRows: 99), from: peer.link)
         let daemon = try #require(fixture.sockets.first)
-        daemon.write(ZmxIPC.encode(.output, Data("pre".utf8), wire: .preFreeze))
-        daemon.write(ZmxIPC.encode(.capture, Data("S".utf8), wire: .preFreeze) + ZmxIPC.encode(.output, Data("o".utf8), wire: .preFreeze))
+        daemon.write(ZmxIPC.encode(.output, Data("pre".utf8), wire: .v1))
+        daemon.write(ZmxIPC.encode(.capture, Data("S".utf8), wire: .v1) + ZmxIPC.encode(.output, Data("o".utf8), wire: .v1))
         try await eventually("snapshot and output") { peer.events.all.count == 3 }
         daemon.closeDaemonEnd()
         try await eventually("detached") { peer.events.all.count == 4 }
@@ -219,7 +236,7 @@ import Testing
         let input = Data("ls\r".utf8)
         fixture.host.handle(.input(attachmentId: "a", generation: 1, sequence: 1, data: input), from: owner.link)
         fixture.host.handle(.input(attachmentId: "b", generation: 1, sequence: 1, data: input), from: other.link)
-        var decoder = ZmxFrameDecoder(wire: .preFreeze)
+        var decoder = ZmxFrameDecoder(wire: .v1)
         let frames = try fixture.sockets[0].readFrames(&decoder, count: 2)
         #expect(frames.map(\.tag) == [ZmxIPC.Tag.capture.rawValue, ZmxIPC.Tag.send.rawValue])
         #expect(frames.last?.payload == input)

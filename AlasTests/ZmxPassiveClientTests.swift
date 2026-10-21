@@ -141,27 +141,31 @@ import Testing
 
     // MARK: Passive client over a socket pair
 
-    @Test func passiveAttachCapturesFirstAndOrdersStreamAroundTheSnapshot() async throws {
+    @Test(arguments: [ZmxIPC.Wire.preFreeze, .v1])
+    func passiveAttachCapturesFirstAndOrdersStreamAroundTheSnapshot(wire: ZmxIPC.Wire) async throws {
         let pair = try ZmxSocketPair()
         let events = EventLog()
-        let client = ZmxPassiveClient(socket: ZmxIPCSocket(fd: pair.client), scrollbackRows: 500) {
-            events.append($0)
-        }
+        let client = ZmxPassiveClient(
+            socket: ZmxIPCSocket(fd: pair.client),
+            probe: { probeStatus(wire) },
+            scrollbackRows: 500
+        ) { events.append($0) }
         client.start()
 
-        // The only bytes a passive attach writes are one Capture request.
-        var daemon = ZmxFrameDecoder(wire: .preFreeze)
+        // The only bytes a passive attach writes are one Capture request,
+        // encoded for the probed wire.
+        var daemon = ZmxFrameDecoder(wire: wire)
         let request = try pair.readFrames(&daemon, count: 1)
-        #expect(request == [ZmxFrame(tag: 22, payload: ZmxIPC.captureRequest(scrollbackRows: 500, wire: .preFreeze).dropFirst(8))])
+        #expect(request == [ZmxFrame(tag: 22, payload: ZmxIPC.captureRequest(scrollbackRows: 500, wire: wire).dropFirst(8))])
 
-        pair.write(ZmxIPC.encode(.output, Data("before".utf8), wire: .preFreeze))
-        pair.write(ZmxIPC.encode(.capture, Data("snapshot".utf8), wire: .preFreeze) + ZmxIPC.encode(.output, Data("after".utf8), wire: .preFreeze))
+        pair.write(ZmxIPC.encode(.output, Data("before".utf8), wire: wire))
+        pair.write(ZmxIPC.encode(.capture, Data("snapshot".utf8), wire: wire) + ZmxIPC.encode(.output, Data("after".utf8), wire: wire))
         try await eventually("snapshot and live output") { events.all.count == 2 }
 
         #expect(client.requestResync())
         #expect(!client.requestResync())
         #expect(try pair.readFrames(&daemon, count: 1).map(\.tag) == [22])
-        pair.write(ZmxIPC.encode(.output, Data("dropped".utf8), wire: .preFreeze) + ZmxIPC.encode(.capture, Data("again".utf8), wire: .preFreeze))
+        pair.write(ZmxIPC.encode(.output, Data("dropped".utf8), wire: wire) + ZmxIPC.encode(.capture, Data("again".utf8), wire: wire))
 
         #expect(client.send(Data("ls\r".utf8)))
         #expect(try pair.readFrames(&daemon, count: 1) == [ZmxFrame(tag: 18, payload: Data("ls\r".utf8))])
@@ -176,16 +180,18 @@ import Testing
         ])
     }
 
-    @Test func daemonThatIgnoresCaptureIsReportedUnsupported() async throws {
+    @Test(arguments: [ZmxIPC.Wire.preFreeze, .v1])
+    func daemonThatIgnoresCaptureIsReportedUnsupported(wire: ZmxIPC.Wire) async throws {
         let pair = try ZmxSocketPair()
         let events = EventLog()
         let client = ZmxPassiveClient(
             socket: ZmxIPCSocket(fd: pair.client),
+            probe: { probeStatus(wire) },
             scrollbackRows: 0,
             captureTimeout: .milliseconds(50)
         ) { events.append($0) }
         client.start()
-        pair.write(ZmxIPC.encode(.output, Data("ignored".utf8), wire: .preFreeze))
+        pair.write(ZmxIPC.encode(.output, Data("ignored".utf8), wire: wire))
         try await eventually("capture deadline") { !events.all.isEmpty }
         #expect(events.all == [.closed(.captureUnsupported)])
         #expect(!client.send(Data("x".utf8)))
@@ -194,18 +200,40 @@ import Testing
     @Test func oversizedFrameDetachesAsOverflow() async throws {
         let pair = try ZmxSocketPair()
         let events = EventLog()
-        let client = ZmxPassiveClient(socket: ZmxIPCSocket(fd: pair.client), scrollbackRows: 0) {
-            events.append($0)
-        }
+        let client = ZmxPassiveClient(
+            socket: ZmxIPCSocket(fd: pair.client),
+            probe: { .preFreeze(pid: 1) },
+            scrollbackRows: 0
+        ) { events.append($0) }
         client.start()
         pair.write(Data([1, 0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0]))
         try await eventually("overflow") { !events.all.isEmpty }
         #expect(events.all == [.closed(.overflow)])
     }
 
+    @Test func unreachableProbeClosesWithoutSendingAnything() async throws {
+        let pair = try ZmxSocketPair()
+        let events = EventLog()
+        let client = ZmxPassiveClient(
+            socket: ZmxIPCSocket(fd: pair.client),
+            probe: { .unreachable },
+            scrollbackRows: 0
+        ) { events.append($0) }
+        client.start()
+        try await eventually("closed") { !events.all.isEmpty }
+        #expect(events.all == [.closed(.unreachable)])
+        #expect(try pair.readUntilEOF().isEmpty)
+        #expect(!client.requestResync())
+        #expect(!client.send(Data("x".utf8)))
+    }
+
     @Test func inputToAStalledDaemonNeverBlocksAndRevokedInputIsDropped() throws {
         let pair = try ZmxSocketPair()
-        let client = ZmxPassiveClient(socket: ZmxIPCSocket(fd: pair.client), scrollbackRows: 0) { _ in }
+        let client = ZmxPassiveClient(
+            socket: ZmxIPCSocket(fd: pair.client),
+            probe: { .preFreeze(pid: 1) },
+            scrollbackRows: 0
+        ) { _ in }
         client.start()
         defer { client.close() }
 
@@ -253,6 +281,10 @@ final class ZmxEventLog<Event: Sendable>: @unchecked Sendable {
 }
 
 private typealias EventLog = ZmxEventLog<ZmxPassiveClient.Event>
+
+private func probeStatus(_ wire: ZmxIPC.Wire) -> ZmxDaemonStatus {
+    wire == .v1 ? .v1(pid: 1) : .preFreeze(pid: 1)
+}
 
 let zmxV1InfoHeaderHex = "0601000028020000"
 let zmxPreFreezeInfoHeaderHex = "0628020000000000"
@@ -393,6 +425,18 @@ final class ZmxSocketPair: @unchecked Sendable {
         return frames
     }
 
+    /// Everything the client end wrote until it shut down; throws on timeout.
+    func readUntilEOF() throws -> Data {
+        var received = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while true {
+            let n = Darwin.read(daemon, &buffer, buffer.count)
+            if n == 0 { return received }
+            guard n > 0 else { throw POSIXError(.ETIMEDOUT) }
+            received.append(contentsOf: buffer[0..<n])
+        }
+    }
+
     func closeDaemonEnd() {
         guard daemonOpen else { return }
         daemonOpen = false
@@ -501,9 +545,11 @@ private struct PassiveViewer {
     init(path: String) throws {
         let events = ZmxEventLog<ZmxPassiveClient.Event>()
         self.events = events
-        client = ZmxPassiveClient(socket: try ZmxIPCSocket.connect(path: path), scrollbackRows: 0) {
-            events.append($0)
-        }
+        client = ZmxPassiveClient(
+            socket: try ZmxIPCSocket.connect(path: path),
+            probe: { ZmxIPCSocket.probe(path: path) },
+            scrollbackRows: 0
+        ) { events.append($0) }
         client.start()
     }
 

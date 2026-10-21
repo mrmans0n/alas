@@ -59,6 +59,8 @@ public final class PeerConsoleHost {
         /// Closes a console `resolve` accepted, as a local tab close does.
         public var terminate: @MainActor (String) -> Void
         public var connect: @Sendable (String) throws -> ZmxIPCSocket = { try ZmxIPCSocket.connect(path: $0) }
+        /// Detects a socket's wire format. Blocking; runs off the main actor.
+        public var probe: @Sendable (String) -> ZmxDaemonStatus = { ZmxIPCSocket.probe(path: $0) }
         public var captureTimeout: DispatchTimeInterval = .seconds(3)
         public var limits = PeerConsoleOutbox.Limits()
 
@@ -68,6 +70,7 @@ public final class PeerConsoleHost {
             setLocalInputSuppressed: @escaping @MainActor (_ consoleId: String, _ suppressed: Bool) -> Void,
             terminate: @escaping @MainActor (String) -> Void,
             connect: @escaping @Sendable (String) throws -> ZmxIPCSocket = { try ZmxIPCSocket.connect(path: $0) },
+            probe: @escaping @Sendable (String) -> ZmxDaemonStatus = { ZmxIPCSocket.probe(path: $0) },
             captureTimeout: DispatchTimeInterval = .seconds(3),
             limits: PeerConsoleOutbox.Limits = PeerConsoleOutbox.Limits()
         ) {
@@ -76,6 +79,7 @@ public final class PeerConsoleHost {
             self.setLocalInputSuppressed = setLocalInputSuppressed
             self.terminate = terminate
             self.connect = connect
+            self.probe = probe
             self.captureTimeout = captureTimeout
             self.limits = limits
         }
@@ -197,6 +201,8 @@ public final class PeerConsoleHost {
             limits: environment.limits
         )
         attachments[attachmentId] = attachment
+        let probe = environment.probe
+        let socketPath = target.socketPath
         link.send(.attached(
             attachmentId: attachmentId,
             rows: target.rows,
@@ -205,6 +211,7 @@ public final class PeerConsoleHost {
         ))
         attachment.start(
             socket: socket,
+            probe: { probe(socketPath) },
             scrollbackRows: UInt32(min(max(scrollbackRows, 0), Self.maxScrollbackRows)),
             captureTimeout: environment.captureTimeout
         ) { [weak self] reason in
@@ -232,6 +239,7 @@ public final class PeerConsoleHost {
         case .captureUnsupported: .restartRequired
         case .overflow: .localOverflow
         case .protocolError: .protocolError
+        case .unreachable: .unavailable
         }
         remove(attachment, reason: detachReason)
     }
@@ -312,12 +320,17 @@ public final class PeerConsoleAttachment: @unchecked Sendable {
 
     public func start(
         socket: ZmxIPCSocket,
+        probe: @escaping @Sendable () -> ZmxDaemonStatus,
         scrollbackRows: UInt32,
         captureTimeout: DispatchTimeInterval,
         onClosed: @escaping @Sendable (ZmxPassiveClient.CloseReason) -> Void
     ) {
-        let client = ZmxPassiveClient(socket: socket, scrollbackRows: scrollbackRows, captureTimeout: captureTimeout) {
-            [weak self] event in
+        let client = ZmxPassiveClient(
+            socket: socket,
+            probe: probe,
+            scrollbackRows: scrollbackRows,
+            captureTimeout: captureTimeout
+        ) { [weak self] event in
             switch event {
             case .snapshot(let data): self?.transition { $0.snapshot(data) }
             case .output(let data): self?.transition { $0.output(data) }
