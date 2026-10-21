@@ -183,8 +183,10 @@ struct AppStateKeepSessionsAliveTests {
     /// pre-freeze, and the bundled zmx would attach it as a stuck terminal:
     /// the restore leaves that pane without a session. Asking for it again
     /// re-runs the migration for that session alone and, once it restarted,
-    /// restores the pane.
-    @Test func restoreSkipsAPaneLeftPreFreezeUntilAReRunRestartsIt() async throws {
+    /// restores the pane. A daemon that did not answer at launch but answers
+    /// v1 on the re-run is current, and its pane restores too.
+    @Test(arguments: ZmxRetryRecovery.allCases)
+    func restoreSkipsAPaneLeftPreFreezeUntilAReRunClearsIt(recovery: ZmxRetryRecovery) async throws {
         let repo = try await makeRepo(name: "zmx-in-use")
         defer { try? FileManager.default.removeItem(at: repo) }
 
@@ -198,10 +200,7 @@ struct AppStateKeepSessionsAliveTests {
         state.config.terminal.keepSessionsAlive = true
         let leafId = "leaf-in-use"
         let name = ZmxSessionName.derive(worktreeId: worktree.id, leafId: leafId)
-        let migration = ZmxMigrationGate(blocked: false, results: [
-            ZmxPreFreezeMigration.Result(inUse: [name]),
-            ZmxPreFreezeMigration.Result(restarted: [name]),
-        ])
+        let migration = ZmxMigrationGate(blocked: false, results: recovery.results(name))
         state.zmxMigrationRunner = migration.runner
         state.zmxSocketExists = { _ in true }
         state.bundledZmxWire = .v1
@@ -229,8 +228,10 @@ struct AppStateKeepSessionsAliveTests {
         }
     }
 
-    /// A re-run that can neither restart the daemon nor find its socket gone,
-    /// such as one whose probe timed out, has not shown the session is safe:
+    /// A daemon that accepted the probe but never answered may be
+    /// pre-freeze: the restore leaves its pane without a session. A re-run
+    /// that can neither restart the daemon nor find its socket gone, such as
+    /// one whose probe timed out again, has not shown the session is safe:
     /// the pane stays without a session.
     @Test func restoreKeepsAPaneBlockedWhenAReRunCannotClassifyIt() async throws {
         let repo = try await makeRepo(name: "zmx-unclassified")
@@ -247,7 +248,7 @@ struct AppStateKeepSessionsAliveTests {
         let leafId = "leaf-unclassified"
         let name = ZmxSessionName.derive(worktreeId: worktree.id, leafId: leafId)
         let migration = ZmxMigrationGate(blocked: false, results: [
-            ZmxPreFreezeMigration.Result(inUse: [name]),
+            ZmxPreFreezeMigration.Result(unresponsive: [name]),
             ZmxPreFreezeMigration.Result(),
         ])
         state.zmxMigrationRunner = migration.runner
@@ -515,6 +516,22 @@ private final class ZmxMigrationGate: @unchecked Sendable {
             self.gate.wait()
             self.gate.signal()
             return result
+        }
+    }
+}
+
+/// How a session left blocked by the launch migration is cleared by a
+/// re-run: the first result blocks it, the second unblocks it.
+enum ZmxRetryRecovery: CaseIterable, Sendable {
+    case inUseThenRestarted
+    case unresponsiveThenCurrent
+
+    func results(_ name: String) -> [ZmxPreFreezeMigration.Result] {
+        switch self {
+        case .inUseThenRestarted:
+            [ZmxPreFreezeMigration.Result(inUse: [name]), ZmxPreFreezeMigration.Result(restarted: [name])]
+        case .unresponsiveThenCurrent:
+            [ZmxPreFreezeMigration.Result(unresponsive: [name]), ZmxPreFreezeMigration.Result(current: [name])]
         }
     }
 }

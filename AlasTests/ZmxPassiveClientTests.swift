@@ -160,24 +160,29 @@ import Testing
     @Test func migrationStopsOnlyPreFreezeDaemons() throws {
         let directory = try zmxShortTempDirectory()
         defer { try? FileManager.default.removeItem(atPath: directory) }
-        let v1 = try ZmxFakeDaemonListener(directory: directory, name: "a", scripts: [.reply(zmxInfoReply(wire: .v1))])
+        let v1 = try ZmxFakeDaemonListener(directory: directory, name: "alas-a", scripts: [.reply(zmxInfoReply(wire: .v1))])
         defer { v1.tearDown() }
         let preFreeze = try ZmxFakeDaemonListener(
-            directory: directory, name: "b",
+            directory: directory, name: "alas-b",
             scripts: [.reply(zmxInfoReply(wire: .preFreeze)), .closeAfterReceiving(count: 8)])
         defer { preFreeze.tearDown() }
-        let silent = try ZmxFakeDaemonListener(directory: directory, name: "c", scripts: [.silent])
+        // Accepts the probe and the connect check but never answers: a hung
+        // daemon that may be pre-freeze.
+        let silent = try ZmxFakeDaemonListener(directory: directory, name: "alas-c", scripts: [.silent, .silent])
         defer { silent.tearDown() }
+        // Left by a daemon that has exited: refuses connections.
+        try zmxStaleSocket(at: directory + "/alas-f")
         // A pre-freeze daemon another client is attached to: an older Alas.
         let inUse = try ZmxFakeDaemonListener(
-            directory: directory, name: "e", scripts: [.reply(zmxInfoReply(wire: .preFreeze, clients: 2))])
+            directory: directory, name: "alas-e", scripts: [.reply(zmxInfoReply(wire: .preFreeze, clients: 2))])
         defer { inUse.tearDown() }
-        #expect(FileManager.default.createFile(atPath: directory + "/d", contents: Data("log".utf8)))
+        #expect(FileManager.default.createFile(atPath: directory + "/alas-d", contents: Data("log".utf8)))
         try FileManager.default.createDirectory(atPath: directory + "/logs", withIntermediateDirectories: false)
 
         let signalled = ZmxEventLog<Int32>()
         let result = ZmxPreFreezeMigration.run(
             directory: URL(fileURLWithPath: directory),
+            sessionPrefix: "",
             bundledWire: .v1,
             probe: { ZmxIPCSocket.probe(path: $0, timeout: .milliseconds(300)) },
             kill: { ZmxIPCSocket.killPreFreeze(path: $0, timeout: .seconds(2)) },
@@ -185,13 +190,14 @@ import Testing
             isAlive: { _ in false }
         )
 
-        #expect(result == ZmxPreFreezeMigration.Result(restarted: ["b"], failed: [], inUse: ["e"]))
+        #expect(result == ZmxPreFreezeMigration.Result(
+            restarted: ["alas-b"], failed: [], inUse: ["alas-e"], unresponsive: ["alas-c"], current: ["alas-a"]))
         #expect(signalled.all.isEmpty)
         #expect(preFreeze.receivedPerConnection == [ZmxIPC.versionProbe, Data([5, 0, 0, 0, 0, 0, 0, 0])])
         #expect(!FileManager.default.fileExists(atPath: preFreeze.path))
         #expect(inUse.receivedPerConnection == [ZmxIPC.versionProbe])
         #expect(FileManager.default.fileExists(atPath: inUse.path))
-        for name in ["a", "c", "d", "logs"] {
+        for name in ["alas-a", "alas-c", "alas-d", "alas-f", "logs"] {
             #expect(FileManager.default.fileExists(atPath: directory + "/" + name), "\(name)")
         }
     }
@@ -218,7 +224,8 @@ import Testing
         #expect(FileManager.default.fileExists(atPath: daemon.path))
     }
 
-    /// Recovering one pane re-runs the migration for its socket alone.
+    /// Recovering one pane re-runs the migration for its socket alone, and
+    /// reports a daemon that now answers v1 as current.
     @Test func migrationProbesOnlyTheNamedSockets() throws {
         let directory = try zmxShortTempDirectory()
         defer { try? FileManager.default.removeItem(atPath: directory) }
@@ -227,16 +234,40 @@ import Testing
         }
         defer { daemons.forEach { $0.tearDown() } }
         let probed = ZmxEventLog<String>()
-        _ = ZmxPreFreezeMigration.run(
+        let result = ZmxPreFreezeMigration.run(
             directory: URL(fileURLWithPath: directory),
             names: ["b", "missing"],
+            bundledWire: .v1,
+            probe: { path in
+                probed.append((path as NSString).lastPathComponent)
+                return .v1(pid: 4242)
+            }
+        )
+        #expect(probed.all == ["b"])
+        #expect(result == ZmxPreFreezeMigration.Result(current: ["b"]))
+    }
+
+    /// Only sockets this Alas could attach are probed: the active prefix
+    /// followed by an Alas session name. Another tool's sockets, and those
+    /// of another `ZMX_SESSION_PREFIX`, are never touched.
+    @Test func migrationProbesOnlyTheActiveSessionNamespace() throws {
+        let directory = try zmxShortTempDirectory()
+        defer { try? FileManager.default.removeItem(atPath: directory) }
+        let daemons = try ["p-alas-a", "p-other", "q-alas-b", "alas-c"].map {
+            try ZmxFakeDaemonListener(directory: directory, name: $0, scripts: [.silent])
+        }
+        defer { daemons.forEach { $0.tearDown() } }
+        let probed = ZmxEventLog<String>()
+        _ = ZmxPreFreezeMigration.run(
+            directory: URL(fileURLWithPath: directory),
+            sessionPrefix: "p-",
             bundledWire: .v1,
             probe: { path in
                 probed.append((path as NSString).lastPathComponent)
                 return .unreachable
             }
         )
-        #expect(probed.all == ["b"])
+        #expect(probed.all == ["p-alas-a"])
     }
 
     /// The socket goes only once the daemon has exited. A daemon that keeps
@@ -253,11 +284,12 @@ import Testing
     func migrationEscalatesSignalsUntilTheDaemonExits(
         daemon shape: (pid: Int32, killHangsUp: Bool, exitsOn: Int32, signals: [Int32])
     ) throws {
-        let daemon = try ZmxFakeDaemonListener(script: .silent)
+        let daemon = try ZmxFakeDaemonListener(name: "alas-s", scripts: [.silent])
         defer { daemon.tearDown() }
         let signalled = ZmxEventLog<[Int32]>()
         let result = ZmxPreFreezeMigration.run(
             directory: URL(fileURLWithPath: daemon.directory),
+            sessionPrefix: "",
             bundledWire: .v1,
             probe: { _ in .preFreeze(pid: shape.pid) },
             kill: { _ in shape.killHangsUp },
@@ -270,36 +302,50 @@ import Testing
         #expect(signalled.all == shape.signals.map { [shape.pid, $0] })
         #expect(FileManager.default.fileExists(atPath: daemon.path) == !restarted)
         #expect(result == (restarted
-            ? ZmxPreFreezeMigration.Result(restarted: ["s"], failed: [])
-            : ZmxPreFreezeMigration.Result(restarted: [], failed: ["s"])))
+            ? ZmxPreFreezeMigration.Result(restarted: ["alas-s"], failed: [])
+            : ZmxPreFreezeMigration.Result(restarted: [], failed: ["alas-s"])))
     }
 
     /// Another Alas may start a fresh daemon under the same name once the
     /// old one left its socket. That socket is not the one probed: it stays
-    /// bound, and the old session counts as restarted.
-    @Test func migrationLeavesASocketReboundDuringTheStop() throws {
-        let daemon = try ZmxFakeDaemonListener(script: .silent)
+    /// bound, and the old session counts as restarted. Rebound before the
+    /// stop, it never gets the `Kill` or a signal meant for the old daemon.
+    @Test(arguments: [true, false])
+    func migrationLeavesASocketReboundDuringTheStop(reboundBeforeKill: Bool) throws {
+        let daemon = try ZmxFakeDaemonListener(name: "alas-s", scripts: [.silent])
         defer { daemon.tearDown() }
         let replacements = ZmxEventLog<ZmxFakeDaemonListener>()
         defer { replacements.all.forEach { $0.tearDown() } }
+        let rebind: @Sendable (String) -> Void = { path in
+            _ = unlink(path)
+            if let fresh = try? ZmxFakeDaemonListener(
+                directory: (path as NSString).deletingLastPathComponent, name: "alas-s", scripts: [.silent]) {
+                replacements.append(fresh)
+            }
+        }
+        let killed = ZmxEventLog<String>()
+        let signalled = ZmxEventLog<Int32>()
         let result = ZmxPreFreezeMigration.run(
             directory: URL(fileURLWithPath: daemon.directory),
+            sessionPrefix: "",
             bundledWire: .v1,
-            probe: { _ in .preFreeze(pid: 4242) },
+            probe: { path in
+                if reboundBeforeKill { rebind(path) }
+                return .preFreeze(pid: 4242)
+            },
             kill: { path in
-                _ = unlink(path)
-                if let fresh = try? ZmxFakeDaemonListener(
-                    directory: (path as NSString).deletingLastPathComponent, name: "s", scripts: [.silent]) {
-                    replacements.append(fresh)
-                }
+                killed.append(path)
+                if !reboundBeforeKill { rebind(path) }
                 return true
             },
-            signal: { _, _ in },
+            signal: { _, signal in signalled.append(signal) },
             isAlive: { _ in false }
         )
         #expect(replacements.all.count == 1)
         #expect(FileManager.default.fileExists(atPath: daemon.path))
-        #expect(result == ZmxPreFreezeMigration.Result(restarted: ["s"]))
+        #expect(killed.all.count == (reboundBeforeKill ? 0 : 1))
+        #expect(signalled.all.isEmpty)
+        #expect(result == ZmxPreFreezeMigration.Result(restarted: ["alas-s"]))
     }
 
     @Test func migrationProbesConcurrently() throws {
@@ -307,7 +353,7 @@ import Testing
         defer { try? FileManager.default.removeItem(atPath: directory) }
         // More sockets than a CI runner has cores: each one gets its own worker.
         let daemons = try (0..<8).map {
-            try ZmxFakeDaemonListener(directory: directory, name: "\($0)", scripts: [.silent])
+            try ZmxFakeDaemonListener(directory: directory, name: "alas-\($0)", scripts: [.silent, .silent])
         }
         defer { daemons.forEach { $0.tearDown() } }
 
@@ -317,6 +363,7 @@ import Testing
         let start = clock.now
         let result = ZmxPreFreezeMigration.run(
             directory: URL(fileURLWithPath: directory),
+            sessionPrefix: "",
             bundledWire: .v1,
             probe: { path in
                 let status = ZmxIPCSocket.probe(path: path, timeout: .milliseconds(300))
@@ -332,7 +379,7 @@ import Testing
         #expect(clock.now - start < .seconds(1))
         #expect(statuses.all == Array(repeating: .unreachable, count: 8))
         #expect(killed.all.isEmpty)
-        #expect(result == ZmxPreFreezeMigration.Result(restarted: [], failed: []))
+        #expect(result == ZmxPreFreezeMigration.Result(unresponsive: (0..<8).map { "alas-\($0)" }))
     }
 
     // MARK: Snapshot ordering
@@ -537,6 +584,23 @@ func zmxShortTempDirectory() throws -> String {
     guard let dir = template.withUnsafeMutableBufferPointer({ mkdtemp($0.baseAddress) }).map({ String(cString: $0) })
     else { throw POSIXError(.EIO) }
     return dir
+}
+
+/// Binds a Unix socket at `path` and closes it without unlinking, like a
+/// daemon that exited without cleaning up: the file stays, connects fail.
+func zmxStaleSocket(at path: String) throws {
+    let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+    guard fd >= 0 else { throw POSIXError(.EIO) }
+    defer { Darwin.close(fd) }
+    var address = sockaddr_un()
+    address.sun_family = sa_family_t(AF_UNIX)
+    withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: Array(path.utf8)) }
+    let bound = withUnsafePointer(to: &address) { pointer in
+        pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+            Darwin.bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+        }
+    }
+    guard bound == 0 else { throw POSIXError(.EADDRINUSE) }
 }
 
 /// Listens on a Unix socket and serves one connection per script, in order:

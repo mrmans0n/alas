@@ -52,6 +52,14 @@ public enum ZmxSessionName: Sendable {
         "alas-\(leafId)"
     }
 
+    /// Whether a bare (unprefixed) session name has the root every Alas
+    /// name shares: scoped (`derive(worktreeId:leafId:)`), checkout-scoped
+    /// (`derive(owner:leafId:)`), and `legacy(leafId:)`. Leaf ids are opaque
+    /// strings, so the legacy shape allows nothing narrower.
+    public static func isAlasName(_ name: String) -> Bool {
+        name.hasPrefix("alas-")
+    }
+
     /// Split a scoped session name into its (wt, leaf) hash halves. Returns
     /// nil for legacy `alas-<UUID>` shapes (the leafId contains dashes, so
     /// the segment count differs) and for any string that doesn't match the
