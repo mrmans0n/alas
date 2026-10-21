@@ -775,6 +775,36 @@ struct TerminalServiceZmxTests {
         ])
     }
 
+    /// Worktree removal and checkout archiving wait for their kills, outside
+    /// the dispatched path, and must hold for the gate all the same.
+    @Test
+    func awaitedTerminationWaitsForTheKillGate() async throws {
+        let recorder = RecordingRunner()
+        let name = ZmxSessionName.derive(worktreeId: "wt-1", leafId: "leaf-awaited")
+        recorder.resultsByFirstArg["ls"] = .init(exitCode: 0, stdout: "name=\(name)\n", stderr: "")
+        let svc = TerminalService(
+            zmxClient: ZmxClient(env: makeZmxEnv(available: true), runner: recorder.runner())
+        )
+        let (gateStream, openGate) = AsyncStream<Void>.makeStream()
+        svc.killGate = Task.detached {
+            for await _ in gateStream {}
+        }
+        defer { openGate.finish() }
+
+        let termination = Task {
+            try await svc.terminateSessionsAndWait(
+                [TerminalSessionIdentity(worktreeId: "wt-1", leafId: "leaf-awaited")], timeout: 1
+            )
+        }
+        // Without the gate `ls` runs well inside this window.
+        await waitForCalls(recorder, count: 1, timeout: 0.3) { $0.calls.count }
+        #expect(recorder.calls.isEmpty)
+
+        openGate.finish()
+        try await termination.value
+        #expect(recorder.calls.map(\.args) == [["ls"], ["kill", name]])
+    }
+
     @Test
     func waitForPendingKillsReturnsImmediatelyWhenNothingPending() {
         let recorder = RecordingRunner()

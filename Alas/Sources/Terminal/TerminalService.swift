@@ -42,10 +42,11 @@ final class TerminalService {
     /// completion via a MainActor follow-up Task.
     @ObservationIgnored private var pendingKillTasks: Set<Task<Void, Never>> = []
 
-    /// Work every dispatched zmx kill, list, and sweep waits for before it
-    /// runs. AppState sets it to the pre-freeze migration: the bundled zmx
-    /// hangs on a pre-freeze daemon instead of killing it. It must complete
-    /// without the main actor, because `waitForPendingKills` blocks main.
+    /// Work every dispatched zmx kill, list, and sweep, and every awaited
+    /// termination, waits for before it runs. AppState sets it to the
+    /// pre-freeze migration: the bundled zmx hangs on a pre-freeze daemon
+    /// instead of killing it. It must complete without the main actor,
+    /// because `waitForPendingKills` blocks main.
     @ObservationIgnored var killGate: Task<Void, Never>?
 
     /// Default initializer used by production code paths (AppState).
@@ -668,6 +669,9 @@ final class TerminalService {
     func terminateSessionsAndWait(_ sessions: [TerminalSessionIdentity], timeout: TimeInterval) async throws {
         let (localNames, remoteNamesByHost) = Self.partitionedSessionNames(for: sessions)
         let client = zmxClient
+        // Like every dispatched kill: the bundled zmx hangs on a daemon the
+        // pre-freeze migration has yet to stop.
+        await killGate?.value
         let localExistingNames = await BlockingWork.run {
             Set(client.listSessionInfos().map(\.name))
         }
