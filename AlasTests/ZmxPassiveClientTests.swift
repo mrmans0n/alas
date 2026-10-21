@@ -143,6 +143,85 @@ import Testing
         #expect(!ZmxIPCSocket.killPreFreeze(path: silent.path, timeout: .milliseconds(200)))
     }
 
+    // MARK: Pre-freeze migration
+
+    @Test func migrationStopsOnlyPreFreezeDaemons() throws {
+        let directory = try zmxShortTempDirectory()
+        defer { try? FileManager.default.removeItem(atPath: directory) }
+        let v1 = try ZmxFakeDaemonListener(directory: directory, name: "a", scripts: [.reply(zmxInfoReply(wire: .v1))])
+        defer { v1.tearDown() }
+        let preFreeze = try ZmxFakeDaemonListener(
+            directory: directory, name: "b",
+            scripts: [.reply(zmxInfoReply(wire: .preFreeze)), .closeAfterReceiving(count: 8)])
+        defer { preFreeze.tearDown() }
+        let silent = try ZmxFakeDaemonListener(directory: directory, name: "c", scripts: [.silent])
+        defer { silent.tearDown() }
+        #expect(FileManager.default.createFile(atPath: directory + "/d", contents: Data("log".utf8)))
+        try FileManager.default.createDirectory(atPath: directory + "/logs", withIntermediateDirectories: false)
+
+        let signalled = ZmxEventLog<Int32>()
+        let result = ZmxPreFreezeMigration.run(
+            directory: URL(fileURLWithPath: directory),
+            probe: { ZmxIPCSocket.probe(path: $0, timeout: .milliseconds(300)) },
+            kill: { ZmxIPCSocket.killPreFreeze(path: $0, timeout: .seconds(2)) },
+            signal: { signalled.append($0) }
+        )
+
+        #expect(result == ZmxPreFreezeMigration.Result(restarted: ["b"], failed: []))
+        #expect(signalled.all.isEmpty)
+        #expect(preFreeze.receivedPerConnection == [ZmxIPC.versionProbe, Data([5, 0, 0, 0, 0, 0, 0, 0])])
+        #expect(!FileManager.default.fileExists(atPath: preFreeze.path))
+        for name in ["a", "c", "d", "logs"] {
+            #expect(FileManager.default.fileExists(atPath: directory + "/" + name), "\(name)")
+        }
+    }
+
+    @Test func migrationFallsBackToSignallingThePid() throws {
+        let daemon = try ZmxFakeDaemonListener(script: .silent)
+        defer { daemon.tearDown() }
+        let signalled = ZmxEventLog<Int32>()
+        let result = ZmxPreFreezeMigration.run(
+            directory: URL(fileURLWithPath: daemon.directory),
+            probe: { _ in .preFreeze(pid: 4242) },
+            kill: { _ in false },
+            signal: { signalled.append($0) }
+        )
+        #expect(signalled.all == [4242])
+        #expect(!FileManager.default.fileExists(atPath: daemon.path))
+        #expect(result == ZmxPreFreezeMigration.Result(restarted: ["s"], failed: []))
+    }
+
+    @Test func migrationProbesConcurrently() throws {
+        let directory = try zmxShortTempDirectory()
+        defer { try? FileManager.default.removeItem(atPath: directory) }
+        let daemons = try (0..<5).map {
+            try ZmxFakeDaemonListener(directory: directory, name: "\($0)", scripts: [.silent])
+        }
+        defer { daemons.forEach { $0.tearDown() } }
+
+        let statuses = ZmxEventLog<ZmxDaemonStatus>()
+        let killed = ZmxEventLog<String>()
+        let clock = ContinuousClock()
+        let start = clock.now
+        let result = ZmxPreFreezeMigration.run(
+            directory: URL(fileURLWithPath: directory),
+            probe: { path in
+                let status = ZmxIPCSocket.probe(path: path, timeout: .milliseconds(300))
+                statuses.append(status)
+                return status
+            },
+            kill: { path in
+                killed.append(path)
+                return false
+            },
+            signal: { _ in }
+        )
+        #expect(clock.now - start < .seconds(1))
+        #expect(statuses.all == Array(repeating: .unreachable, count: 5))
+        #expect(killed.all.isEmpty)
+        #expect(result == ZmxPreFreezeMigration.Result(restarted: [], failed: []))
+    }
+
     // MARK: Snapshot ordering
 
     @Test func gateDropsOutputUntilEachCaptureResponse() {
@@ -337,8 +416,17 @@ func zmxAmbiguousInfoReply() -> Data {
     return ZmxIPC.encode(.output, payload, wire: .v1) + zmxInfoReply(wire: .v1)
 }
 
-/// Accepts one connection on a Unix socket in a short temp dir, records every
-/// byte until the peer closes, and plays a scripted reply.
+/// A short temp directory for Unix sockets (`sun_path` caps paths near 104 bytes).
+func zmxShortTempDirectory() throws -> String {
+    var template = Array("/tmp/zmxt-XXXXXX".utf8CString)
+    guard let dir = template.withUnsafeMutableBufferPointer({ mkdtemp($0.baseAddress) }).map({ String(cString: $0) })
+    else { throw POSIXError(.EIO) }
+    return dir
+}
+
+/// Listens on a Unix socket and serves one connection per script, in order:
+/// records every byte until the peer closes and plays that script's reply.
+/// Without a `directory` it binds `s` in its own short temp dir.
 final class ZmxFakeDaemonListener: @unchecked Sendable {
     enum Script: Sendable {
         case reply(Data)
@@ -348,18 +436,22 @@ final class ZmxFakeDaemonListener: @unchecked Sendable {
     }
 
     let path: String
-    private let directory: String
+    let directory: String
+    private let ownsDirectory: Bool
     private let listener: Int32
     private let lock = NSLock()
-    private var buffer = Data()
+    private var connections: [Data] = []
     private let finished = DispatchSemaphore(value: 0)
 
-    init(script: Script) throws {
-        var template = Array("/tmp/zmxt-XXXXXX".utf8CString)
-        guard let dir = template.withUnsafeMutableBufferPointer({ mkdtemp($0.baseAddress) }).map({ String(cString: $0) })
-        else { throw POSIXError(.EIO) }
-        directory = dir
-        path = dir + "/s"
+    convenience init(script: Script) throws {
+        try self.init(scripts: [script])
+    }
+
+    init(directory: String? = nil, name: String = "s", scripts: [Script]) throws {
+        let dir = try directory ?? zmxShortTempDirectory()
+        self.directory = dir
+        ownsDirectory = directory == nil
+        path = dir + "/" + name
         listener = socket(AF_UNIX, SOCK_STREAM, 0)
         guard listener >= 0 else { throw POSIXError(.EIO) }
         var address = sockaddr_un()
@@ -372,31 +464,50 @@ final class ZmxFakeDaemonListener: @unchecked Sendable {
         }
         guard bound == 0, Darwin.listen(listener, 1) == 0 else {
             Darwin.close(listener)
-            try? FileManager.default.removeItem(atPath: dir)
+            if ownsDirectory { try? FileManager.default.removeItem(atPath: dir) }
             throw POSIXError(.EADDRINUSE)
         }
         let listener = listener
-        Thread { [self] in serve(listener: listener, script: script) }.start()
+        Thread { [self] in
+            defer { finished.signal() }
+            for script in scripts {
+                guard serve(listener: listener, script: script) else { return }
+            }
+        }.start()
     }
 
-    /// Everything received, once the peer has closed (or after 5 seconds).
+    /// Everything received over all connections, once every script has been
+    /// served (or after 5 seconds).
     var received: Data {
+        receivedPerConnection.reduce(Data(), +)
+    }
+
+    /// The bytes of each connection, in accept order.
+    var receivedPerConnection: [Data] {
         _ = finished.wait(timeout: .now() + 5)
         finished.signal()
-        return lock.withLock { buffer }
+        return lock.withLock { connections }
     }
 
     func tearDown() {
         Darwin.shutdown(listener, SHUT_RDWR)
         Darwin.close(listener)
-        try? FileManager.default.removeItem(atPath: directory)
+        if ownsDirectory {
+            try? FileManager.default.removeItem(atPath: directory)
+        } else {
+            unlink(path)
+        }
     }
 
-    private func serve(listener: Int32, script: Script) {
-        defer { finished.signal() }
+    /// Serves one connection; false when accepting failed.
+    private func serve(listener: Int32, script: Script) -> Bool {
         let client = Darwin.accept(listener, nil, nil)
-        guard client >= 0 else { return }
+        guard client >= 0 else { return false }
         defer { Darwin.close(client) }
+        let index = lock.withLock { () -> Int in
+            connections.append(Data())
+            return connections.count - 1
+        }
         func send(_ data: Data) {
             _ = data.withUnsafeBytes { Darwin.write(client, $0.baseAddress, $0.count) }
         }
@@ -404,10 +515,10 @@ final class ZmxFakeDaemonListener: @unchecked Sendable {
         var chunk = [UInt8](repeating: 0, count: 4096)
         while true {
             let n = Darwin.read(client, &chunk, chunk.count)
-            if n <= 0 { return }
+            if n <= 0 { return true }
             let total = lock.withLock { () -> Int in
-                buffer.append(contentsOf: chunk[0..<n])
-                return buffer.count
+                connections[index].append(contentsOf: chunk[0..<n])
+                return connections[index].count
             }
             switch script {
             case .silent:
@@ -425,7 +536,7 @@ final class ZmxFakeDaemonListener: @unchecked Sendable {
                     }
                 }
             case .closeAfterReceiving(let count):
-                if total >= count { return }
+                if total >= count { return true }
             }
         }
     }
