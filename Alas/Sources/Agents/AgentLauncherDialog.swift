@@ -442,6 +442,15 @@ struct AgentLauncherDialog: View {
                     }
                 }
             }
+            // ←→ in the session browser moves `chatAgent`, not
+            // `selectedIndex`, so it needs its own trigger to keep the
+            // active tile on screen when the strip overflows.
+            .onChange(of: chatAgent?.id) { _, id in
+                guard let id else { return }
+                withAnimation(.easeOut(duration: 0.15)) {
+                    proxy.scrollTo(id, anchor: .center)
+                }
+            }
         }
     }
 
