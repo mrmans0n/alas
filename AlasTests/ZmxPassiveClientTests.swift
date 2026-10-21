@@ -384,8 +384,10 @@ final class ZmxFakeDaemonListener: @unchecked Sendable {
             try? FileManager.default.removeItem(atPath: dir)
             throw POSIXError(.EADDRINUSE)
         }
-        let listener = listener
-        Thread { [self] in serve(listener: listener, script: script) }.start()
+        // A distinct name: Swift 6.2 rejects the closures above if a local
+        // shadows the `listener` property later in this initializer.
+        let listenerFD = listener
+        Thread { [self] in serve(listener: listenerFD, script: script) }.start()
     }
 
     /// Everything received, once the peer has closed (or after 5 seconds).
