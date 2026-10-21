@@ -44,12 +44,16 @@ public final class ShellEnvResolver: @unchecked Sendable {
         await task?.value
     }
 
-    private static func discoverShellPath() async -> String? {
-        let candidates = shellCandidates()
+    /// The PATH of the user's shell: interactive and login first, since nvm,
+    /// fnm and mise are set up in `.zshrc`, which zsh reads only for an
+    /// interactive shell; a plain login shell when that yields nothing.
+    static func discoverShellPath(candidates: [String] = shellCandidates()) async -> String? {
         for shell in candidates {
-            if let path = try? await runShellAndGetPATH(shell: shell) {
-                let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty { return trimmed }
+            for interactive in [true, false] {
+                if let path = try? await runShellAndGetPATH(shell: shell, interactive: interactive) {
+                    let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.isEmpty { return trimmed }
+                }
             }
         }
         return nil
@@ -66,16 +70,19 @@ public final class ShellEnvResolver: @unchecked Sendable {
     private static let sentinelStart = "___ALAS_PATH___"
     private static let sentinelEnd = "___ALAS_END___"
 
-    private static func runShellAndGetPATH(shell: String) async throws -> String {
+    private static func runShellAndGetPATH(shell: String, interactive: Bool) async throws -> String {
+        // An interactive shell's startup files may print, fail a command or
+        // take seconds (nvm); the sentinels find PATH in whatever it prints,
+        // whatever its exit status, and an empty stdin keeps it from waiting
+        // for input.
         let result = try await Process.run(
             shell,
-            args: [
-                "-l", "-c",
+            args: (interactive ? ["-i", "-l", "-c"] : ["-l", "-c"]) + [
                 #"printf '%s' "\#(sentinelStart)"; printenv PATH; printf '%s' "\#(sentinelEnd)""#
             ],
-            timeout: 2
+            stdin: "",
+            timeout: interactive ? 10 : 2
         )
-        guard result.exitCode == 0 else { return "" }
         let raw = result.stdout
         guard let start = raw.range(of: sentinelStart)?.upperBound,
               let end = raw.range(of: sentinelEnd, range: start..<raw.endIndex)?.lowerBound,
