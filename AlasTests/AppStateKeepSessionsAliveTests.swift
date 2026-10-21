@@ -127,7 +127,7 @@ struct AppStateKeepSessionsAliveTests {
     /// while the migration runs shows the restore is waiting on it. While the
     /// bundled zmx is itself pre-freeze there is nothing to migrate: the
     /// runner never runs and the restore goes ahead at once.
-    @Test(arguments: [ZmxIPC.Wire.v1, .preFreeze])
+    @Test(.timeLimit(.minutes(1)), arguments: [ZmxIPC.Wire.v1, .preFreeze])
     func terminalRestoreWaitsForTheZmxMigration(bundledWire: ZmxIPC.Wire) async throws {
         let repo = try await makeRepo(name: "zmx-migration")
         defer { try? FileManager.default.removeItem(at: repo) }
