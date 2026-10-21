@@ -26,6 +26,18 @@ enum ACPDictationShortcutMonitor {
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp, .flagsChanged]) { event in
             MainActor.assumeIsolated { handle(event) } ? nil : event
         }
+        // Local monitors see nothing once another app is active, so a hold
+        // in progress would never hear its release and keep recording.
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didResignActiveNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            MainActor.assumeIsolated {
+                heldKey = nil
+                finishPress(.interrupted)
+            }
+        }
     }
 
     /// Returns true when the event belonged to the shortcut and is consumed.
@@ -35,7 +47,7 @@ enum ACPDictationShortcutMonitor {
             // Letting go of any of the shortcut's modifiers ends a hold, even
             // with the key still down. Modifier changes always pass through.
             let held = Set(ShortcutRecorderSession.modifiers(from: event.modifierFlags))
-            if !Set(binding.modifiers).isSubset(of: held) { release(at: event.timestamp) }
+            if !Set(binding.modifiers).isSubset(of: held) { finishPress(.released(at: event.timestamp)) }
             return false
         }
         guard let pressed = ShortcutRecorderSession.binding(from: event), pressed.key == binding.key else {
@@ -44,7 +56,7 @@ enum ACPDictationShortcutMonitor {
         if event.type == .keyUp {
             guard heldKey == pressed.key else { return false }
             heldKey = nil
-            release(at: event.timestamp)
+            finishPress(.released(at: event.timestamp))
             return true
         }
         if event.isARepeat { return heldKey == pressed.key }
@@ -59,9 +71,9 @@ enum ACPDictationShortcutMonitor {
         return true
     }
 
-    private static func release(at timestamp: TimeInterval) {
+    private static func finishPress(_ event: ACPDictationShortcutEvent) {
         guard let textView = pressedTextView else { return }
         pressedTextView = nil
-        textView.onDictationShortcut(.released(at: timestamp))
+        textView.onDictationShortcut(event)
     }
 }

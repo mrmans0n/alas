@@ -294,4 +294,20 @@ struct ACPDictationServiceTests {
 
         #expect(service.state == .listening)
     }
+
+    @Test(
+        "losing the shortcut's release mid-press stops dictation, but not a session a tap left running",
+        arguments: [(tappedFirst: false, expected: ACPDictationState.idle), (tappedFirst: true, expected: .listening)]
+    )
+    func shortcutInterruptionEndsOnlyAPendingPress(tappedFirst: Bool, expected: ACPDictationState) {
+        let engine = FakeDictationEngine()
+        let service = ACPDictationService(engine: engine)
+        service.handleShortcut(.pressed(at: 100))
+        engine.simulateReady()
+        if tappedFirst { service.handleShortcut(.released(at: 100.1)) }
+
+        service.handleShortcut(.interrupted)
+
+        #expect(service.state == expected)
+    }
 }

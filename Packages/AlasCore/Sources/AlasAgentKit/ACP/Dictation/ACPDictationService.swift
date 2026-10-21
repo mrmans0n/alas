@@ -63,7 +63,7 @@ public final class ACPDictationService: ChangeTracking {
     /// Tap-or-hold handling for the Dictate shortcut. Times are the key
     /// events' timestamps. A press while dictating stops it; otherwise it
     /// starts, and the release stops it again if the key was held at least
-    /// `shortcutHoldThreshold`.
+    /// `shortcutHoldThreshold`. An interrupted press counts as a hold.
     public func handleShortcut(_ event: ACPDictationShortcutEvent) {
         switch event {
         case .pressed(let time):
@@ -80,6 +80,9 @@ public final class ACPDictationService: ChangeTracking {
             guard let pressedAt = shortcutPressedAt else { return }
             shortcutPressedAt = nil
             if time - pressedAt >= Self.shortcutHoldThreshold { stop() }
+        case .interrupted:
+            guard shortcutPressedAt != nil else { return }
+            stop()
         }
     }
 
@@ -148,4 +151,7 @@ public final class ACPDictationService: ChangeTracking {
 public enum ACPDictationShortcutEvent: Equatable, Sendable {
     case pressed(at: TimeInterval)
     case released(at: TimeInterval)
+    /// The press's release can no longer be observed, e.g. the app lost
+    /// focus with the key still down.
+    case interrupted
 }
