@@ -79,14 +79,16 @@ public struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
     public var usageLimit: ACPUsageLimit?
 
     /// Whether the queue UI lists this item. User-triggered Alas actions stay
-    /// visible with their attribution. A delegated session prompt is hidden
-    /// while it waits its turn — it is not the user's to edit or reorder —
-    /// but surfaces once a send fails or its delivery is uncertain: the
-    /// flusher will not retry it until the user does, so a hidden failed
+    /// visible with their attribution. Delegated prompts, background wakes,
+    /// and automatic restart continuations stay hidden while they can proceed
+    /// without intervention. Any failed or delivery-uncertain item surfaces:
+    /// the flusher will not retry it until the user does, so a hidden failed
     /// head would block the whole queue.
     public var isShownToUser: Bool {
-        delegatedSource?.appAction != nil
-            || (delegatedSource == nil && backgroundTaskWake == nil) || lastError != nil || deliveryUncertain
+        lastError != nil
+            || deliveryUncertain
+            || delegatedSource?.appAction != nil
+            || (!interruptedTurnContinuation && delegatedSource == nil && backgroundTaskWake == nil)
     }
     public var backgroundTaskWakes: [BackgroundTaskWake] {
         if let backgroundTaskWakeBatch, !backgroundTaskWakeBatch.isEmpty {

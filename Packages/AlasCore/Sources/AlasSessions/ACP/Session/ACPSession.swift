@@ -3103,6 +3103,21 @@ public final class ACPSession: ChangeTracking, Identifiable {
 
     public static let interruptedTurnContinueText = QueuedPrompt.interruptedTurnContinueText
 
+    /// Live agent output means a restored turn is already progressing. Drop
+    /// any continuation that has not started and clear the launch marker so a
+    /// later relaunch does not recreate it. A sending continuation stays: the
+    /// activity may be its own response.
+    public func dismissInterruptedTurnRecoveryAfterActivity() -> (
+        queueChanged: Bool,
+        directTurnChanged: Bool
+    ) {
+        let directTurnChanged = directTurnInFlight
+        directTurnInFlight = false
+        let previousQueueCount = queue.count
+        queue.removeAll { $0.interruptedTurnContinuation && $0.status == .pending }
+        return (queue.count != previousQueueCount, directTurnChanged)
+    }
+
     /// Consumes the interruptions recorded since the last attach. With
     /// `resume`, uncertain prompts are released for resending and a turn the
     /// agent had started answering after hydration gets a continue prompt at

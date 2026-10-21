@@ -58,6 +58,18 @@ struct ACPTranscriptQueuePolicyTests {
         #expect(ACPTranscriptQueuePolicy.shouldRenderQueueBubble(items[0]))
     }
 
+    @Test("restart continuation stays hidden unless automatic send fails")
+    func restartContinuationOnlyRendersOnFailure() {
+        var item = QueuedPrompt(
+            blocks: [.text(QueuedPrompt.interruptedTurnContinueText)],
+            interruptedTurnContinuation: true
+        )
+        #expect(!ACPTranscriptQueuePolicy.shouldRenderQueueBubble(item))
+
+        item.lastError = "boom"
+        #expect(ACPTranscriptQueuePolicy.shouldRenderQueueBubble(item))
+    }
+
     // MARK: - adjacentRenderedIndex
 
     @Test("adjacentRenderedIndex steps over hidden delegated prompts")
