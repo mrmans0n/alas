@@ -391,7 +391,10 @@ final class ZmxFakeDaemonListener: @unchecked Sendable {
             case .silent:
                 break
             case .reply(let data):
-                if !replied { replied = true; send(data) }
+                if !replied {
+                    replied = true
+                    send(data)
+                }
             case .replyInChunks(let data, let size):
                 if !replied {
                     replied = true
