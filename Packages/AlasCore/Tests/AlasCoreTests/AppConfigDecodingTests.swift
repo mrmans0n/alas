@@ -91,6 +91,9 @@ struct AppConfigDecodingTests {
         var remote = try #require(raw["remote"] as? [String: Any])
         remote["someFutureKey"] = "kept"
         raw["remote"] = remote
+        var worktrees = try #require(raw["worktrees"] as? [String: Any])
+        worktrees["defaultOrdering"] = "someFutureMode"
+        raw["worktrees"] = worktrees
         try JSONSerialization.data(withJSONObject: raw).write(to: file)
 
         try HostProfileWrite.update({ try HostSettingCatalog.named("host.port", in: $0).set("9999", in: &$0) }, file: file)
@@ -103,5 +106,6 @@ struct AppConfigDecodingTests {
         let written = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
         #expect((written["someFutureSection"] as? [String: Any])?["flag"] as? Bool == true)
         #expect((written["remote"] as? [String: Any])?["someFutureKey"] as? String == "kept")
+        #expect((written["worktrees"] as? [String: Any])?["defaultOrdering"] as? String == "someFutureMode")
     }
 }

@@ -68,14 +68,15 @@ public enum HostProfileWrite {
         try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
     }
 
-    /// Applies the `before` -> `after` change to `base`: every value `after` holds wins
-    /// (objects merge recursively), keys `change` cleared are removed, the rest of `base` stays.
+    /// Applies the `before` -> `after` change to `base`: only values that differ between
+    /// `before` and `after` are written (objects merge recursively), keys `change` cleared
+    /// are removed, and everything else in `base` keeps its raw value.
     static func apply(from before: [String: Any], to after: [String: Any], onto base: [String: Any]) -> [String: Any] {
         var result = base
         for (key, value) in after {
             if let nested = value as? [String: Any], let baseNested = base[key] as? [String: Any] {
                 result[key] = apply(from: before[key] as? [String: Any] ?? [:], to: nested, onto: baseNested)
-            } else {
+            } else if before[key].map({ ($0 as AnyObject).isEqual(value) }) != true {
                 result[key] = value
             }
         }
