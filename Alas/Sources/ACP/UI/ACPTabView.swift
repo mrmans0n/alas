@@ -688,7 +688,10 @@ private struct ACPSessionView: View {
             }
         }
         .overlay(alignment: .top) {
-            if !showsPreSessionUserInput {
+            if let coordinator = session.codexHooksReview {
+                ACPCodexHooksReviewView(coordinator: coordinator)
+                    .padding(12)
+            } else if !showsPreSessionUserInput {
                 sideQuestionSlot(.top, contentMaxWidth: contentMaxWidth)
                     .padding(.top, 12)
                     .padding(.trailing, showMinimap && !isConnecting ? MinimapView.width : 0)

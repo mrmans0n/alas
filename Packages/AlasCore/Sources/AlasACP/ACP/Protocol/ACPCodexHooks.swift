@@ -128,3 +128,11 @@ public enum ACPCodexHookReviewError: String, Sendable {
         return Self(rawValue: kind)
     }
 }
+
+/// Older running brokers may still require byte-identical review metadata.
+public struct ACPCodexHooksBrokerMismatchError: LocalizedError, Sendable {
+    public init() {}
+    public var errorDescription: String? {
+        "The running Alas broker rejected changed hook review metadata. Restart the broker with the updated Alas helper before continuing."
+    }
+}

@@ -3,6 +3,161 @@ import Testing
 import AlasCore
 
 struct ACPCodexHooksTests {
+    @Test(arguments: ["session/new", "session/load", "session/resume", "session/fork", "session/prompt", "_session/steering", "_session/goal"])
+    @MainActor func executionWaitsForReviewAndRebuildsStaleToken(method: String) async throws {
+        let mock = ACPMockClient()
+        mock.script(method: "initialize") { _ in Data(#"{"protocolVersion":1,"agentInfo":{"name":"@alas-ide/codex-acp","version":"2.2.2-alas.4"},"_meta":{"codexHooks":{"version":1,"reviewToken":true}}}"#.utf8) }
+        let connection = ACPConnection(client: mock)
+        connection.codexHooksReviewEnabled = true
+        try await connection.initialize()
+        var reviews = 0
+        connection.reviewCodexHooks = {
+            reviews += 1
+            connection.codexHooksReviewToken = "review-\(reviews)"
+        }
+        mock.script(method: method) { request in
+            let params = try #require(request.params)
+            let value = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(params)) as? [String: Any])
+            let meta = try #require(value["_meta"] as? [String: Any])
+            let token = try #require((meta["codexHooks"] as? [String: String])?["reviewToken"])
+            if token == "review-1" {
+                throw ACPClientError.jsonrpc(JSONRPCError(code: -32044, message: "Changed", data: AnyCodable(["kind": "codex_hook_changed"])))
+            }
+            #expect(token == "review-2")
+            return Data(#"{"sessionId":"s","outcome":"injected"}"#.utf8)
+        }
+        switch method {
+        case "session/new": _ = try await connection.newSession(cwd: "/p", mcpServers: [])
+        case "session/load": _ = try await connection.loadSession(cwd: "/p", sessionId: "s", mcpServers: [])
+        case "session/resume": _ = try await connection.resumeSession(cwd: "/p", sessionId: "s", mcpServers: [])
+        case "session/fork": _ = try await connection.forkSession(cwd: "/p", sessionId: "s", mcpServers: [])
+        case "session/prompt": _ = try await connection.prompt(sessionId: "s", blocks: [])
+        case "_session/steering": _ = try await connection.steer(sessionId: "s", blocks: [])
+        default: try await connection.controlGoal(sessionId: "s", capability: .init(version: 1, controlMethod: method, actions: [.resume]), action: .resume)
+        }
+        #expect(reviews == 2)
+        #expect(mock.sent.filter { $0.method == method }.count == 2)
+    }
+
+    @Test(arguments: [false, true])
+    @MainActor func attachmentReviewSurvivesStartupAndPreservesQueuedDraft(cancel: Bool) async throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("hook-manager-\(UUID()).sqlite")
+        defer { try? FileManager.default.removeItem(at: path) }
+        let mock = ACPMockClient()
+        mock.script(method: "initialize") { _ in Data(#"{"protocolVersion":1,"agentInfo":{"name":"@alas-ide/codex-acp","version":"2.2.2-alas.4"},"_meta":{"codexHooks":{"version":1,"reviewToken":true}}}"#.utf8) }
+        mock.script(method: "_codex/hooks/list") { _ in
+            Data(#"{"cwd":"/p","hooks":[],"warnings":["Review startup configuration"],"errors":[],"reviewToken":"token","codexHome":"/actual/codex"}"#.utf8)
+        }
+        mock.script(method: "session/new") { _ in Data(#"{"sessionId":"remote"}"#.utf8) }
+        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        let connection = ACPConnection(client: mock)
+        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/p", persistence: ACPSessionPersistence(path: path.path), setupEvaluator: { _ in .ready }, connectionFactory: { _, _, _ in connection })
+        defer { manager.shutdownBackgroundTasks() }
+        let session = manager.createSession(agentId: "codex", autoRunDefault: false)
+        session.enqueue(blocks: [.text("saved draft")])
+        let queued = session.queue
+        let attach = Task { await manager.attach(to: session.id, freshlyCreated: true) }
+        try await eventually { await session.codexHooksReview?.presentation?.isBusy == false }
+        let review = try #require(session.codexHooksReview)
+        let id = try #require(review.presentation?.id)
+        #expect(mock.sent.allSatisfy { $0.method != "session/new" })
+        #expect(session.queue == queued)
+        if cancel {
+            review.cancel(presentationID: id)
+            await attach.value
+            #expect(mock.sent.allSatisfy { $0.method != "session/new" })
+            #expect(session.queue == queued)
+        } else {
+            review.continueWithoutTrusting(presentationID: id)
+            await attach.value
+            #expect(mock.sent.filter { $0.method == "session/new" }.count == 1)
+            try await eventually { await session.queue.isEmpty }
+            #expect(mock.sent.filter { $0.method == "session/prompt" }.count == 1)
+            await connection.invalidateCodexHooksReview()
+            let prompt = Task { try await connection.prompt(sessionId: "remote", blocks: []) }
+            let concurrent = Task { try await connection.prompt(sessionId: "remote", blocks: []) }
+            try await eventually { await session.codexHooksReview?.presentation?.isBusy == false }
+            #expect(mock.sent.filter { $0.method == "_codex/hooks/list" }.count == 2)
+            #expect(review.continueWithoutTrusting(presentationID: id) == nil)
+            let interrupted = try #require(session.codexHooksReview)
+            await connection.invalidateCodexHooksReview()
+            try await eventually { await MainActor.run { session.codexHooksReview !== interrupted && session.codexHooksReview?.presentation?.isBusy == false } }
+            #expect(mock.sent.filter { $0.method == "_codex/hooks/list" }.count == 3)
+            #expect(interrupted.continueWithoutTrusting() == nil)
+            let active = try #require(session.codexHooksReview)
+            active.continueWithoutTrusting(presentationID: active.presentation?.id)
+            _ = try await prompt.value
+            _ = try await concurrent.value
+            let delivered = mock.sent.filter { $0.method == "session/prompt" }.count
+            #expect(delivered == 3)
+            #expect(session.queue.isEmpty)
+        }
+        await manager.detach(sessionId: session.id)
+    }
+
+    @Test(arguments: [-32603, 1001, -32044])
+    @MainActor func ordinaryExecutionErrorsDoNotTriggerReviewReplay(code: Int) async throws {
+        let mock = ACPMockClient()
+        mock.script(method: "initialize") { _ in Data(#"{"protocolVersion":1,"agentInfo":{"name":"@alas-ide/codex-acp","version":"2.2.2-alas.4"},"_meta":{"codexHooks":{"version":1,"reviewToken":true}}}"#.utf8) }
+        let connection = ACPConnection(client: mock)
+        connection.codexHooksReviewEnabled = true
+        try await connection.initialize()
+        connection.reviewCodexHooks = { connection.codexHooksReviewToken = "reviewed" }
+        mock.script(method: "session/prompt") { _ in
+            throw ACPClientError.jsonrpc(JSONRPCError(code: code, message: "Post-dispatch failure", data: AnyCodable(["kind": "unknown", "restartable": true])))
+        }
+        await #expect(throws: ACPClientError.self) { try await connection.prompt(sessionId: "s", blocks: []) }
+        #expect(mock.sent.filter { $0.method == "session/prompt" }.count == 1)
+    }
+
+    @Test @MainActor func cancelledReviewWaiterCannotDispatchAfterSharedContinuation() async throws {
+        let mock = ACPMockClient()
+        mock.script(method: "initialize") { _ in Data(#"{"protocolVersion":1,"agentInfo":{"name":"@alas-ide/codex-acp","version":"2.2.2-alas.4"},"_meta":{"codexHooks":{"version":1,"reviewToken":true}}}"#.utf8) }
+        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        let connection = ACPConnection(client: mock)
+        connection.codexHooksReviewEnabled = true
+        try await connection.initialize()
+        let gate = ExecutionReviewGate()
+        connection.reviewCodexHooks = { connection.codexHooksReviewToken = await gate.review() }
+        let prompt = Task { try await connection.prompt(sessionId: "s", blocks: []) }
+        var iterator = gate.entered.stream.makeAsyncIterator()
+        await iterator.next()
+        prompt.cancel()
+        gate.release?.resume(returning: "reviewed")
+        await #expect(throws: CancellationError.self) { try await prompt.value }
+        #expect(mock.sent.allSatisfy { $0.method != "session/prompt" })
+    }
+
+    @MainActor private final class ExecutionReviewGate {
+        let entered = AsyncStream<Void>.makeStream()
+        var release: CheckedContinuation<String, Never>?
+        func review() async -> String {
+            await withCheckedContinuation { continuation in
+                release = continuation
+                entered.continuation.yield(())
+            }
+        }
+    }
+
+    @Test @MainActor func oldBrokerMismatchBlocksLifecycleFallback() async throws {
+        let mock = ACPMockClient()
+        mock.script(method: "initialize") { _ in Data(#"{"protocolVersion":1,"agentInfo":{"name":"@alas-ide/codex-acp","version":"2.2.2-alas.4"},"_meta":{"codexHooks":{"version":1,"reviewToken":true}}}"#.utf8) }
+        mock.script(method: "session/fork") { _ in
+            throw RemoteHelperClientError.jsonrpc(.init(code: -32076, message: "broker state error: OperationKeyPayloadMismatch", data: nil))
+        }
+        mock.script(method: "session/new") { _ in Data(#"{"sessionId":"unsafe-fallback"}"#.utf8) }
+        let connection = ACPConnection(client: mock)
+        connection.codexHooksReviewEnabled = true
+        try await connection.initialize()
+        connection.reviewCodexHooks = { connection.codexHooksReviewToken = "fresh" }
+        await #expect(throws: ACPCodexHooksBrokerMismatchError.self) {
+            try await connection.forkSession(cwd: "/p", sessionId: "source", mcpServers: [], brokerOperationKey: "stable")
+        }
+        await #expect(throws: ACPCodexHooksBrokerMismatchError.self) { try await connection.newSession(cwd: "/p", mcpServers: []) }
+        #expect(mock.sent.filter { $0.method == "session/fork" }.count == 1)
+        #expect(mock.sent.allSatisfy { $0.method != "session/new" })
+    }
+
     @Test(arguments: ["2.2.2-alas.4", "2.2.2-alas.14", "2.3.0-alas.1"])
     func verifiedRelease(version: String) {
         #expect(ACPCodexHooksCapability.supports(agentInfo: .init(name: "@alas-ide/codex-acp", version: version)))

@@ -883,6 +883,12 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, @unchecked Senda
             break
         }
         stateLock.unlock()
+        if case .operationCompleted(let key, let outcome) = event.kind,
+           let error = outcome.error, ACPCodexHookReviewError.classify(error) != nil {
+            // No execution occurred. Release this registration even if review is cancelled;
+            // ordered ACK still waits behind earlier unconsumed events.
+            ackOperationCompletion(operationKey: key, cursor: event.cursor)
+        }
         onEventDispatchedForTesting?(event.cursor)
 
         switch event.kind {
@@ -1316,7 +1322,8 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, @unchecked Senda
             let id = operation.adapterRequestId.jsonRPCID
             if let terminalOutcome = operation.terminalOutcome {
                 pendingOutboundRequestIds.remove(id)
-                if preRegisteredOperationKeyRefCounts[operation.operationKey] != nil {
+                if preRegisteredOperationKeyRefCounts[operation.operationKey] != nil,
+                   terminalOutcome.error.map({ ACPCodexHookReviewError.classify($0) == nil }) ?? true {
                     preRegisteredOperationTerminalOutcomes[operation.operationKey] = terminalOutcome
                 }
             } else {

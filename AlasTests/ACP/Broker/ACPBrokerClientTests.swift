@@ -1608,6 +1608,40 @@ struct ACPBrokerClientTests {
     // like the abandoned-operation case, but this one WILL be retried.
     // `preRegisterAwaitedOperationKeys` closes that gap by registering
     // interest before `start()` runs at all.
+    @Test func rejectedReviewCompletionReleasesRegistrationWithoutSkippingEarlierUpdates() async throws {
+        let service = MockBrokerService()
+        let key = "queued-hook-review"
+        await service.enqueueAttach(events: [
+            .init(cursor: .init(rawValue: 1), kind: .adapterNotification(method: "session/update", params: .object([
+                "sessionId": .string("remote"), "update": .object([
+                    "sessionUpdate": .string("agent_message_chunk"),
+                    "content": .object(["type": .string("text"), "text": .string("earlier")])
+                ])
+            ]))),
+            .init(cursor: .init(rawValue: 2), kind: .operationCompleted(operationKey: .init(rawValue: key), outcome: .init(
+                result: nil, error: .init(code: -32044, message: "Review required", data: AnyCodable(["kind": "codex_hook_review_required"]))
+            )))
+        ])
+        let client = makeClient(service: service)
+        defer { Task { await client.detach() } }
+        client.preRegisterAwaitedOperationKeys([key])
+        try await client.start()
+        let update = try await nextUpdate(from: client.incomingUpdates)
+        #expect(client.replayedCompletion(forPreRegisteredOperationKey: key) == nil)
+        #expect(client.terminalOutcome(forPreRegisteredOperationKey: key) == nil)
+        #expect(await service.acks.isEmpty)
+        update.durableConsumptionAcknowledgement?()
+        try await waitUntil { await service.acks.contains { $0.cursor.rawValue == 2 } }
+
+        // The cancelled queue item never calls send. Its old registration must
+        // not protect an unrelated later completion with this stable key.
+        await service.enqueueAttach(events: [
+            .init(cursor: .init(rawValue: 3), kind: .operationCompleted(operationKey: .init(rawValue: key), outcome: .init(result: .null, error: nil)))
+        ])
+        try await client.notify(ACPRequest(method: "test/poll", params: EmptyObject()))
+        #expect(client.replayedCompletion(forPreRegisteredOperationKey: key) == nil)
+    }
+
     @Test func preRegisteredOperationKeyProtectsCompletionReplayedDuringStart() async throws {
         let service = MockBrokerService()
         let operationKey = "queued-prompt:test-uuid:0:session/prompt"

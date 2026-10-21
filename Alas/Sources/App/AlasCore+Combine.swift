@@ -58,6 +58,10 @@ extension ACPDictationService: @retroactive ObservableObject {
     public nonisolated var objectWillChange: ObservableObjectPublisher { willChange.objectWillChangePublisher }
 }
 
+extension ACPCodexHooksReviewCoordinator: @retroactive ObservableObject {
+    public nonisolated var objectWillChange: ObservableObjectPublisher { willChange.objectWillChangePublisher }
+}
+
 extension ACPSession: @retroactive ObservableObject {
     public nonisolated var objectWillChange: ObservableObjectPublisher { willChange.objectWillChangePublisher }
 }

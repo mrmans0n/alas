@@ -2781,23 +2781,35 @@ struct ACPSessionRunnerQueueTests {
         #expect(persisted == session.queue)
     }
 
-    @Test("terminal queued failure advances broker operation key before retry")
-    func terminalQueuedFailureAdvancesBrokerOperationKey() async throws {
-        let (runner, mock, session, _) = try mkRunner()
+    @Test("terminal queued failure requires explicit retry after reconnect", arguments: [-32042, -32603, 1001])
+    func terminalQueuedFailureAdvancesBrokerOperationKey(code: Int) async throws {
+        let (runner, mock, session, store) = try mkRunner(agentID: "codex")
+        defer { runner.stop() }
         mock.script(method: "session/prompt") { _ in
-            throw ACPClientError.jsonrpc(.init(code: -32042, message: "terminal", data: nil))
+            throw ACPClientError.jsonrpc(.init(code: code, message: "terminal", data: AnyCodable(["restartable": true])))
         }
         session.enqueue(blocks: [.text("will-fail-terminally")])
         let operationKey = session.queue[0].brokerOperationKey
-
         runner.persistQueue()
         runner.flushQueueIfIdle()
-        try await Task.sleep(nanoseconds: 200_000_000)
-
+        try await waitUntil { session.queue.first?.lastError != nil }
+        await runner.flushPersistence()
         #expect(session.queue.count == 1)
         #expect(session.queue[0].status == .pending)
-        #expect(session.queue[0].lastError != nil)
         #expect(session.queue[0].brokerOperationKey != operationKey)
+        #expect(mock.sent.filter { $0.method == "session/prompt" }.count == 1)
+
+        let restored = ACPSession(id: "s", agentId: "codex", worktreeId: "wt", title: "restored")
+        restored.agentState = .ready
+        restored.remoteSessionId = "remote"
+        restored.restoreQueue(try store.loadQueue(sessionId: "s"))
+        let replacement = ACPSessionRunner(session: restored, connection: ACPConnection(client: mock), store: store, sessionId: "s", worktreePath: "/tmp")
+        defer { replacement.stop() }
+        replacement.flushQueueIfIdle()
+        await replacement.flushPersistence()
+        #expect(restored.queue.first?.lastError != nil)
+        #expect(restored.queue.first?.status == .pending)
+        #expect(mock.sent.filter { $0.method == "session/prompt" }.count == 1)
     }
 
     @Test("superseded prompt success does not consume shared state or finish its callback")
