@@ -206,6 +206,27 @@ import Testing
         #expect(daemon.receivedPerConnection.isEmpty)
     }
 
+    /// Recovering one pane re-runs the migration for its socket alone.
+    @Test func migrationProbesOnlyTheNamedSockets() throws {
+        let directory = try zmxShortTempDirectory()
+        defer { try? FileManager.default.removeItem(atPath: directory) }
+        let daemons = try ["a", "b"].map {
+            try ZmxFakeDaemonListener(directory: directory, name: $0, scripts: [.silent])
+        }
+        defer { daemons.forEach { $0.tearDown() } }
+        let probed = ZmxEventLog<String>()
+        _ = ZmxPreFreezeMigration.run(
+            directory: URL(fileURLWithPath: directory),
+            names: ["b", "missing"],
+            bundledWire: .v1,
+            probe: { path in
+                probed.append((path as NSString).lastPathComponent)
+                return .unreachable
+            }
+        )
+        #expect(probed.all == ["b"])
+    }
+
     /// The socket goes only once the daemon has exited. A daemon that keeps
     /// running gets `SIGTERM` (unless the `Kill` fallback already sent it),
     /// then `SIGKILL`; one that outlives both, or a pid that cannot be

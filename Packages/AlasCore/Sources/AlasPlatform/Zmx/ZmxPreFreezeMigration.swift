@@ -51,11 +51,14 @@ public enum ZmxPreFreezeMigration {
     /// survives `SIGKILL`, or one reporting an unusable pid, is left in place
     /// and reported failed. Blocking; run it off the main thread.
     ///
-    /// Does nothing, without probing, while `bundledWire` is `.preFreeze`:
-    /// the bundled zmx still speaks to those daemons, and another Alas
-    /// sharing the directory may be using them.
+    /// `names`, when given, limits the run to those socket names, such as
+    /// one session a previous run left in use. Does nothing, without
+    /// probing, while `bundledWire` is `.preFreeze`: the bundled zmx still
+    /// speaks to those daemons, and another Alas sharing the directory may be
+    /// using them.
     public static func run(
         directory: URL,
+        names filter: Set<String>? = nil,
         bundledWire: ZmxIPC.Wire = ZmxIPC.bundledWire,
         probe: @escaping @Sendable (String) -> ZmxDaemonStatus = { ZmxIPCSocket.probe(path: $0) },
         kill: @escaping @Sendable (String) -> Bool = { ZmxIPCSocket.killPreFreeze(path: $0) },
@@ -65,7 +68,7 @@ public enum ZmxPreFreezeMigration {
     ) -> Result {
         guard bundledWire == .v1 else { return Result() }
         let directory = directory.path
-        let names = socketNames(in: directory)
+        let names = socketNames(in: directory).filter { filter?.contains($0) ?? true }
         guard !names.isEmpty else { return Result() }
         let outcomes = OutcomeTable(count: names.count)
         let group = DispatchGroup()
