@@ -1514,11 +1514,10 @@ pub fn dispatch(env: &McpEnv, command: &Command) -> Result<Response, TransportEr
         Some(env.worktree_dir.clone()),
     );
     req.mcp_transport = Some(env.transport);
-    match command {
-        Command::PrCreate { .. } => {
-            alas_client::send_with_timeout(&env.socket, &req, PR_CREATE_READ_TIMEOUT)
-        }
-        _ => alas_client::send(&env.socket, &req),
+    if publishes(command) {
+        alas_client::send_with_timeout(&env.socket, &req, PR_CREATE_READ_TIMEOUT)
+    } else {
+        alas_client::send(&env.socket, &req)
     }
 }
 
@@ -1645,11 +1644,11 @@ fn success_message(command: &Command) -> String {
 }
 
 fn transport_error_result(command: &Command, err: &TransportError) -> Value {
-    // A pr_create that was sent but got no reply keeps running in the app, so
-    // its push and PR/MR may still land; never report that as a failure.
-    if matches!(command, Command::PrCreate { .. }) && matches!(err, TransportError::Io) {
+    // A publish that was sent but got no reply keeps running in the app, so
+    // its push and PR/MRs may still land; never report that as a failure.
+    if let Some(tool) = publish_tool(command).filter(|_| matches!(err, TransportError::Io)) {
         return text_result(
-            "Alas did not reply before the pr_create deadline; the push and PR/MR may still complete. Call pr_status before retrying.".into(),
+            format!("Alas did not reply before the {tool} deadline; the push and PR/MR(s) may still complete. Call pr_status before retrying."),
             true,
         );
     }
@@ -1751,7 +1750,22 @@ fn is_preview_command(command: &Command) -> bool {
 /// a worker so it keeps reading other calls and cancellations meanwhile.
 fn runs_on_worker(command: &Command) -> bool {
     is_preview_command(command)
-        || matches!(command, Command::SessionWait { .. } | Command::PrCreate { .. })
+        || publishes(command)
+        || matches!(command, Command::SessionWait { .. })
+}
+
+/// The calls that push and open pull/merge requests, which outlast the
+/// default read timeout: the tool name, or None for any other command.
+fn publish_tool(command: &Command) -> Option<&'static str> {
+    match command {
+        Command::PrCreate { .. } => Some("pr_create"),
+        Command::StackShip => Some("stack_ship"),
+        _ => None,
+    }
+}
+
+fn publishes(command: &Command) -> bool {
+    publish_tool(command).is_some()
 }
 
 /// Longest single `session_wait` request sent to the app by a worker.
@@ -2973,7 +2987,7 @@ mod tests {
     }
 
     #[test]
-    fn pr_create_without_a_reply_reports_an_unknown_outcome() {
+    fn a_publish_without_a_reply_reports_an_unknown_outcome() {
         let create = Command::PrCreate {
             title: "t".into(),
             body: "b".into(),
@@ -2987,8 +3001,10 @@ mod tests {
                 .to_string()
         };
         assert!(text(&create, TransportError::Io).contains("Call pr_status before retrying"));
+        assert!(text(&Command::StackShip, TransportError::Io).contains("stack_ship deadline"));
         // Nothing was sent, or the call is read-only: a plain failure.
         assert_eq!(text(&create, TransportError::Connect), "could not reach Alas");
+        assert_eq!(text(&Command::StackShip, TransportError::Connect), "could not reach Alas");
         assert_eq!(text(&Command::PrStatus, TransportError::Io), "could not reach Alas");
     }
 
