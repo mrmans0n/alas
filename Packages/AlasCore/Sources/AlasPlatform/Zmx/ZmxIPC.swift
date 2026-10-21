@@ -430,12 +430,15 @@ public final class ZmxIPCSocket: @unchecked Sendable {
     }
 
     /// `poll(2)` until the descriptor is readable (data or hangup) or the
-    /// deadline passes. EINTR retries with the remaining time.
+    /// deadline passes. EINTR retries with the remaining time. Once the
+    /// deadline has passed this is false even with bytes queued, so a peer
+    /// that keeps writing cannot hold a caller's loop past its deadline.
     private func waitReadable(until deadline: DispatchTime) -> Bool {
         var descriptor = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
         while true {
             let now = DispatchTime.now().uptimeNanoseconds
-            let remaining = deadline.uptimeNanoseconds > now ? deadline.uptimeNanoseconds - now : 0
+            guard deadline.uptimeNanoseconds > now else { return false }
+            let remaining = deadline.uptimeNanoseconds - now
             let milliseconds = Int32(clamping: (remaining + 999_999) / 1_000_000)
             let result = Darwin.poll(&descriptor, 1, milliseconds)
             if result > 0 { return true }
