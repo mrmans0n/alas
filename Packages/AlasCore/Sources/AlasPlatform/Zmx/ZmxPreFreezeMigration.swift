@@ -28,31 +28,43 @@ public enum ZmxPreFreezeMigration {
         case failed
     }
 
-    /// Probes every Unix socket directly inside `directory` concurrently and
-    /// stops each pre-freeze daemon: a pre-freeze `Kill`, falling back to
-    /// `signal(pid)` when the daemon does not hang up, then removes its socket
-    /// if it is still there. Blocking; run it off the main thread.
+    /// Sockets probed and stopped at the same time. Each worker blocks for
+    /// up to a probe, a kill, and an exit wait, so this stays well below the
+    /// global queue's thread limit.
+    static let maxConcurrentSockets = 32
+
+    /// Probes every Unix socket directly inside `directory`, one worker per
+    /// socket, and stops each pre-freeze daemon: a pre-freeze `Kill`, falling
+    /// back to `signal(pid)` when the daemon does not hang up. Its socket is
+    /// removed only once `isAlive(pid)` turns false, so an exiting daemon
+    /// cannot remove a socket a fresh daemon has since bound. A daemon still
+    /// alive after `exitTimeout`, or one reporting an unusable pid, is left in
+    /// place and reported failed. Blocking; run it off the main thread.
     public static func run(
         directory: URL,
         probe: @escaping @Sendable (String) -> ZmxDaemonStatus = { ZmxIPCSocket.probe(path: $0) },
         kill: @escaping @Sendable (String) -> Bool = { ZmxIPCSocket.killPreFreeze(path: $0) },
-        signal: @escaping @Sendable (Int32) -> Void = { _ = Darwin.kill($0, SIGTERM) }
+        signal: @escaping @Sendable (Int32) -> Void = { _ = Darwin.kill($0, SIGTERM) },
+        isAlive: @escaping @Sendable (Int32) -> Bool = { processExists($0) },
+        exitTimeout: DispatchTimeInterval = .seconds(2)
     ) -> Result {
         let directory = directory.path
         let names = socketNames(in: directory)
         guard !names.isEmpty else { return Result() }
         let outcomes = OutcomeTable(count: names.count)
-        DispatchQueue.concurrentPerform(iterations: names.count) { index in
-            let path = (directory as NSString).appendingPathComponent(names[index])
-            guard case .preFreeze(let pid) = probe(path) else { return }
-            if !kill(path), pid > 1, pid != getpid() {
-                signal(pid)
+        let group = DispatchGroup()
+        let slots = DispatchSemaphore(value: maxConcurrentSockets)
+        for (index, name) in names.enumerated() {
+            let path = (directory as NSString).appendingPathComponent(name)
+            slots.wait()
+            DispatchQueue.global(qos: .userInitiated).async(group: group) {
+                defer { slots.signal() }
+                guard case .preFreeze(let pid) = probe(path) else { return }
+                outcomes[index] = stop(
+                    path: path, pid: pid, kill: kill, signal: signal, isAlive: isAlive, exitTimeout: exitTimeout)
             }
-            // A daemon that hung up may not have removed its socket yet, and
-            // a signalled one never does; the next attach must not find it.
-            if isSocket(path) { _ = unlink(path) }
-            outcomes[index] = exists(path) ? .failed : .restarted
         }
+        group.wait()
         var result = Result()
         for (index, name) in names.enumerated() {
             switch outcomes[index] {
@@ -62,6 +74,34 @@ public enum ZmxPreFreezeMigration {
             }
         }
         return result
+    }
+
+    /// Whether `pid` names a live process: `kill(pid, 0)` succeeds, or fails
+    /// for a reason other than `ESRCH` (such as `EPERM`).
+    public static func processExists(_ pid: Int32) -> Bool {
+        Darwin.kill(pid, 0) == 0 || errno != ESRCH
+    }
+
+    private static func stop(
+        path: String,
+        pid: Int32,
+        kill: @Sendable (String) -> Bool,
+        signal: @Sendable (Int32) -> Void,
+        isAlive: @Sendable (Int32) -> Bool,
+        exitTimeout: DispatchTimeInterval
+    ) -> Outcome {
+        // Without a pid to watch there is no safe moment to remove the socket.
+        guard pid > 1, pid != getpid() else { return .failed }
+        if !kill(path) { signal(pid) }
+        let deadline = DispatchTime.now() + exitTimeout
+        while isAlive(pid) {
+            guard DispatchTime.now() < deadline else { return .failed }
+            usleep(20_000)
+        }
+        // A daemon that hung up may not have removed its socket, and a
+        // signalled one never does; the next attach must not find it.
+        if isSocket(path) { _ = unlink(path) }
+        return exists(path) ? .failed : .restarted
     }
 
     /// Sorted names of the direct children that are Unix sockets. `lstat`
@@ -83,8 +123,7 @@ public enum ZmxPreFreezeMigration {
         return lstat(path, &info) == 0 || errno != ENOENT
     }
 
-    /// One slot per socket; each `concurrentPerform` iteration writes only
-    /// its own index.
+    /// One slot per socket; each worker writes only its own index.
     private final class OutcomeTable: @unchecked Sendable {
         private let lock = NSLock()
         private var outcomes: [Outcome]

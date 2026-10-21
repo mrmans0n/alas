@@ -164,7 +164,8 @@ import Testing
             directory: URL(fileURLWithPath: directory),
             probe: { ZmxIPCSocket.probe(path: $0, timeout: .milliseconds(300)) },
             kill: { ZmxIPCSocket.killPreFreeze(path: $0, timeout: .seconds(2)) },
-            signal: { signalled.append($0) }
+            signal: { signalled.append($0) },
+            isAlive: { _ in false }
         )
 
         #expect(result == ZmxPreFreezeMigration.Result(restarted: ["b"], failed: []))
@@ -176,25 +177,39 @@ import Testing
         }
     }
 
-    @Test func migrationFallsBackToSignallingThePid() throws {
+    /// The socket goes only once the daemon has exited; a daemon that never
+    /// exits, or a pid that cannot be watched, leaves it in place.
+    @Test(arguments: [
+        (pid: Int32(4242), exits: true),
+        (pid: Int32(4242), exits: false),
+        (pid: Int32(1), exits: true),
+    ])
+    func migrationFallsBackToSignallingThePid(daemon shape: (pid: Int32, exits: Bool)) throws {
         let daemon = try ZmxFakeDaemonListener(script: .silent)
         defer { daemon.tearDown() }
         let signalled = ZmxEventLog<Int32>()
         let result = ZmxPreFreezeMigration.run(
             directory: URL(fileURLWithPath: daemon.directory),
-            probe: { _ in .preFreeze(pid: 4242) },
+            probe: { _ in .preFreeze(pid: shape.pid) },
             kill: { _ in false },
-            signal: { signalled.append($0) }
+            signal: { signalled.append($0) },
+            // Exits on the signal, or never.
+            isAlive: { _ in !shape.exits || signalled.all.isEmpty },
+            exitTimeout: .milliseconds(100)
         )
-        #expect(signalled.all == [4242])
-        #expect(!FileManager.default.fileExists(atPath: daemon.path))
-        #expect(result == ZmxPreFreezeMigration.Result(restarted: ["s"], failed: []))
+        let restarted = shape.pid > 1 && shape.exits
+        #expect(signalled.all == (shape.pid > 1 ? [shape.pid] : []))
+        #expect(FileManager.default.fileExists(atPath: daemon.path) == !restarted)
+        #expect(result == (restarted
+            ? ZmxPreFreezeMigration.Result(restarted: ["s"], failed: [])
+            : ZmxPreFreezeMigration.Result(restarted: [], failed: ["s"])))
     }
 
     @Test func migrationProbesConcurrently() throws {
         let directory = try zmxShortTempDirectory()
         defer { try? FileManager.default.removeItem(atPath: directory) }
-        let daemons = try (0..<5).map {
+        // More sockets than a CI runner has cores: each one gets its own worker.
+        let daemons = try (0..<8).map {
             try ZmxFakeDaemonListener(directory: directory, name: "\($0)", scripts: [.silent])
         }
         defer { daemons.forEach { $0.tearDown() } }
@@ -217,7 +232,7 @@ import Testing
             signal: { _ in }
         )
         #expect(clock.now - start < .seconds(1))
-        #expect(statuses.all == Array(repeating: .unreachable, count: 5))
+        #expect(statuses.all == Array(repeating: .unreachable, count: 8))
         #expect(killed.all.isEmpty)
         #expect(result == ZmxPreFreezeMigration.Result(restarted: [], failed: []))
     }
