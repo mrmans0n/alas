@@ -324,6 +324,23 @@ public final class AlasCoreContext {
         )
     }
 
+    /// `defaultSessionManager`, resuming after a usage limit and continuing
+    /// interrupted sessions as `config` says when each is decided.
+    public static func sessionManagerFactory(
+        config: @escaping @MainActor () -> AppConfig
+    ) -> @MainActor (SessionOwnerID, Worktree) -> ACPSessionManager {
+        { owner, worktree in
+            ACPSessionManager(
+                worktreeId: worktree.id,
+                worktreePath: worktree.path.path,
+                owner: owner,
+                persistence: ACPSessionPersistence(path: Paths.acpSessionsDB(for: owner).path),
+                autoResumeAfterUsageLimit: { config().harness.acpAutoResumeAfterUsageLimit },
+                continueInterruptedSessions: { config().harness.acpContinueInterruptedSessions }
+            )
+        }
+    }
+
     /// The session manager for `worktree`, created on first use. None is
     /// handed out, cached or new, while the worktree is being created or
     /// deleted.

@@ -143,6 +143,58 @@ struct AlasHostExecutableTests {
         #expect(try await host.exitStatus() == 0)
     }
 
+    /// The host listens where its own `host` settings say, over the shared
+    /// `remote` section: loopback with Remote off serves, off with Remote on
+    /// does not.
+    @Test func aHostServesTheReachabilityItsSettingsName() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-reach-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        func profile(_ name: String, _ configure: (inout AppConfig) -> Void) throws -> URL {
+            let directory = root.appendingPathComponent(name)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            var config = AppConfig.defaults
+            configure(&config)
+            try PersistenceStore().write(config, to: directory.appendingPathComponent("app.json"))
+            return directory
+        }
+        let port = try freePort()
+        let loopback = try AlasHostProcess(dataDirectory: profile("loopback") {
+            $0.remote.enabled = false
+            $0.host = HostSettings(reachability: .loopback, port: port)
+        })
+        _ = try await loopback.socketPath()
+        try await eventually { [loopback] in loopback.output.contains("remote ") || !loopback.process.isRunning }
+        #expect(loopback.output.split(separator: "\n").contains("remote http://127.0.0.1:\(port)"), "\(loopback.errorOutput)")
+        loopback.process.terminate()
+        #expect(try await loopback.exitStatus() == 0)
+
+        let off = try AlasHostProcess(dataDirectory: profile("off") {
+            $0.remote.enabled = true
+            $0.host = HostSettings(reachability: .off)
+        })
+        _ = try await off.socketPath()
+        off.process.terminate()
+        #expect(try await off.exitStatus() == 0)
+        #expect(!off.output.split(separator: "\n").contains { $0.hasPrefix("remote ") })
+    }
+
+    /// A port nothing listens on now, for a host to bind.
+    private func freePort() throws -> UInt16 {
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        defer { close(fd) }
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let bound = withUnsafeMutablePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                bind(fd, $0, length) == 0 && getsockname(fd, $0, &length) == 0
+            }
+        }
+        try #require(bound)
+        return UInt16(bigEndian: address.sin_port)
+    }
+
     /// Inside the app, the host serves the web client the app ships, beside
     /// its own directory, when started through a link as the cask installs it.
     @Test func aBundledHostServesTheWebClientBesideIt() async throws {

@@ -171,16 +171,17 @@ guard let socket = HostSocketServer(server: protocolServer) else {
 // One shutdown: a second signal must not exit while the first still flushes.
 var isStopping = false
 
-// Remote, when the profile enables it: loopback only, since a bare executable
-// has no local-network permission, reached from other devices through the
-// `tailscale serve` proxy run here, as the app runs it, or a tunnel. No peer
-// identity, federation or Bonjour: only another Mac asks for an identity
-// proof, and a headless host pairs with codes.
+// Remote, where the profile's host reachability says: loopback, reached from
+// other devices through the `tailscale serve` proxy run here, as the app runs
+// it, or a tunnel; or every interface when the LAN is chosen. Accepting
+// incoming TCP needs no local network permission, only Bonjour does (TN3179).
+// No peer identity, federation or Bonjour: only another Mac asks for an
+// identity proof, and a headless host pairs with codes.
 var remote: RemoteServer?
 var tailscaleServe: RemoteTailscaleServeProcess?
 let keepAwake = RemoteKeepAwakeController()
 var config = (try? PersistenceStore().readIfExists(AppConfig.self, from: Paths.appConfigFile)) ?? .defaults
-if config.remote.enabled {
+if let listen = config.hostRemoteListen {
     if config.remote.ensureServerId() {
         do {
             try PersistenceStore().write(config, to: Paths.appConfigFile)
@@ -245,7 +246,7 @@ if config.remote.enabled {
             guard let status = try? await RemoteTailscale.status(), servedPort == port else { return }
             server.updateAccessPolicy(settings.accessPolicy(interfaces: interfaces, tailnetDNSName: status.dnsName))
             server.updateOriginPolicy(settings.originPolicy(interfaces: interfaces, tailnetDNSName: status.dnsName))
-            guard settings.tailscaleServe, status.httpsEnabled, !isStopping,
+            guard listen.tailscaleServe, status.httpsEnabled, !isStopping,
                   let executable = RemoteTailscale.executable() else { return }
             do {
                 tailscaleServe = try RemoteTailscaleServeProcess(executable: executable, port: port) { reason in
@@ -259,7 +260,7 @@ if config.remote.enabled {
         }
     }
     do {
-        try server.start(port: settings.preferredPort, loopbackOnly: true)
+        try server.start(port: listen.port, loopbackOnly: listen.loopbackOnly)
     } catch {
         fail("cannot serve Remote: \(error.localizedDescription)")
     }
