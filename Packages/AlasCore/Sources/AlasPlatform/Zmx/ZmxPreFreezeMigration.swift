@@ -54,7 +54,7 @@ public enum ZmxPreFreezeMigration {
     /// How long a daemon gets to exit after `SIGKILL`, which it cannot catch.
     static let sigkillExitTimeout: DispatchTimeInterval = .milliseconds(500)
 
-    /// Probes every Unix socket directly inside `directory`, one worker per
+    /// Probes the Unix sockets directly inside `directory`, one worker per
     /// socket, and stops each pre-freeze daemon no client is attached to: a
     /// pre-freeze `Kill`, then `signal(pid, SIGTERM)` when the daemon does
     /// not hang up or has not exited within `exitTimeout`, then
@@ -65,13 +65,18 @@ public enum ZmxPreFreezeMigration {
     /// and reported failed. Blocking; run it off the main thread.
     ///
     /// `names`, when given, limits the run to those socket names, such as
-    /// one session a previous run left in use. Does nothing, without
+    /// one session a previous run left in use. Without it the run covers
+    /// only sockets this Alas could attach: `sessionPrefix` followed by an
+    /// Alas session name (`ZmxSessionName.isAlasName`). Sockets of another
+    /// tool or another `ZMX_SESSION_PREFIX` share the directory and are
+    /// never probed, matching the orphan sweeps. Does nothing, without
     /// probing, while `bundledWire` is `.preFreeze`: the bundled zmx still
     /// speaks to those daemons, and another Alas sharing the directory may be
     /// using them.
     public static func run(
         directory: URL,
         names filter: Set<String>? = nil,
+        sessionPrefix: String = ProcessInfo.processInfo.environment["ZMX_SESSION_PREFIX"] ?? "",
         bundledWire: ZmxIPC.Wire = ZmxIPC.bundledWire,
         probe: @escaping @Sendable (String) -> ZmxDaemonStatus = { ZmxIPCSocket.probe(path: $0) },
         kill: @escaping @Sendable (String) -> Bool = { ZmxIPCSocket.killPreFreeze(path: $0) },
@@ -81,7 +86,11 @@ public enum ZmxPreFreezeMigration {
     ) -> Result {
         guard bundledWire == .v1 else { return Result() }
         let directory = directory.path
-        let sockets = Self.sockets(in: directory).filter { filter?.contains($0.name) ?? true }
+        let sockets = Self.sockets(in: directory).filter { socket in
+            if let filter { return filter.contains(socket.name) }
+            return socket.name.hasPrefix(sessionPrefix)
+                && ZmxSessionName.isAlasName(String(socket.name.dropFirst(sessionPrefix.count)))
+        }
         guard !sockets.isEmpty else { return Result() }
         let outcomes = OutcomeTable(count: sockets.count)
         let group = DispatchGroup()
