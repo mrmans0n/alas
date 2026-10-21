@@ -121,6 +121,56 @@ struct AppStateKeepSessionsAliveTests {
         #expect(state.terminal.registry.session(for: "leaf-hook") == nil)
     }
 
+    /// A persisted session must not be attached, or killed, while pre-freeze
+    /// daemons are still being stopped: attaching one shows a stuck terminal.
+    /// With keep-alive off the restore closes the tab, so the tab surviving
+    /// while the migration runs shows the restore is waiting on it.
+    @Test func terminalRestoreWaitsForTheZmxMigration() async throws {
+        let repo = try await makeRepo(name: "zmx-migration")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(
+            path: repo, displayName: "test", color: "#000000"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        let worktree = try #require(state.projectsManager.worktrees(projectId: project.id).first)
+        state.selectedWorktreeId = worktree.id
+        state.config.terminal.keepSessionsAlive = false
+        let migration = ZmxMigrationGate(blocked: true)
+        defer { migration.release() }
+        state.zmxMigrationRunner = migration.runner
+        let tab = state.tabs.appendTerminal(
+            worktreeId: worktree.id, title: "main", sessionId: "leaf-migration"
+        )
+
+        let restoreTask = Task {
+            try await state.restoreTerminalTabIfNeededAsync(worktreeId: worktree.id, tabId: tab.id)
+        }
+        let deadline = Date().addingTimeInterval(10)
+        while migration.runCount == 0, Date() < deadline {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        #expect(migration.runCount == 1)
+        #expect(state.tabs.tabs(forWorktree: worktree.id).map(\.id) == [tab.id])
+
+        migration.release()
+        _ = try await restoreTask.value
+        #expect(state.tabs.tabs(forWorktree: worktree.id).isEmpty)
+    }
+
+    @Test func zmxMigrationRunsOncePerProcess() async {
+        let state = AppState()
+        let migration = ZmxMigrationGate(blocked: false)
+        state.zmxMigrationRunner = migration.runner
+
+        state.reloadTabs()
+        state.reloadTabs()
+        await state.awaitZmxMigration()
+
+        #expect(migration.runCount == 1)
+    }
+
     /// `reloadTabs` runs once on launch and is the only path that touches
     /// every persisted terminal tab across every worktree. When
     /// `keepSessionsAlive` is off, it must prune them all — including
@@ -322,5 +372,31 @@ struct AppStateKeepSessionsAliveTests {
         #expect(state.selectedWorktreeId == worktree.id)
         #expect(state.tabs.activeTabId(for: owner) == shared.id)
         #expect(state.tabs.activeTabId(forWorktree: worktree.id) != nil)
+    }
+}
+
+/// A zmx migration runner that counts its runs and, when blocked, parks them
+/// until `release()`. Declared outside the main-actor suite so the runner is
+/// not main-actor isolated when it runs on its own thread.
+private final class ZmxMigrationGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private let gate: DispatchSemaphore
+    private var count = 0
+
+    init(blocked: Bool) {
+        gate = DispatchSemaphore(value: blocked ? 0 : 1)
+    }
+
+    var runCount: Int { lock.withLock { count } }
+
+    func release() { gate.signal() }
+
+    var runner: AppState.ZmxMigrationRunner {
+        { _ in
+            self.lock.withLock { self.count += 1 }
+            self.gate.wait()
+            self.gate.signal()
+            return ZmxPreFreezeMigration.Result()
+        }
     }
 }

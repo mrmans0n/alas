@@ -519,6 +519,19 @@ final class AppState {
 
     @ObservationIgnored
     private let terminalSessionOpener: TerminalSessionOpener?
+
+    typealias ZmxMigrationRunner = @Sendable (URL) -> ZmxPreFreezeMigration.Result
+
+    /// Stops pre-freeze zmx daemons in the given socket directory. nil runs
+    /// `ZmxPreFreezeMigration.run(directory:)` when zmx is available outside
+    /// a test host; tests inject a runner instead.
+    @ObservationIgnored
+    var zmxMigrationRunner: ZmxMigrationRunner?
+    /// The once-per-instance pre-freeze migration. Started by the first
+    /// `awaitZmxMigration()` call; every restore of a persisted session and
+    /// every orphan sweep awaits it.
+    @ObservationIgnored
+    private var zmxMigration: Task<Void, Never>?
     @ObservationIgnored
     private let closeTabConfirmer: CloseTabConfirmer?
     @ObservationIgnored
@@ -2084,6 +2097,9 @@ final class AppState {
     /// after `projectsManager.refreshAll()` so worktrees actually exist.
     func reloadTabs() {
         let restoringActiveTabs = restoreActiveTabsOnNextReload
+        // Start stopping pre-freeze zmx daemons before anything attaches to
+        // or sweeps persisted sessions; those paths await this same task.
+        startZmxMigrationIfNeeded()
         Task { @MainActor [weak self] in
             guard let self else { return }
             await self.loadWorkspaces()
@@ -2128,6 +2144,53 @@ final class AppState {
         Task { @MainActor [weak self] in
             await self?.bootstrapScheduledACPSessions(worktreeIds: allWorktreeIds)
         }
+    }
+
+    /// Waits for the pre-freeze zmx migration, starting it on first use.
+    /// Anything that attaches to or sweeps a session persisted by an earlier
+    /// launch awaits this first: a pre-freeze daemon shows a stuck terminal
+    /// on attach and hangs `zmx kill`.
+    func awaitZmxMigration() async {
+        await startZmxMigrationIfNeeded().value
+    }
+
+    /// Starts the migration once per instance without suspending, so
+    /// concurrent callers share one run. It runs even when
+    /// `keepSessionsAlive` is off, because that path kills persisted
+    /// sessions with `zmx kill`.
+    @discardableResult
+    private func startZmxMigrationIfNeeded() -> Task<Void, Never> {
+        if let zmxMigration { return zmxMigration }
+        let task: Task<Void, Never>
+        if let work = zmxMigrationWork() {
+            task = Task { @MainActor in
+                let result = await BlockingWork.run(work)
+                for name in result.restarted {
+                    Self.logger.info("Restarted pre-freeze zmx session \(name, privacy: .public)")
+                }
+                for name in result.failed {
+                    Self.logger.warning("Could not stop pre-freeze zmx session \(name, privacy: .public)")
+                }
+            }
+        } else {
+            task = Task {}
+        }
+        zmxMigration = task
+        return task
+    }
+
+    /// The blocking migration for this instance, or nil when there is no zmx
+    /// to migrate. An injected runner needs only the socket directory; the
+    /// default also needs the bundled binary and never runs in a test host,
+    /// which shares its socket directory with the Alas the developer runs.
+    private func zmxMigrationWork() -> (@Sendable () -> ZmxPreFreezeMigration.Result)? {
+        let env = terminal.zmxClient.env
+        guard let directory = env.zmxDir else { return nil }
+        if let runner = zmxMigrationRunner {
+            return { runner(directory) }
+        }
+        guard env.isAvailable, !Self.isRunningUnitTests else { return nil }
+        return { ZmxPreFreezeMigration.run(directory: directory) }
     }
 
     /// Debounce window for status rescans. Activation, selection and topology
@@ -2504,7 +2567,18 @@ final class AppState {
     /// so persisted leaves are visible; without this, sessions leaked by
     /// any prior bug (or quit race) would persist forever because nothing
     /// would ever try to kill them on subsequent launches.
+    ///
+    /// Waits for the pre-freeze migration first. Leaf ids are read after the
+    /// wait so a pane opened meanwhile is not swept as an orphan.
     private func sweepOrphanZmxSessions(worktreeIds: [String]) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await awaitZmxMigration()
+            sweepOrphanZmxSessionsNow(worktreeIds: worktreeIds)
+        }
+    }
+
+    private func sweepOrphanZmxSessionsNow(worktreeIds: [String]) {
         var leafIds: Set<String> = []
         for worktreeId in worktreeIds {
             for tab in tabs.tabs(forWorktree: worktreeId) {
@@ -2535,7 +2609,17 @@ final class AppState {
         }
     }
 
+    /// Like `sweepOrphanZmxSessions`, waits for the pre-freeze migration and
+    /// reads the known leaves after it.
     private func sweepOrphanWorkspaceCheckoutZmxSessions() {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await awaitZmxMigration()
+            sweepOrphanWorkspaceCheckoutZmxSessionsNow()
+        }
+    }
+
+    private func sweepOrphanWorkspaceCheckoutZmxSessionsNow() {
         let knownLeavesByOwner = workspaceCheckoutTerminalLeafIDsByOwner()
         terminal.sweepWorkspaceCheckoutOrphans(knownLeavesByOwner: knownLeavesByOwner)
 
@@ -8028,6 +8112,7 @@ final class AppState {
 
     @discardableResult
     func restoreTerminalTabIfNeededAsync(worktreeId: String, tabId: TabID) async throws -> Tab? {
+        await awaitZmxMigration()
         guard await !checkpointTerminalAdmissionDisabledAfterDiscovery(worktreeId: worktreeId) else {
             throw TerminalLaunchError.checkpointRecoveryRequired
         }
@@ -8044,6 +8129,7 @@ final class AppState {
 
     @discardableResult
     func restoreTerminalTabIfNeededAsync(owner: SessionOwnerID, tabId: TabID) async throws -> Tab? {
+        await awaitZmxMigration()
         switch owner {
         case .worktree(let worktreeID):
             return try await restoreTerminalTabIfNeededAsync(worktreeId: worktreeID, tabId: tabId)
