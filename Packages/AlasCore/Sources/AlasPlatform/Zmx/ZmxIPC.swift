@@ -46,11 +46,11 @@ public enum ZmxIPC: Sendable {
     }
 
     /// The wire spoken by the zmx binary bundled from `ThirdParty/zmx`. It
-    /// must always equal that binary's wire: the bump of the submodule to a
-    /// v1 zmx flips this to `.v1` in the same commit. While it is
-    /// `.preFreeze`, every live daemon is one the bundled zmx can still
-    /// drive, so nothing may stop them as pre-freeze.
-    public static let bundledWire: Wire = .preFreeze
+    /// must always equal that binary's wire; `ZmxPassiveClientIntegrationTests`
+    /// pins it against the real binary. Daemons that speak `.preFreeze` while
+    /// this is `.v1` were started by an older Alas and are restarted by
+    /// `ZmxPreFreezeMigration` at launch.
+    public static let bundledWire: Wire = .v1
 
     public static let headerSize = 8
 
