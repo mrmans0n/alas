@@ -529,6 +529,14 @@ final class AppState {
     /// outside a test host; tests inject a runner instead.
     @ObservationIgnored
     var zmxMigrationRunner: ZmxMigrationRunner?
+    /// Whether a zmx socket path still exists. A re-run that neither
+    /// restarted a session nor finds its socket gone leaves it blocked;
+    /// tests override it alongside `zmxMigrationRunner`.
+    @ObservationIgnored
+    var zmxSocketExists: @Sendable (URL) -> Bool = { url in
+        var info = stat()
+        return lstat(url.path, &info) == 0 || errno != ENOENT
+    }
     /// The wire of the bundled zmx. The migration runs only once it is v1;
     /// tests override it to exercise either side of the zmx bump.
     @ObservationIgnored
@@ -2191,7 +2199,7 @@ final class AppState {
             terminal.killGate = Task.detached { _ = await migration.value }
             task = Task { @MainActor [weak self] in
                 let result = await migration.value
-                self?.recordZmxMigration(result, sessions: nil)
+                self?.recordZmxMigration(result)
             }
         } else {
             task = Task {}
@@ -2220,10 +2228,12 @@ final class AppState {
         return { ZmxPreFreezeMigration.run(directory: directory, names: sockets) }
     }
 
-    /// Logs a migration run and updates the sessions left pre-freeze.
-    /// `sessions` are the session names a single-session re-run covered;
-    /// nil for the launch run over every socket.
-    private func recordZmxMigration(_ result: ZmxPreFreezeMigration.Result, sessions: Set<String>?) {
+    /// Logs a migration run and updates the sessions left pre-freeze. A
+    /// session stops being blocked only once a run restarted it, or its
+    /// socket is gone (`recovered`) so `zmx attach` starts a fresh one. A
+    /// re-run that could not classify it, such as a probe timeout, keeps it
+    /// blocked: it was confirmed pre-freeze and still may be.
+    private func recordZmxMigration(_ result: ZmxPreFreezeMigration.Result, recovered: Set<String> = []) {
         for name in result.restarted {
             Self.logger.info("Restarted pre-freeze zmx session \(name, privacy: .public)")
         }
@@ -2233,7 +2243,8 @@ final class AppState {
         for name in result.inUse {
             Self.logger.info("Left pre-freeze zmx session \(name, privacy: .public) running: another client is attached")
         }
-        if let sessions { zmxSessionsLeftPreFreeze.subtract(sessions) }
+        zmxSessionsLeftPreFreeze.subtract(recovered)
+        zmxSessionsLeftPreFreeze.subtract(result.restarted.compactMap(Self.zmxSessionName(forSocket:)))
         zmxSessionsLeftPreFreeze.formUnion((result.inUse + result.failed).compactMap(Self.zmxSessionName(forSocket:)))
     }
 
@@ -2263,12 +2274,20 @@ final class AppState {
                 .intersection(zmxSessionsSkippedPreFreeze)
                 .intersection(zmxSessionsLeftPreFreeze)
             guard !sessions.isEmpty,
+                  let directory = terminal.zmxClient.env.zmxDir,
                   let work = zmxMigrationWork(sockets: Set(sessions.map { Self.zmxSessionPrefix + $0 }))
             else { return }
-            let result = await Task.detached(priority: .userInitiated) {
-                await BlockingWork.run(work)
+            let socketExists = zmxSocketExists
+            let (result, gone) = await Task.detached(priority: .userInitiated) {
+                await BlockingWork.run { () -> (ZmxPreFreezeMigration.Result, Set<String>) in
+                    let result = work()
+                    let gone = sessions.filter {
+                        !socketExists(directory.appendingPathComponent(Self.zmxSessionPrefix + $0))
+                    }
+                    return (result, gone)
+                }
             }.value
-            recordZmxMigration(result, sessions: sessions)
+            recordZmxMigration(result, recovered: gone)
         }
         zmxMigrationRetry = retry
         await retry.value

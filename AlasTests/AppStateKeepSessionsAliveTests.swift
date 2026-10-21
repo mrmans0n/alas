@@ -127,7 +127,7 @@ struct AppStateKeepSessionsAliveTests {
     /// while the migration runs shows the restore is waiting on it. While the
     /// bundled zmx is itself pre-freeze there is nothing to migrate: the
     /// runner never runs and the restore goes ahead at once.
-    @Test(arguments: [ZmxIPC.Wire.v1, .preFreeze])
+    @Test(.timeLimit(.minutes(1)), arguments: [ZmxIPC.Wire.v1, .preFreeze])
     func terminalRestoreWaitsForTheZmxMigration(bundledWire: ZmxIPC.Wire) async throws {
         let repo = try await makeRepo(name: "zmx-migration")
         defer { try? FileManager.default.removeItem(at: repo) }
@@ -157,10 +157,7 @@ struct AppStateKeepSessionsAliveTests {
         let restoreTask = Task {
             try await state.restoreTerminalTabIfNeededAsync(worktreeId: worktree.id, tabId: tab.id)
         }
-        let deadline = Date().addingTimeInterval(10)
-        while migration.runCount == 0, Date() < deadline {
-            try await Task.sleep(nanoseconds: 10_000_000)
-        }
+        await migration.untilARunStarts()
         #expect(migration.runCount == 1)
         #expect(state.tabs.tabs(forWorktree: worktree.id).map(\.id) == [tab.id])
 
@@ -206,6 +203,7 @@ struct AppStateKeepSessionsAliveTests {
             ZmxPreFreezeMigration.Result(restarted: [name]),
         ])
         state.zmxMigrationRunner = migration.runner
+        state.zmxSocketExists = { _ in true }
         state.bundledZmxWire = .v1
         let tab = state.tabs.appendTerminal(worktreeId: worktree.id, title: "main", sessionId: leafId)
 
@@ -229,6 +227,40 @@ struct AppStateKeepSessionsAliveTests {
             state.terminal.closeSession(id: leafId, worktreeId: worktree.id)
             state.terminal.waitForPendingKills(timeout: 20)
         }
+    }
+
+    /// A re-run that can neither restart the daemon nor find its socket gone,
+    /// such as one whose probe timed out, has not shown the session is safe:
+    /// the pane stays without a session.
+    @Test func restoreKeepsAPaneBlockedWhenAReRunCannotClassifyIt() async throws {
+        let repo = try await makeRepo(name: "zmx-unclassified")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(
+            path: repo, displayName: "test", color: "#000000"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        let worktree = try #require(state.projectsManager.worktrees(projectId: project.id).first)
+        state.selectedWorktreeId = worktree.id
+        state.config.terminal.keepSessionsAlive = true
+        let leafId = "leaf-unclassified"
+        let name = ZmxSessionName.derive(worktreeId: worktree.id, leafId: leafId)
+        let migration = ZmxMigrationGate(blocked: false, results: [
+            ZmxPreFreezeMigration.Result(inUse: [name]),
+            ZmxPreFreezeMigration.Result(),
+        ])
+        state.zmxMigrationRunner = migration.runner
+        state.zmxSocketExists = { _ in true }
+        state.bundledZmxWire = .v1
+        let tab = state.tabs.appendTerminal(worktreeId: worktree.id, title: "main", sessionId: leafId)
+
+        _ = try await state.restoreTerminalTabIfNeededAsync(worktreeId: worktree.id, tabId: tab.id)
+        _ = try await state.restoreTerminalTabIfNeededAsync(worktreeId: worktree.id, tabId: tab.id)
+
+        #expect(migration.runNames == [nil, [name]])
+        #expect(state.terminal.registry.session(for: leafId) == nil)
+        #expect(state.tabs.tabs(forWorktree: worktree.id).map(\.id) == [tab.id])
     }
 
     /// `reloadTabs` runs once on launch and is the only path that touches
@@ -437,13 +469,15 @@ struct AppStateKeepSessionsAliveTests {
 
 /// A zmx migration runner that records the socket names of each run and
 /// returns the scripted results in order (then empty ones). When blocked it
-/// parks runs until `release()`. Declared outside the main-actor suite so the
-/// runner is not main-actor isolated when it runs on its own thread.
+/// parks runs until `release()`; `untilARunStarts()` awaits a run's entry.
+/// Declared outside the main-actor suite so the runner is not main-actor
+/// isolated when it runs on its own thread.
 private final class ZmxMigrationGate: @unchecked Sendable {
     private let lock = NSLock()
     private let gate: DispatchSemaphore
     private var runs: [Set<String>?] = []
     private var results: [ZmxPreFreezeMigration.Result]
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(blocked: Bool, results: [ZmxPreFreezeMigration.Result] = []) {
         gate = DispatchSemaphore(value: blocked ? 0 : 1)
@@ -456,12 +490,28 @@ private final class ZmxMigrationGate: @unchecked Sendable {
 
     func release() { gate.signal() }
 
+    /// Returns once a run has started, even while the gate parks it.
+    func untilARunStarts() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let started = lock.withLock { () -> Bool in
+                if !runs.isEmpty { return true }
+                startWaiters.append(continuation)
+                return false
+            }
+            if started { continuation.resume() }
+        }
+    }
+
     var runner: AppState.ZmxMigrationRunner {
         { _, names in
-            let result = self.lock.withLock { () -> ZmxPreFreezeMigration.Result in
+            let (result, waiters) = self.lock.withLock {
+                () -> (ZmxPreFreezeMigration.Result, [CheckedContinuation<Void, Never>]) in
                 self.runs.append(names)
-                return self.results.isEmpty ? ZmxPreFreezeMigration.Result() : self.results.removeFirst()
+                let waiters = self.startWaiters
+                self.startWaiters = []
+                return (self.results.isEmpty ? ZmxPreFreezeMigration.Result() : self.results.removeFirst(), waiters)
             }
+            for waiter in waiters { waiter.resume() }
             self.gate.wait()
             self.gate.signal()
             return result

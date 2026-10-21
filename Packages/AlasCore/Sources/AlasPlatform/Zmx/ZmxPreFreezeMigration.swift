@@ -26,6 +26,19 @@ public enum ZmxPreFreezeMigration {
         }
     }
 
+    /// Which file a socket path named when it was listed, so a socket a
+    /// fresh daemon has since bound at the same path is never mistaken for
+    /// the one probed.
+    private struct SocketIdentity: Equatable {
+        let device: dev_t
+        let inode: ino_t
+
+        init(_ info: stat) {
+            device = info.st_dev
+            inode = info.st_ino
+        }
+    }
+
     private enum Outcome {
         case untouched
         case restarted
@@ -68,12 +81,12 @@ public enum ZmxPreFreezeMigration {
     ) -> Result {
         guard bundledWire == .v1 else { return Result() }
         let directory = directory.path
-        let names = socketNames(in: directory).filter { filter?.contains($0) ?? true }
-        guard !names.isEmpty else { return Result() }
-        let outcomes = OutcomeTable(count: names.count)
+        let sockets = Self.sockets(in: directory).filter { filter?.contains($0.name) ?? true }
+        guard !sockets.isEmpty else { return Result() }
+        let outcomes = OutcomeTable(count: sockets.count)
         let group = DispatchGroup()
         let slots = DispatchSemaphore(value: maxConcurrentSockets)
-        for (index, name) in names.enumerated() {
+        for (index, (name, identity)) in sockets.enumerated() {
             let path = (directory as NSString).appendingPathComponent(name)
             slots.wait()
             DispatchQueue.global(qos: .userInitiated).async(group: group) {
@@ -84,12 +97,12 @@ public enum ZmxPreFreezeMigration {
                     return
                 }
                 outcomes[index] = stop(
-                    path: path, pid: pid, kill: kill, signal: signal, isAlive: isAlive, exitTimeout: exitTimeout)
+                    path: path, identity: identity, pid: pid, kill: kill, signal: signal, isAlive: isAlive, exitTimeout: exitTimeout)
             }
         }
         group.wait()
         var result = Result()
-        for (index, name) in names.enumerated() {
+        for (index, (name, _)) in sockets.enumerated() {
             switch outcomes[index] {
             case .restarted: result.restarted.append(name)
             case .failed: result.failed.append(name)
@@ -108,6 +121,7 @@ public enum ZmxPreFreezeMigration {
 
     private static func stop(
         path: String,
+        identity: SocketIdentity,
         pid: Int32,
         kill: @Sendable (String) -> Bool,
         signal: @Sendable (Int32, Int32) -> Void,
@@ -137,28 +151,34 @@ public enum ZmxPreFreezeMigration {
         }
         guard exited else { return .failed }
         // A daemon that hung up may not have removed its socket, and a
-        // signalled one never does; the next attach must not find it.
-        if isSocket(path) { _ = unlink(path) }
-        return exists(path) ? .failed : .restarted
+        // signalled one never does; the next attach must not find it. A
+        // socket at the path that is not the one probed belongs to a fresh
+        // daemon, such as one another Alas started once the old one left:
+        // the old socket is gone and the new one stays.
+        if socketIdentity(path) == identity { _ = unlink(path) }
+        var info = stat()
+        guard lstat(path, &info) == 0 else { return errno == ENOENT ? .restarted : .failed }
+        return SocketIdentity(info) == identity ? .failed : .restarted
     }
 
-    /// Sorted names of the direct children that are Unix sockets. `lstat`
-    /// never follows a symlink, so a link to a socket elsewhere is skipped.
-    private static func socketNames(in directory: String) -> [String] {
+    /// Sorted names, and identities, of the direct children that are Unix
+    /// sockets. `lstat` never follows a symlink, so a link to a socket
+    /// elsewhere is skipped.
+    private static func sockets(in directory: String) -> [(name: String, identity: SocketIdentity)] {
         guard let entries = try? FileManager.default.contentsOfDirectory(atPath: directory) else { return [] }
         return entries
-            .filter { !$0.contains("/") && isSocket((directory as NSString).appendingPathComponent($0)) }
+            .filter { !$0.contains("/") }
             .sorted()
+            .compactMap { name in
+                socketIdentity((directory as NSString).appendingPathComponent(name)).map { (name, $0) }
+            }
     }
 
-    private static func isSocket(_ path: String) -> Bool {
+    /// The identity of the Unix socket at `path`; nil when there is none.
+    private static func socketIdentity(_ path: String) -> SocketIdentity? {
         var info = stat()
-        return lstat(path, &info) == 0 && (info.st_mode & S_IFMT) == S_IFSOCK
-    }
-
-    private static func exists(_ path: String) -> Bool {
-        var info = stat()
-        return lstat(path, &info) == 0 || errno != ENOENT
+        guard lstat(path, &info) == 0, (info.st_mode & S_IFMT) == S_IFSOCK else { return nil }
+        return SocketIdentity(info)
     }
 
     /// One slot per socket; each worker writes only its own index.
