@@ -25,7 +25,7 @@ public final class HostSocketServer: @unchecked Sendable {
     private let listenFD: Int32
     /// An exclusive `flock` on `<path>.lock`, held while serving: whoever
     /// holds it owns the path, and the kernel releases it if the process dies.
-    private let lockFD: Int32
+    let lockFD: Int32
     private let lock = NSLock()
     private var isStopped = false
     private let server: HostProtocolServer
@@ -59,7 +59,7 @@ public final class HostSocketServer: @unchecked Sendable {
               chmod(path, 0o600) == 0, listen(fd, 16) == 0
         else {
             if fd >= 0 { close(fd) }
-            close(lock)
+            Self.release(lock)
             hostSocketLogger.error("Could not listen on \(path, privacy: .public): \(String(cString: strerror(errno)), privacy: .public)")
             return nil
         }
@@ -79,8 +79,17 @@ public final class HostSocketServer: @unchecked Sendable {
             unlink(path)
             shutdown(listenFD, SHUT_RDWR)
             close(listenFD)
-            close(lockFD)
+            Self.release(lockFD)
         }
+    }
+
+    /// Lets go of the path's lock. Unlocked before closing: a child another
+    /// thread is spawning right now shares this descriptor until its exec
+    /// closes it, and `close` alone would leave the lock held until then, so
+    /// a host started next would find the path taken.
+    private static func release(_ lockFD: Int32) {
+        flock(lockFD, LOCK_UN)
+        close(lockFD)
     }
 
     private var stopped: Bool { lock.withLock { isStopped } }

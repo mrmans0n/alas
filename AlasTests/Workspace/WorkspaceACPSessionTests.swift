@@ -50,7 +50,9 @@ struct WorkspaceACPSessionTests {
         final class Outcome { var result: Result<Void, Error>? }
         let outcome = Outcome()
         sender.send(delivery, .newChat(agentID: "claude", title: "New chat")) { outcome.result = $0 }
-        try await eventually("the new chat to take or refuse the review turn") { outcome.result != nil }
+        // Starting the agent spawns its adapter, which a loaded runner can
+        // stretch past the default 5s; the wait still ends on the outcome.
+        try await eventually("the new chat to take or refuse the review turn", within: .seconds(60)) { outcome.result != nil }
         #expect(state.tabs.tabs(for: owner).count == 2)
         #expect(state.tabs.tabs(forWorktree: worktree.id).isEmpty)
         let newSession = try #require(manager.sessions.values.first { $0.id != session.id })

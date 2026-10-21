@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import AlasCore
 @testable import AlasHostCore
+@testable import AlasModel
 
 struct DataDirectoryLockTests {
     /// One holder at a time: a second taker is told who holds the lock, and
@@ -15,12 +16,11 @@ struct DataDirectoryLockTests {
             _ = try DataDirectoryLock.acquire(in: directory)
         }
 
-        first = nil
-        _ = first
-        // Polled: a child another test is spawning right now briefly shares
-        // this process's descriptors, the lock's among them, until the
-        // kernel closes them on exec.
-        try await eventually { (try? DataDirectoryLock.acquire(in: directory)) != nil }
+        // Released even while a child still holds a copy of its descriptor.
+        _ = try withChildHolding(try #require(first).fd) {
+            first = nil
+            return try DataDirectoryLock.acquire(in: directory)
+        }
     }
 
     /// A waiting taker blocks while the directory is held and takes it as

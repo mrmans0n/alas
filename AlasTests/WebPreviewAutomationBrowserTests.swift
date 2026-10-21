@@ -429,14 +429,19 @@ struct WebPreviewAutomationBrowserTests {
         defer { window.orderOut(nil)
         browser.close() }
         let initialURL = try #require(browser.webView.url)
-        _ = try await browser.automation(command: .init(action: .inspect, selector: "#message"))
-        _ = try await browser.automation(command: .init(action: .navigate, url: initialURL.appendingPathComponent("other").absoluteString))
-        _ = try await browser.automation(command: .init(action: .back))
+        // Each step ends on its own completion event, so the budget only bounds
+        // a real hang: a loaded runner can stall WebContent for seconds, past
+        // the 5s default.
+        let budget = 20_000
+        _ = try await browser.automation(command: .init(action: .inspect, selector: "#message", timeoutMS: budget))
+        _ = try await browser.automation(command: .init(action: .navigate, url: initialURL.appendingPathComponent("other").absoluteString,
+                                                        timeoutMS: budget))
+        _ = try await browser.automation(command: .init(action: .back, timeoutMS: budget))
         #expect(browser.webView.url == initialURL)
-        let result = try await browser.automation(command: .init(action: .inspect, selector: "#message"))
+        let result = try await browser.automation(command: .init(action: .inspect, selector: "#message", timeoutMS: budget))
         let element = try #require((result["elements"] as? [[String: Any]])?.first)
         let id = try #require(element["element_id"] as? String)
-        _ = try await browser.automation(command: .init(action: .type, elementID: id, text: "Restored"))
+        _ = try await browser.automation(command: .init(action: .type, elementID: id, text: "Restored", timeoutMS: budget))
     }
 
     private func loadedBrowser(ownerKey: String, server: AutomationFixtureServer) async throws -> (WebPreviewBrowser, NSWindow) {

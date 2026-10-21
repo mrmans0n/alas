@@ -53,6 +53,7 @@ final class CodeEditorCoordinator {
     private var semanticSupportsRange = false
     private var inlayFeature: InlayHintsFeature?
     private let inlayPresentationExpirySleep: @Sendable () async throws -> Void
+    private let completionRequestTimeoutNanos: UInt64
     private var inlayLayout: EditorInlayLayout?
     private var inlayClient: LSPClient?
     private var inlaySubscription: Task<Void, Never>?
@@ -107,9 +108,11 @@ final class CodeEditorCoordinator {
     }
 
     init(appState: AppState,
-         inlayPresentationExpirySleep: @escaping @Sendable () async throws -> Void = InlayHintsFeature.waitForPresentationExpiry) {
+         inlayPresentationExpirySleep: @escaping @Sendable () async throws -> Void = InlayHintsFeature.waitForPresentationExpiry,
+         completionRequestTimeoutNanos: UInt64 = 900_000_000) {
         self.appState = appState
         self.inlayPresentationExpirySleep = inlayPresentationExpirySleep
+        self.completionRequestTimeoutNanos = completionRequestTimeoutNanos
     }
 
     func attach(textView: CodeTextView, buffer: EditorBuffer, layoutManager: NSLayoutManager, worktreeId: String, worktreeRoot: URL, tabId: TabID, revealLine: Int?, revealEndLine: Int? = nil, revealCharacter: Int?, revealRevision: Int? = nil, theme: Theme, externalAbsolutePath: String? = nil, originatingRelativePath: String? = nil, externalEditable: Bool = false) {
@@ -282,7 +285,8 @@ final class CodeEditorCoordinator {
             },
             executeFollowup: { [weak self] command, client, context in
                 await self?.codeActionsFeature?.performCompletionCommand(command, client: client, context: context)
-            }
+            },
+            requestTimeoutNanos: completionRequestTimeoutNanos
         )
         signatureHelp = SignatureHelpFeature(
             textView: textView,

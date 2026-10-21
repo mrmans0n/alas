@@ -37,8 +37,12 @@ struct HostSocketServerTests {
         // or another host starts at the same time.
         unlink(path)
         #expect(HostSocketServer(path: path, server: HostProtocolServer(host: AlasHost(core: core))) == nil, "one host per socket")
-        first.stop()
-        let socket = try #require(HostSocketServer(path: path, server: HostProtocolServer(host: AlasHost(core: core))))
+        // Free once stopped, even while a child still holds a copy of the
+        // lock's descriptor.
+        let socket = try withChildHolding(first.lockFD) {
+            first.stop()
+            return try #require(HostSocketServer(path: path, server: HostProtocolServer(host: AlasHost(core: core))))
+        }
         defer { socket.stop() }
         let client = try SocketClient(path: path)
         defer { client.close() }

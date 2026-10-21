@@ -398,7 +398,9 @@ struct EditorDisplayIntegrationTests {
         let window = NSWindow(contentRect: view.frame, styleMask: .titled, backing: .buffered, defer: false)
         window.contentView = view
         window.orderFront(nil)
-        let coordinator = CodeEditorCoordinator(appState: app)
+        // The test answers the completion request by hand after a hint
+        // refresh; a loaded runner must not let the 900 ms timeout win.
+        let coordinator = CodeEditorCoordinator(appState: app, completionRequestTimeoutNanos: 60_000_000_000)
         coordinator.attach(textView: view, buffer: buffer, layoutManager: layout, worktreeId: "projection", worktreeRoot: root, tabId: "tab", revealLine: nil, revealCharacter: nil, theme: try ThemeStore().current)
         defer { coordinator.detach()
             window.orderOut(nil)

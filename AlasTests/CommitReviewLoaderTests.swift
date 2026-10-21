@@ -83,7 +83,12 @@ struct CommitReviewLoaderTests {
             openFileForPath: { _ in nil }
         )
 
-        #expect(git.requests.map(\.originalPath) == ["Sources/OldName.swift", "Sources/Original.swift"])
+        // Fallback diffs load concurrently, so request order is not deterministic.
+        let originalPathsByFile = Dictionary(uniqueKeysWithValues: git.requests.map { ($0.file, $0.originalPath) })
+        #expect(originalPathsByFile == [
+            "Sources/NewName.swift": "Sources/OldName.swift",
+            "Sources/Copied.swift": "Sources/Original.swift",
+        ])
         #expect(session.files.map(\.summary.originalPath) == ["Sources/OldName.swift", "Sources/Original.swift"])
         #expect(session.files.map(\.summary.status) == [.renamed, .copied])
     }
