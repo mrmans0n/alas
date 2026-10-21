@@ -184,6 +184,18 @@ struct StackShepherdTests {
         #expect(record.entries[0].shepherd.fixAttempts == 1)
     }
 
+    @Test func aRetainedClosedEntryTakesABudgetChangeAndKeepsItsPhase() {
+        var record = Self.record([41, 42, 43])
+        record.entries[0].shepherd.phase = .closed
+        record.entries[2].shepherd.phase = .merged
+
+        record.setFixAttemptBudget(5)
+
+        #expect(record.entries[0].shepherd.fixAttemptBudget == 5)
+        #expect(record.entries[0].shepherd.phase == .closed)
+        #expect(record.entries[1].shepherd.fixAttemptBudget == 5)
+    }
+
     @Test func entriesGGNoLongerListsAreDroppedWhileOpenAndFinishWhenMerged() {
         let record = Self.record([41, 42, 43])
 

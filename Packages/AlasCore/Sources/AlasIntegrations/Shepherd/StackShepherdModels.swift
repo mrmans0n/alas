@@ -117,12 +117,14 @@ public struct StackShepherdRecord: Codable, Equatable, Sendable {
 
     public var fixAttemptBudget: Int { maxFixAttempts ?? ShepherdDefaults.defaultMaxFixAttempts }
 
-    /// Sets the budget on the stack and every entry, clamped to
-    /// `ShepherdDefaults.fixAttemptRange`; entries that escalated for running
-    /// out of attempts go back to watching when the new budget leaves room.
+    /// Sets the budget on the stack and every entry that has not merged,
+    /// clamped to `ShepherdDefaults.fixAttemptRange`; entries that escalated
+    /// for running out of attempts go back to watching when the new budget
+    /// leaves room. A closed entry keeps its phase but takes the budget, so a
+    /// reopen later runs under it.
     public mutating func setFixAttemptBudget(_ budget: Int) {
         maxFixAttempts = ShepherdDefaults.clampedFixAttempts(budget)
-        for index in entries.indices where !entries[index].shepherd.phase.isTerminal {
+        for index in entries.indices where entries[index].shepherd.phase != .merged {
             entries[index].shepherd.setFixAttemptBudget(budget)
         }
     }
