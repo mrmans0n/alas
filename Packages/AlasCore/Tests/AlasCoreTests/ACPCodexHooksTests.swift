@@ -80,18 +80,49 @@ struct ACPCodexHooksTests {
         #expect(coordinator.selection.isEmpty)
     }
 
-    @Test @MainActor func confirmedReadbackContinuesWithFreshToken() async throws {
+    @Test @MainActor func confirmedReadbackContinuesWithStableToken() async throws {
         var current = try snapshot()
         let coordinator = ACPCodexHooksReviewCoordinator(context: .init(host: "local", cwd: "/p"), list: { current }, trust: { _, pairs in
             #expect(pairs == [current.hooks[0].identity])
-            current = try snapshot(status: "trusted", token: "fresh")
+            current = try snapshot(status: "trusted")
             return true
         })
         await coordinator.refresh()
         coordinator.setSelected(current.hooks[0].identity, selected: true)
         await coordinator.trustSelectedAndContinue()
         #expect(coordinator.presentation == nil)
-        #expect(coordinator.reviewToken == "fresh")
+        #expect(coordinator.reviewToken == "token")
+    }
+
+    @Test(arguments: ["unknown hook", "diagnostic"])
+    @MainActor func changedTrustReadbackWaitsForExplicitContinuation(change: String) async throws {
+        var current = try snapshot(diagnostics: false)
+        let coordinator = ACPCodexHooksReviewCoordinator(context: .init(host: "local", cwd: "/p"), list: { current }, trust: { _, _ in
+            current = try snapshot(status: "trusted", token: "changed", diagnostics: change == "diagnostic", additionalUnknownHook: change == "unknown hook")
+            return true
+        })
+        let updates = AsyncStream<Void>.makeStream()
+        let subscription = coordinator.willChange.observe { updates.continuation.yield(()) }
+        var completed = false
+        let waiting = Task {
+            let token = await coordinator.review()
+            completed = true
+            return token
+        }
+        var iterator = updates.stream.makeAsyncIterator()
+        while coordinator.presentation?.isBusy != false { _ = await iterator.next() }
+        let originalID = try #require(coordinator.presentation?.id)
+        coordinator.setSelected(current.hooks[0].identity, selected: true, presentationID: originalID)
+        await coordinator.trustSelectedAndContinue(presentationID: originalID)
+        #expect(coordinator.presentation?.snapshot == current)
+        #expect(coordinator.presentation?.id != originalID)
+        #expect(coordinator.presentation?.error != nil)
+        #expect(coordinator.selection.isEmpty)
+        #expect(completed == false)
+        #expect(coordinator.continueWithoutTrusting(presentationID: originalID) == nil)
+        #expect(coordinator.continueWithoutTrusting() == "changed")
+        #expect(await waiting.value == "changed")
+        _ = subscription
     }
 
     @Test @MainActor func invalidationResolvesWaitBeforeLateListCompletes() async throws {
@@ -166,12 +197,14 @@ struct ACPCodexHooksTests {
         #expect(ACPCodexHookReviewError.classify(JSONRPCError(code: 1001, message: "original", data: AnyCodable(["kind": kind, "restartable": true]))) == nil)
     }
 
-    private func snapshot(handler: String = "command", hash: String = "h", status: String = "untrusted", token: String = "token", duplicate: Bool = false, diagnostics: Bool = true) throws -> ACPCodexHooksList {
+    private func snapshot(handler: String = "command", hash: String = "h", status: String = "untrusted", token: String = "token", duplicate: Bool = false, diagnostics: Bool = true, additionalUnknownHook: Bool = false) throws -> ACPCodexHooksList {
         let hook = """
         {"key":"k","currentHash":"\(hash)","eventName":"sessionStart","matcher":null,"timeoutSec":10,"statusMessage":null,"sourcePath":"/hooks.json","source":"sessionFlags","pluginId":null,"displayOrder":0,"enabled":true,"isManaged":false,"trustStatus":"\(status)","handlerType":"\(handler)","command":"true","async":false}
         """
+        let unknown = hook.replacingOccurrences(of: #""key":"k""#, with: #""key":"new""#)
+            .replacingOccurrences(of: #""handlerType":"command""#, with: #""handlerType":"future""#)
         return try JSONDecoder().decode(ACPCodexHooksList.self, from: Data("""
-        {"cwd":"/p","hooks":[\(hook)\(duplicate ? "," + hook : "")],"warnings":\(diagnostics ? #"["warning"]"# : "[]"),"errors":\(diagnostics ? #"[{"path":"/bad","message":"bad"}]"# : "[]"),"reviewToken":"\(token)"}
+        {"cwd":"/p","hooks":[\(hook)\(duplicate ? "," + hook : "")\(additionalUnknownHook ? "," + unknown : "")],"warnings":\(diagnostics ? #"["warning"]"# : "[]"),"errors":\(diagnostics ? #"[{"path":"/bad","message":"bad"}]"# : "[]"),"reviewToken":"\(token)"}
         """.utf8))
     }
 }

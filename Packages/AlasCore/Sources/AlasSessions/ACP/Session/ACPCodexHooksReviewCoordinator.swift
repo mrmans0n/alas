@@ -97,11 +97,16 @@ public final class ACPCodexHooksReviewCoordinator: ChangeTracking {
             let accepted = pairs.allSatisfy { identity in
                 fresh.isUnique(identity) && fresh.hooks.contains { $0.identity == identity && $0.isKnown && $0.trustStatus == "trusted" }
             }
-            if failure == nil && accepted {
+            // Trust-state updates preserve the adapter token; a different token describes an unseen snapshot.
+            let sameReview = fresh.reviewToken == snapshot.reviewToken
+            if failure == nil && accepted && sameReview {
                 apply(fresh, id: id, error: nil)
                 finish(fresh.reviewToken)
             } else {
-                apply(fresh, id: UUID(), error: failure ?? "Selected hooks changed or could not be verified. Review them again.")
+                let readbackError = sameReview
+                    ? "Selected hooks changed or could not be verified. Review them again."
+                    : "The hook configuration changed. Review it again before continuing."
+                apply(fresh, id: UUID(), error: failure ?? readbackError)
             }
         } catch {
             guard valid, generation == current else { return }
