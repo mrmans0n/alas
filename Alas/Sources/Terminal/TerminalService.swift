@@ -42,6 +42,13 @@ final class TerminalService {
     /// completion via a MainActor follow-up Task.
     @ObservationIgnored private var pendingKillTasks: Set<Task<Void, Never>> = []
 
+    /// Work every dispatched zmx kill, list, and sweep, and every awaited
+    /// termination, waits for before it runs. AppState sets it to the
+    /// pre-freeze migration: the bundled zmx hangs on a pre-freeze daemon
+    /// instead of killing it. It must complete without the main actor,
+    /// because `waitForPendingKills` blocks main.
+    @ObservationIgnored var killGate: Task<Void, Never>?
+
     /// Default initializer used by production code paths (AppState).
     init(zmxClient: ZmxClient = ZmxClient(env: ZmxEnv.resolve())) {
         self.zmxClient = zmxClient
@@ -153,7 +160,11 @@ final class TerminalService {
     /// `Task.detached { … }` callers used pre-tracking.
     private func dispatchTrackedKill(_ body: @escaping @Sendable () -> Void) {
         // zmx calls block on the child's exit; keep them off the cooperative pool.
-        let task = Task.detached { await BlockingWork.run(body) }
+        let gate = killGate
+        let task = Task.detached {
+            await gate?.value
+            await BlockingWork.run(body)
+        }
         pendingKillTasks.insert(task)
         Task { @MainActor [weak self] in
             _ = await task.value
@@ -162,7 +173,11 @@ final class TerminalService {
     }
 
     private func dispatchTrackedKill(_ body: @escaping @Sendable () async -> Void) {
-        let task = Task.detached(operation: body)
+        let gate = killGate
+        let task = Task.detached {
+            await gate?.value
+            await body()
+        }
         pendingKillTasks.insert(task)
         Task { @MainActor [weak self] in
             _ = await task.value
@@ -654,6 +669,9 @@ final class TerminalService {
     func terminateSessionsAndWait(_ sessions: [TerminalSessionIdentity], timeout: TimeInterval) async throws {
         let (localNames, remoteNamesByHost) = Self.partitionedSessionNames(for: sessions)
         let client = zmxClient
+        // Like every dispatched kill: the bundled zmx hangs on a daemon the
+        // pre-freeze migration has yet to stop.
+        await killGate?.value
         let localExistingNames = await BlockingWork.run {
             Set(client.listSessionInfos().map(\.name))
         }
@@ -879,8 +897,11 @@ final class TerminalService {
     /// Snapshot of the currently-open zmx sessions for the Settings ›
     /// Terminal "Open sessions" list. Runs `zmx ls` off-main (it blocks up
     /// to ~5s), then classifies the result against this window's registry.
+    /// Waits for the kill gate first: a `zmx ls` client connected to a
+    /// pre-freeze daemon would make the migration see it as in use.
     func loadOpenSessions() async -> OpenSessionsSnapshot {
         guard zmxClient.isAvailable else { return .empty }
+        await killGate?.value
         let prefix = ProcessInfo.processInfo.environment["ZMX_SESSION_PREFIX"] ?? ""
         let tracked = registry.all.map {
             TrackedSessionRef(leafId: $0.id, worktreeId: $0.worktreeId, zmxSessionName: $0.zmxSessionName)

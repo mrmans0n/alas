@@ -78,6 +78,9 @@ import Testing
         #expect(ZmxIPC.classifyProbeReply(output) == nil)
         #expect(ZmxIPC.classifyProbeReply(reply) == expected)
         #expect(ZmxIPC.classifyProbeReply(output + reply) == expected)
+        // `clients_len` leads the payload.
+        let busy = 0x0102_0304_0506_0708 as UInt64
+        #expect(ZmxIPC.classifyProbeReply(zmxInfoReply(wire: wire, clients: busy)) == zmxInfoStatus(wire, clients: busy))
         // Neither wire can frame a v1 header with another version byte and
         // a pre-freeze length above the payload ceiling.
         let unframeable: [UInt8] = [1, 0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0]
@@ -150,6 +153,252 @@ import Testing
         let start = clock.now
         #expect(!ZmxIPCSocket.killPreFreeze(path: chatty.path, timeout: .milliseconds(200)))
         #expect(clock.now - start < .seconds(1))
+    }
+
+    // MARK: Pre-freeze migration
+
+    @Test func migrationStopsOnlyPreFreezeDaemons() throws {
+        let directory = try zmxShortTempDirectory()
+        defer { try? FileManager.default.removeItem(atPath: directory) }
+        let v1 = try ZmxFakeDaemonListener(directory: directory, name: "alas-a", scripts: [.reply(zmxInfoReply(wire: .v1))])
+        defer { v1.tearDown() }
+        let preFreeze = try ZmxFakeDaemonListener(
+            directory: directory, name: "alas-b",
+            scripts: [.reply(zmxInfoReply(wire: .preFreeze)), .closeAfterReceiving(count: 8)])
+        defer { preFreeze.tearDown() }
+        // Accepts the probe and the connect check but never answers: a hung
+        // daemon that may be pre-freeze.
+        let silent = try ZmxFakeDaemonListener(directory: directory, name: "alas-c", scripts: [.silent, .silent])
+        defer { silent.tearDown() }
+        // Left by a daemon that has exited: refuses connections.
+        try zmxStaleSocket(at: directory + "/alas-f")
+        // A pre-freeze daemon another client is attached to: an older Alas.
+        let inUse = try ZmxFakeDaemonListener(
+            directory: directory, name: "alas-e", scripts: [.reply(zmxInfoReply(wire: .preFreeze, clients: 2))])
+        defer { inUse.tearDown() }
+        #expect(FileManager.default.createFile(atPath: directory + "/alas-d", contents: Data("log".utf8)))
+        try FileManager.default.createDirectory(atPath: directory + "/logs", withIntermediateDirectories: false)
+
+        let signalled = ZmxEventLog<Int32>()
+        let result = ZmxPreFreezeMigration.run(
+            directory: URL(fileURLWithPath: directory),
+            sessionPrefix: "",
+            bundledWire: .v1,
+            probe: { ZmxIPCSocket.probe(path: $0, timeout: .milliseconds(300)) },
+            kill: { ZmxIPCSocket.killPreFreeze(path: $0, timeout: .seconds(2)) },
+            signal: { pid, _ in signalled.append(pid) },
+            isAlive: { _ in false },
+            processStart: { _ in zmxDaemonStart }
+        )
+
+        #expect(result == ZmxPreFreezeMigration.Result(
+            restarted: ["alas-b"], failed: [], inUse: ["alas-e"], unresponsive: ["alas-c"], current: ["alas-a"]))
+        #expect(signalled.all.isEmpty)
+        #expect(preFreeze.receivedPerConnection == [ZmxIPC.versionProbe, Data([5, 0, 0, 0, 0, 0, 0, 0])])
+        #expect(!FileManager.default.fileExists(atPath: preFreeze.path))
+        #expect(inUse.receivedPerConnection == [ZmxIPC.versionProbe])
+        #expect(FileManager.default.fileExists(atPath: inUse.path))
+        for name in ["alas-a", "alas-c", "alas-d", "alas-f", "logs"] {
+            #expect(FileManager.default.fileExists(atPath: directory + "/" + name), "\(name)")
+        }
+    }
+
+    /// Until the bundled zmx speaks v1, every daemon is one it can drive and
+    /// another Alas sharing the directory may be using it.
+    @Test func migrationDoesNothingWhileTheBundledZmxIsPreFreeze() throws {
+        let daemon = try ZmxFakeDaemonListener(script: .reply(zmxInfoReply(wire: .preFreeze)))
+        defer { daemon.tearDown() }
+        let probed = ZmxEventLog<String>()
+        let result = ZmxPreFreezeMigration.run(
+            directory: URL(fileURLWithPath: daemon.directory),
+            bundledWire: .preFreeze,
+            probe: { path in
+                probed.append(path)
+                return ZmxIPCSocket.probe(path: path)
+            },
+            kill: { _ in true },
+            signal: { _, _ in },
+            isAlive: { _ in false }
+        )
+        #expect(result == ZmxPreFreezeMigration.Result())
+        #expect(probed.all.isEmpty)
+        #expect(FileManager.default.fileExists(atPath: daemon.path))
+    }
+
+    /// Recovering one pane re-runs the migration for its socket alone, and
+    /// reports a daemon that now answers v1 as current.
+    @Test func migrationProbesOnlyTheNamedSockets() throws {
+        let directory = try zmxShortTempDirectory()
+        defer { try? FileManager.default.removeItem(atPath: directory) }
+        let daemons = try ["a", "b"].map {
+            try ZmxFakeDaemonListener(directory: directory, name: $0, scripts: [.silent])
+        }
+        defer { daemons.forEach { $0.tearDown() } }
+        let probed = ZmxEventLog<String>()
+        let result = ZmxPreFreezeMigration.run(
+            directory: URL(fileURLWithPath: directory),
+            names: ["b", "missing"],
+            bundledWire: .v1,
+            probe: { path in
+                probed.append((path as NSString).lastPathComponent)
+                return .v1(pid: 4242)
+            }
+        )
+        #expect(probed.all == ["b"])
+        #expect(result == ZmxPreFreezeMigration.Result(current: ["b"]))
+    }
+
+    /// Only sockets this Alas could attach are probed: the active prefix
+    /// followed by an Alas session name. Another tool's sockets, and those
+    /// of another `ZMX_SESSION_PREFIX`, are never touched.
+    @Test func migrationProbesOnlyTheActiveSessionNamespace() throws {
+        let directory = try zmxShortTempDirectory()
+        defer { try? FileManager.default.removeItem(atPath: directory) }
+        let daemons = try ["p-alas-a", "p-other", "q-alas-b", "alas-c"].map {
+            try ZmxFakeDaemonListener(directory: directory, name: $0, scripts: [.silent])
+        }
+        defer { daemons.forEach { $0.tearDown() } }
+        let probed = ZmxEventLog<String>()
+        _ = ZmxPreFreezeMigration.run(
+            directory: URL(fileURLWithPath: directory),
+            sessionPrefix: "p-",
+            bundledWire: .v1,
+            probe: { path in
+                probed.append((path as NSString).lastPathComponent)
+                return .unreachable
+            }
+        )
+        #expect(probed.all == ["p-alas-a"])
+    }
+
+    /// The socket goes only once the daemon has exited. A daemon that keeps
+    /// running gets `SIGTERM` (unless the `Kill` fallback already sent it),
+    /// then `SIGKILL`; one that outlives both, or a pid that cannot be
+    /// watched, leaves the socket in place. A pid that names a process
+    /// started after the probe belongs to another process once the daemon
+    /// has exited: it never gets a signal, and the socket goes.
+    @Test(arguments: [
+        (pid: Int32(4242), killHangsUp: false, exitsOn: SIGTERM, start: ZmxProbedStart.stable, signals: [SIGTERM]),
+        (pid: Int32(4242), killHangsUp: false, exitsOn: SIGKILL, start: .stable, signals: [SIGTERM, SIGKILL]),
+        (pid: Int32(4242), killHangsUp: true, exitsOn: SIGKILL, start: .stable, signals: [SIGTERM, SIGKILL]),
+        (pid: Int32(4242), killHangsUp: false, exitsOn: 0, start: .stable, signals: [SIGTERM, SIGKILL]),
+        (pid: Int32(1), killHangsUp: false, exitsOn: SIGTERM, start: .stable, signals: [Int32]()),
+        (pid: Int32(4242), killHangsUp: false, exitsOn: 0, start: .reusedAfterProbe, signals: []),
+        (pid: Int32(4242), killHangsUp: false, exitsOn: SIGTERM, start: .unreadable, signals: []),
+    ])
+    func migrationEscalatesSignalsUntilTheDaemonExits(
+        daemon shape: (pid: Int32, killHangsUp: Bool, exitsOn: Int32, start: ZmxProbedStart, signals: [Int32])
+    ) throws {
+        let daemon = try ZmxFakeDaemonListener(name: "alas-s", scripts: [.silent])
+        defer { daemon.tearDown() }
+        let signalled = ZmxEventLog<[Int32]>()
+        let startReads = ZmxEventLog<Int32>()
+        let result = ZmxPreFreezeMigration.run(
+            directory: URL(fileURLWithPath: daemon.directory),
+            sessionPrefix: "",
+            bundledWire: .v1,
+            probe: { _ in .preFreeze(pid: shape.pid) },
+            kill: { _ in shape.killHangsUp },
+            signal: { pid, signal in signalled.append([pid, signal]) },
+            // Exits on `exitsOn`; 0 never comes, so that daemon never exits.
+            isAlive: { _ in !signalled.all.contains { $0.last == shape.exitsOn } },
+            processStart: { pid in
+                startReads.append(pid)
+                switch shape.start {
+                case .stable: return zmxDaemonStart
+                case .unreadable: return nil
+                case .reusedAfterProbe:
+                    return startReads.all.count == 1
+                        ? zmxDaemonStart
+                        : ZmxPreFreezeMigration.ProcessStart(seconds: 2_000, microseconds: 0)
+                }
+            },
+            exitTimeout: .milliseconds(100)
+        )
+        let restarted = shape.pid > 1 && shape.start != .unreadable
+            && (shape.exitsOn != 0 || shape.start == .reusedAfterProbe)
+        #expect(signalled.all == shape.signals.map { [shape.pid, $0] })
+        #expect(FileManager.default.fileExists(atPath: daemon.path) == !restarted)
+        #expect(result == (restarted
+            ? ZmxPreFreezeMigration.Result(restarted: ["alas-s"], failed: [])
+            : ZmxPreFreezeMigration.Result(restarted: [], failed: ["alas-s"])))
+    }
+
+    /// Another Alas may start a fresh daemon under the same name once the
+    /// old one left its socket. That socket is not the one probed: it stays
+    /// bound, and the old session counts as restarted. Rebound before the
+    /// stop, it never gets the `Kill` or a signal meant for the old daemon.
+    @Test(arguments: [true, false])
+    func migrationLeavesASocketReboundDuringTheStop(reboundBeforeKill: Bool) throws {
+        let daemon = try ZmxFakeDaemonListener(name: "alas-s", scripts: [.silent])
+        defer { daemon.tearDown() }
+        let replacements = ZmxEventLog<ZmxFakeDaemonListener>()
+        defer { replacements.all.forEach { $0.tearDown() } }
+        let rebind: @Sendable (String) -> Void = { path in
+            _ = unlink(path)
+            if let fresh = try? ZmxFakeDaemonListener(
+                directory: (path as NSString).deletingLastPathComponent, name: "alas-s", scripts: [.silent]) {
+                replacements.append(fresh)
+            }
+        }
+        let killed = ZmxEventLog<String>()
+        let signalled = ZmxEventLog<Int32>()
+        let result = ZmxPreFreezeMigration.run(
+            directory: URL(fileURLWithPath: daemon.directory),
+            sessionPrefix: "",
+            bundledWire: .v1,
+            probe: { path in
+                if reboundBeforeKill { rebind(path) }
+                return .preFreeze(pid: 4242)
+            },
+            kill: { path in
+                killed.append(path)
+                if !reboundBeforeKill { rebind(path) }
+                return true
+            },
+            signal: { _, signal in signalled.append(signal) },
+            isAlive: { _ in false },
+            processStart: { _ in zmxDaemonStart }
+        )
+        #expect(replacements.all.count == 1)
+        #expect(FileManager.default.fileExists(atPath: daemon.path))
+        #expect(killed.all.count == (reboundBeforeKill ? 0 : 1))
+        #expect(signalled.all.isEmpty)
+        #expect(result == ZmxPreFreezeMigration.Result(restarted: ["alas-s"]))
+    }
+
+    @Test func migrationProbesConcurrently() throws {
+        let directory = try zmxShortTempDirectory()
+        defer { try? FileManager.default.removeItem(atPath: directory) }
+        // More sockets than a CI runner has cores: each one gets its own worker.
+        let daemons = try (0..<8).map {
+            try ZmxFakeDaemonListener(directory: directory, name: "alas-\($0)", scripts: [.silent, .silent])
+        }
+        defer { daemons.forEach { $0.tearDown() } }
+
+        let statuses = ZmxEventLog<ZmxDaemonStatus>()
+        let killed = ZmxEventLog<String>()
+        let clock = ContinuousClock()
+        let start = clock.now
+        let result = ZmxPreFreezeMigration.run(
+            directory: URL(fileURLWithPath: directory),
+            sessionPrefix: "",
+            bundledWire: .v1,
+            probe: { path in
+                let status = ZmxIPCSocket.probe(path: path, timeout: .milliseconds(300))
+                statuses.append(status)
+                return status
+            },
+            kill: { path in
+                killed.append(path)
+                return false
+            },
+            signal: { _, _ in }
+        )
+        #expect(clock.now - start < .seconds(1))
+        #expect(statuses.all == Array(repeating: .unreachable, count: 8))
+        #expect(killed.all.isEmpty)
+        #expect(result == ZmxPreFreezeMigration.Result(unresponsive: (0..<8).map { "alas-\($0)" }))
     }
 
     // MARK: Snapshot ordering
@@ -305,6 +554,17 @@ import Testing
     }
 }
 
+/// How the start time of the pid a probe reports reads from then on.
+enum ZmxProbedStart: Sendable {
+    case stable
+    /// The daemon exited after the probe and the system gave its pid to a
+    /// process that started later.
+    case reusedAfterProbe
+    case unreadable
+}
+
+let zmxDaemonStart = ZmxPreFreezeMigration.ProcessStart(seconds: 1_000, microseconds: 1)
+
 final class ZmxEventLog<Event: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
     private var events: [Event] = []
@@ -318,16 +578,18 @@ private func probeStatus(_ wire: ZmxIPC.Wire) -> ZmxDaemonStatus {
     wire == .v1 ? .v1(pid: 1) : .preFreeze(pid: 1)
 }
 
-/// The status a probe reports for `zmxInfoReply(wire:)`.
-func zmxInfoStatus(_ wire: ZmxIPC.Wire) -> ZmxDaemonStatus {
-    wire == .v1 ? .v1(pid: 4242) : .preFreeze(pid: 4242)
+/// The status a probe reports for `zmxInfoReply(wire:clients:)`.
+func zmxInfoStatus(_ wire: ZmxIPC.Wire, clients: UInt64 = 0) -> ZmxDaemonStatus {
+    wire == .v1 ? .v1(pid: 4242, clients: clients) : .preFreeze(pid: 4242, clients: clients)
 }
 
-/// A full `Info` reply for pid 4242: the header captured from a real daemon
-/// of each wire plus a `ZmxIPC.infoPayloadSize` payload.
-func zmxInfoReply(wire: ZmxIPC.Wire) -> Data {
+/// A full `Info` reply for pid 4242 with `clients` other clients attached:
+/// the header captured from a real daemon of each wire plus a
+/// `ZmxIPC.infoPayloadSize` payload.
+func zmxInfoReply(wire: ZmxIPC.Wire, clients: UInt64 = 0) -> Data {
     let headerHex = wire == .v1 ? "0601000028020000" : "0628020000000000"
     var payload = Data(count: ZmxIPC.infoPayloadSize)
+    payload.replaceSubrange(0..<8, with: withUnsafeBytes(of: clients.littleEndian, Array.init))
     payload.replaceSubrange(8..<12, with: withUnsafeBytes(of: Int32(4242).littleEndian, Array.init))
     let header = Data(stride(from: 0, to: headerHex.count, by: 2).map { index in
         let start = headerHex.index(headerHex.startIndex, offsetBy: index)
@@ -346,8 +608,34 @@ func zmxAmbiguousInfoReply() -> Data {
     return ZmxIPC.encode(.output, payload, wire: .v1) + zmxInfoReply(wire: .v1)
 }
 
-/// Accepts one connection on a Unix socket in a short temp dir, records every
-/// byte until the peer closes, and plays a scripted reply.
+/// A short temp directory for Unix sockets (`sun_path` caps paths near 104 bytes).
+func zmxShortTempDirectory() throws -> String {
+    var template = Array("/tmp/zmxt-XXXXXX".utf8CString)
+    guard let dir = template.withUnsafeMutableBufferPointer({ mkdtemp($0.baseAddress) }).map({ String(cString: $0) })
+    else { throw POSIXError(.EIO) }
+    return dir
+}
+
+/// Binds a Unix socket at `path` and closes it without unlinking, like a
+/// daemon that exited without cleaning up: the file stays, connects fail.
+func zmxStaleSocket(at path: String) throws {
+    let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+    guard fd >= 0 else { throw POSIXError(.EIO) }
+    defer { Darwin.close(fd) }
+    var address = sockaddr_un()
+    address.sun_family = sa_family_t(AF_UNIX)
+    withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: Array(path.utf8)) }
+    let bound = withUnsafePointer(to: &address) { pointer in
+        pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+            Darwin.bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+        }
+    }
+    guard bound == 0 else { throw POSIXError(.EADDRINUSE) }
+}
+
+/// Listens on a Unix socket and serves one connection per script, in order:
+/// records every byte until the peer closes and plays that script's reply.
+/// Without a `directory` it binds `s` in its own short temp dir.
 final class ZmxFakeDaemonListener: @unchecked Sendable {
     enum Script: Sendable {
         case reply(Data)
@@ -357,18 +645,22 @@ final class ZmxFakeDaemonListener: @unchecked Sendable {
     }
 
     let path: String
-    private let directory: String
+    let directory: String
+    private let ownsDirectory: Bool
     private let listener: Int32
     private let lock = NSLock()
-    private var buffer = Data()
+    private var connections: [Data] = []
     private let finished = DispatchSemaphore(value: 0)
 
-    init(script: Script) throws {
-        var template = Array("/tmp/zmxt-XXXXXX".utf8CString)
-        guard let dir = template.withUnsafeMutableBufferPointer({ mkdtemp($0.baseAddress) }).map({ String(cString: $0) })
-        else { throw POSIXError(.EIO) }
-        directory = dir
-        path = dir + "/s"
+    convenience init(script: Script) throws {
+        try self.init(scripts: [script])
+    }
+
+    init(directory: String? = nil, name: String = "s", scripts: [Script]) throws {
+        let dir = try directory ?? zmxShortTempDirectory()
+        self.directory = dir
+        ownsDirectory = directory == nil
+        path = dir + "/" + name
         listener = socket(AF_UNIX, SOCK_STREAM, 0)
         guard listener >= 0 else { throw POSIXError(.EIO) }
         var address = sockaddr_un()
@@ -381,33 +673,52 @@ final class ZmxFakeDaemonListener: @unchecked Sendable {
         }
         guard bound == 0, Darwin.listen(listener, 1) == 0 else {
             Darwin.close(listener)
-            try? FileManager.default.removeItem(atPath: dir)
+            if ownsDirectory { try? FileManager.default.removeItem(atPath: dir) }
             throw POSIXError(.EADDRINUSE)
         }
         // A distinct name: Swift 6.2 rejects the closures above if a local
         // shadows the `listener` property later in this initializer.
         let listenerFD = listener
-        Thread { [self] in serve(listener: listenerFD, script: script) }.start()
+        Thread { [self] in
+            defer { finished.signal() }
+            for script in scripts {
+                guard serve(listener: listenerFD, script: script) else { return }
+            }
+        }.start()
     }
 
-    /// Everything received, once the peer has closed (or after 5 seconds).
+    /// Everything received over all connections, once every script has been
+    /// served (or after 5 seconds).
     var received: Data {
+        receivedPerConnection.reduce(Data(), +)
+    }
+
+    /// The bytes of each connection, in accept order.
+    var receivedPerConnection: [Data] {
         _ = finished.wait(timeout: .now() + 5)
         finished.signal()
-        return lock.withLock { buffer }
+        return lock.withLock { connections }
     }
 
     func tearDown() {
         Darwin.shutdown(listener, SHUT_RDWR)
         Darwin.close(listener)
-        try? FileManager.default.removeItem(atPath: directory)
+        if ownsDirectory {
+            try? FileManager.default.removeItem(atPath: directory)
+        } else {
+            unlink(path)
+        }
     }
 
-    private func serve(listener: Int32, script: Script) {
-        defer { finished.signal() }
+    /// Serves one connection; false when accepting failed.
+    private func serve(listener: Int32, script: Script) -> Bool {
         let client = Darwin.accept(listener, nil, nil)
-        guard client >= 0 else { return }
+        guard client >= 0 else { return false }
         defer { Darwin.close(client) }
+        let index = lock.withLock { () -> Int in
+            connections.append(Data())
+            return connections.count - 1
+        }
         // The code under test may hang up while a reply is still streaming.
         var on: Int32 = 1
         setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
@@ -419,10 +730,10 @@ final class ZmxFakeDaemonListener: @unchecked Sendable {
         var chunk = [UInt8](repeating: 0, count: 4096)
         while true {
             let n = Darwin.read(client, &chunk, chunk.count)
-            if n <= 0 { return }
+            if n <= 0 { return true }
             let total = lock.withLock { () -> Int in
-                buffer.append(contentsOf: chunk[0..<n])
-                return buffer.count
+                connections[index].append(contentsOf: chunk[0..<n])
+                return connections[index].count
             }
             switch script {
             case .silent:
@@ -437,13 +748,13 @@ final class ZmxFakeDaemonListener: @unchecked Sendable {
                     replied = true
                     var offset = 0
                     while offset < data.count {
-                        guard send(data[offset..<min(offset + size, data.count)]) else { return }
+                        guard send(data[offset..<min(offset + size, data.count)]) else { return true }
                         offset += size
                         usleep(2_000)
                     }
                 }
             case .closeAfterReceiving(let count):
-                if total >= count { return }
+                if total >= count { return true }
             }
         }
     }
@@ -507,6 +818,19 @@ final class ZmxSocketPair: @unchecked Sendable {
 /// client hands it geometry. Runs in an isolated `ZMX_DIR`.
 @Suite(.enabled(if: ZmxEnv.resolve().binaryURL != nil, "requires the bundled zmx binary"))
 struct ZmxPassiveClientIntegrationTests {
+    /// The migration trusts `ZmxIPC.bundledWire`; a zmx bump that forgets to
+    /// flip it must fail here.
+    @Test func bundledWireMatchesTheBundledBinary() throws {
+        let session = try ZmxProbeSession()
+        defer { session.tearDown() }
+        let wire: ZmxIPC.Wire? = switch ZmxIPCSocket.probe(path: session.socketPath, timeout: .seconds(5)) {
+        case .v1: ZmxIPC.Wire.v1
+        case .preFreeze: ZmxIPC.Wire.preFreeze
+        case .unreachable: nil
+        }
+        #expect(wire == ZmxIPC.bundledWire)
+    }
+
     @Test func passiveViewerLeavesLeadershipAndGeometryWithTheHost() async throws {
         let session = try ZmxProbeSession()
         defer { session.tearDown() }

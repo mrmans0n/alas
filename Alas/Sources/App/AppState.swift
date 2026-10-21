@@ -534,6 +534,47 @@ final class AppState {
 
     @ObservationIgnored
     private let terminalSessionOpener: TerminalSessionOpener?
+
+    /// The socket directory, and the socket names to limit the run to (nil
+    /// for every socket).
+    typealias ZmxMigrationRunner = @Sendable (URL, Set<String>?) -> ZmxPreFreezeMigration.Result
+
+    /// Stops pre-freeze zmx daemons in the given socket directory. nil runs
+    /// `ZmxPreFreezeMigration.run(directory:names:)` when zmx is available
+    /// outside a test host; tests inject a runner instead.
+    @ObservationIgnored
+    var zmxMigrationRunner: ZmxMigrationRunner?
+    /// Whether a zmx socket path still exists. A re-run that neither
+    /// restarted a session nor finds its socket gone leaves it blocked;
+    /// tests override it alongside `zmxMigrationRunner`.
+    @ObservationIgnored
+    var zmxSocketExists: @Sendable (URL) -> Bool = { url in
+        var info = stat()
+        return lstat(url.path, &info) == 0 || errno != ENOENT
+    }
+    /// The wire of the bundled zmx. The migration runs only once it is v1;
+    /// tests override it to exercise either side of the zmx bump.
+    @ObservationIgnored
+    var bundledZmxWire: ZmxIPC.Wire = ZmxIPC.bundledWire
+    /// The once-per-instance pre-freeze migration. Started by the first
+    /// `awaitZmxMigration()` call; every restore of a persisted session and
+    /// every orphan sweep awaits it.
+    @ObservationIgnored
+    private var zmxMigration: Task<Void, Never>?
+    /// zmx session names the migration left pre-freeze, or could not rule
+    /// out: in use by another client, not stoppable, or not answering the
+    /// probe. Restores never attach them, because the bundled zmx shows a
+    /// stuck terminal on a pre-freeze daemon.
+    @ObservationIgnored
+    private var zmxSessionsLeftPreFreeze: Set<String> = []
+    /// The subset a restore has already skipped, and warned about, once.
+    /// Restoring one again re-runs the migration for it first.
+    @ObservationIgnored
+    private var zmxSessionsSkippedPreFreeze: Set<String> = []
+    /// The latest single-session re-run; the next one waits for it, so two
+    /// runs never stop the same daemon at once.
+    @ObservationIgnored
+    private var zmxMigrationRetry: Task<Void, Never>?
     @ObservationIgnored
     private let closeTabConfirmer: CloseTabConfirmer?
     @ObservationIgnored
@@ -2101,6 +2142,9 @@ final class AppState {
     /// after `projectsManager.refreshAll()` so worktrees actually exist.
     func reloadTabs() {
         let restoringActiveTabs = restoreActiveTabsOnNextReload
+        // Start stopping pre-freeze zmx daemons before anything attaches to
+        // or sweeps persisted sessions; those paths await this same task.
+        startZmxMigrationIfNeeded()
         Task { @MainActor [weak self] in
             guard let self else { return }
             await self.loadWorkspaces()
@@ -2121,7 +2165,8 @@ final class AppState {
         // daemon sessions get killed via `closeTab` and inactive /
         // other-worktree tabs don't linger waiting for someone to open
         // them (which is the only thing that drives the per-tab guard
-        // in `restoreTerminalTabIfNeeded`).
+        // in `restoreTerminalTabIfNeeded`). The tabs go now; their `zmx kill`
+        // waits for the migration through `TerminalService.killGate`.
         if !config.terminal.keepSessionsAlive {
             for worktreeId in allWorktreeIds {
                 for tab in tabs.tabs(forWorktree: worktreeId) {
@@ -2145,6 +2190,160 @@ final class AppState {
         Task { @MainActor [weak self] in
             await self?.bootstrapScheduledACPSessions(worktreeIds: allWorktreeIds)
         }
+    }
+
+    /// Waits for the pre-freeze zmx migration, starting it on first use.
+    /// Anything that attaches to or sweeps a session persisted by an earlier
+    /// launch awaits this first: a pre-freeze daemon shows a stuck terminal
+    /// on attach and hangs `zmx kill`.
+    func awaitZmxMigration() async {
+        await startZmxMigrationIfNeeded().value
+    }
+
+    /// Starts the migration once per instance without suspending, so
+    /// concurrent callers share one run. It runs even when
+    /// `keepSessionsAlive` is off, because that path kills persisted
+    /// sessions with `zmx kill`.
+    @discardableResult
+    private func startZmxMigrationIfNeeded() -> Task<Void, Never> {
+        if let zmxMigration { return zmxMigration }
+        let task: Task<Void, Never>
+        if let work = zmxMigrationWork() {
+            let migration = Task.detached(priority: .userInitiated) {
+                await BlockingWork.run(work)
+            }
+            // Kills dispatched meanwhile, such as the keep-alive-off prune,
+            // run after it. Detached: `waitForPendingKills` blocks main.
+            terminal.killGate = Task.detached { _ = await migration.value }
+            task = Task { @MainActor [weak self] in
+                let result = await migration.value
+                self?.recordZmxMigration(result)
+            }
+        } else {
+            task = Task {}
+        }
+        zmxMigration = task
+        return task
+    }
+
+    /// The blocking migration for this instance, or nil when there is no zmx
+    /// to migrate. Nothing migrates while the bundled zmx is itself
+    /// pre-freeze: every daemon is one it can drive, and builds share the
+    /// socket directory, so stopping them would kill another Alas' shells.
+    /// An injected runner needs only the socket directory; the default also
+    /// needs the bundled binary and never runs in a test host, which shares
+    /// its socket directory with the Alas the developer runs.
+    private func zmxMigrationWork(
+        sockets: Set<String>? = nil
+    ) -> (@Sendable () -> ZmxPreFreezeMigration.Result)? {
+        guard bundledZmxWire == .v1 else { return nil }
+        let env = terminal.zmxClient.env
+        guard let directory = env.zmxDir else { return nil }
+        if let runner = zmxMigrationRunner {
+            return { runner(directory, sockets) }
+        }
+        guard env.isAvailable, !Self.isRunningUnitTests else { return nil }
+        return { ZmxPreFreezeMigration.run(directory: directory, names: sockets) }
+    }
+
+    /// Logs a migration run and updates the sessions left pre-freeze: one a
+    /// run found in use, could not stop, or got no answer from is blocked. A
+    /// session stops being blocked only once a run restarted it, found its
+    /// daemon current (v1), or its socket is gone (`recovered`) so
+    /// `zmx attach` starts a fresh one. A
+    /// re-run that could not classify it, such as a probe timeout, keeps it
+    /// blocked: it was confirmed pre-freeze and still may be.
+    private func recordZmxMigration(_ result: ZmxPreFreezeMigration.Result, recovered: Set<String> = []) {
+        for name in result.restarted {
+            Self.logger.info("Restarted pre-freeze zmx session \(name, privacy: .public)")
+        }
+        for name in result.failed {
+            Self.logger.warning("Could not stop pre-freeze zmx session \(name, privacy: .public)")
+        }
+        for name in result.inUse {
+            Self.logger.info("Left pre-freeze zmx session \(name, privacy: .public) running: another client is attached")
+        }
+        for name in result.unresponsive {
+            Self.logger.warning("Left zmx session \(name, privacy: .public) running: its daemon did not answer the probe")
+        }
+        // Block first, then clear: a socket that vanished after the run
+        // classified it means `zmx attach` is safe, whatever that run saw.
+        zmxSessionsLeftPreFreeze.formUnion(
+            (result.inUse + result.failed + result.unresponsive).compactMap(Self.zmxSessionName(forSocket:)))
+        zmxSessionsLeftPreFreeze.subtract((result.restarted + result.current).compactMap(Self.zmxSessionName(forSocket:)))
+        zmxSessionsLeftPreFreeze.subtract(recovered)
+    }
+
+    /// Whether a restore must leave the pane `name` would attach without a
+    /// session: the migration left that daemon pre-freeze. Warns the first
+    /// time a session is skipped.
+    private func zmxSessionIsLeftPreFreeze(_ name: String) -> Bool {
+        guard zmxSessionsLeftPreFreeze.contains(name) else { return false }
+        if zmxSessionsSkippedPreFreeze.insert(name).inserted {
+            Self.logger.warning(
+                "Not attaching pre-freeze zmx session \(name, privacy: .public): it is in use, could not be stopped, or did not answer"
+            )
+        }
+        return true
+    }
+
+    /// Re-runs the migration for the `candidates` a restore has already
+    /// skipped once, so asking for such a pane again recovers it once the
+    /// other client has detached. Runs one at a time.
+    private func retryZmxMigration(forSessions candidates: Set<String>) async {
+        guard !candidates.isDisjoint(with: zmxSessionsSkippedPreFreeze) else { return }
+        let previous = zmxMigrationRetry
+        let retry = Task { @MainActor [weak self] in
+            await previous?.value
+            guard let self else { return }
+            let sessions = candidates
+                .intersection(zmxSessionsSkippedPreFreeze)
+                .intersection(zmxSessionsLeftPreFreeze)
+            guard !sessions.isEmpty,
+                  let directory = terminal.zmxClient.env.zmxDir,
+                  let work = zmxMigrationWork(sockets: Set(sessions.map { Self.zmxSessionPrefix + $0 }))
+            else { return }
+            let socketExists = zmxSocketExists
+            let (result, gone) = await Task.detached(priority: .userInitiated) {
+                await BlockingWork.run { () -> (ZmxPreFreezeMigration.Result, Set<String>) in
+                    let result = work()
+                    let gone = sessions.filter {
+                        !socketExists(directory.appendingPathComponent(Self.zmxSessionPrefix + $0))
+                    }
+                    return (result, gone)
+                }
+            }.value
+            recordZmxMigration(result, recovered: gone)
+        }
+        zmxMigrationRetry = retry
+        await retry.value
+    }
+
+    /// The zmx session names the restore of `tabId` could attach: the
+    /// owner-scoped name of each leaf without a live session, and for a
+    /// worktree its legacy name too.
+    private func zmxSessionNamesAwaitingRestore(owner: SessionOwnerID, tabId: TabID) -> Set<String> {
+        guard let tab = tabs.tabs(for: owner).first(where: { $0.id == tabId }),
+              case .terminal(let state) = tab else { return [] }
+        var names: Set<String> = []
+        for leaf in state.root.leaves() where terminal.registry.session(for: leaf.id) == nil {
+            names.insert(ZmxSessionName.derive(owner: owner, leafId: leaf.id))
+            if case .worktree = owner { names.insert(ZmxSessionName.legacy(leafId: leaf.id)) }
+        }
+        return names
+    }
+
+    /// zmx names a session's socket `ZMX_SESSION_PREFIX` + its name.
+    private nonisolated static var zmxSessionPrefix: String {
+        ProcessInfo.processInfo.environment["ZMX_SESSION_PREFIX"] ?? ""
+    }
+
+    /// The session behind a socket name, or nil when the socket lacks the
+    /// prefix and so is no session this process could attach.
+    private nonisolated static func zmxSessionName(forSocket socket: String) -> String? {
+        let prefix = zmxSessionPrefix
+        guard socket.hasPrefix(prefix) else { return nil }
+        return String(socket.dropFirst(prefix.count))
     }
 
     /// Debounce window for status rescans. Activation, selection and topology
@@ -2521,7 +2720,18 @@ final class AppState {
     /// so persisted leaves are visible; without this, sessions leaked by
     /// any prior bug (or quit race) would persist forever because nothing
     /// would ever try to kill them on subsequent launches.
+    ///
+    /// Waits for the pre-freeze migration first. Leaf ids are read after the
+    /// wait so a pane opened meanwhile is not swept as an orphan.
     private func sweepOrphanZmxSessions(worktreeIds: [String]) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await awaitZmxMigration()
+            sweepOrphanZmxSessionsNow(worktreeIds: worktreeIds)
+        }
+    }
+
+    private func sweepOrphanZmxSessionsNow(worktreeIds: [String]) {
         var leafIds: Set<String> = []
         for worktreeId in worktreeIds {
             for tab in tabs.tabs(forWorktree: worktreeId) {
@@ -2552,7 +2762,17 @@ final class AppState {
         }
     }
 
+    /// Like `sweepOrphanZmxSessions`, waits for the pre-freeze migration and
+    /// reads the known leaves after it.
     private func sweepOrphanWorkspaceCheckoutZmxSessions() {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await awaitZmxMigration()
+            sweepOrphanWorkspaceCheckoutZmxSessionsNow()
+        }
+    }
+
+    private func sweepOrphanWorkspaceCheckoutZmxSessionsNow() {
         let knownLeavesByOwner = workspaceCheckoutTerminalLeafIDsByOwner()
         terminal.sweepWorkspaceCheckoutOrphans(knownLeavesByOwner: knownLeavesByOwner)
 
@@ -3497,34 +3717,6 @@ final class AppState {
             }
             return true
         }
-    }
-
-    /// Restores checkout tabs under their checkout owner. A saved cwd without
-    /// matching persisted location is intentionally discarded and restarts at
-    /// the authoritative root rather than trusting an ambiguous path.
-    @discardableResult
-    func restoreWorkspaceCheckoutTerminalTabIfNeeded(_ checkout: WorkspaceCheckout, tabID: TabID) throws -> Tab? {
-        let context = workspaceTerminalContext(for: checkout)
-        let owner = context.owner
-        guard let tab = tabs.tabs(for: owner).first(where: { $0.id == tabID }),
-              case .terminal(let state) = tab
-        else { return nil }
-        for leaf in state.root.leaves() where terminal.registry.session(for: leaf.id) == nil {
-            let session = try terminal.openCheckoutSession(
-                context: context,
-                cfg: config.terminal,
-                theme: themeStore.current,
-                forcedCwd: TerminalService.checkoutRestorationCwd(
-                    savedPath: leaf.lastCwd,
-                    context: context,
-                    savedLocation: leaf.lastCwdLocation
-                ),
-                forcedCwdLocation: leaf.lastCwdLocation,
-                leafId: leaf.id
-            )
-            session.registerForegroundPid(with: harness.detector)
-        }
-        return tabs.tabs(for: owner).first(where: { $0.id == tabID })
     }
 
     func workspaceCoordinator() -> WorkspaceCheckoutCoordinator {
@@ -8045,6 +8237,8 @@ final class AppState {
 
     @discardableResult
     func restoreTerminalTabIfNeededAsync(worktreeId: String, tabId: TabID) async throws -> Tab? {
+        await awaitZmxMigration()
+        await retryZmxMigration(forSessions: zmxSessionNamesAwaitingRestore(owner: .worktree(worktreeId), tabId: tabId))
         guard await !checkpointTerminalAdmissionDisabledAfterDiscovery(worktreeId: worktreeId) else {
             throw TerminalLaunchError.checkpointRecoveryRequired
         }
@@ -8061,10 +8255,12 @@ final class AppState {
 
     @discardableResult
     func restoreTerminalTabIfNeededAsync(owner: SessionOwnerID, tabId: TabID) async throws -> Tab? {
+        await awaitZmxMigration()
         switch owner {
         case .worktree(let worktreeID):
             return try await restoreTerminalTabIfNeededAsync(worktreeId: worktreeID, tabId: tabId)
         case .workspaceCheckout(let checkoutID, _):
+            await retryZmxMigration(forSessions: zmxSessionNamesAwaitingRestore(owner: owner, tabId: tabId))
             return try await restoreCheckoutTerminalTabIfNeeded(checkoutID: checkoutID, owner: owner, tabID: tabId)
         }
     }
@@ -8099,6 +8295,8 @@ final class AppState {
         let context = workspaceTerminalContext(for: checkout)
         for leaf in state.root.leaves() {
             if terminal.registry.session(for: leaf.id) != nil { continue }
+            if case .local = context.executionLocation,
+               zmxSessionIsLeftPreFreeze(ZmxSessionName.derive(owner: owner, leafId: leaf.id)) { continue }
             let forcedCwd = await validatedWorkspaceCheckoutRestorationCwd(
                 savedPath: leaf.lastCwd,
                 context: context,
@@ -8203,6 +8401,12 @@ final class AppState {
                     legacySessionInfos: $0
                 )
             }
+            // A pre-freeze daemon would attach as a stuck terminal; leave the
+            // pane without a session until a later restore recovers it.
+            if project.host == nil,
+               zmxSessionIsLeftPreFreeze(
+                   preResolvedZmxSessionName ?? ZmxSessionName.derive(worktreeId: worktree.id, leafId: leaf.id)
+               ) { continue }
             if currentState.runScriptLeafId == leaf.id {
                 let reattachingPersistedSession = preResolvedZmxSessionName.map { sessionName in
                     legacySessionInfos?.contains { $0.name == sessionName } ?? false
