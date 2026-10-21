@@ -159,7 +159,7 @@ struct AppStateKeepSessionsAliveTests {
         #expect(state.tabs.tabs(forWorktree: worktree.id).isEmpty)
     }
 
-    @Test func zmxMigrationRunsOncePerProcess() async {
+    @Test func zmxMigrationRunsOncePerAppState() async {
         let state = AppState()
         let migration = ZmxMigrationGate(blocked: false)
         state.zmxMigrationRunner = migration.runner

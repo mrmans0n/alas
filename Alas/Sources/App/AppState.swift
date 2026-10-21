@@ -3573,34 +3573,6 @@ final class AppState {
         }
     }
 
-    /// Restores checkout tabs under their checkout owner. A saved cwd without
-    /// matching persisted location is intentionally discarded and restarts at
-    /// the authoritative root rather than trusting an ambiguous path.
-    @discardableResult
-    func restoreWorkspaceCheckoutTerminalTabIfNeeded(_ checkout: WorkspaceCheckout, tabID: TabID) throws -> Tab? {
-        let context = workspaceTerminalContext(for: checkout)
-        let owner = context.owner
-        guard let tab = tabs.tabs(for: owner).first(where: { $0.id == tabID }),
-              case .terminal(let state) = tab
-        else { return nil }
-        for leaf in state.root.leaves() where terminal.registry.session(for: leaf.id) == nil {
-            let session = try terminal.openCheckoutSession(
-                context: context,
-                cfg: config.terminal,
-                theme: themeStore.current,
-                forcedCwd: TerminalService.checkoutRestorationCwd(
-                    savedPath: leaf.lastCwd,
-                    context: context,
-                    savedLocation: leaf.lastCwdLocation
-                ),
-                forcedCwdLocation: leaf.lastCwdLocation,
-                leafId: leaf.id
-            )
-            session.registerForegroundPid(with: harness.detector)
-        }
-        return tabs.tabs(for: owner).first(where: { $0.id == tabID })
-    }
-
     func workspaceCoordinator() -> WorkspaceCheckoutCoordinator {
         core.workspaceCoordinator()
     }
