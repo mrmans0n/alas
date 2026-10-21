@@ -141,6 +141,15 @@ import Testing
         let silent = try ZmxFakeDaemonListener(script: .silent)
         defer { silent.tearDown() }
         #expect(!ZmxIPCSocket.killPreFreeze(path: silent.path, timeout: .milliseconds(200)))
+
+        // A daemon that keeps broadcasting output while its shutdown stalls
+        // (~2 s of 64-byte chunks) must not hold the kill past its deadline.
+        let chatty = try ZmxFakeDaemonListener(script: .replyInChunks(Data(repeating: 0x41, count: 64 * 1000), size: 64))
+        defer { chatty.tearDown() }
+        let clock = ContinuousClock()
+        let start = clock.now
+        #expect(!ZmxIPCSocket.killPreFreeze(path: chatty.path, timeout: .milliseconds(200)))
+        #expect(clock.now - start < .seconds(1))
     }
 
     // MARK: Snapshot ordering
@@ -397,8 +406,12 @@ final class ZmxFakeDaemonListener: @unchecked Sendable {
         let client = Darwin.accept(listener, nil, nil)
         guard client >= 0 else { return }
         defer { Darwin.close(client) }
-        func send(_ data: Data) {
-            _ = data.withUnsafeBytes { Darwin.write(client, $0.baseAddress, $0.count) }
+        // The code under test may hang up while a reply is still streaming.
+        var on: Int32 = 1
+        setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+        @discardableResult
+        func send(_ data: Data) -> Bool {
+            data.withUnsafeBytes { Darwin.write(client, $0.baseAddress, $0.count) } == data.count
         }
         var replied = false
         var chunk = [UInt8](repeating: 0, count: 4096)
@@ -422,7 +435,7 @@ final class ZmxFakeDaemonListener: @unchecked Sendable {
                     replied = true
                     var offset = 0
                     while offset < data.count {
-                        send(data[offset..<min(offset + size, data.count)])
+                        guard send(data[offset..<min(offset + size, data.count)]) else { return }
                         offset += size
                         usleep(2_000)
                     }
