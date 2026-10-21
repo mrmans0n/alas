@@ -41,19 +41,20 @@ struct AlasApp: App {
         // Applies the AppKit menu-crash workaround on the affected OS, and
         // is a no-op everywhere else; see SystemMenuItems.swift.
         AppKitMenuInjection.applyOptOut()
+        let appState: AppState
         if Self.isRunningUnitTests {
-            _state = State(initialValue: AppState())
+            appState = AppState()
         } else {
             // Before any state is read: one process writes a data directory
             // at a time, and a running `alas-host` keeps it.
             Self.takeDataDirectoryLock()
             try? WorkspaceEditJournal().cleanSuccessfulRecords(retaining: [])
             let recovery = StartupRecovery()
-            _state = State(initialValue: AppState(
-                restoreActiveTabsOnStartup: !recovery.begin()
-            ))
+            appState = AppState(restoreActiveTabsOnStartup: !recovery.begin())
             AlasTerminationCoordinator.shared.finish = recovery.finish
+            ACPDictationShortcutMonitor.install { [weak appState] in appState?.binding(for: .dictate) }
         }
+        _state = State(initialValue: appState)
         BundledFontRegistrar.registerFonts()
         // Refresh Gatekeeper cache when the user returns from System Settings
         // after granting permission to a blocked LSP binary.

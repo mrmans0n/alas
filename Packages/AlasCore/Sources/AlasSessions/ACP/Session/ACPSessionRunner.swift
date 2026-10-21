@@ -1369,6 +1369,7 @@ public final class ACPSessionRunner {
                     streamingLeaseLost = true
                 }
                 let dirty = session.apply(params.update, worktreeRoot: worktreePath)
+                dismissInterruptedTurnRecoveryAfterLiveActivity(dirty)
                 if !streamingLeaseLost {
                     scheduleStreamingPersist(
                         dirty,
@@ -1378,6 +1379,7 @@ public final class ACPSessionRunner {
                 }
             } else {
                 let dirty = session.apply(params.update, worktreeRoot: worktreePath)
+                dismissInterruptedTurnRecoveryAfterLiveActivity(dirty)
                 flushStreamingPersist()
                 var suggestionsHandled: Bool = false
                 if case .availableCommandsUpdate(let suggestions) = params.update {
@@ -1449,6 +1451,19 @@ public final class ACPSessionRunner {
             break
         }
         applyPendingCompletedOutputBoundaryIfReady(flushQueueWhenReady: flushQueueWhenBoundaryReady)
+    }
+
+    private func dismissInterruptedTurnRecoveryAfterLiveActivity(_ touchedIndices: Set<Int>) {
+        guard activePromptID == nil,
+              holdsLeaseForWrite(),
+              touchedIndices.contains(where: {
+                  session.transcript.messages.indices.contains($0)
+                      && session.transcript.messages[$0].isAgentSideProgress
+              })
+        else { return }
+        let changes = session.dismissInterruptedTurnRecoveryAfterActivity()
+        if changes.queueChanged { persistQueue() }
+        if changes.directTurnChanged { persistDirectTurnInFlight() }
     }
 
     /// Whether an incoming update belongs to a native subagent rather than

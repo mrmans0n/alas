@@ -713,6 +713,8 @@ struct ACPUserMessageText: View {
     let session: ACPSession
     /// False for remote sessions, where a local existence check says nothing.
     let chipsAbsolutePaths: Bool
+    /// Symbol mentions to badge inline; nil when the message has none.
+    let symbolMentions: ACPTranscriptSymbolMentions?
     @State private var agentSuggestions: [ACPPromptSuggestion]
     @Environment(\.acpUpstreamReferenceStore) private var upstreamReferences
     @Environment(\.acpPromptCardContext) private var promptCardContext
@@ -724,7 +726,8 @@ struct ACPUserMessageText: View {
         pastedSpans: [ACPPastedTextSpan],
         typography: ACPChatTypography,
         session: ACPSession,
-        chipsAbsolutePaths: Bool
+        chipsAbsolutePaths: Bool,
+        symbolMentions: ACPTranscriptSymbolMentions?
     ) {
         self.text = text
         self.attachments = attachments
@@ -732,6 +735,7 @@ struct ACPUserMessageText: View {
         self.typography = typography
         self.session = session
         self.chipsAbsolutePaths = chipsAbsolutePaths
+        self.symbolMentions = symbolMentions
         _agentSuggestions = State(initialValue: session.promptSuggestions)
     }
 
@@ -745,6 +749,7 @@ struct ACPUserMessageText: View {
             .environment(\.acpPastedTextContents, pasted)
             .environment(\.acpUpstreamReferenceChipping, chipping)
             .environment(\.acpAbsolutePathChipping, chipsAbsolutePaths)
+            .environment(\.acpSymbolMentions, symbolMentions)
             .onReceive(session.$promptSuggestions) { latest in
                 if latest != agentSuggestions { agentSuggestions = latest }
             }

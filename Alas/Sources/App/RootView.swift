@@ -41,7 +41,6 @@ struct RootView: View {
     @State private var editingProject: ProjectConfig?
     @State private var removingProject: ProjectConfig?
     @State private var newWorktreePresentation: NewWorktreePresentation?
-    @State private var worktreeCleanupPresentation: WorktreeCleanupPresentation?
     @State private var creatingWorkspaceCheckout: Workspace?
     @State private var editingWorkspace: Workspace?
     @State private var reviewSessionLaunchError: ReviewSessionLaunchError?
@@ -89,8 +88,7 @@ struct RootView: View {
                 newProjectPresentation: $newProjectPresentation,
                 editingProject: $editingProject,
                 removingProject: $removingProject,
-                newWorktreePresentation: $newWorktreePresentation,
-                worktreeCleanupPresentation: $worktreeCleanupPresentation
+                newWorktreePresentation: $newWorktreePresentation
             ))
             .sheet(item: $creatingWorkspaceCheckout) { workspace in
                 CreateWorkspaceCheckoutDialog(
@@ -177,6 +175,7 @@ struct RootView: View {
                 state.startRunScheduler()
                 state.startReviewShepherd()
                 state.startArchivedWorktreePruning()
+                state.startWorktreeCleanupReminders()
                 // Last, so the card lands on the restored workspace rather
                 // than the loading UI.
                 state.whatsNew.evaluateOnLaunch(hasConfiguredProjects: !state.projectsManager.projects.isEmpty)
@@ -284,7 +283,7 @@ struct RootView: View {
                 newWorktreePresentation = NewWorktreePresentation(projectId: projectId)
             },
             onCleanupWorktrees: { projectId in
-                worktreeCleanupPresentation = WorktreeCleanupPresentation(projectId: projectId)
+                state.presentWorktreeCleanup(projectId: projectId)
             },
             onHideSidebar: {
                 state.config.sidebarVisible = false
@@ -721,7 +720,6 @@ private struct RootPresentationHandlers: ViewModifier {
     @Binding var editingProject: ProjectConfig?
     @Binding var removingProject: ProjectConfig?
     @Binding var newWorktreePresentation: NewWorktreePresentation?
-    @Binding var worktreeCleanupPresentation: WorktreeCleanupPresentation?
 
     func body(content: Content) -> some View {
         content
@@ -733,8 +731,7 @@ private struct RootPresentationHandlers: ViewModifier {
             ))
             .modifier(RootWorktreePresentationHandlers(
                 state: state,
-                newWorktreePresentation: $newWorktreePresentation,
-                worktreeCleanupPresentation: $worktreeCleanupPresentation
+                newWorktreePresentation: $newWorktreePresentation
             ))
             .modifier(RootRunScriptPresentationHandlers(state: state))
             .modifier(RootReviewMergePresentationHandlers(state: state))
@@ -809,7 +806,6 @@ private struct RootProjectPresentationHandlers: ViewModifier {
 private struct RootWorktreePresentationHandlers: ViewModifier {
     @Bindable var state: AppState
     @Binding var newWorktreePresentation: NewWorktreePresentation?
-    @Binding var worktreeCleanupPresentation: WorktreeCleanupPresentation?
 
     func body(content: Content) -> some View {
         content
@@ -823,11 +819,11 @@ private struct RootWorktreePresentationHandlers: ViewModifier {
                     presetProjectId: presentation.projectId
                 )
             }
-            .sheet(item: $worktreeCleanupPresentation) { presentation in
+            .sheet(item: $state.worktreeCleanupPresentation) { presentation in
                 WorktreeCleanupSheetHost(
                     state: state,
                     projectId: presentation.projectId,
-                    onClose: { worktreeCleanupPresentation = nil }
+                    onClose: { state.worktreeCleanupPresentation = nil }
                 )
                 .modifier(RepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue))
             }

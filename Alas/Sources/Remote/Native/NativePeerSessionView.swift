@@ -472,7 +472,8 @@ private struct NativePeerComposer: View {
                 usesExternalMentionPicker: true,
                 acceptsImages: acceptsImages,
                 onEditorSelectionChange: { reconcileMentionPicker() },
-                onEditorKeyDown: handleMentionKey
+                onEditorKeyDown: handleMentionKey,
+                onDictationShortcut: { dictation.handleShortcut($0) }
             )
             .disabled(!sessionOpen)
             .accessibilityLabel("Message peer session")
