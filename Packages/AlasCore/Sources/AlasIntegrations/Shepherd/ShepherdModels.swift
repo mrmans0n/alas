@@ -64,6 +64,14 @@ public enum ShepherdPhase: Codable, Equatable, Sendable {
         default: false
         }
     }
+
+    /// Escalated and paused records wait for the user to press Resume.
+    public var isResumable: Bool {
+        switch self {
+        case .escalated, .paused: true
+        default: false
+        }
+    }
 }
 
 public struct ShepherdFingerprint: Codable, Equatable, Sendable {

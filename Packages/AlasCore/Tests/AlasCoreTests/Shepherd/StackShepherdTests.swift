@@ -1,0 +1,317 @@
+import Foundation
+import Testing
+@testable import AlasCore
+@testable import AlasHostCore
+@testable import AlasIntegrations
+
+private typealias F = ShepherdFixtures
+
+@MainActor
+struct StackShepherdTests {
+    // MARK: Fixtures
+
+    nonisolated private static let local = ReviewLoopLocalState(
+        branchName: "nacho/auth", headSHA: F.head, baseBranch: "main",
+        hasWorkingTreeChanges: false, hasStagedChanges: false, aheadCommitCount: 2,
+        hasUpstream: true, upstreamRemoteName: "origin", upstreamBranchName: "nacho/auth",
+        needsPush: false
+    )
+
+    private static func request(
+        _ number: Int,
+        state: ReviewRequestState = .open,
+        head: String = F.head,
+        checks: [ReviewCheck] = [F.check("build", .pass)],
+        threads: [ReviewThread] = []
+    ) -> ReviewRequest {
+        let remote = F.remote()
+        return ReviewRequest(
+            remote: remote, number: number, title: "Entry \(number)", url: remote.reviewRequestURL(number: number),
+            state: state, isDraft: false, headRefName: "nacho/auth--c-\(number)", baseRefName: "main",
+            headSHA: head, reviewDecision: .approved, mergeState: .clean,
+            checks: checks, threads: threads, areThreadsComplete: true
+        )
+    }
+
+    /// `numbers` bottom-up; GG-IDs are `c-<number>`.
+    private static func stack(_ numbers: [Int]) -> GGStack {
+        GGStack(
+            name: "auth", base: "main", totalCommits: numbers.count, syncedCommits: numbers.count,
+            currentPosition: numbers.count, behindBase: 0,
+            entries: numbers.enumerated().map { index, number in
+                GGStackEntry(position: index + 1, sha: "sha\(number)", title: "Entry \(number)", ggId: "c-\(number)", prNumber: number)
+            }
+        )
+    }
+
+    private static func record(_ numbers: [Int]) -> StackShepherdRecord {
+        let empty = StackShepherdRecord(
+            id: StackShepherdRecordID(worktreeID: "wt-1", stackName: "auth"),
+            sessionID: "session-1", remote: F.remote(), base: "main", autoFix: true, entries: [], now: F.earlier
+        )
+        return StackShepherdPolicy.reconcile(empty, with: stack(numbers), now: F.earlier)
+    }
+
+    private static func observation(
+        _ requests: [ReviewRequest],
+        present: Set<String>? = nil,
+        canDispatch: Bool = true,
+        now: Date = F.now
+    ) -> StackShepherdObservation {
+        StackShepherdObservation(
+            requests: Dictionary(uniqueKeysWithValues: requests.map { ($0.number, $0) }),
+            presentEntryIDs: present,
+            local: local,
+            capabilities: .githubCLI,
+            headReviewers: [:],
+            session: .idle,
+            canDispatch: canDispatch,
+            rules: .none,
+            now: now
+        )
+    }
+
+    // MARK: Policy
+
+    @Test func problemsInSeveralEntriesGoOutAsOneTurnBottomUp() {
+        // gg lists the top entry first; the turn still starts at the bottom.
+        var listed = Self.stack([41, 42, 43])
+        listed = GGStack(
+            name: listed.name, base: listed.base, totalCommits: 3, syncedCommits: 3,
+            currentPosition: 3, behindBase: 0, entries: listed.entries.reversed()
+        )
+        let empty = StackShepherdRecord(
+            id: StackShepherdRecordID(worktreeID: "wt-1", stackName: "auth"),
+            sessionID: "session-1", remote: F.remote(), base: "main", autoFix: true, entries: [], now: F.earlier
+        )
+        let record = StackShepherdPolicy.reconcile(empty, with: listed, now: F.earlier)
+
+        let decision = StackShepherdPolicy.decide(record, Self.observation([
+            Self.request(41, checks: [F.failing]),
+            Self.request(42),
+            Self.request(43, threads: [F.trustedThread]),
+        ]))
+
+        #expect(decision.fixes.map(\.entry.position) == [1, 3])
+        #expect(decision.record.entries.map { $0.shepherd.phase } == [
+            .fixing(dispatchedAt: F.now), .watching, .fixing(dispatchedAt: F.now),
+        ])
+    }
+
+    @Test func fixTurnWaitsWhileTheWorktreeCannotMoveBetweenEntries() {
+        let decision = StackShepherdPolicy.decide(
+            Self.record([41]),
+            Self.observation([Self.request(41, checks: [F.failing])], canDispatch: false)
+        )
+
+        #expect(decision.fixes.isEmpty)
+        #expect(decision.record.entries[0].shepherd.phase == .watching)
+        #expect(decision.record.entries[0].shepherd.fixAttempts == 0)
+    }
+
+    @Test func readyIsAnnouncedOnceWhenEveryOpenEntryPasses() {
+        let green = [Self.request(41), Self.request(42)]
+        var record = Self.record([41, 42])
+        // The head gate needs a head seen on consecutive polls.
+        record = StackShepherdPolicy.decide(record, Self.observation(green, now: F.earlier)).record
+        let pending = StackShepherdPolicy.decide(record, Self.observation([green[0], Self.request(42, checks: [F.pending])]))
+        #expect(!pending.gatePasses)
+
+        let ready = StackShepherdPolicy.decide(record, Self.observation(green))
+        let again = StackShepherdPolicy.decide(ready.record, Self.observation(green))
+
+        #expect(ready.gatePasses && ready.notifyReady)
+        #expect(again.gatePasses && !again.notifyReady)
+    }
+
+    @Test func reconcileKeepsEntryStateAcrossRewritesAndRestartsWhenTheRequestChanges() {
+        var record = Self.record([41, 42])
+        record.entries[0].shepherd.fixAttempts = 2
+        record.entries[1].shepherd.fixAttempts = 2
+        // Entry c-41 was rewritten (new SHA, now on top); c-42's request was
+        // replaced by #50.
+        let rewritten = GGStack(
+            name: "auth", base: "main", totalCommits: 2, syncedCommits: 2, currentPosition: 2, behindBase: 0,
+            entries: [
+                GGStackEntry(position: 1, sha: "new42", title: "Entry 42", ggId: "c-42", prNumber: 50),
+                GGStackEntry(position: 2, sha: "new41", title: "Entry 41", ggId: "c-41", prNumber: 41),
+            ]
+        )
+
+        let next = StackShepherdPolicy.reconcile(record, with: rewritten, now: F.now)
+
+        #expect(next.entries.map(\.requestNumber) == [50, 41])
+        #expect(next.entries.map(\.position) == [1, 2])
+        #expect(next.entries.map(\.shepherd.fixAttempts) == [0, 2])
+    }
+
+    @Test func entryBudgetFollowsTheStackAndRaisingItReopensExhaustedEntries() {
+        var record = Self.record([41, 42])
+        record.setFixAttemptBudget(1)
+        record.entries[0].shepherd.fixAttempts = 1
+        record.entries[0].shepherd.phase = .escalated(.attemptsExhausted)
+
+        let added = StackShepherdPolicy.reconcile(record, with: Self.stack([41, 42, 43]), now: F.now)
+        record.setFixAttemptBudget(2)
+
+        #expect(added.entries[2].shepherd.fixAttemptBudget == 1)
+        #expect(record.entries.map(\.shepherd.fixAttemptBudget) == [2, 2])
+        #expect(record.entries[0].shepherd.phase == .watching)
+        #expect(record.entries[0].shepherd.fixAttempts == 1)
+    }
+
+    @Test func entriesGGNoLongerListsAreDroppedWhileOpenAndFinishWhenMerged() {
+        let record = Self.record([41, 42, 43])
+
+        let decision = StackShepherdPolicy.decide(record, Self.observation(
+            [Self.request(41, state: .merged), Self.request(42), Self.request(43)],
+            present: ["c-43"]
+        ))
+
+        #expect(decision.record.entries.map(\.requestNumber) == [41, 43])
+        #expect(decision.record.entries[0].shepherd.phase == .merged)
+        #expect(decision.finished == nil)
+
+        let landed = StackShepherdPolicy.decide(decision.record, Self.observation([Self.request(43, state: .merged)]))
+        #expect(landed.finished == .merged)
+        #expect(landed.record.finishedAt == F.now)
+    }
+
+    @Test(arguments: [
+        (true, false, [41], false, StackShipAction.shepherding(stackName: "auth")),
+        (false, true, [41], false, .adopt),
+        (false, false, [41, 42], false, .adopt),
+        (false, false, [41, 0], true, .unavailable("Wait for the current turn to finish.")),
+        (false, false, [41, 0], false, .create),
+    ] as [(Bool, Bool, [Int], Bool, StackShipAction)])
+    func shipActionFollowsTheStackAndItsOwner(
+        ownRecord: Bool, otherRecord: Bool, numbers: [Int], isBusy: Bool, expected: StackShipAction
+    ) {
+        // 0 marks an entry gg has not published yet.
+        let stack = GGStack(
+            name: "auth", base: "main", totalCommits: numbers.count, syncedCommits: 0,
+            currentPosition: numbers.count, behindBase: 0,
+            entries: numbers.enumerated().map { index, number in
+                GGStackEntry(position: index + 1, sha: "sha\(index)", title: "t", prNumber: number == 0 ? nil : number)
+            }
+        )
+        var other = Self.record([41])
+        other.sessionID = "session-2"
+
+        let action = StackShipAction.resolve(
+            record: ownRecord ? Self.record([41]) : nil,
+            otherRecord: otherRecord ? other : nil,
+            stack: stack,
+            isBusy: isBusy
+        )
+
+        #expect(action == expected)
+    }
+
+    /// Pins the agent-facing `pr_status` keys for a stack, including the
+    /// explicit nulls agents rely on.
+    @Test func stackStatusWireKeepsEveryKey() {
+        let wire = StackStatusWire(
+            stack: .init(name: "auth", base: "main", entries: [
+                .init(position: 1, entryId: "c-41", title: "Add store", pullRequest: nil, phase: nil),
+            ]),
+            shepherd: nil
+        )
+
+        #expect(ReviewCommentWireDTO.jsonLine(wire)
+            == #"{"shepherd":null,"stack":{"base":"main","entries":[{"entry_id":"c-41","phase":null,"position":1,"pull_request":null,"title":"Add store"}],"name":"auth"}}"#)
+    }
+
+    // MARK: Service
+
+    private final class MemoryStore: PersistenceStoreProtocol {
+        var files: [URL: Data] = [:]
+
+        func write<T: Encodable>(_ value: T, to url: URL) throws {
+            files[url] = try JSONEncoder().encode(value)
+        }
+
+        func readIfExists<T: Decodable>(_ type: T.Type, from url: URL) throws -> T? {
+            guard let data = files[url] else { return nil }
+            return try JSONDecoder().decode(T.self, from: data)
+        }
+    }
+
+    /// Serves requests by number.
+    private struct FakeProvider: CodeHostProvider {
+        let requests: [Int: ReviewRequest]
+        var kind: CodeHostKind { .github }
+
+        func isAvailable(cwd: URL) async -> Bool { true }
+        func isAuthenticated(remote: CodeHostRemote, cwd: URL) async -> Bool { true }
+        func currentReviewRequest(
+            remote: CodeHostRemote, branch: String, headOwner: String?, baseBranch: String, cwd: URL
+        ) async throws -> ReviewRequest? {
+            nil
+        }
+        func reviewRequest(remote: CodeHostRemote, number: Int, cwd: URL) async throws -> ReviewRequest {
+            guard let request = requests[number] else { throw CodeHostProviderError.unsupportedProvider(kind) }
+            return request
+        }
+        func createReviewRequest(
+            remote: CodeHostRemote, branch: String, headOwner: String?, baseBranch: String,
+            title: String, body: String, isDraft: Bool, cwd: URL
+        ) async throws -> URL {
+            throw CodeHostProviderError.unsupportedProvider(kind)
+        }
+        func checks(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewCheck] {
+            request.checks
+        }
+        func rerunFailedChecks(
+            remote: CodeHostRemote, branch: String, headSHA: String, request: ReviewRequest?, cwd: URL
+        ) async throws {}
+    }
+
+    @Test func onePollSendsOneFixTurnForEveryEntryInNeed() async throws {
+        let requests = [
+            Self.request(41, threads: [F.trustedThread]),
+            Self.request(42),
+            Self.request(43, checks: [F.failing]),
+        ]
+        let stack = Self.stack([41, 42, 43])
+        var delivered: [String] = []
+        let shepherd = StackShepherd(
+            store: MemoryStore(),
+            fileURL: URL(fileURLWithPath: "/memory/stack-shepherds.json"),
+            providerRegistry: CodeHostProviderRegistry(providers: [
+                .github: FakeProvider(requests: Dictionary(uniqueKeysWithValues: requests.map { ($0.number, $0) })),
+            ]),
+            localProbe: ReviewLoopLocalProbe { _, _ in (local: Self.local, remotes: []) },
+            operationInProgress: { _ in false },
+            now: { F.now }
+        )
+        shepherd.effects = StackShepherd.Effects(
+            worktreeContext: { worktreeID in
+                .init(worktreeID: worktreeID, path: URL(fileURLWithPath: "/tmp/\(worktreeID)"), stackName: "auth", isEligible: true)
+            },
+            loadStack: { _ in stack },
+            syncStack: { _ in },
+            sessionState: { _, _ in .idle },
+            deliverPrompt: { _, _, prompt, _ in
+                delivered.append(prompt.text)
+                return .delivered
+            },
+            rules: { _ in .none },
+            notify: { _ in },
+            archiveWorktreeIfAllowed: { _, _, _ in .declined }
+        )
+        let record = await shepherd.bind(
+            sessionID: "session-1", worktreeID: "wt-1", stack: stack,
+            requests: [:], remote: F.remote(), autoFix: true, maxFixAttempts: 3, contextRules: nil
+        )
+
+        await shepherd.evaluateNow(record.id)
+
+        let text = try #require(delivered.first)
+        #expect(delivered.count == 1)
+        let bottom = try #require(text.range(of: "# Entry 1 ·"))
+        let top = try #require(text.range(of: "# Entry 3 ·"))
+        #expect(bottom.lowerBound < top.lowerBound)
+        #expect(!text.contains("# Entry 2 ·"))
+    }
+}

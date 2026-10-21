@@ -71,7 +71,7 @@ public enum ACPMCPPromptPreamble: Sendable {
         "worktree_list", "worktree_switch", "worktree_new", "worktree_delete",
         "review", "review_comments", "review_reply", "review_resolve",
         "review_comment_add", "review_finish",
-        "pr_create", "pr_status",
+        "pr_create", "pr_status", "stack_ship",
         "preview_list", "preview_open", "preview_navigate", "preview_reload", "preview_back", "preview_forward",
         "preview_inspect", "preview_capture", "preview_console", "preview_click", "preview_type", "preview_scroll",
         "preview_wait", "preview_cancel",
@@ -203,6 +203,8 @@ public enum ACPMCPPromptPreamble: Sendable {
                 + "pr_create/pr_status (open a PR/MR for this worktree's branch and have Alas watch it "
                 + "until it merges; offer pr_create when you've finished a change the user will want "
                 + "reviewed, and call it only after the user agrees or asks), "
+                + "stack_ship (pr_create for a gg stack: publishes every entry as its own PR/MR and has "
+                + "Alas watch them all; same consent rule), "
                 + "visual_show (show an HTML visual inline in this transcript, before your final reply), "
                 + "\(sessionTools)."
             if isDelegated {
@@ -236,14 +238,14 @@ public enum ACPMCPPromptPreamble: Sendable {
                 + "the `alas` CLI in your shell: `alas open`, `alas notify`, "
                 + "`alas wt …`, `alas review …` (comments/reply/resolve/finish), "
                 + "`alas session …`, and `alas preview …`. "
-                + "pr_create and pr_status are MCP-only.")
+                + "pr_create, pr_status and stack_ship are MCP-only.")
         }
         if !userServerNames.isEmpty {
             lines.append("Additional MCP servers attached: "
                 + userServerNames.joined(separator: ", ") + ".")
         }
         if let ggStack {
-            lines.append(ggStackLine(ggStack, cliMode: false))
+            lines.append(ggStackLine(ggStack, cliMode: false, shipsWithAlas: builtInTools == .full))
         }
         if let delegation {
             lines.append(delegation)
@@ -326,7 +328,7 @@ public enum ACPMCPPromptPreamble: Sendable {
             }
         }
         if let ggStack {
-            lines.append(ggStackLine(ggStack, cliMode: true))
+            lines.append(ggStackLine(ggStack, cliMode: true, shipsWithAlas: false))
         }
         if let delegation {
             lines.append(delegation)
@@ -347,7 +349,7 @@ public enum ACPMCPPromptPreamble: Sendable {
         + "skip it for short answers, single facts, code edits, status updates, and anything "
         + "a list or code block already shows clearly."
 
-    private static func ggStackLine(_ context: GGPreambleStackContext, cliMode: Bool) -> String {
+    private static func ggStackLine(_ context: GGPreambleStackContext, cliMode: Bool, shipsWithAlas: Bool) -> String {
         var line: String
         if let name = context.stackName {
             let entries = context.entryCount.map { " (\($0) entr\($0 == 1 ? "y" : "ies"))" } ?? ""
@@ -364,6 +366,10 @@ public enum ACPMCPPromptPreamble: Sendable {
         if context.ggMCPAttached, !cliMode {
             line += " The MCP server \"git-gud\" exposes stack tools "
                 + "(list/log/sync/land); prefer them over parsing CLI output."
+        }
+        if shipsWithAlas {
+            line += " To open the stack's PRs for review and have Alas watch them, call stack_ship, "
+                + "not pr_create."
         }
         return line
     }

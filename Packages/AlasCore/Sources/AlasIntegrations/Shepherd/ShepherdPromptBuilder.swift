@@ -116,7 +116,7 @@ public enum ShepherdPromptBuilder {
         """
     }
 
-    private static func checksSection(_ checks: [ReviewCheck], logs: [ShepherdCheckLog]) -> String {
+    static func checksSection(_ checks: [ReviewCheck], logs: [ShepherdCheckLog]) -> String {
         let logsByID = Dictionary(logs.map { ($0.checkID, $0) }, uniquingKeysWith: { first, _ in first })
         let heading = checks.contains { $0.bucket == .cancel } ? "Failing or cancelled checks" : "Failing checks"
         var lines = ["## \(heading) (\(checks.count))"]
@@ -146,7 +146,7 @@ public enum ShepherdPromptBuilder {
         return lines.joined(separator: "\n")
     }
 
-    private static func threadsSection(_ threads: [ReviewThread]) -> String {
+    static func threadsSection(_ threads: [ReviewThread]) -> String {
         let blocks = threads.map { thread -> String in
             var lines = ["### \(threadLocation(thread))"]
             for comment in thread.comments {
@@ -166,20 +166,25 @@ public enum ShepherdPromptBuilder {
     }
 
     private static func howToWork(_ kind: CodeHostKind) -> String {
-        let cli = kind == .github ? "gh" : "glab"
-        return """
-        ## How to work
-        - Classify each finding: fix it, show it is already fixed, or reply with evidence that it is wrong. Never change code only to silence wrong feedback.
-        - Batch every fix you can make now into one push.
-        - Run the tests your repository instructions require for the files you touch.
-        - If a check failure is unrelated to your change and the log shows a flake or infrastructure error, rerun it with \(cli) and say why.
-        - A cancelled check usually needs a rerun with \(cli), not a code change.
-        - Reply on threads you decline. Resolve threads you fixed.
-        - If you can't make progress, say so plainly. Alas will notify the user.
-        """
+        var bullets = findingRules(kind)
+        bullets.insert("Batch every fix you can make now into one push.", at: 1)
+        return (["## How to work"] + bullets.map { "- \($0)" }).joined(separator: "\n")
     }
 
-    private static func projectRulesSection(_ rules: ShepherdRules) -> String? {
+    /// How to treat each finding, shared by the PR and stack prompts.
+    static func findingRules(_ kind: CodeHostKind) -> [String] {
+        let cli = kind == .github ? "gh" : "glab"
+        return [
+            "Classify each finding: fix it, show it is already fixed, or reply with evidence that it is wrong. Never change code only to silence wrong feedback.",
+            "Run the tests your repository instructions require for the files you touch.",
+            "If a check failure is unrelated to your change and the log shows a flake or infrastructure error, rerun it with \(cli) and say why.",
+            "A cancelled check usually needs a rerun with \(cli), not a code change.",
+            "Reply on threads you decline. Resolve threads you fixed.",
+            "If you can't make progress, say so plainly. Alas will notify the user.",
+        ]
+    }
+
+    static func projectRulesSection(_ rules: ShepherdRules) -> String? {
         let text = rules.instructions.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return nil }
         return "## Project rules\n\(text)"
@@ -196,7 +201,6 @@ public enum ShepherdPromptBuilder {
     }
 
     private static func fixCard(request: ReviewRequest, fix: ShepherdFixRequest, logs: [ShepherdCheckLog]) -> ACPPromptCard {
-        let logsByID = Dictionary(logs.map { ($0.checkID, $0) }, uniquingKeysWith: { first, _ in first })
         var sections: [ACPPromptCard.Section] = []
         if fix.hasConflict {
             sections.append(.init(title: "Merge conflict", items: [
@@ -205,16 +209,7 @@ public enum ShepherdPromptBuilder {
         }
         if !fix.failingChecks.isEmpty {
             let heading = fix.failingChecks.contains { $0.bucket == .cancel } ? "Failing or cancelled checks" : "Failing checks"
-            let items = fix.failingChecks.enumerated().map { index, check -> ACPPromptCard.Item in
-                // Only the checks the text gives a log get an excerpt.
-                let log = index < maxCheckLogs ? logsByID[check.id] : nil
-                return .init(
-                    bodyMarkdown: checkTitle(check),
-                    excerpt: log.flatMap(logExcerpt),
-                    url: log?.url ?? check.detailURL,
-                    status: check.bucket == .cancel ? .cancelled : .failed)
-            }
-            sections.append(.init(title: "\(heading) (\(fix.failingChecks.count))", items: items))
+            sections.append(.init(title: "\(heading) (\(fix.failingChecks.count))", items: checkItems(fix.failingChecks, logs: logs)))
         }
         if !fix.threads.isEmpty {
             sections.append(.init(
@@ -237,6 +232,19 @@ public enum ShepherdPromptBuilder {
         return card(request, sections: [.init(title: "Current problems", items: items)])
     }
 
+    /// One item per check; only the checks the text gives a log get an excerpt.
+    static func checkItems(_ checks: [ReviewCheck], logs: [ShepherdCheckLog]) -> [ACPPromptCard.Item] {
+        let logsByID = Dictionary(logs.map { ($0.checkID, $0) }, uniquingKeysWith: { first, _ in first })
+        return checks.enumerated().map { index, check in
+            let log = index < maxCheckLogs ? logsByID[check.id] : nil
+            return .init(
+                bodyMarkdown: checkTitle(check),
+                excerpt: log.flatMap(logExcerpt),
+                url: log?.url ?? check.detailURL,
+                status: check.bucket == .cancel ? .cancelled : .failed)
+        }
+    }
+
     private static func logExcerpt(_ log: ShepherdCheckLog) -> ACPPromptCard.Excerpt? {
         let body = log.body.trimmingCharacters(in: .newlines)
         guard !body.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
@@ -244,7 +252,7 @@ public enum ShepherdPromptBuilder {
         return .init(text: lines.suffix(cardLogLines).joined(separator: "\n"), style: .log)
     }
 
-    private static func threadItem(_ thread: ReviewThread, includesBody: Bool) -> ACPPromptCard.Item {
+    static func threadItem(_ thread: ReviewThread, includesBody: Bool) -> ACPPromptCard.Item {
         var location: ACPPromptCard.Location?
         if let path = thread.path, !path.isEmpty {
             let line = thread.isFileLevel ? nil : (thread.line ?? thread.originalLine)
@@ -271,12 +279,12 @@ public enum ShepherdPromptBuilder {
 
     // MARK: - Labels
 
-    private static func checkTitle(_ check: ReviewCheck) -> String {
+    static func checkTitle(_ check: ReviewCheck) -> String {
         guard let workflow = check.workflow, !workflow.isEmpty, workflow != check.name else { return check.name }
         return "\(check.name) (\(workflow))"
     }
 
-    private static func threadLocation(_ thread: ReviewThread) -> String {
+    static func threadLocation(_ thread: ReviewThread) -> String {
         guard let path = thread.path, !path.isEmpty else { return "General comment" }
         guard !thread.isFileLevel, let line = thread.line ?? thread.originalLine else { return path }
         return "\(path):\(line)"
