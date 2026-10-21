@@ -59,7 +59,7 @@ enum HostCommands {
                 try HostSettingCatalog.named(arguments[1], in: config).set(arguments[2], in: &config)
             }
             if case .host = holder {
-                if arguments.count == 4 { try restart() } else { print("Saved. Restart the host to apply: alas-host restart") }
+                if arguments.count == 4 { try restart(afterSaving: true) } else { print("Saved. Restart the host to apply: alas-host restart") }
             }
         case ("project", "list", 1):
             for project in try await listProjects() {
@@ -173,7 +173,9 @@ enum HostCommands {
 
     // MARK: - Restart
 
-    static func restart() throws {
+    /// Restarts the launch agent's host. `afterSaving`, a host run in a
+    /// terminal is no failure: the settings are saved, and it says how to apply them.
+    static func restart(afterSaving: Bool = false) throws {
         let agent = HostLaunchAgent(executable: URL(fileURLWithPath: CommandLine.arguments[0]))
         let service = "gui/\(getuid())/\(agent.label)"
         if FileManager.default.fileExists(atPath: agent.plistURL.path), launchctl("print", service) == 0 {
@@ -184,6 +186,8 @@ enum HostCommands {
             return
         }
         switch DataDirectoryHolder.current() {
+        case .host where afterSaving:
+            print("Saved. The host is not running as a launch agent; stop it (Ctrl-C) and start it again to apply.")
         case .host, .unknown:
             throw HostCommandError("The host is not running as a launch agent; stop it (Ctrl-C) and start it again.")
         case .none, .app:

@@ -1,3 +1,4 @@
+import Foundation
 import AlasAgentKit
 import AlasHostCore
 import AlasModel
@@ -96,8 +97,10 @@ struct HostSettingTests {
         #expect(model.changedConfig.hostReachability == .loopback)
         #expect(!model.isDirty)
 
-        // Reopen the section, then pick on the reachability row.
+        // Reopen the section, then pick on the reachability row: LAN is the last stop.
         press([.enter, .enter], on: &model)
+        #expect(model.changedConfig.hostReachability == .tailscale)
+        press([.enter], on: &model)
         #expect(model.changedConfig.hostReachability == .lan)
     }
 
@@ -109,5 +112,25 @@ struct HostSettingTests {
         open(.behavior, on: &dirty)
         press([.enter, .escape], on: &dirty)
         #expect(press(Array(repeating: .down, count: HostSetupMenuItem.allCases.count) + [.enter], on: &dirty) == .save)
+    }
+
+    @Test func removingAProjectAsksFirst() throws {
+        let project = try JSONDecoder().decode(ProjectSnapshot.self, from: Data("""
+        {"id": "p1", "name": "repo", "path": "/tmp/repo", "kind": "git", "addedAt": 0}
+        """.utf8))
+        var model = HostSetupModel(config: .defaults, projects: [project])
+        open(.projects, on: &model)
+        #expect(press([.up, .enter], on: &model) == nil)
+        #expect(press([.escape, .enter], on: &model) == nil)
+        #expect(press([.enter], on: &model) == .removeProject("p1"))
+    }
+
+    @Test func marksAnEnabledAgentWhoseAdapterIsMissing() {
+        let agent = AgentBuiltins.catalog[0].id
+        var model = HostSetupModel(config: .defaults, projects: [], missingCommands: [agent: "missing-acp"])
+        open(.agents, on: &model)
+        #expect(model.view.rows[0].hasSuffix("true - `missing-acp` not found on PATH"))
+        press([.enter], on: &model)
+        #expect(!model.view.rows[0].contains("not found"))
     }
 }

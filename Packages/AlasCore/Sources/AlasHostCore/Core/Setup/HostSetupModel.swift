@@ -75,12 +75,18 @@ public struct HostSetupModel: Equatable {
     public private(set) var screen: HostSetupScreen = .menu(selected: 0)
     /// A line shown under the screen until the next key: an error, a pairing code.
     public var notice: String?
+    /// The adapter command each agent launches, by agent id, for agents whose
+    /// command is not found; an enabled one is marked on the Agents screen.
+    public let missingCommands: [String: String]
     private var escapeDiscards = false
+    /// The project the last Enter asked to remove; a second Enter removes it.
+    private var pendingRemoval: String?
 
-    public init(config: AppConfig, projects: [ProjectSnapshot]) {
+    public init(config: AppConfig, projects: [ProjectSnapshot], missingCommands: [String: String] = [:]) {
         original = config
         changedConfig = config
         self.projects = projects
+        self.missingCommands = missingCommands
     }
 
     /// Whether any setting differs from what the profile had: a setting set
@@ -109,6 +115,8 @@ public struct HostSetupModel: Equatable {
         notice = nil
         let wasDiscarding = escapeDiscards
         escapeDiscards = false
+        let removal = pendingRemoval
+        pendingRemoval = nil
         switch screen {
         case .menu(let selected):
             return handleMenu(key, selected: selected, discarding: wasDiscarding)
@@ -116,7 +124,7 @@ public struct HostSetupModel: Equatable {
             handleSettings(key, section: section, selected: selected, editing: editing)
             return nil
         case .projects(let selected, let editing):
-            return handleProjects(key, selected: selected, editing: editing)
+            return handleProjects(key, selected: selected, editing: editing, pendingRemoval: removal)
         }
     }
 
@@ -140,7 +148,7 @@ public struct HostSetupModel: Equatable {
             switch item {
             case .save: return isDirty ? .save : .quit
             case .pair: return .showPairingCode
-            case .projects: screen = .projects(selected: 0, editing: nil)
+            case .projects: screen = .projects(selected: projects.count, editing: nil)
             default: screen = .settings(item.section!, selected: 0, editing: nil)
             }
             return nil
@@ -203,7 +211,9 @@ public struct HostSetupModel: Equatable {
         }
     }
 
-    private mutating func handleProjects(_ key: HostSetupKey, selected: Int, editing: String?) -> HostSetupEffect? {
+    private mutating func handleProjects(
+        _ key: HostSetupKey, selected: Int, editing: String?, pendingRemoval removal: String?
+    ) -> HostSetupEffect? {
         if var path = editing {
             switch key {
             case .character(let character): path.append(character)
@@ -230,13 +240,24 @@ public struct HostSetupModel: Equatable {
                 screen = .projects(selected: projects.count, editing: "")
                 return nil
             }
-            return .removeProject(projects[selected].id)
+            let project = projects[selected]
+            if removal == project.id { return .removeProject(project.id) }
+            pendingRemoval = project.id
+            notice = "Remove \(project.name)? Its settings, scripts and schedules are deleted. Press Enter again to remove, Esc to keep."
         case .escape:
+            // Esc after a removal was asked keeps the project and the screen.
+            guard removal == nil else { return nil }
             screen = .menu(selected: HostSetupMenuItem.allCases.firstIndex(of: .projects)!)
         default:
             break
         }
         return nil
+    }
+
+    /// `claude` for `agents.claude.enabled`.
+    private static func agentID(of key: String) -> String? {
+        guard key.hasPrefix("agents."), key.hasSuffix(".enabled") else { return nil }
+        return String(key.dropFirst("agents.".count).dropLast(".enabled".count))
     }
 
     private func menu(at section: HostSettingSection) -> HostSetupScreen {
@@ -261,7 +282,10 @@ public struct HostSetupModel: Equatable {
                 title: HostSetupMenuItem.allCases.first { $0.section == section }!.title,
                 rows: rows.enumerated().map { index, setting in
                     let value = index == selected ? editing.map { "\($0)_" } ?? setting.value(in: changedConfig) : setting.value(in: changedConfig)
-                    let shown = value.isEmpty ? "(default)" : value
+                    var shown = value.isEmpty ? "(default)" : value
+                    if section == .agents, value == "true", let id = Self.agentID(of: setting.key), let command = missingCommands[id] {
+                        shown += " - `\(command)` not found on PATH"
+                    }
                     return setting.title.padding(toLength: width, withPad: " ", startingAt: 0) + "  " + shown
                 },
                 selected: selected,
@@ -276,7 +300,7 @@ public struct HostSetupModel: Equatable {
                 selected: min(selected, projects.count),
                 hint: editing != nil
                     ? "Type the project's path; Enter to add, Esc to cancel"
-                    : "Enter on a project removes it; Enter on Add a project to add one; Esc to go back"
+                    : "Enter on a project to remove it; Enter on Add a project to add one; Esc to go back"
             )
         }
     }

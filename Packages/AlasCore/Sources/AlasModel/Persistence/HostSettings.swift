@@ -2,7 +2,8 @@ import Foundation
 
 /// Where the headless `alas-host` listens. Host-only: the app never reads it.
 public enum HostReachability: String, Codable, CaseIterable, Sendable {
-    case off, loopback, lan, tailscale
+    // Ordered so cycling through the choices reaches LAN last.
+    case off, loopback, tailscale, lan
 }
 
 /// Host-only overrides. Nil fields are derived from the shared `remote` section.

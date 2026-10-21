@@ -12,7 +12,10 @@ enum HostSetup {
         // lock taken here is let go at once: the project commands take it
         // themselves, and saving checks again.
         _ = try HostCommands.writableHolder()
-        var model = HostSetupModel(config: HostCommands.readConfig(), projects: try await HostCommands.listProjects())
+        let config = HostCommands.readConfig()
+        var model = HostSetupModel(
+            config: config, projects: try await HostCommands.listProjects(), missingCommands: missingAdapterCommands(config)
+        )
 
         Terminal.enter()
         defer { Terminal.restore() }
@@ -41,7 +44,7 @@ enum HostSetup {
                 let now = askToRestart()
                 Terminal.restore()
                 if now {
-                    try HostCommands.restart()
+                    try HostCommands.restart(afterSaving: true)
                 } else {
                     print("Saved. Restart the host to apply: alas-host restart")
                 }
@@ -66,6 +69,20 @@ enum HostSetup {
                 model.notice = pairingNotice(reachability: model.original.hostReachability)
             }
         }
+    }
+
+    /// The adapter command of each agent whose command is not found the way
+    /// the host launches it: this process's PATH plus the well-known directories.
+    /// ponytail: setup's PATH, not a launch agent's (launchd's minimal one);
+    /// check that PATH too if agents found here fail to start under launchd.
+    private static func missingAdapterCommands(_ config: AppConfig) -> [String: String] {
+        let path = ProcessInfo.processInfo.environment["PATH"]
+        var missing: [String: String] = [:]
+        for spec in ACPLaunchCatalog.builtinSpecs + config.agents.registry.map(\.launchSpec)
+            where AgentPath.resolveExecutable(named: spec.command, base: path) == nil {
+            missing[spec.agentID] = spec.command
+        }
+        return missing
     }
 
     /// Asks whether to restart the running host now; Escape means later.
