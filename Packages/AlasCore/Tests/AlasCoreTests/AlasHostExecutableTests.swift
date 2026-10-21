@@ -178,6 +178,36 @@ struct AlasHostExecutableTests {
         #expect(!off.output.split(separator: "\n").contains { $0.hasPrefix("remote ") })
     }
 
+    /// With no host running, settings and projects are changed in the
+    /// profile's files: an invalid value is refused and leaves the old one.
+    @Test func aProfileIsConfiguredFromTheCommandLine() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-config-\(UUID().uuidString)")
+        let dataDirectory = root.appendingPathComponent("data")
+        let repo = root.appendingPathComponent("repo")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: dataDirectory, withIntermediateDirectories: true)
+        try GitTemplate.repository(at: repo)
+        func run(_ arguments: String...) async throws -> (status: Int32, output: String, error: String) {
+            let process = try AlasHostProcess(dataDirectory: dataDirectory, arguments: arguments)
+            return (try await process.exitStatus(), process.output, process.errorOutput)
+        }
+
+        #expect(try await run("config", "set", "host.port", "18999").status == 0)
+        #expect(try await run("config", "get", "host.port").output == "18999\n")
+        let refused = try await run("config", "set", "host.port", "70000")
+        #expect(refused.status == 1)
+        #expect(refused.error.contains("host.port"))
+        #expect(try await run("config", "get", "host.port").output == "18999\n")
+
+        let added = try await run("project", "add", repo.path)
+        #expect(added.status == 0, "\(added.error)")
+        let listed = try await run("project", "list")
+        #expect(listed.output.contains("  repo  \(repo.standardizedFileURL.path)\n"), "\(listed.output)")
+        let removed = try await run("project", "remove", repo.path)
+        #expect(removed.status == 0, "\(removed.error)")
+        #expect(try await run("project", "list").output.isEmpty)
+    }
+
     /// A port nothing listens on now, for a host to bind.
     private func freePort() throws -> UInt16 {
         let fd = socket(AF_INET, SOCK_STREAM, 0)

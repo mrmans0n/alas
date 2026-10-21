@@ -9,6 +9,9 @@ let usage = """
 usage: alas-host [--wait-for-lock]
        alas-host pair
        alas-host install-agent | uninstall-agent
+       alas-host config list | get [<key>] | set <key> <value> [--restart]
+       alas-host project list | add <path> [--name <name>] | remove <id|path>
+       alas-host restart
 
 Serves the Alas host protocol for the data directory ALAS_APP_SUPPORT_DIR
 (default: ~/Library/Application Support/Alas) on its local socket, and prints
@@ -25,6 +28,12 @@ phone or browser redeems within two minutes, and prints it.
 `alas-host install-agent` installs and starts a launchd agent that runs this
 executable with --wait-for-lock at login, and restarts it after a crash;
 `uninstall-agent` stops and removes it. Each profile has its own agent.
+
+`alas-host config` reads and changes the host's settings in the profile's
+app.json; the running host applies a change once restarted. `alas-host project`
+lists, adds and removes the profile's projects, through the running host when
+one serves the profile. `alas-host restart` restarts the launch agent's host.
+Changes are refused while the app has the profile open.
 """
 
 func fail(_ message: String) -> Never {
@@ -59,6 +68,7 @@ if CommandLine.arguments.dropFirst().elementsEqual(["pair"]) {
     }
 }
 let arguments = Array(CommandLine.arguments.dropFirst())
+HostCommands.runIfCommand(arguments)
 if arguments == ["install-agent"] || arguments == ["uninstall-agent"] {
     // The path this was started as, links not resolved: Homebrew's link in
     // its `bin` outlives an upgrade, while what it points to (a versioned
@@ -75,17 +85,6 @@ if arguments == ["install-agent"] || arguments == ["uninstall-agent"] {
     let executable = URL(fileURLWithPath: started).standardizedFileURL
     let agent = HostLaunchAgent(executable: executable)
     let domain = "gui/\(getuid())"
-    @discardableResult
-    func launchctl(_ arguments: String...) -> Int32 {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-        process.arguments = arguments
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        guard (try? process.run()) != nil else { return -1 }
-        process.waitUntilExit()
-        return process.terminationStatus
-    }
     // 3 (ESRCH) is an agent that is not loaded: there is nothing to stop.
     let stopped = launchctl("bootout", "\(domain)/\(agent.label)")
     guard stopped == 0 || stopped == ESRCH else {
