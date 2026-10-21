@@ -33,6 +33,7 @@ enum PlatformServices {
         ReviewShepherd.wakeNotification = (NSWorkspace.shared.notificationCenter, NSWorkspace.didWakeNotification)
         LocalTextEngine.make = { LocalTextInferenceEngine(store: $0, observeMemoryPressure: false) }
         ACPImageEncoding.encoder = { ACPImageEncoding.appKitInlineBase64(fileURL: $0, maxDimension: $1) }
+        ComputerUsePlatform.shared = ComputerUseSystemPermissions.make()
         URLOpening.shared = URLOpening(
             launchHandler: { url in
                 guard let applicationURL = NSWorkspace.shared.urlForApplication(toOpen: url) else {
