@@ -136,7 +136,11 @@ import Testing
         let peer = FakePeer()
         fixture.host.handle(.attach(consoleId: "c", attachmentId: "a", scrollbackRows: 0), from: peer.link)
         try await eventually("detached") { peer.events.all.count == 2 }
-        #expect(peer.events.all.last == .detached(attachmentId: "a", reason: .unavailable))
+        #expect(peer.events.all == [
+            .attached(attachmentId: "a", rows: 40, columns: 120,
+                      control: PeerConsoleControl(owner: .host, generation: 0, change: .current)),
+            .detached(attachmentId: "a", reason: .unavailable),
+        ])
         #expect(fixture.connectCount == 1)
     }
 

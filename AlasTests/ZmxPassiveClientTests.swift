@@ -69,31 +69,41 @@ import Testing
         }
     }
 
-    @Test(arguments: [
-        ("0601000028020000", ZmxDaemonStatus.v1(pid: 4242)),
-        ("0628020000000000", ZmxDaemonStatus.preFreeze(pid: 4242)),
-    ])
-    func probeReplyClassifiesTheCapturedInfoHeaders(headerHex: String, expected: ZmxDaemonStatus) {
-        let reply = zmxInfoReply(headerHex: headerHex)
+    @Test(arguments: [ZmxIPC.Wire.preFreeze, .v1])
+    func probeReplyClassifiesTheCapturedInfoHeaders(wire: ZmxIPC.Wire) {
+        let reply = zmxInfoReply(wire: wire)
+        let expected = zmxInfoStatus(wire)
+        let output = ZmxIPC.encode(.output, Data(repeating: 0x41, count: 600), wire: wire)
         #expect(ZmxIPC.classifyProbeReply(reply.prefix(300)) == nil)
+        #expect(ZmxIPC.classifyProbeReply(output) == nil)
         #expect(ZmxIPC.classifyProbeReply(reply) == expected)
+        #expect(ZmxIPC.classifyProbeReply(output + reply) == expected)
+        // Neither wire can frame a v1 header with another version byte and
+        // a pre-freeze length above the payload ceiling.
+        #expect(ZmxIPC.classifyProbeReply([1, 0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0]) == .unreachable)
         #expect(Array(ZmxIPC.versionProbe) == [6, 1, 0, 0, 0, 0, 0, 0, 0])
     }
 
     // MARK: Probe
 
-    @Test(arguments: [
-        (zmxV1InfoHeaderHex, ZmxDaemonStatus.v1(pid: 4242), Int.max),
-        (zmxPreFreezeInfoHeaderHex, ZmxDaemonStatus.preFreeze(pid: 4242), Int.max),
-        (zmxV1InfoHeaderHex, ZmxDaemonStatus.v1(pid: 4242), 7),
-        (zmxPreFreezeInfoHeaderHex, ZmxDaemonStatus.preFreeze(pid: 4242), 7),
+    /// Whole or 7-byte chunks, each with and without a broadcast `Output`
+    /// frame ahead of the `Info` reply (zmx broadcasts to un-`Init`ed clients).
+    @Test(arguments: [ZmxIPC.Wire.preFreeze, .v1], [
+        (chunkSize: Int.max, precededByOutput: false),
+        (chunkSize: 7, precededByOutput: false),
+        (chunkSize: Int.max, precededByOutput: true),
+        (chunkSize: 7, precededByOutput: true),
     ])
-    func probeClassifiesEachDaemonFromItsInfoReply(headerHex: String, expected: ZmxDaemonStatus, chunkSize: Int) throws {
-        let reply = zmxInfoReply(headerHex: headerHex)
+    func probeClassifiesEachDaemonFromItsInfoReply(wire: ZmxIPC.Wire, shape: (chunkSize: Int, precededByOutput: Bool)) throws {
+        let info = zmxInfoReply(wire: wire)
+        let reply = shape.precededByOutput
+            ? ZmxIPC.encode(.output, Data(repeating: 0x41, count: 600), wire: wire) + info
+            : info
         let daemon = try ZmxFakeDaemonListener(
-            script: chunkSize == Int.max ? .reply(reply) : .replyInChunks(reply, size: chunkSize))
+            script: shape.chunkSize == Int.max ? .reply(reply) : .replyInChunks(reply, size: shape.chunkSize))
         defer { daemon.tearDown() }
-        #expect(ZmxIPCSocket.probe(path: daemon.path) == expected)
+        // Paced chunks take a while to arrive; the deadline is not under test.
+        #expect(ZmxIPCSocket.probe(path: daemon.path, timeout: .seconds(5)) == zmxInfoStatus(wire))
         #expect(daemon.received == ZmxIPC.versionProbe)
     }
 
@@ -286,12 +296,16 @@ private func probeStatus(_ wire: ZmxIPC.Wire) -> ZmxDaemonStatus {
     wire == .v1 ? .v1(pid: 1) : .preFreeze(pid: 1)
 }
 
-let zmxV1InfoHeaderHex = "0601000028020000"
-let zmxPreFreezeInfoHeaderHex = "0628020000000000"
+/// The status a probe reports for `zmxInfoReply(wire:)`.
+func zmxInfoStatus(_ wire: ZmxIPC.Wire) -> ZmxDaemonStatus {
+    wire == .v1 ? .v1(pid: 4242) : .preFreeze(pid: 4242)
+}
 
-/// A full `Info` reply (header plus 552-byte payload) for pid 4242.
-func zmxInfoReply(headerHex: String) -> Data {
-    var payload = Data(count: 552)
+/// A full `Info` reply for pid 4242: the header captured from a real daemon
+/// of each wire plus a `ZmxIPC.infoPayloadSize` payload.
+func zmxInfoReply(wire: ZmxIPC.Wire) -> Data {
+    let headerHex = wire == .v1 ? "0601000028020000" : "0628020000000000"
+    var payload = Data(count: ZmxIPC.infoPayloadSize)
     payload.replaceSubrange(8..<12, with: withUnsafeBytes(of: Int32(4242).littleEndian, Array.init))
     let header = Data(stride(from: 0, to: headerHex.count, by: 2).map { index in
         let start = headerHex.index(headerHex.startIndex, offsetBy: index)
@@ -598,34 +612,43 @@ private struct PassiveViewer {
 }
 
 /// A raw zmx client standing in for a terminal: answers zmx dimension
-/// requests (an empty `Resize`) with its own size.
+/// requests (an empty `Resize`) with its own size. Speaks whichever wire the
+/// bundled daemon answers the probe with.
 private final class ProbeTerminalClient: @unchecked Sendable {
     private let socket: ZmxIPCSocket
+    private let wire: ZmxIPC.Wire
     private let size: Data
     private let requests = ZmxEventLog<Int>()
 
     var dimensionRequests: Int { requests.all.count }
 
     init(path: String, rows: UInt16, cols: UInt16, sendInit: Bool) throws {
+        switch ZmxIPCSocket.probe(path: path) {
+        case .v1: wire = .v1
+        case .preFreeze: wire = .preFreeze
+        case .unreachable:
+            Issue.record("the zmx daemon at \(path) did not answer the wire probe")
+            throw POSIXError(.ECONNREFUSED)
+        }
         socket = try ZmxIPCSocket.connect(path: path)
         size = ZmxIPC.sizePayload(rows: rows, cols: cols)
-        Thread { [socket, size, requests] in
-            var decoder = ZmxFrameDecoder(wire: .preFreeze)
+        Thread { [socket, wire, size, requests] in
+            var decoder = ZmxFrameDecoder(wire: wire)
             while let chunk = socket.read(), !chunk.isEmpty {
                 guard let frames = try? decoder.push(chunk) else { return }
                 for frame in frames where frame.knownTag == .resize && frame.payload.isEmpty {
                     requests.append(0)
-                    socket.write(ZmxIPC.encode(.resize, size, wire: .preFreeze))
+                    socket.write(ZmxIPC.encode(.resize, size, wire: wire))
                 }
             }
         }.start()
-        if sendInit { socket.write(ZmxIPC.encode(.initialize, size, wire: .preFreeze)) }
+        if sendInit { socket.write(ZmxIPC.encode(.initialize, size, wire: wire)) }
     }
 
-    func sendResize() { socket.write(ZmxIPC.encode(.resize, size, wire: .preFreeze)) }
+    func sendResize() { socket.write(ZmxIPC.encode(.resize, size, wire: wire)) }
 
     /// A bare CR counts as user input to zmx and claims leadership.
-    func claimWithInput() { socket.write(ZmxIPC.encode(.input, Data("\r".utf8), wire: .preFreeze)) }
+    func claimWithInput() { socket.write(ZmxIPC.encode(.input, Data("\r".utf8), wire: wire)) }
 
     func close() { socket.shutdown() }
 }

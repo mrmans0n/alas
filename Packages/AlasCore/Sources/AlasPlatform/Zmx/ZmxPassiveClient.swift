@@ -14,10 +14,11 @@ import AlasModel
 /// The daemon's wire format is probed on a separate connection before
 /// anything is written to or decoded from this socket.
 ///
-/// A dedicated thread drains the socket continuously regardless of how fast
-/// `onEvent` consumers forward data, so zmx never accumulates a backlog for
-/// this client. `onEvent` runs on that thread and must not block; it fires
-/// `.closed` exactly once, last.
+/// A dedicated thread drains the socket regardless of how fast `onEvent`
+/// consumers forward data. It starts reading only once the probe resolves
+/// (bounded by the probe's timeout), so zmx may buffer output for this client
+/// until then; after that it never accumulates a backlog. `onEvent` runs on
+/// that thread and must not block; it fires `.closed` exactly once, last.
 public final class ZmxPassiveClient: @unchecked Sendable {
     public enum Event: Equatable, Sendable {
         case snapshot(Data)
@@ -122,7 +123,7 @@ public final class ZmxPassiveClient: @unchecked Sendable {
                 // Discarded input already gave its bytes back.
                 guard inputEpoch == epoch else { return nil }
                 queuedInputBytes -= input.count
-                return isClosed ? nil : wire
+                return isClosed ? nil : self.wire
             }
             guard let wire else { return }
             if !socket.write(ZmxIPC.encode(.send, input, wire: wire)) { finish(.targetExited) }
@@ -155,7 +156,7 @@ public final class ZmxPassiveClient: @unchecked Sendable {
             finish(.unreachable)
             return
         }
-        lock.withLock { wire = detected }
+        lock.withLock { self.wire = detected }
         wireResolved.signal()
     }
 
@@ -169,7 +170,7 @@ public final class ZmxPassiveClient: @unchecked Sendable {
         // starts once the probe is done, so a slow probe never eats it.
         if token > 1 { scheduleCaptureDeadline(token: token) }
         writer.async { [self] in
-            guard let wire = lock.withLock({ isClosed ? nil : wire }) else { return }
+            guard let wire = lock.withLock({ isClosed ? nil : self.wire }) else { return }
             if token == 1 { scheduleCaptureDeadline(token: token) }
             let frame = ZmxIPC.captureRequest(scrollbackRows: scrollbackRows, wire: wire)
             if !socket.write(frame) { finish(.targetExited) }
@@ -194,7 +195,7 @@ public final class ZmxPassiveClient: @unchecked Sendable {
         wireResolved.wait()
         // No wire means the client already finished (unreachable or closed
         // during the probe) and delivered `.closed`.
-        guard let wire = lock.withLock({ isClosed ? nil : wire }) else { return }
+        guard let wire = lock.withLock({ isClosed ? nil : self.wire }) else { return }
         var decoder = ZmxFrameDecoder(wire: wire)
         while true {
             guard let chunk = socket.read(), !chunk.isEmpty else {
