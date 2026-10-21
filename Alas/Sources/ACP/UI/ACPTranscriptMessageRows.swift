@@ -73,7 +73,8 @@ struct UserMessageRow: View {
                     pastedSpans: pastedSpans,
                     typography: typography,
                     session: session,
-                    chipsAbsolutePaths: chipsAbsolutePaths
+                    chipsAbsolutePaths: chipsAbsolutePaths,
+                    symbolMentions: ACPTranscriptSymbolMentions(attachments: attachments, root: worktreeRoot)
                 )
                 .acpUserBubble()
             }

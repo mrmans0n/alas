@@ -16,6 +16,7 @@ struct ACPMarkdownInlineText: View {
     @Environment(\.acpPastedTextContents) private var pastedTextContents
     @Environment(\.acpAbsolutePathChipping) private var chipsAbsolutePaths
     @Environment(\.acpCommandSuggestions) private var commandSuggestions
+    @Environment(\.acpSymbolMentions) private var symbolMentions
 
     var body: some View {
         if let text = plainText() {
@@ -31,7 +32,8 @@ struct ACPMarkdownInlineText: View {
     }
 
     private func plainText() -> AttributedString? {
-        guard upstreamChipping == nil, pastedTextContents == nil, !chipsAbsolutePaths, commandSuggestions.isEmpty else {
+        guard upstreamChipping == nil, pastedTextContents == nil, !chipsAbsolutePaths, commandSuggestions.isEmpty,
+              symbolMentions == nil else {
             return nil
         }
         return Self.plainText(
