@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### ✨ Features
+
+- Set up the headless host from the command line: `alas-host setup`, `config`, `project` and `restart` change reachability (including LAN), agents, behavior, worktrees and projects.
+
 ## [0.21.10] - 2026-10-21
 
 ### ✨ Features
