@@ -294,19 +294,27 @@ struct HostProtocolServerTests {
         #expect(persisted.projects.isEmpty)
     }
 
-    /// A project with a session running in one of its worktrees stays.
-    @Test func removeProjectRefusesWhileWorkIsLive() async throws {
+    /// A project with a session in one of its worktrees stays, whether its
+    /// agent runs or is still starting.
+    @Test(arguments: [false, true])
+    func removeProjectRefusesWhileWorkIsLive(waitsForTheAgent: Bool) async throws {
         let fixture = try await RepoFixture()
         defer { fixture.tearDown() }
-        let worktree = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
+        let core = fixture.core
+        let worktree = try #require(core.projects.worktrees(projectId: fixture.projectID).first)
         _ = try await fixture.host.sessions.create(
             .worktree(WorktreeRef(projectID: fixture.projectID, path: worktree.path.path)), agentID: "gemini", caller: .app
         )
-        let core = fixture.core
-        try await eventually { @MainActor in core.sessionManagers.values.contains { !$0.runners.isEmpty } }
+        if waitsForTheAgent {
+            try await eventually { @MainActor in core.sessionManagers.values.contains { !$0.runners.isEmpty } }
+        }
 
         #expect(try await fixture.request(.removeProject(projectID: fixture.projectID)) == .failure(error: .projectBusy))
-        #expect(fixture.core.projects.projects.map(\.id) == [fixture.projectID])
+        #expect(core.projects.projects.map(\.id) == [fixture.projectID])
+        let persisted = try #require(try PersistenceStore().readIfExists(ProjectsFile.self, from: fixture.projectsFile))
+        #expect(persisted.projects.map(\.id) == [fixture.projectID])
+        let manager = try #require(core.sessionManagers[.worktree(worktree.id)])
+        try await eventually { @MainActor in !manager.runners.isEmpty }
     }
 
     /// A host over a real repository, persisting to a scratch directory,

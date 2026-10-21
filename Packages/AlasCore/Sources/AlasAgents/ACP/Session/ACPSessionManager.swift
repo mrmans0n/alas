@@ -1750,6 +1750,16 @@ public final class ACPSessionManager: ChangeTracking {
         public init() {}
     }
     private var attachmentAttempts: [ACPSession.ID: AttachmentAttempt] = [:]
+    /// Sessions created here whose first `attach` has not returned yet:
+    /// starting, though no attempt or runner exists for them so far.
+    private var awaitingFirstAttach: Set<ACPSession.ID> = []
+
+    /// Whether a session here is starting or connecting: created and not yet
+    /// attached, or with an attach in flight. Persisted sessions that nothing
+    /// attaches are not starting.
+    package var hasStartingSession: Bool {
+        !awaitingFirstAttach.isEmpty || !attachmentAttempts.isEmpty
+    }
     /// Invalidates takeover work suspended while mirroring the final writer snapshot.
     private var takeoverAttemptIDs: [ACPSession.ID: UUID] = [:]
     /// Identifies the latest connection generation after its attach task has
@@ -2050,6 +2060,7 @@ public final class ACPSessionManager: ChangeTracking {
             recent.insert(row, at: 0)
         }
         unsavedCreations.insert(id)
+        awaitingFirstAttach.insert(id)
         markSaved(id, once: enqueuePersistenceResult { persistence -> Bool in
             try await persistence.upsertSession(row)
             return true
@@ -6057,6 +6068,7 @@ extension ACPSessionManager {
     /// and calls `session/new` (new sessions) or `session/load` (reopened).
     @discardableResult
     public func attach(to sessionId: ACPSession.ID, freshlyCreated: Bool) async -> UUID? {
+        defer { awaitingFirstAttach.remove(sessionId) }
         await previousManagerDisposal?.value
         // Every path that starts an agent ends here, so a worktree operation
         // (a delete being confirmed or carried out) is enforced once.

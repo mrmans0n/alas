@@ -263,7 +263,7 @@ public final class AlasCoreContext {
     }
 
     /// Forgets project `id` and persists the list. Refuses (`projectBusy`)
-    /// while a session or run is live in one of its worktrees; idle session
+    /// while a session or run is live or starting in one of its worktrees; idle session
     /// managers of the worktrees no other project lists are disposed. A
     /// worktree it shadowed goes back to the project that lost it.
     public func removeProject(id: String) async throws {
@@ -275,7 +275,9 @@ public final class AlasCoreContext {
             throw WorktreeOperationInProgress()
         }
         let worktreeIDs = Set(projects.worktrees(projectId: id).map(\.id))
-        let isLive = worktreeIDs.contains { sessionManagers[.worktree($0)]?.runners.isEmpty == false }
+        let isLive = worktreeIDs.contains { id in
+            sessionManagers[.worktree(id)].map { !$0.runners.isEmpty || $0.hasStartingSession } == true
+        }
             || processRuns.values.contains { $0.projectID == id || worktreeIDs.contains($0.worktreeID) }
             || pendingRunLaunches.keys.contains { worktreeIDs.contains($0.worktreeID) }
         guard !isLive else { throw HostError.projectBusy }
