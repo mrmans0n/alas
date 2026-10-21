@@ -2231,8 +2231,9 @@ final class AppState {
 
     /// Logs a migration run and updates the sessions left pre-freeze: one a
     /// run found in use, could not stop, or got no answer from is blocked. A
-    /// session stops being blocked only once a run restarted it, or its
-    /// socket is gone (`recovered`) so `zmx attach` starts a fresh one. A
+    /// session stops being blocked only once a run restarted it, found its
+    /// daemon current (v1), or its socket is gone (`recovered`) so
+    /// `zmx attach` starts a fresh one. A
     /// re-run that could not classify it, such as a probe timeout, keeps it
     /// blocked: it was confirmed pre-freeze and still may be.
     private func recordZmxMigration(_ result: ZmxPreFreezeMigration.Result, recovered: Set<String> = []) {
@@ -2249,7 +2250,7 @@ final class AppState {
             Self.logger.warning("Left zmx session \(name, privacy: .public) running: its daemon did not answer the probe")
         }
         zmxSessionsLeftPreFreeze.subtract(recovered)
-        zmxSessionsLeftPreFreeze.subtract(result.restarted.compactMap(Self.zmxSessionName(forSocket:)))
+        zmxSessionsLeftPreFreeze.subtract((result.restarted + result.current).compactMap(Self.zmxSessionName(forSocket:)))
         zmxSessionsLeftPreFreeze.formUnion(
             (result.inUse + result.failed + result.unresponsive).compactMap(Self.zmxSessionName(forSocket:)))
     }

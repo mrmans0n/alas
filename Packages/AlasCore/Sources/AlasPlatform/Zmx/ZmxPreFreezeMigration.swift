@@ -25,14 +25,22 @@ public enum ZmxPreFreezeMigration {
         /// that refuses connections is not: its daemon is gone and the next
         /// `zmx attach` replaces it.
         public var unresponsive: [String]
+        /// Socket names, sorted, whose daemon answered the v1 probe: current,
+        /// so the bundled zmx attaches it and it was left alone.
+        public var current: [String]
 
         public init(
-            restarted: [String] = [], failed: [String] = [], inUse: [String] = [], unresponsive: [String] = []
+            restarted: [String] = [],
+            failed: [String] = [],
+            inUse: [String] = [],
+            unresponsive: [String] = [],
+            current: [String] = []
         ) {
             self.restarted = restarted
             self.failed = failed
             self.inUse = inUse
             self.unresponsive = unresponsive
+            self.current = current
         }
     }
 
@@ -55,6 +63,7 @@ public enum ZmxPreFreezeMigration {
         case failed
         case inUse
         case unresponsive
+        case current
     }
 
     /// Sockets probed and stopped at the same time. Each worker blocks for
@@ -120,6 +129,10 @@ public enum ZmxPreFreezeMigration {
                     outcomes[index] = .unresponsive
                     return
                 }
+                if case .v1 = status {
+                    outcomes[index] = .current
+                    return
+                }
                 guard case .preFreeze(let pid, let clients) = status else { return }
                 guard clients == 0 else {
                     outcomes[index] = .inUse
@@ -137,6 +150,7 @@ public enum ZmxPreFreezeMigration {
             case .failed: result.failed.append(name)
             case .inUse: result.inUse.append(name)
             case .unresponsive: result.unresponsive.append(name)
+            case .current: result.current.append(name)
             case .untouched: break
             }
         }

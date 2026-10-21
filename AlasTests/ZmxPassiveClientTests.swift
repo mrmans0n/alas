@@ -191,7 +191,7 @@ import Testing
         )
 
         #expect(result == ZmxPreFreezeMigration.Result(
-            restarted: ["alas-b"], failed: [], inUse: ["alas-e"], unresponsive: ["alas-c"]))
+            restarted: ["alas-b"], failed: [], inUse: ["alas-e"], unresponsive: ["alas-c"], current: ["alas-a"]))
         #expect(signalled.all.isEmpty)
         #expect(preFreeze.receivedPerConnection == [ZmxIPC.versionProbe, Data([5, 0, 0, 0, 0, 0, 0, 0])])
         #expect(!FileManager.default.fileExists(atPath: preFreeze.path))
@@ -224,7 +224,8 @@ import Testing
         #expect(FileManager.default.fileExists(atPath: daemon.path))
     }
 
-    /// Recovering one pane re-runs the migration for its socket alone.
+    /// Recovering one pane re-runs the migration for its socket alone, and
+    /// reports a daemon that now answers v1 as current.
     @Test func migrationProbesOnlyTheNamedSockets() throws {
         let directory = try zmxShortTempDirectory()
         defer { try? FileManager.default.removeItem(atPath: directory) }
@@ -233,16 +234,17 @@ import Testing
         }
         defer { daemons.forEach { $0.tearDown() } }
         let probed = ZmxEventLog<String>()
-        _ = ZmxPreFreezeMigration.run(
+        let result = ZmxPreFreezeMigration.run(
             directory: URL(fileURLWithPath: directory),
             names: ["b", "missing"],
             bundledWire: .v1,
             probe: { path in
                 probed.append((path as NSString).lastPathComponent)
-                return .unreachable
+                return .v1(pid: 4242)
             }
         )
         #expect(probed.all == ["b"])
+        #expect(result == ZmxPreFreezeMigration.Result(current: ["b"]))
     }
 
     /// Only sockets this Alas could attach are probed: the active prefix
