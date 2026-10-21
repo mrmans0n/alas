@@ -546,9 +546,10 @@ final class AppState {
     /// every orphan sweep awaits it.
     @ObservationIgnored
     private var zmxMigration: Task<Void, Never>?
-    /// zmx session names the migration left pre-freeze: in use by another
-    /// client, or not stoppable. Restores never attach them, because the
-    /// bundled zmx shows a stuck terminal on a pre-freeze daemon.
+    /// zmx session names the migration left pre-freeze, or could not rule
+    /// out: in use by another client, not stoppable, or not answering the
+    /// probe. Restores never attach them, because the bundled zmx shows a
+    /// stuck terminal on a pre-freeze daemon.
     @ObservationIgnored
     private var zmxSessionsLeftPreFreeze: Set<String> = []
     /// The subset a restore has already skipped, and warned about, once.
@@ -2228,7 +2229,8 @@ final class AppState {
         return { ZmxPreFreezeMigration.run(directory: directory, names: sockets) }
     }
 
-    /// Logs a migration run and updates the sessions left pre-freeze. A
+    /// Logs a migration run and updates the sessions left pre-freeze: one a
+    /// run found in use, could not stop, or got no answer from is blocked. A
     /// session stops being blocked only once a run restarted it, or its
     /// socket is gone (`recovered`) so `zmx attach` starts a fresh one. A
     /// re-run that could not classify it, such as a probe timeout, keeps it
@@ -2243,9 +2245,13 @@ final class AppState {
         for name in result.inUse {
             Self.logger.info("Left pre-freeze zmx session \(name, privacy: .public) running: another client is attached")
         }
+        for name in result.unresponsive {
+            Self.logger.warning("Left zmx session \(name, privacy: .public) running: its daemon did not answer the probe")
+        }
         zmxSessionsLeftPreFreeze.subtract(recovered)
         zmxSessionsLeftPreFreeze.subtract(result.restarted.compactMap(Self.zmxSessionName(forSocket:)))
-        zmxSessionsLeftPreFreeze.formUnion((result.inUse + result.failed).compactMap(Self.zmxSessionName(forSocket:)))
+        zmxSessionsLeftPreFreeze.formUnion(
+            (result.inUse + result.failed + result.unresponsive).compactMap(Self.zmxSessionName(forSocket:)))
     }
 
     /// Whether a restore must leave the pane `name` would attach without a
@@ -2255,7 +2261,7 @@ final class AppState {
         guard zmxSessionsLeftPreFreeze.contains(name) else { return false }
         if zmxSessionsSkippedPreFreeze.insert(name).inserted {
             Self.logger.warning(
-                "Not attaching pre-freeze zmx session \(name, privacy: .public): it is still in use or could not be stopped"
+                "Not attaching pre-freeze zmx session \(name, privacy: .public): it is in use, could not be stopped, or did not answer"
             )
         }
         return true

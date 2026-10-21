@@ -6,8 +6,9 @@ import Foundation
 /// The bundled v1 zmx cannot talk to a pre-freeze daemon: attaching shows a
 /// blank, stuck terminal and `zmx kill` hangs. Stopping those daemons and
 /// removing their sockets lets the next `zmx attach` with the same name start
-/// a fresh session in the same pane. Daemons that answer v1, that cannot be
-/// classified at all, or that another client is attached to, are left alone.
+/// a fresh session in the same pane. Daemons that answer v1, that another
+/// client is attached to, or that accept a connection but give no usable
+/// reply, are left alone; the last two are reported so restores keep away.
 public enum ZmxPreFreezeMigration {
     public struct Result: Equatable, Sendable {
         /// Socket names, sorted, whose pre-freeze daemon was stopped and whose
@@ -18,11 +19,20 @@ public enum ZmxPreFreezeMigration {
         /// Socket names, sorted, of pre-freeze daemons left running because a
         /// client is attached: another, older Alas sharing the directory.
         public var inUse: [String]
+        /// Socket names, sorted, whose daemon accepted a connection but gave
+        /// no reply the probe could classify, such as a hung or busy daemon.
+        /// It may be pre-freeze, so it is left running and reported. A socket
+        /// that refuses connections is not: its daemon is gone and the next
+        /// `zmx attach` replaces it.
+        public var unresponsive: [String]
 
-        public init(restarted: [String] = [], failed: [String] = [], inUse: [String] = []) {
+        public init(
+            restarted: [String] = [], failed: [String] = [], inUse: [String] = [], unresponsive: [String] = []
+        ) {
             self.restarted = restarted
             self.failed = failed
             self.inUse = inUse
+            self.unresponsive = unresponsive
         }
     }
 
@@ -44,6 +54,7 @@ public enum ZmxPreFreezeMigration {
         case restarted
         case failed
         case inUse
+        case unresponsive
     }
 
     /// Sockets probed and stopped at the same time. Each worker blocks for
@@ -62,7 +73,10 @@ public enum ZmxPreFreezeMigration {
     /// is removed only once `isAlive(pid)` turns false, so an exiting daemon
     /// cannot remove a socket a fresh daemon has since bound. A daemon that
     /// survives `SIGKILL`, or one reporting an unusable pid, is left in place
-    /// and reported failed. Blocking; run it off the main thread.
+    /// and reported failed. A socket whose probe is `.unreachable` is
+    /// reported unresponsive when `accepts(path)` still connects, and left
+    /// out of the result when it refuses. Blocking; run it off the main
+    /// thread.
     ///
     /// `names`, when given, limits the run to those socket names, such as
     /// one session a previous run left in use. Without it the run covers
@@ -79,6 +93,7 @@ public enum ZmxPreFreezeMigration {
         sessionPrefix: String = ProcessInfo.processInfo.environment["ZMX_SESSION_PREFIX"] ?? "",
         bundledWire: ZmxIPC.Wire = ZmxIPC.bundledWire,
         probe: @escaping @Sendable (String) -> ZmxDaemonStatus = { ZmxIPCSocket.probe(path: $0) },
+        accepts: @escaping @Sendable (String) -> Bool = { acceptsConnections(path: $0) },
         kill: @escaping @Sendable (String) -> Bool = { ZmxIPCSocket.killPreFreeze(path: $0) },
         signal: @escaping @Sendable (_ pid: Int32, _ signal: Int32) -> Void = { _ = Darwin.kill($0, $1) },
         isAlive: @escaping @Sendable (Int32) -> Bool = { processExists($0) },
@@ -100,7 +115,12 @@ public enum ZmxPreFreezeMigration {
             slots.wait()
             DispatchQueue.global(qos: .userInitiated).async(group: group) {
                 defer { slots.signal() }
-                guard case .preFreeze(let pid, let clients) = probe(path) else { return }
+                let status = probe(path)
+                if status == .unreachable, accepts(path) {
+                    outcomes[index] = .unresponsive
+                    return
+                }
+                guard case .preFreeze(let pid, let clients) = status else { return }
                 guard clients == 0 else {
                     outcomes[index] = .inUse
                     return
@@ -116,10 +136,19 @@ public enum ZmxPreFreezeMigration {
             case .restarted: result.restarted.append(name)
             case .failed: result.failed.append(name)
             case .inUse: result.inUse.append(name)
+            case .unresponsive: result.unresponsive.append(name)
             case .untouched: break
             }
         }
         return result
+    }
+
+    /// Whether a daemon is listening at `path`. A stale socket, left by a
+    /// daemon that has exited, refuses the connection.
+    public static func acceptsConnections(path: String) -> Bool {
+        guard let socket = try? ZmxIPCSocket.connect(path: path) else { return false }
+        socket.shutdown()
+        return true
     }
 
     /// Whether `pid` names a live process: `kill(pid, 0)` succeeds, or fails

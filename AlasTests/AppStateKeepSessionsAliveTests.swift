@@ -229,8 +229,10 @@ struct AppStateKeepSessionsAliveTests {
         }
     }
 
-    /// A re-run that can neither restart the daemon nor find its socket gone,
-    /// such as one whose probe timed out, has not shown the session is safe:
+    /// A daemon that accepted the probe but never answered may be
+    /// pre-freeze: the restore leaves its pane without a session. A re-run
+    /// that can neither restart the daemon nor find its socket gone, such as
+    /// one whose probe timed out again, has not shown the session is safe:
     /// the pane stays without a session.
     @Test func restoreKeepsAPaneBlockedWhenAReRunCannotClassifyIt() async throws {
         let repo = try await makeRepo(name: "zmx-unclassified")
@@ -247,7 +249,7 @@ struct AppStateKeepSessionsAliveTests {
         let leafId = "leaf-unclassified"
         let name = ZmxSessionName.derive(worktreeId: worktree.id, leafId: leafId)
         let migration = ZmxMigrationGate(blocked: false, results: [
-            ZmxPreFreezeMigration.Result(inUse: [name]),
+            ZmxPreFreezeMigration.Result(unresponsive: [name]),
             ZmxPreFreezeMigration.Result(),
         ])
         state.zmxMigrationRunner = migration.runner

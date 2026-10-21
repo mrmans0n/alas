@@ -166,8 +166,12 @@ import Testing
             directory: directory, name: "alas-b",
             scripts: [.reply(zmxInfoReply(wire: .preFreeze)), .closeAfterReceiving(count: 8)])
         defer { preFreeze.tearDown() }
-        let silent = try ZmxFakeDaemonListener(directory: directory, name: "alas-c", scripts: [.silent])
+        // Accepts the probe and the connect check but never answers: a hung
+        // daemon that may be pre-freeze.
+        let silent = try ZmxFakeDaemonListener(directory: directory, name: "alas-c", scripts: [.silent, .silent])
         defer { silent.tearDown() }
+        // Left by a daemon that has exited: refuses connections.
+        try zmxStaleSocket(at: directory + "/alas-f")
         // A pre-freeze daemon another client is attached to: an older Alas.
         let inUse = try ZmxFakeDaemonListener(
             directory: directory, name: "alas-e", scripts: [.reply(zmxInfoReply(wire: .preFreeze, clients: 2))])
@@ -186,13 +190,14 @@ import Testing
             isAlive: { _ in false }
         )
 
-        #expect(result == ZmxPreFreezeMigration.Result(restarted: ["alas-b"], failed: [], inUse: ["alas-e"]))
+        #expect(result == ZmxPreFreezeMigration.Result(
+            restarted: ["alas-b"], failed: [], inUse: ["alas-e"], unresponsive: ["alas-c"]))
         #expect(signalled.all.isEmpty)
         #expect(preFreeze.receivedPerConnection == [ZmxIPC.versionProbe, Data([5, 0, 0, 0, 0, 0, 0, 0])])
         #expect(!FileManager.default.fileExists(atPath: preFreeze.path))
         #expect(inUse.receivedPerConnection == [ZmxIPC.versionProbe])
         #expect(FileManager.default.fileExists(atPath: inUse.path))
-        for name in ["alas-a", "alas-c", "alas-d", "logs"] {
+        for name in ["alas-a", "alas-c", "alas-d", "alas-f", "logs"] {
             #expect(FileManager.default.fileExists(atPath: directory + "/" + name), "\(name)")
         }
     }
@@ -333,7 +338,7 @@ import Testing
         defer { try? FileManager.default.removeItem(atPath: directory) }
         // More sockets than a CI runner has cores: each one gets its own worker.
         let daemons = try (0..<8).map {
-            try ZmxFakeDaemonListener(directory: directory, name: "alas-\($0)", scripts: [.silent])
+            try ZmxFakeDaemonListener(directory: directory, name: "alas-\($0)", scripts: [.silent, .silent])
         }
         defer { daemons.forEach { $0.tearDown() } }
 
@@ -359,7 +364,7 @@ import Testing
         #expect(clock.now - start < .seconds(1))
         #expect(statuses.all == Array(repeating: .unreachable, count: 8))
         #expect(killed.all.isEmpty)
-        #expect(result == ZmxPreFreezeMigration.Result(restarted: [], failed: []))
+        #expect(result == ZmxPreFreezeMigration.Result(unresponsive: (0..<8).map { "alas-\($0)" }))
     }
 
     // MARK: Snapshot ordering
@@ -564,6 +569,23 @@ func zmxShortTempDirectory() throws -> String {
     guard let dir = template.withUnsafeMutableBufferPointer({ mkdtemp($0.baseAddress) }).map({ String(cString: $0) })
     else { throw POSIXError(.EIO) }
     return dir
+}
+
+/// Binds a Unix socket at `path` and closes it without unlinking, like a
+/// daemon that exited without cleaning up: the file stays, connects fail.
+func zmxStaleSocket(at path: String) throws {
+    let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+    guard fd >= 0 else { throw POSIXError(.EIO) }
+    defer { Darwin.close(fd) }
+    var address = sockaddr_un()
+    address.sun_family = sa_family_t(AF_UNIX)
+    withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: Array(path.utf8)) }
+    let bound = withUnsafePointer(to: &address) { pointer in
+        pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+            Darwin.bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+        }
+    }
+    guard bound == 0 else { throw POSIXError(.EADDRINUSE) }
 }
 
 /// Listens on a Unix socket and serves one connection per script, in order:
