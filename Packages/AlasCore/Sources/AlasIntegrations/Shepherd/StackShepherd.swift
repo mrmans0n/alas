@@ -313,14 +313,17 @@ public final class StackShepherd {
         record.maxFixAttempts = ShepherdDefaults.clampedFixAttempts(maxFixAttempts)
         record.finishedAt = nil
         record = StackShepherdPolicy.reconcile(record, with: stack, now: now)
-        for index in record.entries.indices where !record.entries[index].shepherd.phase.isTerminal {
+        // Every entry that has not merged takes the owner and settings, a
+        // closed one included: a reopen later brings it back under them. Only
+        // a live entry starts over; a closed one keeps its phase until then.
+        for index in record.entries.indices where record.entries[index].shepherd.phase != .merged {
             var shepherd = record.entries[index].shepherd
             shepherd.sessionID = sessionID
             shepherd.autoFix = autoFix
             shepherd.autoMerge = false
             shepherd.maxFixAttempts = record.maxFixAttempts
-            if startsFresh {
-                if newOwner { shepherd.handledThreadRevisions = nil }
+            if newOwner { shepherd.handledThreadRevisions = nil }
+            if startsFresh, !shepherd.phase.isTerminal {
                 shepherd.phase = .watching
                 shepherd.fixAttempts = 0
                 shepherd.lastDispatchedFingerprint = nil

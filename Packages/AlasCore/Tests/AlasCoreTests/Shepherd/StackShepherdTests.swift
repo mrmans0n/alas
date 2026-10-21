@@ -619,6 +619,45 @@ struct StackShepherdTests {
         #expect(core.stackShepherd.records.isEmpty)
     }
 
+    /// A closed entry kept beside live ones comes back under whatever owner and
+    /// settings the stack has when its request reopens, not the previous bind's.
+    @Test func aRetainedClosedEntryTakesTheNewOwnersSettings() async throws {
+        var seeded = Self.record([41, 42])
+        seeded.entries[0].shepherd.phase = .closed
+        seeded.entries[0].shepherd.finishedAt = F.now
+        let store = MemoryStore()
+        try store.write(StackShepherdsFile(records: [seeded]), to: URL(fileURLWithPath: "/memory/stack-shepherds.json"))
+        let shepherd = makeShepherd(requests: [], stack: Self.stack([41, 42]), store: store)
+
+        let rebound = await shepherd.bind(
+            sessionID: "session-2", worktreeID: "wt-1", stack: Self.stack([41, 42]),
+            requests: [:], remote: F.remote(), autoFix: false, maxFixAttempts: 5, contextRules: nil
+        )
+
+        let closed = rebound.entries[0].shepherd
+        #expect(closed.phase == .closed)
+        #expect(closed.sessionID == "session-2")
+        #expect(!closed.autoFix)
+        #expect(closed.maxFixAttempts == 5)
+        #expect(rebound.entries[1].shepherd.phase == .watching)
+    }
+
+    /// A locally closed entry whose request just reopened is still a stack
+    /// entry: a standalone bind of it must release the stack, or the next poll
+    /// reactivates it beside the standalone shepherd.
+    @Test func aStandaloneBindReleasesAStackHoldingTheRequestClosed() async throws {
+        var seeded = Self.record([41, 42])
+        seeded.entries[0].shepherd.phase = .closed
+        seeded.entries[0].shepherd.finishedAt = F.now
+        let store = MemoryStore()
+        try store.write(StackShepherdsFile(records: [seeded]), to: Paths.stackShepherdsFile)
+        let core = makeCore(store: store)
+
+        core.releaseStackShepherds(forStandaloneBindOf: Self.request(41), sessionID: "other", worktreeID: "wt-1")
+
+        #expect(core.stackShepherd.records.isEmpty)
+    }
+
     /// A finished record stays listed after its worktree moves on; it must not
     /// route `pr_status` into the stack path, which refuses a non-stack worktree.
     @Test func prStatusIgnoresAFinishedStackRecordInAWorktreeOffTheStack() async throws {

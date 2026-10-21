@@ -79,12 +79,14 @@ extension AlasCoreContext {
 
     /// Before a standalone PR bind: stops the session's live stack record (a
     /// session shepherds one PR or one stack, never both) and any live stack
-    /// record in the worktree that still watches `request`, whoever owns it. A
-    /// request has one shepherd, or both would dispatch fixes for it.
+    /// record in the worktree that still holds `request` as an entry that has
+    /// not merged, whoever owns it. A closed entry counts: a reopened request
+    /// is watched again on the next poll. A request has one shepherd, or both
+    /// would dispatch fixes for it.
     public func releaseStackShepherds(forStandaloneBindOf request: ReviewRequest, sessionID: String, worktreeID: String) {
         for record in stackShepherd.records.values where !record.isFinished {
             let watchesRequest = record.id.worktreeID == worktreeID
-                && record.openEntries.contains { $0.requestNumber == request.number }
+                && record.entries.contains { $0.requestNumber == request.number && $0.shepherd.phase != .merged }
             if record.sessionID == sessionID || watchesRequest {
                 stackShepherd.stopShepherding(record.id)
             }
