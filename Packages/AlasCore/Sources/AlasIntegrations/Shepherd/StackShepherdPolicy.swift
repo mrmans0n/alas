@@ -192,15 +192,19 @@ public enum StackShepherdPolicy {
             ? .busy : observation.session
         var entries: [StackShepherdEntry] = []
         for var entry in record.entries {
+            // Removed from the stack: gg no longer lists it. A merged entry
+            // stays as landed history; anything else is no longer part of it.
+            let isAbsent = observation.presentEntryIDs.map { !$0.contains(entry.entryID) } ?? false
             guard !entry.shepherd.phase.isTerminal,
                   let request = observation.requests[entry.requestNumber]
             else {
+                if isAbsent, entry.shepherd.phase == .closed { continue }
                 entries.append(entry)
                 continue
             }
-            // Dropped or unstacked: the request stays open, but it is no
-            // longer part of this stack.
-            if let present = observation.presentEntryIDs, !present.contains(entry.entryID), request.state == .open {
+            // Dropped or unstacked: the request stays open or was closed, but
+            // it is no longer part of this stack.
+            if isAbsent, request.state != .merged {
                 continue
             }
             entry.shepherd.branch = request.headRefName

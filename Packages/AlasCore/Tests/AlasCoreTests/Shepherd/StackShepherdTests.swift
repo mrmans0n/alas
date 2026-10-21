@@ -234,6 +234,27 @@ struct StackShepherdTests {
         #expect(decision.notifyReady == ready)
     }
 
+    /// A closed entry the user removed from the stack is gone, not a closed
+    /// stack: it must not keep the entries that remain from being ready.
+    @Test func aClosedEntryRemovedFromTheStackIsDropped() {
+        let requests = [Self.request(41, state: .closed), Self.request(42)]
+        var record = Self.record([41, 42])
+
+        // Closed and removed in one poll: dropped without a closed notice.
+        let once = StackShepherdPolicy.decide(record, Self.observation(requests, present: ["c-42"], now: F.earlier))
+        #expect(once.record.entries.map(\.requestNumber) == [42])
+        #expect(once.entryEvents.isEmpty)
+
+        // Closed while still listed, removed on a later poll.
+        record = StackShepherdPolicy.decide(record, Self.observation(requests, present: ["c-41", "c-42"], now: F.earlier)).record
+        #expect(record.entries.map(\.shepherd.phase).first == .closed)
+        record = StackShepherdPolicy.decide(record, Self.observation(requests, present: ["c-42"])).record
+        #expect(record.entries.map(\.requestNumber) == [42])
+
+        let ready = StackShepherdPolicy.decide(record, Self.observation(requests, present: ["c-42"]))
+        #expect(ready.gatePasses)
+    }
+
     private static func stack(published: [Bool], synced: Int? = nil) -> GGStack {
         GGStack(
             name: "auth", base: "main", totalCommits: published.count, syncedCommits: synced ?? published.count,
