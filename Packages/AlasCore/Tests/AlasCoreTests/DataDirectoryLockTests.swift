@@ -17,10 +17,7 @@ struct DataDirectoryLockTests {
 
         first = nil
         _ = first
-        // Polled: a child another test is spawning right now briefly shares
-        // this process's descriptors, the lock's among them, until the
-        // kernel closes them on exec.
-        try await eventually { (try? DataDirectoryLock.acquire(in: directory)) != nil }
+        _ = try DataDirectoryLock.acquire(in: directory)
     }
 
     /// A waiting taker blocks while the directory is held and takes it as

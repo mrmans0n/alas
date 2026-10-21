@@ -58,7 +58,7 @@ final class CompletionFeature {
     private var isRefreshing = false
 
     private let automaticDebounceNanos: UInt64 = 120_000_000
-    private let requestTimeoutNanos: UInt64 = 900_000_000
+    private let requestTimeoutNanos: UInt64
     private let fallbackTriggerCharacters = [".", "->", "::"]
     private static let memberAccessTriggerCharacters: Set<String> = [".", "->", "::"]
 
@@ -76,9 +76,11 @@ final class CompletionFeature {
         synchronizeRequest: SynchronizeRequest? = nil,
         isContextCurrent: @escaping (EditorRequestContext) -> Bool = { _ in true },
         applyWorkspaceCompletion: ((CompletionEditPlan, String, EditorRequestContext) async -> Bool)? = nil,
-        executeFollowup: ((LSPCommand, LSPClient, EditorRequestContext) async -> Void)? = nil
+        executeFollowup: ((LSPCommand, LSPClient, EditorRequestContext) async -> Void)? = nil,
+        requestTimeoutNanos: UInt64 = 900_000_000
     ) {
         self.textView = textView
+        self.requestTimeoutNanos = requestTimeoutNanos
         self.getClient = getClient
         self.getURI = getURI
         self.isEnabled = isEnabled

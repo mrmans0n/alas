@@ -57,7 +57,10 @@ public final class DataDirectoryLock: Sendable {
     }
 
     deinit {
-        // Closing the descriptor releases the lock.
+        // Unlocked before closing: a child another thread is spawning right
+        // now shares this descriptor until its exec closes it, and `close`
+        // alone would leave the lock held until then.
+        flock(fd, LOCK_UN)
         close(fd)
     }
 
