@@ -20,7 +20,7 @@ func launchctl(_ arguments: String...) -> Int32 {
     return process.terminationStatus
 }
 
-/// The `config`, `project` and `restart` commands. The project operations
+/// The `config`, `project`, `restart` and `setup` commands. The project operations
 /// go through the running host's socket when one serves the profile, and
 /// through a host booted in this process when none does.
 @MainActor
@@ -28,7 +28,7 @@ enum HostCommands {
     /// Runs the command `arguments` names and exits; returns when they name
     /// none of these commands.
     static func runIfCommand(_ arguments: [String]) {
-        guard let command = arguments.first, ["config", "project", "restart"].contains(command) else { return }
+        guard let command = arguments.first, ["config", "project", "restart", "setup"].contains(command) else { return }
         Task { @MainActor in
             do {
                 try await run(command, Array(arguments.dropFirst()))
@@ -72,12 +72,14 @@ enum HostCommands {
             try await removeProject(arguments[1])
         case ("restart", nil, 0):
             try restart()
+        case ("setup", nil, 0):
+            try await HostSetup.run()
         default:
             throw HostCommandError("unknown command \(([command] + arguments).joined(separator: " "))\n\(usage)")
         }
     }
 
-    private static func message(for error: any Error) -> String {
+    static func message(for error: any Error) -> String {
         switch error as? HostError {
         case .projectBusy?: "A session or run is live in one of the project's worktrees; stop it and run this again."
         case .operationInProgress?: "Another operation is underway in one of the project's worktrees."
@@ -89,13 +91,13 @@ enum HostCommands {
         }
     }
 
-    private static func readConfig() -> AppConfig {
+    static func readConfig() -> AppConfig {
         (try? PersistenceStore().readIfExists(AppConfig.self, from: Paths.appConfigFile)) ?? .defaults
     }
 
     /// Who holds the profile, for a command that writes it: the app and an
     /// unknown process keep it in memory and would overwrite the change.
-    private static func writableHolder() throws -> DataDirectoryHolder {
+    static func writableHolder() throws -> DataDirectoryHolder {
         let holder = DataDirectoryHolder.current()
         switch holder {
         case .app: throw HostProfileRefusal()
@@ -171,7 +173,7 @@ enum HostCommands {
 
     // MARK: - Restart
 
-    private static func restart() throws {
+    static func restart() throws {
         let agent = HostLaunchAgent(executable: URL(fileURLWithPath: CommandLine.arguments[0]))
         let service = "gui/\(getuid())/\(agent.label)"
         if FileManager.default.fileExists(atPath: agent.plistURL.path), launchctl("print", service) == 0 {

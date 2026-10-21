@@ -45,4 +45,69 @@ struct HostSettingTests {
         try HostSettingCatalog.named("agents.zed.enabled", in: config).set("no", in: &config)
         #expect(config.agents.registry[0].isEnabled == false)
     }
+
+    // MARK: - Setup model
+
+    /// Drives `model` with `keys`, returning the last effect.
+    @discardableResult
+    private func press(_ keys: [HostSetupKey], on model: inout HostSetupModel) -> HostSetupEffect? {
+        var effect: HostSetupEffect?
+        for key in keys { effect = model.handle(key) }
+        return effect
+    }
+
+    /// Opens the main menu's `item`.
+    @discardableResult
+    private func open(_ item: HostSetupMenuItem, on model: inout HostSetupModel) -> HostSetupEffect? {
+        let index = HostSetupMenuItem.allCases.firstIndex(of: item)!
+        return press(Array(repeating: .down, count: index) + [.enter], on: &model)
+    }
+
+    @Test func togglingABoolMarksTheConfigDirty() {
+        var model = HostSetupModel(config: .defaults, projects: [])
+        let before = AppConfig.defaults.harness.acpAutoResumeAfterUsageLimit
+        open(.behavior, on: &model)
+        press([.down, .enter], on: &model)
+        #expect(model.changedConfig.harness.acpAutoResumeAfterUsageLimit == !before)
+        #expect(model.isDirty)
+    }
+
+    @Test func editingTextIsCancelledByEscape() {
+        var model = HostSetupModel(config: .defaults, projects: [])
+        let clear = Array(repeating: HostSetupKey.backspace, count: AppConfig.defaults.worktrees.baseBranch.count)
+        let typeDev: [HostSetupKey] = [.down, .enter] + clear + "dev".map { .character($0) }
+        open(.worktrees, on: &model)
+        press(typeDev + [.escape], on: &model)
+        #expect(model.changedConfig.worktrees.baseBranch == AppConfig.defaults.worktrees.baseBranch)
+        #expect(!model.isDirty)
+
+        press([.up] + typeDev + [.enter], on: &model)
+        #expect(model.changedConfig.worktrees.baseBranch == "dev")
+        #expect(model.isDirty)
+    }
+
+    @Test func choosingLANNeedsAnExplicitPick() {
+        var upgraded = AppConfig.defaults
+        upgraded.remote.enabled = true
+        var model = HostSetupModel(config: upgraded, projects: [])
+        open(.reachability, on: &model)
+        #expect(model.changedConfig.hostReachability == .loopback)
+        press([.down, .down, .up, .up, .tab, .escape], on: &model)
+        #expect(model.changedConfig.hostReachability == .loopback)
+        #expect(!model.isDirty)
+
+        // Reopen the section, then pick on the reachability row.
+        press([.enter, .enter], on: &model)
+        #expect(model.changedConfig.hostReachability == .lan)
+    }
+
+    @Test func saveEffectOnlyWhenDirty() {
+        var clean = HostSetupModel(config: .defaults, projects: [])
+        #expect(open(.save, on: &clean) == .quit)
+
+        var dirty = HostSetupModel(config: .defaults, projects: [])
+        open(.behavior, on: &dirty)
+        press([.enter, .escape], on: &dirty)
+        #expect(press(Array(repeating: .down, count: HostSetupMenuItem.allCases.count) + [.enter], on: &dirty) == .save)
+    }
 }

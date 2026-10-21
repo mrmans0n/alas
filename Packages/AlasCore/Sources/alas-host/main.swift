@@ -7,6 +7,7 @@ import Foundation
 
 let usage = """
 usage: alas-host [--wait-for-lock]
+       alas-host setup
        alas-host pair
        alas-host install-agent | uninstall-agent
        alas-host config list | get [<key>] | set <key> <value> [--restart]
@@ -21,6 +22,10 @@ the one in /Applications, or of ALAS_REMOTE_WEB_DIR. Stops on SIGINT or SIGTERM.
 
 With --wait-for-lock, waits while another process (the app) holds the data
 directory instead of exiting, and serves once it lets go.
+
+`alas-host setup` walks through the host's settings, projects and pairing in
+a full-screen terminal UI that opens on the current values; rerun it to change
+them later.
 
 `alas-host pair` asks the running host for a Remote pairing code, which a
 phone or browser redeems within two minutes, and prints it.
