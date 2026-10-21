@@ -6252,7 +6252,8 @@ extension ACPSessionManager {
             let task: Task<String?, Never>
             let taskID: UUID
             if let current = attempt.hookReviewTask, let currentID = attempt.hookReviewTaskID {
-                task = current; taskID = currentID
+                task = current
+                taskID = currentID
             } else {
                 let cwd = worktreePath
                 let coordinator = ACPCodexHooksReviewCoordinator(
@@ -6283,7 +6284,10 @@ extension ACPSessionManager {
             } else if token == nil || attempt.hookReview?.reviewToken != token {
                 throw CancellationError()
             }
-            guard let token else { attempt.hookReviewCancelled = true; throw CancellationError() }
+            guard let token else {
+                attempt.hookReviewCancelled = true
+                throw CancellationError()
+            }
             // Install under the same actor/owner fence, so a late callback cannot restore an invalidated token.
             connection.codexHooksReviewToken = token
             return

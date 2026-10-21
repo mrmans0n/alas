@@ -206,7 +206,8 @@ struct ACPCodexHooksTests {
         }
         var created = 0
         let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/p", persistence: ACPSessionPersistence(path: path.path), setupEvaluator: { _ in .ready }, connectionFactory: { _, _, _ in
-            let client = mocks[min(created, 1)]; created += 1
+            let client = mocks[min(created, 1)]
+            created += 1
             return ACPConnection(client: client)
         })
         defer { manager.shutdownBackgroundTasks() }
@@ -448,7 +449,10 @@ struct ACPCodexHooksTests {
         let entered = AsyncStream<Void>.makeStream()
         var release: CheckedContinuation<ACPCodexHooksList, Never>?
         let coordinator = ACPCodexHooksReviewCoordinator(context: .init(host: "local", cwd: "/p"), list: {
-            await withCheckedContinuation { continuation in release = continuation; entered.continuation.yield(()) }
+            await withCheckedContinuation { continuation in
+                release = continuation
+                entered.continuation.yield(())
+            }
         }, trust: { _, _ in true })
         let waiting = Task { await coordinator.review() }
         var iterator = entered.stream.makeAsyncIterator()
@@ -461,7 +465,10 @@ struct ACPCodexHooksTests {
 
         // Await the entire refresh operation to prove a late callback cannot restore state.
         let late = ACPCodexHooksReviewCoordinator(context: .init(host: "local", cwd: "/p"), list: {
-            await withCheckedContinuation { continuation in release = continuation; entered.continuation.yield(()) }
+            await withCheckedContinuation { continuation in
+                release = continuation
+                entered.continuation.yield(())
+            }
         }, trust: { _, _ in true })
         let refreshing = Task { await late.refresh() }
         await iterator.next()
@@ -477,7 +484,10 @@ struct ACPCodexHooksTests {
         let entered = AsyncStream<Void>.makeStream()
         var release: CheckedContinuation<Bool, Never>?
         let coordinator = ACPCodexHooksReviewCoordinator(context: .init(host: "local", cwd: "/p"), list: { initial }, trust: { _, _ in
-            await withCheckedContinuation { continuation in release = continuation; entered.continuation.yield(()) }
+            await withCheckedContinuation { continuation in
+                release = continuation
+                entered.continuation.yield(())
+            }
         })
         await coordinator.refresh()
         coordinator.setSelected(initial.hooks[0].identity, selected: true)

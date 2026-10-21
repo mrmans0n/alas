@@ -36,7 +36,10 @@ public struct ACPCodexHookReviewMetadata: Codable, Equatable, Sendable {
 public struct ACPCodexHookIdentity: Codable, Hashable, Sendable {
     public let key: String
     public let currentHash: String
-    public init(key: String, currentHash: String) { self.key = key; self.currentHash = currentHash }
+    public init(key: String, currentHash: String) {
+        self.key = key
+        self.currentHash = currentHash
+    }
 }
 
 /// Raw strings preserve future adapter values for inspection, while eligibility fails closed.

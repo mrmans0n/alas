@@ -1132,10 +1132,16 @@ struct RemoteHelperClientTests {
         var reviewToken: String? = "initial"
         let transport = RemoteHelperACPTransport(
             host: "devbox", procId: "reviewed-proc", command: "codex-acp", arguments: [], cwd: "/repo", environment: [:],
-            onReattached: { reviewToken = nil; invalidations.continuation.yield(()) },
+            onReattached: {
+                reviewToken = nil
+                invalidations.continuation.yield(())
+            },
             clientProvider: { _ in client }
         )
-        defer { transport.terminate(); Task { await client.shutdown() } }
+        defer {
+            transport.terminate()
+            Task { await client.shutdown() }
+        }
         try transport.start()
         try await waitUntil { first.sentFrames.count == 1 }
         first.send(frame: Data(#"{"jsonrpc":"2.0","id":1,"result":{"name":"alas-helper","protocolVersion":1,"binaryVersion":"0.3.0","capabilities":{"watchKinds":[],"fs":{"read":true,"write":true,"stat":true},"ping":true,"proc":true}}}"#.utf8))

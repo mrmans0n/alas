@@ -191,7 +191,10 @@ public struct ACPGoalControlParams: Encodable, Sendable {
     public let action: ACPGoalAction
     public let objective: String?
     public var meta: ACPSessionMeta? = nil
-    public enum CodingKeys: String, CodingKey { case sessionId, action, objective; case meta = "_meta" }
+    public enum CodingKeys: String, CodingKey {
+        case sessionId, action, objective
+        case meta = "_meta"
+    }
 
     public init(sessionId: String, action: ACPGoalAction, objective: String?) {
         self.sessionId = sessionId
@@ -1237,7 +1240,10 @@ public struct ACPSessionPromptParams: Codable, Equatable, Sendable {
     public let sessionId: String
     public let prompt: [ACPContentBlock]
     public var meta: ACPSessionMeta? = nil
-    public enum CodingKeys: String, CodingKey { case sessionId, prompt; case meta = "_meta" }
+    public enum CodingKeys: String, CodingKey {
+        case sessionId, prompt
+        case meta = "_meta"
+    }
 
     public init(sessionId: String, prompt: [ACPContentBlock]) {
         self.sessionId = sessionId

@@ -765,14 +765,24 @@ public final class ACPConnection: @unchecked Sendable {
 
     public func trustCodexHooks(cwd: String, reviewToken: String, hooks: [ACPCodexHookIdentity]) async throws -> Bool {
         guard negotiatedCodexHooks else { throw ACPClientError.decoding("Codex hook review was not negotiated") }
-        struct Params: Encodable { let cwd: String; let reviewToken: String; let hooks: [ACPCodexHookIdentity] }
+        struct Params: Encodable {
+            let cwd: String
+            let reviewToken: String
+            let hooks: [ACPCodexHookIdentity]
+        }
         struct Response: Decodable { let trusted: Bool }
         let response = try await client.send(ACPRequest(method: "_codex/hooks/trust", params: Params(cwd: cwd, reviewToken: reviewToken, hooks: hooks)))
         defer { response.acknowledgeDurableConsumption() }
         return try JSONDecoder().decode(Response.self, from: response.body).trusted
     }
 
-    public func shutdown() async { await invalidateCodexHooksReview(); await client.shutdown() }
+    public func shutdown() async {
+        await invalidateCodexHooksReview()
+        await client.shutdown()
+    }
 
-    public func detach() async { await invalidateCodexHooksReview(); await client.detach() }
+    public func detach() async {
+        await invalidateCodexHooksReview()
+        await client.detach()
+    }
 }

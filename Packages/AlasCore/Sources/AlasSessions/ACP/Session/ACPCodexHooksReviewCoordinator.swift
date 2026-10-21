@@ -7,7 +7,10 @@ public final class ACPCodexHooksReviewCoordinator: ChangeTracking {
     public struct Context: Equatable, Sendable {
         public let host: String
         public let cwd: String
-        public init(host: String, cwd: String) { self.host = host; self.cwd = cwd }
+        public init(host: String, cwd: String) {
+            self.host = host
+            self.cwd = cwd
+        }
     }
     public struct Presentation: Equatable, Sendable, Identifiable {
         public let id: UUID
@@ -31,7 +34,9 @@ public final class ACPCodexHooksReviewCoordinator: ChangeTracking {
     private var waitID: UUID?
 
     public init(context: Context, list: @escaping List, trust: @escaping Trust) {
-        self.context = context; self.list = list; self.trust = trust
+        self.context = context
+        self.list = list
+        self.trust = trust
     }
 
     /// Suspends startup until a valid review is continued or this attempt is invalidated.
@@ -40,7 +45,10 @@ public final class ACPCodexHooksReviewCoordinator: ChangeTracking {
         let requestID = UUID()
         return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
-                guard valid, !Task.isCancelled else { continuation.resume(returning: nil); return }
+                guard valid, !Task.isCancelled else {
+                    continuation.resume(returning: nil)
+                    return
+                }
                 waiter = continuation
                 waitID = requestID
                 Task { await self.refresh() }
