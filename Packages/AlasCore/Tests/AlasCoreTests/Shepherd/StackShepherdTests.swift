@@ -359,7 +359,9 @@ struct StackShepherdTests {
     private func makeShepherd(
         requests: [ReviewRequest],
         stack: GGStack,
-        deliverPrompt: @escaping @MainActor (String) -> Void = { _ in }
+        contextStackName: String? = "auth",
+        deliverPrompt: @escaping @MainActor (String) -> Void = { _ in },
+        archive: @escaping @MainActor () -> Void = {}
     ) -> StackShepherd {
         let shepherd = StackShepherd(
             store: MemoryStore(),
@@ -373,7 +375,7 @@ struct StackShepherdTests {
         )
         shepherd.effects = StackShepherd.Effects(
             worktreeContext: { worktreeID in
-                .init(worktreeID: worktreeID, path: URL(fileURLWithPath: "/tmp/\(worktreeID)"), stackName: "auth", isEligible: true)
+                .init(worktreeID: worktreeID, path: URL(fileURLWithPath: "/tmp/\(worktreeID)"), stackName: contextStackName, isEligible: true)
             },
             loadStack: { _ in stack },
             syncStack: { _ in },
@@ -384,7 +386,10 @@ struct StackShepherdTests {
             },
             rules: { _ in .none },
             notify: { _ in },
-            archiveWorktreeIfAllowed: { _, _, _ in .declined }
+            archiveWorktreeIfAllowed: { _, _, _ in
+                archive()
+                return .declined
+            }
         )
         return shepherd
     }
@@ -394,6 +399,23 @@ struct StackShepherdTests {
             sessionID: session, worktreeID: "wt-1", stack: stack,
             requests: [:], remote: F.remote(), autoFix: true, maxFixAttempts: 3, contextRules: nil
         )
+    }
+
+    /// Archive-after-merge hides the worktree, so it only runs while the
+    /// worktree is still on the stack that landed, not on one the user moved to.
+    @Test(arguments: [("auth", 1), ("other", 0), (nil, 0)] as [(String?, Int)])
+    func landedStackArchivesOnlyWhileTheWorktreeIsStillOnIt(currentStack: String?, archived: Int) async {
+        let stack = Self.stack([41])
+        var archives = 0
+        let shepherd = makeShepherd(
+            requests: [Self.request(41, state: .merged)], stack: stack, contextStackName: currentStack
+        ) { _ in } archive: { archives += 1 }
+        let record = await bind(shepherd, session: "session-1", stack: stack)
+
+        await shepherd.evaluateNow(record.id)
+
+        #expect(shepherd.records[record.id]?.isFinished == true)
+        #expect(archives == archived)
     }
 
     @Test func onePollSendsOneFixTurnForEveryEntryInNeed() async throws {

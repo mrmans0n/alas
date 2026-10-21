@@ -651,7 +651,12 @@ public final class StackShepherd {
             guard let self, self.records[id]?.phase == .merged, self.generations[id] == generation else { return false }
             return true
         }
-        let result = await effects.archiveWorktreeIfAllowed(id.worktreeID, record.sessionID, isStillWanted)
+        // The worktree may have moved to another stack since this one landed;
+        // archiving would hide that stack's work and stop its tabs.
+        let stillOnStack = effects.worktreeContext(id.worktreeID)?.stackName == id.stackName
+        let result: ReviewShepherd.ArchiveResult = stillOnStack
+            ? await effects.archiveWorktreeIfAllowed(id.worktreeID, record.sessionID, isStillWanted)
+            : .declined
         guard isStillWanted(), var latest = records[id] else { return }
         let pending: Bool? = result == .deferredBusy ? true : nil
         guard latest.archivePending != pending else { return }
