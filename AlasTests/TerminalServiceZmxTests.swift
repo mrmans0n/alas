@@ -738,6 +738,43 @@ struct TerminalServiceZmxTests {
         #expect(recorder.calls.map(\.args) == [["kill", "alas-\(ZmxSessionName.hash16("wt-1"))-\(ZmxSessionName.hash16("leaf-drain"))"]])
     }
 
+    /// The pre-freeze migration is the kill gate at launch: the bundled zmx
+    /// must not run `kill` against a daemon the migration has yet to stop.
+    @Test
+    func dispatchedKillWaitsForTheKillGate() async {
+        let recorder = RecordingRunner()
+        let svc = TerminalService(
+            zmxClient: ZmxClient(env: makeZmxEnv(available: true), runner: recorder.runner())
+        )
+        let (gateStream, openGate) = AsyncStream<Void>.makeStream()
+        svc.killGate = Task.detached {
+            for await _ in gateStream {}
+        }
+        defer { openGate.finish() }
+
+        let surface = AlasGhostty.SurfaceView(testIO: FakeGhosttySurfaceIO())
+        svc.registry.register(TerminalSession(
+            id: "leaf-gated",
+            worktreeId: "wt-1",
+            projectId: "proj-1",
+            surface: surface,
+            executable: "/bin/zsh",
+            args: [],
+            zmxSessionName: ZmxSessionName.derive(worktreeId: "wt-1", leafId: "leaf-gated")
+        ))
+        svc.closeSession(id: "leaf-gated", worktreeId: "wt-1")
+
+        // Without the gate the kill finishes well inside this window.
+        await svc.drainPendingKills(timeout: 0.3)
+        #expect(recorder.calls.isEmpty)
+
+        openGate.finish()
+        svc.waitForPendingKills(timeout: 2.0)
+        #expect(recorder.calls.map(\.args) == [
+            ["kill", "alas-\(ZmxSessionName.hash16("wt-1"))-\(ZmxSessionName.hash16("leaf-gated"))"],
+        ])
+    }
+
     @Test
     func waitForPendingKillsReturnsImmediatelyWhenNothingPending() {
         let recorder = RecordingRunner()

@@ -2120,7 +2120,8 @@ final class AppState {
         // daemon sessions get killed via `closeTab` and inactive /
         // other-worktree tabs don't linger waiting for someone to open
         // them (which is the only thing that drives the per-tab guard
-        // in `restoreTerminalTabIfNeeded`).
+        // in `restoreTerminalTabIfNeeded`). The tabs go now; their `zmx kill`
+        // waits for the migration through `TerminalService.killGate`.
         if !config.terminal.keepSessionsAlive {
             for worktreeId in allWorktreeIds {
                 for tab in tabs.tabs(forWorktree: worktreeId) {
@@ -2163,8 +2164,14 @@ final class AppState {
         if let zmxMigration { return zmxMigration }
         let task: Task<Void, Never>
         if let work = zmxMigrationWork() {
+            let migration = Task.detached(priority: .userInitiated) {
+                await BlockingWork.run(work)
+            }
+            // Kills dispatched meanwhile, such as the keep-alive-off prune,
+            // run after it. Detached: `waitForPendingKills` blocks main.
+            terminal.killGate = Task.detached { _ = await migration.value }
             task = Task { @MainActor in
-                let result = await BlockingWork.run(work)
+                let result = await migration.value
                 for name in result.restarted {
                     Self.logger.info("Restarted pre-freeze zmx session \(name, privacy: .public)")
                 }
