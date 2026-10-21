@@ -301,6 +301,41 @@ struct StackShepherdTests {
         #expect(!StackShepherdPolicy.publication(of: nil, local: Self.dirty()).isPublished)
     }
 
+    /// `pr_status` reports the stack as gg lists it now, not the record as of
+    /// the last poll: a commit published with gg sync since is in it, one
+    /// removed is out of it, and the order is gg's.
+    @Test func statusEntriesFollowTheStackGGListsNow() {
+        var record = Self.record([41, 42])
+        record.entries[1].shepherd.fixAttempts = 2
+
+        // 42 removed, 43 published, and a local commit not published yet.
+        let changed = GGStack(
+            name: "auth", base: "main", totalCommits: 3, syncedCommits: 2, currentPosition: 3, behindBase: 0,
+            entries: [
+                GGStackEntry(position: 1, sha: "a", title: "Entry 41", ggId: "c-41", prNumber: 41),
+                GGStackEntry(position: 2, sha: "b", title: "Entry 43", ggId: "c-43", prNumber: 43),
+                GGStackEntry(position: 3, sha: "c", title: "Local", ggId: "c-99", prNumber: nil),
+            ]
+        )
+        let rows = StackShepherdPolicy.statusEntries(of: record, stack: changed, now: F.now)
+
+        #expect(rows.map(\.entryID) == ["c-41", "c-43", "c-99"])
+        #expect(rows.map(\.requestNumber) == [41, 43, nil])
+        #expect(rows[0].shepherd?.fixAttempts == 0)
+        #expect(rows[1].shepherd?.phase == .watching)
+        #expect(rows[2].shepherd == nil)
+
+        // The record's state follows an entry that kept its request.
+        let unchanged = StackShepherdPolicy.statusEntries(of: record, stack: Self.stack([41, 42]), now: F.now)
+        #expect(unchanged[1].shepherd?.fixAttempts == 2)
+
+        // No stack, or another one checked out: the record as of the last poll.
+        let asRecorded = StackShepherdPolicy.statusEntries(of: record, stack: nil, now: F.now)
+        #expect(asRecorded.map(\.requestNumber) == [41, 42])
+        let other = GGStack(name: "other", base: "main", totalCommits: 0, syncedCommits: 0, currentPosition: nil, behindBase: nil, entries: [])
+        #expect(StackShepherdPolicy.statusEntries(of: record, stack: other, now: F.now).map(\.requestNumber) == [41, 42])
+    }
+
     /// A request closed and then reopened is a live entry again; left closed
     /// it would block the ready gate until the user stopped and restarted.
     @Test func aReopenedEntryIsWatchedAgain() {
@@ -685,6 +720,17 @@ struct StackShepherdTests {
             entries: [GGStackEntry(position: 1, sha: "x", title: "t", prNumber: 77)]
         )
         #expect(await !ready(fresh, stack: other))
+
+        // An entry published since the last poll is in the stack but unseen by
+        // the shepherd: green on its request is not enough to call it ready.
+        var grown = fresh
+        grown[43] = Self.request(43)
+        #expect(await !ready(grown, stack: Self.stack([41, 42, 43])))
+        // One removed since the poll no longer holds the stack back.
+        #expect(await ready(fresh, stack: Self.stack([41, 42])))
+        var shrunk = fresh
+        shrunk[42] = nil
+        #expect(await ready(shrunk, stack: Self.stack([41])))
 
         // A required reviewer that no longer covers the head, with no head change.
         let required = ShepherdRules(source: .projectSettings, instructions: "", requiredReviewers: ["codex"])

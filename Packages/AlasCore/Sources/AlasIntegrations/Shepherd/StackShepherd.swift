@@ -252,8 +252,14 @@ public final class StackShepherd {
               let probed = try? await localProbe.probe(context.path, record.base),
               let latest = records[id], !latest.isFinished
         else { return false }
+        // The record as of the last poll, brought up to the stack gg lists now:
+        // an entry published since is in it but unseen, so not ready, and one
+        // removed is out of it.
+        var current = StackShepherdPolicy.reconcile(latest, with: stack, now: now())
+        let listed = Set(stack.entries.filter { $0.prNumber != nil }.map(\.id))
+        current.entries.removeAll { !listed.contains($0.entryID) && $0.shepherd.phase != .merged }
         return StackShepherdPolicy.isReady(
-            latest, requests: freshRequests,
+            current, requests: freshRequests,
             isStackPublished: StackShepherdPolicy.publication(of: stack, local: probed.local).isPublished,
             capabilities: provider.capabilities, rules: rules, headReviewers: headReviewers, now: now()
         )

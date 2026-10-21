@@ -307,4 +307,37 @@ public enum StackShepherdPolicy {
                 )
         }
     }
+
+    /// One row of a `pr_status` read.
+    public struct StatusEntry: Equatable, Sendable {
+        public let position: Int
+        public let entryID: String
+        public let title: String
+        /// Nil for a local entry gg has not published.
+        public let requestNumber: Int?
+        /// The shepherd's state for the entry; nil while it has no request.
+        public let shepherd: ShepherdRecord?
+    }
+
+    /// What a status read reports for `record`: the stack as gg lists it now,
+    /// bottom-up, with the shepherd's state for each published entry. An entry
+    /// published or rewritten since the last poll is already in it (fresh,
+    /// until a poll sees it), and one removed from the stack is gone. Without
+    /// gg's stack, or with another stack checked out, it is the record's own
+    /// entries as of the last poll.
+    public static func statusEntries(of record: StackShepherdRecord, stack: GGStack?, now: Date) -> [StatusEntry] {
+        guard let stack, stack.name == record.id.stackName else {
+            return record.entries.sorted { $0.position < $1.position }.map {
+                StatusEntry(position: $0.position, entryID: $0.entryID, title: $0.title, requestNumber: $0.requestNumber, shepherd: $0.shepherd)
+            }
+        }
+        let current = reconcile(record, with: stack, now: now)
+        return stack.entries.sorted { $0.position < $1.position }.map { entry in
+            let matched = entry.prNumber.flatMap { current.entry(number: $0) }
+            return StatusEntry(
+                position: entry.position, entryID: entry.id, title: entry.title,
+                requestNumber: entry.prNumber, shepherd: matched?.shepherd
+            )
+        }
+    }
 }

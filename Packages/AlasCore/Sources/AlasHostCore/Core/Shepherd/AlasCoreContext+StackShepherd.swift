@@ -222,24 +222,28 @@ extension AlasCoreContext {
         let (effects, context) = try stackShepherdTarget(worktreeID, sessionID: sessionID)
         let rules = try await effects.rules(worktreeID)
         if let bound {
+            // The stack as gg lists it now, so an entry published, removed or
+            // reordered since the last poll is reported as it is.
+            let freshStack = try? await effects.loadStack(context.path)
+            let rows = StackShepherdPolicy.statusEntries(of: bound, stack: freshStack, now: Date())
             let requests = try await readStackRequests(
-                numbers: bound.entries.map(\.requestNumber), remote: bound.remote, path: context.path
+                numbers: rows.compactMap(\.requestNumber), remote: bound.remote, path: context.path
             )
             var entries: [StackStatusWire.Entry] = []
             var reviewers: [Int: Set<String>] = [:]
-            for entry in bound.entries {
+            for row in rows {
+                let request = row.requestNumber.flatMap { requests[$0] }
                 let status = await statusRequest(
-                    requests[entry.requestNumber], rules: rules, path: context.path,
-                    notBefore: { entry.shepherd.headFirstSeenAt(of: $0.headSHA) }
+                    request, rules: rules, path: context.path,
+                    notBefore: { row.shepherd?.headFirstSeenAt(of: $0.headSHA) }
                 )
-                if let logins = status.headReviewers { reviewers[entry.requestNumber] = logins }
+                if let number = row.requestNumber, let logins = status.headReviewers { reviewers[number] = logins }
                 entries.append(.init(
-                    position: entry.position, entryId: entry.entryID, title: entry.title,
-                    pullRequest: status.wire, phase: PRStatusWire.Shepherd.wireName(entry.shepherd.phase)
+                    position: row.position, entryId: row.entryID, title: row.title,
+                    pullRequest: status.wire, phase: row.shepherd.map { PRStatusWire.Shepherd.wireName($0.phase) }
                 ))
             }
             // Ready is judged on what was just read, not on the last poll.
-            let freshStack = try? await effects.loadStack(context.path)
             let readyToLand = await stackShepherd.isReadyToLand(
                 bound.id, freshRequests: requests, stack: freshStack, headReviewers: reviewers, rules: rules
             )
