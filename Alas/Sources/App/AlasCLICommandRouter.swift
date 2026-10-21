@@ -141,7 +141,7 @@ struct AlasCLICommandRouter {
             return notify(body, title: title, level: level, from: .checkoutSession(sessionId, owner: owner), caller: caller)
         }
         switch request.command {
-        case .prCreate, .prStatus:
+        case .prCreate, .prStatus, .stackShip:
             if case .workspaceCheckout = requestOwner {
                 return .error("The PR shepherd does not support Workspace checkouts yet. Use a regular worktree.")
             }
@@ -254,6 +254,11 @@ struct AlasCLICommandRouter {
                 return .error("pr_status is only available to ACP agent sessions.")
             }
             return await host.prs.status(sessionID: sessionId, worktreeID: origin.id)
+        case .stackShip:
+            guard let sessionId = request.sessionId, callers.acpOrigin(ofSession: sessionId) != nil else {
+                return .error("stack_ship is only available to ACP agent sessions.")
+            }
+            return await host.prs.shipStack(sessionID: sessionId, worktreeID: origin.id)
         }
     }
 

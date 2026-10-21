@@ -128,16 +128,33 @@ public enum ShepherdPolicy {
     /// `noChecksGracePeriod` since it was first seen. Never bypassed.
     public static func mergeGatePasses(_ record: ShepherdRecord, _ observation: ShepherdObservation) -> Bool {
         guard ReviewReadinessModel.canMergeReviewRequest(snapshot: observation.snapshot),
-              let request = observation.snapshot.reviewRequest,
-              let head = request.headSHA,
+              let request = observation.snapshot.reviewRequest
+        else { return false }
+        return headGatePasses(
+            record, request: request, rules: observation.rules,
+            headReviewers: observation.headReviewers, now: observation.now
+        )
+    }
+
+    /// The half of `mergeGatePasses` that the shepherd's own state decides: a
+    /// head that stayed put with complete checks for `requiredStablePolls`
+    /// polls, the no-checks grace period, and required reviewers on that head.
+    public static func headGatePasses(
+        _ record: ShepherdRecord,
+        request: ReviewRequest,
+        rules: ShepherdRules,
+        headReviewers: Set<String>?,
+        now: Date
+    ) -> Bool {
+        guard let head = request.headSHA,
               record.lastSeenHeadSHA == head,
               record.stableHeadPolls >= requiredStablePolls,
-              !awaitingFirstChecks(record, request: request, now: observation.now)
+              !awaitingFirstChecks(record, request: request, now: now)
         else { return false }
-        let required = observation.rules.requiredReviewers
+        let required = rules.requiredReviewers
         guard !required.isEmpty else { return true }
-        guard let reviewers = observation.headReviewers else { return false }
-        return required.allSatisfy { reviewers.contains($0.lowercased()) }
+        guard let headReviewers else { return false }
+        return required.allSatisfy { headReviewers.contains($0.lowercased()) }
     }
 
     /// Applied by the service after executing `.merge`. A nil outcome (head

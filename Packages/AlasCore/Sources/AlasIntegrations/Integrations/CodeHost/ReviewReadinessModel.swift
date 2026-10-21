@@ -325,9 +325,16 @@ public struct ReviewReadinessModel: Equatable, Sendable {
         // needsPush/upstreamAhead) look clean off the stale local commit —
         // merging would ship/delete commits never present in the review diff.
         guard request.headSHA == snapshot.local.headSHA else { return false }
+        return requestIsMergeReady(request, capabilities: snapshot.providerCapabilities)
+    }
+
+    /// The provider half of `canMergeReviewRequest`: what the request itself
+    /// must show, with no local worktree involved. A gg stack entry is never
+    /// checked out on its own, so the stack shepherd judges entries by this.
+    public static func requestIsMergeReady(_ request: ReviewRequest, capabilities: CodeHostProviderCapabilities) -> Bool {
         let mergeStateAllowsOperation = request.mergeState == .clean
             || (request.isMergeQueueEnabled && request.mergeState == .blocked)
-        return snapshot.providerCapabilities.canMerge
+        return capabilities.canMerge
             && request.state == .open
             && !request.isDraft
             && mergeStateAllowsOperation

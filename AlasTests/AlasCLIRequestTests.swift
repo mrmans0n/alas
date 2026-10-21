@@ -468,9 +468,13 @@ struct AlasCLIRequestTests {
         }
     }
 
-    @Test func decodesPRStatus() throws {
-        let json = #"{"v":1,"kind":"cli","command":"pr_status","session_id":"acp-1","cwd":"/wt","params":{}}"#
-        #expect(try AlasCLIRequest.decode(from: Data(json.utf8)).command == .prStatus)
+    @Test(arguments: [
+        ("pr_status", AlasCLIRequest.Command.prStatus),
+        ("stack_ship", AlasCLIRequest.Command.stackShip),
+    ])
+    func decodesParameterlessShepherdCommands(command: String, expected: AlasCLIRequest.Command) throws {
+        let json = #"{"v":1,"kind":"cli","command":"\#(command)","session_id":"acp-1","cwd":"/wt","params":{}}"#
+        #expect(try AlasCLIRequest.decode(from: Data(json.utf8)).command == expected)
     }
 
     /// Pins the agent-facing `pr_status` keys from the spec, including the
