@@ -22,14 +22,15 @@ public struct StackShepherdObservation: Sendable {
     /// The worktree is on this stack with no gg or git operation paused, so
     /// the session can move between entries. Fix turns wait otherwise.
     public let canDispatch: Bool
-    /// Every local entry has a request and gg reports the stack synced, so
-    /// the requests describe what is in the worktree. False while a commit is
-    /// unpublished or an entry was rewritten after its last sync, when green
-    /// requests say nothing about the code that would land. Unknown (true)
-    /// while the worktree is on another stack.
+    /// The requests describe what is in the worktree: every local entry has a
+    /// request, gg reports the stack synced, and nothing is uncommitted. False
+    /// while a commit is unpublished, an entry was rewritten after its last
+    /// sync, or the worktree has edits, when green requests say nothing about
+    /// the code that would land. See `StackShepherdPolicy.publication`.
     public let isStackPublished: Bool
-    /// gg lists a local entry with no request yet. Nil while the worktree is
-    /// on another stack: the record keeps what it last saw.
+    /// gg lists a local entry with no request yet, or the worktree has
+    /// uncommitted edits. Nil while the worktree is on another stack: the
+    /// record keeps what it last saw.
     public let hasUnpublishedEntries: Bool?
     public let rules: ShepherdRules
     public let now: Date
@@ -101,6 +102,21 @@ public struct StackShepherdDecision: Equatable, Sendable {
 /// combined fix turn, the stack-wide ready gate, and keeping the entries in
 /// step with what gg lists.
 public enum StackShepherdPolicy {
+    /// What the worktree holds that no request describes yet. `stack` is what
+    /// gg lists for the worktree, nil when it is on another stack. Uncommitted
+    /// edits count as unpublished work, as in a single PR's merge gate: green
+    /// requests must not announce, or finish, a stack with edits in it.
+    public static func publication(
+        of stack: GGStack?,
+        local: ReviewLoopLocalState
+    ) -> (isPublished: Bool, hasUnpublishedEntries: Bool?) {
+        let hasEdits = local.hasWorkingTreeChanges || local.hasStagedChanges
+        guard let stack else { return (!hasEdits, nil) }
+        let hasUnpublished = stack.entries.contains { $0.prNumber == nil } || hasEdits
+        let isSynced = stack.syncedCommits == stack.totalCommits
+        return (!hasUnpublished && isSynced, hasUnpublished)
+    }
+
     /// The record's entries in step with `stack`'s published entries,
     /// bottom-up. An entry is matched by its GG-ID (or SHA), then by request
     /// number; a match whose request number changed starts over. Entries gg

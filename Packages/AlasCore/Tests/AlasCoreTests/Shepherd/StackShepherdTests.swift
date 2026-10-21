@@ -219,6 +219,51 @@ struct StackShepherdTests {
         #expect(published.record.isFinished)
     }
 
+    private static func stack(published: [Bool], synced: Int? = nil) -> GGStack {
+        GGStack(
+            name: "auth", base: "main", totalCommits: published.count, syncedCommits: synced ?? published.count,
+            currentPosition: published.count, behindBase: 0,
+            entries: published.enumerated().map { index, isPublished in
+                GGStackEntry(position: index + 1, sha: "sha\(index)", title: "t", prNumber: isPublished ? 40 + index : nil)
+            }
+        )
+    }
+
+    private static func dirty(staged: Bool = false) -> ReviewLoopLocalState {
+        ReviewLoopLocalState(
+            branchName: "nacho/auth", headSHA: F.head, baseBranch: "main",
+            hasWorkingTreeChanges: !staged, hasStagedChanges: staged, aheadCommitCount: 2,
+            hasUpstream: true, upstreamRemoteName: "origin", upstreamBranchName: "nacho/auth",
+            needsPush: false
+        )
+    }
+
+    /// Green requests describe the stack only when gg lists every entry
+    /// published and synced and the worktree holds no edits; uncommitted work
+    /// counts like an unpublished commit, as in a single PR's merge gate.
+    @Test func publicationRequiresEveryEntryPublishedSyncedAndNoEdits() {
+        let clean = Self.local
+        let all = StackShepherdPolicy.publication(of: Self.stack(published: [true, true]), local: clean)
+        #expect(all.isPublished && all.hasUnpublishedEntries == false)
+
+        let newCommit = StackShepherdPolicy.publication(of: Self.stack(published: [true, false]), local: clean)
+        #expect(!newCommit.isPublished && newCommit.hasUnpublishedEntries == true)
+
+        let rewritten = StackShepherdPolicy.publication(of: Self.stack(published: [true, true], synced: 1), local: clean)
+        #expect(!rewritten.isPublished && rewritten.hasUnpublishedEntries == false)
+
+        for local in [Self.dirty(), Self.dirty(staged: true)] {
+            let edited = StackShepherdPolicy.publication(of: Self.stack(published: [true, true]), local: local)
+            #expect(!edited.isPublished && edited.hasUnpublishedEntries == true)
+        }
+
+        // On another stack: nothing is known about this one's entries, and
+        // edits still keep the worktree from being ready to land.
+        let away = StackShepherdPolicy.publication(of: nil, local: clean)
+        #expect(away.isPublished && away.hasUnpublishedEntries == nil)
+        #expect(!StackShepherdPolicy.publication(of: nil, local: Self.dirty()).isPublished)
+    }
+
     @Test(arguments: [
         (true, false, [41], false, StackShipAction.shepherding(stackName: "auth")),
         (false, true, [41], false, .adopt),

@@ -531,6 +531,7 @@ public final class StackShepherd {
         // decide on the current record, and not at all for another owner.
         guard let current = records[id], current.sessionID == owner, !current.isFinished else { return }
         failureCounts[id] = nil
+        let publication = StackShepherdPolicy.publication(of: onStack, local: probed.local)
         let observation = StackShepherdObservation(
             requests: fetched,
             presentEntryIDs: onStack.map { Set($0.entries.filter { $0.prNumber != nil }.map(\.id)) },
@@ -539,10 +540,8 @@ public final class StackShepherd {
             headReviewers: reviewers,
             session: session,
             canDispatch: onStack != nil && !operationInProgress(context.path),
-            isStackPublished: onStack.map { stack in
-                stack.entries.allSatisfy { $0.prNumber != nil } && stack.syncedCommits == stack.totalCommits
-            } ?? true,
-            hasUnpublishedEntries: onStack.map { stack in stack.entries.contains { $0.prNumber == nil } },
+            isStackPublished: publication.isPublished,
+            hasUnpublishedEntries: publication.hasUnpublishedEntries,
             rules: rules,
             now: now()
         )
