@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 @testable import Alas
@@ -283,6 +284,7 @@ struct ACPSymbolReferenceTests {
     @Test("sent symbol mentions badge inline at word boundaries, outside code and links, and copy back as text", arguments: [
         ("use @Model and @Queue.load() here", ["@Model", "@Queue.load()"]),
         ("end of sentence @Model. Then @Model, done", ["@Model", "@Model"]),
+        ("🙂@Model and ❤️@Model then @Model🙂", ["@Model", "@Model", "@Model"]),
         ("@ModelView x@Model @Model.other `@Model` [@Model](https://example.com) @@Model", []),
     ])
     @MainActor func transcriptSymbolChips(text: String, expected: [String]) throws {
@@ -314,6 +316,36 @@ struct ACPSymbolReferenceTests {
             Self.mentionAttachment("Queue"),
         ], root: nil))
         #expect(Array(mentions.byLabel.keys) == ["@Queue"])
+    }
+
+    // @MainActor: transcript chips build AppKit attachments.
+    @Test("a long inline symbol badge stays within a narrow bubble's line")
+    @MainActor func transcriptSymbolChipFitsTheLine() throws {
+        let name = String(repeating: "VeryLongSymbolName", count: 6)
+        let mentions = try #require(ACPTranscriptSymbolMentions(attachments: [Self.mentionAttachment(name)], root: nil))
+        let rendered = ACPMarkdownInlineRenderer.makeAttributedString(
+            source: "see @\(name) here", theme: Theme(id: "test", name: "Test", tokens: [:]),
+            typography: .default, role: .body)
+        #expect(ACPTranscriptSymbolChip.chipify(rendered, mentions: mentions) == 1)
+        let width: CGFloat = 200
+
+        // How the paragraph measures itself.
+        let measured = rendered.boundingRect(
+            with: CGSize(width: width, height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin, .usesFontLeading])
+        #expect(measured.width <= width)
+
+        // Where the paragraph's text view draws the badge.
+        let storage = NSTextStorage(attributedString: rendered)
+        let layoutManager = NSLayoutManager()
+        let container = NSTextContainer(size: CGSize(width: width, height: .greatestFiniteMagnitude))
+        container.lineFragmentPadding = 0
+        layoutManager.addTextContainer(container)
+        storage.addLayoutManager(layoutManager)
+        let chip = (rendered.string as NSString).range(of: "\u{FFFC}")
+        let glyphs = layoutManager.glyphRange(forCharacterRange: chip, actualCharacterRange: nil)
+        let drawn = layoutManager.boundingRect(forGlyphRange: glyphs, in: container)
+        #expect(drawn.maxX <= width)
+        #expect(drawn.width > 40)
     }
 
     @Test("the hover preview numbers lines from the declaration's 1-based start")

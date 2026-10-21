@@ -169,8 +169,9 @@ extension EnvironmentValues {
     @Entry var acpSymbolMentions: ACPTranscriptSymbolMentions? = nil
 }
 
-/// Image-backed symbol badge for transcript paragraphs, drawn by the
-/// composer's cell.
+/// Symbol badge for transcript paragraphs, drawn and sized by the composer's
+/// cell. Transcript paragraphs lay out with TextKit 1, which sizes a cell per
+/// line, so a long name truncates instead of running past the bubble.
 final class ACPTranscriptSymbolChipAttachment: NSTextAttachment {
     let mention: ACPTranscriptSymbolMentions.Mention
 
@@ -178,13 +179,7 @@ final class ACPTranscriptSymbolChipAttachment: NSTextAttachment {
     init(mention: ACPTranscriptSymbolMentions.Mention) {
         self.mention = mention
         super.init(data: nil, ofType: nil)
-        let cell = ACPSymbolChipCell(target: mention.sentTarget)
-        let size = cell.cellSize
-        image = NSImage(size: size, flipped: true) { rect in
-            MainActor.assumeIsolated { cell.draw(withFrame: rect, in: nil) }
-            return true
-        }
-        bounds = NSRect(x: 0, y: ACPMentionChipMetrics.baselineOffset, width: size.width, height: size.height)
+        attachmentCell = ACPSymbolChipCell(target: mention.sentTarget)
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -243,24 +238,30 @@ enum ACPTranscriptSymbolChip {
         return hit
     }
 
-    private static func isIdentifier(_ character: unichar) -> Bool {
-        guard let scalar = Unicode.Scalar(character) else { return true }
+    /// The base scalar of the user-perceived character at `location`, so an
+    /// emoji's surrogate pair or variation selector reads as the emoji itself.
+    private static func baseScalar(at location: Int, in source: NSString) -> Unicode.Scalar? {
+        source.substring(with: source.rangeOfComposedCharacterSequence(at: location)).unicodeScalars.first
+    }
+
+    private static func isIdentifier(_ scalar: Unicode.Scalar?) -> Bool {
+        guard let scalar else { return false }
         return scalar == "_" || CharacterSet.alphanumerics.contains(scalar)
     }
 
     private static func isBoundary(before range: NSRange, in source: NSString) -> Bool {
         guard range.location > 0 else { return true }
-        let previous = source.character(at: range.location - 1)
-        return !isIdentifier(previous) && previous != UInt16(UInt8(ascii: "@")) && previous != UInt16(UInt8(ascii: "."))
+        let previous = baseScalar(at: range.location - 1, in: source)
+        return !isIdentifier(previous) && previous != "@" && previous != "."
     }
 
     private static func isBoundary(after range: NSRange, in source: NSString) -> Bool {
         let end = NSMaxRange(range)
         guard end < source.length else { return true }
-        let next = source.character(at: end)
+        let next = baseScalar(at: end, in: source)
         if isIdentifier(next) { return false }
-        guard next == UInt16(UInt8(ascii: ".")), end + 1 < source.length else { return true }
-        return !isIdentifier(source.character(at: end + 1))
+        guard next == ".", end + 1 < source.length else { return true }
+        return !isIdentifier(baseScalar(at: end + 1, in: source))
     }
 
     @MainActor
