@@ -2264,10 +2264,12 @@ final class AppState {
         for name in result.unresponsive {
             Self.logger.warning("Left zmx session \(name, privacy: .public) running: its daemon did not answer the probe")
         }
-        zmxSessionsLeftPreFreeze.subtract(recovered)
-        zmxSessionsLeftPreFreeze.subtract((result.restarted + result.current).compactMap(Self.zmxSessionName(forSocket:)))
+        // Block first, then clear: a socket that vanished after the run
+        // classified it means `zmx attach` is safe, whatever that run saw.
         zmxSessionsLeftPreFreeze.formUnion(
             (result.inUse + result.failed + result.unresponsive).compactMap(Self.zmxSessionName(forSocket:)))
+        zmxSessionsLeftPreFreeze.subtract((result.restarted + result.current).compactMap(Self.zmxSessionName(forSocket:)))
+        zmxSessionsLeftPreFreeze.subtract(recovered)
     }
 
     /// Whether a restore must leave the pane `name` would attach without a

@@ -202,7 +202,8 @@ struct AppStateKeepSessionsAliveTests {
         let name = ZmxSessionName.derive(worktreeId: worktree.id, leafId: leafId)
         let migration = ZmxMigrationGate(blocked: false, results: recovery.results(name))
         state.zmxMigrationRunner = migration.runner
-        state.zmxSocketExists = { _ in true }
+        let vanishes = recovery.socketVanishesOnRetry
+        state.zmxSocketExists = { _ in !(vanishes && migration.runNames.count > 1) }
         state.bundledZmxWire = .v1
         let tab = state.tabs.appendTerminal(worktreeId: worktree.id, title: "main", sessionId: leafId)
 
@@ -525,6 +526,9 @@ private final class ZmxMigrationGate: @unchecked Sendable {
 enum ZmxRetryRecovery: CaseIterable, Sendable {
     case inUseThenRestarted
     case unresponsiveThenCurrent
+    /// The re-run still gets no answer, but the socket is gone by the time
+    /// it is checked: `zmx attach` is safe, so that wins.
+    case unresponsiveThenVanished
 
     func results(_ name: String) -> [ZmxPreFreezeMigration.Result] {
         switch self {
@@ -532,6 +536,10 @@ enum ZmxRetryRecovery: CaseIterable, Sendable {
             [ZmxPreFreezeMigration.Result(inUse: [name]), ZmxPreFreezeMigration.Result(restarted: [name])]
         case .unresponsiveThenCurrent:
             [ZmxPreFreezeMigration.Result(unresponsive: [name]), ZmxPreFreezeMigration.Result(current: [name])]
+        case .unresponsiveThenVanished:
+            [ZmxPreFreezeMigration.Result(unresponsive: [name]), ZmxPreFreezeMigration.Result(unresponsive: [name])]
         }
     }
+
+    var socketVanishesOnRetry: Bool { self == .unresponsiveThenVanished }
 }
