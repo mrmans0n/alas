@@ -620,10 +620,16 @@ impl ACPBrokerState {
         self.acknowledged_cursor = cursor;
         self.journal.retain(|event| event.cursor > cursor);
         self.operations.retain(|_, record| {
+            // Replay delivery does not mean the polling send has received this
+            // rejection. Only consume_hook_review_rejection may release it.
             record
-                .completed_cursor
-                .map(|completed_cursor| completed_cursor > cursor)
-                .unwrap_or(true)
+                .terminal_outcome
+                .as_ref()
+                .is_some_and(AdapterRPCOutcome::is_hook_review_rejection)
+                || record
+                    .completed_cursor
+                    .map(|completed_cursor| completed_cursor > cursor)
+                    .unwrap_or(true)
         });
         Ok(())
     }
