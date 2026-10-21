@@ -129,18 +129,18 @@ struct AppConfigShortcutsCodingTests {
                 ShortcutBinding(key: "c", modifiers: [.command, .option, .shift]))
     }
 
-    @Test func unbindsNewChatActionWhenItsDefaultIsAlreadyTaken() throws {
+    @Test(arguments: [ShortcutAction.launchAgentInChat, .dictate])
+    func unbindsNewActionWhenItsDefaultIsAlreadyTaken(action: ShortcutAction) throws {
         var cfg = AppConfig.defaults
-        let chatDefault = ShortcutBinding(key: "c", modifiers: [.command, .option, .shift])
-        cfg.shortcutOverrides = [ShortcutAction.toggleRightPane.rawValue: chatDefault]
+        cfg.shortcutOverrides = [ShortcutAction.toggleRightPane.rawValue: action.defaultBinding]
 
         let data = try JSONEncoder().encode(cfg)
         let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
 
         // The user keeps their chord; the new action starts unbound rather
         // than registering the same one.
-        #expect(decoded.shortcutOverrides[ShortcutAction.toggleRightPane.rawValue] == .some(chatDefault))
-        #expect(decoded.shortcutOverrides[ShortcutAction.launchAgentInChat.rawValue] == .some(nil))
+        #expect(decoded.shortcutOverrides[ShortcutAction.toggleRightPane.rawValue] == .some(action.defaultBinding))
+        #expect(decoded.shortcutOverrides[action.rawValue] == .some(nil))
     }
 
     @Test func unbindsNewTerminalActionWhenItsDefaultIsAlreadyTaken() throws {

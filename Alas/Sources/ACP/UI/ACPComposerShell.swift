@@ -78,10 +78,12 @@ enum ACPComposerControlPresentation {
         return selected?.uid == identifier ? selected : nil
     }
 
-    static func micHelp(for state: ACPDictationState) -> String {
+    static func micHelp(for state: ACPDictationState, shortcut: ShortcutBinding? = nil) -> String {
         switch state {
         case .unavailable: return "Dictation unavailable"
-        case .idle: return "Dictate into the composer"
+        case .idle:
+            guard let shortcut else { return "Dictate into the composer" }
+            return "Dictate into the composer (\(shortcut.displayString): tap to toggle, hold to talk)"
         case .preparing: return "Preparing dictation…"
         case .listening: return "Listening — click to stop"
         case .failed(let message): return message
@@ -478,6 +480,10 @@ struct ACPComposer: View {
                 onNextPromptStateChange: onNextPromptStateChange,
                 nextPromptInputBlocked: nextPromptInputBlocked,
                 nextPromptIsDictating: { dictation.state == .preparing || dictation.state == .listening },
+                onDictationShortcut: { event in
+                    if case .pressed = event { dismissNextPromptOffer() }
+                    dictation.handleShortcut(event)
+                },
                 upstreamReferences: manager.upstreamReferences.store(for: worktreeRoot),
                 sessionMentions: sessionMentions,
                 symbolMentions: symbolMentions,

@@ -58,6 +58,8 @@ struct ACPInputField: NSViewRepresentable {
     var onNextPromptStateChange: (NextPromptEligibilitySnapshot.Environment) -> Void = { _ in }
     var nextPromptInputBlocked: () -> Bool = { false }
     var nextPromptIsDictating: () -> Bool = { false }
+    /// The Dictate shortcut was pressed or released while this composer had focus.
+    var onDictationShortcut: (ACPDictationShortcutEvent) -> Void = { _ in }
     /// Reference-chip cache for this worktree. `nil` disables reference chips.
     var upstreamReferences: ACPUpstreamReferenceStore? = nil
     /// Sessions that can be attached by `@` or by a drop. `nil` offers none.
@@ -211,6 +213,7 @@ struct ACPInputField: NSViewRepresentable {
         textView.acceptsImages = acceptsImages
         textView.onExternalKeyDown = onEditorKeyDown
         textView.coordinator?.onSelectionChange = onEditorSelectionChange
+        textView.onDictationShortcut = onDictationShortcut
     }
 
     private func configureNextPrompt(_ textView: ACPNSTextView) {
@@ -1080,6 +1083,8 @@ final class ACPNSTextView: PairedDelimiterTextView {
     var nextPromptDraftIsEmpty: () -> Bool = { true }
     var nextPromptInputBlocked: () -> Bool = { false }
     var nextPromptIsDictating: () -> Bool = { false }
+    /// Set by `ACPInputField`; `ACPDictationShortcutMonitor` calls it.
+    var onDictationShortcut: (ACPDictationShortcutEvent) -> Void = { _ in }
     private var nextPromptInvalidationGeneration: UInt64 = 0
     private var insertingAcceptedNextPrompt = false
     private var imagePickerPresented = false
