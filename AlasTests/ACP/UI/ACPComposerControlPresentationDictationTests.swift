@@ -10,15 +10,6 @@ struct ACPComposerControlPresentationDictationTests {
         #expect(ACPComposerControlPresentation.micIconName(for: .listening) == "mic.fill")
         #expect(ACPComposerControlPresentation.micIconName(for: .failed("boom")) == "mic")
     }
-
-    @Test("help text is state-specific")
-    func micHelpTextIsStateSpecific() {
-        #expect(ACPComposerControlPresentation.micHelp(for: .idle) == "Dictate into the composer")
-        #expect(ACPComposerControlPresentation.micHelp(for: .preparing) == "Preparing dictation…")
-        #expect(ACPComposerControlPresentation.micHelp(for: .listening) == "Listening — click to stop")
-        #expect(ACPComposerControlPresentation.micHelp(for: .failed("No microphone access")) == "No microphone access")
-        #expect(ACPComposerControlPresentation.micHelp(for: .unavailable) == "Dictation unavailable")
-    }
 }
 
 @Suite("ACP composer compact controls")

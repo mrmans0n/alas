@@ -897,8 +897,11 @@ final class TerminalService {
     /// Snapshot of the currently-open zmx sessions for the Settings ›
     /// Terminal "Open sessions" list. Runs `zmx ls` off-main (it blocks up
     /// to ~5s), then classifies the result against this window's registry.
+    /// Waits for the kill gate first: a `zmx ls` client connected to a
+    /// pre-freeze daemon would make the migration see it as in use.
     func loadOpenSessions() async -> OpenSessionsSnapshot {
         guard zmxClient.isAvailable else { return .empty }
+        await killGate?.value
         let prefix = ProcessInfo.processInfo.environment["ZMX_SESSION_PREFIX"] ?? ""
         let tracked = registry.all.map {
             TrackedSessionRef(leafId: $0.id, worktreeId: $0.worktreeId, zmxSessionName: $0.zmxSessionName)

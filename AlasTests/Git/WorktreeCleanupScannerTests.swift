@@ -57,7 +57,7 @@ struct WorktreeCleanupScannerTests {
 
     private static func scanner(
         facts: @escaping @Sendable (Worktree) async -> WorktreeCleanupGitFacts = { _ in cleanFacts },
-        mergeIndex: @escaping @Sendable (ProjectConfig) async -> Result<WorktreeForgeMergeIndex, Error> = { _ in
+        mergeIndex: @escaping @Sendable (ProjectConfig, [String]) async -> Result<WorktreeForgeMergeIndex, Error> = { _, _ in
             .success(WorktreeForgeMergeIndex(refsByHeadBranch: [:]))
         },
         activeSessionCount: @escaping @Sendable (String) async -> Int = { _ in 0 },
@@ -89,6 +89,42 @@ struct WorktreeCleanupScannerTests {
         )
     }
 
+    /// The main checkout is never removable, so the scan must not spend git
+    /// probes or forge query terms on it — including when the topology did
+    /// not record git's main flag and only the project path identifies it.
+    @Test(arguments: [true, nil] as [Bool?])
+    func mainWorktreeIsNeitherProbedNorQueried(isMainFlag: Bool?) async {
+        let probed = StringRecorder()
+        let queried = StringRecorder()
+        let scanner = Self.scanner(
+            facts: { worktree in
+                await probed.append(worktree.branch)
+                return Self.cleanFacts
+            },
+            mergeIndex: { _, branches in
+                for branch in branches { await queried.append(branch) }
+                return .success(WorktreeForgeMergeIndex(refsByHeadBranch: [:]))
+            }
+        )
+        let main = Worktree(
+            id: "/tmp/repo",
+            projectId: "p",
+            name: "main",
+            branch: "main",
+            path: URL(fileURLWithPath: "/tmp/repo"),
+            isMainWorktree: isMainFlag,
+            status: .clean,
+            lastActivity: Self.now
+        )
+        let results = await Self.scan(
+            scanner,
+            worktrees: [main, Self.worktree(branch: "feature/a")]
+        )
+        #expect(results.map(\.worktree.branch) == ["feature/a"])
+        #expect(await probed.values == ["feature/a"])
+        #expect(await queried.values == ["feature/a"])
+    }
+
     @Test func forgeIndexIsAppliedByHeadRefName() async {
         let ref = MergedReviewRequestRef(
             number: 42,
@@ -96,7 +132,7 @@ struct WorktreeCleanupScannerTests {
             url: URL(string: "https://github.com/o/r/pull/42")!,
             headSHA: Self.localHeadSHA
         )
-        let scanner = Self.scanner(mergeIndex: { _ in
+        let scanner = Self.scanner(mergeIndex: { _, _ in
             .success(WorktreeForgeMergeIndex(refsByHeadBranch: ["feature/a": [ref]]))
         })
         let results = await Self.scan(
@@ -120,7 +156,7 @@ struct WorktreeCleanupScannerTests {
             url: URL(string: "https://github.com/o/r/pull/42")!,
             headSHA: "old-unrelated-sha"
         )
-        let scanner = Self.scanner(mergeIndex: { _ in
+        let scanner = Self.scanner(mergeIndex: { _, _ in
             .success(WorktreeForgeMergeIndex(refsByHeadBranch: ["feature/a": [ref]]))
         })
         let results = await Self.scan(
@@ -156,7 +192,7 @@ struct WorktreeCleanupScannerTests {
         }
         let scanner = Self.scanner(
             facts: { _ in facts },
-            mergeIndex: { _ in
+            mergeIndex: { _, _ in
                 .success(WorktreeForgeMergeIndex(refsByHeadBranch: ["feature/a": [newerRef, olderRef]]))
             }
         )
@@ -173,7 +209,7 @@ struct WorktreeCleanupScannerTests {
     /// The core degradation rule: a forge failure must not manufacture a
     /// "not merged" answer.
     @Test func forgeFailureYieldsUnknownNotNotMerged() async {
-        let scanner = Self.scanner(mergeIndex: { _ in
+        let scanner = Self.scanner(mergeIndex: { _, _ in
             .failure(CodeHostProviderError.cliMissing("gh"))
         })
         let results = await Self.scan(
@@ -194,7 +230,7 @@ struct WorktreeCleanupScannerTests {
         }
         let scanner = Self.scanner(
             facts: { _ in facts },
-            mergeIndex: { _ in .failure(CodeHostProviderError.cliMissing("gh")) }
+            mergeIndex: { _, _ in .failure(CodeHostProviderError.cliMissing("gh")) }
         )
         let results = await Self.scan(
             scanner,
@@ -205,7 +241,7 @@ struct WorktreeCleanupScannerTests {
     }
 
     @Test func branchAbsentFromForgeIndexIsNotMerged() async {
-        let scanner = Self.scanner(mergeIndex: { _ in
+        let scanner = Self.scanner(mergeIndex: { _, _ in
             .success(WorktreeForgeMergeIndex(refsByHeadBranch: [:]))
         })
         let results = await Self.scan(
@@ -232,7 +268,7 @@ struct WorktreeCleanupScannerTests {
         )
         let scanner = Self.scanner(
             facts: { _ in facts },
-            mergeIndex: { _ in
+            mergeIndex: { _, _ in
                 .success(WorktreeForgeMergeIndex(refsByHeadBranch: ["feature/a": [ref]]))
             }
         )
@@ -254,7 +290,7 @@ struct WorktreeCleanupScannerTests {
         }
         let scanner = Self.scanner(
             facts: { _ in facts },
-            mergeIndex: { _ in
+            mergeIndex: { _, _ in
                 .success(WorktreeForgeMergeIndex(refsByHeadBranch: [:]))
             }
         )
@@ -282,7 +318,7 @@ struct WorktreeCleanupScannerTests {
         )
         let scanner = Self.scanner(
             facts: { _ in facts },
-            mergeIndex: { _ in
+            mergeIndex: { _, _ in
                 .success(WorktreeForgeMergeIndex(refsByHeadBranch: ["feature/a": [ref]]))
             }
         )
@@ -405,7 +441,7 @@ struct WorktreeCleanupScannerTests {
                 await recorder.recordStart()
                 return Self.cleanFacts
             },
-            mergeIndex: { _ in
+            mergeIndex: { _, _ in
                 await forgeGate.pause()
                 return .success(WorktreeForgeMergeIndex(refsByHeadBranch: [:]))
             }
@@ -428,7 +464,7 @@ struct WorktreeCleanupScannerTests {
 
     @Test func cancellingScanCancelsMergeIndexLookup() async {
         let probe = WorktreeCleanupCancellationProbe()
-        let scanner = Self.scanner(mergeIndex: { _ in
+        let scanner = Self.scanner(mergeIndex: { _, _ in
             await probe.markStarted()
             do {
                 try await Task.sleep(nanoseconds: 1_000_000_000)
@@ -460,7 +496,7 @@ struct WorktreeCleanupScannerTests {
                 try? await Task.sleep(nanoseconds: 10_000_000_000)
                 return Self.cleanFacts
             },
-            mergeIndex: { _ in
+            mergeIndex: { _, _ in
                 try? await Task.sleep(nanoseconds: 10_000_000_000)
                 return .failure(CancellationError())
             }
@@ -523,6 +559,11 @@ struct WorktreeCleanupScannerTests {
 private actor ProbeCounter {
     private(set) var value = 0
     func increment() { value += 1 }
+}
+
+private actor StringRecorder {
+    private(set) var values: [String] = []
+    func append(_ value: String) { values.append(value) }
 }
 
 private actor WorktreeCleanupUpdateRecorder {

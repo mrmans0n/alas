@@ -805,6 +805,30 @@ struct TerminalServiceZmxTests {
         #expect(recorder.calls.map(\.args) == [["ls"], ["kill", name]])
     }
 
+    /// Settings' session list connects to every daemon too: run during the
+    /// migration, it would make a pre-freeze daemon look in use.
+    @Test
+    func openSessionsScanWaitsForTheKillGate() async {
+        let recorder = RecordingRunner()
+        let svc = TerminalService(
+            zmxClient: ZmxClient(env: makeZmxEnv(available: true), runner: recorder.runner())
+        )
+        let (gateStream, openGate) = AsyncStream<Void>.makeStream()
+        svc.killGate = Task.detached {
+            for await _ in gateStream {}
+        }
+        defer { openGate.finish() }
+
+        let scan = Task { await svc.loadOpenSessions() }
+        // Without the gate `ls` runs well inside this window.
+        await waitForCalls(recorder, count: 1, timeout: 0.3) { $0.calls.count }
+        #expect(recorder.calls.isEmpty)
+
+        openGate.finish()
+        _ = await scan.value
+        #expect(recorder.calls.map(\.args) == [["ls"]])
+    }
+
     @Test
     func waitForPendingKillsReturnsImmediatelyWhenNothingPending() {
         let recorder = RecordingRunner()

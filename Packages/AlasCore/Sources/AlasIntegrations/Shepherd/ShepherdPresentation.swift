@@ -121,6 +121,66 @@ public struct ShepherdPresentation: Equatable, Sendable {
         case .authFailed: "provider sign-in failed"
         }
     }
+
+    /// The pill for a gg stack. `requests` are the shepherd's latest reads by
+    /// number; `gatePasses` is `StackShepherdPolicy`'s ready gate. Without a
+    /// record the pill offers Ship stack.
+    public static func make(
+        stack record: StackShepherdRecord?,
+        requests: [Int: ReviewRequest],
+        gatePasses: Bool
+    ) -> ShepherdPresentation {
+        guard let record else {
+            return ShepherdPresentation(badge: .noRequest, number: nil, tooltip: "Ship stack", phaseLine: "not shepherded")
+        }
+        let open = record.openEntries
+        let count = open.isEmpty ? record.entries.count : open.count
+        let label = record.remote.kind == .gitlab ? "MR" : "PR"
+        let number = "\(count) \(label)\(count == 1 ? "" : "s")"
+        let (badge, line) = stackState(record: record, requests: requests, gatePasses: gatePasses)
+        return ShepherdPresentation(
+            badge: badge, number: number,
+            tooltip: "gg stack \(record.id.stackName) · \(number) · \(line)", phaseLine: line
+        )
+    }
+
+    private static func stackState(
+        record: StackShepherdRecord,
+        requests: [Int: ReviewRequest],
+        gatePasses: Bool
+    ) -> (ShepherdBadgeState, String) {
+        switch record.phase {
+        case .merged: return (.merged, "landed")
+        case .closed: return (.closed, "closed")
+        case .escalated(let reason): return (.attention, "needs attention: \(text(for: reason))")
+        case .paused: return (.attention, "paused: provider sign-in failed")
+        case .fixing: return (.fixing, "fixing \(entryList(record.openEntries.filter { if case .fixing = $0.shepherd.phase { true } else { false } }))")
+        case .awaitingPush: return (.waiting, "waiting for stack_ship")
+        case .merging, .queued, .watching: break
+        }
+        if gatePasses { return (.ready, "ready to land") }
+        let open = record.openEntries
+        let openRequests = open.compactMap { requests[$0.requestNumber] }
+        guard !openRequests.isEmpty else { return (.waiting, "watching") }
+        let needingFix = open.filter { entry in
+            guard let request = requests[entry.requestNumber] else { return false }
+            return !ShepherdPolicy.problems(in: request, handled: entry.shepherd.handledThreadRevisions ?? []).isEmpty
+        }
+        if !needingFix.isEmpty {
+            let which = entryList(needingFix)
+            return record.autoFix ? (.waiting, "needs a fix: \(which)") : (.attention, "auto-fix off: \(which)")
+        }
+        if openRequests.contains(where: { $0.checks.contains { $0.bucket == .pending } }) {
+            return (.waiting, "checks running")
+        }
+        return (.waiting, "watching")
+    }
+
+    /// "entry 2" or "entries 1, 3".
+    private static func entryList(_ entries: [StackShepherdEntry]) -> String {
+        let positions = entries.map { String($0.position) }
+        return positions.count == 1 ? "entry \(positions[0])" : "entries \(positions.joined(separator: ", "))"
+    }
 }
 
 /// The one action the Ship popover offers a session that doesn't shepherd a
@@ -215,11 +275,44 @@ public enum ShepherdShipOffer {
             // A git push ("push the branch up"), not "push back on the reviewer".
             + #"(?:\s+(?:it|them|this|everything|(?:the|this) (?:branch|changes|commits?)))?"#
             + #"(?:\s+(?:up|upstream|to (?:origin|the remote|remote|github|gitlab)))?"#
-            + #"(?=\s*(?:[?.!,]|$)|\s+(?:and|so|now|for)\b)|ship (?:it|this|these changes)\b)"#
+            + #"(?=\s*(?:[?.!,]|$)|\s+(?:and|so|now|for)\b)|ship (?:it|this|these changes|the stack)\b)"#
         return matches(ask, offer + between + ship)
     }
 
     private static func matches(_ text: String, _ pattern: String) -> Bool {
         text.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
+    }
+}
+
+/// The one action Ship offers a session in a gg stacked-diffs worktree that
+/// doesn't shepherd the stack yet, shared with `/ship`.
+public enum StackShipAction: Equatable, Sendable {
+    /// This session already shepherds the stack.
+    case shepherding(stackName: String)
+    /// Bind the published stack to the session, taking it over from another
+    /// session if one shepherds it.
+    case adopt
+    /// Ask the session to fold its work into the stack and call `stack_ship`.
+    case create
+    /// Ship can't run now; the reason says why.
+    case unavailable(String)
+
+    /// `otherRecord` is a live record another session in the worktree owns;
+    /// `stack` is what gg lists for the worktree, nil while unknown.
+    public static func resolve(
+        record: StackShepherdRecord?,
+        otherRecord: StackShepherdRecord?,
+        stack: GGStack?,
+        isBusy: Bool,
+        isLoading: Bool = false
+    ) -> StackShipAction {
+        if let record, !record.isFinished { return .shepherding(stackName: record.id.stackName) }
+        if otherRecord != nil { return .adopt }
+        guard let stack else {
+            return .unavailable(isLoading ? "Reading the stack…" : "gg does not list a stack for this worktree.")
+        }
+        if !stack.entries.isEmpty, stack.entries.allSatisfy({ $0.prNumber != nil }) { return .adopt }
+        if isBusy { return .unavailable("Wait for the current turn to finish.") }
+        return .create
     }
 }

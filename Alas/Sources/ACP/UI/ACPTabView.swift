@@ -504,18 +504,25 @@ private struct ACPSessionView: View {
         guard offersShipCommand, session.transcript.streamingState == .idle,
               let closing = closingAgentMessage, closing.id != dismissedShipOfferMessage,
               ShepherdShipOffer.isOffered(in: closing.text) else { return nil }
-        let context = ShepherdSessionContext(sessionID: sessionId, worktree: worktree, state: state)
         let detail: String
-        switch ShepherdShipAction.resolve(
-            record: context.record, otherRecord: context.otherRecord, request: context.request,
-            snapshot: context.snapshot, isBusy: false
-        ) {
-        case .create(let kind):
-            detail = kind == .gitlab ? "Create merge request" : "Create pull request"
-        case .unavailable where context.snapshot == nil && context.record == nil && context.otherRecord == nil:
-            detail = "Open a PR for \(worktree.branch)"
-        default:
-            return nil
+        if state.shipsStack(sessionID: sessionId, worktree: worktree) {
+            // A live stack record means this session already ships the stack.
+            let context = StackShepherdSessionContext(sessionID: sessionId, worktree: worktree, state: state)
+            if let record = context.record, !record.isFinished { return nil }
+            detail = "Ship gg stack \(state.shepherdStackName(for: worktree) ?? worktree.branch)"
+        } else {
+            let context = ShepherdSessionContext(sessionID: sessionId, worktree: worktree, state: state)
+            switch ShepherdShipAction.resolve(
+                record: context.record, otherRecord: context.otherRecord, request: context.request,
+                snapshot: context.snapshot, isBusy: false
+            ) {
+            case .create(let kind):
+                detail = kind == .gitlab ? "Create merge request" : "Create pull request"
+            case .unavailable where context.snapshot == nil && context.record == nil && context.otherRecord == nil:
+                detail = "Open a PR for \(worktree.branch)"
+            default:
+                return nil
+            }
         }
         let messageID = closing.id
         return (messageID, ACPNextPromptAction(detail: detail, title: "Ship") {
@@ -924,6 +931,11 @@ private struct ACPSessionView: View {
                     guard !isMirror, !session.readOnlyRestricted,
                           state.offersShip(in: worktree, isWorkspaceCheckoutOwner: isWorkspaceCheckoutOwner)
                     else { return nil }
+                    if state.shipsStack(sessionID: sessionId, worktree: worktree) {
+                        let context = StackShepherdSessionContext(sessionID: sessionId, worktree: worktree, state: state)
+                        let name = context.record?.id.stackName ?? state.shepherdStackName(for: worktree) ?? worktree.branch
+                        return ACPShipStatus(presentation: context.presentation, branch: name, unshippedLabel: "Not shipped yet: gg stack")
+                    }
                     let context = ShepherdSessionContext(sessionID: sessionId, worktree: worktree, state: state)
                     return ACPShipStatus(presentation: context.presentation, branch: worktree.branch)
                 }

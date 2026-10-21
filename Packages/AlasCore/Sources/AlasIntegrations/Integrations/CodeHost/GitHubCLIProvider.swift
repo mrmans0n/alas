@@ -366,52 +366,119 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
         self.runner = runner
     }
 
+    /// Branches per GraphQL request. Each is an aliased connection of at most
+    /// `mergedPullRequestsPerBranch` nodes, far below GitHub's node limit.
+    public static let mergedPullRequestsBranchBatchSize = 50
+    /// Page size per branch. A name reused across more merged pull requests
+    /// than this is followed through its remaining pages.
+    public static let mergedPullRequestsPerBranch = 20
+
     public func mergedReviewRequests(
         remote: CodeHostRemote,
-        limit: Int,
+        headBranches: [String],
         cwd: URL
     ) async throws -> [MergedReviewRequestRef] {
-        let result = try await runner.run(
-            "gh",
-            args: [
-                "pr", "list",
-                "--state", "merged",
-                "--limit", "\(limit)",
-                "--json", "number,headRefName,url,headRefOid",
-                "-R", Self.highLevelRepositorySelector(remote: remote),
-            ],
-            cwd: cwd
-        )
-        guard result.exitCode == 0 else {
-            throw CodeHostProviderError.commandFailed(
-                command: "gh pr list",
-                stderr: result.stderr
+        // Each entry is a branch and the cursor of its next page; branches
+        // with more pages rejoin the queue, so they share later requests.
+        var queue: [(branch: String, cursor: String?)] = Array(Set(headBranches)).sorted().map { ($0, nil) }
+        var refs: [MergedReviewRequestRef] = []
+        while !queue.isEmpty {
+            let batch = Array(queue.prefix(Self.mergedPullRequestsBranchBatchSize))
+            queue.removeFirst(batch.count)
+            var variables = ["owner": remote.owner, "repo": remote.repository]
+            for (index, entry) in batch.enumerated() {
+                variables["b\(index)"] = entry.branch
+                variables["c\(index)"] = entry.cursor
+            }
+            let result = try await runner.run(
+                "gh",
+                args: ["api", "graphql", "--hostname", remote.host, "--input", "-"],
+                cwd: cwd,
+                stdin: try Self.graphQLInput(
+                    query: Self.mergedPullRequestsQuery(branchCount: batch.count),
+                    variables: variables
+                )
             )
+            guard result.exitCode == 0 else {
+                throw CodeHostProviderError.commandFailed(
+                    command: "gh api graphql",
+                    stderr: result.stderr
+                )
+            }
+            let pages = try Self.parseMergedPullRequests(result.stdout)
+            for (index, entry) in batch.enumerated() {
+                guard let page = pages["b\(index)"] else {
+                    throw CodeHostProviderError.malformedOutput("Unable to parse merged pull requests")
+                }
+                refs.append(contentsOf: page.refs)
+                if let next = page.nextCursor {
+                    queue.append((entry.branch, next))
+                }
+            }
         }
-        return try Self.parseMergedPRList(result.stdout)
+        return refs
     }
 
-    public static func parseMergedPRList(_ json: String) throws -> [MergedReviewRequestRef] {
-        struct Item: Decodable {
-            let number: Int
-            let headRefName: String
-            let url: URL
-            let headRefOid: String
+    /// One aliased `pullRequests` connection per branch (`b0`, `b1`, …), each
+    /// bound to `$bN` and its page cursor `$cN` (null for the first page), so
+    /// branch names never reach the query text.
+    static func mergedPullRequestsQuery(branchCount: Int) -> String {
+        let parameters = (0..<branchCount).map { ", $b\($0): String!, $c\($0): String" }.joined()
+        let connections = (0..<branchCount).map {
+            "b\($0): pullRequests(headRefName: $b\($0), states: MERGED, first: \(mergedPullRequestsPerBranch), "
+                + "after: $c\($0), orderBy: {field: UPDATED_AT, direction: DESC}) "
+                + "{ pageInfo { hasNextPage endCursor } nodes { number url headRefName headRefOid } }"
+        }.joined(separator: " ")
+        return "query($owner: String!, $repo: String!\(parameters)) { repository(owner: $owner, name: $repo) { \(connections) } }"
+    }
+
+    public struct MergedPullRequestPage: Equatable, Sendable {
+        public let refs: [MergedReviewRequestRef]
+        /// Non-nil while the connection has more pages.
+        public let nextCursor: String?
+
+        public init(refs: [MergedReviewRequestRef], nextCursor: String?) {
+            self.refs = refs
+            self.nextCursor = nextCursor
         }
-        do {
-            return try JSONDecoder()
-                .decode([Item].self, from: Data(json.utf8))
-                .map {
+    }
+
+    /// Pages keyed by connection alias (`b0`, `b1`, …).
+    public static func parseMergedPullRequests(_ json: String) throws -> [String: MergedPullRequestPage] {
+        struct Response: Decodable {
+            struct Body: Decodable { let repository: [String: Connection]? }
+            struct Connection: Decodable {
+                let pageInfo: PageInfo
+                let nodes: [Node]
+            }
+            struct PageInfo: Decodable {
+                let hasNextPage: Bool
+                let endCursor: String?
+            }
+            struct Node: Decodable {
+                let number: Int
+                let url: URL
+                let headRefName: String
+                let headRefOid: String
+            }
+            let data: Body?
+        }
+        guard let response = try? JSONDecoder().decode(Response.self, from: Data(json.utf8)),
+              let connections = response.data?.repository
+        else {
+            throw CodeHostProviderError.malformedOutput("Unable to parse merged pull requests")
+        }
+        return connections.mapValues { connection in
+            MergedPullRequestPage(
+                refs: connection.nodes.map {
                     MergedReviewRequestRef(
                         number: $0.number,
                         headRefName: $0.headRefName,
                         url: $0.url,
                         headSHA: $0.headRefOid
                     )
-                }
-        } catch {
-            throw CodeHostProviderError.malformedOutput(
-                "Unable to parse gh pr list output"
+                },
+                nextCursor: connection.pageInfo.hasNextPage ? connection.pageInfo.endCursor : nil
             )
         }
     }

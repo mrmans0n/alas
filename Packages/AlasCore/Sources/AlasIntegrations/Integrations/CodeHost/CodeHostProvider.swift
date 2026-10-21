@@ -269,12 +269,13 @@ public protocol CodeHostProvider: Sendable {
     func publishReview(_ request: ProviderReviewPublishRequest) async throws -> ProviderReviewPublishResult
     func mutateReviewThread(_ mutation: ProviderThreadMutation) async throws -> ProviderThreadMutationResult
 
-    /// Merged review requests for the repository, newest first, in one batched
-    /// query. Cleanup needs the whole set at once; asking per branch would be
-    /// one network round-trip per worktree.
+    /// Merged review requests whose head branch is one of `headBranches`, in
+    /// as few round-trips as the provider allows. Asking only for the branches
+    /// being scanned keeps the cost proportional to the worktrees rather than
+    /// to the repository's merge history.
     func mergedReviewRequests(
         remote: CodeHostRemote,
-        limit: Int,
+        headBranches: [String],
         cwd: URL
     ) async throws -> [MergedReviewRequestRef]
 
@@ -502,7 +503,7 @@ extension CodeHostProvider {
     // to tell those apart so it can report `unknown`.
     public func mergedReviewRequests(
         remote: CodeHostRemote,
-        limit: Int,
+        headBranches: [String],
         cwd: URL
     ) async throws -> [MergedReviewRequestRef] {
         throw CodeHostProviderError.unsupportedProvider(remote.kind)

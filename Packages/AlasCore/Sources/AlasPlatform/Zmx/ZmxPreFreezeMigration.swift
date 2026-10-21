@@ -57,6 +57,18 @@ public enum ZmxPreFreezeMigration {
         }
     }
 
+    /// When a process started, which tells it apart from a later process
+    /// the system has given the same pid.
+    public struct ProcessStart: Equatable, Sendable {
+        public let seconds: UInt64
+        public let microseconds: UInt64
+
+        public init(seconds: UInt64, microseconds: UInt64) {
+            self.seconds = seconds
+            self.microseconds = microseconds
+        }
+    }
+
     private enum Outcome {
         case untouched
         case restarted
@@ -80,9 +92,13 @@ public enum ZmxPreFreezeMigration {
     /// not hang up or has not exited within `exitTimeout`, then
     /// `signal(pid, SIGKILL)` when it outlives `SIGTERM` as long. Its socket
     /// is removed only once `isAlive(pid)` turns false, so an exiting daemon
-    /// cannot remove a socket a fresh daemon has since bound. A daemon that
-    /// survives `SIGKILL`, or one reporting an unusable pid, is left in place
-    /// and reported failed. A socket whose probe is `.unreachable` is
+    /// cannot remove a socket a fresh daemon has since bound. `processStart`
+    /// is read once the probe names the pid and again before each signal and
+    /// liveness check: once the pid is gone or names a process that started
+    /// at another time, the daemon has exited and is never signalled, since
+    /// the pid may now belong to an unrelated process. A daemon that
+    /// survives `SIGKILL`, or one reporting a pid that is unusable or whose
+    /// start time cannot be read, is left in place and reported failed. A socket whose probe is `.unreachable` is
     /// reported unresponsive when `accepts(path)` still connects, and left
     /// out of the result when it refuses. Blocking; run it off the main
     /// thread.
@@ -106,6 +122,7 @@ public enum ZmxPreFreezeMigration {
         kill: @escaping @Sendable (String) -> Bool = { ZmxIPCSocket.killPreFreeze(path: $0) },
         signal: @escaping @Sendable (_ pid: Int32, _ signal: Int32) -> Void = { _ = Darwin.kill($0, $1) },
         isAlive: @escaping @Sendable (Int32) -> Bool = { processExists($0) },
+        processStart: @escaping @Sendable (Int32) -> ProcessStart? = { startTime(ofProcess: $0) },
         exitTimeout: DispatchTimeInterval = .seconds(2)
     ) -> Result {
         guard bundledWire == .v1 else { return Result() }
@@ -139,7 +156,8 @@ public enum ZmxPreFreezeMigration {
                     return
                 }
                 outcomes[index] = stop(
-                    path: path, identity: identity, pid: pid, kill: kill, signal: signal, isAlive: isAlive, exitTimeout: exitTimeout)
+                    path: path, identity: identity, pid: pid, kill: kill, signal: signal, isAlive: isAlive,
+                    processStart: processStart, exitTimeout: exitTimeout)
             }
         }
         group.wait()
@@ -171,6 +189,15 @@ public enum ZmxPreFreezeMigration {
         Darwin.kill(pid, 0) == 0 || errno != ESRCH
     }
 
+    /// When the process `pid` names started; nil when there is none or its
+    /// information cannot be read.
+    public static func startTime(ofProcess pid: Int32) -> ProcessStart? {
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+        guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size, Int32(info.pbi_pid) == pid else { return nil }
+        return ProcessStart(seconds: info.pbi_start_tvsec, microseconds: info.pbi_start_tvusec)
+    }
+
     private static func stop(
         path: String,
         identity: SocketIdentity,
@@ -178,35 +205,47 @@ public enum ZmxPreFreezeMigration {
         kill: @Sendable (String) -> Bool,
         signal: @Sendable (Int32, Int32) -> Void,
         isAlive: @Sendable (Int32) -> Bool,
+        processStart: @Sendable (Int32) -> ProcessStart?,
         exitTimeout: DispatchTimeInterval
     ) -> Outcome {
         // Without a pid to watch there is no safe moment to remove the socket.
         guard pid > 1, pid != getpid() else { return .failed }
+        // Read as close to the probe as possible: a daemon that exits leaves
+        // its pid free for the system to reuse, and a process found under it
+        // later that started at another time is not the daemon.
+        guard let started = processStart(pid) else { return .failed }
+        func isProbedDaemon() -> Bool { processStart(pid) == started }
         func exits(within timeout: DispatchTimeInterval) -> Bool {
             let deadline = DispatchTime.now() + timeout
-            while isAlive(pid) {
+            while isAlive(pid), isProbedDaemon() {
                 guard DispatchTime.now() < deadline else { return false }
                 usleep(20_000)
             }
             return true
+        }
+        /// Signals the daemon unless its pid no longer names it, and returns
+        /// whether it had already exited.
+        func exitedBefore(_ sent: Int32) -> Bool {
+            guard isProbedDaemon() else { return true }
+            signal(pid, sent)
+            return false
         }
         // Once the probed socket has left the path, the old daemon has too,
         // and whatever is bound there now is a fresh session, such as one
         // another Alas started: `Kill` would reach and stop it instead.
         guard socketIdentity(path) == identity else { return .restarted }
         let hungUp = kill(path)
+        var exited = false
         if !hungUp {
             guard socketIdentity(path) == identity else { return .restarted }
-            signal(pid, SIGTERM)
+            exited = exitedBefore(SIGTERM)
         }
-        var exited = exits(within: exitTimeout)
+        if !exited { exited = exits(within: exitTimeout) }
         if !exited, hungUp {
-            signal(pid, SIGTERM)
-            exited = exits(within: exitTimeout)
+            exited = exitedBefore(SIGTERM) || exits(within: exitTimeout)
         }
         if !exited {
-            signal(pid, SIGKILL)
-            exited = exits(within: sigkillExitTimeout)
+            exited = exitedBefore(SIGKILL) || exits(within: sigkillExitTimeout)
         }
         guard exited else { return .failed }
         // A daemon that hung up may not have removed its socket, and a
