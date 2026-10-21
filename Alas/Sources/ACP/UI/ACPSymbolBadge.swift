@@ -117,3 +117,209 @@ extension ACPSymbolReference.Target {
         return sent
     }
 }
+
+extension NSAttributedString.Key {
+    /// The `@name` an inline symbol badge stands for, so a copy spells it out.
+    static let symbolMention = NSAttributedString.Key("alas.acp.symbolMention")
+}
+
+/// A user message's sent symbol mentions, keyed by the `@name` the composer
+/// wrote for each one, which its paragraphs turn into inline badges.
+struct ACPTranscriptSymbolMentions: Equatable {
+    struct Mention: Equatable {
+        let target: ACPSymbolReference.Target
+        let snapshot: ACPSymbolSnapshot?
+
+        /// The badge's target as sent: its code flag and line range.
+        var sentTarget: ACPSymbolReference.Target {
+            let sent = target.asSent(snapshot: snapshot)
+            return ACPSymbolReference.Target(
+                path: sent.path, name: sent.name, kind: sent.kind, container: sent.container,
+                lineRange: snapshot?.lineRange ?? sent.lineRange, includeCode: sent.includeCode)
+        }
+    }
+
+    let byLabel: [String: Mention]
+    /// Where hover previews read files; nil shows none.
+    let root: URL?
+
+    /// Nil when the message has no symbol mention. A name two different
+    /// symbols share stays text: nothing tells which one it means.
+    init?(attachments: [ACPMessage.Attachment], root: URL?) {
+        var byLabel: [String: Mention] = [:]
+        var ambiguous: Set<String> = []
+        for attachment in attachments {
+            guard let target = ACPSymbolReference.target(fromURI: attachment.uri) else { continue }
+            let label = "@" + (attachment.name ?? target.displayName)
+            if let existing = byLabel[label] {
+                if existing.target != target { ambiguous.insert(label) }
+                continue
+            }
+            byLabel[label] = Mention(target: target, snapshot: attachment.symbol)
+        }
+        for label in ambiguous { byLabel[label] = nil }
+        guard !byLabel.isEmpty else { return nil }
+        self.byLabel = byLabel
+        self.root = root
+    }
+}
+
+extension EnvironmentValues {
+    /// Set by `ACPUserMessageText` on messages that mention symbols.
+    @Entry var acpSymbolMentions: ACPTranscriptSymbolMentions? = nil
+}
+
+/// Image-backed symbol badge for transcript paragraphs, drawn by the
+/// composer's cell.
+final class ACPTranscriptSymbolChipAttachment: NSTextAttachment {
+    let mention: ACPTranscriptSymbolMentions.Mention
+
+    @MainActor
+    init(mention: ACPTranscriptSymbolMentions.Mention) {
+        self.mention = mention
+        super.init(data: nil, ofType: nil)
+        let cell = ACPSymbolChipCell(target: mention.sentTarget)
+        let size = cell.cellSize
+        image = NSImage(size: size, flipped: true) { rect in
+            MainActor.assumeIsolated { cell.draw(withFrame: rect, in: nil) }
+            return true
+        }
+        bounds = NSRect(x: 0, y: ACPMentionChipMetrics.baselineOffset, width: size.width, height: size.height)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+}
+
+/// Inline symbol badges in submitted user-message markdown.
+enum ACPTranscriptSymbolChip {
+    /// Replaces each `@name` of a mentioned symbol with its badge. The name
+    /// must start at a word boundary and end before an identifier character
+    /// or a `.member`. Links, inline code, and other chips stay as they are.
+    @MainActor
+    @discardableResult
+    static func chipify(_ rendered: NSMutableAttributedString, mentions: ACPTranscriptSymbolMentions) -> Int {
+        let source = rendered.string as NSString
+        var matches: [(range: NSRange, mention: ACPTranscriptSymbolMentions.Mention)] = []
+        // Longest first, so `@Type.member()` wins over `@Type` at the same spot.
+        for (label, mention) in mentions.byLabel.sorted(by: { $0.key.count > $1.key.count }) {
+            var searchStart = 0
+            while searchStart < source.length {
+                let range = source.range(
+                    of: label, options: .literal,
+                    range: NSRange(location: searchStart, length: source.length - searchStart))
+                guard range.location != NSNotFound else { break }
+                searchStart = NSMaxRange(range)
+                guard isBoundary(before: range, in: source), isBoundary(after: range, in: source),
+                      !matches.contains(where: { NSIntersectionRange($0.range, range).length > 0 }),
+                      !isExcluded(range, in: rendered)
+                else { continue }
+                matches.append((range, mention))
+            }
+        }
+        for match in matches.sorted(by: { $0.range.location > $1.range.location }) {
+            let chip = NSMutableAttributedString(attachment: ACPTranscriptSymbolChipAttachment(mention: match.mention))
+            var attributes = rendered.attributes(at: match.range.location, effectiveRange: nil)
+            attributes[.attachment] = nil
+            attributes[.symbolMention] = source.substring(with: match.range)
+            chip.addAttributes(attributes, range: NSRange(location: 0, length: chip.length))
+            rendered.replaceCharacters(in: match.range, with: chip)
+        }
+        return matches.count
+    }
+
+    @MainActor
+    static func hit(
+        at point: NSPoint, in textView: NSTextView
+    ) -> (range: NSRange, mention: ACPTranscriptSymbolMentions.Mention)? {
+        guard let storage = textView.textStorage else { return nil }
+        var hit: (range: NSRange, mention: ACPTranscriptSymbolMentions.Mention)?
+        storage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: storage.length)) { value, range, stop in
+            guard let attachment = value as? ACPTranscriptSymbolChipAttachment,
+                  let rect = textView.upstreamReferenceAnchorRect(for: range),
+                  rect.insetBy(dx: -1, dy: -1).contains(point) else { return }
+            hit = (range, attachment.mention)
+            stop.pointee = true
+        }
+        return hit
+    }
+
+    private static func isIdentifier(_ character: unichar) -> Bool {
+        guard let scalar = Unicode.Scalar(character) else { return true }
+        return scalar == "_" || CharacterSet.alphanumerics.contains(scalar)
+    }
+
+    private static func isBoundary(before range: NSRange, in source: NSString) -> Bool {
+        guard range.location > 0 else { return true }
+        let previous = source.character(at: range.location - 1)
+        return !isIdentifier(previous) && previous != UInt16(UInt8(ascii: "@")) && previous != UInt16(UInt8(ascii: "."))
+    }
+
+    private static func isBoundary(after range: NSRange, in source: NSString) -> Bool {
+        let end = NSMaxRange(range)
+        guard end < source.length else { return true }
+        let next = source.character(at: end)
+        if isIdentifier(next) { return false }
+        guard next == UInt16(UInt8(ascii: ".")), end + 1 < source.length else { return true }
+        return !isIdentifier(source.character(at: end + 1))
+    }
+
+    @MainActor
+    private static func isExcluded(_ range: NSRange, in rendered: NSAttributedString) -> Bool {
+        var excluded = false
+        rendered.enumerateAttributes(in: range) { attributes, _, stop in
+            if attributes[.link] != nil || attributes[.attachment] != nil
+                || ACPMarkdownInlineRenderer.isInlineCode(attributes) {
+                excluded = true
+                stop.pointee = true
+            }
+        }
+        return excluded
+    }
+}
+
+/// Debounced hover popover for inline symbol badges: what was sent, or the
+/// code now, like the badge above the bubble.
+@MainActor
+final class ACPTranscriptSymbolChipHoverController {
+    private var popover: NSPopover?
+    private var showWork: DispatchWorkItem?
+    private var target: NSRange?
+
+    func scheduleShow(
+        range: NSRange,
+        mention: ACPTranscriptSymbolMentions.Mention,
+        root: URL,
+        typography: ACPChatTypography,
+        theme: Theme,
+        in textView: NSTextView
+    ) {
+        guard target != range else { return }
+        hide()
+        target = range
+        let work = DispatchWorkItem { [weak self, weak textView] in
+            guard let self, let textView, self.target == range,
+                  let anchor = textView.upstreamReferenceAnchorRect(for: range) else { return }
+            let preview = ACPSymbolSentHoverView(
+                target: mention.target.asSent(snapshot: mention.snapshot), snapshot: mention.snapshot,
+                root: root, typography: typography, theme: theme)
+            let hosting = NSHostingController(rootView: preview.environment(\.theme, theme))
+            hosting.sizingOptions = [.preferredContentSize]
+            let popover = NSPopover()
+            popover.behavior = .transient
+            popover.animates = false
+            popover.contentViewController = hosting
+            popover.show(relativeTo: anchor, of: textView, preferredEdge: .maxY)
+            self.popover = popover
+        }
+        showWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + ACPImageChipHoverController.hoverDelay, execute: work)
+    }
+
+    func hide() {
+        showWork?.cancel()
+        showWork = nil
+        target = nil
+        popover?.performClose(nil)
+        popover = nil
+    }
+}

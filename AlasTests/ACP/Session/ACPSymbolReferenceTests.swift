@@ -272,6 +272,50 @@ struct ACPSymbolReferenceTests {
         #expect(ACPSymbolReference.target(fromURI: sent.absoluteString)?.lineRange == 9...12)
     }
 
+    private static func mentionAttachment(_ name: String, container: String? = nil, kind: SymbolKind = .class,
+                                          path: String = "a.swift") -> ACPMessage.Attachment {
+        let target = ACPSymbolReference.Target(path: path, name: name, kind: kind, container: container,
+                                               lineRange: 0...0, includeCode: false)
+        return ACPMessage.Attachment(uri: ACPSymbolReference.uri(for: target), name: target.displayName)
+    }
+
+    // @MainActor: transcript chips build AppKit attachments.
+    @Test("sent symbol mentions badge inline at word boundaries, outside code and links, and copy back as text", arguments: [
+        ("use @Model and @Queue.load() here", ["@Model", "@Queue.load()"]),
+        ("end of sentence @Model. Then @Model, done", ["@Model", "@Model"]),
+        ("@ModelView x@Model @Model.other `@Model` [@Model](https://example.com) @@Model", []),
+    ])
+    @MainActor func transcriptSymbolChips(text: String, expected: [String]) throws {
+        let mentions = try #require(ACPTranscriptSymbolMentions(attachments: [
+            Self.mentionAttachment("Model"),
+            Self.mentionAttachment("load", container: "Queue", kind: .method),
+        ], root: nil))
+        let rendered = ACPMarkdownInlineRenderer.makeAttributedString(
+            source: text, theme: Theme(id: "test", name: "Test", tokens: [:]), typography: .default, role: .body)
+        let plain = rendered.string
+
+        #expect(ACPTranscriptSymbolChip.chipify(rendered, mentions: mentions) == expected.count)
+        var chipped: [String] = []
+        rendered.enumerateAttribute(.symbolMention, in: NSRange(location: 0, length: rendered.length)) { value, range, _ in
+            guard let label = value as? String else { return }
+            #expect(rendered.attribute(.attachment, at: range.location, effectiveRange: nil) is ACPTranscriptSymbolChipAttachment)
+            chipped.append(label)
+        }
+        #expect(chipped == expected)
+        if !expected.isEmpty { #expect(ACPUpstreamReferenceChip.plainText(of: rendered) == plain) }
+    }
+
+    @Test("a name two different symbols share is not badged inline")
+    func transcriptSymbolMentionsDropAmbiguousNames() throws {
+        let mentions = try #require(ACPTranscriptSymbolMentions(attachments: [
+            Self.mentionAttachment("Model", path: "a.swift"),
+            Self.mentionAttachment("Model", path: "b.swift"),
+            Self.mentionAttachment("Queue"),
+            Self.mentionAttachment("Queue"),
+        ], root: nil))
+        #expect(Array(mentions.byLabel.keys) == ["@Queue"])
+    }
+
     @Test("the hover preview numbers lines from the declaration's 1-based start")
     func hoverWindowNumbering() {
         let window = ACPSymbolHoverPreview.window(declaration: "func a() {\r\n    b()\r\n}", startLine: 98)
