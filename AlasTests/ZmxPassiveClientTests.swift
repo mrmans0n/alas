@@ -265,6 +265,34 @@ import Testing
             : ZmxPreFreezeMigration.Result(restarted: [], failed: ["s"])))
     }
 
+    /// Another Alas may start a fresh daemon under the same name once the
+    /// old one left its socket. That socket is not the one probed: it stays
+    /// bound, and the old session counts as restarted.
+    @Test func migrationLeavesASocketReboundDuringTheStop() throws {
+        let daemon = try ZmxFakeDaemonListener(script: .silent)
+        defer { daemon.tearDown() }
+        let replacements = ZmxEventLog<ZmxFakeDaemonListener>()
+        defer { replacements.all.forEach { $0.tearDown() } }
+        let result = ZmxPreFreezeMigration.run(
+            directory: URL(fileURLWithPath: daemon.directory),
+            bundledWire: .v1,
+            probe: { _ in .preFreeze(pid: 4242) },
+            kill: { path in
+                _ = unlink(path)
+                if let fresh = try? ZmxFakeDaemonListener(
+                    directory: (path as NSString).deletingLastPathComponent, name: "s", scripts: [.silent]) {
+                    replacements.append(fresh)
+                }
+                return true
+            },
+            signal: { _, _ in },
+            isAlive: { _ in false }
+        )
+        #expect(replacements.all.count == 1)
+        #expect(FileManager.default.fileExists(atPath: daemon.path))
+        #expect(result == ZmxPreFreezeMigration.Result(restarted: ["s"]))
+    }
+
     @Test func migrationProbesConcurrently() throws {
         let directory = try zmxShortTempDirectory()
         defer { try? FileManager.default.removeItem(atPath: directory) }
