@@ -206,6 +206,7 @@ struct AppStateKeepSessionsAliveTests {
             ZmxPreFreezeMigration.Result(restarted: [name]),
         ])
         state.zmxMigrationRunner = migration.runner
+        state.zmxSocketExists = { _ in true }
         state.bundledZmxWire = .v1
         let tab = state.tabs.appendTerminal(worktreeId: worktree.id, title: "main", sessionId: leafId)
 
@@ -229,6 +230,40 @@ struct AppStateKeepSessionsAliveTests {
             state.terminal.closeSession(id: leafId, worktreeId: worktree.id)
             state.terminal.waitForPendingKills(timeout: 20)
         }
+    }
+
+    /// A re-run that can neither restart the daemon nor find its socket gone,
+    /// such as one whose probe timed out, has not shown the session is safe:
+    /// the pane stays without a session.
+    @Test func restoreKeepsAPaneBlockedWhenAReRunCannotClassifyIt() async throws {
+        let repo = try await makeRepo(name: "zmx-unclassified")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(
+            path: repo, displayName: "test", color: "#000000"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        let worktree = try #require(state.projectsManager.worktrees(projectId: project.id).first)
+        state.selectedWorktreeId = worktree.id
+        state.config.terminal.keepSessionsAlive = true
+        let leafId = "leaf-unclassified"
+        let name = ZmxSessionName.derive(worktreeId: worktree.id, leafId: leafId)
+        let migration = ZmxMigrationGate(blocked: false, results: [
+            ZmxPreFreezeMigration.Result(inUse: [name]),
+            ZmxPreFreezeMigration.Result(),
+        ])
+        state.zmxMigrationRunner = migration.runner
+        state.zmxSocketExists = { _ in true }
+        state.bundledZmxWire = .v1
+        let tab = state.tabs.appendTerminal(worktreeId: worktree.id, title: "main", sessionId: leafId)
+
+        _ = try await state.restoreTerminalTabIfNeededAsync(worktreeId: worktree.id, tabId: tab.id)
+        _ = try await state.restoreTerminalTabIfNeededAsync(worktreeId: worktree.id, tabId: tab.id)
+
+        #expect(migration.runNames == [nil, [name]])
+        #expect(state.terminal.registry.session(for: leafId) == nil)
+        #expect(state.tabs.tabs(forWorktree: worktree.id).map(\.id) == [tab.id])
     }
 
     /// `reloadTabs` runs once on launch and is the only path that touches
