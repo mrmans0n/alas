@@ -139,8 +139,8 @@ import Testing
         let peer = FakePeer()
         fixture.host.handle(.attach(consoleId: "c", attachmentId: "a", scrollbackRows: 99), from: peer.link)
         let daemon = try #require(fixture.sockets.first)
-        daemon.write(ZmxIPC.encode(.output, Data("pre".utf8)))
-        daemon.write(ZmxIPC.encode(.capture, Data("S".utf8)) + ZmxIPC.encode(.output, Data("o".utf8)))
+        daemon.write(ZmxIPC.encode(.output, Data("pre".utf8), wire: .preFreeze))
+        daemon.write(ZmxIPC.encode(.capture, Data("S".utf8), wire: .preFreeze) + ZmxIPC.encode(.output, Data("o".utf8), wire: .preFreeze))
         try await eventually("snapshot and output") { peer.events.all.count == 3 }
         daemon.closeDaemonEnd()
         try await eventually("detached") { peer.events.all.count == 4 }
@@ -219,7 +219,7 @@ import Testing
         let input = Data("ls\r".utf8)
         fixture.host.handle(.input(attachmentId: "a", generation: 1, sequence: 1, data: input), from: owner.link)
         fixture.host.handle(.input(attachmentId: "b", generation: 1, sequence: 1, data: input), from: other.link)
-        var decoder = ZmxFrameDecoder()
+        var decoder = ZmxFrameDecoder(wire: .preFreeze)
         let frames = try fixture.sockets[0].readFrames(&decoder, count: 2)
         #expect(frames.map(\.tag) == [ZmxIPC.Tag.capture.rawValue, ZmxIPC.Tag.send.rawValue])
         #expect(frames.last?.payload == input)

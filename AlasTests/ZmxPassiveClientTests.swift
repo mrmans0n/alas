@@ -6,22 +6,27 @@ import Testing
 @Suite struct ZmxPassiveClientTests {
     // MARK: Codec
 
-    @Test func tagValuesAndHeaderLayoutAreFrozen() {
+    @Test func tagValuesAreFrozen() {
         let tags: [(ZmxIPC.Tag, UInt8)] = [
-            (.input, 0), (.output, 1), (.resize, 2), (.initialize, 7), (.send, 18), (.capture, 22),
+            (.input, 0), (.output, 1), (.resize, 2), (.kill, 5), (.info, 6), (.initialize, 7),
+            (.send, 18), (.capture, 22), (.unsupported, 255),
         ]
         for (tag, raw) in tags { #expect(tag.rawValue == raw) }
-
-        let frame = ZmxIPC.encode(.send, Data(repeating: 0x41, count: 0x0102_03))
-        #expect(Array(frame.prefix(8)) == [18, 0x03, 0x02, 0x01, 0x00, 0, 0, 0])
-        #expect(frame.count == 8 + 0x0102_03)
-
-        #expect(Array(ZmxIPC.captureRequest(scrollbackRows: 0x0A0B_0C0D))
-            == [22, 8, 0, 0, 0, 0, 0, 0, 1, 0x0D, 0x0C, 0x0B, 0x0A, 0, 0, 0])
     }
 
-    @Test(arguments: [1, 3, 7, 8, 9, 64])
-    func decoderReassemblesFramesAcrossArbitraryReads(chunkSize: Int) throws {
+    @Test func headerAndCaptureLayoutsMatchEachWire() {
+        let payload = Data(repeating: 0x41, count: 0x0102_03)
+        #expect(Array(ZmxIPC.encode(.send, payload, wire: .preFreeze).prefix(8)) == [18, 0x03, 0x02, 0x01, 0x00, 0, 0, 0])
+        #expect(Array(ZmxIPC.encode(.send, payload, wire: .v1).prefix(8)) == [18, 1, 0, 0, 0x03, 0x02, 0x01, 0x00])
+        #expect(Array(ZmxIPC.captureRequest(scrollbackRows: 0x0A0B_0C0D, wire: .preFreeze))
+            == [22, 8, 0, 0, 0, 0, 0, 0, 1, 0x0D, 0x0C, 0x0B, 0x0A, 0, 0, 0])
+        #expect(Array(ZmxIPC.captureRequest(scrollbackRows: 0x0A0B_0C0D, wire: .v1))
+            == [22, 1, 0, 0, 8, 0, 0, 0, 1, 0, 0, 0, 0x0D, 0x0C, 0x0B, 0x0A])
+        #expect(Array(ZmxIPC.encode(.kill, wire: .preFreeze)) == [5, 0, 0, 0, 0, 0, 0, 0])
+    }
+
+    @Test(arguments: [ZmxIPC.Wire.preFreeze, .v1], [1, 3, 7, 8, 9, 64])
+    func decoderReassemblesFramesAcrossArbitraryReads(wire: ZmxIPC.Wire, chunkSize: Int) throws {
         let expected = [
             ZmxFrame(tag: 1, payload: Data("hello".utf8)),
             ZmxFrame(tag: 99, payload: Data([1, 2, 3])),
@@ -29,11 +34,11 @@ import Testing
             ZmxFrame(tag: 1, payload: Data(repeating: 0xFF, count: 300)),
         ]
         let stream = expected.reduce(into: Data()) { data, frame in
-            var header = ZmxIPC.encode(.output, frame.payload)
+            var header = ZmxIPC.encode(.output, frame.payload, wire: wire)
             header[0] = frame.tag
             data.append(header)
         }
-        var decoder = ZmxFrameDecoder()
+        var decoder = ZmxFrameDecoder(wire: wire)
         var frames: [ZmxFrame] = []
         var offset = 0
         while offset < stream.count {
@@ -46,13 +51,39 @@ import Testing
         #expect(decoder.bufferedByteCount == 0)
     }
 
-    @Test(arguments: [UInt32(1025), UInt32.max])
-    func decoderRejectsOversizedPayloadFromHeaderAlone(declared: UInt32) {
-        var decoder = ZmxFrameDecoder(maxPayloadLength: 1024)
-        let header: [UInt8] = [1] + withUnsafeBytes(of: declared.littleEndian, Array.init) + [0, 0, 0]
+    @Test(arguments: [ZmxIPC.Wire.preFreeze, .v1], [UInt32(1025), UInt32.max])
+    func decoderRejectsOversizedPayloadFromHeaderAlone(wire: ZmxIPC.Wire, declared: UInt32) {
+        var decoder = ZmxFrameDecoder(wire: wire, maxPayloadLength: 1024)
+        var header = ZmxIPC.encode(.output, wire: wire)
+        let offset = wire == .v1 ? 4 : 1
+        header.replaceSubrange(offset..<(offset + 4), with: withUnsafeBytes(of: declared.littleEndian, Array.init))
         #expect(throws: ZmxFrameDecoder.Failure.payloadTooLarge(declared: declared)) {
             _ = try decoder.push(header)
         }
+    }
+
+    @Test func v1DecoderRejectsAFrameFromAnotherProtocolVersion() {
+        var decoder = ZmxFrameDecoder(wire: .v1)
+        #expect(throws: ZmxFrameDecoder.Failure.unsupportedVersion(0x28)) {
+            _ = try decoder.push(ZmxIPC.encode(.output, Data(repeating: 0, count: 0x28), wire: .preFreeze))
+        }
+    }
+
+    @Test(arguments: [
+        ("0601000028020000", ZmxDaemonStatus.v1(pid: 4242)),
+        ("0628020000000000", ZmxDaemonStatus.preFreeze(pid: 4242)),
+    ])
+    func probeReplyClassifiesTheCapturedInfoHeaders(headerHex: String, expected: ZmxDaemonStatus) {
+        var payload = Data(count: 552)
+        payload.replaceSubrange(8..<12, with: withUnsafeBytes(of: Int32(4242).littleEndian, Array.init))
+        let header = Data(stride(from: 0, to: headerHex.count, by: 2).map { index in
+            let start = headerHex.index(headerHex.startIndex, offsetBy: index)
+            return UInt8(headerHex[start..<headerHex.index(start, offsetBy: 2)], radix: 16)!
+        })
+        let reply = header + payload
+        #expect(ZmxIPC.classifyProbeReply(reply.prefix(300)) == nil)
+        #expect(ZmxIPC.classifyProbeReply(reply) == expected)
+        #expect(Array(ZmxIPC.versionProbe) == [6, 1, 0, 0, 0, 0, 0, 0, 0])
     }
 
     // MARK: Snapshot ordering
@@ -85,18 +116,18 @@ import Testing
         client.start()
 
         // The only bytes a passive attach writes are one Capture request.
-        var daemon = ZmxFrameDecoder()
+        var daemon = ZmxFrameDecoder(wire: .preFreeze)
         let request = try pair.readFrames(&daemon, count: 1)
-        #expect(request == [ZmxFrame(tag: 22, payload: ZmxIPC.captureRequest(scrollbackRows: 500).dropFirst(8))])
+        #expect(request == [ZmxFrame(tag: 22, payload: ZmxIPC.captureRequest(scrollbackRows: 500, wire: .preFreeze).dropFirst(8))])
 
-        pair.write(ZmxIPC.encode(.output, Data("before".utf8)))
-        pair.write(ZmxIPC.encode(.capture, Data("snapshot".utf8)) + ZmxIPC.encode(.output, Data("after".utf8)))
+        pair.write(ZmxIPC.encode(.output, Data("before".utf8), wire: .preFreeze))
+        pair.write(ZmxIPC.encode(.capture, Data("snapshot".utf8), wire: .preFreeze) + ZmxIPC.encode(.output, Data("after".utf8), wire: .preFreeze))
         try await eventually("snapshot and live output") { events.all.count == 2 }
 
         #expect(client.requestResync())
         #expect(!client.requestResync())
         #expect(try pair.readFrames(&daemon, count: 1).map(\.tag) == [22])
-        pair.write(ZmxIPC.encode(.output, Data("dropped".utf8)) + ZmxIPC.encode(.capture, Data("again".utf8)))
+        pair.write(ZmxIPC.encode(.output, Data("dropped".utf8), wire: .preFreeze) + ZmxIPC.encode(.capture, Data("again".utf8), wire: .preFreeze))
 
         #expect(client.send(Data("ls\r".utf8)))
         #expect(try pair.readFrames(&daemon, count: 1) == [ZmxFrame(tag: 18, payload: Data("ls\r".utf8))])
@@ -120,7 +151,7 @@ import Testing
             captureTimeout: .milliseconds(50)
         ) { events.append($0) }
         client.start()
-        pair.write(ZmxIPC.encode(.output, Data("ignored".utf8)))
+        pair.write(ZmxIPC.encode(.output, Data("ignored".utf8), wire: .preFreeze))
         try await eventually("capture deadline") { !events.all.isEmpty }
         #expect(events.all == [.closed(.captureUnsupported)])
         #expect(!client.send(Data("x".utf8)))
@@ -155,7 +186,7 @@ import Testing
 
         client.discardQueuedInput()
         #expect(client.send(Data("END".utf8)))
-        var decoder = ZmxFrameDecoder()
+        var decoder = ZmxFrameDecoder(wire: .preFreeze)
         var delivered = 0
         var sawEnd = false
         while !sawEnd {
@@ -391,22 +422,22 @@ private final class ProbeTerminalClient: @unchecked Sendable {
         socket = try ZmxIPCSocket.connect(path: path)
         size = ZmxIPC.sizePayload(rows: rows, cols: cols)
         Thread { [socket, size, requests] in
-            var decoder = ZmxFrameDecoder()
+            var decoder = ZmxFrameDecoder(wire: .preFreeze)
             while let chunk = socket.read(), !chunk.isEmpty {
                 guard let frames = try? decoder.push(chunk) else { return }
                 for frame in frames where frame.knownTag == .resize && frame.payload.isEmpty {
                     requests.append(0)
-                    socket.write(ZmxIPC.encode(.resize, size))
+                    socket.write(ZmxIPC.encode(.resize, size, wire: .preFreeze))
                 }
             }
         }.start()
-        if sendInit { socket.write(ZmxIPC.encode(.initialize, size)) }
+        if sendInit { socket.write(ZmxIPC.encode(.initialize, size, wire: .preFreeze)) }
     }
 
-    func sendResize() { socket.write(ZmxIPC.encode(.resize, size)) }
+    func sendResize() { socket.write(ZmxIPC.encode(.resize, size, wire: .preFreeze)) }
 
     /// A bare CR counts as user input to zmx and claims leadership.
-    func claimWithInput() { socket.write(ZmxIPC.encode(.input, Data("\r".utf8))) }
+    func claimWithInput() { socket.write(ZmxIPC.encode(.input, Data("\r".utf8), wire: .preFreeze)) }
 
     func close() { socket.shutdown() }
 }

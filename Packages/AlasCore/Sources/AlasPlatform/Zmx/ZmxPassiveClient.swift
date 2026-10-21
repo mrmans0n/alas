@@ -100,7 +100,7 @@ public final class ZmxPassiveClient: @unchecked Sendable {
             return inputEpoch
         }
         guard let epoch else { return false }
-        let frame = ZmxIPC.encode(.send, input)
+        let frame = ZmxIPC.encode(.send, input, wire: .preFreeze)
         writer.async { [self] in
             let current = lock.withLock { () -> Bool in
                 // Discarded input already gave its bytes back.
@@ -133,7 +133,7 @@ public final class ZmxPassiveClient: @unchecked Sendable {
         captureCount += 1
         let token = captureCount
         lock.unlock()
-        let frame = ZmxIPC.captureRequest(scrollbackRows: scrollbackRows)
+        let frame = ZmxIPC.captureRequest(scrollbackRows: scrollbackRows, wire: .preFreeze)
         writer.async { [self] in
             if !socket.write(frame) { finish(.targetExited) }
         }
@@ -151,7 +151,7 @@ public final class ZmxPassiveClient: @unchecked Sendable {
     }
 
     private func readLoop() {
-        var decoder = ZmxFrameDecoder()
+        var decoder = ZmxFrameDecoder(wire: .preFreeze)
         while true {
             guard let chunk = socket.read(), !chunk.isEmpty else {
                 finish(.targetExited)

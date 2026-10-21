@@ -3,25 +3,39 @@ import Foundation
 import AlasFoundation
 import AlasModel
 
-/// zmx's Unix-socket IPC wire format, mirrored from upstream `src/ipc.zig`.
+/// zmx's Unix-socket IPC wire formats, mirrored from upstream `src/ipc.zig`.
 ///
-/// zmx IPC is not yet a declared stable public API (neurosnap/zmx#127). Keep
-/// every wire detail in this file so the codec can later move to libzmx or an
-/// upstream client module without touching callers.
+/// Two layouts exist. Keep every wire detail in this file so the codec can
+/// later move to libzmx or an upstream client module without touching callers.
 ///
-/// Frame: an eight-byte header followed by the payload. Byte 0 is the tag,
-/// bytes 1...4 are the little-endian payload length, bytes 5...7 are padding
+/// Pre-freeze (daemons built before upstream froze the protocol): an
+/// eight-byte header followed by the payload. Byte 0 is the tag, bytes 1...4
+/// are the little-endian payload length, bytes 5...7 are padding
 /// (`packed struct { tag: u8, len: u32 }` occupies eight bytes).
+///
+/// v1 (frozen upstream): byte 0 is the tag, byte 1 is the protocol version
+/// (`protocolVersion`), bytes 2...3 are padding, and bytes 4...7 are the
+/// little-endian payload length. Payload structs are C-aligned, so `Capture`
+/// carries three padding bytes after its format byte.
 public enum ZmxIPC: Sendable {
+    /// Which header and payload layout a daemon speaks.
+    public enum Wire: Equatable, Sendable {
+        case preFreeze
+        case v1
+    }
+
     /// Tags Alas sends or reads. Values are frozen by upstream; unknown
     /// incoming tags are carried as raw bytes in `ZmxFrame` and skipped.
     public enum Tag: UInt8, Sendable {
         case input = 0
         case output = 1
         case resize = 2
+        case kill = 5
+        case info = 6
         case initialize = 7
         case send = 18
         case capture = 22
+        case unsupported = 255
     }
 
     /// `util.HistoryFormat` in upstream zmx.
@@ -33,32 +47,81 @@ public enum ZmxIPC: Sendable {
 
     public static let headerSize = 8
 
+    /// The v1 header's protocol version byte.
+    public static let protocolVersion: UInt8 = 1
+
     /// Ceiling for a single incoming payload. Checked against the declared
     /// length before anything is buffered, so a corrupt header cannot make
     /// the reader allocate. Sized below the peer WebSocket frame limit after
     /// base64 expansion.
     public static let maxPayloadLength = 8 * 1024 * 1024
 
-    public static func encode(_ tag: Tag, _ payload: Data = Data()) -> Data {
+    /// Offset of the little-endian payload length within the header.
+    static func lengthOffset(_ wire: Wire) -> Int {
+        switch wire {
+        case .preFreeze: 1
+        case .v1: 4
+        }
+    }
+
+    public static func encode(_ tag: Tag, _ payload: Data = Data(), wire: Wire) -> Data {
         var frame = Data(count: headerSize)
         frame[0] = tag.rawValue
+        if wire == .v1 { frame[1] = protocolVersion }
         let length = UInt32(payload.count)
+        let offset = lengthOffset(wire)
         for byte in 0..<4 {
-            frame[1 + byte] = UInt8(truncatingIfNeeded: length >> (8 * UInt32(byte)))
+            frame[offset + byte] = UInt8(truncatingIfNeeded: length >> (8 * UInt32(byte)))
         }
         frame.append(payload)
         return frame
     }
 
-    /// `ipc.Capture` is `packed struct { format: u8, rows: u32 }`, eight bytes
-    /// on the wire. The daemon silently drops any other payload length.
-    public static func captureRequest(format: CaptureFormat = .vt, scrollbackRows: UInt32) -> Data {
+    /// `ipc.Capture` is eight bytes on the wire: the format byte and a
+    /// little-endian `rows: u32`, packed at offset 1 pre-freeze and aligned at
+    /// offset 4 in v1. The daemon silently drops any other payload length.
+    public static func captureRequest(format: CaptureFormat = .vt, scrollbackRows: UInt32, wire: Wire) -> Data {
         var payload = Data(count: 8)
         payload[0] = format.rawValue
+        let offset = wire == .v1 ? 4 : 1
         for byte in 0..<4 {
-            payload[1 + byte] = UInt8(truncatingIfNeeded: scrollbackRows >> (8 * UInt32(byte)))
+            payload[offset + byte] = UInt8(truncatingIfNeeded: scrollbackRows >> (8 * UInt32(byte)))
         }
-        return encode(.capture, payload)
+        return encode(.capture, payload, wire: wire)
+    }
+
+    /// An empty-payload `Info` request in v1 framing. A pre-freeze daemon
+    /// reads its first header byte as the tag and byte 1 (the version) as the
+    /// low length byte, so it answers with a pre-freeze `Info` frame instead.
+    public static let versionProbe = Data([Tag.info.rawValue, protocolVersion, 0, 0, 0, 0, 0, 0, 0])
+
+    /// `ipc.Info` is 552 bytes; the daemon pid is an `i32` at payload offset 8.
+    private static let infoPayloadSize = 552
+    private static let infoPidOffset = 8
+
+    /// Classifies a daemon from the bytes it answered `versionProbe` with.
+    /// Returns nil until a whole `Info` frame is present, or when the header
+    /// matches neither wire. Never returns `.unreachable`; that is the
+    /// caller's verdict when the connection fails or goes silent.
+    public static func classifyProbeReply(_ bytes: some Collection<UInt8>) -> ZmxDaemonStatus? {
+        let reply = Array(bytes.prefix(headerSize + infoPayloadSize))
+        guard reply.count >= headerSize, reply[0] == Tag.info.rawValue else { return nil }
+        func length(at offset: Int) -> Int {
+            (0..<4).reduce(0) { $0 | Int(reply[offset + $1]) << (8 * $1) }
+        }
+        let wire: Wire
+        if reply[1] == protocolVersion, length(at: 4) == infoPayloadSize {
+            wire = .v1
+        } else if length(at: 1) == infoPayloadSize, reply[5] == 0, reply[6] == 0, reply[7] == 0 {
+            wire = .preFreeze
+        } else {
+            return nil
+        }
+        guard reply.count == headerSize + infoPayloadSize else { return nil }
+        let pidStart = headerSize + infoPidOffset
+        let raw = (0..<4).reduce(UInt32(0)) { $0 | UInt32(reply[pidStart + $1]) << (8 * UInt32($1)) }
+        let pid = Int32(bitPattern: raw)
+        return wire == .v1 ? .v1(pid: pid) : .preFreeze(pid: pid)
     }
 
     /// `ipc.Resize` is `packed struct { rows, cols, xpixel, ypixel: u16 }`;
@@ -71,6 +134,13 @@ public enum ZmxIPC: Sendable {
         payload[3] = UInt8(truncatingIfNeeded: cols >> 8)
         return payload
     }
+}
+
+/// What a probe learned about a session daemon.
+public enum ZmxDaemonStatus: Equatable, Sendable {
+    case v1(pid: Int32)
+    case preFreeze(pid: Int32)
+    case unreachable
 }
 
 public struct ZmxFrame: Equatable, Sendable {
@@ -90,13 +160,17 @@ public struct ZmxFrame: Equatable, Sendable {
 public struct ZmxFrameDecoder: Sendable {
     public enum Failure: Error, Equatable, Sendable {
         case payloadTooLarge(declared: UInt32)
+        /// A v1 header whose protocol byte is not `ZmxIPC.protocolVersion`.
+        case unsupportedVersion(UInt8)
     }
 
+    private let wire: ZmxIPC.Wire
     private let maxPayloadLength: Int
     private var buffer: [UInt8] = []
     private var head = 0
 
-    public init(maxPayloadLength: Int = ZmxIPC.maxPayloadLength) {
+    public init(wire: ZmxIPC.Wire, maxPayloadLength: Int = ZmxIPC.maxPayloadLength) {
+        self.wire = wire
         self.maxPayloadLength = maxPayloadLength
     }
 
@@ -106,9 +180,13 @@ public struct ZmxFrameDecoder: Sendable {
         buffer.append(contentsOf: bytes)
         var frames: [ZmxFrame] = []
         while buffer.count - head >= ZmxIPC.headerSize {
+            if wire == .v1, buffer[head + 1] != ZmxIPC.protocolVersion {
+                throw Failure.unsupportedVersion(buffer[head + 1])
+            }
+            let lengthOffset = ZmxIPC.lengthOffset(wire)
             var declared: UInt32 = 0
             for byte in 0..<4 {
-                declared |= UInt32(buffer[head + 1 + byte]) << (8 * UInt32(byte))
+                declared |= UInt32(buffer[head + lengthOffset + byte]) << (8 * UInt32(byte))
             }
             // Compare as UInt64 so a near-max length can never wrap.
             guard UInt64(declared) <= UInt64(maxPayloadLength) else {
