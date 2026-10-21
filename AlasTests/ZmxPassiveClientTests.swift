@@ -85,6 +85,16 @@ import Testing
         #expect(Array(ZmxIPC.versionProbe) == [6, 1, 0, 0, 0, 0, 0, 0, 0])
     }
 
+    /// A pre-freeze verdict kills the daemon, so an `Info` counts only once
+    /// the other wire's decoder has thrown.
+    @Test func probeReplyNamesAWireOnlyOnceTheOtherIsRuledOut() {
+        // Pre-freeze reads an empty v1 frame as a one-byte frame and is only
+        // ruled out inside the v1 `Info` header that follows.
+        let emptyOutput = ZmxIPC.encode(.output, Data(), wire: .v1)
+        #expect(ZmxIPC.classifyProbeReply(emptyOutput + zmxInfoReply(wire: .v1)) == zmxInfoStatus(.v1))
+        #expect(ZmxIPC.classifyProbeReply(zmxAmbiguousInfoReply()) == nil)
+    }
+
     // MARK: Probe
 
     /// Whole or 7-byte chunks, each with and without a broadcast `Output`
@@ -111,7 +121,9 @@ import Testing
     @Test func probeReportsUnreachableWithinItsTimeout() throws {
         let silent = try ZmxFakeDaemonListener(script: .silent)
         defer { silent.tearDown() }
-        for path in ["/tmp/zmxt-missing/s", silent.path] {
+        let ambiguous = try ZmxFakeDaemonListener(script: .reply(zmxAmbiguousInfoReply()))
+        defer { ambiguous.tearDown() }
+        for path in ["/tmp/zmxt-missing/s", silent.path, ambiguous.path] {
             let clock = ContinuousClock()
             let start = clock.now
             let status = ZmxIPCSocket.probe(path: path, timeout: .milliseconds(200))
@@ -313,6 +325,16 @@ func zmxInfoReply(wire: ZmxIPC.Wire) -> Data {
         return UInt8(headerHex[start..<headerHex.index(start, offsetBy: 2)], radix: 16)!
     })
     return header + payload
+}
+
+/// A v1 `Info` behind a v1 `Output` that the pre-freeze decoder can still
+/// frame: it reads the `Output` header as a one-byte frame, then a 1 MiB
+/// frame header planted in that payload, so it is still waiting for bytes
+/// when the v1 `Info` completes.
+func zmxAmbiguousInfoReply() -> Data {
+    var payload = Data(count: 256)
+    payload.replaceSubrange(1..<9, with: [1, 0, 0, 0x10, 0, 0, 0, 0])
+    return ZmxIPC.encode(.output, payload, wire: .v1) + zmxInfoReply(wire: .v1)
 }
 
 /// Accepts one connection on a Unix socket in a short temp dir, records every
