@@ -14,6 +14,23 @@ struct NativePeerSessionsTests {
         #expect(NativePeerComposerState.mention(from: "file:///tmp/local.swift", peerId: "host-a") == nil)
     }
 
+    /// The composer's error line: a generic rejection gives way to the
+    /// agent issue a later sessionConfig brings; other errors keep priority.
+    @Test(arguments: [
+        (NativePeerSessions.genericPromptRejectedMessage, nil, "Codex needs sign-in.",
+         "Prompt was not delivered: Codex needs sign-in. Your draft was kept."),
+        (NativePeerSessions.genericPromptRejectedMessage, nil, nil, NativePeerSessions.genericPromptRejectedMessage),
+        ("Peer is offline.", nil, "Codex needs sign-in.", "Peer is offline."),
+        (nil, "Dictation failed.", "Codex needs sign-in.", "Dictation failed."),
+        (nil, nil, "Codex needs sign-in.", "Codex needs sign-in."),
+        (nil, nil, nil, nil),
+    ] as [(String?, String?, String?, String?)])
+    func composerMessagePrefersAReason(deliveryError: String?, notice: String?, issue: String?, shown: String?) {
+        #expect(NativePeerSessions.composerMessage(
+            deliveryError: deliveryError, notice: notice,
+            agentIssue: issue.map { RemoteAgentIssue(kind: "needsAuth", message: $0) }) == shown)
+    }
+
     private final class FakeLinks: FederatedPeerLinks {
         var sessionCarryingPeers: [FederatedPeerInfo] = []
         var onFederationEvent: (@MainActor (FederatedPeerLinkEvent) -> Void)?

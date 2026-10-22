@@ -692,8 +692,9 @@ struct RemoteProtocolTests {
         #expect(try roundTrip(rejected) == rejected)
     }
 
-    @Test func promptRejectedRoundTrips() throws {
-        let rejected = RemoteServerMessage.promptRejected(sessionId: "s1")
+    @Test(arguments: [nil, "Codex needs sign-in before it can continue."] as [String?])
+    func promptRejectedRoundTrips(reason: String?) throws {
+        let rejected = RemoteServerMessage.promptRejected(sessionId: "s1", reason: reason)
         #expect(try roundTrip(rejected) == rejected)
     }
 
@@ -858,6 +859,7 @@ struct RemoteProtocolTests {
             modelName: "Opus", context: .init(used: 1_000, size: 200_000, costAmount: 0.25, costCurrency: "USD"),
             lastTurn: [.init(label: "opus", tokens: 900)], cumulative: [.init(label: "Total", tokens: 4_000)])
         config.supportsQueueReorder = true
+        config.agentIssue = RemoteAgentIssue(kind: "needsAuth", message: "Codex needs sign-in before it can continue.")
         let message = RemoteServerMessage.sessionConfig(config)
         #expect(try roundTrip(message) == message)
     }
@@ -878,6 +880,7 @@ struct RemoteProtocolTests {
         #""availableCommands":"nonsense""#,
         #""usage":{"context":"nonsense"}"#,
         #""supportsQueueReorder":"yes""#,
+        #""agentIssue":{"kind":1}"#,
     ])
     func sessionConfigWithAMalformedOptionalFieldStillDecodes(field: String) throws {
         let json = #"{"type":"sessionConfig","sessionId":"s1","models":[],"modes":[],"autoRunEnabled":false,"acceptsImages":false,"#
@@ -889,6 +892,7 @@ struct RemoteProtocolTests {
         #expect(config.availableCommands == nil)
         #expect(config.usage == nil)
         #expect(config.supportsQueueReorder == nil)
+        #expect(config.agentIssue == nil)
     }
 
     @Test(arguments: [("\"high\"", ACPConfigValue.string("high")), ("false", .boolean(false))])

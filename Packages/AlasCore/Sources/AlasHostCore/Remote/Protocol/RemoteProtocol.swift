@@ -116,8 +116,12 @@ public struct RemoteSessionConfig: Codable, Equatable, Sendable {
     /// Set by hosts that serve `searchMentions` and resolve `sendPrompt`
     /// mentions. Older hosts would drop both.
     public var supportsMentions: Bool? = nil
+    /// Why the session's agent cannot run on the host, or the error it last
+    /// hit, as the host's own banner words it. Nil when nothing is wrong,
+    /// and on older hosts.
+    public var agentIssue: RemoteAgentIssue? = nil
 
-    public init(sessionId: String, models: [RemoteModelInfo], modes: [RemoteModelInfo], currentModel: String? = nil, currentMode: String? = nil, autoRunEnabled: Bool, acceptsImages: Bool, chips: RemoteChipState? = nil, supportsSteering: Bool? = nil, availableCommands: [RemoteSlashCommand]? = nil, usage: RemoteUsage? = nil, supportsQueueReorder: Bool? = nil, supportsMentions: Bool? = nil) {
+    public init(sessionId: String, models: [RemoteModelInfo], modes: [RemoteModelInfo], currentModel: String? = nil, currentMode: String? = nil, autoRunEnabled: Bool, acceptsImages: Bool, chips: RemoteChipState? = nil, supportsSteering: Bool? = nil, availableCommands: [RemoteSlashCommand]? = nil, usage: RemoteUsage? = nil, supportsQueueReorder: Bool? = nil, supportsMentions: Bool? = nil, agentIssue: RemoteAgentIssue? = nil) {
         self.sessionId = sessionId
         self.models = models
         self.modes = modes
@@ -131,6 +135,19 @@ public struct RemoteSessionConfig: Codable, Equatable, Sendable {
         self.usage = usage
         self.supportsQueueReorder = supportsQueueReorder
         self.supportsMentions = supportsMentions
+        self.agentIssue = agentIssue
+    }
+}
+
+public struct RemoteAgentIssue: Codable, Equatable, Sendable {
+    /// `needsSetup`, `needsAuth`, `setupError`, `failed` (the agent could
+    /// not start or attach) or `error` (a prompt failed on a running agent).
+    public var kind: String
+    public var message: String
+
+    public init(kind: String, message: String) {
+        self.kind = kind
+        self.message = message
     }
 }
 
@@ -827,8 +844,9 @@ public enum RemoteServerMessage: Equatable, Sendable {
     case sessionClosed(sessionId: String)
     /// The server dropped a `sendPrompt` (caller is no longer the writer, or
     /// the prompt was empty), so the client should restore the user's text
-    /// instead of silently losing it.
-    case promptRejected(sessionId: String)
+    /// instead of silently losing it. `reason` is why the session's agent
+    /// cannot take it, when the host knows; nil on older hosts.
+    case promptRejected(sessionId: String, reason: String? = nil)
     /// The server refused a `visualAidResponse` (reason: notWriter, notFound,
     /// alreadyAnswered, invalid or failed), so the phone re-enables the card.
     /// `requestId` echoes the response's token when it carried one.
@@ -884,7 +902,7 @@ extension RemoteServerMessage: Codable {
         case type, sessions, sessionId, projectId, streamingState, canDrive, messages, upserts, payload, requestId, message
         case hasCancellableBackgroundWork
         case worktrees, agents, session, projects, branches, preferredBase, stage, worktreeId
-        case chips, supportsSteering, availableCommands, usage, supportsQueueReorder, supportsMentions
+        case chips, supportsSteering, availableCommands, usage, supportsQueueReorder, supportsMentions, agentIssue
         case query, candidates
         case models, modes, currentModel, currentMode, autoRunEnabled, acceptsImages, title
         case firstIndex, totalCount, epoch, revision
@@ -1012,7 +1030,10 @@ extension RemoteServerMessage: Codable {
                 visualId: try c.decode(String.self, forKey: .visualId),
                 reason: try c.decode(String.self, forKey: .reason),
                 requestId: try c.decodeIfPresent(String.self, forKey: .requestId))
-        case "promptRejected": self = .promptRejected(sessionId: try c.decode(String.self, forKey: .sessionId))
+        case "promptRejected":
+            self = .promptRejected(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                reason: try? c.decodeIfPresent(String.self, forKey: .reason) ?? nil)
         case "sessionTabActionSucceeded":
             self = .sessionTabActionSucceeded(sessionId: try c.decode(String.self, forKey: .sessionId))
         case "sessionTabActionFailed":
@@ -1036,6 +1057,7 @@ extension RemoteServerMessage: Codable {
             config.usage = try? c.decodeIfPresent(RemoteUsage.self, forKey: .usage) ?? nil
             config.supportsQueueReorder = try? c.decodeIfPresent(Bool.self, forKey: .supportsQueueReorder) ?? nil
             config.supportsMentions = try? c.decodeIfPresent(Bool.self, forKey: .supportsMentions) ?? nil
+            config.agentIssue = try? c.decodeIfPresent(RemoteAgentIssue.self, forKey: .agentIssue) ?? nil
             self = .sessionConfig(config)
         case "sessionRenamed":
             self = .sessionRenamed(
@@ -1262,8 +1284,9 @@ extension RemoteServerMessage: Codable {
             try c.encode(requestId, forKey: .requestId)
         case .sessionClosed(let id): try c.encode("sessionClosed", forKey: .type)
         try c.encode(id, forKey: .sessionId)
-        case .promptRejected(let id): try c.encode("promptRejected", forKey: .type)
+        case .promptRejected(let id, let reason): try c.encode("promptRejected", forKey: .type)
         try c.encode(id, forKey: .sessionId)
+        try c.encodeIfPresent(reason, forKey: .reason)
         case .visualAidRejected(let s, let v, let r, let requestId):
             try c.encode("visualAidRejected", forKey: .type)
             try c.encode(s, forKey: .sessionId)
@@ -1292,6 +1315,7 @@ extension RemoteServerMessage: Codable {
             try c.encodeIfPresent(cfg.usage, forKey: .usage)
             try c.encodeIfPresent(cfg.supportsQueueReorder, forKey: .supportsQueueReorder)
             try c.encodeIfPresent(cfg.supportsMentions, forKey: .supportsMentions)
+            try c.encodeIfPresent(cfg.agentIssue, forKey: .agentIssue)
         case .sessionRenamed(let id, let title):
             try c.encode("sessionRenamed", forKey: .type)
             try c.encode(id, forKey: .sessionId)

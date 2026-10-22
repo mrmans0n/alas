@@ -29,29 +29,6 @@ struct ACPAuthTerminalCommand: Equatable {
     }
 }
 
-enum ACPAuthNudgeBannerCopy {
-    static func message(agentDisplayName: String, reason: String?) -> String {
-        let base = "\(agentDisplayName) needs sign-in before it can continue."
-        guard let reason = reason?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !reason.isEmpty
-        else { return base }
-        return "\(base) \(reason)"
-    }
-
-    static func unsupportedMessage(agentDisplayName: String) -> String {
-        "\(agentDisplayName) requires environment credentials or agent sign-in, and sign-in is not supported yet. Add credentials outside Alas, then reconnect."
-    }
-
-    static func buttonTitle(method: ACPInitializeResult.ACPAuthMethod) -> String {
-        if let label = method.terminalAuth?.label?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !label.isEmpty {
-            return label
-        }
-        let name = method.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        return name.isEmpty ? "Sign In" : name
-    }
-}
-
 struct ACPAuthNudgeBanner: View {
     let agentDisplayName: String
     let methods: [ACPInitializeResult.ACPAuthMethod]
