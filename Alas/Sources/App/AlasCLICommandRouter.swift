@@ -70,7 +70,12 @@ struct AlasCLICommandRouter {
             }
             return await previewCommand(command, owner, request.sessionId)
         case .computer(let command):
-            guard let sessionID = request.sessionId, callers.acpOrigin(ofSession: sessionID) != nil else {
+            // Side sessions never show the approval card, and checkout owners have no
+            // computer tools in their MCP scope.
+            guard let sessionID = request.sessionId, callers.acpOrigin(ofSession: sessionID) != nil,
+                  !callers.isReadOnlySideSession(sessionID),
+                  case .worktree? = callers.owner(ofSession: sessionID)
+            else {
                 return .error("computer_unsupported_caller: Computer use is only available to ACP agent sessions.")
             }
             return await computerCommand(command, sessionID)

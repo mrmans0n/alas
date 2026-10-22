@@ -24,22 +24,39 @@ struct WebPreviewAutomationRoutingTests {
         return }
     }
 
-    @Test func computerCommandsRefuseNonACPCallers() async {
+    enum ComputerCaller: CaseIterable, Sendable { case terminal, cwdOnly, sideSession, checkoutSession }
+
+    @Test(arguments: ComputerCaller.allCases)
+    func computerCommandsRefuseNonACPCallers(caller: ComputerCaller) async throws {
         let worktree = Worktree(id: "b", projectId: "p", name: "b", branch: "b",
                                 path: URL(fileURLWithPath: "/b"), status: .clean, lastActivity: .now)
+        let checkout = WorkspaceCheckout(workspaceID: UUID(), fallbackWorkspaceName: "Shared", executionLocation: .local,
+                                         branch: "b", rootPath: "/shared", members: [])
+        let manager = try ACPSessionManager(worktreeId: "b", worktreePath: "/b", store: ACPSessionStore(
+            path: FileManager.default.temporaryDirectory.appendingPathComponent("alas-computer-router-\(UUID().uuidString).sqlite").path))
+        let session = manager.createSession(agentId: "pi")
+        var managers: [SessionOwnerID: ACPSessionManager] = [:]
+        var sessionID: String? = session.id
+        switch caller {
+        case .terminal: sessionID = "terminal"
+        case .cwdOnly: sessionID = nil
+        case .sideSession:
+            session.readOnlyRestricted = true
+            managers[.worktree("b")] = manager
+        case .checkoutSession:
+            managers[.workspaceCheckout(checkout.id, .local)] = manager
+        }
         let router = AlasCLICommandRouter(
-            host: AlasHost.routerFixture([worktree], sessionWorktree: { $0 == "terminal" ? "b" : nil }),
+            host: AlasHost.routerFixture([worktree], sessionWorktree: { $0 == "terminal" ? "b" : nil },
+                                         sessionManagers: managers, checkouts: [checkout]),
             openRelativeFile: { _, _ in }, openExternalFile: { _, _ in },
             computerCommand: { _, _ in
-                Issue.record("Non-ACP callers must not reach computer use")
+                Issue.record("Only full ACP sessions in a worktree may reach computer use")
                 return .ok
             }, activateApp: {}
         )
-        let refusal = AlasCLIResponse.error("computer_unsupported_caller: Computer use is only available to ACP agent sessions.")
-        let terminal = await router.handle(.init(version: 1, sessionId: "terminal", cwd: "/b", command: .computer(.init(action: .apps))))
-        let cwdOnly = await router.handle(.init(version: 1, sessionId: nil, cwd: "/b", command: .computer(.init(action: .apps))))
-        #expect(terminal == refusal)
-        #expect(cwdOnly == refusal)
+        let response = await router.handle(.init(version: 1, sessionId: sessionID, cwd: "/b", command: .computer(.init(action: .apps))))
+        #expect(response == .error("computer_unsupported_caller: Computer use is only available to ACP agent sessions."))
     }
 
     @Test func listIsOwnerScopedAndDoesNotLoadPageOrFocus() async throws {
