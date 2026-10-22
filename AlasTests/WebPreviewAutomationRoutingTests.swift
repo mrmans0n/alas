@@ -24,6 +24,24 @@ struct WebPreviewAutomationRoutingTests {
         return }
     }
 
+    @Test func computerCommandsRefuseNonACPCallers() async {
+        let worktree = Worktree(id: "b", projectId: "p", name: "b", branch: "b",
+                                path: URL(fileURLWithPath: "/b"), status: .clean, lastActivity: .now)
+        let router = AlasCLICommandRouter(
+            host: AlasHost.routerFixture([worktree], sessionWorktree: { $0 == "terminal" ? "b" : nil }),
+            openRelativeFile: { _, _ in }, openExternalFile: { _, _ in },
+            computerCommand: { _, _ in
+                Issue.record("Non-ACP callers must not reach computer use")
+                return .ok
+            }, activateApp: {}
+        )
+        let refusal = AlasCLIResponse.error("computer_unsupported_caller: Computer use is only available to ACP agent sessions.")
+        let terminal = await router.handle(.init(version: 1, sessionId: "terminal", cwd: "/b", command: .computer(.init(action: .apps))))
+        let cwdOnly = await router.handle(.init(version: 1, sessionId: nil, cwd: "/b", command: .computer(.init(action: .apps))))
+        #expect(terminal == refusal)
+        #expect(cwdOnly == refusal)
+    }
+
     @Test func listIsOwnerScopedAndDoesNotLoadPageOrFocus() async throws {
         let tabs = TabsManager(store: TestPersistenceStore())
         let owner = SessionOwnerID.workspaceCheckout(UUID(), .local)

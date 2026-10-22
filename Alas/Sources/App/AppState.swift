@@ -316,6 +316,8 @@ final class AppState {
     var runScheduler: RunScheduler { core.runScheduler }
     /// Scheduled chat sessions whose first turn a firing is waiting on.
     let scheduledAgentTurns = ScheduledAgentTurns()
+    /// Serves computer_* calls: approvals, the driver lock, stop/resume.
+    let computerUse: ComputerUseCoordinator
     /// The models each ACP agent last advertised, for surfaces that configure
     /// a session before it exists (the schedule editor's model picker).
     let acpModelCatalog: ACPAgentModelCatalog
@@ -1656,6 +1658,8 @@ final class AppState {
         )
         self.hostEnvironment = hostEnvironment
         self.host = AlasHost(core: core)
+        let computerUseLink = AppStateLink()
+        self.computerUse = Self.makeComputerUse(link: computerUseLink)
         let spacesManager = spacesFile.map(SpacesManager.init(file:))
             ?? SpacesManager.migrating(projects: projectsFile.projects)
         var spacesChanged = spacesManager.pruneMissingProjects(validProjectIds: Set(projectsFile.projects.map(\.id)))
@@ -1686,6 +1690,7 @@ final class AppState {
             await self?.loadWorkspaces()
         }
         // All stored properties are initialized; we can safely capture `self`.
+        computerUseLink.state = self
         // Wire the live default-ordering source so the manager reads the
         // current `config.worktrees.defaultOrdering` on every sort.
         self.projectsManager.setDefaultOrdering { [weak self] in
@@ -7255,6 +7260,10 @@ final class AppState {
                     }
                 })
             },
+            computerCommand: { [weak self] command, sessionID in
+                guard let self else { return .error("Alas is not available.") }
+                return await self.computerUse.perform(command, sessionID: sessionID)
+            },
             activateApp: {
                 NSApp.activate(ignoringOtherApps: true)
             }
@@ -12325,6 +12334,7 @@ final class AppState {
             },
             onTurnCompleted: { [weak self] completion in
                 Task { @MainActor [weak self] in
+                    self?.computerUse.turnEnded(sessionID: completion.sessionId)
                     self?.scheduledAgentTurns.deliver(completion)
                     self?.reviewShepherd.turnCompleted(sessionID: completion.sessionId)
                     self?.stackShepherd.turnCompleted(sessionID: completion.sessionId)
@@ -12655,6 +12665,9 @@ final class AppState {
         }
         let worktreeId = worktree.id
         mgr.admitsNewWork = { [weak self] in self?.projectsManager.admitsNewWork(worktreeId: worktreeId) ?? false }
+        mgr.onSessionRuntimeEnded = { [weak self] sessionID in
+            self?.computerUse.sessionEnded(sessionID: sessionID)
+        }
         acpManagers[owner] = mgr
         acpManagerProjectIds[owner] = worktree.projectId
         observeNextPromptSessions(mgr, owner: owner)
@@ -12821,6 +12834,7 @@ final class AppState {
             },
             onTurnCompleted: { [weak self] completion in
                 Task { @MainActor [weak self] in
+                    self?.computerUse.turnEnded(sessionID: completion.sessionId)
                     await self?.acpOrchestration.childTurnCompleted(completion)
                 }
             },
@@ -12996,6 +13010,9 @@ final class AppState {
                 await self.excludePiDirectoryFromGit(worktreeURL: worktreeURL)
             }
             return (adapterState, configOutcome, userServerNames, skippedServerStatuses, requestedServerStatuses)
+        }
+        manager.onSessionRuntimeEnded = { [weak self] sessionID in
+            self?.computerUse.sessionEnded(sessionID: sessionID)
         }
         acpManagers[owner] = manager
         observeNextPromptSessions(manager, owner: owner)
