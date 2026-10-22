@@ -23,6 +23,12 @@ public final class HostProtocolServer {
     /// The pairing of the Remote server this host serves headlessly, which
     /// mints codes for local clients; nil where the app shows codes itself.
     public var remotePairing: RemotePairingService?
+    /// The Macs paired with that server, which a local client lists and
+    /// forgets; nil where the app manages them itself.
+    public var remotePeers: RemotePeerManager?
+    /// The pairing link for a code that `remotePairing` minted, with the
+    /// addresses the server is reached at now; nil leaves the code alone.
+    public var remotePairingLink: (@MainActor (String) -> String?)?
 
     public init(
         host: AlasHost,
@@ -44,7 +50,8 @@ public final class HostProtocolServer {
             host: host, caller: caller, discoverScripts: discoverScripts,
             // Held by the connection: a caller may keep only the connection
             // (the Remote gateway does), and the server keeps no connection.
-            isServerClosed: { [self] in isClosed }, remotePairing: { [self] in remotePairing }, send: send
+            isServerClosed: { [self] in isClosed }, remotePairing: { [self] in remotePairing },
+            remotePeers: { [self] in remotePeers }, remotePairingLink: { [self] in remotePairingLink }, send: send
         )
     }
 
@@ -62,6 +69,8 @@ public final class HostProtocolConnection {
     private let discoverScripts: HostProtocolServer.ScriptDiscovery
     private let isServerClosed: @MainActor () -> Bool
     private let remotePairing: @MainActor () -> RemotePairingService?
+    private let remotePeers: @MainActor () -> RemotePeerManager?
+    private let remotePairingLink: @MainActor () -> (@MainActor (String) -> String?)?
     private let send: @MainActor (HostServerMessage) async -> Void
     private var subscription: HostSubscription?
     /// The last message handed to the transport. Every send waits for the
@@ -76,6 +85,8 @@ public final class HostProtocolConnection {
         discoverScripts: @escaping HostProtocolServer.ScriptDiscovery,
         isServerClosed: @escaping @MainActor () -> Bool = { false },
         remotePairing: @escaping @MainActor () -> RemotePairingService? = { nil },
+        remotePeers: @escaping @MainActor () -> RemotePeerManager? = { nil },
+        remotePairingLink: @escaping @MainActor () -> (@MainActor (String) -> String?)? = { nil },
         send: @escaping @MainActor (HostServerMessage) async -> Void
     ) {
         self.host = host
@@ -83,6 +94,8 @@ public final class HostProtocolConnection {
         self.discoverScripts = discoverScripts
         self.isServerClosed = isServerClosed
         self.remotePairing = remotePairing
+        self.remotePeers = remotePeers
+        self.remotePairingLink = remotePairingLink
         self.send = send
     }
 
@@ -278,12 +291,34 @@ public final class HostProtocolConnection {
                 throw HostError.failed(message: "This host does not mint Remote pairing codes.")
             }
             let code = pairing.beginPairing()
-            return .remotePairingCode(code: code, expiresAt: Date().addingTimeInterval(RemotePairingService.codeTTL))
+            return .remotePairingCode(
+                code: code, expiresAt: Date().addingTimeInterval(RemotePairingService.codeTTL), link: remotePairingLink()?(code)
+            )
+        case .listPeers:
+            return .peers(peers: try localPeers().peers.map(Self.summary))
+        case .forgetPeer(let peerID):
+            let peers = try localPeers()
+            guard peers.peers.contains(where: { $0.id == peerID }) else { throw HostError.notFound(what: "peer \(peerID)") }
+            peers.forget(peerId: peerID)
+            return .done
         }
         return .done
     }
 
     private var sessions: SessionsAPI { host.sessions }
+
+    /// Forgetting a peer revokes its token and listing shows where it is
+    /// reached, so only the local user may, as with pairing codes.
+    private func localPeers() throws -> RemotePeerManager {
+        guard case .localUser = caller, let peers = remotePeers() else {
+            throw HostError.failed(message: "This host does not serve Mac peers.")
+        }
+        return peers
+    }
+
+    private static func summary(_ peer: RemotePeer) -> HostPeerSummary {
+        HostPeerSummary(id: peer.id, serverId: peer.serverId, name: peer.name, origins: peer.origins)
+    }
 
     /// Following acts on the connection's subscription, so it needs one.
     private func subscribed() throws -> HostSubscription {

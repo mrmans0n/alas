@@ -83,6 +83,29 @@ struct GitServiceStackCommitTests {
         }
     }
 
+    /// A landed stack entry is on the base either as itself or, after a
+    /// squash merge, as a new commit with the same change; an open entry is
+    /// neither.
+    @Test func commitsAlreadyInCountsAncestorsAndPatchEquivalentsOfTheUpstream() async throws {
+        let fixture = try await makeTwoCommitRepo()
+        defer { try? FileManager.default.removeItem(at: fixture.repo) }
+        let repo = fixture.repo
+        _ = try await Process.git(["checkout", "-q", "-b", "upstream", fixture.base], cwd: repo)
+        // `-x` changes the message, so the copy is a different commit.
+        _ = try await Process.git(["cherry-pick", "-x", fixture.tip], cwd: repo)
+        _ = try await Process.git(["checkout", "-q", "main"], cwd: repo)
+        try "open\n".write(to: repo.appendingPathComponent("open.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "open.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "feat: open entry"], cwd: repo)
+        let open = try await resolvedHead(in: repo)
+
+        let landed = try await GitService().commitsAlreadyIn(
+            upstream: "upstream", shas: [fixture.base, fixture.tip, open], worktreePath: repo
+        )
+
+        #expect(landed == [fixture.base, fixture.tip])
+    }
+
     @Test func parserIndexesReversedRecordsByResolvedSHA() throws {
         let base = String(repeating: "a", count: 40)
         let tip = String(repeating: "b", count: 40)

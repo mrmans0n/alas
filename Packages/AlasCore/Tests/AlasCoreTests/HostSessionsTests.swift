@@ -512,6 +512,22 @@ struct HostSessionsTests {
         }
     }
 
+    /// A client with a stale view may ask to take over a session this
+    /// instance already drives; the agent keeps running and takes the prompt.
+    @Test func aTakeoverByTheWriterKeepsItsAgent() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let sessions = fixture.host.sessions
+        let id = try await sessions.create(.worktree(fixture.ref), agentID: "gemini", caller: .app).id
+        let manager = try #require(fixture.core.sessionManagers.values.first)
+        try await eventually { await manager.liveSession(for: id)?.agentState == .ready }
+
+        try await sessions.takeOver(id, caller: .app)
+        #expect(manager.liveSession(for: id)?.agentState == .ready)
+        try await sessions.send(id, prompt: "hello", caller: .app)
+        #expect(fixture.agent.sent.filter { $0.method == "initialize" }.count == 1)
+    }
+
     /// An attachment of this instance can hold the session's lease before
     /// the manager records it; archiving fences with that lease and leaves it.
     @Test func archiveUsesALeaseThisInstanceAlreadyHolds() async throws {

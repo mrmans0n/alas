@@ -20,6 +20,7 @@ struct StackShepherdTests {
     private static func request(
         _ number: Int,
         state: ReviewRequestState = .open,
+        base: String = "main",
         head: String = F.head,
         checks: [ReviewCheck] = [F.check("build", .pass)],
         threads: [ReviewThread] = []
@@ -27,7 +28,7 @@ struct StackShepherdTests {
         let remote = F.remote()
         return ReviewRequest(
             remote: remote, number: number, title: "Entry \(number)", url: remote.reviewRequestURL(number: number),
-            state: state, isDraft: false, headRefName: "nacho/auth--c-\(number)", baseRefName: "main",
+            state: state, isDraft: false, headRefName: "nacho/auth--c-\(number)", baseRefName: base,
             headSHA: head, reviewDecision: .approved, mergeState: .clean,
             checks: checks, threads: threads, areThreadsComplete: true
         )
@@ -55,6 +56,7 @@ struct StackShepherdTests {
     private static func observation(
         _ requests: [ReviewRequest],
         present: Set<String>? = nil,
+        listed: Set<String>? = nil,
         canDispatch: Bool = true,
         isStackPublished: Bool = true,
         hasUnpublishedEntries: Bool? = nil,
@@ -63,6 +65,7 @@ struct StackShepherdTests {
         StackShepherdObservation(
             requests: Dictionary(uniqueKeysWithValues: requests.map { ($0.number, $0) }),
             presentEntryIDs: present,
+            listedEntryIDs: listed,
             local: local,
             capabilities: .githubCLI,
             headReviewers: [:],
@@ -267,15 +270,50 @@ struct StackShepherdTests {
         #expect(ready.gatePasses)
     }
 
+    /// After the bottom lands, gg still lists its commit until the stack is
+    /// rebased: the owner is asked once to restack with stack_ship, and the
+    /// rest is not ready to land until gg drops the landed commit.
+    @Test func aLandingGGStillListsAsksTheOwnerOnceToRestack() {
+        let requests = [Self.request(41, state: .merged), Self.request(42)]
+        // `gg land` forgot #41, so only #42 is published.
+        let landed = StackShepherdPolicy.decide(
+            Self.record([41, 42]),
+            Self.observation(requests, present: ["c-42"], listed: ["c-41", "c-42"], now: F.earlier)
+        )
+        #expect(landed.record.entries[0].shepherd.phase == .merged)
+        #expect(landed.restack.map(\.entryID) == ["c-41"])
+
+        let again = StackShepherdPolicy.decide(landed.record, Self.observation(requests, present: ["c-42"], listed: ["c-41", "c-42"]))
+        #expect(again.restack.isEmpty)
+        #expect(!again.gatePasses)
+
+        let rebased = StackShepherdPolicy.decide(again.record, Self.observation(requests, present: ["c-42"], listed: ["c-42"]))
+        #expect(rebased.record.landedEntryIDs == nil && rebased.record.restackRequestedFor == nil)
+        #expect(rebased.gatePasses)
+    }
+
+    /// An upper entry merged into the entry below it has not reached the
+    /// base: a rebase would keep it, so it must not ask for one, or every
+    /// stack_ship would rebase again.
+    @Test func anEntryMergedIntoItsParentIsNotLanded() {
+        let requests = [Self.request(41), Self.request(42, state: .merged, base: "nacho/auth--c-41")]
+
+        let decision = StackShepherdPolicy.decide(Self.record([41, 42]), Self.observation(requests, listed: ["c-41", "c-42"]))
+
+        #expect(decision.record.entries[1].shepherd.phase == .merged)
+        #expect(decision.restack.isEmpty && decision.record.landedEntryIDs == nil)
+        #expect(StackShepherdPolicy.landedEntryIDs(of: decision.record, in: Self.stack([41, 42])).isEmpty)
+    }
+
     /// Entry IDs are `g<index>`; positions in `shaOnly` have no GG-ID, so their
-    /// ID is `sha<index>`.
-    private static func stack(published: [Bool], synced: Int? = nil, shaOnly: Set<Int> = []) -> GGStack {
+    /// ID is their SHA: `shas[index]` when given, else `sha<index>`.
+    private static func stack(published: [Bool], synced: Int? = nil, shaOnly: Set<Int> = [], shas: [String] = []) -> GGStack {
         GGStack(
             name: "auth", base: "main", totalCommits: published.count, syncedCommits: synced ?? published.count,
             currentPosition: published.count, behindBase: 0,
             entries: published.enumerated().map { index, isPublished in
                 GGStackEntry(
-                    position: index + 1, sha: "sha\(index)", title: "t",
+                    position: index + 1, sha: index < shas.count ? shas[index] : "sha\(index)", title: "t",
                     ggId: shaOnly.contains(index + 1) ? nil : "g\(index)", prNumber: isPublished ? 40 + index : nil
                 )
             }
@@ -309,6 +347,11 @@ struct StackShepherdTests {
             let edited = StackShepherdPolicy.publication(of: Self.stack(published: [true, true]), local: local)
             #expect(!edited.isPublished && edited.hasUnpublishedEntries == true)
         }
+
+        // `gg land` forgets a landed entry's request: until a rebase drops
+        // it, it is neither unpublished work nor part of a published stack.
+        let landed = StackShepherdPolicy.publication(of: Self.stack(published: [false, true], synced: 1), local: clean, landed: ["g0"])
+        #expect(!landed.isPublished && landed.hasUnpublishedEntries == false)
 
         // On another stack nothing is known about this one: not ready, and no
         // verdict on unpublished work, so a stack last seen with an
@@ -595,6 +638,7 @@ struct StackShepherdTests {
             },
             loadStack: { _ in stack },
             syncStack: { _, _ in },
+            rebaseStack: { _, _ in },
             sessionState: { _, _ in .idle },
             deliverPrompt: { _, _, prompt, _ in
                 deliverPrompt(prompt.text)
@@ -813,6 +857,7 @@ struct StackShepherdTests {
             worktreeContext: { .init(worktreeID: $0, path: URL(fileURLWithPath: "/tmp/\($0)"), stackName: nil, isEligible: true) },
             loadStack: { _ in nil },
             syncStack: { _, _ in },
+            rebaseStack: { _, _ in },
             sessionState: { _, _ in .idle },
             deliverPrompt: { _, _, _, _ in .delivered },
             rules: { _ in .none },
@@ -957,6 +1002,7 @@ struct StackShepherdTests {
             worktreeContext: { .init(worktreeID: $0, path: URL(fileURLWithPath: "/tmp/\($0)"), stackName: "b", isEligible: true) },
             loadStack: { _ in otherStack },
             syncStack: { _, _ in synced += 1 },
+            rebaseStack: { _, _ in },
             sessionState: { _, _ in .idle },
             deliverPrompt: { _, _, _, _ in .delivered },
             rules: { _ in .none },
@@ -975,25 +1021,50 @@ struct StackShepherdTests {
         #expect(core.stackShepherd.record(forSession: "session-1")?.id.stackName == "auth")
     }
 
-    /// The agent's `stack_ship` takes no arguments: it publishes what the
-    /// user chose in the popover, a boundary gg no longer lists is refused
-    /// rather than widened to the whole stack, and a failed publish keeps the
-    /// choice for the retry.
-    @Test(arguments: [("g1", true), ("gone", false)])
-    func stackShipSyncsThePopoversChoiceAndKeepsItUntilAPublishSucceeds(boundary: String, syncs: Bool) async {
+    private final class SyncLog {
+        var plans: [StackShipPlan] = []
+    }
+
+    /// A core whose `stack_ship` publishes a stack of `published` entries
+    /// from a real worktree three commits ahead of origin, so the landed
+    /// check before the sync finds nothing landed; every sync is logged. The
+    /// entries' SHAs are the worktree's commits: read expectations through
+    /// `entryID(_:shas:)`.
+    private func stackShipCore(published: [Bool], shaOnly: Set<Int> = []) throws -> (core: AlasCoreContext, log: SyncLog, stack: GGStack, shas: [String]) {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-stack-ship-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let repo = root.appendingPathComponent("repo")
+        let shas = try GitTemplate.repositoryAheadOfOrigin(at: repo)
+        let stack = Self.stack(published: published, shaOnly: shaOnly, shas: shas)
         let core = makeCore()
-        var synced: [StackShipPlan] = []
-        let stack = Self.stack(published: [false, false, false])
+        let log = SyncLog()
         core.stackShepherd.effects = StackShepherd.Effects(
-            worktreeContext: { .init(worktreeID: $0, path: URL(fileURLWithPath: "/tmp/\($0)"), stackName: "auth", isEligible: true) },
+            worktreeContext: { .init(worktreeID: $0, path: repo, stackName: "auth", isEligible: true) },
             loadStack: { _ in stack },
-            syncStack: { _, plan in synced.append(plan) },
+            syncStack: { _, plan in log.plans.append(plan) },
+            rebaseStack: { _, _ in Issue.record("nothing landed, so nothing should be rebased") },
             sessionState: { _, _ in .idle },
             deliverPrompt: { _, _, _, _ in .delivered },
             rules: { _ in .none },
             notify: { _ in },
             archiveWorktreeIfAllowed: { _, _, _ in .declined }
         )
+        return (core, log, stack, shas)
+    }
+
+    /// `name` with `sha<index>` read as the fixture's `shas[index]`.
+    private static func entryID(_ name: String?, shas: [String]) -> String? {
+        guard let name, name.hasPrefix("sha"), let index = Int(name.dropFirst(3)) else { return name }
+        return shas[index]
+    }
+
+    /// The agent's `stack_ship` takes no arguments: it publishes what the
+    /// user chose in the popover, a boundary gg no longer lists is refused
+    /// rather than widened to the whole stack, and a failed publish keeps the
+    /// choice for the retry.
+    @Test(arguments: [("g1", true), ("gone", false)])
+    func stackShipSyncsThePopoversChoiceAndKeepsItUntilAPublishSucceeds(boundary: String, syncs: Bool) async throws {
+        let (core, log, _, _) = try stackShipCore(published: [false, false, false])
         let id = StackShepherdRecordID(worktreeID: "wt-1", stackName: "auth")
         let chosen = StackShipPlan(shipThroughEntryID: boundary, opensDrafts: true)
         core.stackShepherd.setPendingShipPlan(chosen, sessionID: "session-1", id: id)
@@ -1001,7 +1072,7 @@ struct StackShepherdTests {
         // The fake gg opens no request, so even a sync fails the publish.
         let response = await core.shipStack(sessionID: "session-1", worktreeID: "wt-1")
 
-        #expect(synced == (syncs ? [chosen] : []))
+        #expect(log.plans == (syncs ? [chosen] : []))
         guard case .error = response else {
             Issue.record("expected the publish to fail, got \(response)")
             return
@@ -1019,6 +1090,7 @@ struct StackShepherdTests {
             worktreeContext: { .init(worktreeID: $0, path: URL(fileURLWithPath: "/tmp/\($0)"), stackName: "auth", isEligible: true) },
             loadStack: { _ in stack },
             syncStack: { _, _ in synced += 1 },
+            rebaseStack: { _, _ in },
             sessionState: { _, _ in .idle },
             deliverPrompt: { _, _, _, _ in .delivered },
             rules: { _ in .none },
@@ -1044,20 +1116,8 @@ struct StackShepherdTests {
     /// entry rises to it: that entry's fixes keep being pushed. A SHA-only
     /// one is kept as is, not moved up onto the held-back entry above it.
     @Test(arguments: [([], "g1"), ([2], "sha1")] as [(Set<Int>, String)])
-    func stackShipNeverHoldsBackAnEntryThatHasARequest(shaOnly: Set<Int>, boundary: String) async {
-        let core = makeCore()
-        var synced: [StackShipPlan] = []
-        let stack = Self.stack(published: [true, true, false], shaOnly: shaOnly)
-        core.stackShepherd.effects = StackShepherd.Effects(
-            worktreeContext: { .init(worktreeID: $0, path: URL(fileURLWithPath: "/tmp/\($0)"), stackName: "auth", isEligible: true) },
-            loadStack: { _ in stack },
-            syncStack: { _, plan in synced.append(plan) },
-            sessionState: { _, _ in .idle },
-            deliverPrompt: { _, _, _, _ in .delivered },
-            rules: { _ in .none },
-            notify: { _ in },
-            archiveWorktreeIfAllowed: { _, _, _ in .declined }
-        )
+    func stackShipNeverHoldsBackAnEntryThatHasARequest(shaOnly: Set<Int>, boundary: String) async throws {
+        let (core, log, _, shas) = try stackShipCore(published: [true, true, false], shaOnly: shaOnly)
         core.stackShepherd.setPendingShipPlan(
             StackShipPlan(shipThroughEntryID: "g0"), sessionID: "session-1",
             id: StackShepherdRecordID(worktreeID: "wt-1", stackName: "auth")
@@ -1065,7 +1125,7 @@ struct StackShepherdTests {
 
         _ = await core.shipStack(sessionID: "session-1", worktreeID: "wt-1")
 
-        #expect(synced == [StackShipPlan(shipThroughEntryID: boundary)])
+        #expect(log.plans == [StackShipPlan(shipThroughEntryID: Self.entryID(boundary, shas: shas))])
     }
 
     /// After Clean removes the boundary the record shipped through, a fix
@@ -1075,20 +1135,8 @@ struct StackShepherdTests {
     @Test(arguments: [
         ([true, true], [], nil), ([true, false], [], "g0"), ([true, true, false], [2], "sha1"),
     ] as [([Bool], Set<Int>, String?)])
-    func stackShipRecoversARecordBoundaryCleanRemoved(published: [Bool], shaOnly: Set<Int>, boundary: String?) async {
-        let core = makeCore()
-        var synced: [StackShipPlan] = []
-        let stack = Self.stack(published: published, shaOnly: shaOnly)
-        core.stackShepherd.effects = StackShepherd.Effects(
-            worktreeContext: { .init(worktreeID: $0, path: URL(fileURLWithPath: "/tmp/\($0)"), stackName: "auth", isEligible: true) },
-            loadStack: { _ in stack },
-            syncStack: { _, plan in synced.append(plan) },
-            sessionState: { _, _ in .idle },
-            deliverPrompt: { _, _, _, _ in .delivered },
-            rules: { _ in .none },
-            notify: { _ in },
-            archiveWorktreeIfAllowed: { _, _, _ in .declined }
-        )
+    func stackShipRecoversARecordBoundaryCleanRemoved(published: [Bool], shaOnly: Set<Int>, boundary: String?) async throws {
+        let (core, log, stack, shas) = try stackShipCore(published: published, shaOnly: shaOnly)
         await core.stackShepherd.bind(
             sessionID: "session-1", worktreeID: "wt-1", stack: stack, requests: [:], remote: F.remote(),
             autoFix: true, maxFixAttempts: 3, shipPlan: StackShipPlan(shipThroughEntryID: "cleaned"), contextRules: nil
@@ -1096,6 +1144,6 @@ struct StackShepherdTests {
 
         _ = await core.shipStack(sessionID: "session-1", worktreeID: "wt-1")
 
-        #expect(synced == [StackShipPlan(shipThroughEntryID: boundary)])
+        #expect(log.plans == [StackShipPlan(shipThroughEntryID: Self.entryID(boundary, shas: shas))])
     }
 }

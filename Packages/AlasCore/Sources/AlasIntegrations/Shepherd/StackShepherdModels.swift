@@ -60,6 +60,14 @@ public struct StackShepherdRecord: Codable, Equatable, Sendable {
     /// What Ship publishes, kept for every later `stack_ship`: entries above
     /// its boundary are held back. Nil publishes the whole stack.
     public var shipPlan: StackShipPlan?
+    /// Entries whose request merged while gg still lists their commits, as
+    /// of the last poll that saw the stack: the bottom of the stack landed and
+    /// the rest must be rebased onto the base before it publishes again. Nil
+    /// when there are none.
+    public var landedEntryIDs: [String]?
+    /// `landedEntryIDs` when the owner was last asked to restack, so each
+    /// landing is announced once.
+    public var restackRequestedFor: [String]?
     public var finishedAt: Date?
     /// Every entry merged while the owner session was busy; the
     /// archive-after-merge step waits for its turn to end.

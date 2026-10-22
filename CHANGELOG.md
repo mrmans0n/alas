@@ -14,6 +14,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### 🐛 Fixes
 
 - Show a "Preparing to ship…" row in the transcript while Ship reads the branch or gg stack, so the button no longer looks unresponsive before its card appears.
+- Keep a shipped gg stack moving after its bottom entry lands: the stack shepherd asks the agent once to restack, and `stack_ship` rebases the landed entries away before `gg sync` instead of pushing them again or opening a new pull request for one `gg land` already merged.
 
 ### 🎨 Changed
 

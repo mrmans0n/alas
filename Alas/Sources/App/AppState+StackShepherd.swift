@@ -22,6 +22,10 @@ extension AppState {
                 guard let self else { throw GGMutationError.staleConfirmation }
                 try await self.syncStackForShip(worktreeID: worktreeID, plan: plan)
             },
+            rebaseStack: { [weak self] worktreeID, expected in
+                guard let self else { throw GGMutationError.staleConfirmation }
+                try await self.ggPane(worktreeID: worktreeID).rebaseGGForShip(expected: expected)
+            },
             sessionState: { [weak self] sessionID, worktreeID in
                 await self?.shepherdSessionState(sessionID: sessionID, worktreeID: worktreeID) ?? .missing
             },
@@ -79,19 +83,24 @@ extension AppState {
     /// stack drawer's Sync and Commit & sync use: the same preflight, paused
     /// operation guard, progress and refresh.
     private func syncStackForShip(worktreeID: String, plan: StackShipPlan) async throws {
-        guard let worktree = worktree(withId: worktreeID) else { throw GGMutationError.staleConfirmation }
-        let pane = rightPaneStore.state(
-            for: worktree,
-            baseBranch: config.worktrees.baseBranch,
-            comparisonMode: config.changes.comparisonMode,
-            activates: false
-        )
+        let pane = try ggPane(worktreeID: worktreeID)
         guard plan != .wholeStack else {
             try await pane.syncGGForCommitPublish(.sync)
             return
         }
         guard GGAvailability.shared.capabilities.syncUntilDraft else { throw GGMutationError.scopedSyncUnsupported }
         try await pane.syncGGForCommitPublish(.syncUntil(target: plan.shipThroughEntryID, draft: plan.opensDrafts))
+    }
+
+    /// The worktree's Changes pane state, which runs its gg mutations.
+    private func ggPane(worktreeID: String) throws -> RightPaneState {
+        guard let worktree = worktree(withId: worktreeID) else { throw GGMutationError.staleConfirmation }
+        return rightPaneStore.state(
+            for: worktree,
+            baseBranch: config.worktrees.baseBranch,
+            comparisonMode: config.changes.comparisonMode,
+            activates: false
+        )
     }
 
     // MARK: - Ship

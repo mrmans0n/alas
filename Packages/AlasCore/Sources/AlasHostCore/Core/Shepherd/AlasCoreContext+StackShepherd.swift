@@ -71,13 +71,41 @@ extension AlasCoreContext {
                     + "Check out \"\(pending.id.stackName)\" and call stack_ship again, or ask the user to choose again in the Ship popover."
             )
         }
+        // Landed entries go first: synced as they are, the landed commits
+        // would be pushed again, and one `gg land` already forgot would get
+        // a new request.
+        var toSync = stack
+        let landed = try await landedEntries(of: stack, worktreeID: worktreeID, path: context.path)
+        if !landed.isEmpty, let top = stack.entries.max(by: { $0.position < $1.position }) {
+            // The checks above read this stack; the rebase refuses to run on
+            // whatever the worktree moved to while they ran.
+            let inspected = GGStackIdentity(stackName: stack.name, base: stack.base, headSHA: top.sha)
+            do {
+                try await effects.rebaseStack(worktreeID, inspected)
+            } catch GGMutationError.staleConfirmation {
+                throw PRShepherdCLIError(
+                    message: "The gg stack \"\(stack.name)\" changed while Alas was checking it for landed entries, so it did not rebase. Return to the top of the stack you want to publish and call stack_ship again."
+                )
+            } catch {
+                throw PRShepherdCLIError(
+                    message: "Entr\(landed.count == 1 ? "y" : "ies") \(landed.map { String($0.position) }.joined(separator: ", ")) of the gg stack \"\(stack.name)\" already landed on \(stack.base), "
+                        + "so Alas ran gg rebase to drop \(landed.count == 1 ? "it" : "them") before syncing, and it did not finish: \(Self.prShepherdErrorMessage(error)). "
+                        + "If it stopped on a conflict, resolve it, run `gg continue`, and call stack_ship again."
+                )
+            }
+            guard let rebased = try await loadStack(effects, path: context.path), !rebased.entries.isEmpty else {
+                throw PRShepherdCLIError(message: "Every entry of the gg stack \"\(stack.name)\" has landed on \(stack.base). Nothing is left to publish.")
+            }
+            toSync = rebased
+        }
         let isUsersChoice = explicitPlan != nil || stackShepherd.pendingShipPlans[sessionID] != nil
         let chosen = explicitPlan ?? stackShepherd.shipPlan(sessionID: sessionID, id: id)
-        // A boundary below a published entry rises to it. One gg no longer
-        // lists never widens a fresh choice; the record's, gone after Clean,
+        // Resolved on the stack about to sync, rebased or not. A boundary
+        // below a published entry rises to it. One gg no longer lists never
+        // widens a fresh choice; the record's, gone after Clean or a landing,
         // ships what already has a request, as Held back reads it.
-        guard let plan = (try? chosen.resolved(in: stack)) ?? (isUsersChoice ? nil : chosen.recovered(in: stack)) else {
-            throw Self.missingShipEntryError(stack)
+        guard let plan = (try? chosen.resolved(in: toSync)) ?? (isUsersChoice ? nil : chosen.recovered(in: toSync)) else {
+            throw Self.missingShipEntryError(toSync)
         }
         do {
             try await effects.syncStack(worktreeID, plan)
@@ -93,7 +121,7 @@ extension AlasCoreContext {
         stackShepherd.clearPendingShipPlan(sessionID: sessionID, id: id)
         return StackShipResultWire(
             record: record, requests: published.requests, heldBack: published.heldBack,
-            uncommittedChanges: published.hasUncommittedChanges
+            uncommittedChanges: published.hasUncommittedChanges, restacked: !landed.isEmpty
         )
     }
 
@@ -102,6 +130,37 @@ extension AlasCoreContext {
             message: "The entry the user chose to ship through in the Ship popover is no longer in the gg stack \"\(stack.name)\". "
                 + "Ask the user to choose what to ship again in the Ship popover."
         )
+    }
+
+    /// The entries of `stack` that already landed on its base while gg still
+    /// lists them: those a shepherd record saw merge into the base, and those
+    /// whose change the freshly fetched base already has. The last covers a
+    /// landing no record saw, including a `gg land` that forgot the entry's
+    /// request. gg's own merged state is not enough: an upper entry merged
+    /// into the entry below it has not reached the base. Throws when the
+    /// base can't be fetched or compared: syncing without knowing would push
+    /// a landed commit again.
+    private func landedEntries(of stack: GGStack, worktreeID: String, path: URL) async throws -> [GGStackEntry] {
+        let seenMerged = stackShepherd.records.values
+            .filter { $0.id.worktreeID == worktreeID }
+            .reduce(into: Set<String>()) { $0.formUnion(StackShepherdPolicy.landedEntryIDs(of: $1, in: stack)) }
+        let git = GitService()
+        // gg rebases onto origin's base, so that is what decides.
+        let onBase: Set<String>
+        do {
+            try await git.fetchRef(worktreePath: path, remote: "origin", branch: stack.base)
+            onBase = try await git.commitsAlreadyIn(
+                upstream: "origin/\(stack.base)", shas: stack.entries.map(\.sha), worktreePath: path
+            )
+        } catch {
+            throw PRShepherdCLIError(
+                message: "Alas could not check origin/\(stack.base) for entries that already landed, so it did not sync: \(error.localizedDescription). "
+                    + "Check that origin is reachable and has \(stack.base), then call stack_ship again."
+            )
+        }
+        return stack.entries
+            .filter { seenMerged.contains($0.id) || onBase.contains($0.sha) }
+            .sorted { $0.position < $1.position }
     }
 
     /// Binds the worktree's already published stack to `sessionID` without
@@ -309,7 +368,13 @@ extension AlasCoreContext {
             let latest = stackShepherd.records[bound.id] ?? bound
             return StackStatusWire(
                 stack: .init(name: bound.id.stackName, base: latest.base, entries: entries),
-                shepherd: .init(record: latest, readyToLand: readyToLand, rules: rules)
+                shepherd: .init(
+                    record: latest, readyToLand: readyToLand,
+                    restackNeeded: freshStack.flatMap { $0.name == latest.id.stackName ? $0 : nil }
+                        .map { !StackShepherdPolicy.landedEntryIDs(of: latest, in: $0).isEmpty }
+                        ?? (latest.landedEntryIDs != nil),
+                    rules: rules
+                )
             )
         }
         guard let stack = try await loadStack(effects, path: context.path) else { return nil }
