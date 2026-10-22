@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 @_spi(Testing) @_spi(AppHost) @testable import AlasCore
 @_spi(Testing) @_spi(AppHost) @testable import AlasHostCore
@@ -340,6 +341,48 @@ struct HostSessionsTests {
         try await sessions.setAutoRun(id, enabled: true, caller: .app)
         try await eventually { await received.states(of: id).last?.config.autoRunEnabled == true }
         subscription.cancel()
+    }
+
+    /// A follower hears why the agent cannot run, and that it is fixed once
+    /// a takeover finds the agent set up.
+    @Test func followingCarriesWhyTheAgentCannotRun() async throws {
+        let setup = Mutex(ACPSetupResult.missing(reason: "gemini is not installed"))
+        let fixture = try Fixture(setupEvaluator: { _ in setup.withLock { $0 } })
+        defer { fixture.tearDown() }
+        let sessions = fixture.host.sessions
+        let id = try await sessions.create(.worktree(fixture.ref), agentID: "gemini", caller: .app).id
+        let subscription = fixture.host.subscribe()
+        defer { subscription.cancel() }
+        let received = Collected(subscription)
+        try subscription.follow(id)
+        try await eventually { await received.states(of: id).last?.config.agentIssue != nil }
+        #expect(received.states(of: id).last?.config.agentIssue
+            == RemoteAgentIssue(kind: "needsSetup", message: "gemini is not installed"))
+
+        setup.withLock { $0 = .ready }
+        try await sessions.takeOver(id, caller: .app)
+        try await eventually { await received.states(of: id).last?.config.agentIssue == nil }
+    }
+
+    @Test(arguments: [
+        (ACPSession.AgentState.ready, ACPSession.SetupState.ready, nil, nil),
+        (.spawning, .checking, nil, nil),
+        (.disconnected, .ready, nil, nil),
+        (.failed("spawn failed"), .ready, nil, RemoteAgentIssue(kind: "failed", message: "spawn failed")),
+        (.failed("spawn failed"), .ready, "Broken pipe", RemoteAgentIssue(kind: "failed", message: "Broken pipe")),
+        (.failed("x"), .needsAuth(methods: [.init(id: "login", name: "Login", kind: .terminal)], reason: "Token expired."), nil,
+         RemoteAgentIssue(kind: "needsAuth", message: "Codex needs sign-in before it can continue. Token expired.")),
+        (.failed("x"), .needsSetup(reason: "missing"), nil,
+         RemoteAgentIssue(kind: "needsSetup", message: "Codex requires the ACP adapter to be installed.")),
+        (.failed("x"), .setupError(reason: "Probe timed out"), nil,
+         RemoteAgentIssue(kind: "setupError", message: "Probe timed out")),
+    ] as [(ACPSession.AgentState, ACPSession.SetupState, String?, RemoteAgentIssue?)])
+    func agentIssueWordsItAsTheHostBannerDoes(
+        agentState: ACPSession.AgentState, setupState: ACPSession.SetupState, lastError: String?, issue: RemoteAgentIssue?
+    ) {
+        #expect(RemoteSessionConfigProjection.agentIssue(
+            agentName: "Codex", managedAdapter: true,
+            agentState: agentState, setupState: setupState, lastError: lastError) == issue)
     }
 
     /// A host socket client creates a session against a scripted agent,
@@ -699,7 +742,8 @@ struct HostSessionsTests {
         init(
             environment: any AlasHostEnvironment = HeadlessHostEnvironment(),
             projectHost: String? = nil,
-            otherProjects: [ProjectConfig] = []
+            otherProjects: [ProjectConfig] = [],
+            setupEvaluator: @escaping ACPSessionManager.ACPSetupEvaluator = { _ in .ready }
         ) throws {
             root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-sessions-\(UUID().uuidString)")
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -728,7 +772,7 @@ struct HostSessionsTests {
                         worktreePath: worktree.path.path,
                         owner: owner,
                         persistence: ACPSessionPersistence(path: database.path),
-                        setupEvaluator: { _ in .ready },
+                        setupEvaluator: setupEvaluator,
                         connectionFactory: { _, _, _ in ACPConnection(client: agent) }
                     )
                 },

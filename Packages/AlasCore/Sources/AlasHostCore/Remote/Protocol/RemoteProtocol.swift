@@ -116,8 +116,11 @@ public struct RemoteSessionConfig: Codable, Equatable, Sendable {
     /// Set by hosts that serve `searchMentions` and resolve `sendPrompt`
     /// mentions. Older hosts would drop both.
     public var supportsMentions: Bool? = nil
+    /// Why the session's agent cannot run on the host, as the host's own
+    /// banner words it. Nil when nothing is wrong, and on older hosts.
+    public var agentIssue: RemoteAgentIssue? = nil
 
-    public init(sessionId: String, models: [RemoteModelInfo], modes: [RemoteModelInfo], currentModel: String? = nil, currentMode: String? = nil, autoRunEnabled: Bool, acceptsImages: Bool, chips: RemoteChipState? = nil, supportsSteering: Bool? = nil, availableCommands: [RemoteSlashCommand]? = nil, usage: RemoteUsage? = nil, supportsQueueReorder: Bool? = nil, supportsMentions: Bool? = nil) {
+    public init(sessionId: String, models: [RemoteModelInfo], modes: [RemoteModelInfo], currentModel: String? = nil, currentMode: String? = nil, autoRunEnabled: Bool, acceptsImages: Bool, chips: RemoteChipState? = nil, supportsSteering: Bool? = nil, availableCommands: [RemoteSlashCommand]? = nil, usage: RemoteUsage? = nil, supportsQueueReorder: Bool? = nil, supportsMentions: Bool? = nil, agentIssue: RemoteAgentIssue? = nil) {
         self.sessionId = sessionId
         self.models = models
         self.modes = modes
@@ -131,6 +134,18 @@ public struct RemoteSessionConfig: Codable, Equatable, Sendable {
         self.usage = usage
         self.supportsQueueReorder = supportsQueueReorder
         self.supportsMentions = supportsMentions
+        self.agentIssue = agentIssue
+    }
+}
+
+public struct RemoteAgentIssue: Codable, Equatable, Sendable {
+    /// `needsSetup`, `needsAuth`, `setupError` or `failed`.
+    public var kind: String
+    public var message: String
+
+    public init(kind: String, message: String) {
+        self.kind = kind
+        self.message = message
     }
 }
 
@@ -884,7 +899,7 @@ extension RemoteServerMessage: Codable {
         case type, sessions, sessionId, projectId, streamingState, canDrive, messages, upserts, payload, requestId, message
         case hasCancellableBackgroundWork
         case worktrees, agents, session, projects, branches, preferredBase, stage, worktreeId
-        case chips, supportsSteering, availableCommands, usage, supportsQueueReorder, supportsMentions
+        case chips, supportsSteering, availableCommands, usage, supportsQueueReorder, supportsMentions, agentIssue
         case query, candidates
         case models, modes, currentModel, currentMode, autoRunEnabled, acceptsImages, title
         case firstIndex, totalCount, epoch, revision
@@ -1036,6 +1051,7 @@ extension RemoteServerMessage: Codable {
             config.usage = try? c.decodeIfPresent(RemoteUsage.self, forKey: .usage) ?? nil
             config.supportsQueueReorder = try? c.decodeIfPresent(Bool.self, forKey: .supportsQueueReorder) ?? nil
             config.supportsMentions = try? c.decodeIfPresent(Bool.self, forKey: .supportsMentions) ?? nil
+            config.agentIssue = try? c.decodeIfPresent(RemoteAgentIssue.self, forKey: .agentIssue) ?? nil
             self = .sessionConfig(config)
         case "sessionRenamed":
             self = .sessionRenamed(
@@ -1292,6 +1308,7 @@ extension RemoteServerMessage: Codable {
             try c.encodeIfPresent(cfg.usage, forKey: .usage)
             try c.encodeIfPresent(cfg.supportsQueueReorder, forKey: .supportsQueueReorder)
             try c.encodeIfPresent(cfg.supportsMentions, forKey: .supportsMentions)
+            try c.encodeIfPresent(cfg.agentIssue, forKey: .agentIssue)
         case .sessionRenamed(let id, let title):
             try c.encode("sessionRenamed", forKey: .type)
             try c.encode(id, forKey: .sessionId)

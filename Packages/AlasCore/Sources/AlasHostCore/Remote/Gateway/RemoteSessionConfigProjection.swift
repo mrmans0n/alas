@@ -5,6 +5,7 @@ import AlasPlatform
 import AlasFeatures
 import AlasCode
 import AlasAgents
+import AlasAgentKit
 import AlasACP
 import AlasSessions
 
@@ -31,7 +32,47 @@ public enum RemoteSessionConfigProjection: Sendable {
                              lastTurn: session.lastTurnQuota, cumulative: session.sessionQuotaTotal)
         config.supportsQueueReorder = true
         config.supportsMentions = true
+        config.agentIssue = agentIssue(
+            agentName: AgentBuiltins.entry(id: session.agentId)?.displayName ?? session.agentId,
+            managedAdapter: ACPManagedAdapterDescriptor.descriptor(for: session.agentId) != nil,
+            agentState: session.agentState, setupState: session.setupState, lastError: session.lastError)
         return config
+    }
+
+    /// Why the agent cannot run, in the words of the banner `ACPTabView`
+    /// shows on the host: its error banner first, then the sign-in or
+    /// setup nudge. Nil while the agent is fine or still connecting.
+    public nonisolated static func agentIssue(
+        agentName: String, managedAdapter: Bool,
+        agentState: ACPSession.AgentState, setupState: ACPSession.SetupState, lastError: String?
+    ) -> RemoteAgentIssue? {
+        let kind: String
+        let setupMessage: String?
+        switch setupState {
+        case .needsSetup(let reason):
+            kind = "needsSetup"
+            // ACPSetupNudgeBannerCopy.idleMessage(mode: .install, ...)
+            setupMessage = managedAdapter ? "\(agentName) requires the ACP adapter to be installed." : reason
+        case .needsAuth(let methods, let reason):
+            kind = "needsAuth"
+            // ACPAuthNudgeBannerCopy
+            let reason = reason?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            setupMessage = if !methods.contains(where: { $0.kind == .terminal }) {
+                "\(agentName) requires environment credentials or agent sign-in, and sign-in is not supported yet. Add credentials outside Alas, then reconnect."
+            } else {
+                "\(agentName) needs sign-in before it can continue." + (reason.isEmpty ? "" : " \(reason)")
+            }
+        case .setupError(let reason):
+            kind = "setupError"
+            setupMessage = reason
+        case .checking, .ready:
+            guard case .failed = agentState else { return nil }
+            kind = "failed"
+            setupMessage = nil
+        }
+        if let lastError, !lastError.isEmpty { return RemoteAgentIssue(kind: kind, message: lastError) }
+        if kind == "failed", case .failed(let reason) = agentState { return RemoteAgentIssue(kind: kind, message: reason) }
+        return setupMessage.map { RemoteAgentIssue(kind: kind, message: $0) }
     }
 
     /// Nil when there is nothing for the ring or its popover to show, so a
