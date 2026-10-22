@@ -71,10 +71,13 @@ fn parse_computer(args: &[&str]) -> Result<Command, String> {
             .map_err(|_| "window-id must be a non-negative integer".to_string())
     };
     match args.first().copied() {
-        Some("apps") if args.len() == 1 => Ok(Command::Computer(alas_client::ComputerCommand::Apps)),
+        Some("apps") if args.len() == 1 => Ok(Command::Computer(
+            alas_client::ComputerCommand::Apps { call_id: None },
+        )),
         Some("screenshot") if args.len() == 2 => Ok(Command::Computer(
             alas_client::ComputerCommand::Screenshot {
                 window_id: window_id(args[1])?,
+                call_id: None,
             },
         )),
         Some("inspect") if args.len() >= 2 => {
@@ -117,6 +120,7 @@ fn parse_computer(args: &[&str]) -> Result<Command, String> {
                 query,
                 limit,
                 max_depth,
+                call_id: None,
             }))
         }
         _ => Err(USAGE.into()),
@@ -2015,11 +2019,14 @@ mod tests {
         let p = |args: &[&str]| parse(&s(args), Path::new("/b"));
         assert_eq!(
             p(&["computer", "apps"]).unwrap(),
-            Command::Computer(ComputerCommand::Apps)
+            Command::Computer(ComputerCommand::Apps { call_id: None })
         );
         assert_eq!(
             p(&["computer", "screenshot", "7"]).unwrap(),
-            Command::Computer(ComputerCommand::Screenshot { window_id: 7 })
+            Command::Computer(ComputerCommand::Screenshot {
+                window_id: 7,
+                call_id: None
+            })
         );
         assert_eq!(
             p(&["computer", "inspect", "7"]).unwrap(),
@@ -2027,7 +2034,8 @@ mod tests {
                 window_id: 7,
                 query: None,
                 limit: 300,
-                max_depth: 12
+                max_depth: 12,
+                call_id: None
             })
         );
         assert_eq!(
@@ -2040,7 +2048,8 @@ mod tests {
                 window_id: 7,
                 query: Some("Save".into()),
                 limit: 3000,
-                max_depth: 1
+                max_depth: 1,
+                call_id: None
             })
         );
         for bad in [

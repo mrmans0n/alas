@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicBool, AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
 };
 
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
@@ -1143,12 +1143,15 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
         }),
         "computer_apps" => {
             reject_arguments(args, name, &[])?;
-            Ok(Command::Computer(alas_client::ComputerCommand::Apps))
+            Ok(Command::Computer(alas_client::ComputerCommand::Apps {
+                call_id: None,
+            }))
         }
         "computer_screenshot" => {
             reject_arguments(args, name, &["window_id"])?;
             Ok(Command::Computer(alas_client::ComputerCommand::Screenshot {
                 window_id: required_window_id(args)?,
+                call_id: None,
             }))
         }
         "computer_inspect" => {
@@ -1158,6 +1161,7 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                 query: optional_limited_string(args, "query", 256)?,
                 limit: optional_bounded_u64(args, "limit", 1, 3000)?.unwrap_or(300),
                 max_depth: optional_bounded_u64(args, "max_depth", 1, 12)?.unwrap_or(12),
+                call_id: None,
             }))
         }
         "preview_list" => Ok(Command::Preview(alas_client::PreviewCommand::List)),
@@ -1591,7 +1595,7 @@ pub fn dispatch(env: &McpEnv, command: &Command) -> Result<Response, TransportEr
     req.mcp_transport = Some(env.transport);
     if publishes(command) {
         alas_client::send_with_timeout(&env.socket, &req, PR_CREATE_READ_TIMEOUT)
-    } else if matches!(command, Command::Computer(_)) {
+    } else if is_computer_call(command) {
         alas_client::send_with_timeout(&env.socket, &req, COMPUTER_READ_TIMEOUT)
     } else {
         alas_client::send(&env.socket, &req)
@@ -1909,12 +1913,29 @@ fn is_preview_cancel_command(command: &Command) -> bool {
     )
 }
 
-fn register_pending_preview(
+/// A computer call that may block in the app; its cancel is quick.
+fn is_computer_call(command: &Command) -> bool {
+    matches!(command, Command::Computer(computer) if !matches!(computer, alas_client::ComputerCommand::Cancel { .. }))
+}
+
+/// Process-unique ids for computer calls, so a cancellation can name one.
+fn next_computer_call_id() -> String {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    format!("{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed))
+}
+
+/// Records a call a cancellation can reach, first tagging a computer call
+/// with a fresh call id. Returns the key to remove once the call finishes.
+fn register_pending_call(
     pending: &Mutex<std::collections::HashMap<String, Command>>,
     id: &Value,
-    command: &Command,
+    command: &mut Command,
 ) -> Option<String> {
-    if preview_id_for_cancel(command).is_none() && !matches!(command, Command::SessionWait { .. }) {
+    if is_computer_call(command) {
+        if let Command::Computer(computer) = command {
+            computer.set_call_id(next_computer_call_id());
+        }
+    } else if preview_id_for_cancel(command).is_none() && !matches!(command, Command::SessionWait { .. }) {
         return None;
     }
     let key = request_key(id);
@@ -1926,7 +1947,7 @@ fn register_pending_preview(
     }
 }
 
-fn remove_pending_preview(
+fn remove_pending_call(
     pending: &Mutex<std::collections::HashMap<String, Command>>,
     key: Option<&str>,
 ) {
@@ -1973,6 +1994,11 @@ fn cancellation_command_for_message(
     if matches!(command, Command::SessionWait { .. }) {
         pending.remove(&key);
         return None;
+    }
+    if let Command::Computer(computer) = &command {
+        return Some(Command::Computer(alas_client::ComputerCommand::Cancel {
+            call_id: computer.call_id()?.to_string(),
+        }));
     }
     let preview_id = preview_id_for_cancel(&command)?;
     Some(Command::Preview(alas_client::PreviewCommand::Cancel {
@@ -2041,7 +2067,7 @@ pub fn serve(env: &McpEnv) -> std::io::Result<()> {
             continue;
         }
         match tools_call_command(&msg, &env.worktree_dir, env.tool_scope()) {
-            Ok(Some((id, command))) => {
+            Ok(Some((id, mut command))) => {
                 if !runs_on_worker(&command) {
                     let result = match dispatch(env, &command) {
                         Ok(resp) => tool_result(&command, resp),
@@ -2067,7 +2093,7 @@ pub fn serve(env: &McpEnv) -> std::io::Result<()> {
                     ));
                     continue;
                 }
-                let key = register_pending_preview(&runtime.pending, &id, &command);
+                let key = register_pending_call(&runtime.pending, &id, &mut command);
                 let env = env.clone();
                 let reply_tx = reply_tx.clone();
                 let pending = Arc::clone(&runtime.pending);
@@ -2086,7 +2112,7 @@ pub fn serve(env: &McpEnv) -> std::io::Result<()> {
                             })
                         };
                         let dispatched = dispatch_session_wait(&env, &command, still_pending);
-                        remove_pending_preview(&pending, key.as_deref());
+                        remove_pending_call(&pending, key.as_deref());
                         release_worker(&active_workers);
                         // A cancelled request gets no response.
                         let Some(dispatched) = dispatched else { return };
@@ -2101,7 +2127,7 @@ pub fn serve(env: &McpEnv) -> std::io::Result<()> {
                         }));
                     });
                 if spawn.is_err() {
-                    remove_pending_preview(&runtime.pending, fallback_key.as_deref());
+                    remove_pending_call(&runtime.pending, fallback_key.as_deref());
                     release_worker(&runtime.active_workers);
                     let _ = reply_tx.send(error_reply(
                         fallback_id,
@@ -2456,7 +2482,7 @@ fn build_http_response(
             return http_response(202, "application/json", "");
         }
         match tools_call_command(&msg, &env.worktree_dir, env.tool_scope()) {
-            Ok(Some((id, command))) if runs_on_worker(&command) => {
+            Ok(Some((id, mut command))) if runs_on_worker(&command) => {
                 let limit = if is_preview_cancel_command(&command) {
                     MAX_MCP_WORKERS
                 } else {
@@ -2470,7 +2496,7 @@ fn build_http_response(
                             .to_string(),
                     );
                 }
-                let key = register_pending_preview(&runtime.pending, &id, &command);
+                let key = register_pending_call(&runtime.pending, &id, &mut command);
                 let still_pending = || {
                     key.as_ref().is_none_or(|key| {
                         runtime
@@ -2480,7 +2506,7 @@ fn build_http_response(
                     })
                 };
                 let dispatched = dispatch_session_wait(env, &command, still_pending);
-                remove_pending_preview(&runtime.pending, key.as_deref());
+                remove_pending_call(&runtime.pending, key.as_deref());
                 release_worker(&runtime.active_workers);
                 // An HTTP request still needs a reply once its wait is cancelled.
                 let Some(dispatched) = dispatched else {
@@ -2521,7 +2547,7 @@ mod tests {
         CHILD_ONLY_TOOLS, HttpRequest, McpEnv, McpRuntime, PROTOCOL_VERSION, build_http_response,
         cancellation_command_for_message, command_for_tool, dispatch, env_from, handle_line,
         handle_line_with_parent, http_response, initialize_result,
-        parse_http_request, register_pending_preview, runs_on_worker, session_wait_timed_out, RelayScope,
+        parse_http_request, register_pending_call, runs_on_worker, session_wait_timed_out, RelayScope,
         tool_definitions, tool_result, tools_call_command, transport_error_result, ToolScope,
     };
     use alas_client::{Command, Response, TransportError, VisualOption, VisualQuestion};
@@ -3408,13 +3434,41 @@ mod tests {
     }
 
     #[test]
+    fn cancellation_notification_maps_pending_computer_call_to_cancel_by_call_id() {
+        use alas_client::ComputerCommand;
+        let pending = std::sync::Mutex::new(std::collections::HashMap::new());
+        let mut first = Command::Computer(ComputerCommand::Screenshot {
+            window_id: 7,
+            call_id: None,
+        });
+        let mut second = Command::Computer(ComputerCommand::Apps { call_id: None });
+        assert!(register_pending_call(&pending, &json!(7), &mut first).is_some());
+        assert!(register_pending_call(&pending, &json!(8), &mut second).is_some());
+        let call_id = |command: &Command| match command {
+            Command::Computer(computer) => computer.call_id().unwrap().to_string(),
+            _ => unreachable!(),
+        };
+        assert_ne!(call_id(&first), call_id(&second));
+        let msg: Value = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":7}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            cancellation_command_for_message(&msg, &pending),
+            Some(Command::Computer(ComputerCommand::Cancel {
+                call_id: call_id(&first)
+            }))
+        );
+    }
+
+    #[test]
     fn cancelling_a_pending_session_wait_drops_it_without_an_app_command() {
         let pending = std::sync::Mutex::new(std::collections::HashMap::new());
-        let wait = Command::SessionWait {
+        let mut wait = Command::SessionWait {
             session_ids: vec!["child".into()],
             timeout_ms: None,
         };
-        assert!(register_pending_preview(&pending, &json!(9), &wait).is_some());
+        assert!(register_pending_call(&pending, &json!(9), &mut wait).is_some());
         let msg: Value = serde_json::from_str(
             r#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":9}}"#,
         )
@@ -3447,16 +3501,29 @@ mod tests {
 
     #[test]
     fn http_cancellation_notification_uses_pending_preview_map() {
-        let runtime = McpRuntime::new();
-        runtime.pending.lock().unwrap().insert(
-            json!("wait-1").to_string(),
+        for pending in [
             Command::Preview(alas_client::PreviewCommand::Wait {
                 preview_id: "runtime-preview-id".into(),
                 condition: alas_client::PreviewWaitCondition::Loaded,
                 selector: None,
                 timeout_ms: 20_000,
             }),
-        );
+            Command::Computer(alas_client::ComputerCommand::Screenshot {
+                window_id: 7,
+                call_id: Some("42-1".into()),
+            }),
+        ] {
+            assert_http_cancellation_is_accepted(pending);
+        }
+    }
+
+    fn assert_http_cancellation_is_accepted(pending: Command) {
+        let runtime = McpRuntime::new();
+        runtime
+            .pending
+            .lock()
+            .unwrap()
+            .insert(json!("wait-1").to_string(), pending);
         let env = McpEnv {
             socket: "/tmp/alas-no-such-socket-for-cancel-test".into(),
             worktree_dir: "/wt".into(),
@@ -3520,11 +3587,14 @@ mod tests {
         use alas_client::ComputerCommand;
         assert_eq!(
             command_for_tool("computer_apps", &json!({}), "/wt").unwrap(),
-            Command::Computer(ComputerCommand::Apps)
+            Command::Computer(ComputerCommand::Apps { call_id: None })
         );
         assert_eq!(
             command_for_tool("computer_screenshot", &json!({ "window_id": 7 }), "/wt").unwrap(),
-            Command::Computer(ComputerCommand::Screenshot { window_id: 7 })
+            Command::Computer(ComputerCommand::Screenshot {
+                window_id: 7,
+                call_id: None
+            })
         );
         assert_eq!(
             command_for_tool(
@@ -3537,7 +3607,8 @@ mod tests {
                 window_id: 7,
                 query: Some("Save".into()),
                 limit: 300,
-                max_depth: 12
+                max_depth: 12,
+                call_id: None
             })
         );
         let long_query = "q".repeat(257);
@@ -3548,6 +3619,7 @@ mod tests {
             ("computer_screenshot", json!({ "window_id": -1 })),
             ("computer_screenshot", json!({ "window_id": 4294967296u64 })),
             ("computer_screenshot", json!({ "window_id": 7, "query": "x" })),
+            ("computer_screenshot", json!({ "window_id": 7, "call_id": "forged" })),
             ("computer_inspect", json!({})),
             ("computer_inspect", json!({ "window_id": 7, "query": "  " })),
             ("computer_inspect", json!({ "window_id": 7, "query": long_query })),

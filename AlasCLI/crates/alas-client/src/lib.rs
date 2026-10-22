@@ -282,16 +282,45 @@ pub enum Command {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ComputerCommand {
-    Apps,
+    /// `call_id` lets a later `Cancel` find the call in the app; the MCP
+    /// bridge sets it, the CLI leaves it out.
+    Apps {
+        call_id: Option<String>,
+    },
     Screenshot {
         window_id: u32,
+        call_id: Option<String>,
     },
     Inspect {
         window_id: u32,
         query: Option<String>,
         limit: u64,
         max_depth: u64,
+        call_id: Option<String>,
     },
+    Cancel {
+        call_id: String,
+    },
+}
+
+impl ComputerCommand {
+    pub fn call_id(&self) -> Option<&str> {
+        match self {
+            ComputerCommand::Apps { call_id }
+            | ComputerCommand::Screenshot { call_id, .. }
+            | ComputerCommand::Inspect { call_id, .. } => call_id.as_deref(),
+            ComputerCommand::Cancel { .. } => None,
+        }
+    }
+
+    pub fn set_call_id(&mut self, id: String) {
+        match self {
+            ComputerCommand::Apps { call_id }
+            | ComputerCommand::Screenshot { call_id, .. }
+            | ComputerCommand::Inspect { call_id, .. } => *call_id = Some(id),
+            ComputerCommand::Cancel { .. } => {}
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -776,35 +805,39 @@ pub fn build_request(
 }
 
 fn computer_request(command: &ComputerCommand) -> Request {
-    match command {
-        ComputerCommand::Apps => {
-            let mut request = Request::new("computer_apps");
-            request.params = Some(serde_json::json!({}));
-            request
-        }
-        ComputerCommand::Screenshot { window_id } => {
-            let mut request = Request::new("computer_screenshot");
-            request.params = Some(serde_json::json!({ "window_id": window_id }));
-            request
+    let mut params = serde_json::Map::new();
+    let name = match command {
+        ComputerCommand::Apps { .. } => "computer_apps",
+        ComputerCommand::Screenshot { window_id, .. } => {
+            params.insert("window_id".into(), serde_json::Value::from(*window_id));
+            "computer_screenshot"
         }
         ComputerCommand::Inspect {
             window_id,
             query,
             limit,
             max_depth,
+            ..
         } => {
-            let mut request = Request::new("computer_inspect");
-            let mut params = serde_json::Map::new();
             params.insert("window_id".into(), serde_json::Value::from(*window_id));
             if let Some(query) = query {
                 params.insert("query".into(), serde_json::Value::String(query.clone()));
             }
             params.insert("limit".into(), serde_json::Value::from(*limit));
             params.insert("max_depth".into(), serde_json::Value::from(*max_depth));
-            request.params = Some(serde_json::Value::Object(params));
-            request
+            "computer_inspect"
         }
+        ComputerCommand::Cancel { call_id } => {
+            params.insert("call_id".into(), serde_json::Value::String(call_id.clone()));
+            "computer_cancel"
+        }
+    };
+    if let Some(call_id) = command.call_id() {
+        params.insert("call_id".into(), serde_json::Value::String(call_id.into()));
     }
+    let mut request = Request::new(name);
+    request.params = Some(serde_json::Value::Object(params));
+    request
 }
 
 fn preview_request(command: &PreviewCommand) -> Request {
@@ -1883,7 +1916,10 @@ mod tests {
     #[test]
     fn computer_commands_serialize_as_versioned_params_only_requests() {
         let shot = build_request(
-            &Command::Computer(ComputerCommand::Screenshot { window_id: 7 }),
+            &Command::Computer(ComputerCommand::Screenshot {
+                window_id: 7,
+                call_id: None,
+            }),
             Some("s1".into()),
             None,
         );
@@ -1898,6 +1934,7 @@ mod tests {
                 query: Some("Save".into()),
                 limit: 300,
                 max_depth: 12,
+                call_id: Some("42-1".into()),
             }),
             None,
             None,
@@ -1906,9 +1943,19 @@ mod tests {
         assert_eq!(
             inspect.params,
             Some(serde_json::json!({
-                "window_id": 7, "query": "Save", "limit": 300, "max_depth": 12
+                "window_id": 7, "query": "Save", "limit": 300, "max_depth": 12, "call_id": "42-1"
             }))
         );
+
+        let cancel = build_request(
+            &Command::Computer(ComputerCommand::Cancel {
+                call_id: "42-1".into(),
+            }),
+            None,
+            None,
+        );
+        assert_eq!(cancel.command, "computer_cancel");
+        assert_eq!(cancel.params, Some(serde_json::json!({ "call_id": "42-1" })));
     }
 
     #[test]

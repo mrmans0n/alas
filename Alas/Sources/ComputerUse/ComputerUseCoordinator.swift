@@ -49,6 +49,13 @@ final class ComputerUseCoordinator {
     @ObservationIgnored private var epochs: [String: Int] = [:]
     /// Streaming states replaced by `.awaitingPermission` while a card is up.
     @ObservationIgnored private var priorStreamingStates: [String: ACPSession.StreamingState] = [:]
+    /// Calls the MCP bridge tagged with a call id, so its cancellation can stop them.
+    @ObservationIgnored private var calls: [CallKey: Task<AlasCLIResponse, Never>] = [:]
+
+    private struct CallKey: Hashable {
+        var sessionID: String
+        var callID: String
+    }
 
     static let resultLimit = 12 * 1024 * 1024
 
@@ -95,6 +102,25 @@ final class ComputerUseCoordinator {
     // MARK: - Calls
 
     func perform(_ command: ComputerUseCommand, sessionID: String) async -> AlasCLIResponse {
+        if command.action == .cancel {
+            // Only the session's own calls: another session's call id is ignored.
+            if let callID = command.callID { calls[CallKey(sessionID: sessionID, callID: callID)]?.cancel() }
+            return .ok
+        }
+        guard let callID = command.callID else { return await execute(command, sessionID: sessionID) }
+        let key = CallKey(sessionID: sessionID, callID: callID)
+        let task = Task { await self.execute(command, sessionID: sessionID) }
+        calls[key] = task
+        let response = await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
+        }
+        if calls[key] == task { calls[key] = nil }
+        return response
+    }
+
+    private func execute(_ command: ComputerUseCommand, sessionID: String) async -> AlasCLIResponse {
         if let error = readiness().toolError { return .error(error) }
         if access.isStopped(session: sessionID) { return .error(Message.stopped) }
         if command.action == .apps { return await listApps(sessionID: sessionID) }
@@ -141,7 +167,10 @@ final class ComputerUseCoordinator {
 
         let payload: [String: Any]
         do {
+            try Task.checkCancellation()
             payload = try await run(command, window: window)
+            // A cancelled call discards what it captured.
+            try Task.checkCancellation()
         } catch {
             // Only the lock this call took: a later turn may hold a fresh one by now.
             if let takenLock, lock === takenLock { releaseDriver() }
@@ -340,8 +369,8 @@ final class ComputerUseCoordinator {
             "app": Self.app(window.app),
         ]
         switch command.action {
-        case .apps:
-            preconditionFailure("computer_apps is listed before window resolution")
+        case .apps, .cancel:
+            preconditionFailure("computer_apps and computer_cancel return before window resolution")
         case .screenshot:
             let shot = try await system.screenshot(window)
             var windowInfo: [String: Any] = ["frame": Self.frame(window.frame)]

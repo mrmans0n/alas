@@ -103,6 +103,15 @@ struct ComputerUseCoordinatorTests {
         #expect(fresh.id != stale.id)
     }
 
+    @Test func cancelledCallReturnsCancelledAndKeepsTheCard() async throws {
+        let f = Self.fixture()
+        let call = Task { await f.coordinator.perform(.init(action: .inspect, windowID: 1, callID: "c1"), sessionID: "s") }
+        try await eventually("approval card") { f.coordinator.waitingCallCount == 1 }
+        #expect(await f.coordinator.perform(.init(action: .cancel, callID: "c1"), sessionID: "s") == .ok)
+        #expect(await call.value == .error("computer_cancelled: The call was cancelled."))
+        #expect(f.coordinator.pendingApprovals.count == 1)
+    }
+
     @Test func busyWhenAnotherHolderHasTheLock() async throws {
         let f = Self.fixture()
         f.access.record(.allowForSession, for: Self.notes, session: "s")

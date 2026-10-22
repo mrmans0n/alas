@@ -17,6 +17,10 @@ struct ComputerUseCommandTests {
         #expect(apps.command == .computer(.init(action: .apps, windowID: nil, query: nil, limit: 300, maxDepth: 12)))
         let shot = try decode("computer_screenshot", #"{"window_id":7}"#)
         #expect(shot.command == .computer(.init(action: .screenshot, windowID: 7)))
+        let tagged = try decode("computer_screenshot", #"{"window_id":7,"call_id":"42-1"}"#)
+        #expect(tagged.command == .computer(.init(action: .screenshot, windowID: 7, callID: "42-1")))
+        let cancel = try decode("computer_cancel", #"{"call_id":"42-1"}"#)
+        #expect(cancel.command == .computer(.init(action: .cancel, callID: "42-1")))
     }
 
     @Test(arguments: [
@@ -28,6 +32,11 @@ struct ComputerUseCommandTests {
         ("computer_inspect", "{\"window_id\":1,\"query\":\"\(String(repeating: "x", count: 257))\"}"),
         ("computer_apps", #"{"window_id":1}"#),
         ("computer_click", #"{"window_id":1}"#),
+        ("computer_screenshot", #"{"window_id":1,"call_id":"  "}"#),
+        ("computer_screenshot", "{\"window_id\":1,\"call_id\":\"\(String(repeating: "x", count: 129))\"}"),
+        ("computer_cancel", "{}"),
+        ("computer_cancel", #"{"call_id":"c","window_id":1}"#),
+        ("computer_cancel", #"{"call_id":"c","limit":300}"#),
     ])
     func rejectsInvalidRequests(command: String, params: String) {
         #expect(throws: AlasCLIRequestError.self) { try decode(command, params) }
