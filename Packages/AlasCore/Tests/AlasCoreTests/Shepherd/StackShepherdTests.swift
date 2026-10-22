@@ -962,4 +962,35 @@ struct StackShepherdTests {
         }
         #expect(core.stackShepherd.shipPlan(sessionID: "session-1", id: id) == chosen)
     }
+
+    /// A partial choice made on stack "other" must not turn into shipping
+    /// all of "auth" because the worktree moved on before `stack_ship`.
+    @Test func stackShipRefusesAPendingChoiceMadeOnAnotherStack() async {
+        let core = makeCore()
+        var synced = 0
+        let stack = Self.stack(published: [false, false])
+        core.stackShepherd.effects = StackShepherd.Effects(
+            worktreeContext: { .init(worktreeID: $0, path: URL(fileURLWithPath: "/tmp/\($0)"), stackName: "auth", isEligible: true) },
+            loadStack: { _ in stack },
+            syncStack: { _, _ in synced += 1 },
+            sessionState: { _, _ in .idle },
+            deliverPrompt: { _, _, _, _ in .delivered },
+            rules: { _ in .none },
+            notify: { _ in },
+            archiveWorktreeIfAllowed: { _, _, _ in .declined }
+        )
+        core.stackShepherd.setPendingShipPlan(
+            StackShipPlan(shipThroughEntryID: "x"), sessionID: "session-1",
+            id: StackShepherdRecordID(worktreeID: "wt-1", stackName: "other")
+        )
+
+        let response = await core.shipStack(sessionID: "session-1", worktreeID: "wt-1")
+
+        guard case .error(let message) = response else {
+            Issue.record("expected a refusal, got \(response)")
+            return
+        }
+        #expect(message.contains("\"other\""))
+        #expect(synced == 0)
+    }
 }

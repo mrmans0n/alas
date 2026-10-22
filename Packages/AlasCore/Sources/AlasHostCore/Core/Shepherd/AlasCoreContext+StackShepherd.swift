@@ -63,6 +63,14 @@ extension AlasCoreContext {
             )
         }
         let id = StackShepherdRecordID(worktreeID: worktreeID, stackName: stack.name)
+        // A choice made on another stack must not fall back to shipping all
+        // of this one: the worktree moved on before the agent got here.
+        if explicitPlan == nil, let pending = stackShepherd.pendingShipPlans[sessionID], pending.id != id {
+            throw PRShepherdCLIError(
+                message: "The user chose what to ship from the gg stack \"\(pending.id.stackName)\", but this worktree is on \"\(stack.name)\". "
+                    + "Check out \"\(pending.id.stackName)\" and call stack_ship again, or ask the user to choose again in the Ship popover."
+            )
+        }
         let plan = explicitPlan ?? stackShepherd.shipPlan(sessionID: sessionID, id: id)
         // A boundary gg no longer lists must not widen into the whole stack.
         guard (try? plan.shipThroughPosition(in: stack)) != nil else { throw Self.missingShipEntryError(stack) }
