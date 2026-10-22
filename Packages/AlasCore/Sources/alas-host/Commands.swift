@@ -1,5 +1,6 @@
 import AlasCore
 import Foundation
+import Synchronization
 
 /// A command's failure, printed as is.
 struct HostCommandError: LocalizedError {
@@ -112,10 +113,15 @@ enum HostCommands {
             case .notInstalled, .updateAvailable:
                 break
             }
-            let installed = try await ACPRegistryInstaller().install(agent)
             // The download can take a while, and who holds the profile may
-            // have changed since: ask again, and hold its lock while writing.
-            let writer = try writableHolder()
+            // have changed since: ask again before the new files replace any
+            // installed ones, and hold that, its lock included, while writing.
+            let checked = Mutex<DataDirectoryHolder?>(nil)
+            let installed = try await ACPRegistryInstaller().install(agent) {
+                let holder = try writableHolder()
+                checked.withLock { $0 = holder }
+            }
+            let writer = try checked.withLock { $0 } ?? writableHolder()
             try withExtendedLifetime(writer) {
                 try HostProfileWrite.update { $0.agents.installRegistryAgent(installed) }
             }
@@ -123,16 +129,22 @@ enum HostCommands {
             if case .host = writer { print("Restart the host to use it: alas-host restart") }
         case ("registry", "uninstall", 2):
             let holder = try writableHolder()
-            guard readConfig().agents.registry.contains(where: { $0.registryID == arguments[1] }) else {
+            guard let record = readConfig().agents.registry.first(where: { $0.registryID == arguments[1] }) else {
                 throw HostCommandError("No agent \(arguments[1]) is installed from the ACP registry.")
             }
             // The record goes first, while the holder just checked still
             // holds: removing a large npm install can take long enough for
-            // the app to open the profile in between.
+            // the app to open the profile in between. Files that fail to go
+            // get their record back, so a later uninstall still finds them.
             try withExtendedLifetime(holder) {
                 try HostProfileWrite.update { $0.agents.uninstallRegistryAgent(registryID: arguments[1]) }
+                do {
+                    try ACPRegistryInstaller().uninstall(registryID: arguments[1])
+                } catch {
+                    try? HostProfileWrite.update { $0.agents.installRegistryAgent(record) }
+                    throw error
+                }
             }
-            try ACPRegistryInstaller().uninstall(registryID: arguments[1])
             print("Uninstalled \(arguments[1]).")
             if case .host = holder { print("Restart the host to apply: alas-host restart") }
         case ("restart", nil, 0):
@@ -162,7 +174,7 @@ enum HostCommands {
 
     /// Who holds the profile, for a command that writes it: the app and an
     /// unknown process keep it in memory and would overwrite the change.
-    static func writableHolder() throws -> DataDirectoryHolder {
+    nonisolated static func writableHolder() throws -> DataDirectoryHolder {
         let holder = DataDirectoryHolder.current()
         switch holder {
         case .app: throw HostProfileRefusal()
