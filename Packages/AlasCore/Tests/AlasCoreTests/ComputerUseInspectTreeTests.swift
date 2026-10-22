@@ -50,8 +50,18 @@ struct ComputerUseInspectTreeTests {
     @Test func queryMatchesCaseInsensitivelyAndKeepsDescendantsReachable() {
         let result = ComputerUseInspectTree.flatten(sample, query: "cANcel", limit: 100, maxDepth: 10)
         #expect(result.elements.map(\.title) == ["Cancel"])
-        #expect(result.elements.first?.ref == "e1")
         #expect(result.elements.first?.depth == 2)
+    }
+
+    @Test(arguments: [("cancel", 1), ("AXButton", 1), ("hello", 100), ("AXButton", 2)] as [(String, Int)])
+    func filteredRefsNameTheSameElementAsTheFullListing(query: String, limit: Int) {
+        let full = ComputerUseInspectTree.flatten(sample, query: nil, limit: 100, maxDepth: 10)
+        let refToRole = Dictionary(uniqueKeysWithValues: full.elements.map { ($0.ref, "\($0.role)|\($0.title ?? "")|\($0.value ?? "")") })
+        let filtered = ComputerUseInspectTree.flatten(sample, query: query, limit: limit, maxDepth: 10)
+        #expect(!filtered.elements.isEmpty)
+        for element in filtered.elements {
+            #expect(refToRole[element.ref] == "\(element.role)|\(element.title ?? "")|\(element.value ?? "")")
+        }
     }
 
     @Test(arguments: [("AXTextField", "AXSecureTextField"), ("AXSecureTextField", nil)] as [(String, String?)])

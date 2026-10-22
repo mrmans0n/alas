@@ -288,7 +288,7 @@ struct ComputerUseCoordinatorTests {
         let recorder = Recorder()
         let f = Self.fixture(system: Self.system(recorder: recorder), recorder: recorder, allowed: [Self.notes])
         _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1, query: "Save"), sessionID: "s")
-        let json = try #require(Self.text(await f.coordinator.perform(.init(action: .click, windowID: 1, ref: "e1"), sessionID: "s")))
+        let json = try #require(Self.text(await f.coordinator.perform(.init(action: .click, windowID: 1, ref: "e2"), sessionID: "s")))
         guard case .click(.element(_, let handle), let button, let count) = try #require(recorder.inputs.first) else {
             Issue.record("expected an element click")
             return
@@ -302,7 +302,7 @@ struct ComputerUseCoordinatorTests {
 
     @Test(arguments: [
         (ComputerUseSystemError.staleElement,
-         "computer_stale: The element ref e1 is no longer valid. Call computer_inspect on window 1 again."),
+         "computer_stale: The element ref e2 is no longer valid. Call computer_inspect on window 1 again."),
         (.outOfBounds, "computer_out_of_bounds: The point is outside window 1."),
         (.userActive, "computer_user_active: The user is using Notes right now. Try again in a moment."),
     ])
@@ -311,7 +311,7 @@ struct ComputerUseCoordinatorTests {
         system.perform = { _, _, _, _ in throw error }
         let f = Self.fixture(system: system, allowed: [Self.notes])
         _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1, query: "Save"), sessionID: "s")
-        let response = await f.coordinator.perform(.init(action: .click, windowID: 1, ref: "e1"), sessionID: "s")
+        let response = await f.coordinator.perform(.init(action: .click, windowID: 1, ref: "e2"), sessionID: "s")
         #expect(response == .error(expected))
     }
 
@@ -362,8 +362,8 @@ struct ComputerUseCoordinatorTests {
         case .reinspectWithoutTheNode: _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1, query: "Save"), sessionID: "s")
         case .elementChanged: break
         }
-        let response = await f.coordinator.perform(.init(action: .click, windowID: 1, ref: "e1"), sessionID: "s")
-        #expect(response == .error("computer_stale: The element ref e1 is no longer valid. Call computer_inspect on window 1 again."))
+        let response = await f.coordinator.perform(.init(action: .click, windowID: 1, ref: "e2"), sessionID: "s")
+        #expect(response == .error("computer_stale: The element ref e2 is no longer valid. Call computer_inspect on window 1 again."))
         #expect(recorder.inputs.isEmpty)
     }
 
@@ -462,12 +462,12 @@ struct ComputerUseCoordinatorTests {
         system.window = { _ in failure == .windowCloses && lookups.next() == 3 ? nil : window }
         let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
         _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1, query: "Save"), sessionID: "s")
-        let click = ComputerUseCommand(action: .click, windowID: 1, ref: "e1")
+        let click = ComputerUseCommand(action: .click, windowID: 1, ref: "e2")
         let json = try #require(Self.text(await f.coordinator.perform(click, sessionID: "s")))
         let postStateError = failure == .readFails ? "Capture failed: gone" : "Window 1 is no longer on screen"
         #expect(json.contains(#""post_state_error":"\#(postStateError)""#) && json.contains(#""elements":[]"#))
         #expect(await f.coordinator.perform(click, sessionID: "s")
-            == .error("computer_stale: The element ref e1 is no longer valid. Call computer_inspect on window 1 again."))
+            == .error("computer_stale: The element ref e2 is no longer valid. Call computer_inspect on window 1 again."))
         #expect(recorder.inputs.count == 1)
     }
 
@@ -554,7 +554,7 @@ struct ComputerUseCoordinatorTests {
         switch waitCase {
         case .appears:
             let json = try #require(Self.text(response))
-            #expect(json.contains(#""ref":"e1""#) && json.contains(#""title":"Done""#))
+            #expect(json.contains(#""ref":"e2""#) && json.contains(#""title":"Done""#))
             #expect(recorder.sleeps == [.milliseconds(250), .milliseconds(250)])
         case .disappears:
             #expect(try #require(Self.text(response)).contains(#""elements":[]"#))

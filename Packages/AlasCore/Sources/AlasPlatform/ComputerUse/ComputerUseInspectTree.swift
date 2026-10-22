@@ -83,6 +83,9 @@ public struct ComputerUseInspectElement: Equatable, Sendable {
 public enum ComputerUseInspectTree {
     static let maxStringLength = 200
 
+    /// Refs are the pre-order index of each node among all nodes visited (root is `e1`),
+    /// so a query or limit never renumbers them: the same element has the same ref in a
+    /// filtered and an unfiltered listing of the same tree.
     public static func flatten(
         _ root: ComputerUseAXNode,
         query: String?,
@@ -92,6 +95,7 @@ public enum ComputerUseInspectTree {
         let needle = query.flatMap { $0.isEmpty ? nil : $0.lowercased() }
         var elements: [ComputerUseInspectElement] = []
         var truncated = false
+        var visited = 0
 
         func isSecure(_ node: ComputerUseAXNode) -> Bool {
             node.role == "AXSecureTextField" || node.subrole == "AXSecureTextField"
@@ -111,13 +115,14 @@ public enum ComputerUseInspectTree {
         // Returns false once traversal can stop.
         func visit(_ node: ComputerUseAXNode, depth: Int) -> Bool {
             guard depth <= maxDepth else { return true }
+            visited += 1
             if matches(node) {
                 if elements.count >= limit {
                     truncated = true
                     return false
                 }
                 elements.append(ComputerUseInspectElement(
-                    ref: "e\(elements.count + 1)",
+                    ref: "e\(visited)",
                     depth: depth,
                     role: clip(node.role) ?? node.role,
                     subrole: clip(node.subrole),
