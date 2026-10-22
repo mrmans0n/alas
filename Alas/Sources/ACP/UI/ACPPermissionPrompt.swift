@@ -64,6 +64,13 @@ struct ACPPermissionCardContent: Equatable {
         )
     }
 
+    init(heading: String, title: String, reason: String, options: [Option]) {
+        self.init(
+            heading: heading, kind: nil, mcpServerName: nil, title: title,
+            summary: nil, reason: reason, defaultToNo: false, options: options
+        )
+    }
+
     private init(
         heading: String?, kind: String?, mcpServerName: String?, title: String,
         summary: String?, reason: String?, defaultToNo: Bool, options: [Option]

@@ -27,6 +27,11 @@ public struct CallersAPI {
         core.acpSessionLocation(id)?.origin
     }
 
+    /// Whether ACP session `id` is a read-only side session, such as a /btw question.
+    public func isReadOnlySideSession(_ id: String) -> Bool {
+        core.acpSessionLocation(id)?.manager.liveSession(for: id)?.readOnlyRestricted == true
+    }
+
     /// The worktree a command from session `id` acts in: its owner's for a
     /// worktree-owned session, and for a checkout-owned one the member
     /// worktree holding `cwd`.

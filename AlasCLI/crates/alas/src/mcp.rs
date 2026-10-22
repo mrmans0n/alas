@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicBool, AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
 };
 
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
@@ -590,6 +590,7 @@ fn all_tool_definitions() -> Vec<Value> {
         }),
     ];
     tools.extend(preview_tool_definitions());
+    tools.extend(computer_tool_definitions());
     tools.extend(workspace_tool_definitions());
     tools
 }
@@ -633,6 +634,44 @@ fn workspace_tool_definitions() -> Vec<Value> {
                     "member_id": { "type": "string", "description": "Workspace Checkout member UUID." }
                 },
                 "required": ["checkout_id", "member_id"]
+            }
+        }),
+    ]
+}
+
+fn computer_tool_definitions() -> Vec<Value> {
+    vec![
+        json!({
+            "name": "computer_apps",
+            "description": "List running apps on the user's Mac and their on-screen windows (window_id, title, frame) with each app's approval state. Does not need approval.",
+            "annotations": { "readOnlyHint": true },
+            "inputSchema": { "type": "object", "properties": {} }
+        }),
+        json!({
+            "name": "computer_screenshot",
+            "description": "Capture a PNG screenshot of one on-screen window by window_id (long edge at most 1280 px). Returns native MCP image content plus JSON metadata, including `scale` (image pixels per screen point). The first use of each app asks the user for approval.",
+            "annotations": { "readOnlyHint": true },
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "window_id": { "type": "integer", "minimum": 0, "maximum": 4294967295u64, "description": "A window_id from computer_apps." }
+                },
+                "required": ["window_id"]
+            }
+        }),
+        json!({
+            "name": "computer_inspect",
+            "description": "Read a window's Accessibility tree as numbered elements (ref, role, title, value, frame). Use `query` to filter and `limit`/`max_depth` to bound the result. Prefer this over screenshots. The first use of each app asks the user for approval.",
+            "annotations": { "readOnlyHint": true },
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "window_id": { "type": "integer", "minimum": 0, "maximum": 4294967295u64, "description": "A window_id from computer_apps." },
+                    "query": { "type": "string", "maxLength": 256, "description": "Optional text filter on element role, title and value." },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 3000, "description": "Maximum elements returned. Default: 300." },
+                    "max_depth": { "type": "integer", "minimum": 1, "maximum": 12, "description": "Maximum tree depth. Default: 12." }
+                },
+                "required": ["window_id"]
             }
         }),
     ]
@@ -1102,6 +1141,31 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
             checkout_id: required_uuid(args, "checkout_id")?,
             member_id: required_uuid(args, "member_id")?,
         }),
+        "computer_apps" => {
+            reject_arguments(args, name, &[])?;
+            Ok(Command::Computer(alas_client::ComputerCommand::Apps {
+                call_id: None,
+            }))
+        }
+        "computer_screenshot" => {
+            reject_arguments(args, name, &["window_id"])?;
+            Ok(Command::Computer(
+                alas_client::ComputerCommand::Screenshot {
+                    window_id: required_window_id(args)?,
+                    call_id: None,
+                },
+            ))
+        }
+        "computer_inspect" => {
+            reject_arguments(args, name, &["window_id", "query", "limit", "max_depth"])?;
+            Ok(Command::Computer(alas_client::ComputerCommand::Inspect {
+                window_id: required_window_id(args)?,
+                query: optional_limited_string(args, "query", 256)?,
+                limit: optional_bounded_u64(args, "limit", 1, 3000)?.unwrap_or(300),
+                max_depth: optional_bounded_u64(args, "max_depth", 1, 12)?.unwrap_or(12),
+                call_id: None,
+            }))
+        }
         "preview_list" => Ok(Command::Preview(alas_client::PreviewCommand::List)),
         "preview_open" => {
             let url = optional_limited_string(args, "url", 8192)?;
@@ -1373,6 +1437,23 @@ fn optional_bool(args: &Value, key: &str) -> Result<Option<bool>, String> {
     }
 }
 
+/// The computer_* tools accept exactly their documented arguments.
+fn reject_arguments(args: &Value, tool: &str, allowed: &[&str]) -> Result<(), String> {
+    if let Some(object) = args.as_object() {
+        if let Some(key) = object.keys().find(|key| !allowed.contains(&key.as_str())) {
+            return Err(format!("{tool} does not accept '{key}'"));
+        }
+    }
+    Ok(())
+}
+
+fn required_window_id(args: &Value) -> Result<u32, String> {
+    args.get("window_id")
+        .and_then(Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+        .ok_or_else(|| "window_id must be an integer from a computer_apps window".to_string())
+}
+
 fn optional_bounded_u64(
     args: &Value,
     key: &str,
@@ -1516,6 +1597,8 @@ pub fn dispatch(env: &McpEnv, command: &Command) -> Result<Response, TransportEr
     req.mcp_transport = Some(env.transport);
     if publishes(command) {
         alas_client::send_with_timeout(&env.socket, &req, PR_CREATE_READ_TIMEOUT)
+    } else if is_computer_call(command) {
+        alas_client::send_with_timeout(&env.socket, &req, COMPUTER_READ_TIMEOUT)
     } else {
         alas_client::send(&env.socket, &req)
     }
@@ -1526,6 +1609,10 @@ pub fn dispatch(env: &McpEnv, command: &Command) -> Result<Response, TransportEr
 /// ssh, so it gets far longer than the default 30-second reply bound. The
 /// remote helper's relay waits slightly longer than this.
 const PR_CREATE_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// `computer_*` calls may wait on the user's approval prompt the first time
+/// an app is used, so they get longer than the default reply bound.
+const COMPUTER_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// Unknown tools and invalid arguments are JSON-RPC protocol errors
 /// (-32602); failures while executing a valid call are tool results with
@@ -1592,6 +1679,7 @@ fn tool_result(command: &Command, resp: Response) -> Value {
     if matches!(
         command,
         Command::Preview(alas_client::PreviewCommand::Capture { .. })
+            | Command::Computer(alas_client::ComputerCommand::Screenshot { .. })
     ) {
         if let Some(result) = capture_tool_result(resp.lines.as_ref()) {
             return result;
@@ -1639,6 +1727,7 @@ fn success_message(command: &Command) -> String {
         Command::WorkspaceSwitch { .. } => "Switched Alas to Workspace Checkout.".into(),
         Command::WorkspaceFocus { .. } => "Focused Workspace Checkout member.".into(),
         Command::Preview(_) => "Preview command completed.".into(),
+        Command::Computer(_) => "Computer command completed.".into(),
         Command::WtList | Command::Resolve => "OK".into(),
     }
 }
@@ -1750,6 +1839,7 @@ fn is_preview_command(command: &Command) -> bool {
 /// a worker so it keeps reading other calls and cancellations meanwhile.
 fn runs_on_worker(command: &Command) -> bool {
     is_preview_command(command)
+        || matches!(command, Command::Computer(_))
         || publishes(command)
         || matches!(command, Command::SessionWait { .. })
 }
@@ -1773,7 +1863,9 @@ const SESSION_WAIT_SLICE_MS: u64 = 1_000;
 
 /// Dispatches `command`, running a `session_wait` as a series of short
 /// waits so a cancelled request stops within one slice instead of holding a
-/// worker until its timeout. Returns None once `still_pending` turns false.
+/// worker until its timeout. Returns None once `still_pending` turns false,
+/// for any command: a cancelled computer call still runs to its end in the
+/// app's reply, but its result is dropped.
 fn dispatch_session_wait(
     env: &McpEnv,
     command: &Command,
@@ -1784,7 +1876,8 @@ fn dispatch_session_wait(
         timeout_ms,
     } = command
     else {
-        return Some(dispatch(env, command));
+        let result = dispatch(env, command);
+        return still_pending().then_some(result);
     };
     let deadline =
         std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms.unwrap_or(20_000));
@@ -1825,12 +1918,35 @@ fn is_preview_cancel_command(command: &Command) -> bool {
     )
 }
 
-fn register_pending_preview(
+/// A computer call that may block in the app; its cancel is quick.
+fn is_computer_call(command: &Command) -> bool {
+    matches!(command, Command::Computer(computer) if !matches!(computer, alas_client::ComputerCommand::Cancel { .. }))
+}
+
+/// Process-unique ids for computer calls, so a cancellation can name one.
+fn next_computer_call_id() -> String {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    format!(
+        "{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
+/// Records a call a cancellation can reach, first tagging a computer call
+/// with a fresh call id. Returns the key to remove once the call finishes.
+fn register_pending_call(
     pending: &Mutex<std::collections::HashMap<String, Command>>,
     id: &Value,
-    command: &Command,
+    command: &mut Command,
 ) -> Option<String> {
-    if preview_id_for_cancel(command).is_none() && !matches!(command, Command::SessionWait { .. }) {
+    if is_computer_call(command) {
+        if let Command::Computer(computer) = command {
+            computer.set_call_id(next_computer_call_id());
+        }
+    } else if preview_id_for_cancel(command).is_none()
+        && !matches!(command, Command::SessionWait { .. })
+    {
         return None;
     }
     let key = request_key(id);
@@ -1842,7 +1958,7 @@ fn register_pending_preview(
     }
 }
 
-fn remove_pending_preview(
+fn remove_pending_call(
     pending: &Mutex<std::collections::HashMap<String, Command>>,
     key: Option<&str>,
 ) {
@@ -1889,6 +2005,15 @@ fn cancellation_command_for_message(
     if matches!(command, Command::SessionWait { .. }) {
         pending.remove(&key);
         return None;
+    }
+    // Retired like a wait, so its worker answers nothing (stdio) or the
+    // cancellation error (HTTP) instead of a late result.
+    if let Command::Computer(computer) = &command {
+        let call_id = computer.call_id()?.to_string();
+        pending.remove(&key);
+        return Some(Command::Computer(alas_client::ComputerCommand::Cancel {
+            call_id,
+        }));
     }
     let preview_id = preview_id_for_cancel(&command)?;
     Some(Command::Preview(alas_client::PreviewCommand::Cancel {
@@ -1957,7 +2082,7 @@ pub fn serve(env: &McpEnv) -> std::io::Result<()> {
             continue;
         }
         match tools_call_command(&msg, &env.worktree_dir, env.tool_scope()) {
-            Ok(Some((id, command))) => {
+            Ok(Some((id, mut command))) => {
                 if !runs_on_worker(&command) {
                     let result = match dispatch(env, &command) {
                         Ok(resp) => tool_result(&command, resp),
@@ -1983,7 +2108,7 @@ pub fn serve(env: &McpEnv) -> std::io::Result<()> {
                     ));
                     continue;
                 }
-                let key = register_pending_preview(&runtime.pending, &id, &command);
+                let key = register_pending_call(&runtime.pending, &id, &mut command);
                 let env = env.clone();
                 let reply_tx = reply_tx.clone();
                 let pending = Arc::clone(&runtime.pending);
@@ -2002,7 +2127,7 @@ pub fn serve(env: &McpEnv) -> std::io::Result<()> {
                             })
                         };
                         let dispatched = dispatch_session_wait(&env, &command, still_pending);
-                        remove_pending_preview(&pending, key.as_deref());
+                        remove_pending_call(&pending, key.as_deref());
                         release_worker(&active_workers);
                         // A cancelled request gets no response.
                         let Some(dispatched) = dispatched else { return };
@@ -2017,7 +2142,7 @@ pub fn serve(env: &McpEnv) -> std::io::Result<()> {
                         }));
                     });
                 if spawn.is_err() {
-                    remove_pending_preview(&runtime.pending, fallback_key.as_deref());
+                    remove_pending_call(&runtime.pending, fallback_key.as_deref());
                     release_worker(&runtime.active_workers);
                     let _ = reply_tx.send(error_reply(
                         fallback_id,
@@ -2372,7 +2497,7 @@ fn build_http_response(
             return http_response(202, "application/json", "");
         }
         match tools_call_command(&msg, &env.worktree_dir, env.tool_scope()) {
-            Ok(Some((id, command))) if runs_on_worker(&command) => {
+            Ok(Some((id, mut command))) if runs_on_worker(&command) => {
                 let limit = if is_preview_cancel_command(&command) {
                     MAX_MCP_WORKERS
                 } else {
@@ -2386,7 +2511,7 @@ fn build_http_response(
                             .to_string(),
                     );
                 }
-                let key = register_pending_preview(&runtime.pending, &id, &command);
+                let key = register_pending_call(&runtime.pending, &id, &mut command);
                 let still_pending = || {
                     key.as_ref().is_none_or(|key| {
                         runtime
@@ -2396,7 +2521,7 @@ fn build_http_response(
                     })
                 };
                 let dispatched = dispatch_session_wait(env, &command, still_pending);
-                remove_pending_preview(&runtime.pending, key.as_deref());
+                remove_pending_call(&runtime.pending, key.as_deref());
                 release_worker(&runtime.active_workers);
                 // An HTTP request still needs a reply once its wait is cancelled.
                 let Some(dispatched) = dispatched else {
@@ -2434,11 +2559,11 @@ fn build_http_response(
 #[cfg(test)]
 mod tests {
     use super::{
-        CHILD_ONLY_TOOLS, HttpRequest, McpEnv, McpRuntime, PROTOCOL_VERSION, build_http_response,
-        cancellation_command_for_message, command_for_tool, dispatch, env_from, handle_line,
-        handle_line_with_parent, http_response, initialize_result,
-        parse_http_request, register_pending_preview, runs_on_worker, session_wait_timed_out, RelayScope,
-        tool_definitions, tool_result, tools_call_command, transport_error_result, ToolScope,
+        CHILD_ONLY_TOOLS, HttpRequest, McpEnv, McpRuntime, PROTOCOL_VERSION, RelayScope, ToolScope,
+        build_http_response, cancellation_command_for_message, command_for_tool, dispatch,
+        env_from, handle_line, handle_line_with_parent, http_response, initialize_result,
+        parse_http_request, register_pending_call, runs_on_worker, session_wait_timed_out,
+        tool_definitions, tool_result, tools_call_command, transport_error_result,
     };
     use alas_client::{Command, Response, TransportError, VisualOption, VisualQuestion};
     use serde_json::{Value, json};
@@ -2773,6 +2898,9 @@ mod tests {
                 "preview_scroll",
                 "preview_wait",
                 "preview_cancel",
+                "computer_apps",
+                "computer_screenshot",
+                "computer_inspect",
                 "workspace_list",
                 "workspace_show",
                 "workspace_switch",
@@ -3321,13 +3449,42 @@ mod tests {
     }
 
     #[test]
+    fn cancellation_notification_maps_pending_computer_call_to_cancel_by_call_id() {
+        use alas_client::ComputerCommand;
+        let pending = std::sync::Mutex::new(std::collections::HashMap::new());
+        let mut first = Command::Computer(ComputerCommand::Screenshot {
+            window_id: 7,
+            call_id: None,
+        });
+        let mut second = Command::Computer(ComputerCommand::Apps { call_id: None });
+        assert!(register_pending_call(&pending, &json!(7), &mut first).is_some());
+        assert!(register_pending_call(&pending, &json!(8), &mut second).is_some());
+        let call_id = |command: &Command| match command {
+            Command::Computer(computer) => computer.call_id().unwrap().to_string(),
+            _ => unreachable!(),
+        };
+        assert_ne!(call_id(&first), call_id(&second));
+        let msg: Value = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":7}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            cancellation_command_for_message(&msg, &pending),
+            Some(Command::Computer(ComputerCommand::Cancel {
+                call_id: call_id(&first)
+            }))
+        );
+        assert!(!pending.lock().unwrap().contains_key(&json!(7).to_string()));
+    }
+
+    #[test]
     fn cancelling_a_pending_session_wait_drops_it_without_an_app_command() {
         let pending = std::sync::Mutex::new(std::collections::HashMap::new());
-        let wait = Command::SessionWait {
+        let mut wait = Command::SessionWait {
             session_ids: vec!["child".into()],
             timeout_ms: None,
         };
-        assert!(register_pending_preview(&pending, &json!(9), &wait).is_some());
+        assert!(register_pending_call(&pending, &json!(9), &mut wait).is_some());
         let msg: Value = serde_json::from_str(
             r#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":9}}"#,
         )
@@ -3360,16 +3517,29 @@ mod tests {
 
     #[test]
     fn http_cancellation_notification_uses_pending_preview_map() {
-        let runtime = McpRuntime::new();
-        runtime.pending.lock().unwrap().insert(
-            json!("wait-1").to_string(),
+        for pending in [
             Command::Preview(alas_client::PreviewCommand::Wait {
                 preview_id: "runtime-preview-id".into(),
                 condition: alas_client::PreviewWaitCondition::Loaded,
                 selector: None,
                 timeout_ms: 20_000,
             }),
-        );
+            Command::Computer(alas_client::ComputerCommand::Screenshot {
+                window_id: 7,
+                call_id: Some("42-1".into()),
+            }),
+        ] {
+            assert_http_cancellation_is_accepted(pending);
+        }
+    }
+
+    fn assert_http_cancellation_is_accepted(pending: Command) {
+        let runtime = McpRuntime::new();
+        runtime
+            .pending
+            .lock()
+            .unwrap()
+            .insert(json!("wait-1").to_string(), pending);
         let env = McpEnv {
             socket: "/tmp/alas-no-such-socket-for-cancel-test".into(),
             worktree_dir: "/wt".into(),
@@ -3426,6 +3596,140 @@ mod tests {
         assert_eq!(content[1]["type"], json!("text"));
         assert!(content[1]["text"].as_str().unwrap().contains("\"url\""));
         assert!(!content[1]["text"].as_str().unwrap().contains("\"image\""));
+    }
+
+    #[test]
+    fn computer_tools_validate_arguments_and_map_to_commands() {
+        use alas_client::ComputerCommand;
+        assert_eq!(
+            command_for_tool("computer_apps", &json!({}), "/wt").unwrap(),
+            Command::Computer(ComputerCommand::Apps { call_id: None })
+        );
+        assert_eq!(
+            command_for_tool("computer_screenshot", &json!({ "window_id": 7 }), "/wt").unwrap(),
+            Command::Computer(ComputerCommand::Screenshot {
+                window_id: 7,
+                call_id: None
+            })
+        );
+        assert_eq!(
+            command_for_tool(
+                "computer_inspect",
+                &json!({ "window_id": 7, "query": "Save" }),
+                "/wt"
+            )
+            .unwrap(),
+            Command::Computer(ComputerCommand::Inspect {
+                window_id: 7,
+                query: Some("Save".into()),
+                limit: 300,
+                max_depth: 12,
+                call_id: None
+            })
+        );
+        let long_query = "q".repeat(257);
+        for (tool, args) in [
+            ("computer_apps", json!({ "window_id": 7 })),
+            ("computer_apps", json!({ "query": "x" })),
+            ("computer_screenshot", json!({})),
+            ("computer_screenshot", json!({ "window_id": -1 })),
+            ("computer_screenshot", json!({ "window_id": 4294967296u64 })),
+            (
+                "computer_screenshot",
+                json!({ "window_id": 7, "query": "x" }),
+            ),
+            (
+                "computer_screenshot",
+                json!({ "window_id": 7, "call_id": "forged" }),
+            ),
+            ("computer_inspect", json!({})),
+            ("computer_inspect", json!({ "window_id": 7, "query": "  " })),
+            (
+                "computer_inspect",
+                json!({ "window_id": 7, "query": long_query }),
+            ),
+            ("computer_inspect", json!({ "window_id": 7, "limit": 0 })),
+            ("computer_inspect", json!({ "window_id": 7, "limit": 3001 })),
+            (
+                "computer_inspect",
+                json!({ "window_id": 7, "max_depth": 0 }),
+            ),
+            (
+                "computer_inspect",
+                json!({ "window_id": 7, "max_depth": 13 }),
+            ),
+        ] {
+            assert!(
+                command_for_tool(tool, &args, "/wt").is_err(),
+                "{tool} {args}"
+            );
+        }
+    }
+
+    #[test]
+    fn computer_screenshot_result_extracts_mcp_image_and_keeps_metadata_text() {
+        let line = json!({
+            "version": 1,
+            "scale": 2.0,
+            "image": { "mime_type": "image/png", "data": "iVBORw0KGgo=" }
+        })
+        .to_string();
+        let reply = handle_line(
+            r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"computer_screenshot","arguments":{"window_id":7}}}"#,
+            "/wt",
+            |command| {
+                assert!(matches!(
+                    command,
+                    Command::Computer(alas_client::ComputerCommand::Screenshot { .. })
+                ));
+                Ok(Response {
+                    ok: true,
+                    lines: Some(vec![line.clone()]),
+                    error: None,
+                    exit_code: None,
+                })
+            },
+        )
+        .unwrap();
+
+        let content = reply["result"]["content"].as_array().unwrap();
+        assert_eq!(content[0]["type"], json!("image"));
+        assert_eq!(content[0]["mimeType"], json!("image/png"));
+        assert_eq!(content[0]["data"], json!("iVBORw0KGgo="));
+        assert_eq!(content[1]["type"], json!("text"));
+        assert!(content[1]["text"].as_str().unwrap().contains("\"scale\""));
+        assert!(!content[1]["text"].as_str().unwrap().contains("\"image\""));
+    }
+
+    #[test]
+    fn computer_tools_are_read_only_and_absent_from_relays_and_workspace_mode() {
+        let reply = handle_line(
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#,
+            "/wt",
+            |_| unreachable!(),
+        )
+        .unwrap();
+        let tools = reply["result"]["tools"].as_array().unwrap();
+        for name in ["computer_apps", "computer_screenshot", "computer_inspect"] {
+            let tool = tools
+                .iter()
+                .find(|tool| tool["name"] == json!(name))
+                .unwrap();
+            assert_eq!(tool["annotations"]["readOnlyHint"], json!(true), "{name}");
+        }
+        for scope in [ToolScope::Visual, ToolScope::Remote, ToolScope::Workspace] {
+            let names: Vec<String> = super::tool_definitions_for_mode(scope)
+                .iter()
+                .map(|tool| tool["name"].as_str().unwrap().to_string())
+                .collect();
+            assert!(
+                names.iter().all(|name| !name.starts_with("computer_")),
+                "{scope:?}"
+            );
+        }
+        let msg: Value = serde_json::from_str(&call("computer_apps", json!({}))).unwrap();
+        let err = tools_call_command(&msg, "/wt", ToolScope::Workspace).unwrap_err();
+        assert_eq!(err["error"]["code"], json!(-32602));
     }
 
     #[test]

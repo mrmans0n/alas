@@ -112,6 +112,21 @@ struct ACPMCPPromptPreambleTests {
         #expect(text.contains("Alas delegation tools are not available"))
     }
 
+    @Test(
+        "computer guidance appears only where the session has computer tools",
+        arguments: [ACPMCPPreambleMode.mcp, .cli(serverAvailability: .noServers)]
+    )
+    func computerGuidanceFollowsAvailability(mode: ACPMCPPreambleMode) throws {
+        let full = try #require(ACPMCPPromptPreamble.text(
+            builtInTools: .full, isDelegated: false, userServerNames: [], mode: mode))
+        #expect(full.contains("alas computer"))
+        let checkout = try #require(ACPMCPPromptPreamble.text(
+            builtInTools: .full, isDelegated: false, userServerNames: [], mode: mode, computerUseAvailable: false))
+        #expect(!checkout.contains("computer_"))
+        #expect(!checkout.contains("alas computer"))
+        #expect(checkout.contains("preview"))
+    }
+
     @Test("mcp mode notes the alas CLI fallback for blocked servers")
     func mcpMentionsCLIFallback() {
         let text = ACPMCPPromptPreamble.text(
@@ -170,6 +185,7 @@ struct ACPMCPPromptPreambleTests {
             "preview_list", "preview_open", "preview_navigate", "preview_reload", "preview_back", "preview_forward",
             "preview_inspect", "preview_capture", "preview_console", "preview_click", "preview_type", "preview_scroll",
             "preview_wait", "preview_cancel",
+            "computer_apps", "computer_screenshot", "computer_inspect",
         ])
     }
 

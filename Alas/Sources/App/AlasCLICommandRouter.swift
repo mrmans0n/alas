@@ -25,6 +25,9 @@ struct AlasCLICommandRouter {
     var previewCommand: (WebPreviewCommand, SessionOwnerID, String?) async -> AlasCLIResponse = { _, _, _ in
         .error("Preview automation is not available.")
     }
+    var computerCommand: (ComputerUseCommand, String) async -> AlasCLIResponse = { _, _ in
+        .error("Computer use is not available.")
+    }
     var activateApp: () -> Void
 
     /// Also used by plugins (`review/comment`), so they take the CLI's paths rather than a copy of them.
@@ -66,6 +69,16 @@ struct AlasCLICommandRouter {
                 return .error("not inside an Alas worktree")
             }
             return await previewCommand(command, owner, request.sessionId)
+        case .computer(let command):
+            // Side sessions never show the approval card, and checkout owners have no
+            // computer tools in their MCP scope.
+            guard let sessionID = request.sessionId, callers.acpOrigin(ofSession: sessionID) != nil,
+                  !callers.isReadOnlySideSession(sessionID),
+                  case .worktree? = callers.owner(ofSession: sessionID)
+            else {
+                return .error("computer_unsupported_caller: Computer use is only available to ACP agent sessions.")
+            }
+            return await computerCommand(command, sessionID)
         case .workspace(let command):
             return await workspaceCommand(command, caller)
         case .visualShow(let title, let html, let question, let presentation):
@@ -200,7 +213,7 @@ struct AlasCLICommandRouter {
             case .ambiguous(let labels):
                 return .error("ambiguous worktree \"\(target)\"; matches: \(labels.joined(separator: ", "))")
             }
-        case .workspace, .preview:
+        case .workspace, .preview, .computer:
             preconditionFailure("Workspace commands are handled before generic origin resolution")
         case .review(.localChanges(let worktreeOverride)):
             switch service.reviewOrigin(origin: origin, override: worktreeOverride, projectWorktrees: projectWorktrees) {

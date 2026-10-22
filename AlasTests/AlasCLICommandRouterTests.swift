@@ -1444,7 +1444,9 @@ extension AlasHost {
         sessionWorktree: @escaping (String) -> String? = { _ in nil },
         sessionOwner: @escaping (String) -> SessionOwnerID? = { _ in nil },
         harness: HarnessService = HarnessService(),
-        reviews: RouterReviews = RouterReviews()
+        reviews: RouterReviews = RouterReviews(),
+        sessionManagers: [SessionOwnerID: ACPSessionManager] = [:],
+        checkouts: [WorkspaceCheckout] = []
     ) -> AlasHost {
         let projects = ProjectsManager(persistedProjects: Set((worktrees + hidden).map(\.projectId)).sorted().map {
             ProjectConfig(id: $0, name: $0, path: "/tmp/alas-router-\($0)", color: "blue", addedAt: .distantPast)
@@ -1453,12 +1455,13 @@ extension AlasHost {
         for worktree in hidden {
             projects.setWorktreeHidden(projectId: worktree.projectId, path: worktree.path, hidden: true)
         }
-        let terminals = RouterTerminals(reviews: reviews) { sessionOwner($0) ?? sessionWorktree($0).map(SessionOwnerID.worktree) }
+        let terminals = RouterTerminals(reviews: reviews, checkouts: checkouts) { sessionOwner($0) ?? sessionWorktree($0).map(SessionOwnerID.worktree) }
         let core = AlasCoreContext(
             projects: projects, runHistoryStore: nil, environment: terminals, harness: harness,
             reviewDrafts: reviews.drafts, reviewSessions: reviews.sessions
         )
         core.reviewGitStatus = reviews.gitStatus
+        core.sessionManagers = sessionManagers
         terminals.reviewChanges = core.reviewCommentChanges.observe(reviews.changed)
         return AlasHost(core: core)
     }
@@ -1477,12 +1480,15 @@ struct RouterReviews {
 private final class RouterTerminals: AlasHostEnvironment {
     let owner: (String) -> SessionOwnerID?
     let reviews: RouterReviews
+    let checkouts: [WorkspaceCheckout]
     var reviewChanges: ChangeSubscription?
-    init(reviews: RouterReviews, _ owner: @escaping (String) -> SessionOwnerID?) {
+    init(reviews: RouterReviews, checkouts: [WorkspaceCheckout], _ owner: @escaping (String) -> SessionOwnerID?) {
         self.reviews = reviews
+        self.checkouts = checkouts
         self.owner = owner
     }
     func terminalSessionOwner(_ sessionID: String) -> SessionOwnerID? { owner(sessionID) }
+    func workspaceCheckout(id: UUID) -> WorkspaceCheckout? { checkouts.first { $0.id == id } }
     func providerReviewOriginalPath(_ session: ReviewDraftSessionID, path: String) async -> String? {
         await reviews.originalPath(session, path)
     }

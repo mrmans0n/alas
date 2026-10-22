@@ -279,6 +279,15 @@ private struct ACPSessionView: View {
                 if let limit = session.usageLimit {
                     usageLimitBanner(limit, resumeAt: session.usageLimitResumeItem?.scheduledAt)
                 }
+                if !isMirror {
+                    ForEach(state.computerUse.pendingApprovals.filter { $0.sessionID == session.id }) { approval in
+                        ComputerUseApprovalCard(
+                            agentName: state.agent(id: session.agentId)?.displayName ?? session.agentId,
+                            app: approval.app
+                        ) { state.computerUse.answer(approval.id, $0) }
+                        .padding(.horizontal, 12).padding(.top, 8)
+                    }
+                }
                 if let err = session.lastError {
                     errorBanner(err)
                 } else if case .failed(let reason) = session.agentState,

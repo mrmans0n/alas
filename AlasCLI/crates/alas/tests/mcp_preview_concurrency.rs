@@ -92,7 +92,7 @@ fn handle_fake_connection(
     let request: Value = serde_json::from_slice(&buf).unwrap();
     requests.lock().unwrap().push(request.clone());
     match request.get("command").and_then(Value::as_str) {
-        Some("preview_wait") => {
+        Some("preview_wait") | Some("computer_screenshot") => {
             let (release_tx, release_rx) = mpsc::channel();
             events_tx
                 .send(ServerEvent::Wait {
@@ -106,7 +106,7 @@ fn handle_fake_connection(
                 )
                 .unwrap();
         }
-        Some("preview_cancel") => {
+        Some("preview_cancel") | Some("computer_cancel") => {
             events_tx.send(ServerEvent::Cancel).unwrap();
             stream
                 .write_all(br#"{"ok":true,"lines":["{\"version\":1,\"event\":\"cancelled\"}"]}"#)
@@ -427,6 +427,98 @@ fn http_cancelled_notification_sends_preview_cancel_before_wait_completes() {
     assert!(wait_response.starts_with("HTTP/1.1 200 OK"));
     assert!(wait_response.contains(r#""id":"wait-1""#));
     assert!(wait_response.contains(r#""result""#));
+}
+
+fn computer_screenshot_call(id: &str) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": "tools/call",
+        "params": { "name": "computer_screenshot", "arguments": { "window_id": 7 } }
+    })
+}
+
+fn cancelled_notification(id: &str) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "method": "notifications/cancelled",
+        "params": { "requestId": id, "reason": "test cancellation" }
+    })
+}
+
+fn expect_cancel_then_release(fake: &FakeAlas, wait_release: mpsc::Sender<()>) {
+    match fake.events.recv_timeout(Duration::from_secs(5)).unwrap() {
+        ServerEvent::Cancel => {}
+        ServerEvent::Wait { .. } => panic!("unexpected second call"),
+    }
+    let cancel = fake.requests.lock().unwrap().last().cloned().unwrap();
+    assert_eq!(cancel["command"], json!("computer_cancel"));
+    assert!(
+        cancel["params"]["call_id"]
+            .as_str()
+            .is_some_and(|id| !id.is_empty())
+    );
+    wait_release.send(()).unwrap();
+}
+
+fn wait_started(fake: &FakeAlas) -> mpsc::Sender<()> {
+    match fake.events.recv_timeout(Duration::from_secs(5)).unwrap() {
+        ServerEvent::Wait { release } => release,
+        ServerEvent::Cancel => panic!("cancel arrived before the call started"),
+    }
+}
+
+#[test]
+fn stdio_cancelled_computer_call_gets_no_late_response() {
+    let fake = start_fake_alas("computer-cancel-stdio");
+    // Spawned directly: closing stdin lets the server finish its workers and
+    // exit, so stdout then holds every reply it will ever send.
+    let mut child = Command::new(env!("CARGO_BIN_EXE_alas"))
+        .arg("mcp")
+        .env("ALAS_SOCKET_PATH", &fake.socket)
+        .env("ALAS_WORKTREE_DIR", "/tmp")
+        .env("ALAS_SESSION_ID", "session-1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+
+    send_line(&mut stdin, computer_screenshot_call("shot-1"));
+    let wait_release = wait_started(&fake);
+    send_line(&mut stdin, cancelled_notification("shot-1"));
+    expect_cancel_then_release(&fake, wait_release);
+
+    drop(stdin);
+    let mut rest = String::new();
+    child
+        .stdout
+        .take()
+        .unwrap()
+        .read_to_string(&mut rest)
+        .unwrap();
+    let _ = child.wait();
+    assert!(!rest.contains("shot-1"), "cancelled call answered: {rest}");
+}
+
+#[test]
+fn http_cancelled_computer_call_returns_the_cancellation_error() {
+    let fake = start_fake_alas("computer-cancel-http");
+    let mcp = start_mcp_http(&fake.socket, "test-token");
+
+    let port = mcp.port;
+    let call =
+        thread::spawn(move || http_post(port, "test-token", computer_screenshot_call("shot-1")));
+    let wait_release = wait_started(&fake);
+    let cancel = http_post(mcp.port, "test-token", cancelled_notification("shot-1"));
+    assert!(cancel.starts_with("HTTP/1.1 202 Accepted"));
+    expect_cancel_then_release(&fake, wait_release);
+
+    let response = call.join().unwrap();
+    assert!(response.contains(r#""id":"shot-1""#));
+    assert!(response.contains("-32800"), "{response}");
+    assert!(!response.contains(r#""result""#));
 }
 
 #[test]

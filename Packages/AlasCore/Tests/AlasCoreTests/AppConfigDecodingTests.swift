@@ -11,6 +11,12 @@ struct AppConfigDecodingTests {
         config.computerUse.enabled = true
         let reloaded = try JSONDecoder().decode(AppConfig.self, from: JSONEncoder().encode(config))
         #expect(reloaded.computerUse.enabled)
+
+        let enabledOnly = try JSONDecoder().decode(AppConfig.self, from: Data(#"{"computerUse":{"enabled":true}}"#.utf8))
+        #expect(enabledOnly.computerUse.enabled)
+        config.computerUse.alwaysAllowedBundleIDs = ["com.apple.Notes"]
+        let withApps = try JSONDecoder().decode(AppConfig.self, from: JSONEncoder().encode(config))
+        #expect(withApps.computerUse.alwaysAllowedBundleIDs == ["com.apple.Notes"])
     }
 
     /// A hand-written `app.json` names only what it changes: everything else

@@ -161,6 +161,9 @@ public final class ACPSessionManager: ChangeTracking {
     /// through every manager construction call site. Local sessions only;
     /// remote hosts skip it in `attach`.
     public var alasCLIEnvProvider: AlasCLIEnvProvider?
+    /// False for Workspace Checkout managers: their sessions get no computer tools,
+    /// so the first-prompt preamble must not mention them.
+    public var computerUseAvailable = true
     /// Builds the `.external` adapter status (adapter inspection + managed
     /// config sync) for a worktree path. Set post-init, mirroring
     /// `alasCLIEnvProvider`, so AppState can wire it without threading it
@@ -3023,6 +3026,11 @@ public final class ACPSessionManager: ChangeTracking {
         inFlightBackfills[sessionId] = task
     }
 
+    /// Called once when a session's runtime ends: from `closeSession(id:)`, or
+    /// from a detach teardown (which does not go through `closeSession`).
+    /// Distinct from the init-time `onSessionEnded`, which fires on permanent removal.
+    public var onSessionRuntimeEnded: ((ACPSession.ID) -> Void)?
+
     public func closeSession(id: ACPSession.ID) {
         abandonFirstAttach(of: id)
         cancelAutoReconnect(sessionId: id)
@@ -3047,6 +3055,7 @@ public final class ACPSessionManager: ChangeTracking {
         pendingConfigOptionValues.removeValue(forKey: id)
         discardDeferredConfigOptionUpdates(for: id)
         discardDeferredModelModeUpdates(for: id)
+        onSessionRuntimeEnded?(id)
     }
 
     public func deleteSession(id: ACPSession.ID) async throws {
@@ -8059,7 +8068,8 @@ extension ACPSessionManager {
                     ggStack: ggStackContext,
                     issue: issuePreambleProvider?(worktreeId),
                     nativeSubagentsDisabled: nativeSubagentsDisabled,
-                    nativeDelegationMechanism: ACPNativeDelegationSupport.resolve(agentID: session.agentId).mechanism
+                    nativeDelegationMechanism: ACPNativeDelegationSupport.resolve(agentID: session.agentId).mechanism,
+                    computerUseAvailable: computerUseAvailable
                 )
                 if isWriter(for: sessionId) {
                     session.pendingMCPPreamble = preamble
@@ -10574,6 +10584,7 @@ extension ACPSessionManager {
             // now that state is `.idle` so a closed-while-attached session
             // doesn't keep its transcript + caches resident indefinitely.
             evictIfIdle(id: sessionId)
+            onSessionRuntimeEnded?(sessionId)
         }
         if let closeError { throw closeError }
     }
