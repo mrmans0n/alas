@@ -5,6 +5,9 @@ import SwiftUI
 struct UpdateProgressSheet: View {
     @Bindable var updater: SelfUpdater
     let update: ReleaseInfo?
+    /// False when brew succeeded but the bundle on disk is still the old
+    /// release, because the tap hasn't picked up the new version yet.
+    let isInstalled: Bool
     let onRetry: () -> Void
     let onRelaunch: () -> Void
     let onDone: () -> Void
@@ -25,8 +28,10 @@ struct UpdateProgressSheet: View {
         switch updater.state {
         case .idle, .running:
             return "Updating Alas…"
-        case .finished(let exitCode):
-            return exitCode == 0 ? "\(updateName) is ready" : "Update failed"
+        case .finished(0):
+            return isInstalled ? "\(updateName) is ready" : "Homebrew doesn't have \(updateName) yet"
+        case .finished:
+            return "Update failed"
         case .cancelled:
             return "Update cancelled"
         case .failed:
@@ -42,11 +47,15 @@ struct UpdateProgressSheet: View {
     }
 
     private var isSuccess: Bool {
-        updater.state == .finished(exitCode: 0)
+        updater.state == .finished(exitCode: 0) && isInstalled
+    }
+
+    private var isNotPublishedYet: Bool {
+        updater.state == .finished(exitCode: 0) && !isInstalled
     }
 
     private var isFailure: Bool {
-        !isRunning && !isSuccess
+        !isRunning && !isSuccess && !isNotPublishedYet
     }
 
     var body: some View {
@@ -95,6 +104,10 @@ struct UpdateProgressSheet: View {
             }
         } else if isSuccess {
             Text("Relaunch to switch to the new version. Terminals keep running.")
+                .font(.system(size: 12))
+                .foregroundColor(theme.color("fg-dim"))
+        } else if isNotPublishedYet {
+            Text("New releases take a few minutes to reach the Homebrew tap. Try again shortly.")
                 .font(.system(size: 12))
                 .foregroundColor(theme.color("fg-dim"))
         } else {

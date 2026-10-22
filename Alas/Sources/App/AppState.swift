@@ -1458,9 +1458,11 @@ final class AppState {
 
     func runSelfUpdate() async {
         try? await selfUpdater.start(command: .homebrew)
-        if selfUpdater.state == .finished(exitCode: 0) {
-            updates.isReadyToRelaunch = true
-        }
+        guard selfUpdater.state == .finished(exitCode: 0) else { return }
+        // Read the plist directly: Bundle caches the running copy's info.
+        let plist = Bundle.main.bundleURL.appending(path: "Contents/Info.plist")
+        let onDisk = NSDictionary(contentsOf: plist) as? [String: Any]
+        updates.recordInstall(onDisk: BuildIdentity(infoDictionary: onDisk))
     }
 
     private(set) var installerHost: InstallerHost = .detect()

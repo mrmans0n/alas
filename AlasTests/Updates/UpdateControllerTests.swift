@@ -162,6 +162,32 @@ struct UpdateControllerTests {
         #expect(await source.checkCount == 1)
     }
 
+    @Test func relaunchIsOfferedOnlyForTheReleaseThatReachedDisk() async throws {
+        let source = ReleaseSource()
+        let domain = "UpdateControllerTests.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let controller = UpdateController(
+            identity: identity, checker: ReleaseChecker(fetch: { try await source.fetch($0) }),
+            installSource: .homebrew, defaults: defaults, isEnabled: { true }
+        )
+        await controller.checkManually()
+
+        // brew exited 0 but the tap still served the running version.
+        #expect(!controller.recordInstall(onDisk: identity))
+        #expect(!controller.isReadyToRelaunch)
+
+        #expect(controller.recordInstall(onDisk: BuildIdentity(
+            track: .stable, version: SemanticVersion(major: 2, minor: 0, patch: 0)
+        )))
+        #expect(controller.isReadyToRelaunch)
+
+        await source.setResponse(version: "3.0.0")
+        await controller.checkManually()
+        #expect(controller.availableUpdate?.id == "stable-3.0.0")
+        #expect(!controller.isReadyToRelaunch)
+    }
+
     private var identity: BuildIdentity {
         BuildIdentity(track: .stable, version: SemanticVersion(major: 1, minor: 0, patch: 0))
     }

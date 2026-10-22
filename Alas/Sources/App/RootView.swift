@@ -950,6 +950,7 @@ private struct RootUpdatePresentationHandlers: ViewModifier {
                 UpdateProgressSheet(
                     updater: state.selfUpdater,
                     update: state.updates.availableUpdate,
+                    isInstalled: state.updates.isReadyToRelaunch,
                     onRetry: {
                         state.selfUpdater.reset()
                         Task { await state.runSelfUpdate() }

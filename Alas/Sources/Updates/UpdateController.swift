@@ -13,9 +13,15 @@ final class UpdateController {
     /// Last successfully detected update, independent of sheet presentation.
     private(set) var availableUpdate: ReleaseInfo?
 
-    /// The available update is installed on disk and takes effect on relaunch.
-    /// Not persisted: the next launch already runs the new version.
-    var isReadyToRelaunch = false
+    /// ID of the release whose bundle is on disk, waiting for a relaunch.
+    /// Not persisted: the next launch already runs it.
+    private var installedUpdateID: String?
+
+    /// Scoped to the release that was installed, so a newer release found
+    /// afterwards is offered as an update rather than a relaunch.
+    var isReadyToRelaunch: Bool {
+        installedUpdateID != nil && installedUpdateID == availableUpdate?.id
+    }
 
     private let identity: BuildIdentity
     private let checker: ReleaseChecker
@@ -89,6 +95,16 @@ final class UpdateController {
     /// User-initiated checks bypass the throttle and join an existing fetch.
     func checkManually() async {
         await runCheck(manually: true)
+    }
+
+    /// Marks the available update installed only if `onDisk` contains it:
+    /// `brew upgrade` exits 0 without upgrading while the tap still lags
+    /// the GitHub release.
+    @discardableResult
+    func recordInstall(onDisk: BuildIdentity) -> Bool {
+        guard let availableUpdate, availableUpdate.isContained(in: onDisk) else { return false }
+        installedUpdateID = availableUpdate.id
+        return true
     }
 
     func presentAvailableUpdate() {
