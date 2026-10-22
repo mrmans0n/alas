@@ -144,7 +144,8 @@ public enum HostResponse: Codable, Equatable, Sendable {
     case session(session: HostSessionSummary)
     case capabilities(capabilities: [String])
     case runOutput(output: HostRunOutput)
-    case remotePairingCode(code: String, expiresAt: Date)
+    /// `link` is absent from an older host, and where the host has no address for one.
+    case remotePairingCode(code: String, expiresAt: Date, link: String?)
     case peers(peers: [HostPeerSummary])
     case failure(error: HostError)
 }

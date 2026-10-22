@@ -59,7 +59,7 @@ struct HostProtocolTests {
         .response(id: 7, result: .capabilities(capabilities: ["host.v1", "host.events.v1"])),
         .response(id: 8, result: .runOutput(output: .text("hello\n", truncated: true))),
         .response(id: 9, result: .runOutput(output: .notFinished)),
-        .response(id: 10, result: .remotePairingCode(code: "ABC123", expiresAt: Date(timeIntervalSince1970: 1_800_000_000))),
+        .response(id: 10, result: .remotePairingCode(code: "ABC123", expiresAt: Date(timeIntervalSince1970: 1_800_000_000), link: nil)),
         .events(events: [
             .worktreeChanged(WorktreeSnapshot(worktree: worktree, operation: .deleting, isArchived: false)),
             .worktreeRemoved(projectID: "p", worktreeID: worktree.id),

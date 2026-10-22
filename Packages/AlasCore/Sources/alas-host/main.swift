@@ -1,4 +1,5 @@
 import AlasCore
+@_spi(AppHost) import AlasHostCore
 import Foundation
 
 // Serves the host protocol for one data directory, without the app: the
@@ -30,7 +31,8 @@ a full-screen terminal UI that opens on the current values; rerun it to change
 them later.
 
 `alas-host pair` asks the running host for a Remote pairing code, which a
-phone or browser redeems within two minutes, and prints it.
+phone, browser or Mac redeems within two minutes, and prints it, then the
+pairing link a Mac pastes into Add Peer.
 
 `alas-host peers` lists the Macs paired with this host and removes one,
 revoking its access, through the running host when one serves the profile.
@@ -65,9 +67,16 @@ if CommandLine.arguments.dropFirst().elementsEqual(["pair"]) {
         fail("no host serves \(HostSocketServer.defaultPath()): \(error.localizedDescription)")
     }
     switch response {
-    case .remotePairingCode(let code, let expiresAt):
+    case .remotePairingCode(let code, let expiresAt, let link):
+        // The code stays the first line, for scripts; a Mac pastes the link.
         print(code)
-        FileHandle.standardError.write(Data("Valid until \(expiresAt.formatted(date: .omitted, time: .standard)).\n".utf8))
+        if let link { print(link) }
+        var notice = "Valid until \(expiresAt.formatted(date: .omitted, time: .standard)).\n"
+        let origins = link.flatMap(RemotePairingLink.parse)?.origins ?? []
+        if !origins.isEmpty, origins.allSatisfy({ URL(string: $0).map(RunEndpointPolicy.isLoopback) ?? true }) {
+            notice += "Reachable only from this Mac or a tunnel; set host.reachability to lan or tailscale for other Macs.\n"
+        }
+        FileHandle.standardError.write(Data(notice.utf8))
         exit(0)
     case .failure(.failed(let message)):
         fail(message)
@@ -179,10 +188,6 @@ guard let socket = HostSocketServer(server: protocolServer) else {
     fail("cannot serve \(HostSocketServer.defaultPath()): another host serves it, or its directory is not this user's own")
 }
 
-// Projects added before the host started, by the app or `project add`, have
-// worktrees only once they are listed; the app lists them at launch too.
-Task { await host.loadProjectWorktrees() }
-
 // One shutdown: a second signal must not exit while the first still flushes.
 var isStopping = false
 
@@ -190,9 +195,14 @@ var isStopping = false
 // other devices through the `tailscale serve` proxy run here, as the app runs
 // it, or a tunnel; or every interface when the LAN is chosen. Accepting
 // incoming TCP needs no local network permission, only Bonjour does (TN3179).
-// No peer identity, federation or Bonjour: only another Mac asks for an
-// identity proof, and a headless host pairs with codes.
+// Other Macs pair as peers, as with the app: the host proves its identity key
+// on `/pair` and on every later socket, and pairs back to the Mac. It never
+// connects out to peers' sessions, and has no federation or Bonjour.
 var remote: RemoteServer?
+/// Starts Remote once the open sessions are restored; nil when Remote is off.
+var startRemote: (@MainActor () async -> Void)?
+// Held here: `RemoteServer.presenter` is weak.
+var openSessions: HeadlessSessionPresenter?
 var tailscaleServe: RemoteTailscaleServeProcess?
 let keepAwake = RemoteKeepAwakeController()
 var config = (try? PersistenceStore().readIfExists(AppConfig.self, from: Paths.appConfigFile)) ?? .defaults
@@ -208,7 +218,18 @@ if let listen = config.hostRemoteListen {
     }
     let settings = config.remote
     let pairing = RemotePairingService(store: FileDeviceStore())
+    // Reads the profile's key wherever the app left it, and writes only the
+    // owner-only file, so an app and a host taking turns keep one identity.
+    let secrets = RemoteHostSecretStore()
+    let identityKey = RemoteIdentityKeyProvider(store: secrets)
     let interfaces = RemoteNetwork.interfaces()
+    // Known once `tailscale serve` runs, so peers and diagnostics name it too.
+    var tailnetHTTPSHost: String?
+    func advertisedAddresses(port: UInt16?) -> [RemoteAdvertisedAddress] {
+        settings.advertisedAddresses(
+            port: port, interfaces: interfaces, tailnetHTTPSHost: tailnetHTTPSHost, loopbackOnly: listen.loopbackOnly
+        )
+    }
     // The web client ships inside the app, beside this executable's own
     // directory there (`Contents/Resources/alas-host/alas-host`), wherever the
     // app is installed and whatever link started it. Without one, devices
@@ -233,20 +254,53 @@ if let listen = config.hostRemoteListen {
             RemoteDiagnosticsSnapshot(
                 appName: "Alas",
                 port: port,
-                addresses: settings.advertisedAddresses(
-                    port: port, interfaces: interfaces, tailnetHTTPSHost: nil, loopbackOnly: listen.loopbackOnly
-                ),
+                addresses: advertisedAddresses(port: port),
                 usesPlainHTTP: true,
                 pairedDeviceCount: pairing.devices.count,
                 serverId: settings.serverId,
                 name: settings.resolvedDisplayName
             )
         },
-        identity: { RemoteServerIdentity(serverId: settings.serverId, name: settings.resolvedDisplayName) }
+        // No terminals here, so a Mac does not offer them.
+        identity: { RemoteServerIdentity(serverId: settings.serverId, name: settings.resolvedDisplayName, servesPeerConsoles: false) },
+        signer: identityKey
     )
+    let peers = RemotePeerManager(
+        store: FilePeerStore(secrets: secrets),
+        pairing: pairing,
+        localIdentity: {
+            RemotePeerManager.LocalIdentity(
+                serverId: settings.serverId,
+                name: settings.resolvedDisplayName,
+                // As the app advertises: loopback means nothing to another
+                // Mac, and it refuses more origins than the cap.
+                origins: Array(
+                    advertisedAddresses(port: server.port).filter { $0.kind != .localhost }.map(\.url)
+                        .prefix(RemotePairingLink.maxOrigins)
+                ),
+                publicKey: identityKey.publicKey
+            )
+        }
+    )
+    peers.onRevokeDevice = { server.disconnectDevice($0) }
+    server.onPeerPaired = { request in
+        // Noted on the redeem's own call stack, before the pair-back's task,
+        // so a Forget landing in between is not missed (as in the app).
+        peers.notePeerPairingArrived(serverId: request.peerServerId, localDeviceId: request.localDeviceId)
+        Task { @MainActor in await peers.handleInboundPeer(request) }
+    }
+    protocolServer.remotePeers = peers
+    protocolServer.remotePairingLink = { code in
+        guard let port = server.port else { return nil }
+        let addresses = advertisedAddresses(port: port)
+        let base = addresses.first { $0.kind != .localhost }?.url ?? "http://127.0.0.1:\(port)"
+        return RemotePairingLink.build(base: base, code: code, addresses: addresses)
+    }
+    let presenter = HeadlessSessionPresenter(core: host.coreContext)
+    server.presenter = presenter
+    openSessions = presenter
     // The port can change after the first: a listener that fails rebinds on
     // an OS-assigned one, and the address and the proxy follow it.
-    server.admitsPeers = false
     var servedPort: UInt16?
     server.onPortChange = { port in
         // Held only while the server is bound and the Mac is on external power.
@@ -259,6 +313,7 @@ if let listen = config.hostRemoteListen {
         fflush(stdout)
         tailscaleServe?.stop()
         tailscaleServe = nil
+        tailnetHTTPSHost = nil
         Task { @MainActor in
             // The proxy's requests name the tailnet host, which the policy
             // must allow; a status that cannot be read leaves loopback only.
@@ -271,6 +326,7 @@ if let listen = config.hostRemoteListen {
                 tailscaleServe = try RemoteTailscaleServeProcess(executable: executable, port: port) { reason in
                     FileHandle.standardError.write(Data("alas-host: tailscale serve stopped: \(reason)\n".utf8))
                 }
+                tailnetHTTPSHost = status.dnsName
                 print("remote https://\(status.dnsName)")
                 fflush(stdout)
             } catch {
@@ -278,12 +334,27 @@ if let listen = config.hostRemoteListen {
             }
         }
     }
-    do {
-        try server.start(port: listen.port, loopbackOnly: listen.loopbackOnly)
-    } catch {
-        fail("cannot serve Remote: \(error.localizedDescription)")
-    }
     remote = server
+    startRemote = {
+        // A client's socket reads the open sessions from its first message,
+        // and `restore()` replaces them once it finishes: serve only after.
+        await presenter.restore()
+        guard !isStopping else { return }
+        do {
+            try server.start(port: listen.port, loopbackOnly: listen.loopbackOnly)
+        } catch {
+            fail("cannot serve Remote: \(error.localizedDescription)")
+        }
+    }
+}
+
+// Projects added before the host started, by the app or `project add`, have
+// worktrees only once they are listed; the app lists them at launch too.
+// Remote follows: restoring the open sessions keeps those of listed
+// worktrees only.
+Task {
+    await host.loadProjectWorktrees()
+    await startRemote?()
 }
 
 // Installed before the path is printed, so a stop sent as soon as the host

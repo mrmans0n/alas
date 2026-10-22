@@ -26,6 +26,9 @@ public final class HostProtocolServer {
     /// The Macs paired with that server, which a local client lists and
     /// forgets; nil where the app manages them itself.
     public var remotePeers: RemotePeerManager?
+    /// The pairing link for a code that `remotePairing` minted, with the
+    /// addresses the server is reached at now; nil leaves the code alone.
+    public var remotePairingLink: (@MainActor (String) -> String?)?
 
     public init(
         host: AlasHost,
@@ -48,7 +51,7 @@ public final class HostProtocolServer {
             // Held by the connection: a caller may keep only the connection
             // (the Remote gateway does), and the server keeps no connection.
             isServerClosed: { [self] in isClosed }, remotePairing: { [self] in remotePairing },
-            remotePeers: { [self] in remotePeers }, send: send
+            remotePeers: { [self] in remotePeers }, remotePairingLink: { [self] in remotePairingLink }, send: send
         )
     }
 
@@ -67,6 +70,7 @@ public final class HostProtocolConnection {
     private let isServerClosed: @MainActor () -> Bool
     private let remotePairing: @MainActor () -> RemotePairingService?
     private let remotePeers: @MainActor () -> RemotePeerManager?
+    private let remotePairingLink: @MainActor () -> (@MainActor (String) -> String?)?
     private let send: @MainActor (HostServerMessage) async -> Void
     private var subscription: HostSubscription?
     /// The last message handed to the transport. Every send waits for the
@@ -82,6 +86,7 @@ public final class HostProtocolConnection {
         isServerClosed: @escaping @MainActor () -> Bool = { false },
         remotePairing: @escaping @MainActor () -> RemotePairingService? = { nil },
         remotePeers: @escaping @MainActor () -> RemotePeerManager? = { nil },
+        remotePairingLink: @escaping @MainActor () -> (@MainActor (String) -> String?)? = { nil },
         send: @escaping @MainActor (HostServerMessage) async -> Void
     ) {
         self.host = host
@@ -90,6 +95,7 @@ public final class HostProtocolConnection {
         self.isServerClosed = isServerClosed
         self.remotePairing = remotePairing
         self.remotePeers = remotePeers
+        self.remotePairingLink = remotePairingLink
         self.send = send
     }
 
@@ -285,7 +291,9 @@ public final class HostProtocolConnection {
                 throw HostError.failed(message: "This host does not mint Remote pairing codes.")
             }
             let code = pairing.beginPairing()
-            return .remotePairingCode(code: code, expiresAt: Date().addingTimeInterval(RemotePairingService.codeTTL))
+            return .remotePairingCode(
+                code: code, expiresAt: Date().addingTimeInterval(RemotePairingService.codeTTL), link: remotePairingLink()?(code)
+            )
         case .listPeers:
             return .peers(peers: try localPeers().peers.map(Self.summary))
         case .forgetPeer(let peerID):
