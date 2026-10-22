@@ -85,7 +85,7 @@ struct ComputerUseSystem: Sendable {
         -> (root: ComputerUseAXNode, complete: Bool, handles: ComputerUseAXHandles)
     /// Delivers one input. Throws `CancellationError` when `isCancelled` turns
     /// true before the first event, or after the event sequence in flight.
-    var perform: @Sendable (ComputerUseInput, ComputerUseWindow, _ direct: Bool, _ isCancelled: @Sendable () -> Bool)
+    var perform: @Sendable (ComputerUseInput, ComputerUseWindow, _ direct: Bool, _ isCancelled: @escaping @Sendable () -> Bool)
         async throws -> ComputerUseDelivery
     /// Seconds since the last hardware input; events Alas posts don't count.
     var secondsSinceUserInput: @Sendable () -> TimeInterval
@@ -258,17 +258,26 @@ extension LiveComputerUseSystem {
     static let activationSettle: Duration = .milliseconds(100)
     /// Lets the target read the pasteboard before it is restored.
     static let pasteSettle: Duration = .milliseconds(150)
+    /// Lets a click move focus before the focused element is checked.
+    static let focusSettle: Duration = .milliseconds(50)
+    /// One direct action at a time: activations and pasteboard swaps must not
+    /// interleave, or the pasteboard saved by the second would be the first's text.
+    private static let directLock = ComputerUseSerialLock()
 
     /// Delivery order: an AX action on the element, else events posted to the
     /// pid; `direct` activates the app around the events instead.
     static func perform(
         _ input: ComputerUseInput, in window: ComputerUseWindow, direct: Bool,
-        isCancelled: @Sendable () -> Bool
+        isCancelled: @escaping @Sendable () -> Bool
     ) async throws -> ComputerUseDelivery {
         if isCancelled() { throw CancellationError() }
         if direct {
-            try await withActivation(of: window.app) {
-                try await postEvents(input, in: window, paste: true, isCancelled: isCancelled)
+            try await directLock.run {
+                // A Stop while waiting for another direct action performs nothing.
+                if isCancelled() { throw CancellationError() }
+                try await withActivation(of: window.app) {
+                    try await postEvents(input, in: window, paste: true, isCancelled: isCancelled)
+                }
             }
             return .activation
         }
@@ -277,17 +286,21 @@ extension LiveComputerUseSystem {
         case .click(.element(let handles, let handle), let button, let count) where button == .right || count == 1:
             do {
                 if button == .right {
-                    try await ComputerUseAXActions.showMenu(handles, handle, app: app)
+                    try await ComputerUseAXActions.showMenu(handles, handle, app: app, isCancelled: isCancelled)
                 } else {
-                    try await ComputerUseAXActions.press(handles, handle, app: app)
+                    try await ComputerUseAXActions.press(handles, handle, app: app, isCancelled: isCancelled)
                 }
                 return .ax
             } catch is ComputerUseAXActions.Unsupported {
                 // Not every element supports the action; a click at its centre may still land.
             }
         case .type(let text, .element(let handles, let handle), replace: true):
-            try await ComputerUseAXActions.setValue(text, handles, handle, app: app)
-            return .ax
+            do {
+                try await ComputerUseAXActions.setValue(text, handles, handle, app: app, isCancelled: isCancelled)
+                return .ax
+            } catch is ComputerUseAXActions.Unsupported {
+                // The value isn't settable; focus, select all and type it instead.
+            }
         default:
             break
         }
@@ -299,14 +312,16 @@ extension LiveComputerUseSystem {
     /// before the first event.
     private static func postEvents(
         _ input: ComputerUseInput, in window: ComputerUseWindow, paste: Bool,
-        isCancelled: @Sendable () -> Bool
+        isCancelled: @escaping @Sendable () -> Bool
     ) async throws {
         let app = window.app
         let target = ComputerUseInputPoster.Target(pid: app.pid, windowID: window.windowID)
         func point(_ input: ComputerUseInputTarget) async throws -> CGPoint {
             switch input {
-            case .element(let handles, let handle): try await ComputerUseAXActions.center(handles, handle, app: app)
-            case .point(let point): point
+            case .element(let handles, let handle):
+                try await ComputerUseAXActions.center(handles, handle, app: app, isCancelled: isCancelled)
+            case .point(let point):
+                point
             }
         }
         func checkCancelled() throws {
@@ -320,13 +335,15 @@ extension LiveComputerUseSystem {
         case .type(let text, let at, let replace):
             switch at {
             case .element(let handles, let handle):
-                try checkCancelled()
-                try await ComputerUseAXActions.focus(handles, handle, app: app)
+                try await ComputerUseAXActions.focus(handles, handle, app: app, isCancelled: isCancelled)
             case .point(let location):
                 try checkCancelled()
                 try await ComputerUseInputPoster.click(at: location, button: .left, count: 1, target: target)
+                // Let the click move focus before checking what has it.
+                try? await Task.sleep(for: focusSettle)
+                try await ComputerUseAXActions.refuseSecureFocus(app: app, isCancelled: isCancelled)
             case nil:
-                break
+                try await ComputerUseAXActions.refuseSecureFocus(app: app, isCancelled: isCancelled)
             }
             try checkCancelled()
             if replace {
@@ -353,7 +370,8 @@ extension LiveComputerUseSystem {
     }
 
     /// Brings `app` to the front for `body`, then returns the previously
-    /// frontmost app to the front, also when `body` throws.
+    /// frontmost app to the front, also when `body` throws. Throws without
+    /// running `body` when the app does not come to the front in time.
     private static func withActivation(
         of app: ComputerUseAppIdentity, _ body: () async throws -> Void
     ) async throws {
@@ -364,9 +382,15 @@ extension LiveComputerUseSystem {
         }
         await MainActor.run { _ = NSRunningApplication(processIdentifier: app.pid)?.activate() }
         let deadline = ContinuousClock.now + activationWait
-        while ContinuousClock.now < deadline,
-              await MainActor.run(body: { NSWorkspace.shared.frontmostApplication?.processIdentifier }) != app.pid {
+        var frontmost = false
+        while true {
+            frontmost = await MainActor.run { NSWorkspace.shared.frontmostApplication?.processIdentifier } == app.pid
+            guard !frontmost, ContinuousClock.now < deadline else { break }
             try? await Task.sleep(for: .milliseconds(25))
+        }
+        guard frontmost else {
+            await restoreActivation(previousPID, from: app.pid)
+            throw ComputerUseSystemError.actionFailed("\(app.name) could not be brought to the front.")
         }
         do {
             try await body()
@@ -517,5 +541,23 @@ extension LiveComputerUseSystem {
             ?? bundle?.object(forInfoDictionaryKey: "CFBundleName") as? String
             ?? url.deletingPathExtension().lastPathComponent
         return ComputerUseAppIdentity(name: name, bundleID: bundleID, pid: 0)
+    }
+}
+
+/// Runs async sections one at a time, in arrival order.
+private actor ComputerUseSerialLock {
+    private var busy = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func run<T: Sendable>(_ body: @Sendable () async throws -> T) async throws -> T {
+        if busy {
+            await withCheckedContinuation { waiters.append($0) }
+        } else {
+            busy = true
+        }
+        defer {
+            if waiters.isEmpty { busy = false } else { waiters.removeFirst().resume() }
+        }
+        return try await body()
     }
 }

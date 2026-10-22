@@ -718,7 +718,7 @@ fn computer_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "computer_scroll",
-            "description": "Scroll at an element or a point in a window. Target it with `ref` (from the latest computer_inspect or computer_wait of this window) or with `x` and `y` (pixels in the latest computer_screenshot of this window). `dx` and `dy` are scroll-wheel lines (positive or negative, at most 100 each). Returns the window's new elements (refs are replaced). The first use of each app asks the user for approval.",
+            "description": "Scroll at an element or a point in a window. Target it with `ref` (from the latest computer_inspect or computer_wait of this window) or with `x` and `y` (pixels in the latest computer_screenshot of this window). `dx` and `dy` are scroll-wheel lines, at most 100 each: positive dy scrolls down, positive dx scrolls right. Returns the window's new elements (refs are replaced). The first use of each app asks the user for approval.",
             "annotations": { "readOnlyHint": false, "destructiveHint": true },
             "inputSchema": computer_action_schema(
                 json!({

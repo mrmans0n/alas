@@ -51,10 +51,12 @@ enum ComputerUseInputPoster {
         up.postToPid(target.pid)
     }
 
+    /// Positive `dy` scrolls down and positive `dx` right, like CSS. CG wheel
+    /// deltas run the other way (positive wheel1 scrolls up, wheel2 left).
     static func scroll(at point: CGPoint, dx: Int, dy: Int, target: Target) throws {
         guard let event = CGEvent(
             scrollWheelEvent2Source: try source(), units: .line, wheelCount: 2,
-            wheel1: Int32(clamping: dy), wheel2: Int32(clamping: dx), wheel3: 0
+            wheel1: Int32(clamping: -dy), wheel2: Int32(clamping: -dx), wheel3: 0
         ) else { throw ComputerUseSystemError.actionFailed("Could not create a scroll event.") }
         event.location = point
         setWindow(event, target)
