@@ -233,6 +233,19 @@ public final class AlasCoreContext {
         }
     }
 
+    /// Loads the session manager of every visible local worktree that has a
+    /// stored session database, so its sessions are listed before anything
+    /// opens them.
+    public func loadStoredSessionManagers() async {
+        for project in projects.projects where project.host == nil {
+            for worktree in projects.visibleWorktrees(projectId: project.id)
+            where FileManager.default.fileExists(atPath: Paths.acpSessionsDB(for: .worktree(worktree.id)).path) {
+                guard let manager = try? sessionManager(for: worktree) else { continue }
+                await manager.refreshRecentNow()
+            }
+        }
+    }
+
     /// Registers the repository or folder at `path` and persists it. Nothing
     /// is kept if the save fails.
     @discardableResult
@@ -375,7 +388,8 @@ public final class AlasCoreContext {
     /// interrupted sessions, and capturing Claude session hooks as `config`
     /// says when each is decided.
     public static func sessionManagerFactory(
-        config: @escaping @MainActor () -> AppConfig
+        config: @escaping @MainActor () -> AppConfig,
+        onChipsObserved: (@MainActor (_ agentId: String, _ host: String?, _ chips: ACPChipState) -> Void)? = nil
     ) -> @MainActor (SessionOwnerID, Worktree) -> ACPSessionManager {
         { owner, worktree in
             let manager = ACPSessionManager(
@@ -384,7 +398,8 @@ public final class AlasCoreContext {
                 owner: owner,
                 persistence: ACPSessionPersistence(path: Paths.acpSessionsDB(for: owner).path),
                 autoResumeAfterUsageLimit: { config().harness.acpAutoResumeAfterUsageLimit },
-                continueInterruptedSessions: { config().harness.acpContinueInterruptedSessions }
+                continueInterruptedSessions: { config().harness.acpContinueInterruptedSessions },
+                onChipsObserved: onChipsObserved
             )
             manager.sessionHooksProvider = { config().agents.sessionHooks(for: $0) }
             return manager

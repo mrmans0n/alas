@@ -93,6 +93,19 @@ struct HeadlessSessionPresenterTests {
         #expect(changes == 1)
     }
 
+    @Test func storedSessionsAreListedWithoutOpeningThem() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let id = try await fixture.storedSession()
+        let core = fixture.makeCore()
+        defer { core.sessionManagers.values.forEach { $0.shutdownBackgroundTasks() } }
+
+        await core.loadStoredSessionManagers()
+
+        let summaries = await core.remoteSessionSummaries(tabIndex: { _, _ in nil })
+        #expect(summaries.contains { $0.id == id })
+    }
+
     @MainActor
     private struct Fixture {
         let root: URL

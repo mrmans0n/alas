@@ -229,9 +229,12 @@ public final class HeadlessHostEnvironment: AlasHostEnvironment {
     /// The profile's settings, as its `app.json` has them; the defaults
     /// when it has none.
     public let config: AppConfig
+    /// The models agents advertised, kept in the profile.
+    public let modelCatalog: ACPAgentModelCatalog?
 
     public init(configuration: AppConfig = .defaults) {
         config = configuration
+        modelCatalog = ACPAgentModelCatalog()
     }
 
     public func configuration() -> AppConfig { config }

@@ -34,6 +34,7 @@ public final class AlasHost {
     /// serving host starts with this; see `AlasCoreContext.loadProjectWorktrees()`.
     public func loadProjectWorktrees() async {
         await core.loadProjectWorktrees()
+        await core.loadStoredSessionManagers()
     }
 
     public var worktrees: WorktreesAPI { WorktreesAPI(core: core) }
