@@ -166,6 +166,7 @@ struct HostSettingTests {
         ("enabled", 20, false, "enabled"),
         ("agents.registry-agent.enabled = true", 12, false, "agents.regi…"),
         ("abc", 1, false, "…"),
+        ("abc", 0, false, ""),
         ("漢字漢字", 5, false, "漢字…"),
         ("项目🙂ok", 6, false, "项目…"),
         ("Root  ~/very/long/path/edit_", 10, true, "…ath/edit_"),

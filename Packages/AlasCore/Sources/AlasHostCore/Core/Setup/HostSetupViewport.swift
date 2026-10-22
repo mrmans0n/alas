@@ -17,6 +17,7 @@ public enum HostSetupViewport {
     /// edited, whose cursor is at its end.
     public static func fit(_ row: String, width: Int, keepingEnd: Bool = false) -> String {
         guard cells(row) > width else { return row }
+        guard width > 0 else { return "" }
         var budget = max(width - 1, 0)
         var kept: [Character] = []
         for character in keepingEnd ? Array(row.reversed()) : Array(row) {
