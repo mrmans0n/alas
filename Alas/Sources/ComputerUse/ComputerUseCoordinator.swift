@@ -156,8 +156,10 @@ final class ComputerUseCoordinator {
             case .answered: break
             }
             if let overtaken = overtaken(sessionID, since: epoch) { return overtaken }
-            // The window may have closed or moved while the card was up.
-            guard let current = await system.window(windowID) else { return .error(Message.windowNotFound(windowID)) }
+            // The window may have closed or moved while the card was up, or its id gone to another app.
+            guard let current = await system.window(windowID), current.app.pid == window.app.pid else {
+                return .error(Message.windowNotFound(windowID))
+            }
             window = current
             if let overtaken = overtaken(sessionID, since: epoch) { return overtaken }
             switch access.access(for: window.app, session: sessionID) {

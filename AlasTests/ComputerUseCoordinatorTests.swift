@@ -193,6 +193,24 @@ struct ComputerUseCoordinatorTests {
         #expect(f.coordinator.driver == nil)
     }
 
+    @Test func reResolvedWindowOwnedByAnotherAppIsNotFound() async throws {
+        let lookups = Counter()
+        let notesWindow = Self.windows[1]!
+        let recycled = ComputerUseWindow(windowID: 1, title: notesWindow.title, frame: notesWindow.frame, app: Self.mail)
+        let system = ComputerUseSystem(
+            runningApps: { [] },
+            window: { _ in lookups.next() == 1 ? notesWindow : recycled },
+            screenshot: { _ in ComputerUseScreenshot(png: Data([0x89]), pixelSize: CGSize(width: 1, height: 1), scale: 1) },
+            axTree: { _, _, _ in (ComputerUseAXNode(role: "AXWindow"), true) }
+        )
+        let f = Self.fixture(system: system)
+        f.access.record(.allowForSession, for: Self.mail, session: "s")
+        let call = Task { await f.coordinator.perform(.init(action: .screenshot, windowID: 1), sessionID: "s") }
+        try await eventually("approval card") { f.coordinator.pendingApprovals.count == 1 }
+        f.coordinator.answer(try #require(f.coordinator.pendingApprovals.first).id, .allowForTurn)
+        #expect(await call.value == .error("computer_window_not_found: No on-screen window 1. Call computer_apps again."))
+    }
+
     @Test func busyWhenAnotherHolderHasTheLock() async throws {
         let f = Self.fixture()
         f.access.record(.allowForSession, for: Self.notes, session: "s")
@@ -276,4 +294,11 @@ private final class TreeGate: @unchecked Sendable {
         }
         continuation?.resume()
     }
+}
+
+private final class Counter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    func next() -> Int { lock.withLock { count += 1; return count } }
 }

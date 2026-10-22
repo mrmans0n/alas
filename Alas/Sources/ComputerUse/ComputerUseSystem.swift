@@ -99,7 +99,10 @@ private enum LiveComputerUseSystem {
         } catch {
             throw ComputerUseSystemError.captureFailed(error.localizedDescription)
         }
-        guard let scWindow = content.windows.first(where: { $0.windowID == window.windowID }) else {
+        // A recycled id may now belong to another app, which the grant doesn't cover.
+        guard let scWindow = content.windows.first(where: { $0.windowID == window.windowID }),
+              scWindow.owningApplication?.processID == window.app.pid
+        else {
             throw ComputerUseSystemError.windowNotFound(window.windowID)
         }
         let backingScale = await MainActor.run { screenBackingScale(containing: window.frame) }
