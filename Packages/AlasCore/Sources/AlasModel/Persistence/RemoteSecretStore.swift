@@ -157,13 +157,18 @@ public final class RemoteHostSecretStore: RemoteSecretStore, Sendable {
         self.writing = writing
     }
 
+    /// What the host wrote wins: the reading store may hold a copy the app
+    /// left in the Keychain that the host has since replaced or removed.
     public func secret(for account: String) -> Data? {
-        reading.secret(for: account)
+        guard let written = writing.secret(for: account) else { return reading.secret(for: account) }
+        return written.isEmpty ? nil : written
     }
 
+    /// A removal is written as empty data, so the reading store's copy does
+    /// not come back.
     @discardableResult
     public func setSecret(_ data: Data?, for account: String) -> Bool {
-        writing.setSecret(data, for: account)
+        writing.setSecret(data ?? Data(), for: account)
     }
 }
 
