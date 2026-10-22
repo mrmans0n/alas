@@ -39,15 +39,27 @@ struct ShellEnvResolverTests {
     }
 
     /// Startup files can leave a helper behind that keeps the output open
-    /// after the shell exits; the lookup ends at the PATH it printed.
+    /// after the shell exits; the lookup ends at the PATH it printed, and the
+    /// helper does not outlive it.
     @Test(.timeLimit(.minutes(1)))
-    func aHelperThatKeepsTheOutputOpenDoesNotHoldTheLookup() async throws {
+    func aHelperThatKeepsTheOutputOpenDoesNotHoldTheLookupOrOutliveIt() async throws {
+        let pidFile = FileManager.default.temporaryDirectory.appendingPathComponent("helper-\(UUID().uuidString)")
         let shell = try fakeShell("""
-        printf '%s' "___ALAS_PATH___/with/helper___ALAS_END___"
         sleep 300 &
+        echo $! > '\(pidFile.path)'
+        printf '%s' "___ALAS_PATH___/with/helper___ALAS_END___"
         """)
-        defer { try? FileManager.default.removeItem(at: shell) }
+        defer {
+            try? FileManager.default.removeItem(at: shell)
+            try? FileManager.default.removeItem(at: pidFile)
+        }
         #expect(await ShellEnvResolver.discoverShellPath(candidates: [shell.path]) == "/with/helper")
+        let helper = try #require(pid_t(String(contentsOf: pidFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)))
+        let deadline = ContinuousClock.now + .seconds(5)
+        while kill(helper, 0) == 0, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(kill(helper, 0) != 0, "the helper outlived the lookup")
     }
 
     @Test func aLoginShellAnswersWhenTheInteractiveOneGivesNothing() async throws {

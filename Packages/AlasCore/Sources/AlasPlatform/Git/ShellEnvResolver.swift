@@ -75,8 +75,8 @@ public final class ShellEnvResolver: @unchecked Sendable {
     /// over the terminal this process runs in (`alas-host setup` over SSH)
     /// and stall. They may still print, fail a command, take seconds (nvm) or
     /// leave a helper behind that holds the output open; the read ends at the
-    /// end sentinel, whatever the shell's exit status, and past `timeout` it
-    /// ends regardless and the shell's whole process group is killed.
+    /// end sentinel, whatever the shell's exit status, or past `timeout`, and
+    /// then everything left in the shell's session is killed.
     private static func runShellAndGetPATH(shell: String, interactive: Bool) async -> String? {
         let output = Pipe()
         let errors = Pipe()
@@ -95,20 +95,30 @@ public final class ShellEnvResolver: @unchecked Sendable {
             output.fileHandleForReading.readabilityHandler = { read.append($0.availableData) }
             Task.detached {
                 try? await Task.sleep(for: .seconds(interactive ? 10 : 2))
-                if read.finish() {
-                    // The session leader's pid is its group's id, which stays
-                    // the group's while anything it started is still in it.
-                    kill(-child.pid, SIGKILL)
-                }
+                read.finish()
             }
         }
         output.fileHandleForReading.readabilityHandler = nil
         errors.fileHandleForReading.readabilityHandler = nil
+        // Whatever the shell left behind, a stalled shell itself or helpers
+        // its startup files started, is in its session: end all of it.
+        killSession(child.pid)
         let text = String(decoding: raw, as: UTF8.self)
         guard let start = text.range(of: sentinelStart)?.upperBound,
               let end = text.range(of: sentinelEnd, range: start..<text.endIndex)?.lowerBound,
               start < end else { return "" }
         return text[start..<end].trimmingCharacters(in: .newlines)
+    }
+
+    /// Kills every process in session `id`. A shell's background jobs get
+    /// process groups of their own, but stay in its session.
+    private static func killSession(_ id: pid_t) {
+        let capacity = Int(proc_listallpids(nil, 0)) + 64
+        var pids = [pid_t](repeating: 0, count: capacity)
+        let count = Int(proc_listallpids(&pids, Int32(capacity * MemoryLayout<pid_t>.size)))
+        for pid in pids.prefix(max(0, count)) where pid > 0 && getsid(pid) == id {
+            kill(pid, SIGKILL)
+        }
     }
 
     public init() {}
@@ -135,17 +145,17 @@ private final class ShellOutput: @unchecked Sendable {
         if done { finish() }
     }
 
-    /// Finishes once; returns whether this call did, as the timeout needs to know.
-    @discardableResult
-    func finish() -> Bool {
+    /// Finishes once; later calls do nothing.
+    func finish() {
         lock.lock()
-        guard !finished else { lock.unlock()
-        return false }
+        guard !finished else {
+            lock.unlock()
+            return
+        }
         finished = true
         let result = data
         let callback = onFinish
         lock.unlock()
         callback?(result)
-        return true
     }
 }
