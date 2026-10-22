@@ -30,7 +30,7 @@ struct ComputerUseApprovalCard: View {
             content: ACPPermissionCardContent(
                 heading: "Computer use",
                 title: "Allow \(agentName) to use \(app.name)?",
-                reason: "It can see \(app.name)'s windows and read its controls.",
+                reason: ComputerUseCoordinator.approvalReason(appName: app.name),
                 options: options.map(\.option)
             )
         ) { chosen in

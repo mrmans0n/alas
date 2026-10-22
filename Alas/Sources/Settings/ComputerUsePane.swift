@@ -39,7 +39,7 @@ struct ComputerUsePane: View {
                 }
 
                 SettingsGroup(title: "Always allowed apps") {
-                    Text("If Codex also has OpenAI's Computer Use plugin turned on, agents there see both sets of tools.")
+                    Text("If Codex also has OpenAI's Computer Use plugin turned on, agents there see both sets of tools. Approving an app lets agents click and type in it, not just see it.")
                         .font(.system(size: 12))
                         .foregroundColor(theme.color("fg-dim"))
                         .fixedSize(horizontal: false, vertical: true)
