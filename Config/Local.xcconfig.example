@@ -1,0 +1,6 @@
+// Copy this file to Config/Local.xcconfig (gitignored) to sign Debug builds
+// with a stable identity, so Screen Recording and Accessibility grants persist.
+// Use the Developer ID Application identity; see CLAUDE.md.
+CODE_SIGN_STYLE = Manual
+CODE_SIGN_IDENTITY = Developer ID Application
+DEVELOPMENT_TEAM = YOURTEAMID

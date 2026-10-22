@@ -106,6 +106,36 @@ code they cover should be able to justify it.
 - Do not run the entire test plan locally by default. CI owns repository-wide configured validation. Run broader local tests only when CI does not cover the affected behavior, the change is too cross-cutting for a reliable targeted selection, or the user requests it.
 - Report exactly which local checks ran. Do not claim CI is green unless its current run completed successfully.
 
+## Local signing for dev builds
+
+macOS ties Screen Recording and Accessibility grants to an app's code
+signature. Debug builds are therefore a separate app, "Alas Dev"
+(`io.nlopez.alas.dev`), so they never disturb the grants of the released
+`io.nlopez.alas`. By default they are ad-hoc signed, which means the signature
+changes on every build and macOS asks for those grants again.
+
+To keep grants across rebuilds, sign Debug builds with a stable Developer ID
+Application identity:
+
+1. Make sure a Developer ID Application certificate is in your keychain.
+2. Copy `Config/Local.xcconfig.example` to `Config/Local.xcconfig` (gitignored)
+   and set `DEVELOPMENT_TEAM` to your team id: the 10-character id in
+   parentheses after the *Developer ID Application* identity name in
+   `security find-identity -v -p codesigning` (for Developer ID certificates
+   it is the team id), or shown in Xcode > Settings > Accounts.
+3. Rebuild and check `codesign -dv Alas.app` shows a `TeamIdentifier=` line
+   rather than `Signature=adhoc`. codesign may ask once for keychain access to
+   the signing key; choose "Always Allow".
+
+Do not use automatic or Apple Development signing for now: it embeds an
+application-identifier entitlement, which would let Alas Dev's keychain secret
+store migrate the release app's remote identity key into a keychain group only
+Alas Dev can read, deleting the shared file.
+
+"Alas Dev" has its own preferences domain and its own macOS permission grants,
+but shares the Application Support data with the release app. Release signing
+is unaffected; it stays in `scripts/sign-and-notarize.sh`.
+
 ## Pull request shepherding
 
 - Use the repo-scoped `lassie` skill when asked to babysit, shepherd, finish, or land a pull request.
