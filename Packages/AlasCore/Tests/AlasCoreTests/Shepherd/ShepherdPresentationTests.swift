@@ -104,6 +104,7 @@ private let presentationCases: [ShepherdPresentationCase] = [
         arguments: [
             (F.record(), nil, F.request(), false, false, true, false),
             (nil, F.record(), F.request(), true, false, true, true),
+            (nil, F.record(), nil, false, false, true, false),
             (nil, nil, F.request(), true, false, true, true),
             (nil, nil, F.request(state: .merged), true, false, true, false),
             (nil, nil, nil, false, false, false, true),

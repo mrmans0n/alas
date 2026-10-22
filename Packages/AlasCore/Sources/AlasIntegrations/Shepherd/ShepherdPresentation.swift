@@ -235,8 +235,9 @@ public enum ShepherdShipAction: Equatable, Sendable {
     }
 
     /// Whether the toolbar pill should stand out: its popover leads to an
-    /// action that can run now. Adopting an open request always can; Ship
-    /// with agent needs an idle session and, when `snapshot` is known, a
+    /// action that can run now. Taking over another session's request can
+    /// once its request has loaded, and adopting an open request always can;
+    /// Ship with agent needs an idle session and, when `snapshot` is known, a
     /// usable code host. An unknown snapshot counts as usable because the
     /// popover checks again before it acts.
     public static func invitesShip(
@@ -247,7 +248,8 @@ public enum ShepherdShipAction: Equatable, Sendable {
         isBusy: Bool
     ) -> Bool {
         guard record == nil else { return false }
-        if otherRecord != nil || request?.state == .open { return true }
+        if otherRecord != nil { return request != nil }
+        if request?.state == .open { return true }
         if isBusy { return false }
         guard let snapshot else { return true }
         return createUnavailableReason(isBusy: false, snapshot: snapshot, isLoading: false) == nil
