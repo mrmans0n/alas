@@ -146,4 +146,26 @@ struct HostSettingTests {
         #expect(missing == ["acme": "acme-acp"])
         #expect(HostSettingCatalog.all(for: config).contains { $0.key == "agents.acme.enabled" })
     }
+
+    /// The rows a terminal of `height` lines shows: all of them when they
+    /// fit, otherwise a window that keeps the selection on screen.
+    @Test(arguments: [
+        (5, 0, 10, 0 ..< 5),
+        (50, 0, 10, 0 ..< 10),
+        (50, 20, 10, 15 ..< 25),
+        (50, 49, 10, 40 ..< 50),
+        (50, 3, 0, 3 ..< 4),
+    ] as [(Int, Int, Int, Range<Int>)])
+    func aViewportKeepsTheSelectionVisible(count: Int, selected: Int, height: Int, expected: Range<Int>) {
+        #expect(HostSetupViewport.visibleRows(count: count, selected: selected, height: height) == expected)
+    }
+
+    @Test(arguments: [
+        ("enabled", 20, "enabled"),
+        ("agents.registry-agent.enabled = true", 12, "agents.regi…"),
+        ("abc", 1, "…"),
+    ])
+    func aRowIsCutToTheTerminalWidth(row: String, width: Int, expected: String) {
+        #expect(HostSetupViewport.fit(row, width: width) == expected)
+    }
 }

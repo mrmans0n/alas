@@ -23,11 +23,11 @@ public enum HostSetupMenuItem: CaseIterable, Sendable {
 
     public var title: String {
         switch self {
-        case .reachability: "Reachability"
-        case .agents: "Agents"
+        case .reachability: HostSettingSection.reachability.title
+        case .agents: HostSettingSection.agents.title
         case .projects: "Projects"
-        case .behavior: "Unattended behavior"
-        case .worktrees: "Worktrees"
+        case .behavior: HostSettingSection.behavior.title
+        case .worktrees: HostSettingSection.worktrees.title
         case .pair: "Pair a device"
         case .save: "Save and quit"
         }

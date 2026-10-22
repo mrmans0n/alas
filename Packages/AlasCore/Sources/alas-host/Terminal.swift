@@ -77,15 +77,31 @@ enum Terminal {
     }
 
     static func draw(_ view: HostSetupView, notice: String?) {
-        var screen = "\u{1b}[H\u{1b}[2J\u{1b}[1m\(view.title)\u{1b}[0m\r\n\r\n"
-        for (index, row) in view.rows.enumerated() {
+        let (lines, columns) = size()
+        let noticeLines = notice.map { $0.split(separator: "\n", omittingEmptySubsequences: false) } ?? []
+        // Title and a blank line, the notice and a blank line before it, and
+        // a blank line and the hint.
+        let height = lines - 2 - (noticeLines.isEmpty ? 0 : noticeLines.count + 1) - 2
+        let visible = HostSetupViewport.visibleRows(count: view.rows.count, selected: view.selected, height: height)
+        var screen = "\u{1b}[H\u{1b}[2J\u{1b}[1m\(HostSetupViewport.fit(view.title, width: columns))\u{1b}[0m\r\n\r\n"
+        for index in visible {
+            let row = HostSetupViewport.fit(view.rows[index], width: columns - 2)
             screen += index == view.selected ? "\u{1b}[7m> \(row)\u{1b}[0m\r\n" : "  \(row)\r\n"
         }
-        if let notice {
-            screen += "\r\n" + notice.replacingOccurrences(of: "\n", with: "\r\n") + "\r\n"
+        if !noticeLines.isEmpty {
+            screen += "\r\n" + noticeLines.map { HostSetupViewport.fit(String($0), width: columns) }.joined(separator: "\r\n") + "\r\n"
         }
-        screen += "\r\n\u{1b}[2m\(view.hint)\u{1b}[0m"
+        let position = visible.count < view.rows.count ? " · \(view.selected + 1)/\(view.rows.count)" : ""
+        screen += "\r\n\u{1b}[2m\(HostSetupViewport.fit(view.hint + position, width: columns))\u{1b}[0m"
         output(screen)
+    }
+
+    /// The terminal's lines and columns, or a classic 24 by 80 when it
+    /// cannot say.
+    private static func size() -> (lines: Int, columns: Int) {
+        var size = winsize()
+        guard ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) == 0, size.ws_row > 0, size.ws_col > 0 else { return (24, 80) }
+        return (Int(size.ws_row), Int(size.ws_col))
     }
 
     private static func output(_ text: String) {
