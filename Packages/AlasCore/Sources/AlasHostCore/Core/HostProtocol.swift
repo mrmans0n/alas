@@ -100,6 +100,26 @@ public enum HostRequest: Codable, Equatable, Sendable {
     /// a host that serves Remote headlessly and to a local client only. A
     /// host that serves no Remote, or the app, refuses it.
     case remotePairingCode
+    /// The Macs paired with a host that serves Remote headlessly, to a local
+    /// client only. A host that serves no Remote, or the app, refuses it.
+    case listPeers
+    /// Forgets a paired Mac and revokes its token; local client only.
+    case forgetPeer(peerID: String)
+}
+
+/// A paired Mac as `alas-host peers list` shows it; never its token.
+public struct HostPeerSummary: Codable, Equatable, Sendable {
+    public var id: String
+    public var serverId: String
+    public var name: String
+    public var origins: [String]
+
+    public init(id: String, serverId: String, name: String, origins: [String]) {
+        self.id = id
+        self.serverId = serverId
+        self.name = name
+        self.origins = origins
+    }
 }
 
 public enum HostServerMessage: Codable, Equatable, Sendable {
@@ -125,6 +145,7 @@ public enum HostResponse: Codable, Equatable, Sendable {
     case capabilities(capabilities: [String])
     case runOutput(output: HostRunOutput)
     case remotePairingCode(code: String, expiresAt: Date)
+    case peers(peers: [HostPeerSummary])
     case failure(error: HostError)
 }
 

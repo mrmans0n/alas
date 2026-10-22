@@ -11,6 +11,7 @@ usage: alas-host [--wait-for-lock]
        alas-host pair
        alas-host install-agent | uninstall-agent
        alas-host config list | get [<key>] | set <key> <value> [--restart]
+       alas-host peers list | remove <id|name|serverId>
        alas-host project list | add <path> [--name <name>] | remove <id|path>
        alas-host registry search [<query>] | install <id> | uninstall <id>
        alas-host restart
@@ -30,6 +31,9 @@ them later.
 
 `alas-host pair` asks the running host for a Remote pairing code, which a
 phone or browser redeems within two minutes, and prints it.
+
+`alas-host peers` lists the Macs paired with this host and removes one,
+revoking its access, through the running host when one serves the profile.
 
 `alas-host install-agent` installs and starts a launchd agent that runs this
 executable with --wait-for-lock at login, and restarts it after a crash;
