@@ -47,6 +47,18 @@ struct HeadlessSessionPresenterTests {
         #expect(presenter.sessionTabIndex(id, owner: fixture.owner) == nil)
     }
 
+    @Test func openingASessionArchivedSinceItOpenedFailsAndClosesIt() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let id = try await fixture.storedSession()
+        let presenter = fixture.presenter()
+        #expect(await presenter.openSessionTab(for: id) == .success)
+        try await fixture.persistence.setArchived(id: id, archived: true)
+
+        #expect(await presenter.openSessionTab(for: id) == .failure("This session is archived."))
+        #expect(presenter.sessionTabIndex(id, owner: fixture.owner) == nil)
+    }
+
     @Test func restoreReloadsOpenSessionsAndDropsStaleOnes() async throws {
         let fixture = try Fixture()
         defer { fixture.tearDown() }

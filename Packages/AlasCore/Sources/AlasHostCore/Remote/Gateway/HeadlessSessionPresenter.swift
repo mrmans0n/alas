@@ -103,7 +103,6 @@ public final class HeadlessSessionPresenter: RemoteSessionPresenter {
 
     private func openNow(_ id: String) async -> RemoteSessionTabActionResult {
         guard let worktreeID = await worktreeID(of: id) else { return .failure("This session is no longer available.") }
-        if open[worktreeID]?.contains(id) == true { return .success }
         guard let manager = localManager(worktreeID) else {
             return .failure("This session's worktree is no longer available.")
         }
@@ -116,9 +115,13 @@ public final class HeadlessSessionPresenter: RemoteSessionPresenter {
         } catch {
             return .failure("Could not read this session.")
         }
-        guard let stored else { return .failure("This session is no longer available.") }
-        if stored.archived { return .failure("This session is archived.") }
-        // A `sessionCreated` may have added it during the awaits above.
+        // Checked even when it is open already: a session archived or
+        // deleted since leaves the list instead of reopening.
+        guard let stored, !stored.archived else {
+            drop(id, from: worktreeID)
+            return .failure(stored == nil ? "This session is no longer available." : "This session is archived.")
+        }
+        // Already open, or a `sessionCreated` added it during the awaits above.
         if open[worktreeID]?.contains(id) == true { return .success }
         open[worktreeID, default: []].append(id)
         save()
@@ -128,10 +131,7 @@ public final class HeadlessSessionPresenter: RemoteSessionPresenter {
 
     private func closeNow(_ id: String) async -> RemoteSessionTabActionResult {
         guard let worktreeID = open.first(where: { $0.value.contains(id) })?.key else { return .success }
-        open[worktreeID]?.removeAll { $0 == id }
-        if open[worktreeID]?.isEmpty == true { open[worktreeID] = nil }
-        save()
-        sessionListChanges?.send()
+        drop(id, from: worktreeID)
         // As the app's tab close: dispose the runner, keep the row in history.
         if let manager = core.sessionManagers[.worktree(worktreeID)], manager.liveSession(for: id) != nil {
             manager.flushPendingDraftWrite(forSession: id)
@@ -142,6 +142,15 @@ public final class HeadlessSessionPresenter: RemoteSessionPresenter {
             }
         }
         return .success
+    }
+
+    /// Takes `id` out of the worktree's open sessions, if it is there.
+    private func drop(_ id: String, from worktreeID: String) {
+        guard open[worktreeID]?.contains(id) == true else { return }
+        open[worktreeID]?.removeAll { $0 == id }
+        if open[worktreeID]?.isEmpty == true { open[worktreeID] = nil }
+        save()
+        sessionListChanges?.send()
     }
 
     /// The worktree whose sessions include `id`: one a loaded manager lists,
