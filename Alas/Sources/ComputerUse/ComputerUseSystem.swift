@@ -287,6 +287,9 @@ extension LiveComputerUseSystem {
     static let pasteRestoreFloor: Duration = .milliseconds(200)
     /// Lets a click move focus before the focused element is checked.
     static let focusSettle: Duration = .milliseconds(50)
+    /// How long typing into an element waits for the focus it set to land.
+    static let focusWait: Duration = .milliseconds(300)
+    static let focusPoll: Duration = .milliseconds(25)
     /// One direct action at a time: activations and pasteboard swaps must not
     /// interleave, or the pasteboard saved by the second would be the first's text.
     private static let directLock = ComputerUseSerialLock()
@@ -310,24 +313,67 @@ extension LiveComputerUseSystem {
             return .activation
         }
         let app = window.app
+        // Background apps ignore many posted events; each case falls through to them only
+        // when the element offers no AX way.
         switch input {
-        case .click(.element(let handles, let handle), let button, let count) where button == .right || count == 1:
+        case .click(.element(let handles, let handle), .right, _):
             do {
-                if button == .right {
-                    try await ComputerUseAXActions.showMenu(handles, handle, app: app, isCancelled: isCancelled)
-                } else {
+                try await ComputerUseAXActions.showMenu(handles, handle, app: app, isCancelled: isCancelled)
+                return .ax
+            } catch is ComputerUseAXActions.Unsupported {
+                // A right click at its centre may still land.
+            }
+        case .click(.element(let handles, let handle), .left, let count) where count <= 2:
+            if count == 1 {
+                do {
                     try await ComputerUseAXActions.press(handles, handle, app: app, isCancelled: isCancelled)
+                    return .ax
+                } catch is ComputerUseAXActions.Unsupported {
+                    // Static text and cells have no press; something around them may.
+                }
+            }
+            do {
+                try await ComputerUseAXActions.pressOrSelectNearest(
+                    handles, handle, count: count, app: app, isCancelled: isCancelled)
+                return .ax
+            } catch is ComputerUseAXActions.Unsupported {
+                // A click at its centre may still land.
+            }
+        case .type(let text, .element(let handles, let handle), let replace):
+            do {
+                if replace {
+                    try await ComputerUseAXActions.setValue(text, handles, handle, app: app, isCancelled: isCancelled)
+                } else {
+                    try await ComputerUseAXActions.insertText(text, handles, handle, app: app, isCancelled: isCancelled)
                 }
                 return .ax
             } catch is ComputerUseAXActions.Unsupported {
-                // Not every element supports the action; a click at its centre may still land.
+                // The text isn't settable; focus it and type instead.
             }
-        case .type(let text, .element(let handles, let handle), replace: true):
+        case .type(let text, nil, let replace):
+            // Typing goes to the focused element of the target window only.
+            try await ComputerUseAXActions.makeActiveWindow(window, isCancelled: isCancelled)
             do {
-                try await ComputerUseAXActions.setValue(text, handles, handle, app: app, isCancelled: isCancelled)
+                try await ComputerUseAXActions.typeIntoFocused(text, replace: replace, app: app, isCancelled: isCancelled)
                 return .ax
             } catch is ComputerUseAXActions.Unsupported {
-                // The value isn't settable; focus, select all and type it instead.
+                // Nothing focused takes text this way; type it instead.
+            }
+        case .key(let chord) where ComputerUseAXActions.menuModifiers(chord) != nil:
+            // A menu shortcut acts on the key window, which must be the target, and ⌘V pastes into the focused field.
+            try await ComputerUseAXActions.makeActiveWindow(window, isCancelled: isCancelled)
+            if chord.mayInsertText {
+                try await ComputerUseAXActions.refuseSecureFocus(app: app, isCancelled: isCancelled)
+            }
+            if try await ComputerUseAXActions.pressMenuShortcut(chord, app: app, isCancelled: isCancelled) {
+                return .ax
+            }
+        case .scroll(let at, let dx, let dy):
+            do {
+                try await ComputerUseAXActions.scroll(at, dx: dx, dy: dy, in: window, isCancelled: isCancelled)
+                return .ax
+            } catch is ComputerUseAXActions.Unsupported {
+                // No scroll bar to move; a wheel event at the point may still land.
             }
         default:
             break
@@ -366,6 +412,7 @@ extension LiveComputerUseSystem {
             case .element(let handles, let handle):
                 try await ComputerUseAXActions.focus(handles, handle, app: app, isCancelled: isCancelled)
                 try await ComputerUseAXActions.makeActiveWindow(window, isCancelled: isCancelled)
+                try await waitForFocus(handles, handle, app: app, isCancelled: isCancelled)
             case .point(let location):
                 try checkCancelled()
                 try await ComputerUseInputPoster.click(at: location, button: .left, count: 1, target: target)
@@ -403,6 +450,19 @@ extension LiveComputerUseSystem {
             let end = try await point(to)
             try checkCancelled()
             try await ComputerUseInputPoster.drag(from: start, to: end, target: target) { interrupt() == .userActive }
+        }
+    }
+
+    /// Typed text that arrives before focus lands is lost. Gives up after `focusWait` and types
+    /// anyway: some apps never report the element they focused.
+    private static func waitForFocus(
+        _ handles: ComputerUseAXHandles, _ handle: Int, app: ComputerUseAppIdentity,
+        isCancelled: @escaping @Sendable () -> Bool
+    ) async throws {
+        let deadline = ContinuousClock.now + focusWait
+        while try await !ComputerUseAXActions.isFocused(handles, handle, app: app, isCancelled: isCancelled),
+              ContinuousClock.now < deadline {
+            try? await Task.sleep(for: focusPoll)
         }
     }
 
