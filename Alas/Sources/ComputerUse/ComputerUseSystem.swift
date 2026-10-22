@@ -62,6 +62,17 @@ enum ComputerUseDelivery: String, Sendable {
     case ax, event, activation
 }
 
+/// A delivered input: how it got there and, for a chord pressed as a menu item, which one.
+struct ComputerUseDelivered: Sendable, Equatable {
+    var delivery: ComputerUseDelivery
+    /// "Menu > Item" in the app's own menu titles.
+    var menuItem: String?
+
+    static let ax = ComputerUseDelivered(delivery: .ax)
+    static let event = ComputerUseDelivered(delivery: .event)
+    static let activation = ComputerUseDelivered(delivery: .activation)
+}
+
 enum ComputerUseSystemError: Error, LocalizedError {
     case windowNotFound(UInt32)
     case captureFailed(String)
@@ -106,7 +117,9 @@ struct ComputerUseSystem: Sendable {
     var perform: @Sendable (
         ComputerUseInput, ComputerUseWindow, _ direct: Bool,
         _ interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
-    ) async throws -> ComputerUseDelivery
+    ) async throws -> ComputerUseDelivered
+    /// The target app's focused element, read before and after an input to tell whether it did anything.
+    var focusState: @Sendable (ComputerUseWindow) async -> ComputerUseWindowFingerprint.Focus?
     /// Whether the element behind a handle still has the role and title it was read with.
     var elementMatches: @Sendable (ComputerUseAXHandles, Int, _ role: String, _ title: String?) async -> Bool
     /// Seconds since the last hardware input; events Alas posts don't count.
@@ -127,6 +140,7 @@ struct ComputerUseSystem: Sendable {
         perform: { input, window, direct, interrupt in
             try await LiveComputerUseSystem.perform(input, in: window, direct: direct, interrupt: interrupt)
         },
+        focusState: { await ComputerUseAXActions.focusState(of: $0.app) },
         elementMatches: { handles, handle, role, title in
             await ComputerUseAXActions.elementMatches(handles, handle, role: role, title: title)
         },
@@ -299,7 +313,7 @@ extension LiveComputerUseSystem {
     static func perform(
         _ input: ComputerUseInput, in window: ComputerUseWindow, direct: Bool,
         interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
-    ) async throws -> ComputerUseDelivery {
+    ) async throws -> ComputerUseDelivered {
         let isCancelled: @Sendable () -> Bool = { interrupt() == .cancelled }
         if isCancelled() { throw CancellationError() }
         // The coordinator refuses these first; no delivery path may quit an app either way.
@@ -367,8 +381,8 @@ extension LiveComputerUseSystem {
             // A menu shortcut acts on the key window, which must be the target. The press itself
             // refuses while a secure field has focus: any menu item may paste into it.
             try await ComputerUseAXActions.makeActiveWindow(window, isCancelled: isCancelled)
-            if try await ComputerUseAXActions.pressMenuShortcut(chord, app: app, interrupt: interrupt) {
-                return .ax
+            if let menuItem = try await ComputerUseAXActions.pressMenuShortcut(chord, app: app, interrupt: interrupt) {
+                return ComputerUseDelivered(delivery: .ax, menuItem: menuItem)
             }
         case .scroll(let at, let dx, let dy):
             do {

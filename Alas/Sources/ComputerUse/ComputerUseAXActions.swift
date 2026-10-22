@@ -273,8 +273,8 @@ enum ComputerUseAXActions {
 /// scroll wheels, clicks on static text), so these reach the same result through AX.
 /// Each throws `Unsupported` when the element offers no AX way, so events can be tried.
 extension ComputerUseAXActions {
-    /// Menu levels walked for a shortcut: a top-level menu is level 1.
-    static let menuMaxDepth = 4
+    /// Menu levels walked for a shortcut: a top-level menu is level 1 (Format > Font > Bold is 2).
+    static let menuMaxDepth = 6
     static let menuMaxItems = 2000
     /// Ancestors searched for the scroll area around an element.
     static let scrollAncestorLevels = 8
@@ -284,14 +284,15 @@ extension ComputerUseAXActions {
     /// Characters set per AX insert, so a stop or takeover can land between them.
     static let insertChunkCharacters = 200
 
-    /// Presses the enabled menu item whose shortcut is `chord`; false when no menu item has it.
+    /// Presses the enabled menu item whose shortcut is `chord` and returns its path in the app's
+    /// menu titles ("Format > Font > Bold"); nil when no enabled menu item has it.
     /// Skips the Apple menu: its shortcuts (log out, force quit) belong to the system.
     /// Refuses while a secure text field has focus, since a menu item can paste into it.
     static func pressMenuShortcut(
         _ chord: ComputerUseKeyChord, app: ComputerUseAppIdentity,
         interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
-    ) async throws -> Bool {
-        guard ComputerUseMenuShortcut.applies(to: chord) else { return false }
+    ) async throws -> String? {
+        guard ComputerUseMenuShortcut.applies(to: chord) else { return nil }
         let chordVirtualKey = ComputerUseInputPoster.keyCode(for: chord.key).map(Int.init)
         return try await onQueue({ interrupt() == .cancelled }) {
             func matches(_ item: AXUIElement) -> Bool {
@@ -302,36 +303,39 @@ extension ComputerUseAXActions {
                 case .character: if cmdChar == nil { return false }
                 case .named: virtualKey = number(of: item, kAXMenuItemCmdVirtualKeyAttribute)
                 }
+                // AppKit validates items against the key window: an inactive app's items read as disabled,
+                // and pressing one does nothing.
                 return ComputerUseMenuShortcut.matches(
                     chord, cmdChar: cmdChar, virtualKey: virtualKey,
-                    mask: number(of: item, kAXMenuItemCmdModifiersAttribute) ?? 0, chordVirtualKey: chordVirtualKey)
+                    mask: number(of: item, kAXMenuItemCmdModifiersAttribute), chordVirtualKey: chordVirtualKey)
                     && bool(of: item, kAXEnabledAttribute) == true
             }
             let application = ComputerUseAXReader.application(app.pid)
-            guard let menuBar = elementAttribute(application, kAXMenuBarAttribute) else { return false }
+            guard let menuBar = elementAttribute(application, kAXMenuBarAttribute) else { return nil }
             let deadline = ContinuousClock.now + ComputerUseAXReader.deadline
             var items = 0
-            func find(in menu: AXUIElement, level: Int) -> AXUIElement? {
+            func title(_ element: AXUIElement) -> String { string(of: element, kAXTitleAttribute) ?? "?" }
+            func find(in menu: AXUIElement, level: Int, path: [String]) -> (AXUIElement, [String])? {
                 for item in children(of: menu) {
                     guard items < menuMaxItems, ContinuousClock.now < deadline, interrupt() != .cancelled else { return nil }
                     items += 1
                     guard string(of: item, kAXRoleAttribute) == kAXMenuItemRole else { continue }
-                    if matches(item) { return item }
+                    if matches(item) { return (item, path + [title(item)]) }
                     guard level < menuMaxDepth else { continue }
                     for submenu in children(of: item) where string(of: submenu, kAXRoleAttribute) == kAXMenuRole {
-                        if let found = find(in: submenu, level: level + 1) { return found }
+                        if let found = find(in: submenu, level: level + 1, path: path + [title(item)]) { return found }
                     }
                 }
                 return nil
             }
-            var target: AXUIElement?
+            var target: (item: AXUIElement, path: [String])?
             search: for barItem in children(of: menuBar).dropFirst() {
                 for menu in children(of: barItem) where string(of: menu, kAXRoleAttribute) == kAXMenuRole {
-                    target = find(in: menu, level: 1)
+                    target = find(in: menu, level: 1, path: [title(barItem)])
                     if target != nil { break search }
                 }
             }
-            guard let target else { return false }
+            guard let target else { return nil }
             // The walk can take seconds: the user may have taken over, or a secure field focus, since it started.
             switch interrupt() {
             case .cancelled: throw CancellationError()
@@ -339,8 +343,8 @@ extension ComputerUseAXActions {
             case nil: break
             }
             if let focused = focusedElement(of: app), isSecure(focused) { throw secureRefusal }
-            try press(target, app: app)
-            return true
+            try press(target.item, app: app)
+            return target.path.joined(separator: " > ")
         }
     }
 
@@ -386,6 +390,25 @@ extension ComputerUseAXActions {
               var range, let value = AXValueCreate(.cfRange, &range)
         else { return }
         AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, value)
+    }
+
+    /// The app's focused element as an input could change it; nil when nothing readable has focus.
+    /// A secure field's value is never read.
+    static func focusState(of app: ComputerUseAppIdentity) async -> ComputerUseWindowFingerprint.Focus? {
+        try? await onQueue({ false }) {
+            guard let element = focusedElement(of: app) else { return nil }
+            let role = string(of: element, kAXRoleAttribute) ?? "AXUnknown"
+            var valueHash: Int?
+            if !isSecure(element) {
+                var value: CFTypeRef?
+                if AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &value) == .success, let value {
+                    valueHash = (value as? String)?.hashValue ?? (value as? NSNumber)?.hashValue
+                }
+            }
+            return ComputerUseWindowFingerprint.Focus(
+                role: role, title: string(of: element, kAXTitleAttribute), valueHash: valueHash,
+                selectedRange: selectedRange(of: element).map { [$0.location, $0.length] })
+        }
     }
 
     /// Whether the app's focused element is the one behind `handle`.

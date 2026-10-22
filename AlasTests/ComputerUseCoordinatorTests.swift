@@ -32,6 +32,7 @@ struct ComputerUseCoordinatorTests {
                 recorder?.record(input)
                 return .ax
             },
+            focusState: { _ in nil },
             elementMatches: { _, _, _, _ in true },
             secondsSinceUserInput: { 60 },
             frontmostPID: { nil },
@@ -312,6 +313,40 @@ struct ComputerUseCoordinatorTests {
             return
         }
         #expect(handle == 1)
+    }
+
+    enum WindowChange: CaseIterable { case none, elements, focus }
+
+    @Test(arguments: [
+        (ComputerUseDelivered.ax, WindowChange.none,
+         "No change was observed in the window after this action; the app may have ignored it."),
+        (.event, .none,
+         #"No change was observed in the window after this action; the app may have ignored it. Retry with delivery: "direct"."#),
+        (.event, .elements, nil),
+        (.event, .focus, nil),
+    ] as [(ComputerUseDelivered, WindowChange, String?)])
+    func actionThatChangedNothingSaysSo(_ delivered: ComputerUseDelivered, change: WindowChange, warning: String?) async throws {
+        let reads = Counter()
+        let focusReads = Counter()
+        let saveTree = Self.saveTree
+        var system = Self.system()
+        system.perform = { _, _, _, _ in delivered }
+        // Read 1 is the inspect, 2 the window before the input, 3 the one after it.
+        system.axTree = { _, _, _ in
+            var tree = saveTree
+            if change == .elements, reads.next() == 3 { tree.children.append(ComputerUseAXNode(role: "AXSheet", handle: 2)) }
+            return (tree, true, ComputerUseAXHandles())
+        }
+        system.focusState = { _ in
+            let caret = change == .focus && focusReads.next() == 2 ? 5 : 0
+            return ComputerUseWindowFingerprint.Focus(role: "AXTextArea", valueHash: 1, selectedRange: [caret, 0])
+        }
+        let f = Self.fixture(system: system, allowed: [Self.notes])
+        _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")
+        let json = try #require(Self.text(await f.coordinator.perform(.init(action: .key, windowID: 1, keys: "cmd+b"), sessionID: "s")))
+        let payload = try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        #expect(payload["warning"] as? String == warning)
+        #expect(payload["delivery"] as? String == delivered.delivery.rawValue)
     }
 
     @Test(arguments: [

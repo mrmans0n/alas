@@ -615,9 +615,12 @@ final class ComputerUseCoordinator {
         try checkStillActive(context)
         try await recheckRefs(of: command, in: window, context: context)
         try checkStillActive(context)
-        let delivery: ComputerUseDelivery
+        // What the window looked like, so an input the app ignored doesn't pass for one that worked.
+        let before = await fingerprint(of: window, for: command, context: context)
+        try checkStillActive(context)
+        let delivered: ComputerUseDelivered
         do {
-            delivery = try await deliver(input, to: window, direct: direct, sessionID: context.sessionID)
+            delivered = try await deliver(input, to: window, direct: direct, sessionID: context.sessionID)
         } catch ComputerUseSystemError.staleElement {
             guard let ref = command.ref ?? command.toRef else { throw ComputerUseSystemError.actionFailed("The element is no longer valid.") }
             throw Refusal(Message.stale(ref, windowID: window.windowID))
@@ -631,7 +634,8 @@ final class ComputerUseCoordinator {
         // Stopped mid-sequence: the input finished its events, but nothing more happens.
         try checkStillActive(context)
         payload["action"] = command.action.rawValue
-        payload["delivery"] = delivery.rawValue
+        payload["delivery"] = delivered.delivery.rawValue
+        payload["menu_item"] = delivered.menuItem
 
         await sleep(Self.settleDelay)
         try checkStillActive(context)
@@ -643,6 +647,11 @@ final class ComputerUseCoordinator {
                 window, query: command.query, limit: command.limit, maxDepth: Self.postStateDepth, context: context)
             payload["truncated"] = read.truncated
             payload["elements"] = read.elements.map(Self.element)
+            let after = await ComputerUseWindowFingerprint(
+                focus: system.focusState(window), windowTitle: window.title,
+                elementsHash: ComputerUseChangeCheck.elementsHash(read.elements))
+            payload["warning"] = ComputerUseChangeCheck.warning(
+                before: before, after: after, deliveredAsEvents: delivered.delivery == .event)
         } catch is CancellationError {
             throw CancellationError()
         } catch {
@@ -670,6 +679,19 @@ final class ComputerUseCoordinator {
     static let postStateDepth = 12
     static let takeoverPoll: Duration = .milliseconds(100)
     static let waitPoll: Duration = .milliseconds(250)
+
+    /// The window as the post-action read will see it. A failed read leaves the element list
+    /// unknown, which never counts as unchanged.
+    private func fingerprint(
+        of window: ComputerUseWindow, for command: ComputerUseCommand, context: CallContext
+    ) async -> ComputerUseWindowFingerprint {
+        let read = try? await readElements(
+            window, query: command.query, limit: command.limit, maxDepth: Self.postStateDepth, context: context,
+            recordRefs: false)
+        return await ComputerUseWindowFingerprint(
+            focus: system.focusState(window), windowTitle: window.title,
+            elementsHash: read.map { ComputerUseChangeCheck.elementsHash($0.elements) })
+    }
 
     /// The window as it is now; gone or now another app's → `windowNotFound`.
     private func currentWindow(_ window: ComputerUseWindow) async throws -> ComputerUseWindow {
@@ -753,7 +775,7 @@ final class ComputerUseCoordinator {
     /// The input sees a stop, session end or cancellation through `isCancelled`, between its events.
     private func deliver(
         _ input: ComputerUseInput, to window: ComputerUseWindow, direct: Bool, sessionID: String
-    ) async throws -> ComputerUseDelivery {
+    ) async throws -> ComputerUseDelivered {
         let flag = CancelFlag()
         inputFlags[sessionID, default: []].append(flag)
         defer {
