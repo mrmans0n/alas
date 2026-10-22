@@ -1178,7 +1178,11 @@ final class NativePeerSessions {
             return
         }
         if case .promptRejected = message {
-            rejectPendingPrompt(message: "Prompt was not delivered. Your draft was kept.")
+            // The host refuses prompts while its agent cannot run; say why.
+            let reason = transcript?.config?.agentIssue.map {
+                "Prompt was not delivered: \($0.message.trimmingCharacters(in: CharacterSet(charactersIn: ". "))). Your draft was kept."
+            }
+            rejectPendingPrompt(message: reason ?? "Prompt was not delivered. Your draft was kept.")
             return
         }
         let isChangesReply: Bool = switch message {
