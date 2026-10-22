@@ -45,6 +45,13 @@ is unchanged.
 ## Recognized hosts
 
 Alas recognizes `github.com` as GitHub, and `gitlab.com` or a host whose first
-label is `gitlab` (such as `gitlab.example.com`) as GitLab. GitHub Enterprise
-and self-managed GitLab servers under other names are not recognized, so a
+label is `gitlab` (such as `gitlab.example.com`) as GitLab. GitHub Enterprise,
+self-managed GitLab servers under other names, and SSH host aliases from
+`~/.ssh/config` (such as `git@github-work:org/repo`) are not recognized, so a
 plugin that sets `requires.codeHost` stays hidden in those projects.
+
+## Panel icons
+
+A right-rail panel's `icon` is an SF Symbol name, with two exceptions: `"github"`
+and `"gitlab"` draw Alas's own GitHub and GitLab glyphs. Command icons are
+always SF Symbols.
