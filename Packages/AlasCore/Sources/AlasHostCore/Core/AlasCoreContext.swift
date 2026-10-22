@@ -361,13 +361,14 @@ public final class AlasCoreContext {
         )
     }
 
-    /// `defaultSessionManager`, resuming after a usage limit and continuing
-    /// interrupted sessions as `config` says when each is decided.
+    /// `defaultSessionManager`, resuming after a usage limit, continuing
+    /// interrupted sessions, and capturing Claude session hooks as `config`
+    /// says when each is decided.
     public static func sessionManagerFactory(
         config: @escaping @MainActor () -> AppConfig
     ) -> @MainActor (SessionOwnerID, Worktree) -> ACPSessionManager {
         { owner, worktree in
-            ACPSessionManager(
+            let manager = ACPSessionManager(
                 worktreeId: worktree.id,
                 worktreePath: worktree.path.path,
                 owner: owner,
@@ -375,6 +376,8 @@ public final class AlasCoreContext {
                 autoResumeAfterUsageLimit: { config().harness.acpAutoResumeAfterUsageLimit },
                 continueInterruptedSessions: { config().harness.acpContinueInterruptedSessions }
             )
+            manager.sessionHooksProvider = { config().agents.sessionHooks(for: $0) }
+            return manager
         }
     }
 
