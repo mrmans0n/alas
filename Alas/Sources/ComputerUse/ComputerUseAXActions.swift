@@ -581,7 +581,10 @@ extension ComputerUseAXActions {
             case .selectRow(let index):
                 let row = elements[index]
                 try select(row, app: app)
-                guard count == 2 else { return }
+                guard count == 2 else {
+                    openInSourceList(row, below: elements[..<index], app: app)
+                    return
+                }
                 // Selected but not opened: the double click as events finishes it.
                 guard let open = [openAction, kAXPressAction].first(where: links[index].actions.contains) else {
                     throw Unsupported(error: .actionUnsupported)
@@ -595,6 +598,21 @@ extension ComputerUseAXActions {
 
     /// No header constant exists for it.
     private static let openAction = "AXOpen"
+    private static let sourceListSubrole = "AXSourceList"
+
+    /// A sidebar (a source list, like Finder's) navigates on a single click, which selecting the
+    /// row doesn't do: opens the cell that was clicked, else the row's first cell that opens.
+    /// Best effort, since the row is selected either way.
+    private static func openInSourceList(_ row: AXUIElement, below chain: ArraySlice<AXUIElement>, app: ComputerUseAppIdentity) {
+        guard let outline = elementAttribute(row, kAXParentAttribute),
+              string(of: outline, kAXRoleAttribute) == kAXOutlineRole,
+              string(of: outline, kAXSubroleAttribute) == sourceListSubrole
+        else { return }
+        let opens = { (element: AXUIElement) in actionNames(of: element).contains(openAction) }
+        // The chain runs from the clicked element up to the row: the last entry is the row's child.
+        guard let cell = chain.last.flatMap({ opens($0) ? $0 : nil }) ?? children(of: row).first(where: opens) else { return }
+        _ = try? press(cell, action: openAction, app: app)
+    }
 
     /// Selects the row through its table or outline (`AXSelectedRows`), else the row's own
     /// `AXSelected`, then reads it back: some apps report success and select nothing, which is
