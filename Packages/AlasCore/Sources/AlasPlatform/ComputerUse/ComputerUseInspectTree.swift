@@ -46,6 +46,8 @@ public struct ComputerUseInspectElement: Equatable, Sendable {
     public var subrole: String?
     public var title: String?
     public var value: String?
+    /// The full value's length in characters when `value` was clipped; nil when it wasn't.
+    public var valueLength: Int?
     public var description: String?
     public var frame: CGRect
     public var isEnabled: Bool
@@ -60,6 +62,7 @@ public struct ComputerUseInspectElement: Equatable, Sendable {
         subrole: String? = nil,
         title: String? = nil,
         value: String? = nil,
+        valueLength: Int? = nil,
         description: String? = nil,
         frame: CGRect = .zero,
         isEnabled: Bool = true,
@@ -72,6 +75,7 @@ public struct ComputerUseInspectElement: Equatable, Sendable {
         self.subrole = subrole
         self.title = title
         self.value = value
+        self.valueLength = valueLength
         self.description = description
         self.frame = frame
         self.isEnabled = isEnabled
@@ -85,15 +89,17 @@ public enum ComputerUseInspectTree {
 
     /// Refs are the pre-order index of each node among all nodes visited (root is `e1`),
     /// so a query or limit never renumbers them: the same element has the same ref in a
-    /// filtered and an unfiltered listing of the same tree.
+    /// filtered and an unfiltered listing of the same tree. `refs` maps the ref of every
+    /// visited node with a handle, listed or not, so a filtered read keeps the others usable.
     public static func flatten(
         _ root: ComputerUseAXNode,
         query: String?,
         limit: Int,
         maxDepth: Int
-    ) -> (elements: [ComputerUseInspectElement], truncated: Bool) {
+    ) -> (elements: [ComputerUseInspectElement], truncated: Bool, refs: [String: Int]) {
         let needle = query.flatMap { $0.isEmpty ? nil : $0.lowercased() }
         var elements: [ComputerUseInspectElement] = []
+        var refs: [String: Int] = [:]
         var truncated = false
         var visited = 0
 
@@ -112,36 +118,40 @@ public enum ComputerUseInspectTree {
             string.map { String($0.prefix(maxStringLength)) }
         }
 
-        // Returns false once traversal can stop.
-        func visit(_ node: ComputerUseAXNode, depth: Int) -> Bool {
-            guard depth <= maxDepth else { return true }
+        // Past the limit the walk goes on only to name the remaining nodes' refs.
+        func visit(_ node: ComputerUseAXNode, depth: Int) {
+            guard depth <= maxDepth else { return }
             visited += 1
+            let ref = "e\(visited)"
+            if let handle = node.handle { refs[ref] = handle }
             if matches(node) {
                 if elements.count >= limit {
                     truncated = true
-                    return false
+                } else {
+                    let value = isSecure(node) ? nil : node.value
+                    let length = value?.count ?? 0
+                    elements.append(ComputerUseInspectElement(
+                        ref: ref,
+                        depth: depth,
+                        role: clip(node.role) ?? node.role,
+                        subrole: clip(node.subrole),
+                        title: clip(node.title),
+                        value: clip(value),
+                        valueLength: length > maxStringLength ? length : nil,
+                        description: clip(node.description),
+                        frame: node.frame,
+                        isEnabled: node.isEnabled,
+                        isFocused: node.isFocused,
+                        handle: node.handle
+                    ))
                 }
-                elements.append(ComputerUseInspectElement(
-                    ref: "e\(visited)",
-                    depth: depth,
-                    role: clip(node.role) ?? node.role,
-                    subrole: clip(node.subrole),
-                    title: clip(node.title),
-                    value: isSecure(node) ? nil : clip(node.value),
-                    description: clip(node.description),
-                    frame: node.frame,
-                    isEnabled: node.isEnabled,
-                    isFocused: node.isFocused,
-                    handle: node.handle
-                ))
             }
-            for child in node.children where !visit(child, depth: depth + 1) {
-                return false
+            for child in node.children {
+                visit(child, depth: depth + 1)
             }
-            return true
         }
 
-        _ = visit(root, depth: 0)
-        return (elements, truncated)
+        visit(root, depth: 0)
+        return (elements, truncated, refs)
     }
 }

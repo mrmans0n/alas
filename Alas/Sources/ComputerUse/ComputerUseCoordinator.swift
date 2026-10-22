@@ -811,6 +811,8 @@ final class ComputerUseCoordinator {
         var truncated: Bool
         var elements: [ComputerUseInspectElement]
         var handles: ComputerUseAXHandles
+        /// Every ref the read named, listed or not, to its handle.
+        var refs: [String: Int]
         /// Role and title by handle, before the inspect output clips them.
         var identities: [Int: (role: String, title: String?)]
     }
@@ -833,16 +835,18 @@ final class ComputerUseCoordinator {
         }
         collect(tree.root)
         let read = ElementRead(
-            truncated: flat.truncated || !tree.complete, elements: flat.elements, handles: tree.handles, identities: identities)
+            truncated: flat.truncated || !tree.complete, elements: flat.elements, handles: tree.handles, refs: flat.refs,
+            identities: identities)
         if recordRefs { record(refs: read, of: window, context: context) }
         return read
     }
 
     private func record(refs read: ElementRead, of window: ComputerUseWindow, context: CallContext) {
+        // A query or limit only trims what the agent is shown: every element the read named stays usable.
         var refs: [String: ElementRef] = [:]
-        for element in read.elements {
-            guard let handle = element.handle, let identity = read.identities[handle] else { continue }
-            refs[element.ref] = ElementRef(handle: handle, role: identity.role, title: identity.title)
+        for (ref, handle) in read.refs {
+            guard let identity = read.identities[handle] else { continue }
+            refs[ref] = ElementRef(handle: handle, role: identity.role, title: identity.title)
         }
         updateSnapshot(of: window, context: context) {
             $0.refs = refs
@@ -952,6 +956,10 @@ final class ComputerUseCoordinator {
         object["subrole"] = element.subrole
         object["title"] = element.title
         object["value"] = element.value
+        if let length = element.valueLength {
+            object["value_truncated"] = true
+            object["value_length"] = length
+        }
         object["description"] = element.description
         return object
     }

@@ -300,6 +300,20 @@ struct ComputerUseCoordinatorTests {
         #expect(recorder.sleeps == [.milliseconds(300)])
     }
 
+    @Test func refsTheQueryLeftOutStillWork() async throws {
+        let recorder = Recorder()
+        let f = Self.fixture(system: Self.system(recorder: recorder), recorder: recorder, allowed: [Self.notes])
+        // Only the window matches; the Save button is e2 all the same.
+        let inspect = try #require(Self.text(await f.coordinator.perform(.init(action: .inspect, windowID: 1, query: "Note"), sessionID: "s")))
+        #expect(!inspect.contains("Save"))
+        #expect(Self.text(await f.coordinator.perform(.init(action: .click, windowID: 1, ref: "e2"), sessionID: "s")) != nil)
+        guard case .click(.element(_, let handle), _, _) = try #require(recorder.inputs.first) else {
+            Issue.record("expected an element click")
+            return
+        }
+        #expect(handle == 1)
+    }
+
     @Test(arguments: [
         (ComputerUseSystemError.staleElement,
          "computer_stale: The element ref e2 is no longer valid. Call computer_inspect on window 1 again."),

@@ -3,15 +3,15 @@ import Testing
 @testable import AlasPlatform
 
 struct ComputerUseInspectTreeTests {
-    private func node(_ role: String, title: String? = nil, value: String? = nil, subrole: String? = nil,
+    private func node(_ role: String, title: String? = nil, value: String? = nil, subrole: String? = nil, handle: Int? = nil,
                       _ children: [ComputerUseAXNode] = []) -> ComputerUseAXNode {
-        ComputerUseAXNode(role: role, subrole: subrole, title: title, value: value, children: children)
+        ComputerUseAXNode(role: role, subrole: subrole, title: title, value: value, children: children, handle: handle)
     }
 
     private var sample: ComputerUseAXNode {
-        node("AXWindow", [
-            node("AXGroup", [node("AXButton", title: "OK"), node("AXButton", title: "Cancel")]),
-            node("AXTextField", value: "hello"),
+        node("AXWindow", handle: 0, [
+            node("AXGroup", handle: 1, [node("AXButton", title: "OK", handle: 2), node("AXButton", title: "Cancel", handle: 3)]),
+            node("AXTextField", value: "hello", handle: 4),
         ])
     }
 
@@ -62,6 +62,9 @@ struct ComputerUseInspectTreeTests {
         for element in filtered.elements {
             #expect(refToRole[element.ref] == "\(element.role)|\(element.title ?? "")|\(element.value ?? "")")
         }
+        // The elements the query or limit left out keep their refs too.
+        #expect(filtered.refs == full.refs)
+        #expect(full.refs == ["e1": 0, "e2": 1, "e3": 2, "e4": 3, "e5": 4])
     }
 
     @Test(arguments: [("AXTextField", "AXSecureTextField"), ("AXSecureTextField", nil)] as [(String, String?)])
@@ -79,6 +82,12 @@ struct ComputerUseInspectTreeTests {
         let result = ComputerUseInspectTree.flatten(node("AXStaticText", title: long, value: long), query: nil, limit: 1, maxDepth: 1)
         #expect(result.elements[0].title?.count == 200)
         #expect(result.elements[0].value?.count == 200)
+        // Only a clipped value says how long it really is, in characters.
+        #expect(result.elements[0].valueLength == 500)
+        let emoji = String(repeating: "👍🏽", count: 201)
+        let short = ComputerUseInspectTree.flatten(node("AXWindow", value: "short", [node("AXTextArea", value: emoji)]),
+                                                   query: nil, limit: 2, maxDepth: 1)
+        #expect(short.elements.map(\.valueLength) == [nil, 201])
     }
 
     @Test(arguments: [
