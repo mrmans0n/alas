@@ -68,7 +68,7 @@ struct ACPSessionRunnerTests {
         #expect(runner.session.transcript.streamingState == .idle)
     }
 
-    @Test("send reports successful completion and emits one completed turn when session prompt succeeds")
+    @Test("send reports successful completion, clears an earlier prompt error, and emits one completed turn when session prompt succeeds")
     func sendReportsSuccessfulCompletionWhenPromptSucceeds() async throws {
         var completions: [ACPTurnCompletion] = []
         let (runner, mock) = try makeRunner(onTurnCompleted: { completions.append($0) })
@@ -78,6 +78,7 @@ struct ACPSessionRunnerTests {
         ])])])
         runner.session.apply(.sessionInfoUpdate(.init(title: nil, metadata: retry)))
         runner.session.turnFailure = "previous turn failed"
+        runner.session.lastError = "prompt failed: previous turn failed"
 
         let succeeded = await withCheckedContinuation { continuation in
             runner.send(text: "hello", attachments: []) { succeeded in

@@ -1960,6 +1960,8 @@ public final class ACPSessionRunner {
         } else {
             session.turnFailure = nil
         }
+        // A turn that went through makes an earlier prompt error stale.
+        if case .completed = result { session.lastError = nil }
         guard let startedAt = activePromptStartedAt else {
             // A recovery prompt is no turn, but a stopped one's usage still waits for its result only so long.
             if usageAwaitsResult { reportUsageWithoutResult(promptID) }
