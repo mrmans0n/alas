@@ -14,6 +14,7 @@ public struct AlasCLIRequest: Equatable, Sendable {
         case worktree(WorktreeCommand)
         case workspace(WorkspaceCommand)
         case preview(WebPreviewCommand)
+        case computer(ComputerUseCommand)
         case review(ReviewCommand)
         case agentList(worktree: String?)
         case sessionList
@@ -725,6 +726,11 @@ public struct AlasCLIRequest: Equatable, Sendable {
                 throw AlasCLIRequestError.unsupportedCommand
             }
             command = .preview(try WebPreviewCommand.decode(action: action, data: data))
+        case let name? where name.hasPrefix("computer_"):
+            guard let action = ComputerUseCommand.Action(rawValue: String(name.dropFirst("computer_".count))) else {
+                throw AlasCLIRequestError.unsupportedCommand
+            }
+            command = .computer(try ComputerUseCommand.decode(action: action, data: data))
         case "resolve":
             command = .resolve
         default:

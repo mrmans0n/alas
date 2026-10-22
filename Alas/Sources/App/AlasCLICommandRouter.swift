@@ -66,6 +66,8 @@ struct AlasCLICommandRouter {
                 return .error("not inside an Alas worktree")
             }
             return await previewCommand(command, owner, request.sessionId)
+        case .computer:
+            return .error("Computer use commands are not available yet.")
         case .workspace(let command):
             return await workspaceCommand(command, caller)
         case .visualShow(let title, let html, let question, let presentation):
@@ -200,7 +202,7 @@ struct AlasCLICommandRouter {
             case .ambiguous(let labels):
                 return .error("ambiguous worktree \"\(target)\"; matches: \(labels.joined(separator: ", "))")
             }
-        case .workspace, .preview:
+        case .workspace, .preview, .computer:
             preconditionFailure("Workspace commands are handled before generic origin resolution")
         case .review(.localChanges(let worktreeOverride)):
             switch service.reviewOrigin(origin: origin, override: worktreeOverride, projectWorktrees: projectWorktrees) {
