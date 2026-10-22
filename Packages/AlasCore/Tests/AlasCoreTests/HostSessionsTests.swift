@@ -370,6 +370,7 @@ struct HostSessionsTests {
         (.disconnected, .ready, nil, nil),
         (.failed("spawn failed"), .ready, nil, RemoteAgentIssue(kind: "failed", message: "spawn failed")),
         (.failed("spawn failed"), .ready, "Broken pipe", RemoteAgentIssue(kind: "failed", message: "Broken pipe")),
+        (.ready, .ready, "Prompt failed: rate limited", RemoteAgentIssue(kind: "error", message: "Prompt failed: rate limited")),
         (.failed("x"), .needsAuth(methods: [.init(id: "login", name: "Login", kind: .terminal)], reason: "Token expired."), nil,
          RemoteAgentIssue(kind: "needsAuth", message: "Codex needs sign-in before it can continue. Token expired.")),
         (.failed("x"), .needsSetup(reason: "missing"), nil,

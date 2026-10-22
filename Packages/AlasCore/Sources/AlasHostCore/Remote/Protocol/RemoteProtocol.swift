@@ -116,8 +116,9 @@ public struct RemoteSessionConfig: Codable, Equatable, Sendable {
     /// Set by hosts that serve `searchMentions` and resolve `sendPrompt`
     /// mentions. Older hosts would drop both.
     public var supportsMentions: Bool? = nil
-    /// Why the session's agent cannot run on the host, as the host's own
-    /// banner words it. Nil when nothing is wrong, and on older hosts.
+    /// Why the session's agent cannot run on the host, or the error it last
+    /// hit, as the host's own banner words it. Nil when nothing is wrong,
+    /// and on older hosts.
     public var agentIssue: RemoteAgentIssue? = nil
 
     public init(sessionId: String, models: [RemoteModelInfo], modes: [RemoteModelInfo], currentModel: String? = nil, currentMode: String? = nil, autoRunEnabled: Bool, acceptsImages: Bool, chips: RemoteChipState? = nil, supportsSteering: Bool? = nil, availableCommands: [RemoteSlashCommand]? = nil, usage: RemoteUsage? = nil, supportsQueueReorder: Bool? = nil, supportsMentions: Bool? = nil, agentIssue: RemoteAgentIssue? = nil) {
@@ -139,7 +140,8 @@ public struct RemoteSessionConfig: Codable, Equatable, Sendable {
 }
 
 public struct RemoteAgentIssue: Codable, Equatable, Sendable {
-    /// `needsSetup`, `needsAuth`, `setupError` or `failed`.
+    /// `needsSetup`, `needsAuth`, `setupError`, `failed` (the agent could
+    /// not start or attach) or `error` (a prompt failed on a running agent).
     public var kind: String
     public var message: String
 

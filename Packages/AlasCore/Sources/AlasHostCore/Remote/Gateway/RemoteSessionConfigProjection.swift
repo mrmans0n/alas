@@ -41,7 +41,8 @@ public enum RemoteSessionConfigProjection: Sendable {
 
     /// Why the agent cannot run, in the words of the banner `ACPTabView`
     /// shows on the host: its error banner first, then the sign-in or
-    /// setup nudge. Nil while the agent is fine or still connecting.
+    /// setup nudge. Nil while the agent is fine or still connecting and
+    /// no error is showing.
     public nonisolated static func agentIssue(
         agentName: String, managedAdapter: Bool,
         agentState: ACPSession.AgentState, setupState: ACPSession.SetupState, lastError: String?
@@ -62,8 +63,15 @@ public enum RemoteSessionConfigProjection: Sendable {
             kind = "setupError"
             setupMessage = reason
         case .checking, .ready:
-            guard case .failed = agentState else { return nil }
-            kind = "failed"
+            if case .failed = agentState {
+                kind = "failed"
+            } else if let lastError, !lastError.isEmpty {
+                // A prompt failed on an otherwise running agent; the host
+                // still shows its error banner.
+                kind = "error"
+            } else {
+                return nil
+            }
             setupMessage = nil
         }
         if let lastError, !lastError.isEmpty { return RemoteAgentIssue(kind: kind, message: lastError) }
