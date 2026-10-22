@@ -72,17 +72,37 @@ enum HostCommands {
             try await removeProject(arguments[1])
         case ("registry", "search", 1), ("registry", "search", 2):
             let query = arguments.count == 2 ? arguments[1] : ""
-            let installed = Set(readConfig().agents.registry.map(\.registryID))
+            let installed = readConfig().agents.registry
             let agents = try await ACPRegistryClient().agents().filter {
                 query.isEmpty || $0.id.localizedCaseInsensitiveContains(query) || $0.name.localizedCaseInsensitiveContains(query)
             }
             for agent in agents {
-                print("\(agent.id)  \(agent.name)  \(agent.version)\(installed.contains(agent.id) ? "  (installed)" : "")")
+                let note = switch ACPRegistryEntryStatus.resolve(agent: agent, installed: installed) {
+                case .builtin(let agentID): "  (built in: agents.\(agentID).enabled)"
+                case .installed: "  (installed)"
+                case .updateAvailable(let version): "  (installed \(version); install updates it)"
+                case .unsupported: "  (no build for this Mac)"
+                case .notInstalled: ""
+                }
+                print("\(agent.id)  \(agent.name)  \(agent.version)\(note)")
             }
         case ("registry", "install", 2):
             let holder = try writableHolder()
             guard let agent = try await ACPRegistryClient().agents().first(where: { $0.id == arguments[1] }) else {
                 throw HostCommandError("The ACP registry has no agent \(arguments[1]); see alas-host registry search.")
+            }
+            // As the app's registry browser: built-ins and agents without a
+            // build for this Mac are not installed from the registry.
+            switch ACPRegistryEntryStatus.resolve(agent: agent, installed: readConfig().agents.registry) {
+            case .builtin(let agentID):
+                throw HostCommandError("\(agent.name) ships with Alas; turn it on or off with agents.\(agentID).enabled.")
+            case .unsupported:
+                throw HostCommandError("\(agent.name) has no build for this Mac.")
+            case .installed:
+                print("\(agent.name) \(agent.version) is already installed.")
+                return
+            case .notInstalled, .updateAvailable:
+                break
             }
             let installed = try await ACPRegistryInstaller().install(agent)
             try HostProfileWrite.update { $0.agents.installRegistryAgent(installed) }

@@ -90,12 +90,14 @@ To install agents from the [ACP registry](https://agentclientprotocol.com) on a
 Mac without the app:
 
 ```bash
-alas-host registry search gemini      # id, name, version; installed ones say so
-alas-host registry install gemini     # then agents.gemini.enabled turns it on or off
-alas-host registry uninstall gemini
+alas-host registry search goose       # id, name, version, and whether it is built in or installed
+alas-host registry install goose      # then agents.goose.enabled turns it on or off
+alas-host registry uninstall goose
 ```
 
-Agents install into the profile's data directory. Like `config set`, these
+Agents that ship with Alas, such as Claude, Codex or Gemini, are built in and
+not installed from the registry; their `agents.<id>.enabled` turns them on or
+off. Agents install into the profile's data directory. Like `config set`, these
 refuse while the app has the profile open, and a running host uses the change
 once restarted.
 
