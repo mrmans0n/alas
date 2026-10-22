@@ -68,11 +68,18 @@ struct ACPSessionRunnerTests {
         #expect(runner.session.transcript.streamingState == .idle)
     }
 
-    @Test("send reports successful completion, clears an earlier prompt error, and emits one completed turn when session prompt succeeds")
-    func sendReportsSuccessfulCompletionWhenPromptSucceeds() async throws {
+    /// The success clears the prompt error showing when it was sent, but
+    /// not one raised while its turn ran.
+    @Test("send reports successful completion, clears an earlier prompt error, and emits one completed turn when session prompt succeeds",
+          arguments: [false, true])
+    func sendReportsSuccessfulCompletionWhenPromptSucceeds(errorRaisedDuringTurn: Bool) async throws {
         var completions: [ACPTurnCompletion] = []
         let (runner, mock) = try makeRunner(onTurnCompleted: { completions.append($0) })
-        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        let session = runner.session
+        mock.scriptAsync(method: "session/prompt") { _ in
+            if errorRaisedDuringTurn { await MainActor.run { session.lastError = "Checkpoint restore failed." } }
+            return Data("{}".utf8)
+        }
         let retry = AnyCodable(["codex": AnyCodable(["error": AnyCodable([
             "willRetry": AnyCodable(true), "message": AnyCodable("Retrying")
         ])])])
@@ -88,7 +95,7 @@ struct ACPSessionRunnerTests {
 
         #expect(succeeded == true)
         #expect(runner.session.turnFailure == nil)
-        #expect(runner.session.lastError == nil)
+        #expect(runner.session.lastError == (errorRaisedDuringTurn ? "Checkpoint restore failed." : nil))
         #expect(runner.session.retryStatus == nil)
         #expect(runner.session.transcript.streamingState == .idle)
         #expect(completions.count == 1)

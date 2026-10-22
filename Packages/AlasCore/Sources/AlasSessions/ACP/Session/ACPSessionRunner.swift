@@ -1960,8 +1960,6 @@ public final class ACPSessionRunner {
         } else {
             session.turnFailure = nil
         }
-        // A turn that went through makes an earlier prompt error stale.
-        if case .completed = result { session.lastError = nil }
         guard let startedAt = activePromptStartedAt else {
             // A recovery prompt is no turn, but a stopped one's usage still waits for its result only so long.
             if usageAwaitsResult { reportUsageWithoutResult(promptID) }
@@ -4236,6 +4234,9 @@ extension ACPSessionRunner {
         // and persist `lastError` on the queue head — defeating the
         // detach-clears-cleanly fix from the previous commit.
         activePromptID = promptID
+        // The error showing when this prompt was sent; its success makes it
+        // stale, but not one raised while the turn ran.
+        let lastErrorAtSend = session.lastError
         let connectionIsCurrent = isConnectionCurrent
         let queueDispatchHandoffTracker = self.queueDispatchHandoffTracker
         latestPromptTask = Task {
@@ -4620,6 +4621,7 @@ extension ACPSessionRunner {
                             }
                         }
                         self.activePromptID = nil
+                        if !wasCancelled, self.session.lastError == lastErrorAtSend { self.session.lastError = nil }
                         self.emitTurnCompleted(wasCancelled ? .cancelled : .completed, promptID: promptID, quota: promptOutcome.quota)
                         self.deferCompletedOutputBoundaryUntilUpdatesDrain(
                             successfulTurn: completionUserMessageID.flatMap { userMessageID in
