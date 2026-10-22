@@ -49,6 +49,14 @@ enum ComputerUseInput: Sendable {
     case drag(from: ComputerUseInputTarget, to: ComputerUseInputTarget)
 }
 
+/// Why an input in flight must stop before its next event.
+enum ComputerUseInputInterrupt: Sendable {
+    /// A stop, session or turn end, or the call's cancellation.
+    case cancelled
+    /// The user is using the target app.
+    case userActive
+}
+
 /// How an input reached the app, reported to the agent.
 enum ComputerUseDelivery: String, Sendable {
     case ax, event, activation
@@ -61,12 +69,21 @@ enum ComputerUseSystemError: Error, LocalizedError {
     case staleElement
     case actionFailed(String)
     case openFailed(String)
+    /// The point the input would land on is outside the target window.
+    case outOfBounds
+    /// The user took over between the input's events.
+    case userActive
+    /// The user took over while text was being typed.
+    case userTookOver(typed: Int, of: Int)
 
     var errorDescription: String? {
         switch self {
         case .windowNotFound(let id): "Window \(id) is no longer on screen"
         case .captureFailed(let reason): "Capture failed: \(reason)"
         case .staleElement: "The element is no longer valid"
+        case .outOfBounds: "The point is outside the window"
+        case .userActive: "The user is using the app"
+        case .userTookOver(let typed, let total): "The user took over after \(typed) of \(total) characters"
         case .actionFailed(let reason): reason
         case .openFailed(let reason): reason
         }
@@ -83,10 +100,15 @@ struct ComputerUseSystem: Sendable {
     /// `handles` retains the elements behind each node's `handle`.
     var axTree: @Sendable (ComputerUseWindow, _ maxDepth: Int, _ nodeBudget: Int) async throws
         -> (root: ComputerUseAXNode, complete: Bool, handles: ComputerUseAXHandles)
-    /// Delivers one input. Throws `CancellationError` when `isCancelled` turns
-    /// true before the first event, or after the event sequence in flight.
-    var perform: @Sendable (ComputerUseInput, ComputerUseWindow, _ direct: Bool, _ isCancelled: @escaping @Sendable () -> Bool)
-        async throws -> ComputerUseDelivery
+    /// Delivers one input. Throws `CancellationError` when `interrupt` reports
+    /// `.cancelled` before the first event, or after the event sequence in flight;
+    /// `.userActive` stops long sequences (typed text, drags) between their events.
+    var perform: @Sendable (
+        ComputerUseInput, ComputerUseWindow, _ direct: Bool,
+        _ interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
+    ) async throws -> ComputerUseDelivery
+    /// Whether the element behind a handle still has the role and title it was read with.
+    var elementMatches: @Sendable (ComputerUseAXHandles, Int, _ role: String, _ title: String?) async -> Bool
     /// Seconds since the last hardware input; events Alas posts don't count.
     var secondsSinceUserInput: @Sendable () -> TimeInterval
     var frontmostPID: @Sendable () -> Int32?
@@ -102,8 +124,11 @@ struct ComputerUseSystem: Sendable {
         axTree: { window, maxDepth, nodeBudget in
             try await ComputerUseAXReader.read(window, maxDepth: maxDepth, nodeBudget: nodeBudget)
         },
-        perform: { input, window, direct, isCancelled in
-            try await LiveComputerUseSystem.perform(input, in: window, direct: direct, isCancelled: isCancelled)
+        perform: { input, window, direct, interrupt in
+            try await LiveComputerUseSystem.perform(input, in: window, direct: direct, interrupt: interrupt)
+        },
+        elementMatches: { handles, handle, role, title in
+            await ComputerUseAXActions.elementMatches(handles, handle, role: role, title: title)
         },
         secondsSinceUserInput: {
             // ~0 is kCGAnyInputEventType, which does not import into Swift.
@@ -268,8 +293,9 @@ extension LiveComputerUseSystem {
     /// pid; `direct` activates the app around the events instead.
     static func perform(
         _ input: ComputerUseInput, in window: ComputerUseWindow, direct: Bool,
-        isCancelled: @escaping @Sendable () -> Bool
+        interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
     ) async throws -> ComputerUseDelivery {
+        let isCancelled: @Sendable () -> Bool = { interrupt() == .cancelled }
         if isCancelled() { throw CancellationError() }
         if direct {
             try await directLock.run {

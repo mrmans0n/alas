@@ -7,10 +7,12 @@ struct ComputerUseCoordinatorTests {
     private static let notes = ComputerUseAppIdentity(name: "Notes", bundleID: "com.apple.Notes", pid: 101)
     private static let mail = ComputerUseAppIdentity(name: "Mail", bundleID: "com.apple.mail", pid: 102)
     private static let keychain = ComputerUseAppIdentity(name: "Keychain Access", bundleID: "com.apple.keychainaccess", pid: 103)
+    private static let alasDev = ComputerUseAppIdentity(name: "Alas Dev", bundleID: "io.nlopez.alas.dev", pid: 104)
     private static let windows: [UInt32: ComputerUseWindow] = [
         1: ComputerUseWindow(windowID: 1, title: "Note", frame: CGRect(x: 0, y: 0, width: 400, height: 300), app: notes),
         2: ComputerUseWindow(windowID: 2, title: "Inbox", frame: CGRect(x: 10, y: 10, width: 500, height: 400), app: mail),
         3: ComputerUseWindow(windowID: 3, title: "Login", frame: CGRect(x: 20, y: 20, width: 600, height: 500), app: keychain),
+        4: ComputerUseWindow(windowID: 4, title: "Alas", frame: CGRect(x: 30, y: 30, width: 700, height: 500), app: alasDev),
     ]
 
     private static let saveTree = ComputerUseAXNode(
@@ -30,6 +32,7 @@ struct ComputerUseCoordinatorTests {
                 recorder?.record(input)
                 return .ax
             },
+            elementMatches: { _, _, _, _ in true },
             secondsSinceUserInput: { 60 },
             frontmostPID: { nil },
             resolveApp: { _, _ in notes },
@@ -297,16 +300,46 @@ struct ComputerUseCoordinatorTests {
         #expect(recorder.sleeps == [.milliseconds(300)])
     }
 
-    @Test func actionOnInvalidatedElementReportsStale() async throws {
+    @Test(arguments: [
+        (ComputerUseSystemError.staleElement,
+         "computer_stale: The element ref e1 is no longer valid. Call computer_inspect on window 1 again."),
+        (.outOfBounds, "computer_out_of_bounds: The point is outside window 1."),
+        (.userActive, "computer_user_active: The user is using Notes right now. Try again in a moment."),
+    ])
+    func deliveryFailuresMapToTheirToolErrors(_ error: ComputerUseSystemError, expected: String) async throws {
         var system = Self.system()
-        system.perform = { _, _, _, _ in throw ComputerUseSystemError.staleElement }
+        system.perform = { _, _, _, _ in throw error }
         let f = Self.fixture(system: system, allowed: [Self.notes])
         _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1, query: "Save"), sessionID: "s")
         let response = await f.coordinator.perform(.init(action: .click, windowID: 1, ref: "e1"), sessionID: "s")
-        #expect(response == .error("computer_stale: The element ref e1 is no longer valid. Call computer_inspect on window 1 again."))
+        #expect(response == .error(expected))
     }
 
-    enum RefExpiry: CaseIterable { case turnEnd, reinspectWithoutTheNode }
+    @Test func userTakingOverMidTypingStopsTheInput() async throws {
+        let polls = Counter()
+        var system = Self.system()
+        system.frontmostPID = { 101 }
+        // Idle for the takeover check before the input, busy by the next chunk.
+        system.secondsSinceUserInput = { polls.next() == 1 ? 60 : 0.5 }
+        system.perform = { _, _, _, interrupt in
+            if interrupt() == .userActive { throw ComputerUseSystemError.userTookOver(typed: 5, of: 11) }
+            return .event
+        }
+        let f = Self.fixture(system: system, allowed: [Self.notes])
+        let response = await f.coordinator.perform(.init(action: .type, windowID: 1, text: "hello world"), sessionID: "s")
+        #expect(response == .error("computer_user_active: The user started using Notes; stopped after typing 5 of 11 characters."))
+    }
+
+    @Test func anotherAlasCanBeSeenButNotDriven() async throws {
+        let recorder = Recorder()
+        let f = Self.fixture(system: Self.system(recorder: recorder), recorder: recorder, allowed: [Self.alasDev])
+        #expect(Self.text(await f.coordinator.perform(.init(action: .inspect, windowID: 4), sessionID: "s")) != nil)
+        let response = await f.coordinator.perform(.init(action: .key, windowID: 4, keys: "return"), sessionID: "s")
+        #expect(response == .error("computer_blocked: Alas Dev can't be used by agents."))
+        #expect(recorder.inputs.isEmpty)
+    }
+
+    enum RefExpiry: CaseIterable { case turnEnd, reinspectWithoutTheNode, elementChanged }
 
     @Test(arguments: RefExpiry.allCases)
     func refsExpireWithTheTurnAndOnReinspect(_ expiry: RefExpiry) async throws {
@@ -318,11 +351,16 @@ struct ComputerUseCoordinatorTests {
         system.axTree = { _, _, _ in
             (reads.next() == 1 ? saveTree : ComputerUseAXNode(role: "AXWindow", title: "Note", handle: 0), true, ComputerUseAXHandles())
         }
+        // The element behind the handle still exists, but now reads as another button.
+        system.elementMatches = { _, handle, role, title in
+            expiry != .elementChanged && handle == 1 && role == "AXButton" && title == "Save"
+        }
         let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
         _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1, query: "Save"), sessionID: "s")
         switch expiry {
         case .turnEnd: f.coordinator.turnEnded(sessionID: "s")
         case .reinspectWithoutTheNode: _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1, query: "Save"), sessionID: "s")
+        case .elementChanged: break
         }
         let response = await f.coordinator.perform(.init(action: .click, windowID: 1, ref: "e1"), sessionID: "s")
         #expect(response == .error("computer_stale: The element ref e1 is no longer valid. Call computer_inspect on window 1 again."))
@@ -406,20 +444,28 @@ struct ComputerUseCoordinatorTests {
         #expect(recorder.inputs.isEmpty)
     }
 
-    @Test func failedPostActionReadStillReportsTheActionAndDropsRefs() async throws {
+    enum PostReadFailure: CaseIterable { case readFails, windowCloses }
+
+    @Test(arguments: PostReadFailure.allCases)
+    func failedPostActionReadStillReportsTheActionAndDropsRefs(_ failure: PostReadFailure) async throws {
         let recorder = Recorder()
         let reads = Counter()
+        let lookups = Counter()
         let saveTree = Self.saveTree
+        let window = Self.windows[1]!
         var system = Self.system(recorder: recorder)
         system.axTree = { _, _, _ in
-            guard reads.next() == 1 else { throw ComputerUseSystemError.captureFailed("gone") }
+            guard reads.next() == 1 || failure == .windowCloses else { throw ComputerUseSystemError.captureFailed("gone") }
             return (saveTree, true, ComputerUseAXHandles())
         }
+        // Lookup 3 is the re-fetch before the post-action read.
+        system.window = { _ in failure == .windowCloses && lookups.next() == 3 ? nil : window }
         let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
         _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1, query: "Save"), sessionID: "s")
         let click = ComputerUseCommand(action: .click, windowID: 1, ref: "e1")
         let json = try #require(Self.text(await f.coordinator.perform(click, sessionID: "s")))
-        #expect(json.contains(#""post_state_error":"Capture failed: gone""#) && json.contains(#""elements":[]"#))
+        let postStateError = failure == .readFails ? "Capture failed: gone" : "Window 1 is no longer on screen"
+        #expect(json.contains(#""post_state_error":"\#(postStateError)""#) && json.contains(#""elements":[]"#))
         #expect(await f.coordinator.perform(click, sessionID: "s")
             == .error("computer_stale: The element ref e1 is no longer valid. Call computer_inspect on window 1 again."))
         #expect(recorder.inputs.count == 1)
@@ -433,10 +479,10 @@ struct ComputerUseCoordinatorTests {
         let checks = Recorder()
         var system = Self.system()
         // Checks before its first chunk, then waits mid-sequence and checks before the next one.
-        system.perform = { _, _, _, isCancelled in
-            checks.recordCheck(isCancelled())
+        system.perform = { _, _, _, interrupt in
+            checks.recordCheck(interrupt() == .cancelled)
             await gate.enter(1)
-            let cancelled = isCancelled()
+            let cancelled = interrupt() == .cancelled
             checks.recordCheck(cancelled)
             if cancelled { throw CancellationError() }
             return .event
@@ -454,13 +500,17 @@ struct ComputerUseCoordinatorTests {
         #expect(checks.checks == [false, true])
     }
 
-    @Test func openAppRefusesBlockedAppsWithoutLaunching() async throws {
+    @Test(arguments: [
+        ComputerUseAppIdentity(name: "Keychain Access", bundleID: "com.apple.keychainaccess", pid: 0),
+        ComputerUseAppIdentity(name: "Alas Dev", bundleID: "io.nlopez.alas.dev", pid: 0),
+    ])
+    func openAppRefusesBlockedAppsWithoutLaunching(_ app: ComputerUseAppIdentity) async throws {
         let recorder = Recorder()
         var system = Self.system(recorder: recorder)
-        system.resolveApp = { _, _ in ComputerUseAppIdentity(name: "Keychain Access", bundleID: "com.apple.keychainaccess", pid: 0) }
+        system.resolveApp = { _, _ in app }
         let f = Self.fixture(system: system, recorder: recorder)
-        let response = await f.coordinator.perform(.init(action: .openApp, name: "Keychain Access"), sessionID: "s")
-        #expect(response == .error("computer_blocked: Keychain Access can't be used by agents."))
+        let response = await f.coordinator.perform(.init(action: .openApp, name: app.name), sessionID: "s")
+        #expect(response == .error("computer_blocked: \(app.name) can't be used by agents."))
         #expect(recorder.opens == 0)
         #expect(f.coordinator.pendingApprovals.isEmpty)
     }
@@ -474,19 +524,23 @@ struct ComputerUseCoordinatorTests {
         #expect(response == .error("computer_blocked: Keychain Access can't be used by agents."))
     }
 
-    enum WaitCase: CaseIterable { case appears, neverAppears, disappears, neverDisappears }
+    enum WaitCase: CaseIterable { case appears, neverAppears, disappears, neverDisappears, windowCloses }
 
     @Test(arguments: WaitCase.allCases)
     func waitReturnsWhenTheQueryAppearsOrTimesOut(_ waitCase: WaitCase) async throws {
         let recorder = Recorder()
         let reads = Counter()
+        let lookups = Counter()
+        let window = Self.windows[1]!
         var system = Self.system(recorder: recorder)
+        // Lookups 1 and 2 resolve the inspect and the wait; the window closes before the second poll.
+        system.window = { _ in waitCase == .windowCloses && lookups.next() > 2 ? nil : window }
         // Read 1 is the inspect. "Done" shows up from read 4 on, never, or is always there.
         system.axTree = { _, _, _ in
             let read = reads.next()
             let done = switch waitCase {
             case .appears: read >= 4
-            case .neverAppears, .disappears: false
+            case .neverAppears, .disappears, .windowCloses: false
             case .neverDisappears: read > 1
             }
             let children = done ? [ComputerUseAXNode(role: "AXStaticText", title: "Done", handle: 1)] : []
@@ -494,7 +548,7 @@ struct ComputerUseCoordinatorTests {
         }
         let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
         _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")
-        let condition: ComputerUseCommand.WaitCondition = waitCase == .appears || waitCase == .neverAppears ? .appear : .disappear
+        let condition: ComputerUseCommand.WaitCondition = waitCase == .neverDisappears || waitCase == .disappears ? .disappear : .appear
         let wait = ComputerUseCommand(action: .wait, windowID: 1, query: "done", condition: condition, timeoutMS: 1000)
         let response = await f.coordinator.perform(wait, sessionID: "s")
         switch waitCase {
@@ -505,6 +559,9 @@ struct ComputerUseCoordinatorTests {
         case .disappears:
             #expect(try #require(Self.text(response)).contains(#""elements":[]"#))
             #expect(recorder.sleeps.isEmpty)
+        case .windowCloses:
+            #expect(response == .error("computer_window_not_found: No on-screen window 1. Call computer_apps again."))
+            #expect(recorder.sleeps == [.milliseconds(250)])
         case .neverAppears, .neverDisappears:
             let verb = condition == .appear ? "appeared" : "disappeared"
             #expect(response == .error(#"computer_wait_timeout: Nothing matching "done" \#(verb) in window 1 within 1000 ms."#))

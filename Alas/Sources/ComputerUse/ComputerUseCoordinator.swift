@@ -85,9 +85,17 @@ final class ComputerUseCoordinator {
         var generation: Int
         /// A recycled window id belongs to another app; its old refs don't apply.
         var pid: Int32
-        var refs: [String: Int] = [:]
+        var refs: [String: ElementRef] = [:]
         var handles = ComputerUseAXHandles()
         var lastScreenshot: (frame: CGRect, scale: CGFloat)?
+    }
+
+    /// An element the agent was shown, as read: an action re-checks it before using the handle,
+    /// since an app may reuse a row's element for different content.
+    private struct ElementRef {
+        var handle: Int
+        var role: String
+        var title: String?
     }
 
     /// The session state a call started in.
@@ -154,6 +162,9 @@ final class ComputerUseCoordinator {
         static func userActive(_ app: ComputerUseAppIdentity) -> String {
             "computer_user_active: The user is using \(app.name) right now. Try again in a moment."
         }
+        static func userTookOver(_ app: ComputerUseAppIdentity, typed: Int, of total: Int) -> String {
+            "computer_user_active: The user started using \(app.name); stopped after typing \(typed) of \(total) characters."
+        }
         static func actionFailed(_ reason: String) -> String { "computer_action_failed: \(reason)" }
         static func openFailed(_ reason: String) -> String { "computer_open_failed: \(reason)" }
         static func waitTimeout(_ query: String, _ condition: ComputerUseCommand.WaitCondition, windowID: UInt32, ms: Int) -> String {
@@ -196,7 +207,8 @@ final class ComputerUseCoordinator {
         guard var window = await system.window(windowID) else { return .error(Message.windowNotFound(windowID)) }
         if let overtaken = overtaken(sessionID, since: epoch) { return overtaken }
 
-        switch await approval(for: window.app, sessionID: sessionID, epoch: epoch) {
+        let input = Self.isInput(command.action)
+        switch await approval(for: window.app, sessionID: sessionID, epoch: epoch, input: input) {
         case .refused(let response):
             return response
         case .allowed:
@@ -208,7 +220,7 @@ final class ComputerUseCoordinator {
             }
             window = current
             if let overtaken = overtaken(sessionID, since: epoch) { return overtaken }
-            if let refused = accessAfterAnswer(for: window.app, sessionID: sessionID) { return refused }
+            if let refused = accessAfterAnswer(for: window.app, sessionID: sessionID, input: input) { return refused }
         }
 
         return await withDriverLock(sessionID: sessionID, app: window.app, epoch: epoch) {
@@ -261,8 +273,18 @@ final class ComputerUseCoordinator {
         case refused(AlasCLIResponse)
     }
 
-    private func approval(for app: ComputerUseAppIdentity, sessionID: String, epoch: Int) async -> ApprovalGate {
-        switch access.access(for: app, session: sessionID) {
+    /// Calls that drive the app rather than look at it; other Alas builds refuse them.
+    private static func isInput(_ action: ComputerUseCommand.Action) -> Bool {
+        switch action {
+        case .click, .type, .key, .scroll, .drag, .openApp: true
+        case .apps, .screenshot, .inspect, .wait, .cancel: false
+        }
+    }
+
+    private func approval(
+        for app: ComputerUseAppIdentity, sessionID: String, epoch: Int, input: Bool
+    ) async -> ApprovalGate {
+        switch access.access(for: app, session: sessionID, input: input) {
         case .blocked:
             return .refused(.error(Message.blocked(app)))
         case .denied:
@@ -283,8 +305,8 @@ final class ComputerUseCoordinator {
         }
     }
 
-    private func accessAfterAnswer(for app: ComputerUseAppIdentity, sessionID: String) -> AlasCLIResponse? {
-        switch access.access(for: app, session: sessionID) {
+    private func accessAfterAnswer(for app: ComputerUseAppIdentity, sessionID: String, input: Bool) -> AlasCLIResponse? {
+        switch access.access(for: app, session: sessionID, input: input) {
         case .allowed: nil
         case .denied: .error(Message.denied(app))
         case .blocked: .error(Message.blocked(app))
@@ -301,15 +323,17 @@ final class ComputerUseCoordinator {
             return .error(Message.openFailed(reason))
         }
         if let overtaken = overtaken(sessionID, since: context.epoch) { return overtaken }
-        switch await approval(for: identity, sessionID: sessionID, epoch: context.epoch) {
+        switch await approval(for: identity, sessionID: sessionID, epoch: context.epoch, input: true) {
         case .refused(let response): return response
         case .allowed: break
-        case .answered: if let refused = accessAfterAnswer(for: identity, sessionID: sessionID) { return refused }
+        case .answered: if let refused = accessAfterAnswer(for: identity, sessionID: sessionID, input: true) { return refused }
         }
         return await withDriverLock(sessionID: sessionID, app: identity, epoch: context.epoch) {
             let running = try await system.openApp(identity)
             // What launched may not be what was approved; a blocked app's windows stay private.
-            if access.access(for: running, session: sessionID) == .blocked { throw Refusal(Message.blocked(running)) }
+            if access.access(for: running, session: sessionID, input: true) == .blocked {
+                throw Refusal(Message.blocked(running))
+            }
             let windows = await system.runningApps().first { $0.app.pid == running.pid }?.windows ?? []
             let payload: [String: Any] = ["version": 1, "app": Self.app(running), "windows": windows.map(Self.windowEntry)]
             return (payload, running)
@@ -588,12 +612,20 @@ final class ComputerUseCoordinator {
             input = try self.input(for: command, in: window, context: context)
         }
         try checkStillActive(context)
+        try await recheckRefs(of: command, in: window, context: context)
+        try checkStillActive(context)
         let delivery: ComputerUseDelivery
         do {
             delivery = try await deliver(input, to: window, direct: direct, sessionID: context.sessionID)
         } catch ComputerUseSystemError.staleElement {
             guard let ref = command.ref ?? command.toRef else { throw ComputerUseSystemError.actionFailed("The element is no longer valid.") }
             throw Refusal(Message.stale(ref, windowID: window.windowID))
+        } catch ComputerUseSystemError.outOfBounds {
+            throw Refusal(Message.outOfBounds(window.windowID))
+        } catch ComputerUseSystemError.userActive {
+            throw Refusal(Message.userActive(window.app))
+        } catch ComputerUseSystemError.userTookOver(let typed, let total) {
+            throw Refusal(Message.userTookOver(window.app, typed: typed, of: total))
         }
         // Stopped mid-sequence: the input finished its events, but nothing more happens.
         try checkStillActive(context)
@@ -604,6 +636,8 @@ final class ComputerUseCoordinator {
         try checkStillActive(context)
         // The input landed; a failed re-read must not report it as failed.
         do {
+            // The action may have moved or resized the window; the read matches it by its frame.
+            window = try await currentWindow(window)
             let read = try await readElements(
                 window, query: command.query, limit: command.limit, maxDepth: Self.postStateDepth, context: context)
             payload["truncated"] = read.truncated
@@ -619,7 +653,6 @@ final class ComputerUseCoordinator {
         }
         guard command.includeScreenshot else { return }
         do {
-            // The action may have moved or resized the window.
             let current = await system.window(window.windowID).flatMap { $0.app.pid == window.app.pid ? $0 : nil } ?? window
             let shot = try await system.screenshot(current)
             try record(screenshot: shot, of: current, context: context)
@@ -636,6 +669,23 @@ final class ComputerUseCoordinator {
     static let postStateDepth = 12
     static let takeoverPoll: Duration = .milliseconds(100)
     static let waitPoll: Duration = .milliseconds(250)
+
+    /// The window as it is now; gone or now another app's → `windowNotFound`.
+    private func currentWindow(_ window: ComputerUseWindow) async throws -> ComputerUseWindow {
+        guard let current = await system.window(window.windowID), current.app.pid == window.app.pid else {
+            throw ComputerUseSystemError.windowNotFound(window.windowID)
+        }
+        return current
+    }
+
+    /// An element behind a ref must still read as what the agent was shown.
+    private func recheckRefs(of command: ComputerUseCommand, in window: ComputerUseWindow, context: CallContext) async throws {
+        for ref in [command.ref, command.toRef].compactMap(\.self) {
+            guard let snapshot = snapshot(of: window, context: context), let element = snapshot.refs[ref],
+                  await system.elementMatches(snapshot.handles, element.handle, element.role, element.title)
+            else { throw Refusal(Message.stale(ref, windowID: window.windowID)) }
+        }
+    }
 
     private func input(for command: ComputerUseCommand, in window: ComputerUseWindow, context: CallContext) throws -> ComputerUseInput {
         func target(_ ref: String?, _ x: Double?, _ y: Double?) throws -> ComputerUseInputTarget {
@@ -666,8 +716,8 @@ final class ComputerUseCoordinator {
     ) throws -> ComputerUseInputTarget {
         let snapshot = snapshot(of: window, context: context)
         if let ref {
-            guard let snapshot, let handle = snapshot.refs[ref] else { throw Refusal(Message.stale(ref, windowID: window.windowID)) }
-            return .element(snapshot.handles, handle)
+            guard let snapshot, let element = snapshot.refs[ref] else { throw Refusal(Message.stale(ref, windowID: window.windowID)) }
+            return .element(snapshot.handles, element.handle)
         }
         guard let x, let y else { throw Refusal(Message.actionFailed("The action needs a ref or x and y.")) }
         guard let screenshot = snapshot?.lastScreenshot else { throw Refusal(Message.needsScreenshot(window.windowID)) }
@@ -709,8 +759,16 @@ final class ComputerUseCoordinator {
             if inputFlags[sessionID]?.isEmpty == true { inputFlags[sessionID] = nil }
         }
         let system = system
+        let pid = window.app.pid
+        // The takeover rule between a long input's events: the user is working in the target app.
+        let interrupt: @Sendable () -> ComputerUseInputInterrupt? = {
+            if flag.isSet { return .cancelled }
+            let userActive = system.frontmostPID() == pid
+                && system.secondsSinceUserInput() < ComputerUseTakeover.idleThreshold
+            return userActive ? .userActive : nil
+        }
         return try await withTaskCancellationHandler {
-            try await system.perform(input, window, direct) { flag.isSet }
+            try await system.perform(input, window, direct, interrupt)
         } onCancel: {
             flag.set()
         }
@@ -724,6 +782,7 @@ final class ComputerUseCoordinator {
         let clock = ContinuousClock()
         let start = clock.now
         var slept = Duration.zero
+        var window = window
         while true {
             // Only the read returned to the agent replaces its refs.
             let read = try await readElements(
@@ -741,6 +800,8 @@ final class ComputerUseCoordinator {
             await sleep(Self.waitPoll)
             slept += Self.waitPoll
             try checkStillActive(context)
+            // A window that moved or resized is still matched; one that closed ends the wait.
+            window = try await currentWindow(window)
         }
     }
 
@@ -748,6 +809,8 @@ final class ComputerUseCoordinator {
         var truncated: Bool
         var elements: [ComputerUseInspectElement]
         var handles: ComputerUseAXHandles
+        /// Role and title by handle, before the inspect output clips them.
+        var identities: [Int: (role: String, title: String?)]
     }
 
     /// Reads the window the way computer_inspect does and, unless told not to, replaces its refs.
@@ -761,15 +824,23 @@ final class ComputerUseCoordinator {
         // A cancelled read never reaches the agent, so it must not replace the refs it holds.
         try Task.checkCancellation()
         // A partial read may have missed elements even when the limit was not reached.
-        let read = ElementRead(truncated: flat.truncated || !tree.complete, elements: flat.elements, handles: tree.handles)
+        var identities: [Int: (role: String, title: String?)] = [:]
+        func collect(_ node: ComputerUseAXNode) {
+            if let handle = node.handle { identities[handle] = (node.role, node.title) }
+            node.children.forEach(collect)
+        }
+        collect(tree.root)
+        let read = ElementRead(
+            truncated: flat.truncated || !tree.complete, elements: flat.elements, handles: tree.handles, identities: identities)
         if recordRefs { record(refs: read, of: window, context: context) }
         return read
     }
 
     private func record(refs read: ElementRead, of window: ComputerUseWindow, context: CallContext) {
-        var refs: [String: Int] = [:]
+        var refs: [String: ElementRef] = [:]
         for element in read.elements {
-            if let handle = element.handle { refs[element.ref] = handle }
+            guard let handle = element.handle, let identity = read.identities[handle] else { continue }
+            refs[element.ref] = ElementRef(handle: handle, role: identity.role, title: identity.title)
         }
         updateSnapshot(of: window, context: context) {
             $0.refs = refs

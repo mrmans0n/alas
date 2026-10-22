@@ -74,6 +74,34 @@ enum ComputerUseAXActions {
         }
     }
 
+    /// Whether the element still reads with `role` and `title`; false when it is gone or unreadable.
+    static func elementMatches(_ handles: ComputerUseAXHandles, _ handle: Int, role: String, title: String?) async -> Bool {
+        await withCheckedContinuation { continuation in
+            ComputerUseAXReader.queue.async {
+                guard let element = handles.element(handle) else { return continuation.resume(returning: false) }
+                AXUIElementSetMessagingTimeout(element, ComputerUseAXReader.messagingTimeout)
+                var roleValue: CFTypeRef?
+                let result = AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleValue)
+                // Gone, or the app isn't answering: either way the ref can't be trusted.
+                guard result != .invalidUIElement, result != .cannotComplete else {
+                    return continuation.resume(returning: false)
+                }
+                let liveRole = string(of: element, kAXRoleAttribute) ?? "AXUnknown"
+                continuation.resume(returning: liveRole == role && string(of: element, kAXTitleAttribute) == title)
+            }
+        }
+    }
+
+    /// A string attribute, nil when unreadable or empty, the way the reader reports it.
+    private static func string(of element: AXUIElement, _ attribute: String) -> String? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
+              let value, CFGetTypeID(value) == CFStringGetTypeID()
+        else { return nil }
+        let string = value as! String
+        return string.isEmpty ? nil : string
+    }
+
     /// The element's centre from its current position and size, global points.
     static func center(
         _ handles: ComputerUseAXHandles, _ handle: Int, app: ComputerUseAppIdentity, isCancelled: @escaping IsCancelled
