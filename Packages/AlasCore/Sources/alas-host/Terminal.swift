@@ -85,7 +85,7 @@ enum Terminal {
         let visible = HostSetupViewport.visibleRows(count: view.rows.count, selected: view.selected, height: height)
         var screen = "\u{1b}[H\u{1b}[2J\u{1b}[1m\(HostSetupViewport.fit(view.title, width: columns))\u{1b}[0m\r\n\r\n"
         for index in visible {
-            let row = HostSetupViewport.fit(view.rows[index], width: columns - 2)
+            let row = HostSetupViewport.fit(view.rows[index], width: columns - 2, keepingEnd: view.editing && index == view.selected)
             screen += index == view.selected ? "\u{1b}[7m> \(row)\u{1b}[0m\r\n" : "  \(row)\r\n"
         }
         if !noticeLines.isEmpty {

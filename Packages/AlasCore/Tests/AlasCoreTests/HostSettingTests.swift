@@ -160,12 +160,32 @@ struct HostSettingTests {
         #expect(HostSetupViewport.visibleRows(count: count, selected: selected, height: height) == expected)
     }
 
+    /// Rows are cut by terminal cells, not characters: CJK and emoji take
+    /// two. A row being edited keeps its end, where the cursor is.
     @Test(arguments: [
-        ("enabled", 20, "enabled"),
-        ("agents.registry-agent.enabled = true", 12, "agents.regi…"),
-        ("abc", 1, "…"),
-    ])
-    func aRowIsCutToTheTerminalWidth(row: String, width: Int, expected: String) {
-        #expect(HostSetupViewport.fit(row, width: width) == expected)
+        ("enabled", 20, false, "enabled"),
+        ("agents.registry-agent.enabled = true", 12, false, "agents.regi…"),
+        ("abc", 1, false, "…"),
+        ("漢字漢字", 5, false, "漢字…"),
+        ("项目🙂ok", 6, false, "项目…"),
+        ("Root  ~/very/long/path/edit_", 10, true, "…ath/edit_"),
+        ("名前 漢字漢字_", 6, true, "…漢字_"),
+    ] as [(String, Int, Bool, String)])
+    func aRowIsCutToTheTerminalWidth(row: String, width: Int, keepingEnd: Bool, expected: String) {
+        let fitted = HostSetupViewport.fit(row, width: width, keepingEnd: keepingEnd)
+        #expect(fitted == expected)
+        #expect(HostSetupViewport.cells(fitted) <= width)
+    }
+
+    @Test func theRowBeingEditedIsMarkedForTheTerminal() {
+        var model = HostSetupModel(config: AppConfig.defaults, projects: [])
+        _ = model.handle(.down)
+        _ = model.handle(.down)
+        _ = model.handle(.down)
+        _ = model.handle(.down)
+        _ = model.handle(.enter)
+        #expect(!model.view.editing)
+        _ = model.handle(.enter)
+        #expect(model.view.editing)
     }
 }

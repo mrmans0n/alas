@@ -58,12 +58,16 @@ public struct HostSetupView: Equatable, Sendable {
     public var rows: [String]
     public var selected: Int
     public var hint: String
+    /// The selected row is being typed into; its end, where the cursor is,
+    /// must stay visible.
+    public var editing: Bool
 
-    public init(title: String, rows: [String], selected: Int, hint: String) {
+    public init(title: String, rows: [String], selected: Int, hint: String, editing: Bool = false) {
         self.title = title
         self.rows = rows
         self.selected = selected
         self.hint = hint
+        self.editing = editing
     }
 }
 
@@ -305,7 +309,8 @@ public struct HostSetupModel: Equatable {
                 selected: selected,
                 hint: editing != nil
                     ? "Type the value; Enter to confirm, Esc to cancel"
-                    : "Enter to change, Esc to go back"
+                    : "Enter to change, Esc to go back",
+                editing: editing != nil
             )
         case .projects(let selected, let editing):
             return HostSetupView(
@@ -314,7 +319,8 @@ public struct HostSetupModel: Equatable {
                 selected: min(selected, projects.count),
                 hint: editing != nil
                     ? "Type the project's path; Enter to add, Esc to cancel"
-                    : "Enter on a project to remove it; Enter on Add a project to add one; Esc to go back"
+                    : "Enter on a project to remove it; Enter on Add a project to add one; Esc to go back",
+                editing: editing != nil
             )
         }
     }
