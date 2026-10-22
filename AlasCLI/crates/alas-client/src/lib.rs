@@ -276,7 +276,22 @@ pub enum Command {
         member_id: String,
     },
     Preview(PreviewCommand),
+    Computer(ComputerCommand),
     Resolve,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ComputerCommand {
+    Apps,
+    Screenshot {
+        window_id: u32,
+    },
+    Inspect {
+        window_id: u32,
+        query: Option<String>,
+        limit: u64,
+        max_depth: u64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -752,11 +767,44 @@ pub fn build_request(
             r
         }
         Command::Preview(preview) => preview_request(preview),
+        Command::Computer(computer) => computer_request(computer),
         Command::Resolve => Request::new("resolve"),
     };
     req.session_id = session_id;
     req.cwd = cwd;
     req
+}
+
+fn computer_request(command: &ComputerCommand) -> Request {
+    match command {
+        ComputerCommand::Apps => {
+            let mut request = Request::new("computer_apps");
+            request.params = Some(serde_json::json!({}));
+            request
+        }
+        ComputerCommand::Screenshot { window_id } => {
+            let mut request = Request::new("computer_screenshot");
+            request.params = Some(serde_json::json!({ "window_id": window_id }));
+            request
+        }
+        ComputerCommand::Inspect {
+            window_id,
+            query,
+            limit,
+            max_depth,
+        } => {
+            let mut request = Request::new("computer_inspect");
+            let mut params = serde_json::Map::new();
+            params.insert("window_id".into(), serde_json::Value::from(*window_id));
+            if let Some(query) = query {
+                params.insert("query".into(), serde_json::Value::String(query.clone()));
+            }
+            params.insert("limit".into(), serde_json::Value::from(*limit));
+            params.insert("max_depth".into(), serde_json::Value::from(*max_depth));
+            request.params = Some(serde_json::Value::Object(params));
+            request
+        }
+    }
 }
 
 fn preview_request(command: &PreviewCommand) -> Request {
@@ -1830,6 +1878,37 @@ mod tests {
         assert_eq!(focus.subcommand.as_deref(), Some("focus"));
         assert_eq!(focus.params.as_ref().unwrap()["checkout_id"], checkout);
         assert_eq!(focus.params.as_ref().unwrap()["member_id"], member);
+    }
+
+    #[test]
+    fn computer_commands_serialize_as_versioned_params_only_requests() {
+        let shot = build_request(
+            &Command::Computer(ComputerCommand::Screenshot { window_id: 7 }),
+            Some("s1".into()),
+            None,
+        );
+        assert_eq!(shot.command, "computer_screenshot");
+        assert_eq!(shot.params, Some(serde_json::json!({ "window_id": 7 })));
+        assert!(shot.subcommand.is_none());
+        assert!(shot.target.is_none());
+
+        let inspect = build_request(
+            &Command::Computer(ComputerCommand::Inspect {
+                window_id: 7,
+                query: Some("Save".into()),
+                limit: 300,
+                max_depth: 12,
+            }),
+            None,
+            None,
+        );
+        assert_eq!(inspect.command, "computer_inspect");
+        assert_eq!(
+            inspect.params,
+            Some(serde_json::json!({
+                "window_id": 7, "query": "Save", "limit": 300, "max_depth": 12
+            }))
+        );
     }
 
     #[test]

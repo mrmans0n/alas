@@ -22,6 +22,7 @@ usage: alas workspace show <checkout-uuid>
 usage: alas workspace switch <checkout-uuid>
 usage: alas workspace focus <checkout-uuid> --member <member-uuid>
 usage: alas preview <list|open|navigate|reload|back|forward|inspect|capture|console|click|type|scroll|wait|cancel> ...
+usage: alas computer <apps|screenshot|inspect> ...
 usage: alas agent list [--worktree <name-or-branch>]
 usage: alas session list
 usage: alas session new --prompt <text> [--agent <id>] [--model <id>] [--reasoning <value>] [--role <name>] [--worktree <name-or-branch> | --new-worktree <branch> [--base <ref>]]
@@ -51,6 +52,7 @@ pub fn parse(args: &[String], base: &std::path::Path) -> Result<Command, String>
         Some("wt") => parse_wt(&it.map(|s| s.as_str()).collect::<Vec<_>>()),
         Some("workspace") => parse_workspace(&it.map(|s| s.as_str()).collect::<Vec<_>>()),
         Some("preview") => parse_preview(&it.map(|s| s.as_str()).collect::<Vec<_>>()),
+        Some("computer") => parse_computer(&it.map(|s| s.as_str()).collect::<Vec<_>>()),
         Some("agent") => parse_agent(&it.map(|s| s.as_str()).collect::<Vec<_>>()),
         Some("session") => parse_session(&it.map(|s| s.as_str()).collect::<Vec<_>>()),
         Some("review") => {
@@ -58,6 +60,66 @@ pub fn parse(args: &[String], base: &std::path::Path) -> Result<Command, String>
             parse_review(&rest, base)
         }
         _ => Err(USAGE_ALL.into()),
+    }
+}
+
+fn parse_computer(args: &[&str]) -> Result<Command, String> {
+    const USAGE: &str = "usage: alas computer apps | screenshot <window-id> | inspect <window-id> [--query <text>] [--limit <1...3000>] [--max-depth <1...12>]";
+    let window_id = |value: &str| {
+        value
+            .parse::<u32>()
+            .map_err(|_| "window-id must be a non-negative integer".to_string())
+    };
+    match args.first().copied() {
+        Some("apps") if args.len() == 1 => Ok(Command::Computer(alas_client::ComputerCommand::Apps)),
+        Some("screenshot") if args.len() == 2 => Ok(Command::Computer(
+            alas_client::ComputerCommand::Screenshot {
+                window_id: window_id(args[1])?,
+            },
+        )),
+        Some("inspect") if args.len() >= 2 => {
+            let window_id = window_id(args[1])?;
+            let rest = &args[2..];
+            let mut query = None;
+            let mut limit = 300;
+            let mut max_depth = 12;
+            let (mut seen_limit, mut seen_depth) = (false, false);
+            let mut i = 0;
+            while i < rest.len() {
+                match rest[i] {
+                    "--query" => {
+                        if query.is_some() {
+                            return Err(USAGE.into());
+                        }
+                        i += 1;
+                        query = Some(limited_non_empty(
+                            flag_value(rest, i).ok_or(USAGE)?,
+                            "query",
+                            256,
+                        )?);
+                    }
+                    "--limit" if !seen_limit => {
+                        seen_limit = true;
+                        i += 1;
+                        limit = bounded_u64(flag_value(rest, i).ok_or(USAGE)?, 1, 3000, USAGE)?;
+                    }
+                    "--max-depth" if !seen_depth => {
+                        seen_depth = true;
+                        i += 1;
+                        max_depth = bounded_u64(flag_value(rest, i).ok_or(USAGE)?, 1, 12, USAGE)?;
+                    }
+                    _ => return Err(USAGE.into()),
+                }
+                i += 1;
+            }
+            Ok(Command::Computer(alas_client::ComputerCommand::Inspect {
+                window_id,
+                query,
+                limit,
+                max_depth,
+            }))
+        }
+        _ => Err(USAGE.into()),
     }
 }
 
@@ -1944,6 +2006,57 @@ mod tests {
             ["session", "interrupt", "a", "b"].as_slice(),
         ] {
             assert!(parse(&s(invalid), Path::new("/b")).is_err(), "{invalid:?}");
+        }
+    }
+
+    #[test]
+    fn computer_cli_parses_subcommands_and_bounds() {
+        use alas_client::ComputerCommand;
+        let p = |args: &[&str]| parse(&s(args), Path::new("/b"));
+        assert_eq!(
+            p(&["computer", "apps"]).unwrap(),
+            Command::Computer(ComputerCommand::Apps)
+        );
+        assert_eq!(
+            p(&["computer", "screenshot", "7"]).unwrap(),
+            Command::Computer(ComputerCommand::Screenshot { window_id: 7 })
+        );
+        assert_eq!(
+            p(&["computer", "inspect", "7"]).unwrap(),
+            Command::Computer(ComputerCommand::Inspect {
+                window_id: 7,
+                query: None,
+                limit: 300,
+                max_depth: 12
+            })
+        );
+        assert_eq!(
+            p(&[
+                "computer", "inspect", "7", "--query", "Save", "--limit", "3000", "--max-depth",
+                "1"
+            ])
+            .unwrap(),
+            Command::Computer(ComputerCommand::Inspect {
+                window_id: 7,
+                query: Some("Save".into()),
+                limit: 3000,
+                max_depth: 1
+            })
+        );
+        for bad in [
+            &["computer"][..],
+            &["computer", "apps", "7"],
+            &["computer", "screenshot"],
+            &["computer", "screenshot", "x"],
+            &["computer", "screenshot", "7", "--query", "a"],
+            &["computer", "inspect", "-1"],
+            &["computer", "inspect", "7", "--limit", "0"],
+            &["computer", "inspect", "7", "--limit", "3001"],
+            &["computer", "inspect", "7", "--max-depth", "13"],
+            &["computer", "inspect", "7", "--query", "  "],
+            &["computer", "inspect", "7", "--query"],
+        ] {
+            assert!(p(bad).is_err(), "{bad:?}");
         }
     }
 
