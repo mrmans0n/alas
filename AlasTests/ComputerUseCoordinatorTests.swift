@@ -11,12 +11,14 @@ struct ComputerUseCoordinatorTests {
         2: ComputerUseWindow(windowID: 2, title: "Inbox", frame: CGRect(x: 10, y: 10, width: 500, height: 400), app: mail),
     ]
 
-    private static func system(windows: [UInt32: ComputerUseWindow] = windows) -> ComputerUseSystem {
+    private static func system(windows: [UInt32: ComputerUseWindow] = windows, treeComplete: Bool = true) -> ComputerUseSystem {
         ComputerUseSystem(
             runningApps: { windows.values.map { (app: $0.app, windows: [$0]) } },
             window: { windows[$0] },
             screenshot: { _ in ComputerUseScreenshot(png: Data([0x89]), pixelSize: CGSize(width: 800, height: 600), scale: 2) },
-            axTree: { _, _, _ in ComputerUseAXNode(role: "AXWindow", title: "Note", children: [ComputerUseAXNode(role: "AXButton", title: "Save")]) }
+            axTree: { _, _, _ in
+                (ComputerUseAXNode(role: "AXWindow", title: "Note", children: [ComputerUseAXNode(role: "AXButton", title: "Save")]), treeComplete)
+            }
         )
     }
 
@@ -62,7 +64,15 @@ struct ComputerUseCoordinatorTests {
         f.coordinator.answer(pending.id, .allowForTurn)
         let json = try #require(Self.text(await call.value))
         #expect(json.contains(#""elements""#) && json.contains(#""title":"Save""#))
+        #expect(json.contains(#""truncated":false"#))
         #expect(f.coordinator.pendingApprovals.isEmpty)
+    }
+
+    @Test func inspectReportsTruncatedWhenTheTreeReadWasIncomplete() async throws {
+        let f = Self.fixture(system: Self.system(treeComplete: false))
+        f.access.record(.allowForSession, for: Self.notes, session: "s")
+        let json = try #require(Self.text(await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")))
+        #expect(json.contains(#""truncated":true"#))
     }
 
     @Test func unansweredApprovalReturnsPendingAndKeepsTheCard() async {

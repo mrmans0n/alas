@@ -37,7 +37,9 @@ struct ComputerUseSystem: Sendable {
     var runningApps: @Sendable () async -> [(app: ComputerUseAppIdentity, windows: [ComputerUseWindow])]
     var window: @Sendable (UInt32) async -> ComputerUseWindow?
     var screenshot: @Sendable (ComputerUseWindow) async throws -> ComputerUseScreenshot
-    var axTree: @Sendable (ComputerUseWindow, _ maxDepth: Int, _ nodeBudget: Int) async throws -> ComputerUseAXNode
+    /// `complete` is false when the read stopped early (node budget, deadline, stalled app).
+    var axTree: @Sendable (ComputerUseWindow, _ maxDepth: Int, _ nodeBudget: Int) async throws
+        -> (root: ComputerUseAXNode, complete: Bool)
 
     static let live = ComputerUseSystem(
         runningApps: { await LiveComputerUseSystem.runningApps() },

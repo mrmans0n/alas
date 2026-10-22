@@ -23,8 +23,10 @@ enum ComputerUseAXReader {
         var isSet: Bool { flag.load(ordering: .relaxed) }
     }
 
-    /// Throws `CancellationError` when the calling task is cancelled.
-    static func read(_ window: ComputerUseWindow, maxDepth: Int, nodeBudget: Int) async throws -> ComputerUseAXNode {
+    /// Throws `CancellationError` when the calling task is cancelled. `complete`
+    /// is false when the walk stopped early (node budget, deadline, stalled app).
+    static func read(_ window: ComputerUseWindow, maxDepth: Int, nodeBudget: Int) async throws
+        -> (root: ComputerUseAXNode, complete: Bool) {
         let cancel = CancelFlag()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
@@ -51,6 +53,8 @@ enum ComputerUseAXReader {
         var count = 0
         /// Set on the first timeout-class AX error: the app is not answering.
         var appStalled = false
+        /// Set when children were left unread because the budget ran out or the walk halted.
+        var cutOff = false
 
         init(budget: Int, maxDepth: Int, deadline: ContinuousClock.Instant, isCancelled: @escaping () -> Bool) {
             self.budget = budget
@@ -63,7 +67,7 @@ enum ComputerUseAXReader {
             appStalled || isCancelled() || ContinuousClock.now >= deadline
         }
 
-        func tree(for window: ComputerUseWindow) throws -> ComputerUseAXNode {
+        func tree(for window: ComputerUseWindow) throws -> (root: ComputerUseAXNode, complete: Bool) {
             let app = AXUIElementCreateApplication(window.app.pid)
             AXUIElementSetMessagingTimeout(app, ComputerUseAXReader.messagingTimeout)
 
@@ -83,7 +87,7 @@ enum ComputerUseAXReader {
 
             let root = node(target, depth: 0)
             if isCancelled() { throw CancellationError() }
-            return root
+            return (root, !cutOff && !isHalted)
         }
 
         private func notResponding(_ window: ComputerUseWindow) -> ComputerUseSystemError {
@@ -133,10 +137,18 @@ enum ComputerUseAXReader {
                 isEnabled: bool(of: element, kAXEnabledAttribute) ?? true,
                 isFocused: bool(of: element, kAXFocusedAttribute) ?? false
             )
-            if depth < maxDepth, count < budget, !isHalted {
-                for child in childElements(of: element) {
-                    guard count < budget, !isHalted else { break }
-                    result.children.append(node(child, depth: depth + 1))
+            if depth < maxDepth {
+                if count < budget, !isHalted {
+                    for child in childElements(of: element) {
+                        guard count < budget, !isHalted else {
+                            cutOff = true
+                            break
+                        }
+                        result.children.append(node(child, depth: depth + 1))
+                    }
+                } else {
+                    // Conservative: the unread element may have had no children.
+                    cutOff = true
                 }
             }
             return result

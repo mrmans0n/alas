@@ -337,8 +337,9 @@ final class ComputerUseCoordinator {
             let budget = command.query == nil ? command.limit + 1 : Self.queryNodeBudget
             let tree = try await system.axTree(window, command.maxDepth, budget)
             let flat = ComputerUseInspectTree.flatten(
-                tree, query: command.query, limit: command.limit, maxDepth: command.maxDepth)
-            payload["truncated"] = flat.truncated
+                tree.root, query: command.query, limit: command.limit, maxDepth: command.maxDepth)
+            // A partial read may have missed elements even when the limit was not reached.
+            payload["truncated"] = flat.truncated || !tree.complete
             payload["elements"] = flat.elements.map(Self.element)
         }
         return payload
