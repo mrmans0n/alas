@@ -145,6 +145,31 @@ struct ComputerUseCoordinatorTests {
         try ComputerUseDriverLock.acquire(at: f.lockURL, label: "Next").release()
     }
 
+    @Test func stopKeepsTheLockUntilTheCapturingCallExits() async throws {
+        let gate = TreeGate()
+        let windows = Self.windows
+        let system = ComputerUseSystem(
+            runningApps: { [] },
+            window: { windows[$0] },
+            screenshot: { _ in throw ComputerUseSystemError.captureFailed("unused") },
+            axTree: { window, _, _ in
+                await gate.enter(window.windowID)
+                return (root: ComputerUseAXNode(role: "AXWindow", title: "Note"), complete: true)
+            }
+        )
+        let f = Self.fixture(system: system)
+        f.access.record(.allowForSession, for: Self.notes, session: "s")
+        let call = Task { await f.coordinator.perform(.init(action: .inspect, windowID: 1, callID: "c1"), sessionID: "s") }
+        try await eventually("call capturing") { gate.entered == [1] }
+
+        await f.coordinator.stop(sessionID: "s")
+        #expect(throws: ComputerUseDriverLock.Refusal.self) { try ComputerUseDriverLock.acquire(at: f.lockURL, label: "Other") }
+
+        gate.open(1)
+        #expect(await call.value == .error(ComputerUseCoordinator.Message.stopped))
+        try ComputerUseDriverLock.acquire(at: f.lockURL, label: "Other").release()
+    }
+
     @Test func busyWhenAnotherHolderHasTheLock() async throws {
         let f = Self.fixture()
         f.access.record(.allowForSession, for: Self.notes, session: "s")

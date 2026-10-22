@@ -47,6 +47,9 @@ final class ComputerUseCoordinator {
     /// Calls per session past the lock and inside their system call, so a failing
     /// call never drops the lock under a sibling that is still capturing.
     @ObservationIgnored private var lockedCalls: [String: Int] = [:]
+    /// A release asked for while the holder still had calls capturing: it happens when
+    /// the last one exits, so nobody else captures while a stopped call still reads the screen.
+    @ObservationIgnored private var deferredRelease: ComputerUseDriverLock?
     @ObservationIgnored private var waiters: [UUID: [UUID: Waiter]] = [:]
     /// Bumped on stop and session end, so an in-flight call notices it was overtaken.
     @ObservationIgnored private var epochs: [String: Int] = [:]
@@ -183,7 +186,7 @@ final class ComputerUseCoordinator {
             return .error(Self.message(for: error))
         }
         endLockedCall(of: sessionID)
-        // Stopped or ended mid-call: the lock is already released; don't reclaim the role.
+        // Stopped or ended mid-call: the lock is released (or about to be); don't reclaim the role.
         if let overtaken = overtaken(sessionID, since: epoch) { return overtaken }
         // A turn end (or a failed sibling call) may have released the lock; the
         // result still stands, but the role is only claimed while the lock is held.
@@ -206,6 +209,7 @@ final class ComputerUseCoordinator {
         access.stop(session: sessionID)
         stoppedSessions.insert(sessionID)
         endActivity(of: sessionID)
+        cancelCalls(of: sessionID)
         for entry in access.pending where entry.session == sessionID {
             _ = access.resolvePending(entry.id)
             resumeWaiters(of: entry.id, with: .stopped)
@@ -222,7 +226,7 @@ final class ComputerUseCoordinator {
     /// A card still up from this turn expires with it: answering it later would grant the next turn.
     func turnEnded(sessionID: String) {
         access.turnEnded(session: sessionID)
-        if lockSession == sessionID { releaseDriver() }
+        releaseLock(of: sessionID)
         for entry in access.pending where entry.session == sessionID {
             _ = access.resolvePending(entry.id)
             resumeWaiters(of: entry.id, with: .expired)
@@ -236,6 +240,7 @@ final class ComputerUseCoordinator {
         let ids = access.pending.filter { $0.session == sessionID }.map(\.id)
         access.sessionEnded(session: sessionID)
         endActivity(of: sessionID)
+        cancelCalls(of: sessionID)
         for id in ids { resumeWaiters(of: id, with: .stopped) }
         syncPending()
     }
@@ -244,7 +249,22 @@ final class ComputerUseCoordinator {
 
     private func endActivity(of sessionID: String) {
         epochs[sessionID, default: 0] += 1
-        if lockSession == sessionID { releaseDriver() }
+        releaseLock(of: sessionID)
+    }
+
+    /// Releases the session's lock now, or once its last capturing call exits.
+    private func releaseLock(of sessionID: String) {
+        guard lockSession == sessionID else { return }
+        if lockedCalls[sessionID, default: 0] > 0 {
+            deferredRelease = lock
+            driver = nil
+        } else {
+            releaseDriver()
+        }
+    }
+
+    private func cancelCalls(of sessionID: String) {
+        for (key, task) in calls where key.sessionID == sessionID { task.cancel() }
     }
 
     private func overtaken(_ sessionID: String, since epoch: Int) -> AlasCLIResponse? {
@@ -258,6 +278,11 @@ final class ComputerUseCoordinator {
     private func endLockedCall(of sessionID: String) -> Int {
         let remaining = max(lockedCalls[sessionID, default: 0] - 1, 0)
         lockedCalls[sessionID] = remaining == 0 ? nil : remaining
+        if remaining == 0, lockSession == sessionID, let deferred = deferredRelease {
+            deferredRelease = nil
+            // Only the lock the release was asked for.
+            if lock === deferred { releaseDriver() }
+        }
         return remaining
     }
 
@@ -266,11 +291,16 @@ final class ComputerUseCoordinator {
         lock = nil
         lockSession = nil
         driver = nil
+        deferredRelease = nil
     }
 
     /// The lock this call took, or nil when the session already held it.
     private func takeDriverLock(for sessionID: String) -> Result<ComputerUseDriverLock?, LockFailure> {
-        if lockSession == sessionID { return .success(nil) }
+        if lockSession == sessionID {
+            // A new call keeps the lock a turn end was about to drop.
+            deferredRelease = nil
+            return .success(nil)
+        }
         if let holder = lockSession { return .failure(LockFailure(Message.busy(sessionLabel(holder)))) }
         do {
             let taken = try ComputerUseDriverLock.acquire(at: lockURL, label: sessionLabel(sessionID))
