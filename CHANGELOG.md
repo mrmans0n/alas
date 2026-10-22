@@ -9,6 +9,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### ✨ Features
 
 - Let plugins limit themselves to projects with a GitHub or GitLab remote with `requires.codeHost`, new in plugin API 17 (#2174).
+- Choose how much of a gg stack Ship publishes: drag a line in the Ship stack popover to hold back the top entries, open the new pull or merge requests as drafts, and publish the held-back entries later with "Ship more" from the shepherding popover.
 
 ### 🐛 Fixes
 

@@ -109,17 +109,26 @@ public enum StackShepherdPolicy {
     /// gg lists for the worktree, nil when it is on another stack. Uncommitted
     /// edits count as unpublished work, as in a single PR's merge gate: green
     /// requests must not announce, or finish, a stack with edits in it.
+    /// Entries above `shipThroughEntryID` are held back on purpose: they keep
+    /// the record alive but don't stop the shipped entries from being
+    /// published. A boundary gg no longer lists holds back every entry.
     public static func publication(
         of stack: GGStack?,
-        local: ReviewLoopLocalState
+        local: ReviewLoopLocalState,
+        shipThroughEntryID: String? = nil
     ) -> (isPublished: Bool, hasUnpublishedEntries: Bool?) {
         let hasEdits = local.hasWorkingTreeChanges || local.hasStagedChanges
         // Off the stack nothing is known about its publication: not ready,
         // and no verdict on unpublished work either.
         guard let stack else { return (false, nil) }
         let hasUnpublished = stack.entries.contains { $0.prNumber == nil } || hasEdits
-        let isSynced = stack.syncedCommits == stack.totalCommits
-        return (!hasUnpublished && isSynced, hasUnpublished)
+        let through = (try? StackShipPlan(shipThroughEntryID: shipThroughEntryID).shipThroughPosition(in: stack)) ?? 0
+        let shipped = stack.entries.filter { $0.position <= through }
+        // gg counts the entries whose branch matches the remote; held-back
+        // entries have no branch, so the shipped ones are synced when the
+        // count covers them.
+        let isSynced = stack.syncedCommits >= shipped.count
+        return (!hasEdits && shipped.allSatisfy { $0.prNumber != nil } && isSynced, hasUnpublished)
     }
 
     /// The record's entries in step with `stack`'s published entries,

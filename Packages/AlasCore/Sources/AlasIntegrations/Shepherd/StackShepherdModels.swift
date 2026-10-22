@@ -57,6 +57,9 @@ public struct StackShepherdRecord: Codable, Equatable, Sendable {
     /// saw the stack. Keeps the record alive after every tracked request has
     /// merged, so unpublished work isn't reported as landed. Nil until seen.
     public var hasUnpublishedEntries: Bool?
+    /// What Ship publishes, kept for every later `stack_ship`: entries above
+    /// its boundary are held back. Nil publishes the whole stack.
+    public var shipPlan: StackShipPlan?
     public var finishedAt: Date?
     /// Every entry merged while the owner session was busy; the
     /// archive-after-merge step waits for its turn to end.

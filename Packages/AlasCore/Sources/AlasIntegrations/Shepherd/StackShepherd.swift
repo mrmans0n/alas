@@ -82,8 +82,9 @@ public final class StackShepherd {
         public var worktreeContext: @MainActor (_ worktreeID: String) -> WorktreeContext?
         /// The stack gg reports for the worktree at `path`, nil off-stack.
         public var loadStack: @MainActor (_ path: URL) async throws -> GGStack?
-        /// `gg sync` through the guarded path the stack drawer's Sync uses.
-        public var syncStack: @MainActor (_ worktreeID: String) async throws -> Void
+        /// `gg sync` of `plan` through the guarded path the stack drawer's
+        /// Sync uses.
+        public var syncStack: @MainActor (_ worktreeID: String, _ plan: StackShipPlan) async throws -> Void
         public var sessionState: @MainActor (_ sessionID: String, _ worktreeID: String) async -> ShepherdSessionState
         /// Queues `prompt` on the session; `isStillWanted` is checked right
         /// before the session's queue changes.
@@ -104,7 +105,7 @@ public final class StackShepherd {
         public init(
             worktreeContext: @escaping @MainActor (_ worktreeID: String) -> WorktreeContext?,
             loadStack: @escaping @MainActor (_ path: URL) async throws -> GGStack?,
-            syncStack: @escaping @MainActor (_ worktreeID: String) async throws -> Void,
+            syncStack: @escaping @MainActor (_ worktreeID: String, _ plan: StackShipPlan) async throws -> Void,
             sessionState: @escaping @MainActor (_ sessionID: String, _ worktreeID: String) async -> ShepherdSessionState,
             deliverPrompt: @escaping @MainActor (
                 _ sessionID: String,
@@ -137,6 +138,9 @@ public final class StackShepherd {
     public private(set) var requests: [StackShepherdRecordID: [Int: ReviewRequest]] = [:]
     /// `StackShepherdPolicy`'s ready gate from the latest decision per record.
     public private(set) var gatePasses: [StackShepherdRecordID: Bool] = [:]
+    /// The plan the Ship popover chose for each session's next `stack_ship`,
+    /// by session ID. Taken when that publish succeeds.
+    @ObservationIgnored public private(set) var pendingShipPlans: [String: PendingStackShip] = [:]
 
     @ObservationIgnored private let store: any PersistenceStoreProtocol
     @ObservationIgnored private let fileURL: URL
@@ -260,7 +264,9 @@ public final class StackShepherd {
         current.entries.removeAll { !listed.contains($0.entryID) && $0.shepherd.phase != .merged }
         return StackShepherdPolicy.isReady(
             current, requests: freshRequests,
-            isStackPublished: StackShepherdPolicy.publication(of: stack, local: probed.local).isPublished,
+            isStackPublished: StackShepherdPolicy.publication(
+                of: stack, local: probed.local, shipThroughEntryID: latest.shipPlan?.shipThroughEntryID
+            ).isPublished,
             capabilities: provider.capabilities, rules: rules, headReviewers: headReviewers, now: now()
         )
     }
@@ -282,7 +288,8 @@ public final class StackShepherd {
     /// never reach its attempt budget. The session's other live stack records
     /// are dropped. `requests` are the entries' requests, read by the caller;
     /// with `contextRules` the session is sent the context prompt built with
-    /// them.
+    /// them. `shipPlan` is what Ship publishes, kept for every later
+    /// `stack_ship`.
     @discardableResult
     public func bind(
         sessionID: String,
@@ -292,6 +299,7 @@ public final class StackShepherd {
         remote: CodeHostRemote,
         autoFix: Bool,
         maxFixAttempts: Int,
+        shipPlan: StackShipPlan = .wholeStack,
         contextRules: ShepherdRules?
     ) async -> StackShepherdRecord {
         let id = StackShepherdRecordID(worktreeID: worktreeID, stackName: stack.name)
@@ -312,6 +320,7 @@ public final class StackShepherd {
         record.autoFix = autoFix
         record.maxFixAttempts = ShepherdDefaults.clampedFixAttempts(maxFixAttempts)
         record.finishedAt = nil
+        record.shipPlan = shipPlan == .wholeStack ? nil : shipPlan
         record = StackShepherdPolicy.reconcile(record, with: stack, now: now)
         // Every entry that has not merged takes the owner and settings, a
         // closed one included: a reopen later brings it back under them. Only
@@ -349,6 +358,27 @@ public final class StackShepherd {
         }
         pump()
         return records[id] ?? record
+    }
+
+    /// Remembers what the Ship popover chose for session `sessionID`'s next
+    /// `stack_ship` of stack `id`, replacing an earlier choice.
+    public func setPendingShipPlan(_ plan: StackShipPlan, sessionID: String, id: StackShepherdRecordID) {
+        pendingShipPlans[sessionID] = PendingStackShip(id: id, plan: plan)
+    }
+
+    /// The plan session `sessionID`'s next `stack_ship` of stack `id`
+    /// publishes: the popover's pending choice, else the boundary of the
+    /// session's live record, else the whole stack.
+    public func shipPlan(sessionID: String, id: StackShepherdRecordID) -> StackShipPlan {
+        if let pending = pendingShipPlans[sessionID], pending.id == id { return pending.plan }
+        guard let record = records[id], record.sessionID == sessionID, !record.isFinished else { return .wholeStack }
+        return record.shipPlan ?? .wholeStack
+    }
+
+    /// Drops session `sessionID`'s pending plan for stack `id` once a
+    /// publish carried it out.
+    public func clearPendingShipPlan(sessionID: String, id: StackShepherdRecordID) {
+        if pendingShipPlans[sessionID]?.id == id { pendingShipPlans[sessionID] = nil }
     }
 
     public func setAutoFix(_ on: Bool, for id: StackShepherdRecordID) {
@@ -573,7 +603,9 @@ public final class StackShepherd {
         // decide on the current record, and not at all for another owner.
         guard let current = records[id], current.sessionID == owner, !current.isFinished else { return }
         failureCounts[id] = nil
-        let publication = StackShepherdPolicy.publication(of: onStack, local: probed.local)
+        let publication = StackShepherdPolicy.publication(
+            of: onStack, local: probed.local, shipThroughEntryID: current.shipPlan?.shipThroughEntryID
+        )
         let observation = StackShepherdObservation(
             requests: fetched,
             presentEntryIDs: onStack.map { Set($0.entries.filter { $0.prNumber != nil }.map(\.id)) },

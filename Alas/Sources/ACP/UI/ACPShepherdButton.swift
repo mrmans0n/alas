@@ -681,15 +681,17 @@ struct ShipPopoverStep<Content: View>: View {
 
 struct ShipPopoverChip: View {
     let text: String
+    /// Theme color key that tints the chip; nil keeps it neutral.
+    var tone: String? = nil
     @Environment(\.theme) private var theme
 
     var body: some View {
         Text(text)
             .font(.system(size: 10))
-            .foregroundStyle(theme.color("fg-muted"))
+            .foregroundStyle(theme.color(tone ?? "fg-muted"))
             .padding(.horizontal, 5)
             .padding(.vertical, 1)
-            .background(theme.color("bg-3"), in: RoundedRectangle(cornerRadius: 4))
+            .background(tone.map { theme.color($0).opacity(0.15) } ?? theme.color("bg-3"), in: RoundedRectangle(cornerRadius: 4))
             .lineLimit(1)
     }
 }

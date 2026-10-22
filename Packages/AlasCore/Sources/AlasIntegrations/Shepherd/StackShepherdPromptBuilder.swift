@@ -9,15 +9,21 @@ public enum StackShepherdPromptBuilder {
     public static let header = "Alas stack shepherd"
 
     /// Sent by the toolbar's Ship stack button. The agent organizes the work
-    /// into the stack; `stack_ship` publishes it and starts the shepherd.
-    public static func shipPrompt(kind: CodeHostKind) -> String {
+    /// into the stack; `stack_ship` publishes what `plan` chose and starts the
+    /// shepherd.
+    public static func shipPrompt(kind: CodeHostKind, plan: StackShipPlan) -> String {
         let requests = kind == .gitlab ? "merge requests" : "pull requests"
         let request = kind == .gitlab ? "merge request" : "pull request"
-        return "Ship this gg stack: publish each entry as its own \(request) and have Alas watch the \(requests). "
+        var prompt = "Ship this gg stack: publish each entry as its own \(request) and have Alas watch the \(requests). "
             + "If there are uncommitted changes that belong to this work, fold them into the stack first, one logical change per commit: "
             + "`gg absorb` (or `gg mv <entry id>` then `gg sc --staged-only`) for changes to existing entries, new commits for new changes. "
             + "gg turns each commit message into its \(request)'s title and description, so make every message describe its change. "
             + "Then run `gg last` to return to the top of the stack and call stack_ship."
+        if plan != .wholeStack {
+            prompt += " The user chose in Alas which entries to publish and whether their new \(requests) open as drafts; "
+                + "stack_ship applies that choice, so never publish the other entries yourself."
+        }
+        return prompt
     }
 
     /// One turn for every entry in `fixes`, bottom-up. `logs` holds the
