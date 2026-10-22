@@ -68,6 +68,9 @@ struct ComputerUseDelivered: Sendable, Equatable {
     var delivery: ComputerUseDelivery
     /// "Menu > Item" in the app's own menu titles.
     var menuItem: String?
+    /// The input made the window key in an app that isn't the user's front app; the app keeps
+    /// treating it as its active key window until `releaseBackgroundFocus` hands it back.
+    var keyedInBackground = false
 
     static let ax = ComputerUseDelivered(delivery: .ax)
     static let event = ComputerUseDelivered(delivery: .event)
@@ -136,6 +139,9 @@ struct ComputerUseSystem: Sendable {
     var resolveApp: @Sendable (_ name: String?, _ bundleID: String?) async -> ComputerUseAppIdentity?
     /// Launches, or unhides and reopens, without activating; returns the running identity.
     var openApp: @Sendable (ComputerUseAppIdentity) async throws -> ComputerUseAppIdentity
+    /// Undoes a `keyedInBackground` input once it settled: the app stops treating the window as
+    /// its active key window, unless the user brought the app to the front meanwhile.
+    var releaseBackgroundFocus: @Sendable (ComputerUseWindow) async -> Void = { _ in }
 
     static let live = ComputerUseSystem(
         runningApps: { await LiveComputerUseSystem.runningApps() },
@@ -155,7 +161,8 @@ struct ComputerUseSystem: Sendable {
         secondsSinceUserInput: { LiveComputerUseSystem.secondsSinceUserInput() },
         frontmostPID: { NSWorkspace.shared.frontmostApplication?.processIdentifier },
         resolveApp: { await LiveComputerUseSystem.resolveApp(name: $0, bundleID: $1) },
-        openApp: { try await LiveComputerUseSystem.openApp($0) }
+        openApp: { try await LiveComputerUseSystem.openApp($0) },
+        releaseBackgroundFocus: { await LiveComputerUseSystem.releaseBackgroundFocus($0) }
     )
 }
 
@@ -335,7 +342,8 @@ extension LiveComputerUseSystem {
             throw ComputerUseSystemError.actionFailed(ComputerUseCoordinator.Message.noQuitting)
         }
         if direct {
-            return try await activated(input, in: window, interrupt: interrupt)
+            // Raising the window moves the app's key window too; not while another input holds it.
+            return try await keyLocks.run(window.app.pid) { try await activated(input, in: window, interrupt: interrupt) }
         }
         let app = window.app
         // Each case falls through to events only when the element offers no AX way. Typing without
@@ -385,7 +393,36 @@ extension LiveComputerUseSystem {
         default:
             break
         }
-        let keyConfirmed = try await makeKeyInBackground(window, isCancelled: isCancelled)
+        // From making the window key until it is handed back below, no other input may move key
+        // status in this app: its events would land in whichever window the other one left key.
+        return try await keyLocks.run(app.pid) {
+            if isCancelled() { throw CancellationError() }
+            var keying = KeyAttempt()
+            do {
+                try await makeKeyInBackground(window, &keying, interrupt: interrupt)
+                var delivered = try await deliverEvents(input, in: window, keyConfirmed: keying.confirmed, interrupt: interrupt)
+                await keying.restoreUserKeyWindow(window)
+                // Also after an activation fallback: the previous app is back in front by then, so
+                // the release still finds the target in the background and defocuses it.
+                delivered.keyedInBackground = keying.keyedInBackground
+                return delivered
+            } catch {
+                await keying.restoreUserKeyWindow(window)
+                // Nothing settles after a failed input; the coordinator never learns the window was keyed.
+                if keying.keyedInBackground { defocusIfInBackground(window) }
+                throw error
+            }
+        }
+    }
+
+    /// Events, once AX had no way: to the window made key when that was confirmed, else the AX
+    /// ways on the focused window, else with the app activated around them.
+    private static func deliverEvents(
+        _ input: ComputerUseInput, in window: ComputerUseWindow, keyConfirmed: Bool,
+        interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
+    ) async throws -> ComputerUseDelivered {
+        let isCancelled: @Sendable () -> Bool = { interrupt() == .cancelled }
+        let app = window.app
         let route = ComputerUseEventRoute.choose(
             skyLightAvailable: ComputerUseSkyLight.isAvailable, keyConfirmed: keyConfirmed,
             idleSeconds: secondsSinceUserInput())
@@ -442,29 +479,84 @@ extension LiveComputerUseSystem {
         }
     }
 
+    /// One input at a time per app from making its window key to handing key status back.
+    private static let keyLocks = ComputerUseKeyedLocks()
+
+    /// What making a window key changed, so it can be put back.
+    private struct KeyAttempt {
+        var confirmed = false
+        /// Records went to an app that isn't the user's front app.
+        var keyedInBackground = false
+        /// The user's front app is the target: its key window before the records, to make key again.
+        var userKeyWindow: UInt32?
+
+        /// Makes the user's own key window key again in their front app, with the same records and
+        /// no defocus. Skipped once another window is key: the user picked it. An unreadable state
+        /// still restores, since the agent's window would otherwise keep the user's keys.
+        func restoreUserKeyWindow(_ window: ComputerUseWindow) async {
+            guard let userKeyWindow else { return }
+            // Keys go to whichever window is key when the app handles them; let it handle the
+            // input's events before key status moves back, as an activation waits before leaving.
+            try? await Task.sleep(for: LiveComputerUseSystem.activationSettle)
+            let state = try? await ComputerUseAXActions.keyWindowState(window, isCancelled: { false })
+            if let focused = state?.focusedWindowID, focused != window.windowID { return }
+            _ = await ComputerUseSkyLight.makeKeyWithoutActivating(pid: window.app.pid, windowID: userKeyWindow, current: nil)
+        }
+    }
+
     /// Makes `window` its app's key window without activating the app or raising the window, and
     /// confirms it. The records go out at most twice, since an app may still be handling the first.
-    /// False without SkyLight or when the app never reports the window as key.
+    /// Not confirmed without SkyLight or when the app never reports the window as key.
+    /// In the user's front app the records move the user's own key window, so they go out only
+    /// while the user is idle there, never with a defocus record, and the key window is restored after.
     private static func makeKeyInBackground(
-        _ window: ComputerUseWindow, isCancelled: @escaping @Sendable () -> Bool
-    ) async throws -> Bool {
-        guard ComputerUseSkyLight.isAvailable else { return false }
+        _ window: ComputerUseWindow, _ attempt: inout KeyAttempt,
+        interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
+    ) async throws {
+        let isCancelled: @Sendable () -> Bool = { interrupt() == .cancelled }
+        guard ComputerUseSkyLight.isAvailable else { return }
         var state = try await ComputerUseAXActions.keyWindowState(window, isCancelled: isCancelled)
-        if state.isKey { return true }
+        if state.isKey {
+            attempt.confirmed = true
+            return
+        }
+        let pid = window.app.pid
+        let userFront = await MainActor.run { NSWorkspace.shared.frontmostApplication?.processIdentifier } == pid
+        if userFront {
+            // The takeover rule once more, right before the user's key window moves: the wait for
+            // an idle user ended before the change check and the ref re-check.
+            if interrupt() == .userActive { throw ComputerUseSystemError.userActive }
+            attempt.userKeyWindow = state.focusedWindowID.flatMap { $0 == window.windowID ? nil : $0 }
+        }
         for _ in 0 ..< 2 {
             if isCancelled() { throw CancellationError() }
-            guard await ComputerUseSkyLight.makeKeyWithoutActivating(
-                pid: window.app.pid, windowID: window.windowID, current: state.focusedWindowID)
-            else { return false }
+            let current = userFront ? nil : state.focusedWindowID
+            let accepted = await ComputerUseSkyLight.makeKeyWithoutActivating(pid: pid, windowID: window.windowID, current: current)
+            if !userFront { attempt.keyedInBackground = true }
+            guard accepted else { return }
             let deadline = ContinuousClock.now + keyConfirmWait
             while true {
                 state = try await ComputerUseAXActions.keyWindowState(window, isCancelled: isCancelled)
-                if state.isKey { return true }
+                if state.isKey {
+                    attempt.confirmed = true
+                    return
+                }
                 guard ContinuousClock.now < deadline else { break }
                 try? await Task.sleep(for: focusPoll)
             }
         }
-        return false
+    }
+
+    /// Hands key status back after a settled background input, under the app's key lock.
+    static func releaseBackgroundFocus(_ window: ComputerUseWindow) async {
+        _ = try? await keyLocks.run(window.app.pid) { defocusIfInBackground(window) }
+    }
+
+    /// The defocus record, only while the app is still not WindowServer's front process: once the
+    /// user brought it to the front, the window may be the one they are working in.
+    private static func defocusIfInBackground(_ window: ComputerUseWindow) {
+        guard ComputerUseSkyLight.isFrontProcess(pid: window.app.pid) == false else { return }
+        _ = ComputerUseSkyLight.defocus(pid: window.app.pid, windowID: window.windowID)
     }
 
     /// Activates the app around the events; one direct action at a time.
@@ -795,6 +887,22 @@ extension LiveComputerUseSystem {
             ?? bundle?.object(forInfoDictionaryKey: "CFBundleName") as? String
             ?? url.deletingPathExtension().lastPathComponent
         return ComputerUseAppIdentity(name: name, bundleID: bundleID, pid: 0)
+    }
+}
+
+/// A `ComputerUseSerialLock` per key, created on first use and kept: there is one per app pid.
+private actor ComputerUseKeyedLocks {
+    private var locks: [Int32: ComputerUseSerialLock] = [:]
+
+    private func lock(for key: Int32) -> ComputerUseSerialLock {
+        if let lock = locks[key] { return lock }
+        let lock = ComputerUseSerialLock()
+        locks[key] = lock
+        return lock
+    }
+
+    func run<T: Sendable>(_ key: Int32, _ body: @Sendable () async throws -> T) async throws -> T {
+        try await lock(for: key).run(body)
     }
 }
 

@@ -75,6 +75,9 @@ final class ComputerUseCoordinator {
     @ObservationIgnored private var generations: [String: Int] = [:]
     /// Cancellation flags of the inputs being delivered, set by a stop or session end.
     @ObservationIgnored private var inputFlags: [String: [CancelFlag]] = [:]
+    /// Windows of background apps an input made key, per session and window id: each is handed
+    /// back once its action settled, or at the stop, turn end or session end that cut it short.
+    @ObservationIgnored private var backgroundKeyed: [String: [UInt32: ComputerUseWindow]] = [:]
 
     private struct SnapshotKey: Hashable {
         var sessionID: String
@@ -365,7 +368,9 @@ final class ComputerUseCoordinator {
             resumeWaiters(of: entry.id, with: .stopped)
         }
         syncPending()
+        let release = releaseBackgroundFocus(of: sessionID)
         await interrupt(sessionID)
+        await release.value
     }
 
     func resume(sessionID: String) {
@@ -385,6 +390,7 @@ final class ComputerUseCoordinator {
             resumeWaiters(of: entry.id, with: .expired)
         }
         syncPending()
+        releaseBackgroundFocus(of: sessionID)
     }
 
     /// Idempotent: the manager may report a runtime end more than once (detach, reconnect).
@@ -396,6 +402,26 @@ final class ComputerUseCoordinator {
         cancelCalls(of: sessionID)
         for id in ids { resumeWaiters(of: id, with: .stopped) }
         syncPending()
+        releaseBackgroundFocus(of: sessionID)
+    }
+
+    /// Hands back the key windows the session's inputs still hold. They are taken out at once,
+    /// so the action that keyed one doesn't release it a second time.
+    @discardableResult
+    private func releaseBackgroundFocus(of sessionID: String) -> Task<Void, Never> {
+        let windows = backgroundKeyed.removeValue(forKey: sessionID).map { Array($0.values) } ?? []
+        let system = system
+        return Task {
+            for window in windows {
+                await system.releaseBackgroundFocus(window)
+            }
+        }
+    }
+
+    private func releaseBackgroundFocus(of window: ComputerUseWindow, sessionID: String) async {
+        guard backgroundKeyed[sessionID]?.removeValue(forKey: window.windowID) != nil else { return }
+        if backgroundKeyed[sessionID]?.isEmpty == true { backgroundKeyed[sessionID] = nil }
+        await system.releaseBackgroundFocus(window)
     }
 
     // MARK: - Lifecycle helpers
@@ -639,6 +665,38 @@ final class ComputerUseCoordinator {
         } catch ComputerUseSystemError.userTookOver(let typed, let total) {
             throw Refusal(Message.userTookOver(window.app, typed: typed, of: total))
         }
+        // A background app whose window the input made key keeps it through the settle and the
+        // read below, which see the window as the input left it; it is handed back after them.
+        let keyedWindow = delivered.keyedInBackground ? window : nil
+        if let keyedWindow { backgroundKeyed[context.sessionID, default: [:]][keyedWindow.windowID] = keyedWindow }
+        do {
+            try await settleAndRead(after: delivered, of: command, in: &window, target: target, before: before,
+                                    context: context, payload: &payload)
+        } catch {
+            if let keyedWindow { await releaseBackgroundFocus(of: keyedWindow, sessionID: context.sessionID) }
+            throw error
+        }
+        if let keyedWindow { await releaseBackgroundFocus(of: keyedWindow, sessionID: context.sessionID) }
+        guard command.includeScreenshot else { return }
+        do {
+            let current = await system.window(window.windowID).flatMap { $0.app.pid == window.app.pid ? $0 : nil } ?? window
+            let shot = try await system.screenshot(current)
+            try record(screenshot: shot, of: current, context: context)
+            payload["scale"] = Double(shot.scale)
+            payload["image"] = Self.image(shot)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            payload["screenshot_error"] = error.localizedDescription
+        }
+    }
+
+    /// Reports the delivered input, waits for the app to handle it and reads the window back.
+    private func settleAndRead(
+        after delivered: ComputerUseDelivered, of command: ComputerUseCommand, in window: inout ComputerUseWindow,
+        target: (ComputerUseAXHandles, Int)?, before: ComputerUseWindowFingerprint, context: CallContext,
+        payload: inout [String: Any]
+    ) async throws {
         // Stopped mid-sequence: the input finished its events, but nothing more happens.
         try checkStillActive(context)
         payload["action"] = command.action.rawValue
@@ -666,18 +724,6 @@ final class ComputerUseCoordinator {
             payload["truncated"] = true
             payload["elements"] = [[String: Any]]()
             payload["post_state_error"] = error.localizedDescription
-        }
-        guard command.includeScreenshot else { return }
-        do {
-            let current = await system.window(window.windowID).flatMap { $0.app.pid == window.app.pid ? $0 : nil } ?? window
-            let shot = try await system.screenshot(current)
-            try record(screenshot: shot, of: current, context: context)
-            payload["scale"] = Double(shot.scale)
-            payload["image"] = Self.image(shot)
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch {
-            payload["screenshot_error"] = error.localizedDescription
         }
     }
 

@@ -551,6 +551,43 @@ struct ComputerUseCoordinatorTests {
         #expect(recorder.inputs.count == 1)
     }
 
+    enum KeyedRelease: CaseIterable { case settled, stop, turnEnd, sessionEnd }
+
+    @Test(arguments: KeyedRelease.allCases)
+    func windowKeyedInTheBackgroundIsHandedBackOnce(_ release: KeyedRelease) async throws {
+        let recorder = Recorder()
+        let gate = TreeGate()
+        let saveTree = Self.saveTree
+        var system = Self.system(recorder: recorder)
+        system.axTree = { _, _, _, _ in
+            recorder.recordEvent("read")
+            return (saveTree, true, ComputerUseAXHandles())
+        }
+        system.perform = { _, _, _, _ in ComputerUseDelivered(delivery: .background, keyedInBackground: true) }
+        system.releaseBackgroundFocus = { recorder.recordEvent("release \($0.windowID)") }
+        // The settle after the input waits until the test opens it.
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes]) { _ in await gate.enter(1) }
+        _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")
+        let call = Task { await f.coordinator.perform(.init(action: .click, windowID: 1, ref: "e2"), sessionID: "s") }
+        try await eventually("settling") { gate.entered == [1] }
+        // Inspect and the change check's read; the window is still key.
+        #expect(recorder.events == ["read", "read"])
+        switch release {
+        case .settled: break
+        case .stop: await f.coordinator.stop(sessionID: "s")
+        case .turnEnd: f.coordinator.turnEnded(sessionID: "s")
+        case .sessionEnd: f.coordinator.sessionEnded(sessionID: "s")
+        }
+        if release != .settled {
+            // Cut short: the stop or end hands it back while the action is still settling.
+            try await eventually("handed back") { recorder.events == ["read", "read", "release 1"] }
+        }
+        gate.open(1)
+        _ = await call.value
+        // Settled: after the post-action read. Either way exactly once.
+        #expect(recorder.events == (release == .settled ? ["read", "read", "read", "release 1"] : ["read", "read", "release 1"]))
+    }
+
     enum Interruption: CaseIterable { case stop, turnEnd }
 
     @Test(arguments: Interruption.allCases)
@@ -654,23 +691,26 @@ struct ComputerUseCoordinatorTests {
     }
 }
 
-/// Inputs, launches, sleeps and cancellation checks seen by the fakes.
+/// Inputs, launches, sleeps, cancellation checks and ordered events seen by the fakes.
 private final class Recorder: @unchecked Sendable {
     private let lock = NSLock()
     private var recordedInputs: [ComputerUseInput] = []
     private var recordedSleeps: [Duration] = []
     private var recordedChecks: [Bool] = []
     private var openCount = 0
+    private var recordedEvents: [String] = []
 
     var inputs: [ComputerUseInput] { lock.withLock { recordedInputs } }
     var sleeps: [Duration] { lock.withLock { recordedSleeps } }
     var checks: [Bool] { lock.withLock { recordedChecks } }
     var opens: Int { lock.withLock { openCount } }
+    var events: [String] { lock.withLock { recordedEvents } }
 
     func record(_ input: ComputerUseInput) { lock.withLock { recordedInputs.append(input) } }
     func recordSleep(_ duration: Duration) { lock.withLock { recordedSleeps.append(duration) } }
     func recordCheck(_ cancelled: Bool) { lock.withLock { recordedChecks.append(cancelled) } }
     func recordOpen() { lock.withLock { openCount += 1 } }
+    func recordEvent(_ event: String) { lock.withLock { recordedEvents.append(event) } }
 }
 
 /// Holds each fake tree read until the test opens its window.
