@@ -47,9 +47,16 @@ public final class ShellEnvResolver: @unchecked Sendable {
     /// The PATH of the user's shell: interactive and login first, since nvm,
     /// fnm and mise are set up in `.zshrc`, which zsh reads only for an
     /// interactive shell; a plain login shell when that yields nothing.
-    static func discoverShellPath(candidates: [String] = shellCandidates()) async -> String? {
+    /// `interactive` is false for a process with a terminal: there an
+    /// interactive shell's startup files can take the terminal over and
+    /// stall, and the process, started from the user's shell, already has
+    /// that PATH itself.
+    static func discoverShellPath(
+        candidates: [String] = shellCandidates(),
+        interactive: Bool = !hasControllingTerminal()
+    ) async -> String? {
         for shell in candidates {
-            for interactive in [true, false] {
+            for interactive in interactive ? [true, false] : [false] {
                 if let path = try? await runShellAndGetPATH(shell: shell, interactive: interactive) {
                     let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !trimmed.isEmpty { return trimmed }
@@ -65,6 +72,15 @@ public final class ShellEnvResolver: @unchecked Sendable {
         list.append("/bin/zsh")
         list.append("/bin/sh")
         return list
+    }
+
+    /// Whether this process has a controlling terminal, as one started from
+    /// a shell does and one launchd started (the app, a launch agent) does not.
+    static func hasControllingTerminal() -> Bool {
+        let fd = open("/dev/tty", O_RDONLY | O_NOCTTY)
+        guard fd >= 0 else { return false }
+        close(fd)
+        return true
     }
 
     private static let sentinelStart = "___ALAS_PATH___"
