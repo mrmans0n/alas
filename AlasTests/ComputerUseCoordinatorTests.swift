@@ -339,6 +339,15 @@ struct ComputerUseCoordinatorTests {
         #expect(recorder.inputs.isEmpty)
     }
 
+    @Test(arguments: ["cmd+q", "cmd+opt+q"])
+    func quitChordsAreRefusedBeforeAnyInput(_ keys: String) async throws {
+        let recorder = Recorder()
+        let f = Self.fixture(system: Self.system(recorder: recorder), recorder: recorder, allowed: [Self.notes])
+        let response = await f.coordinator.perform(.init(action: .key, windowID: 1, keys: keys), sessionID: "s")
+        #expect(response == .error("computer_action_failed: Agents can't quit apps."))
+        #expect(recorder.inputs.isEmpty)
+    }
+
     enum RefExpiry: CaseIterable { case turnEnd, reinspectWithoutTheNode, elementChanged }
 
     @Test(arguments: RefExpiry.allCases)

@@ -73,4 +73,57 @@ struct ComputerUseInputTests {
             targetIsFrontmost: frontmost, idleSeconds: idle, direct: direct, waited: waited
         ) == expected)
     }
+
+    @Test(arguments: [
+        (0, [.command]), (1, [.command, .shift]), (2, [.command, .option]), (4, [.command, .control]),
+        (8, []), (12, [.control]), (7, [.command, .shift, .option, .control]),
+    ] as [(Int, Set<Chord.Modifier>)])
+    private func menuModifierMasks(mask: Int, modifiers: Set<Chord.Modifier>) {
+        #expect(ComputerUseMenuShortcut.modifiers(mask: mask) == modifiers)
+    }
+
+    @Test(arguments: [
+        ("cmd+s", "S", nil, 0, true),
+        ("cmd+shift+s", "S", nil, 1, true),
+        ("cmd+s", "S", nil, 1, false),
+        ("ctrl+a", "A", nil, 12, true),
+        ("fn+cmd+s", "S", nil, 0, false),
+        ("cmd+return", "\r", nil, 0, true),
+        // An arrow is reported as a private-use character; its virtual key decides.
+        ("cmd+up", "\u{F700}", 126, 0, true),
+        ("cmd+up", "\u{F700}", 125, 0, false),
+        ("cmd+up", "u", 126, 0, false),
+    ] as [(String, String?, Int?, Int, Bool)])
+    private func menuShortcutMatching(chord: String, cmdChar: String?, virtualKey: Int?, mask: Int, matches: Bool) throws {
+        let parsed = try #require(Chord.parse(chord))
+        let chordKey = parsed.key == .named(.up) ? 126 : nil
+        #expect(ComputerUseMenuShortcut.matches(
+            parsed, cmdChar: cmdChar, virtualKey: virtualKey, mask: mask, chordVirtualKey: chordKey) == matches)
+    }
+
+    @Test(arguments: [("cmd+q", true), ("cmd+opt+q", true), ("cmd+shift+q", true), ("ctrl+q", false), ("q", false), ("cmd+w", false)])
+    private func quitChords(text: String, quits: Bool) throws {
+        #expect(ComputerUseMenuShortcut.isQuit(try #require(Chord.parse(text))) == quits)
+    }
+
+    private typealias Link = (role: String, actions: [String])
+
+    @Test(arguments: [
+        // Static text in a button presses the button.
+        ([("AXStaticText", []), ("AXButton", ["AXPress"]), ("AXGroup", [])], ComputerUseClickTarget.Choice.press(1)),
+        // The element itself wins over a pressable parent.
+        ([("AXLink", ["AXPress"]), ("AXButton", ["AXPress"])], .press(0)),
+        // Static text in a cell in a row in an outline selects the row.
+        ([("AXStaticText", []), ("AXCell", []), ("AXRow", []), ("AXOutline", [])], .selectRow(2)),
+        // A pressable group above the row is never reached.
+        ([("AXStaticText", []), ("AXCell", []), ("AXRow", []), ("AXGroup", ["AXPress"])], .selectRow(2)),
+        // A toolbar stops the climb, and is not a row.
+        ([("AXImage", []), ("AXToolbar", ["AXPress"]), ("AXButton", ["AXPress"])], .none),
+        // Only four levels, counting the element, may be pressed.
+        ([("AXStaticText", []), ("AXGroup", []), ("AXGroup", []), ("AXGroup", []), ("AXButton", ["AXPress"])], .none),
+        ([("AXStaticText", []), ("AXGroup", []), ("AXGroup", []), ("AXButton", ["AXPress"])], .press(3)),
+    ] as [([Link], ComputerUseClickTarget.Choice)])
+    private func clickTargets(chain: [Link], expected: ComputerUseClickTarget.Choice) {
+        #expect(ComputerUseClickTarget.choose(chain: chain) == expected)
+    }
 }

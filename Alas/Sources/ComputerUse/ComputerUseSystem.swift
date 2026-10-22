@@ -302,6 +302,10 @@ extension LiveComputerUseSystem {
     ) async throws -> ComputerUseDelivery {
         let isCancelled: @Sendable () -> Bool = { interrupt() == .cancelled }
         if isCancelled() { throw CancellationError() }
+        // The coordinator refuses these first; no delivery path may quit an app either way.
+        if case .key(let chord) = input, ComputerUseMenuShortcut.isQuit(chord) {
+            throw ComputerUseSystemError.actionFailed(ComputerUseCoordinator.Message.noQuitting)
+        }
         if direct {
             try await directLock.run {
                 // A Stop while waiting for another direct action performs nothing.
@@ -359,18 +363,16 @@ extension LiveComputerUseSystem {
             } catch is ComputerUseAXActions.Unsupported {
                 // Nothing focused takes text this way; type it instead.
             }
-        case .key(let chord) where ComputerUseAXActions.menuModifiers(chord) != nil:
-            // A menu shortcut acts on the key window, which must be the target, and ⌘V pastes into the focused field.
+        case .key(let chord) where ComputerUseMenuShortcut.applies(to: chord):
+            // A menu shortcut acts on the key window, which must be the target. The press itself
+            // refuses while a secure field has focus: any menu item may paste into it.
             try await ComputerUseAXActions.makeActiveWindow(window, isCancelled: isCancelled)
-            if chord.mayInsertText {
-                try await ComputerUseAXActions.refuseSecureFocus(app: app, isCancelled: isCancelled)
-            }
-            if try await ComputerUseAXActions.pressMenuShortcut(chord, app: app, isCancelled: isCancelled) {
+            if try await ComputerUseAXActions.pressMenuShortcut(chord, app: app, interrupt: interrupt) {
                 return .ax
             }
         case .scroll(let at, let dx, let dy):
             do {
-                try await ComputerUseAXActions.scroll(at, dx: dx, dy: dy, in: window, isCancelled: isCancelled)
+                try await ComputerUseAXActions.scroll(at, dx: dx, dy: dy, in: window, interrupt: interrupt)
                 return .ax
             } catch is ComputerUseAXActions.Unsupported {
                 // No scroll bar to move; a wheel event at the point may still land.
@@ -412,7 +414,11 @@ extension LiveComputerUseSystem {
             case .element(let handles, let handle):
                 try await ComputerUseAXActions.focus(handles, handle, app: app, isCancelled: isCancelled)
                 try await ComputerUseAXActions.makeActiveWindow(window, isCancelled: isCancelled)
-                try await waitForFocus(handles, handle, app: app, isCancelled: isCancelled)
+                // Text typed before focus lands goes elsewhere or nowhere.
+                guard try await waitForFocus(handles, handle, app: app, isCancelled: isCancelled) else {
+                    throw ComputerUseSystemError.actionFailed("\(app.name) didn't move focus to the field; nothing was typed.")
+                }
+                try await ComputerUseAXActions.refuseSecureFocus(app: app, isCancelled: isCancelled)
             case .point(let location):
                 try checkCancelled()
                 try await ComputerUseInputPoster.click(at: location, button: .left, count: 1, target: target)
@@ -453,15 +459,15 @@ extension LiveComputerUseSystem {
         }
     }
 
-    /// Typed text that arrives before focus lands is lost. Gives up after `focusWait` and types
-    /// anyway: some apps never report the element they focused.
+    /// Whether the element behind `handle` has the app's focus within `focusWait`.
     private static func waitForFocus(
         _ handles: ComputerUseAXHandles, _ handle: Int, app: ComputerUseAppIdentity,
         isCancelled: @escaping @Sendable () -> Bool
-    ) async throws {
+    ) async throws -> Bool {
         let deadline = ContinuousClock.now + focusWait
-        while try await !ComputerUseAXActions.isFocused(handles, handle, app: app, isCancelled: isCancelled),
-              ContinuousClock.now < deadline {
+        while true {
+            if try await ComputerUseAXActions.isFocused(handles, handle, app: app, isCancelled: isCancelled) { return true }
+            guard ContinuousClock.now < deadline else { return false }
             try? await Task.sleep(for: focusPoll)
         }
     }

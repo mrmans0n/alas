@@ -166,6 +166,7 @@ final class ComputerUseCoordinator {
             "computer_user_active: The user started using \(app.name); stopped after typing \(typed) of \(total) characters."
         }
         static func actionFailed(_ reason: String) -> String { "computer_action_failed: \(reason)" }
+        static let noQuitting = "Agents can't quit apps."
         static func openFailed(_ reason: String) -> String { "computer_open_failed: \(reason)" }
         static func waitTimeout(_ query: String, _ condition: ComputerUseCommand.WaitCondition, windowID: UInt32, ms: Int) -> String {
             let verb = condition == .appear ? "appeared" : "disappeared"
@@ -701,6 +702,7 @@ final class ComputerUseCoordinator {
             guard let keys = command.keys, let chord = ComputerUseKeyChord.parse(keys) else {
                 throw Refusal(Message.actionFailed("\"\(command.keys ?? "")\" is not a key chord."))
             }
+            if ComputerUseMenuShortcut.isQuit(chord) { throw Refusal(Message.actionFailed(Message.noQuitting)) }
             return .key(chord)
         case .scroll:
             return try .scroll(target(command.ref, command.x, command.y), dx: command.dx, dy: command.dy)

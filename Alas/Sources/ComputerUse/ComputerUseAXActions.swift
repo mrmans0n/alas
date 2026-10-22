@@ -278,64 +278,33 @@ extension ComputerUseAXActions {
     /// Menu levels walked for a shortcut: a top-level menu is level 1.
     static let menuMaxDepth = 4
     static let menuMaxItems = 2000
-    /// Ancestors searched for something to press or a row to select.
-    static let clickAncestorLevels = 4
     /// Ancestors searched for the scroll area around an element.
     static let scrollAncestorLevels = 8
     static let maxScrollSteps = 100
     /// Scroll bar value moved per line when the bar takes no increment action.
     static let scrollValuePerLine = 0.05
 
-    /// The `AXMenuItemCmdModifiers` mask for a chord; nil when it has none of command,
-    /// control or option, or uses fn, which menu shortcuts can't express.
-    static func menuModifiers(_ chord: ComputerUseKeyChord) -> Int? {
-        let modifiers = chord.modifiers
-        guard !modifiers.contains(.function), !modifiers.isDisjoint(with: [.command, .control, .option]) else { return nil }
-        // AXMenuItemModifiers: 0 is command alone; shift, option and control add bits 0-2, bit 3 drops command.
-        var mask = 0
-        if modifiers.contains(.shift) { mask |= 1 << 0 }
-        if modifiers.contains(.option) { mask |= 1 << 1 }
-        if modifiers.contains(.control) { mask |= 1 << 2 }
-        if !modifiers.contains(.command) { mask |= 1 << 3 }
-        return mask
-    }
-
-    /// Characters AppKit reports as the shortcut of a menu item bound to a named key.
-    private static let namedKeyCharacters: [ComputerUseKeyChord.NamedKey: Set<String>] = [
-        .return: ["\r", "\n"], .tab: ["\t"], .space: [" "], .escape: ["\u{1B}"], .delete: ["\u{8}", "\u{7F}"],
-    ]
-
     /// Presses the enabled menu item whose shortcut is `chord`; false when no menu item has it.
     /// Skips the Apple menu: its shortcuts (log out, force quit) belong to the system.
+    /// Refuses while a secure text field has focus, since a menu item can paste into it.
     static func pressMenuShortcut(
-        _ chord: ComputerUseKeyChord, app: ComputerUseAppIdentity, isCancelled: @escaping IsCancelled
+        _ chord: ComputerUseKeyChord, app: ComputerUseAppIdentity,
+        interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
     ) async throws -> Bool {
-        guard let mask = menuModifiers(chord) else { return false }
-        let character: String?
-        let virtualKey: Int?
-        let namedCharacters: Set<String>
-        switch chord.key {
-        case .character(let key):
-            character = key.lowercased()
-            virtualKey = nil
-            namedCharacters = []
-        case .named(let named):
-            character = nil
-            virtualKey = ComputerUseInputPoster.keyCode(for: chord.key).map(Int.init)
-            namedCharacters = namedKeyCharacters[named] ?? []
-        }
-        return try await onQueue(isCancelled) {
-            // The shortcut key first: most items have none, which settles them in one read.
+        guard ComputerUseMenuShortcut.applies(to: chord) else { return false }
+        let chordVirtualKey = ComputerUseInputPoster.keyCode(for: chord.key).map(Int.init)
+        return try await onQueue({ interrupt() == .cancelled }) {
             func matches(_ item: AXUIElement) -> Bool {
+                // The shortcut key first: most items have none, which settles them in one read.
                 let cmdChar = string(of: item, kAXMenuItemCmdCharAttribute)
-                if let character {
-                    guard cmdChar?.lowercased() == character else { return false }
-                } else if let cmdChar {
-                    guard namedCharacters.contains(cmdChar) else { return false }
-                } else {
-                    guard let virtualKey, number(of: item, kAXMenuItemCmdVirtualKeyAttribute) == virtualKey else { return false }
+                var virtualKey: Int?
+                switch chord.key {
+                case .character: if cmdChar == nil { return false }
+                case .named: virtualKey = number(of: item, kAXMenuItemCmdVirtualKeyAttribute)
                 }
-                return (number(of: item, kAXMenuItemCmdModifiersAttribute) ?? 0) == mask
+                return ComputerUseMenuShortcut.matches(
+                    chord, cmdChar: cmdChar, virtualKey: virtualKey,
+                    mask: number(of: item, kAXMenuItemCmdModifiersAttribute) ?? 0, chordVirtualKey: chordVirtualKey)
                     && bool(of: item, kAXEnabledAttribute) == true
             }
             let application = AXUIElementCreateApplication(app.pid)
@@ -345,7 +314,7 @@ extension ComputerUseAXActions {
             var items = 0
             func find(in menu: AXUIElement, level: Int) -> AXUIElement? {
                 for item in children(of: menu) {
-                    guard items < menuMaxItems, ContinuousClock.now < deadline, !isCancelled() else { return nil }
+                    guard items < menuMaxItems, ContinuousClock.now < deadline, interrupt() != .cancelled else { return nil }
                     items += 1
                     guard string(of: item, kAXRoleAttribute) == kAXMenuItemRole else { continue }
                     if matches(item) { return item }
@@ -364,7 +333,13 @@ extension ComputerUseAXActions {
                 }
             }
             guard let target else { return false }
-            if isCancelled() { throw CancellationError() }
+            // The walk can take seconds: the user may have taken over, or a secure field focus, since it started.
+            switch interrupt() {
+            case .cancelled: throw CancellationError()
+            case .userActive: throw ComputerUseSystemError.userActive
+            case nil: break
+            }
+            if let focused = focusedElement(of: app), isSecure(focused) { throw secureRefusal }
             try press(target, app: app)
             return true
         }
@@ -412,11 +387,14 @@ extension ComputerUseAXActions {
 
     /// Scrolls the scroll area around the target through its scroll bars, by lines.
     /// Positive `dy` scrolls down and positive `dx` right. A point target must hit `window`.
+    /// Checks `interrupt` before every step: once part of the scroll happened it stops there
+    /// and reports success, so no event fallback scrolls the same axis again.
     static func scroll(
-        _ target: ComputerUseInputTarget, dx: Int, dy: Int, in window: ComputerUseWindow, isCancelled: @escaping IsCancelled
+        _ target: ComputerUseInputTarget, dx: Int, dy: Int, in window: ComputerUseWindow,
+        interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
     ) async throws {
         let app = window.app
-        try await onQueue(isCancelled) {
+        try await onQueue({ interrupt() == .cancelled }) {
             let start: AXUIElement
             switch target {
             case .element(let handles, let handle):
@@ -440,22 +418,35 @@ extension ComputerUseAXActions {
                 string(of: $0, kAXRoleAttribute) == kAXScrollAreaRole
             }) else { throw Unsupported(error: .attributeUnsupported) }
             // Every axis must be scrollable before any moves, so a fallback never scrolls one twice.
-            var steps: [(bar: AXUIElement, delta: Int, action: String?)] = []
-            for (attribute, delta) in [(kAXVerticalScrollBarAttribute, dy), (kAXHorizontalScrollBarAttribute, dx)] where delta != 0 {
+            var steps: [(bar: AXUIElement, delta: Int, action: String?, vertical: Bool)] = []
+            for (attribute, delta, vertical) in [
+                (kAXVerticalScrollBarAttribute, dy, true), (kAXHorizontalScrollBarAttribute, dx, false),
+            ] where delta != 0 {
                 guard let bar = elementAttribute(area, attribute) else { throw Unsupported(error: .attributeUnsupported) }
                 let action = delta > 0 ? kAXIncrementAction : kAXDecrementAction
                 if actionNames(of: bar).contains(action) {
-                    steps.append((bar, delta, action))
+                    steps.append((bar, delta, action, vertical))
                 } else if isSettable(bar, kAXValueAttribute) {
-                    steps.append((bar, delta, nil))
+                    steps.append((bar, delta, nil, vertical))
                 } else {
                     throw Unsupported(error: .actionUnsupported)
                 }
             }
             var moved = false
+            /// False once the scroll should stop where it got to; throws when nothing moved yet.
+            func mayContinue() throws -> Bool {
+                guard let reason = interrupt() else { return true }
+                if moved { return false }
+                switch reason {
+                case .cancelled: throw CancellationError()
+                case .userActive: throw ComputerUseSystemError.userActive
+                }
+            }
             for step in steps {
+                let lines = min(abs(step.delta), maxScrollSteps)
                 if let action = step.action {
-                    for _ in 0 ..< min(abs(step.delta), maxScrollSteps) {
+                    for _ in 0 ..< lines {
+                        guard try mayContinue() else { return }
                         let result = AXUIElementPerformAction(step.bar, action as CFString)
                         guard result == .success else {
                             if !moved { throw failure(result, app: app) }
@@ -465,12 +456,14 @@ extension ComputerUseAXActions {
                         moved = true
                     }
                 } else {
+                    guard try mayContinue() else { return }
                     guard let current = double(of: step.bar, kAXValueAttribute) else {
                         if !moved { throw Unsupported(error: .noValue) }
                         return
                     }
-                    let lines = Double(min(abs(step.delta), maxScrollSteps)) * (step.delta > 0 ? 1 : -1)
-                    let next = min(1, max(0, current + lines * scrollValuePerLine))
+                    let perLine = valuePerLine(of: area, vertical: step.vertical)
+                    let offset = Double(lines) * perLine * (step.delta > 0 ? 1 : -1)
+                    let next = min(1, max(0, current + offset))
                     let result = AXUIElementSetAttributeValue(step.bar, kAXValueAttribute as CFString, next as CFNumber)
                     guard result == .success else {
                         if !moved { throw failure(result, app: app) }
@@ -482,43 +475,57 @@ extension ComputerUseAXActions {
         }
     }
 
-    /// A left click on an element without AXPress: presses the nearest ancestor that has it,
-    /// else selects the row the element is in. A double click selects the row, then opens it.
+    /// Points a scrolled line covers, as a wheel line roughly does.
+    static let scrollLinePoints = 16.0
+
+    /// The scroll bar value one line moves: a line over the scrollable extent (content minus
+    /// visible size), or `scrollValuePerLine` when the sizes can't be read.
+    private static func valuePerLine(of area: AXUIElement, vertical: Bool) -> Double {
+        var contents: CFTypeRef?
+        guard let visible = frame(of: area),
+              AXUIElementCopyAttributeValue(area, kAXContentsAttribute as CFString, &contents) == .success,
+              let content = (contents as? [AXUIElement])?.first
+        else { return scrollValuePerLine }
+        AXUIElementSetMessagingTimeout(content, ComputerUseAXReader.messagingTimeout)
+        guard let contentFrame = frame(of: content) else { return scrollValuePerLine }
+        let extent = vertical ? contentFrame.height - visible.height : contentFrame.width - visible.width
+        guard extent > 0 else { return scrollValuePerLine }
+        return min(1, max(0, scrollLinePoints / Double(extent)))
+    }
+
+    /// A left click on an element without AXPress, decided by `ComputerUseClickTarget`: presses
+    /// the nearest pressable element below the first container, else selects the row that
+    /// container is. A double click selects the row, then opens it.
     static func pressOrSelectNearest(
         _ handles: ComputerUseAXHandles, _ handle: Int, count: Int, app: ComputerUseAppIdentity,
         isCancelled: @escaping IsCancelled
     ) async throws {
         try await onQueue(isCancelled) {
             let element = try resolve(handles, handle)
-            var chain = [element]
-            var current = element
-            for _ in 0 ..< clickAncestorLevels {
-                // Never past the window: pressing it or the app is not a click on the element.
-                guard let parent = elementAttribute(current, kAXParentAttribute),
-                      let role = string(of: parent, kAXRoleAttribute),
-                      ![kAXWindowRole, kAXSheetRole, kAXApplicationRole].contains(role)
-                else { break }
-                chain.append(parent)
-                current = parent
+            var elements = [element]
+            var links = [(role: string(of: element, kAXRoleAttribute) ?? "AXUnknown", actions: actionNames(of: element))]
+            // The pressable levels plus the container above them, which may be the row to select.
+            while elements.count <= ComputerUseClickTarget.maxLevels,
+                  !ComputerUseClickTarget.stopRoles.contains(links[links.count - 1].role),
+                  let parent = elementAttribute(elements[elements.count - 1], kAXParentAttribute) {
+                elements.append(parent)
+                links.append((string(of: parent, kAXRoleAttribute) ?? "AXUnknown", actionNames(of: parent)))
             }
-            let row = chain.first { string(of: $0, kAXRoleAttribute) == kAXRowRole }
-            if count == 1 {
-                if let pressable = chain.dropFirst().first(where: { actionNames(of: $0).contains(kAXPressAction) }) {
-                    try press(pressable, app: app)
-                    return
-                }
-                guard let row else { throw Unsupported(error: .actionUnsupported) }
+            switch ComputerUseClickTarget.choose(chain: links) {
+            case .press(let index) where count == 1:
+                try press(elements[index], app: app)
+            case .selectRow(let index):
+                let row = elements[index]
                 try select(row, app: app)
-                return
-            }
-            guard count == 2, let row else { throw Unsupported(error: .actionUnsupported) }
-            try select(row, app: app)
-            let actions = actionNames(of: row)
-            // Selected but not opened: the double click as events finishes it.
-            guard let open = [openAction, kAXPressAction].first(where: actions.contains) else {
+                guard count == 2 else { return }
+                // Selected but not opened: the double click as events finishes it.
+                guard let open = [openAction, kAXPressAction].first(where: links[index].actions.contains) else {
+                    throw Unsupported(error: .actionUnsupported)
+                }
+                try press(row, action: open, app: app)
+            case .press, .none:
                 throw Unsupported(error: .actionUnsupported)
             }
-            try press(row, action: open, app: app)
         }
     }
 
