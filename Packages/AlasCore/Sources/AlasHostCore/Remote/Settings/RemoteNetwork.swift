@@ -1,4 +1,5 @@
 import Foundation
+import SystemConfiguration
 import AlasFoundation
 import AlasModel
 import AlasPlatform
@@ -104,9 +105,12 @@ public enum RemoteNetwork: Sendable {
         return output
     }
 
+    /// This Mac's Bonjour name, without `.local`. Not `ProcessInfo.hostName`:
+    /// that is whatever a reverse lookup of an address returns, such as the
+    /// tailnet's `mini.tail1234.ts.net`, which `.local` does not complete.
     public static func machineHostName() -> String? {
-        let raw = ProcessInfo.processInfo.hostName.trimmingCharacters(in: .whitespacesAndNewlines)
-        return raw.isEmpty ? nil : raw
+        let raw = (SCDynamicStoreCopyLocalHostName(nil) as String?)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return raw?.isEmpty == false ? raw : nil
     }
 
     public static func advertisedAddresses(

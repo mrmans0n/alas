@@ -96,6 +96,12 @@ struct RemoteNetworkTests {
         #expect(fromLocalName.map(\.kind) == [.localhost, .custom])
     }
 
+    /// The Bonjour name, never a DNS name a reverse lookup found (a tailnet
+    /// `mini.tail1234.ts.net` became `mini.tail1234.ts.net.local`).
+    @Test func machineHostNameIsTheBareBonjourName() {
+        #expect(RemoteNetwork.machineHostName().map { !$0.contains(".") } ?? true)
+    }
+
     @Test func allowedHostCandidatesIncludeLocalhostDetectedIpsAndMachineNames() {
         let interfaces = [
             RemoteNetworkInterface(name: "en0", host: "192.168.1.23", isLoopback: false),
