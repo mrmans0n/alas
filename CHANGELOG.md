@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### 🐛 Fixes
+
+- Show a "Preparing to ship…" row in the transcript while Ship reads the branch or gg stack, so the button no longer looks unresponsive before its card appears.
+
 ## [0.21.11] - 2026-10-22
 
 ### ✨ Features
