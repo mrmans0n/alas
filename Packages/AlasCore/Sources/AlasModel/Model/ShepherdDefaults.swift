@@ -10,7 +10,7 @@ public struct ShepherdDefaults: Codable, Equatable, Sendable {
     public var maxFixAttempts: Int = Self.defaultMaxFixAttempts
 
     public static let defaultMaxFixAttempts = 3
-    public static let fixAttemptRange = 1...10
+    public static let fixAttemptRange = 1...30
 
     public static func clampedFixAttempts(_ value: Int) -> Int {
         min(max(value, fixAttemptRange.lowerBound), fixAttemptRange.upperBound)
