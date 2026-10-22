@@ -16,6 +16,7 @@ import Foundation
 enum ComputerUseSkyLight {
     private typealias PostEventRecordTo = @convention(c) (UnsafeRawPointer, UnsafeRawPointer) -> Int32
     private typealias GetProcessForPID = @convention(c) (pid_t, UnsafeMutableRawPointer) -> Int32
+    private typealias GetFrontProcess = @convention(c) (UnsafeMutableRawPointer) -> Int32
     private typealias EventPostToPid = @convention(c) (pid_t, CGEvent) -> Void
     private typealias EventSetWindowLocation = @convention(c) (CGEvent, CGPoint) -> Void
     private typealias AXUIElementGetWindow = @convention(c) (AXUIElement, UnsafeMutablePointer<UInt32>) -> AXError
@@ -24,6 +25,7 @@ enum ComputerUseSkyLight {
     private struct Symbols: @unchecked Sendable {
         var postEventRecordTo: PostEventRecordTo?
         var getProcessForPID: GetProcessForPID?
+        var getFrontProcess: GetFrontProcess?
         var eventPostToPid: EventPostToPid?
         var eventSetWindowLocation: EventSetWindowLocation?
         var axGetWindow: AXUIElementGetWindow?
@@ -40,16 +42,22 @@ enum ComputerUseSkyLight {
             postEventRecordTo: resolve("SLPSPostEventRecordTo", as: PostEventRecordTo.self),
             // Deprecated Carbon, still exported; resolving it at runtime sidesteps the deprecation.
             getProcessForPID: resolve("GetProcessForPID", as: GetProcessForPID.self),
+            getFrontProcess: resolve("_SLPSGetFrontProcess", as: GetFrontProcess.self),
             eventPostToPid: resolve("SLEventPostToPid", as: EventPostToPid.self),
             eventSetWindowLocation: resolve("CGEventSetWindowLocation", as: EventSetWindowLocation.self),
             axGetWindow: resolve("_AXUIElementGetWindow", as: AXUIElementGetWindow.self)
         )
     }()
 
-    /// Whether a window can be made key without activating its app.
+    /// Whether input can go to a background window: it can be made key without activating its app,
+    /// confirmed by its window id, and mouse events can carry the point inside it.
     static var isAvailable: Bool {
         symbols.postEventRecordTo != nil && symbols.getProcessForPID != nil
+            && symbols.eventSetWindowLocation != nil && symbols.axGetWindow != nil
     }
+
+    /// Whether `windowID(of:)` can name an AX window's CG window.
+    static var canIdentifyWindows: Bool { symbols.axGetWindow != nil }
 
     /// Lets the app handle one record before the next; some apps drop a record that arrives
     /// while they are still handling the previous one (yabai waits the same).
@@ -58,13 +66,11 @@ enum ComputerUseSkyLight {
     /// Posts the records that make `windowID` the key window of `pid`, moving key status off
     /// `current` (the app's focused window) first. True when every record was accepted; whether
     /// the app acted on them is for the caller to confirm.
+    /// Pass a nil `current` for the user's frontmost app: a defocus record there would take key
+    /// status from the window the user is working in.
     static func makeKeyWithoutActivating(pid: pid_t, windowID: UInt32, current: UInt32?) async -> Bool {
-        guard let post = symbols.postEventRecordTo, let getProcess = symbols.getProcessForPID else { return false }
-        var psn = [UInt8](repeating: 0, count: 8)
-        guard getProcess(pid, &psn) == 0 else { return false }
-        func send(_ record: [UInt8]) -> Bool {
-            psn.withUnsafeBytes { psn in record.withUnsafeBytes { post(psn.baseAddress!, $0.baseAddress!) } } == 0
-        }
+        guard let psn = processSerialNumber(pid) else { return false }
+        let send = { (record: [UInt8]) in self.send(record, to: psn) }
         var accepted = true
         if let current, current != windowID {
             accepted = send(focusRecord(current, focus: false)) && accepted
@@ -76,6 +82,32 @@ enum ComputerUseSkyLight {
             accepted = send(makeKeyRecord(windowID, kind: kind)) && accepted
         }
         return accepted
+    }
+
+    /// Hands key status back after a background input: the app stops treating `windowID` as its
+    /// active key window, as it did before. For an app that isn't the user's front app only.
+    static func defocus(pid: pid_t, windowID: UInt32) -> Bool {
+        guard let psn = processSerialNumber(pid) else { return false }
+        return send(focusRecord(windowID, focus: false), to: psn)
+    }
+
+    /// Whether WindowServer has `pid` as its front process; nil when it can't tell.
+    static func isFrontProcess(pid: pid_t) -> Bool? {
+        guard let getFront = symbols.getFrontProcess, let psn = processSerialNumber(pid) else { return nil }
+        var front = [UInt8](repeating: 0, count: 8)
+        guard getFront(&front) == 0 else { return nil }
+        return front == psn
+    }
+
+    private static func processSerialNumber(_ pid: pid_t) -> [UInt8]? {
+        guard symbols.postEventRecordTo != nil, let getProcess = symbols.getProcessForPID else { return nil }
+        var psn = [UInt8](repeating: 0, count: 8)
+        return getProcess(pid, &psn) == 0 ? psn : nil
+    }
+
+    private static func send(_ record: [UInt8], to psn: [UInt8]) -> Bool {
+        guard let post = symbols.postEventRecordTo else { return false }
+        return psn.withUnsafeBytes { psn in record.withUnsafeBytes { post(psn.baseAddress!, $0.baseAddress!) } } == 0
     }
 
     /// The CG window id behind an AX window; nil when unknown.

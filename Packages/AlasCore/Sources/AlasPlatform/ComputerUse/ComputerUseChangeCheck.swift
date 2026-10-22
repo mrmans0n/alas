@@ -22,13 +22,17 @@ public struct ComputerUseWindowFingerprint: Equatable, Sendable {
     /// Nil when nothing has focus or the focus couldn't be read.
     public var focus: Focus?
     public var windowTitle: String?
-    /// `ComputerUseChangeCheck.elementsHash` of the element list; nil when the read failed.
+    /// `ComputerUseChangeCheck.elementsHash` of the element list; nil when the read failed or was
+    /// cut short (limit, node budget, deadline), since elements past the cut may have changed.
     public var elementsHash: Int?
+    /// The acted-on element's own state (value, selection, enabled, title); nil without one.
+    public var targetHash: Int?
 
-    public init(focus: Focus? = nil, windowTitle: String? = nil, elementsHash: Int? = nil) {
+    public init(focus: Focus? = nil, windowTitle: String? = nil, elementsHash: Int? = nil, targetHash: Int? = nil) {
         self.focus = focus
         self.windowTitle = windowTitle
         self.elementsHash = elementsHash
+        self.targetHash = targetHash
     }
 }
 
@@ -39,7 +43,7 @@ public enum ComputerUseChangeCheck {
     public static let retryDirectHint = #" Retry with delivery: "direct"."#
 
     /// The warning for an action whose window looks the same after it, else nil.
-    /// Without both element lists the check can't tell, so it doesn't warn.
+    /// Without both complete element lists the check can't tell, so it doesn't warn.
     public static func warning(
         before: ComputerUseWindowFingerprint?, after: ComputerUseWindowFingerprint?, deliveredAsEvents: Bool
     ) -> String? {
