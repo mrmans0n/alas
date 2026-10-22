@@ -27,16 +27,22 @@ public enum ComputerUseMenuShortcut {
         .return: ["\r", "\n"], .tab: ["\t"], .space: [" "], .escape: ["\u{1B}"], .delete: ["\u{8}", "\u{7F}"],
     ]
 
+    /// Bit 4 of `AXMenuItemCmdModifiers`: the item also needs fn (globe), which a chord here never has.
+    static let functionMaskBit = 1 << 4
+
     /// Whether an item with this shortcut (`cmdChar`, `virtualKey`, `mask` as read) is the chord.
-    /// `chordVirtualKey` is the chord key's code; a named key reported as a control or
-    /// private-use character (function keys, arrows) is matched by its virtual key instead.
+    /// A missing mask means command alone. `chordVirtualKey` is the chord key's code; a named
+    /// key reported as a control or private-use character (function keys, arrows) is matched
+    /// by its virtual key instead.
     public static func matches(
-        _ chord: ComputerUseKeyChord, cmdChar: String?, virtualKey: Int?, mask: Int, chordVirtualKey: Int?
+        _ chord: ComputerUseKeyChord, cmdChar: String?, virtualKey: Int?, mask: Int?, chordVirtualKey: Int?
     ) -> Bool {
-        guard applies(to: chord), modifiers(mask: mask) == chord.modifiers else { return false }
+        let mask = mask ?? 0
+        guard applies(to: chord), mask & functionMaskBit == 0, modifiers(mask: mask) == chord.modifiers else { return false }
         switch chord.key {
         case .character(let character):
-            return cmdChar?.lowercased() == String(character).lowercased()
+            guard let cmdChar = cmdChar?.trimmingCharacters(in: .whitespacesAndNewlines), !cmdChar.isEmpty else { return false }
+            return cmdChar.lowercased() == String(character).lowercased()
         case .named(let named):
             if let cmdChar, namedKeyCharacters[named]?.contains(cmdChar) == true { return true }
             if let cmdChar, !isKeyPlaceholder(cmdChar) { return false }

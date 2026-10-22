@@ -93,8 +93,15 @@ struct ComputerUseInputTests {
         ("cmd+up", "\u{F700}", 126, 0, true),
         ("cmd+up", "\u{F700}", 125, 0, false),
         ("cmd+up", "u", 126, 0, false),
-    ] as [(String, String?, Int?, Int, Bool)])
-    private func menuShortcutMatching(chord: String, cmdChar: String?, virtualKey: Int?, mask: Int, matches: Bool) throws {
+        // No modifiers attribute means command alone; the key compares trimmed and case-insensitively.
+        ("cmd+a", "A", nil, nil, true),
+        ("cmd+b", " b ", nil, nil, true),
+        ("cmd+shift+a", "A", nil, nil, false),
+        // Bit 4 is fn (globe): fn+ctrl+F ("Fill") is not ctrl+f.
+        ("ctrl+f", "F", nil, 28, false),
+        ("cmd+space", " ", nil, nil, true),
+    ] as [(String, String?, Int?, Int?, Bool)])
+    private func menuShortcutMatching(chord: String, cmdChar: String?, virtualKey: Int?, mask: Int?, matches: Bool) throws {
         let parsed = try #require(Chord.parse(chord))
         let chordKey = parsed.key == .named(.up) ? 126 : nil
         #expect(ComputerUseMenuShortcut.matches(
