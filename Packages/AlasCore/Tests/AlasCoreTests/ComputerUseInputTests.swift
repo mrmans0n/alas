@@ -74,6 +74,18 @@ struct ComputerUseInputTests {
         ) == expected)
     }
 
+    /// Without a confirmed key window the input falls back to activation, which an active user blocks.
+    @Test(arguments: [
+        (true, true, 0.5, ComputerUseEventRoute.background),
+        (true, false, 5.0, .activation),
+        (false, true, 5.0, .activation),
+        (true, false, 0.5, .refuse),
+        (false, false, 0.5, .refuse),
+    ])
+    private func eventRoutes(skyLight: Bool, confirmed: Bool, idle: TimeInterval, expected: ComputerUseEventRoute) {
+        #expect(ComputerUseEventRoute.choose(skyLightAvailable: skyLight, keyConfirmed: confirmed, idleSeconds: idle) == expected)
+    }
+
     @Test(arguments: [
         (0, [.command]), (1, [.command, .shift]), (2, [.command, .option]), (4, [.command, .control]),
         (8, []), (12, [.control]), (7, [.command, .shift, .option, .control]),
