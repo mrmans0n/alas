@@ -932,9 +932,7 @@ private struct RootUpdatePresentationHandlers: ViewModifier {
                 guard state.pendingSelfUpdate else { return }
                 state.pendingSelfUpdate = false
                 state.presentUpdateProgress = true
-                Task {
-                    try? await state.selfUpdater.start(command: .homebrew)
-                }
+                Task { await state.runSelfUpdate() }
             }) { info in
                 UpdateAvailableSheet(
                     info: info,
@@ -949,9 +947,20 @@ private struct RootUpdatePresentationHandlers: ViewModifier {
                 .modifier(RepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue))
             }
             .sheet(isPresented: $state.presentUpdateProgress) {
-                UpdateProgressSheet(updater: state.selfUpdater) {
-                    state.presentUpdateProgress = false
-                }
+                UpdateProgressSheet(
+                    updater: state.selfUpdater,
+                    update: state.updates.availableUpdate,
+                    isInstalled: state.updates.isReadyToRelaunch,
+                    onRetry: {
+                        state.selfUpdater.reset()
+                        Task { await state.runSelfUpdate() }
+                    },
+                    onRelaunch: { AppRelaunch.relaunch() },
+                    onDone: {
+                        state.selfUpdater.reset()
+                        state.presentUpdateProgress = false
+                    }
+                )
                 .environment(\.theme, state.themeStore.current)
                 .modifier(RepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue))
             }

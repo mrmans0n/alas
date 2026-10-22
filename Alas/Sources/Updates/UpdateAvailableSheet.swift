@@ -11,6 +11,7 @@ struct UpdateAvailableSheet: View {
     @Environment(\.theme) var theme
 
     private let brewCommand = SelfUpdateCommand.homebrew.displayCommandLine
+    private static let notesTypography = ACPChatTypography(fontFamily: "", fontSize: 12)
 
     private var subtitleText: String {
         switch info {
@@ -53,11 +54,20 @@ struct UpdateAvailableSheet: View {
             .padding(.horizontal, 22).padding(.top, 18).padding(.bottom, 6)
 
             ScrollView {
-                Text(info.releaseNotes.isEmpty ? "No release notes provided." : info.releaseNotes)
-                    .font(.system(size: 12))
-                    .foregroundColor(theme.color("fg-muted"))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
+                Group {
+                    if info.releaseNotes.isEmpty {
+                        Text("No release notes provided.")
+                            .font(.system(size: 12))
+                            .foregroundColor(theme.color("fg-muted"))
+                    } else {
+                        ACPMarkdownText(
+                            raw: info.releaseNotes,
+                            typography: Self.notesTypography,
+                            showsCodeBlockCopyButton: false
+                        )
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .frame(height: 220)
             .padding(.horizontal, 22).padding(.vertical, 12)

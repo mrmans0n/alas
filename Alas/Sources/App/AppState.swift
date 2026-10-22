@@ -1459,6 +1459,15 @@ final class AppState {
     /// conflict while the first one is still animating out.
     var pendingSelfUpdate = false
 
+    func runSelfUpdate() async {
+        try? await selfUpdater.start(command: .homebrew)
+        guard selfUpdater.state == .finished(exitCode: 0) else { return }
+        // Read the plist directly: Bundle caches the running copy's info.
+        let plist = Bundle.main.bundleURL.appending(path: "Contents/Info.plist")
+        let onDisk = NSDictionary(contentsOf: plist) as? [String: Any]
+        updates.recordInstall(onDisk: BuildIdentity(infoDictionary: onDisk))
+    }
+
     private(set) var installerHost: InstallerHost = .detect()
 
     /// Re-detect installers after an install completes so that, e.g., installing
