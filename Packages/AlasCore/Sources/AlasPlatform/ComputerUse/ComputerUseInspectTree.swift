@@ -11,6 +11,8 @@ public struct ComputerUseAXNode: Sendable {
     public var isEnabled: Bool
     public var isFocused: Bool
     public var children: [ComputerUseAXNode]
+    /// Opaque index into the app-side handle table; never serialized.
+    public var handle: Int?
 
     public init(
         role: String,
@@ -21,7 +23,8 @@ public struct ComputerUseAXNode: Sendable {
         frame: CGRect = .zero,
         isEnabled: Bool = true,
         isFocused: Bool = false,
-        children: [ComputerUseAXNode] = []
+        children: [ComputerUseAXNode] = [],
+        handle: Int? = nil
     ) {
         self.role = role
         self.subrole = subrole
@@ -32,6 +35,7 @@ public struct ComputerUseAXNode: Sendable {
         self.isEnabled = isEnabled
         self.isFocused = isFocused
         self.children = children
+        self.handle = handle
     }
 }
 
@@ -46,6 +50,8 @@ public struct ComputerUseInspectElement: Equatable, Sendable {
     public var frame: CGRect
     public var isEnabled: Bool
     public var isFocused: Bool
+    /// Opaque handle copied from the node; never serialized.
+    public var handle: Int?
 
     public init(
         ref: String,
@@ -57,7 +63,8 @@ public struct ComputerUseInspectElement: Equatable, Sendable {
         description: String? = nil,
         frame: CGRect = .zero,
         isEnabled: Bool = true,
-        isFocused: Bool = false
+        isFocused: Bool = false,
+        handle: Int? = nil
     ) {
         self.ref = ref
         self.depth = depth
@@ -69,6 +76,7 @@ public struct ComputerUseInspectElement: Equatable, Sendable {
         self.frame = frame
         self.isEnabled = isEnabled
         self.isFocused = isFocused
+        self.handle = handle
     }
 }
 
@@ -118,7 +126,8 @@ public enum ComputerUseInspectTree {
                     description: clip(node.description),
                     frame: node.frame,
                     isEnabled: node.isEnabled,
-                    isFocused: node.isFocused
+                    isFocused: node.isFocused,
+                    handle: node.handle
                 ))
             }
             for child in node.children where !visit(child, depth: depth + 1) {

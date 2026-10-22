@@ -10,7 +10,7 @@ final class AppStateLink {
 extension AppState {
     static func makeComputerUse(link: AppStateLink) -> ComputerUseCoordinator {
         let access = ComputerUseAccess(hostPID: getpid(), alwaysAllowed: {
-            Set(link.state?.config.computerUse.alwaysAllowedBundleIDs ?? [])
+            Set(link.state?.config.computerUse.alwaysAllowedApps ?? [])
         })
         let coordinator = ComputerUseCoordinator(
             system: .live,
@@ -39,8 +39,8 @@ extension AppState {
     }
 
     func persistComputerUseAlwaysAllowed(_ bundleID: String) {
-        guard !config.computerUse.alwaysAllowedBundleIDs.contains(bundleID) else { return }
-        config.computerUse.alwaysAllowedBundleIDs.append(bundleID)
+        guard !config.computerUse.alwaysAllowedApps.contains(bundleID) else { return }
+        config.computerUse.alwaysAllowedApps.append(bundleID)
         saveConfig()
     }
 

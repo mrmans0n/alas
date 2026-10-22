@@ -14,9 +14,20 @@ struct AppConfigDecodingTests {
 
         let enabledOnly = try JSONDecoder().decode(AppConfig.self, from: Data(#"{"computerUse":{"enabled":true}}"#.utf8))
         #expect(enabledOnly.computerUse.enabled)
-        config.computerUse.alwaysAllowedBundleIDs = ["com.apple.Notes"]
+        config.computerUse.alwaysAllowedApps = ["com.apple.Notes"]
         let withApps = try JSONDecoder().decode(AppConfig.self, from: JSONEncoder().encode(config))
-        #expect(withApps.computerUse.alwaysAllowedBundleIDs == ["com.apple.Notes"])
+        #expect(withApps.computerUse.alwaysAllowedApps == ["com.apple.Notes"])
+    }
+
+    @Test func legacySeeOnlyGrantsAreDropped() throws {
+        let legacy = try JSONDecoder().decode(
+            AppConfig.self,
+            from: Data(#"{"computerUse":{"enabled":true,"alwaysAllowedBundleIDs":["com.apple.Notes"]}}"#.utf8)
+        )
+        #expect(legacy.computerUse.enabled)
+        #expect(legacy.computerUse.alwaysAllowedApps.isEmpty)
+        let reencoded = try String(decoding: JSONEncoder().encode(legacy), as: UTF8.self)
+        #expect(!reencoded.contains("alwaysAllowedBundleIDs"))
     }
 
     /// A hand-written `app.json` names only what it changes: everything else

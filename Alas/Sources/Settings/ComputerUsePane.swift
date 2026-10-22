@@ -44,7 +44,7 @@ struct ComputerUsePane: View {
                         .foregroundColor(theme.color("fg-dim"))
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.bottom, 8)
-                    let bundleIDs = state.config.computerUse.alwaysAllowedBundleIDs
+                    let bundleIDs = state.config.computerUse.alwaysAllowedApps
                     if bundleIDs.isEmpty {
                         Text("No apps yet. Choose \"Always allow\" when an agent asks.")
                             .font(.system(size: 12.5))
@@ -53,7 +53,7 @@ struct ComputerUsePane: View {
                         ForEach(bundleIDs, id: \.self) { bundleID in
                             SettingsRow(name: bundleID) {
                                 AlasButton(title: "Remove") {
-                                    state.config.computerUse.alwaysAllowedBundleIDs.removeAll { $0 == bundleID }
+                                    state.config.computerUse.alwaysAllowedApps.removeAll { $0 == bundleID }
                                     state.saveConfig()
                                 }
                             }

@@ -23,6 +23,15 @@ struct ComputerUseInspectTreeTests {
         #expect(!result.truncated)
     }
 
+    @Test func flattenCarriesHandlesInEmittedOrder() {
+        let tree = ComputerUseAXNode(role: "AXWindow", children: [
+            ComputerUseAXNode(role: "AXGroup", children: [ComputerUseAXNode(role: "AXButton", handle: 7)], handle: 3),
+            ComputerUseAXNode(role: "AXTextField"),
+        ], handle: 1)
+        let result = ComputerUseInspectTree.flatten(tree, query: nil, limit: 100, maxDepth: 10)
+        #expect(result.elements.map(\.handle) == [1, 3, 7, nil])
+    }
+
     @Test func flattenStopsAtLimitAndReportsTruncation() {
         let cut = ComputerUseInspectTree.flatten(sample, query: nil, limit: 3, maxDepth: 10)
         #expect(cut.elements.count == 3)
