@@ -73,9 +73,10 @@ public final class ShellEnvResolver: @unchecked Sendable {
     /// Runs the shell in a session of its own, without a terminal: an
     /// interactive shell's startup files could otherwise read from or take
     /// over the terminal this process runs in (`alas-host setup` over SSH)
-    /// and stall. They may still print, fail a command or take seconds (nvm);
-    /// the sentinels find PATH in whatever the shell prints, whatever its exit
-    /// status, and the shell's whole process group is killed past `timeout`.
+    /// and stall. They may still print, fail a command, take seconds (nvm) or
+    /// leave a helper behind that holds the output open; the read ends at the
+    /// end sentinel, whatever the shell's exit status, and past `timeout` it
+    /// ends regardless and the shell's whole process group is killed.
     private static func runShellAndGetPATH(shell: String, interactive: Bool) async -> String? {
         let output = Pipe()
         let errors = Pipe()
@@ -87,21 +88,64 @@ public final class ShellEnvResolver: @unchecked Sendable {
             newSession: true, stdin: nil, stdout: output, stderr: errors,
             onExit: { _, _ in }
         ) else { return nil }
-        let read = Task.detached { output.fileHandleForReading.readDataToEndOfFile() }
-        let drain = Task.detached { _ = errors.fileHandleForReading.readDataToEndOfFile() }
-        let timeout = Task.detached {
-            try await Task.sleep(for: .seconds(interactive ? 10 : 2))
-            // The session leader's pid is its group's id.
-            if child.isRunning { kill(-child.pid, SIGKILL) }
+        let read = ShellOutput(endMarker: Data(sentinelEnd.utf8))
+        errors.fileHandleForReading.readabilityHandler = { _ = $0.availableData }
+        let raw = await withCheckedContinuation { continuation in
+            read.onFinish = { continuation.resume(returning: $0) }
+            output.fileHandleForReading.readabilityHandler = { read.append($0.availableData) }
+            Task.detached {
+                try? await Task.sleep(for: .seconds(interactive ? 10 : 2))
+                if read.finish() {
+                    // The session leader's pid is its group's id, which stays
+                    // the group's while anything it started is still in it.
+                    kill(-child.pid, SIGKILL)
+                }
+            }
         }
-        let raw = String(decoding: await read.value, as: UTF8.self)
-        timeout.cancel()
-        drain.cancel()
-        guard let start = raw.range(of: sentinelStart)?.upperBound,
-              let end = raw.range(of: sentinelEnd, range: start..<raw.endIndex)?.lowerBound,
+        output.fileHandleForReading.readabilityHandler = nil
+        errors.fileHandleForReading.readabilityHandler = nil
+        let text = String(decoding: raw, as: UTF8.self)
+        guard let start = text.range(of: sentinelStart)?.upperBound,
+              let end = text.range(of: sentinelEnd, range: start..<text.endIndex)?.lowerBound,
               start < end else { return "" }
-        return raw[start..<end].trimmingCharacters(in: .newlines)
+        return text[start..<end].trimmingCharacters(in: .newlines)
     }
 
     public init() {}
+}
+
+/// What a shell printed, until the end marker, end of file or a timeout.
+private final class ShellOutput: @unchecked Sendable {
+    private let lock = NSLock()
+    private let endMarker: Data
+    private var data = Data()
+    private var finished = false
+    var onFinish: ((Data) -> Void)?
+
+    init(endMarker: Data) {
+        self.endMarker = endMarker
+    }
+
+    /// Adds a chunk; an empty one is end of file. Finishes at the end marker.
+    func append(_ chunk: Data) {
+        lock.lock()
+        if !chunk.isEmpty { data.append(chunk) }
+        let done = chunk.isEmpty || data.range(of: endMarker) != nil
+        lock.unlock()
+        if done { finish() }
+    }
+
+    /// Finishes once; returns whether this call did, as the timeout needs to know.
+    @discardableResult
+    func finish() -> Bool {
+        lock.lock()
+        guard !finished else { lock.unlock()
+        return false }
+        finished = true
+        let result = data
+        let callback = onFinish
+        lock.unlock()
+        callback?(result)
+        return true
+    }
 }

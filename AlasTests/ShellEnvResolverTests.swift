@@ -38,6 +38,18 @@ struct ShellEnvResolverTests {
         #expect(await ShellEnvResolver.discoverShellPath(candidates: [shell.path]) == "/own-session")
     }
 
+    /// Startup files can leave a helper behind that keeps the output open
+    /// after the shell exits; the lookup ends at the PATH it printed.
+    @Test(.timeLimit(.minutes(1)))
+    func aHelperThatKeepsTheOutputOpenDoesNotHoldTheLookup() async throws {
+        let shell = try fakeShell("""
+        printf '%s' "___ALAS_PATH___/with/helper___ALAS_END___"
+        sleep 300 &
+        """)
+        defer { try? FileManager.default.removeItem(at: shell) }
+        #expect(await ShellEnvResolver.discoverShellPath(candidates: [shell.path]) == "/with/helper")
+    }
+
     @Test func aLoginShellAnswersWhenTheInteractiveOneGivesNothing() async throws {
         let shell = try fakeShell("""
         case "$1" in -i) exit 1 ;; esac
