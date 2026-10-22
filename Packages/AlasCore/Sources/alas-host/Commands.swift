@@ -73,10 +73,11 @@ enum HostCommands {
         case ("registry", "search", 1), ("registry", "search", 2):
             let query = arguments.count == 2 ? arguments[1] : ""
             let installed = readConfig().agents.registry
-            let agents = try await ACPRegistryClient().agents().filter {
-                query.isEmpty || $0.id.localizedCaseInsensitiveContains(query) || $0.name.localizedCaseInsensitiveContains(query)
+            let registry = try await ACPRegistryClient().agents()
+            let matches = { (id: String, name: String) in
+                query.isEmpty || id.localizedCaseInsensitiveContains(query) || name.localizedCaseInsensitiveContains(query)
             }
-            for agent in agents {
+            for agent in registry where matches(agent.id, agent.name) {
                 let note = switch ACPRegistryEntryStatus.resolve(agent: agent, installed: installed) {
                 case .builtin(let agentID): "  (built in: agents.\(agentID).enabled)"
                 case .installed: "  (installed)"
@@ -86,8 +87,15 @@ enum HostCommands {
                 }
                 print("\(agent.id)  \(agent.name)  \(agent.version)\(note)")
             }
+            // Installed agents the registry no longer lists, which only
+            // `registry uninstall` removes now.
+            for agent in ACPRegistryInstalledAgent.unlisted(installed, registry: registry)
+                where matches(agent.registryID, agent.displayName) {
+                print("\(agent.registryID)  \(agent.displayName)  \(agent.version)  (installed; no longer in the registry)")
+            }
         case ("registry", "install", 2):
-            let holder = try writableHolder()
+            // Fail early, before the download; the write below asks again.
+            _ = try writableHolder()
             guard let agent = try await ACPRegistryClient().agents().first(where: { $0.id == arguments[1] }) else {
                 throw HostCommandError("The ACP registry has no agent \(arguments[1]); see alas-host registry search.")
             }
@@ -105,9 +113,14 @@ enum HostCommands {
                 break
             }
             let installed = try await ACPRegistryInstaller().install(agent)
-            try HostProfileWrite.update { $0.agents.installRegistryAgent(installed) }
+            // The download can take a while, and who holds the profile may
+            // have changed since: ask again, and hold its lock while writing.
+            let writer = try writableHolder()
+            try withExtendedLifetime(writer) {
+                try HostProfileWrite.update { $0.agents.installRegistryAgent(installed) }
+            }
             print("Installed \(agent.name) \(agent.version) as agents.\(agent.id).enabled.")
-            if case .host = holder { print("Restart the host to use it: alas-host restart") }
+            if case .host = writer { print("Restart the host to use it: alas-host restart") }
         case ("registry", "uninstall", 2):
             let holder = try writableHolder()
             guard readConfig().agents.registry.contains(where: { $0.registryID == arguments[1] }) else {
