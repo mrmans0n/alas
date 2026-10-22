@@ -77,11 +77,9 @@ enum HostCommands {
                 print("\(peer.id)  \(peer.name)  \(peer.serverId)")
             }
         case ("peers", "remove", 2):
-            let query = arguments[1]
-            guard let peer = try await listPeers().first(where: { [$0.id, $0.name, $0.serverId].contains(query) }) else {
-                throw HostCommandError("No paired Mac has the id, name or server id \(query).")
-            }
+            let peer = try HostPeerSummary.resolve(arguments[1], in: try await listPeers())
             try await forgetPeer(peer.id)
+            print("\(peer.id)  \(peer.name)")
         case ("registry", "search", 1), ("registry", "search", 2):
             let query = arguments.count == 2 ? arguments[1] : ""
             let installed = readConfig().agents.registry

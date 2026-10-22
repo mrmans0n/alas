@@ -116,4 +116,21 @@ struct HostProtocolTests {
         #expect(!caps.contains(PeerConsoleCapability.terminateV1))
         #expect(caps.contains(PeerSessionTabsCapability.v1))
     }
+
+    /// `peers remove` takes an id or server id as is, and a name only when
+    /// one peer has it.
+    @Test(arguments: [
+        ("p1", "p1"), ("srv-2", "p2"), ("Desk", "p3"), ("p2", "p2"),
+        ("Laptop", nil), ("nobody", nil),
+    ] as [(String, String?)])
+    func aPeerIsResolvedByIdServerIdOrUniqueName(query: String, expected: String?) {
+        // p4 is named after p2's id: the exact id wins over the name.
+        let peers = [
+            HostPeerSummary(id: "p1", serverId: "srv-1", name: "Laptop", origins: []),
+            HostPeerSummary(id: "p2", serverId: "srv-2", name: "Laptop", origins: []),
+            HostPeerSummary(id: "p3", serverId: "srv-3", name: "Desk", origins: []),
+            HostPeerSummary(id: "p4", serverId: "srv-4", name: "p2", origins: []),
+        ]
+        #expect((try? HostPeerSummary.resolve(query, in: peers))?.id == expected)
+    }
 }

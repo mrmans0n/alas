@@ -120,6 +120,16 @@ public struct HostPeerSummary: Codable, Equatable, Sendable {
         self.name = name
         self.origins = origins
     }
+
+    /// The peer `query` names: its id or server id, else a name only one peer has.
+    public static func resolve(_ query: String, in peers: [HostPeerSummary]) throws -> HostPeerSummary {
+        if let peer = peers.first(where: { $0.id == query || $0.serverId == query }) { return peer }
+        let named = peers.filter { $0.name == query }
+        if named.count == 1 { return named[0] }
+        if named.isEmpty { throw HostError.failed(message: "No paired Mac has the id, name or server id \(query).") }
+        let candidates = named.map { "  \($0.id)  \($0.name)" }.joined(separator: "\n")
+        throw HostError.failed(message: "More than one paired Mac is named \(query); remove one by id:\n\(candidates)")
+    }
 }
 
 public enum HostServerMessage: Codable, Equatable, Sendable {
