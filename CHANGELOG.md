@@ -8,7 +8,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### ✨ Features
 
-- Let plugins limit themselves to projects with a GitHub or GitLab remote with `requires.codeHost` (plugin API 17).
+- Let plugins limit themselves to projects with a GitHub or GitLab remote with `requires.codeHost`, new in plugin API 17 (#2174).
 
 ### 🐛 Fixes
 
