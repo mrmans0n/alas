@@ -676,7 +676,7 @@ fn computer_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "computer_click",
-            "description": "Click an element or a point in a window. Target it with `ref` (an element ref from the latest computer_inspect or computer_wait of this window) or with `x` and `y` (pixels in the latest computer_screenshot of this window). Returns the window's new elements (refs are replaced). Works in the background without moving the user's cursor or changing focus; `delivery: \"direct\"` briefly activates the app instead. The first use of each app asks the user for approval.",
+            "description": "Click an element or a point in a window. Target it with `ref` (an element ref from the latest computer_inspect or computer_wait of this window) or with `x` and `y` (pixels in the latest computer_screenshot of this window). Returns the window's new elements (refs are replaced). Works in the background without moving the user's cursor or changing the user's focus, though it may change which of the target app's windows is key; `delivery: \"direct\"` briefly activates the app instead. The first use of each app asks the user for approval.",
             "annotations": { "readOnlyHint": false, "destructiveHint": true },
             "inputSchema": computer_action_schema(
                 json!({
@@ -815,7 +815,7 @@ fn computer_pixel_property(description: &str) -> Value {
 }
 
 fn computer_delivery_property() -> Value {
-    json!({ "type": "string", "enum": ["background", "direct"], "description": "background posts to the app without touching the user's focus. direct briefly activates the app and is refused while the user is active. Default: background." })
+    json!({ "type": "string", "enum": ["background", "direct"], "description": "background posts to the app without touching the user's focus; it may change the target app's key window, and activates the app briefly when that window can't be made key. direct briefly activates the app and is refused while the user is active. Default: background. The result's `delivery` reports how the input went: ax, background or activation." })
 }
 
 fn preview_tool_definitions() -> Vec<Value> {

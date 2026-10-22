@@ -320,7 +320,7 @@ struct ComputerUseCoordinatorTests {
     @Test(arguments: [
         (ComputerUseDelivered.ax, WindowChange.none,
          "No change was observed in the window after this action; the app may have ignored it."),
-        (.event, .none,
+        (.background, .none,
          #"No change was observed in the window after this action; the app may have ignored it. Retry with delivery: "direct"."#),
         (.event, .elements, nil),
         (.event, .focus, nil),

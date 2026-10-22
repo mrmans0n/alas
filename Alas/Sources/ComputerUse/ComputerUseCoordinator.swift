@@ -651,7 +651,7 @@ final class ComputerUseCoordinator {
                 focus: system.focusState(window), windowTitle: window.title,
                 elementsHash: ComputerUseChangeCheck.elementsHash(read.elements))
             payload["warning"] = ComputerUseChangeCheck.warning(
-                before: before, after: after, deliveredAsEvents: delivered.delivery == .event)
+                before: before, after: after, deliveredAsEvents: [.event, .background].contains(delivered.delivery))
         } catch is CancellationError {
             throw CancellationError()
         } catch {
@@ -929,7 +929,8 @@ final class ComputerUseCoordinator {
         switch error {
         case ComputerUseSystemError.windowNotFound(let id): Message.windowNotFound(id)
         case ComputerUseSystemError.captureFailed(let reason): Message.captureFailed(reason)
-        case ComputerUseSystemError.actionFailed(let reason): Message.actionFailed(reason)
+        case ComputerUseSystemError.actionFailed(let reason), ComputerUseSystemError.notActiveWindow(let reason):
+            Message.actionFailed(reason)
         case ComputerUseSystemError.openFailed(let reason): Message.openFailed(reason)
         case let refusal as Refusal: refusal.message
         case is CancellationError: Message.cancelled

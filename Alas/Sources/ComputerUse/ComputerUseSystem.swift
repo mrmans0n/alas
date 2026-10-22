@@ -59,7 +59,8 @@ enum ComputerUseInputInterrupt: Sendable {
 
 /// How an input reached the app, reported to the agent.
 enum ComputerUseDelivery: String, Sendable {
-    case ax, event, activation
+    /// `background`: events posted to the window after it became its app's key window, without activation.
+    case ax, event, activation, background
 }
 
 /// A delivered input: how it got there and, for a chord pressed as a menu item, which one.
@@ -71,6 +72,7 @@ struct ComputerUseDelivered: Sendable, Equatable {
     static let ax = ComputerUseDelivered(delivery: .ax)
     static let event = ComputerUseDelivered(delivery: .event)
     static let activation = ComputerUseDelivered(delivery: .activation)
+    static let background = ComputerUseDelivered(delivery: .background)
 }
 
 enum ComputerUseSystemError: Error, LocalizedError {
@@ -79,6 +81,8 @@ enum ComputerUseSystemError: Error, LocalizedError {
     /// The element a handle points at no longer exists.
     case staleElement
     case actionFailed(String)
+    /// The target window isn't its app's key window, so keys could go to another window.
+    case notActiveWindow(String)
     case openFailed(String)
     /// The point the input would land on is outside the target window.
     case outOfBounds
@@ -96,6 +100,7 @@ enum ComputerUseSystemError: Error, LocalizedError {
         case .userActive: "The user is using the app"
         case .userTookOver(let typed, let total): "The user took over after \(typed) of \(total) characters"
         case .actionFailed(let reason): reason
+        case .notActiveWindow(let reason): reason
         case .openFailed(let reason): reason
         }
     }
@@ -144,10 +149,7 @@ struct ComputerUseSystem: Sendable {
         elementMatches: { handles, handle, role, title in
             await ComputerUseAXActions.elementMatches(handles, handle, role: role, title: title)
         },
-        secondsSinceUserInput: {
-            // ~0 is kCGAnyInputEventType, which does not import into Swift.
-            CGEventSource.secondsSinceLastEventType(.hidSystemState, eventType: CGEventType(rawValue: ~0)!)
-        },
+        secondsSinceUserInput: { LiveComputerUseSystem.secondsSinceUserInput() },
         frontmostPID: { NSWorkspace.shared.frontmostApplication?.processIdentifier },
         resolveApp: { await LiveComputerUseSystem.resolveApp(name: $0, bundleID: $1) },
         openApp: { try await LiveComputerUseSystem.openApp($0) }
@@ -185,6 +187,11 @@ private enum LiveComputerUseSystem {
                 }
                 return (app: app, windows: windows)
             }
+    }
+
+    static func secondsSinceUserInput() -> TimeInterval {
+        // ~0 is kCGAnyInputEventType, which does not import into Swift.
+        CGEventSource.secondsSinceLastEventType(.hidSystemState, eventType: CGEventType(rawValue: ~0)!)
     }
 
     static func window(_ id: UInt32) async -> ComputerUseWindow? {
@@ -308,8 +315,12 @@ extension LiveComputerUseSystem {
     /// interleave, or the pasteboard saved by the second would be the first's text.
     private static let directLock = ComputerUseSerialLock()
 
-    /// Delivery order: an AX action on the element, else events posted to the
-    /// pid; `direct` activates the app around the events instead.
+    /// How long a background delivery waits for the app to report the window as its key window.
+    static let keyConfirmWait: Duration = .milliseconds(200)
+
+    /// Delivery order: an AX action on the element; else events posted to the window once it is
+    /// its app's key window, without activating the app (`background`); else, when that window
+    /// can't be made key, the app is activated around the events as `direct` does.
     static func perform(
         _ input: ComputerUseInput, in window: ComputerUseWindow, direct: Bool,
         interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
@@ -321,18 +332,11 @@ extension LiveComputerUseSystem {
             throw ComputerUseSystemError.actionFailed(ComputerUseCoordinator.Message.noQuitting)
         }
         if direct {
-            try await directLock.run {
-                // A Stop while waiting for another direct action performs nothing.
-                if isCancelled() { throw CancellationError() }
-                try await withActivation(of: window.app, isCancelled: isCancelled) {
-                    try await postEvents(input, in: window, paste: true, interrupt: interrupt)
-                }
-            }
-            return .activation
+            return try await activated(input, in: window, interrupt: interrupt)
         }
         let app = window.app
-        // Background apps ignore many posted events; each case falls through to them only
-        // when the element offers no AX way.
+        // Each case falls through to events only when the element offers no AX way. Typing without
+        // a ref and chords act on the key window, so they wait until it is made key below.
         switch input {
         case .click(.element(let handles, let handle), .right, _):
             do {
@@ -368,22 +372,6 @@ extension LiveComputerUseSystem {
             } catch is ComputerUseAXActions.Unsupported {
                 // The text isn't settable; focus it and type instead.
             }
-        case .type(let text, nil, let replace):
-            // Typing goes to the focused element of the target window only.
-            try await ComputerUseAXActions.makeActiveWindow(window, isCancelled: isCancelled)
-            do {
-                try await ComputerUseAXActions.typeIntoFocused(text, replace: replace, app: app, interrupt: interrupt)
-                return .ax
-            } catch is ComputerUseAXActions.Unsupported {
-                // Nothing focused takes text this way; type it instead.
-            }
-        case .key(let chord) where ComputerUseMenuShortcut.applies(to: chord):
-            // A menu shortcut acts on the key window, which must be the target. The press itself
-            // refuses while a secure field has focus: any menu item may paste into it.
-            try await ComputerUseAXActions.makeActiveWindow(window, isCancelled: isCancelled)
-            if let menuItem = try await ComputerUseAXActions.pressMenuShortcut(chord, app: app, interrupt: interrupt) {
-                return ComputerUseDelivered(delivery: .ax, menuItem: menuItem)
-            }
         case .scroll(let at, let dx, let dy):
             do {
                 try await ComputerUseAXActions.scroll(at, dx: dx, dy: dy, in: window, interrupt: interrupt)
@@ -394,19 +382,117 @@ extension LiveComputerUseSystem {
         default:
             break
         }
-        try await postEvents(input, in: window, paste: false, interrupt: interrupt)
-        return .event
+        let keyConfirmed = try await makeKeyInBackground(window, isCancelled: isCancelled)
+        let route = ComputerUseEventRoute.choose(
+            skyLightAvailable: ComputerUseSkyLight.isAvailable, keyConfirmed: keyConfirmed,
+            idleSeconds: secondsSinceUserInput())
+        if route == .background {
+            // A key window validates the app's menus, so a chord's menu item is enabled now.
+            if let delivered = try await viaKeyWindow(input, app: app, interrupt: interrupt) { return delivered }
+            // Making the window key took a few round trips; the user may have come back since.
+            if interrupt() == .userActive { throw ComputerUseSystemError.userActive }
+            try await postEvents(input, in: window, paste: false, background: true, interrupt: interrupt)
+            return .background
+        }
+        // Not key: the AX ways still work where the target is the app's focused window.
+        if actsOnKeyWindow(input) {
+            do {
+                try await ComputerUseAXActions.makeActiveWindow(window, isCancelled: isCancelled)
+                if let delivered = try await viaKeyWindow(input, app: app, interrupt: interrupt) { return delivered }
+            } catch ComputerUseSystemError.notActiveWindow {
+                // Activation makes it the active window.
+            }
+        }
+        guard route == .activation else { throw ComputerUseSystemError.userActive }
+        return try await activated(input, in: window, interrupt: interrupt)
+    }
+
+    private static func actsOnKeyWindow(_ input: ComputerUseInput) -> Bool {
+        switch input {
+        case .type(_, nil, _): true
+        case .key(let chord): ComputerUseMenuShortcut.applies(to: chord)
+        default: false
+        }
+    }
+
+    /// The AX ways that act on the key window: typing into its focused element, or pressing the
+    /// enabled menu item with a chord's shortcut. Nil when the input has none.
+    private static func viaKeyWindow(
+        _ input: ComputerUseInput, app: ComputerUseAppIdentity,
+        interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
+    ) async throws -> ComputerUseDelivered? {
+        switch input {
+        case .type(let text, nil, let replace):
+            do {
+                try await ComputerUseAXActions.typeIntoFocused(text, replace: replace, app: app, interrupt: interrupt)
+                return .ax
+            } catch is ComputerUseAXActions.Unsupported {
+                // Nothing focused takes text this way; type it instead.
+                return nil
+            }
+        case .key(let chord) where ComputerUseMenuShortcut.applies(to: chord):
+            // The press refuses while a secure field has focus: any menu item may paste into it.
+            return try await ComputerUseAXActions.pressMenuShortcut(chord, app: app, interrupt: interrupt)
+                .map { ComputerUseDelivered(delivery: .ax, menuItem: $0) }
+        default:
+            return nil
+        }
+    }
+
+    /// Makes `window` its app's key window without activating the app or raising the window, and
+    /// confirms it. The records go out at most twice, since an app may still be handling the first.
+    /// False without SkyLight or when the app never reports the window as key.
+    private static func makeKeyInBackground(
+        _ window: ComputerUseWindow, isCancelled: @escaping @Sendable () -> Bool
+    ) async throws -> Bool {
+        guard ComputerUseSkyLight.isAvailable else { return false }
+        var state = try await ComputerUseAXActions.keyWindowState(window, isCancelled: isCancelled)
+        if state.isKey { return true }
+        for _ in 0 ..< 2 {
+            if isCancelled() { throw CancellationError() }
+            guard await ComputerUseSkyLight.makeKeyWithoutActivating(
+                pid: window.app.pid, windowID: window.windowID, current: state.focusedWindowID)
+            else { return false }
+            let deadline = ContinuousClock.now + keyConfirmWait
+            while true {
+                state = try await ComputerUseAXActions.keyWindowState(window, isCancelled: isCancelled)
+                if state.isKey { return true }
+                guard ContinuousClock.now < deadline else { break }
+                try? await Task.sleep(for: focusPoll)
+            }
+        }
+        return false
+    }
+
+    /// Activates the app around the events; one direct action at a time.
+    private static func activated(
+        _ input: ComputerUseInput, in window: ComputerUseWindow,
+        interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
+    ) async throws -> ComputerUseDelivered {
+        let isCancelled: @Sendable () -> Bool = { interrupt() == .cancelled }
+        try await directLock.run {
+            // A Stop while waiting for another direct action performs nothing.
+            if isCancelled() { throw CancellationError() }
+            try await withActivation(of: window.app, isCancelled: isCancelled) {
+                try await postEvents(input, in: window, paste: true, background: false, interrupt: interrupt)
+            }
+        }
+        return .activation
     }
 
     /// Resolves every point first, then checks for cancellation once more
-    /// before the first event.
+    /// before the first event. `background`: the window was made key without activating its app,
+    /// so the focused-window checks only confirm it is still key and never raise it.
     private static func postEvents(
-        _ input: ComputerUseInput, in window: ComputerUseWindow, paste: Bool,
+        _ input: ComputerUseInput, in window: ComputerUseWindow, paste: Bool, background: Bool,
         interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
     ) async throws {
         let isCancelled: @Sendable () -> Bool = { interrupt() == .cancelled }
         let app = window.app
-        let target = ComputerUseInputPoster.Target(pid: app.pid, windowID: window.windowID)
+        let target = ComputerUseInputPoster.Target(pid: app.pid, windowID: window.windowID, windowOrigin: window.frame.origin)
+        func requireActiveWindow() async throws {
+            try await ComputerUseAXActions.makeActiveWindow(window, raise: !background, isCancelled: isCancelled)
+        }
         func point(_ input: ComputerUseInputTarget) async throws -> CGPoint {
             switch input {
             case .element(let handles, let handle):
@@ -427,7 +513,7 @@ extension LiveComputerUseSystem {
             switch at {
             case .element(let handles, let handle):
                 try await ComputerUseAXActions.focus(handles, handle, app: app, isCancelled: isCancelled)
-                try await ComputerUseAXActions.makeActiveWindow(window, isCancelled: isCancelled)
+                try await requireActiveWindow()
                 // Text typed before focus lands goes elsewhere or nowhere.
                 guard try await waitForFocus(handles, handle, app: app, isCancelled: isCancelled) else {
                     throw ComputerUseSystemError.actionFailed("\(app.name) didn't move focus to the field; nothing was typed.")
@@ -438,10 +524,10 @@ extension LiveComputerUseSystem {
                 try await ComputerUseInputPoster.click(at: location, button: .left, count: 1, target: target)
                 // Let the click move focus before checking what has it.
                 try? await Task.sleep(for: focusSettle)
-                try await ComputerUseAXActions.makeActiveWindow(window, isCancelled: isCancelled)
+                try await requireActiveWindow()
                 try await ComputerUseAXActions.refuseSecureFocus(app: app, isCancelled: isCancelled)
             case nil:
-                try await ComputerUseAXActions.makeActiveWindow(window, isCancelled: isCancelled)
+                try await requireActiveWindow()
                 try await ComputerUseAXActions.refuseSecureFocus(app: app, isCancelled: isCancelled)
             }
             try checkCancelled()
@@ -454,7 +540,7 @@ extension LiveComputerUseSystem {
                 try await ComputerUseInputPoster.type(text, pid: app.pid, interrupt: interrupt)
             }
         case .key(let chord):
-            try await ComputerUseAXActions.makeActiveWindow(window, isCancelled: isCancelled)
+            try await requireActiveWindow()
             // A printable key or ⌘V puts text into the focused field, like typing does.
             if chord.mayInsertText {
                 try await ComputerUseAXActions.refuseSecureFocus(app: app, isCancelled: isCancelled)

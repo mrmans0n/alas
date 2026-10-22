@@ -4,7 +4,8 @@ import CoreGraphics
 import Foundation
 
 /// Synthesized input posted straight to an app's pid, so the system cursor and
-/// the frontmost app are untouched. Every sequence that presses something
+/// the frontmost app are untouched. Mouse events carry their window and the point inside it,
+/// so they reach a window that isn't frontmost; see `ComputerUseSkyLight`. Every sequence that presses something
 /// releases it before returning or checking for cancellation.
 enum ComputerUseInputPoster {
     /// Unicode text per keyboard event; larger strings are dropped by some apps.
@@ -15,6 +16,8 @@ enum ComputerUseInputPoster {
     struct Target {
         var pid: Int32
         var windowID: UInt32
+        /// The window's top-left corner, global points.
+        var windowOrigin: CGPoint
     }
 
     static func click(
@@ -24,13 +27,15 @@ enum ComputerUseInputPoster {
         case .left: (.leftMouseDown, .leftMouseUp, .left)
         case .right: (.rightMouseDown, .rightMouseUp, .right)
         }
+        // A window that never saw the pointer hit-tests against stale tracking state.
+        ComputerUseSkyLight.post(try mouseEvent(.mouseMoved, at: point, button: .left, clickState: 0, target: target), pid: target.pid)
         // A double click is two pairs, the second carrying click state 2.
         for clickState in 1 ... max(1, count) {
             let pair = try [down, up].map {
                 try mouseEvent($0, at: point, button: mouseButton, clickState: clickState, target: target)
             }
             for event in pair {
-                event.postToPid(target.pid)
+                ComputerUseSkyLight.post(event, pid: target.pid)
             }
             if clickState < count { await pause() }
         }
@@ -49,17 +54,19 @@ enum ComputerUseInputPoster {
         let ups = try ([start] + points).map {
             try mouseEvent(.leftMouseUp, at: $0, button: .left, clickState: 1, target: target)
         }
-        down.postToPid(target.pid)
+        let primer = try mouseEvent(.mouseMoved, at: start, button: .left, clickState: 0, target: target)
+        ComputerUseSkyLight.post(primer, pid: target.pid)
+        ComputerUseSkyLight.post(down, pid: target.pid)
         for (index, move) in moves.enumerated() {
             await pause()
             if userActive() {
-                ups[index].postToPid(target.pid)
+                ComputerUseSkyLight.post(ups[index], pid: target.pid)
                 throw ComputerUseSystemError.userActive
             }
-            move.postToPid(target.pid)
+            ComputerUseSkyLight.post(move, pid: target.pid)
         }
         await pause()
-        ups[moves.count].postToPid(target.pid)
+        ComputerUseSkyLight.post(ups[moves.count], pid: target.pid)
     }
 
     /// Positive `dy` scrolls down and positive `dx` right, like CSS. CG wheel
@@ -70,8 +77,8 @@ enum ComputerUseInputPoster {
             wheel1: Int32(clamping: -dy), wheel2: Int32(clamping: -dx), wheel3: 0
         ) else { throw ComputerUseSystemError.actionFailed("Could not create a scroll event.") }
         event.location = point
-        setWindow(event, target)
-        event.postToPid(target.pid)
+        setWindow(event, at: point, target)
+        ComputerUseSkyLight.post(event, pid: target.pid)
     }
 
     /// Modifiers ride on the flags; no separate modifier key events, so none can stay down.
@@ -93,8 +100,8 @@ enum ComputerUseInputPoster {
         else { throw ComputerUseSystemError.actionFailed("Could not create a key event.") }
         down.flags = flags
         up.flags = flags
-        down.postToPid(pid)
-        up.postToPid(pid)
+        ComputerUseSkyLight.post(down, pid: pid)
+        ComputerUseSkyLight.post(up, pid: pid)
     }
 
     /// Posts `text` as unicode keyboard events in chunks of at most
@@ -123,8 +130,8 @@ enum ComputerUseInputPoster {
                 event.flags = []
                 event.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
             }
-            down.postToPid(pid)
-            up.postToPid(pid)
+            ComputerUseSkyLight.post(down, pid: pid)
+            ComputerUseSkyLight.post(up, pid: pid)
         }
     }
 
@@ -183,14 +190,22 @@ enum ComputerUseInputPoster {
             mouseEventSource: try source(), mouseType: type, mouseCursorPosition: point, mouseButton: button
         ) else { throw ComputerUseSystemError.actionFailed("Could not create a mouse event.") }
         event.setIntegerValueField(.mouseEventClickState, value: Int64(clickState))
-        setWindow(event, target)
+        setWindow(event, at: point, target)
         return event
     }
 
-    private static func setWindow(_ event: CGEvent, _ target: Target) {
-        event.setIntegerValueField(.mouseEventWindowUnderMousePointer, value: Int64(target.windowID))
-        event.setIntegerValueField(
-            .mouseEventWindowUnderMousePointerThatCanHandleThisEvent, value: Int64(target.windowID))
+    /// The raw window-number field AppKit builds `NSEvent.windowNumber` from; no public name.
+    private static let windowNumberField = CGEventField(rawValue: 51)!
+
+    /// Routes the event to the target window at `point` (global) without a screen hit test.
+    private static func setWindow(_ event: CGEvent, at point: CGPoint, _ target: Target) {
+        let windowID = Int64(target.windowID)
+        event.setIntegerValueField(windowNumberField, value: windowID)
+        event.setIntegerValueField(.mouseEventWindowUnderMousePointer, value: windowID)
+        event.setIntegerValueField(.mouseEventWindowUnderMousePointerThatCanHandleThisEvent, value: windowID)
+        event.setIntegerValueField(.eventTargetUnixProcessID, value: Int64(target.pid))
+        ComputerUseSkyLight.setWindowLocation(
+            event, CGPoint(x: point.x - target.windowOrigin.x, y: point.y - target.windowOrigin.y))
     }
 
     /// Lets the target's event queue keep up; never cancelled midway.

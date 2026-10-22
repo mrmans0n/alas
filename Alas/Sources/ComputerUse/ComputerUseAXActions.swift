@@ -121,12 +121,15 @@ enum ComputerUseAXActions {
     }
 
     /// Keys and typed text go to the app's key window: makes `window` that window, raising it
-    /// if needed, or refuses. Events posted to the pid can't pick a window themselves.
-    static func makeActiveWindow(_ window: ComputerUseWindow, isCancelled: @escaping IsCancelled) async throws {
+    /// if needed, or refuses with `notActiveWindow`. Events posted to the pid can't pick a window
+    /// themselves. With `raise` false it only checks, for a window already made key another way.
+    static func makeActiveWindow(
+        _ window: ComputerUseWindow, raise: Bool = true, isCancelled: @escaping IsCancelled
+    ) async throws {
         try await onQueue(isCancelled) {
             let app = window.app
             let application = ComputerUseAXReader.application(app.pid)
-            let notActive = ComputerUseSystemError.actionFailed(
+            let notActive = ComputerUseSystemError.notActiveWindow(
                 "Window \(window.windowID) isn't \(app.name)'s active window. Click in it first or pass delivery: \"direct\".")
             var windowsRef: CFTypeRef?
             let result = AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &windowsRef)
@@ -136,9 +139,34 @@ enum ComputerUseAXActions {
                       axWindows, for: window, frame: frame(of:), title: { string(of: $0, kAXTitleAttribute) })
             else { throw notActive }
             if isFocusedWindow(target, of: application) { return }
+            guard raise else { throw notActive }
             AXUIElementPerformAction(target, kAXRaiseAction as CFString)
             AXUIElementSetAttributeValue(target, kAXMainAttribute as CFString, kCFBooleanTrue)
             guard isFocusedWindow(target, of: application) else { throw notActive }
+        }
+    }
+
+    /// Whether `window` is its app's key window: the app reports itself frontmost, which follows
+    /// AppKit's activation state rather than the user's front app, and `window` as its focused
+    /// window. The focused window alone proves nothing: an inactive app reports its main window
+    /// there while it has no key window. Also returns the focused window's id, nil when unknown.
+    static func keyWindowState(
+        _ window: ComputerUseWindow, isCancelled: @escaping IsCancelled
+    ) async throws -> (isKey: Bool, focusedWindowID: UInt32?) {
+        try await onQueue(isCancelled) {
+            let app = window.app
+            let application = ComputerUseAXReader.application(app.pid)
+            let focused = elementAttribute(application, kAXFocusedWindowAttribute)
+            let focusedID = focused.flatMap(ComputerUseSkyLight.windowID(of:))
+            var windowsRef: CFTypeRef?
+            let result = AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &windowsRef)
+            if result == .cannotComplete || result == .apiDisabled, let error = mapped(result, app: app) { throw error }
+            guard bool(of: application, kAXFrontmostAttribute) == true, let focused,
+                  let axWindows = windowsRef as? [AXUIElement],
+                  let target = ComputerUseAXReader.matchingWindow(
+                      axWindows, for: window, frame: frame(of:), title: { string(of: $0, kAXTitleAttribute) })
+            else { return (false, focusedID) }
+            return (CFEqual(focused, target), focusedID)
         }
     }
 
