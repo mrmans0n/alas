@@ -44,9 +44,7 @@ struct ComputerUseSystem: Sendable {
         window: { await LiveComputerUseSystem.window($0) },
         screenshot: { try await LiveComputerUseSystem.screenshot($0) },
         axTree: { window, maxDepth, nodeBudget in
-            try await Task.detached(priority: .userInitiated) {
-                try ComputerUseAXReader.tree(for: window, maxDepth: maxDepth, nodeBudget: nodeBudget)
-            }.value
+            try await ComputerUseAXReader.read(window, maxDepth: maxDepth, nodeBudget: nodeBudget)
         }
     )
 }
