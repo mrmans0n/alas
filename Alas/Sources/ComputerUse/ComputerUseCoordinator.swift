@@ -41,6 +41,8 @@ final class ComputerUseCoordinator {
     private let interrupt: @MainActor (String) async -> Void
     private let lockURL: URL
     private let approvalWait: Duration
+    /// Takeover polling, the post-action settle and wait polling; tests drive time through it.
+    private let sleep: @Sendable (Duration) async -> Void
 
     @ObservationIgnored private var lock: ComputerUseDriverLock?
     /// The session the lock was taken for; set before the system call, like `driver`.
@@ -66,6 +68,35 @@ final class ComputerUseCoordinator {
         var callID: String
     }
 
+    /// What the agent last saw of a window in a session: element refs and the screenshot geometry.
+    @ObservationIgnored private var snapshots: [SnapshotKey: Snapshot] = [:]
+    /// Bumped at turn end, stop and session end: refs and screenshots from before count as missing,
+    /// and a call still in flight from then can't write them back.
+    @ObservationIgnored private var generations: [String: Int] = [:]
+    /// Cancellation flags of the inputs being delivered, set by a stop or session end.
+    @ObservationIgnored private var inputFlags: [String: [CancelFlag]] = [:]
+
+    private struct SnapshotKey: Hashable {
+        var sessionID: String
+        var windowID: UInt32
+    }
+
+    private struct Snapshot {
+        var generation: Int
+        /// A recycled window id belongs to another app; its old refs don't apply.
+        var pid: Int32
+        var refs: [String: Int] = [:]
+        var handles = ComputerUseAXHandles()
+        var lastScreenshot: (frame: CGRect, scale: CGFloat)?
+    }
+
+    /// The session state a call started in.
+    private struct CallContext {
+        var sessionID: String
+        var epoch: Int
+        var generation: Int
+    }
+
     static let resultLimit = 12 * 1024 * 1024
 
     init(
@@ -76,7 +107,8 @@ final class ComputerUseCoordinator {
         persistAlwaysAllowed: @escaping @MainActor (String) -> Void,
         interrupt: @escaping @MainActor (String) async -> Void,
         lockURL: URL = ComputerUseDriverLock.defaultURL,
-        approvalWait: Duration = .seconds(50)
+        approvalWait: Duration = .seconds(50),
+        sleep: @escaping @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) }
     ) {
         self.system = system
         self.access = access
@@ -86,6 +118,12 @@ final class ComputerUseCoordinator {
         self.interrupt = interrupt
         self.lockURL = lockURL
         self.approvalWait = approvalWait
+        self.sleep = sleep
+    }
+
+    /// The approval card's reason line: one approval covers seeing and operating the app.
+    static func approvalReason(appName: String) -> String {
+        "It can see and operate \(appName): read its controls, click, type and press keys."
     }
 
     // MARK: - Errors
@@ -105,8 +143,23 @@ final class ComputerUseCoordinator {
         static func windowNotFound(_ id: UInt32) -> String {
             "computer_window_not_found: No on-screen window \(id). Call computer_apps again."
         }
-        static let notAvailableYet = "computer_action_failed: This action is not available yet."
         static func captureFailed(_ reason: String) -> String { "computer_capture_failed: \(reason)" }
+        static func stale(_ ref: String, windowID: UInt32) -> String {
+            "computer_stale: The element ref \(ref) is no longer valid. Call computer_inspect on window \(windowID) again."
+        }
+        static func needsScreenshot(_ windowID: UInt32) -> String {
+            "computer_needs_screenshot: x/y are pixels in a screenshot of window \(windowID). Call computer_screenshot first."
+        }
+        static func outOfBounds(_ windowID: UInt32) -> String { "computer_out_of_bounds: The point is outside window \(windowID)." }
+        static func userActive(_ app: ComputerUseAppIdentity) -> String {
+            "computer_user_active: The user is using \(app.name) right now. Try again in a moment."
+        }
+        static func actionFailed(_ reason: String) -> String { "computer_action_failed: \(reason)" }
+        static func openFailed(_ reason: String) -> String { "computer_open_failed: \(reason)" }
+        static func waitTimeout(_ query: String, _ condition: ComputerUseCommand.WaitCondition, windowID: UInt32, ms: Int) -> String {
+            let verb = condition == .appear ? "appeared" : "disappeared"
+            return "computer_wait_timeout: Nothing matching \"\(query)\" \(verb) in window \(windowID) within \(ms) ms."
+        }
     }
 
     // MARK: - Calls
@@ -134,57 +187,50 @@ final class ComputerUseCoordinator {
         if let error = readiness().toolError { return .error(error) }
         if access.isStopped(session: sessionID) { return .error(Message.stopped) }
         if command.action == .apps { return await listApps(sessionID: sessionID) }
-        // Temporary: the seven input actions land with the coordinator work.
-        switch command.action {
-        case .click, .type, .key, .scroll, .drag, .openApp, .wait: return .error(Message.notAvailableYet)
-        case .apps, .screenshot, .inspect, .cancel: break
-        }
+        let context = CallContext(
+            sessionID: sessionID, epoch: epochs[sessionID, default: 0], generation: generations[sessionID, default: 0])
+        if command.action == .openApp { return await openApp(command, context: context) }
 
         guard let windowID = command.windowID else { return .error(Message.windowNotFound(0)) }
-        let epoch = epochs[sessionID, default: 0]
+        let epoch = context.epoch
         guard var window = await system.window(windowID) else { return .error(Message.windowNotFound(windowID)) }
         if let overtaken = overtaken(sessionID, since: epoch) { return overtaken }
 
-        switch access.access(for: window.app, session: sessionID) {
-        case .blocked:
-            return .error(Message.blocked(window.app))
-        case .denied:
-            return .error(Message.denied(window.app))
+        switch await approval(for: window.app, sessionID: sessionID, epoch: epoch) {
+        case .refused(let response):
+            return response
         case .allowed:
             break
-        case .needsApproval:
-            let id = access.pendingApproval(session: sessionID, app: window.app)
-            syncPending()
-            switch await waitForAnswer(id) {
-            case .timedOut: return .error(Message.approvalPending(window.app))
-            case .stopped: return .error(Message.stopped)
-            case .cancelled, .expired: return .error(Message.cancelled)
-            case .answered: break
-            }
-            if let overtaken = overtaken(sessionID, since: epoch) { return overtaken }
+        case .answered:
             // The window may have closed or moved while the card was up, or its id gone to another app.
             guard let current = await system.window(windowID), current.app.pid == window.app.pid else {
                 return .error(Message.windowNotFound(windowID))
             }
             window = current
             if let overtaken = overtaken(sessionID, since: epoch) { return overtaken }
-            switch access.access(for: window.app, session: sessionID) {
-            case .allowed: break
-            case .denied: return .error(Message.denied(window.app))
-            case .blocked: return .error(Message.blocked(window.app))
-            case .needsApproval: return .error(Message.approvalPending(window.app))
-            }
+            if let refused = accessAfterAnswer(for: window.app, sessionID: sessionID) { return refused }
         }
 
+        return await withDriverLock(sessionID: sessionID, app: window.app, epoch: epoch) {
+            (try await run(command, window: window, context: context), window.app)
+        }
+    }
+
+    /// Runs `body` holding the driver lock, with the driver published before the system call.
+    /// `body` returns the payload and the app the call ended up driving.
+    private func withDriverLock(
+        sessionID: String, app: ComputerUseAppIdentity, epoch: Int,
+        _ body: () async throws -> (payload: [String: Any], app: ComputerUseAppIdentity)
+    ) async -> AlasCLIResponse {
         if case .failure(let failure) = takeDriverLock(for: sessionID) { return .error(failure.message) }
         let heldLock = lock
         lockedCalls[sessionID, default: 0] += 1
-        driver = (sessionID, window.app)
+        driver = (sessionID, app)
 
-        let payload: [String: Any]
+        let result: (payload: [String: Any], app: ComputerUseAppIdentity)
         do {
             try Task.checkCancellation()
-            payload = try await run(command, window: window)
+            result = try await body()
             // A cancelled call discards what it captured.
             try Task.checkCancellation()
         } catch {
@@ -202,10 +248,70 @@ final class ComputerUseCoordinator {
         // A turn end (or a failed sibling call) may have released the lock; the
         // result still stands, but the role is only claimed while the lock is held.
         if lockSession == sessionID {
-            driver = (sessionID, window.app)
-            confirmedApp = window.app
+            driver = (sessionID, result.app)
+            confirmedApp = result.app
         }
-        return Self.serialize(payload)
+        return Self.serialize(result.payload)
+    }
+
+    private enum ApprovalGate {
+        case allowed
+        /// The user answered a card; the caller re-resolves its target and re-checks access.
+        case answered
+        case refused(AlasCLIResponse)
+    }
+
+    private func approval(for app: ComputerUseAppIdentity, sessionID: String, epoch: Int) async -> ApprovalGate {
+        switch access.access(for: app, session: sessionID) {
+        case .blocked:
+            return .refused(.error(Message.blocked(app)))
+        case .denied:
+            return .refused(.error(Message.denied(app)))
+        case .allowed:
+            return .allowed
+        case .needsApproval:
+            let id = access.pendingApproval(session: sessionID, app: app)
+            syncPending()
+            switch await waitForAnswer(id) {
+            case .timedOut: return .refused(.error(Message.approvalPending(app)))
+            case .stopped: return .refused(.error(Message.stopped))
+            case .cancelled, .expired: return .refused(.error(Message.cancelled))
+            case .answered: break
+            }
+            if let overtaken = overtaken(sessionID, since: epoch) { return .refused(overtaken) }
+            return .answered
+        }
+    }
+
+    private func accessAfterAnswer(for app: ComputerUseAppIdentity, sessionID: String) -> AlasCLIResponse? {
+        switch access.access(for: app, session: sessionID) {
+        case .allowed: nil
+        case .denied: .error(Message.denied(app))
+        case .blocked: .error(Message.blocked(app))
+        case .needsApproval: .error(Message.approvalPending(app))
+        }
+    }
+
+    /// Approval and the blocklist apply to the resolved app before anything launches.
+    private func openApp(_ command: ComputerUseCommand, context: CallContext) async -> AlasCLIResponse {
+        let sessionID = context.sessionID
+        guard let identity = await system.resolveApp(command.name, command.bundleID) else {
+            let reason = command.name.map { "No app named \"\($0)\"." }
+                ?? "No app with bundle id \"\(command.bundleID ?? "")\"."
+            return .error(Message.openFailed(reason))
+        }
+        if let overtaken = overtaken(sessionID, since: context.epoch) { return overtaken }
+        switch await approval(for: identity, sessionID: sessionID, epoch: context.epoch) {
+        case .refused(let response): return response
+        case .allowed: break
+        case .answered: if let refused = accessAfterAnswer(for: identity, sessionID: sessionID) { return refused }
+        }
+        return await withDriverLock(sessionID: sessionID, app: identity, epoch: context.epoch) {
+            let running = try await system.openApp(identity)
+            let windows = await system.runningApps().first { $0.app.pid == running.pid }?.windows ?? []
+            let payload: [String: Any] = ["version": 1, "app": Self.app(running), "windows": windows.map(Self.windowEntry)]
+            return (payload, running)
+        }
     }
 
     func answer(_ id: UUID, _ choice: ComputerUseApprovalChoice) {
@@ -240,6 +346,7 @@ final class ComputerUseCoordinator {
     /// A card still up from this turn expires with it: answering it later would grant the next turn.
     func turnEnded(sessionID: String) {
         access.turnEnded(session: sessionID)
+        forgetSnapshots(of: sessionID)
         releaseLock(of: sessionID)
         for entry in access.pending where entry.session == sessionID {
             _ = access.resolvePending(entry.id)
@@ -263,7 +370,14 @@ final class ComputerUseCoordinator {
 
     private func endActivity(of sessionID: String) {
         epochs[sessionID, default: 0] += 1
+        for flag in inputFlags[sessionID] ?? [] { flag.set() }
+        forgetSnapshots(of: sessionID)
         releaseLock(of: sessionID)
+    }
+
+    private func forgetSnapshots(of sessionID: String) {
+        generations[sessionID, default: 0] += 1
+        snapshots = snapshots.filter { $0.key.sessionID != sessionID }
     }
 
     /// Releases the session's lock now, or once its last capturing call exits.
@@ -333,6 +447,12 @@ final class ComputerUseCoordinator {
     }
 
     private struct LockFailure: Error {
+        var message: String
+        init(_ message: String) { self.message = message }
+    }
+
+    /// A call the coordinator itself refuses, carrying its exact tool error.
+    private struct Refusal: Error {
         var message: String
         init(_ message: String) { self.message = message }
     }
@@ -409,48 +529,256 @@ final class ComputerUseCoordinator {
             var object = Self.app(entry.app)
             object["approval"] = Self.approvalName(appAccess)
             // A blocked app's window titles and frames stay private.
-            let windows: [[String: Any]] = appAccess == .blocked ? [] : entry.windows.map { window in
-                var info: [String: Any] = ["window_id": Int(window.windowID), "frame": Self.frame(window.frame)]
-                info["title"] = window.title
-                return info
-            }
-            object["windows"] = windows
+            object["windows"] = appAccess == .blocked ? [] : entry.windows.map(Self.windowEntry)
             return object
         }
         return Self.serialize(["version": 1, "apps": entries])
     }
 
-    private func run(_ command: ComputerUseCommand, window: ComputerUseWindow) async throws -> [String: Any] {
+    private func run(_ command: ComputerUseCommand, window: ComputerUseWindow, context: CallContext) async throws -> [String: Any] {
         var payload: [String: Any] = [
             "version": 1,
             "window_id": Int(window.windowID),
             "app": Self.app(window.app),
         ]
         switch command.action {
-        case .apps, .cancel:
-            preconditionFailure("computer_apps and computer_cancel return before window resolution")
-        case .click, .type, .key, .scroll, .drag, .openApp, .wait:
-            preconditionFailure("input actions return before window resolution until they are implemented")
+        case .apps, .cancel, .openApp:
+            preconditionFailure("computer_apps, computer_cancel and computer_open_app return before window resolution")
         case .screenshot:
             let shot = try await system.screenshot(window)
+            try record(screenshot: shot, of: window, context: context)
             var windowInfo: [String: Any] = ["frame": Self.frame(window.frame)]
             windowInfo["title"] = window.title
             payload["window"] = windowInfo
             payload["image_size"] = ["width": Int(shot.pixelSize.width), "height": Int(shot.pixelSize.height)]
             payload["scale"] = Double(shot.scale)
             payload["captured_at"] = ISO8601DateFormatter().string(from: Date())
-            payload["image"] = ["mime_type": "image/png", "data": shot.png.base64EncodedString()]
+            payload["image"] = Self.image(shot)
         case .inspect:
-            // Without a query the walk only needs one node past the limit to report truncation.
-            let budget = command.query == nil ? command.limit + 1 : Self.queryNodeBudget
-            let tree = try await system.axTree(window, command.maxDepth, budget)
-            let flat = ComputerUseInspectTree.flatten(
-                tree.root, query: command.query, limit: command.limit, maxDepth: command.maxDepth)
-            // A partial read may have missed elements even when the limit was not reached.
-            payload["truncated"] = flat.truncated || !tree.complete
-            payload["elements"] = flat.elements.map(Self.element)
+            let read = try await readElements(
+                window, query: command.query, limit: command.limit, maxDepth: command.maxDepth, context: context)
+            payload["truncated"] = read.truncated
+            payload["elements"] = read.elements.map(Self.element)
+        case .wait:
+            let read = try await waitFor(command, in: window, context: context)
+            payload["truncated"] = read.truncated
+            payload["elements"] = read.elements.map(Self.element)
+        case .click, .type, .key, .scroll, .drag:
+            try await act(command, in: window, context: context, payload: &payload)
         }
         return payload
+    }
+
+    private func act(
+        _ command: ComputerUseCommand, in window: ComputerUseWindow, context: CallContext, payload: inout [String: Any]
+    ) async throws {
+        let input = try input(for: command, in: window, context: context)
+        let direct = command.delivery == .direct
+        try await waitForUserIdle(in: window, direct: direct, context: context)
+        let delivery: ComputerUseDelivery
+        do {
+            delivery = try await deliver(input, to: window, direct: direct, sessionID: context.sessionID)
+        } catch ComputerUseSystemError.staleElement {
+            guard let ref = command.ref ?? command.toRef else { throw ComputerUseSystemError.actionFailed("The element is no longer valid.") }
+            throw Refusal(Message.stale(ref, windowID: window.windowID))
+        }
+        // Stopped mid-sequence: the input finished its events, but nothing more happens.
+        try checkStillActive(context)
+        payload["action"] = command.action.rawValue
+        payload["delivery"] = delivery.rawValue
+
+        await sleep(Self.settleDelay)
+        try checkStillActive(context)
+        // The input landed; a failed re-read must not report it as failed.
+        do {
+            let read = try await readElements(
+                window, query: command.query, limit: command.limit, maxDepth: Self.postStateDepth, context: context)
+            payload["truncated"] = read.truncated
+            payload["elements"] = read.elements.map(Self.element)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            // The action changed the window, so the refs from before it are gone either way.
+            updateSnapshot(of: window, context: context) { $0.refs = [:] }
+            payload["truncated"] = true
+            payload["elements"] = [[String: Any]]()
+            payload["post_state_error"] = error.localizedDescription
+        }
+        guard command.includeScreenshot else { return }
+        do {
+            // The action may have moved or resized the window.
+            let current = await system.window(window.windowID).flatMap { $0.app.pid == window.app.pid ? $0 : nil } ?? window
+            let shot = try await system.screenshot(current)
+            try record(screenshot: shot, of: current, context: context)
+            payload["scale"] = Double(shot.scale)
+            payload["image"] = Self.image(shot)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            payload["screenshot_error"] = error.localizedDescription
+        }
+    }
+
+    static let settleDelay: Duration = .milliseconds(300)
+    static let postStateDepth = 12
+    static let takeoverPoll: Duration = .milliseconds(100)
+    static let waitPoll: Duration = .milliseconds(250)
+
+    private func input(for command: ComputerUseCommand, in window: ComputerUseWindow, context: CallContext) throws -> ComputerUseInput {
+        func target(_ ref: String?, _ x: Double?, _ y: Double?) throws -> ComputerUseInputTarget {
+            try self.target(ref: ref, x: x, y: y, in: window, context: context)
+        }
+        switch command.action {
+        case .click:
+            return try .click(target(command.ref, command.x, command.y), button: command.button, count: command.count)
+        case .type:
+            let element = try command.ref.map { try target($0, nil, nil) }
+            return .type(command.text ?? "", target: element, replace: command.mode == .replace)
+        case .key:
+            guard let keys = command.keys, let chord = ComputerUseKeyChord.parse(keys) else {
+                throw Refusal(Message.actionFailed("\"\(command.keys ?? "")\" is not a key chord."))
+            }
+            return .key(chord)
+        case .scroll:
+            return try .scroll(target(command.ref, command.x, command.y), dx: command.dx, dy: command.dy)
+        case .drag:
+            return try .drag(from: target(command.ref, command.x, command.y), to: target(command.toRef, command.toX, command.toY))
+        case .apps, .screenshot, .inspect, .cancel, .openApp, .wait:
+            preconditionFailure("\(command.action.rawValue) is not an input action")
+        }
+    }
+
+    private func target(
+        ref: String?, x: Double?, y: Double?, in window: ComputerUseWindow, context: CallContext
+    ) throws -> ComputerUseInputTarget {
+        let snapshot = snapshot(of: window, context: context)
+        if let ref {
+            guard let snapshot, let handle = snapshot.refs[ref] else { throw Refusal(Message.stale(ref, windowID: window.windowID)) }
+            return .element(snapshot.handles, handle)
+        }
+        guard let x, let y else { throw Refusal(Message.actionFailed("The action needs a ref or x and y.")) }
+        guard let screenshot = snapshot?.lastScreenshot else { throw Refusal(Message.needsScreenshot(window.windowID)) }
+        guard let point = ComputerUseInputGeometry.globalPoint(
+            pixel: CGPoint(x: x, y: y), screenshotFrame: screenshot.frame, scale: screenshot.scale, currentFrame: window.frame)
+        else { throw Refusal(Message.outOfBounds(window.windowID)) }
+        return .point(point)
+    }
+
+    /// Holds input back while the user is typing or clicking in the target app.
+    private func waitForUserIdle(in window: ComputerUseWindow, direct: Bool, context: CallContext) async throws {
+        var waited = Duration.zero
+        while true {
+            let decision = ComputerUseTakeover.decide(
+                targetIsFrontmost: system.frontmostPID() == window.app.pid,
+                idleSeconds: system.secondsSinceUserInput(),
+                direct: direct,
+                waited: Self.seconds(waited)
+            )
+            switch decision {
+            case .proceed: return
+            case .refuse: throw Refusal(Message.userActive(window.app))
+            case .wait:
+                await sleep(Self.takeoverPoll)
+                waited += Self.takeoverPoll
+                try checkStillActive(context)
+            }
+        }
+    }
+
+    /// The input sees a stop, session end or cancellation through `isCancelled`, between its events.
+    private func deliver(
+        _ input: ComputerUseInput, to window: ComputerUseWindow, direct: Bool, sessionID: String
+    ) async throws -> ComputerUseDelivery {
+        let flag = CancelFlag()
+        inputFlags[sessionID, default: []].append(flag)
+        defer {
+            inputFlags[sessionID]?.removeAll { $0 === flag }
+            if inputFlags[sessionID]?.isEmpty == true { inputFlags[sessionID] = nil }
+        }
+        let system = system
+        return try await withTaskCancellationHandler {
+            try await system.perform(input, window, direct) { flag.isSet }
+        } onCancel: {
+            flag.set()
+        }
+    }
+
+    private func waitFor(
+        _ command: ComputerUseCommand, in window: ComputerUseWindow, context: CallContext
+    ) async throws -> (truncated: Bool, elements: [ComputerUseInspectElement]) {
+        let query = command.query ?? ""
+        let timeout = Duration.milliseconds(command.timeoutMS)
+        let clock = ContinuousClock()
+        let start = clock.now
+        var slept = Duration.zero
+        while true {
+            let read = try await readElements(
+                window, query: query, limit: command.limit, maxDepth: command.maxDepth, context: context)
+            if read.elements.isEmpty == (command.condition == .disappear) { return read }
+            // Slow reads count too, so a stalled app can't stretch the wait.
+            if slept >= timeout || clock.now - start >= timeout {
+                throw Refusal(Message.waitTimeout(query, command.condition, windowID: window.windowID, ms: command.timeoutMS))
+            }
+            await sleep(Self.waitPoll)
+            slept += Self.waitPoll
+            try checkStillActive(context)
+        }
+    }
+
+    /// Reads the window the way computer_inspect does and replaces its refs.
+    private func readElements(
+        _ window: ComputerUseWindow, query: String?, limit: Int, maxDepth: Int, context: CallContext
+    ) async throws -> (truncated: Bool, elements: [ComputerUseInspectElement]) {
+        // Without a query the walk only needs one node past the limit to report truncation.
+        let budget = query == nil ? limit + 1 : Self.queryNodeBudget
+        let tree = try await system.axTree(window, maxDepth, budget)
+        let flat = ComputerUseInspectTree.flatten(tree.root, query: query, limit: limit, maxDepth: maxDepth)
+        // A cancelled read never reaches the agent, so it must not replace the refs it holds.
+        try Task.checkCancellation()
+        var refs: [String: Int] = [:]
+        for element in flat.elements {
+            if let handle = element.handle { refs[element.ref] = handle }
+        }
+        updateSnapshot(of: window, context: context) {
+            $0.refs = refs
+            $0.handles = tree.handles
+        }
+        // A partial read may have missed elements even when the limit was not reached.
+        return (flat.truncated || !tree.complete, flat.elements)
+    }
+
+    private func record(screenshot: ComputerUseScreenshot, of window: ComputerUseWindow, context: CallContext) throws {
+        try Task.checkCancellation()
+        updateSnapshot(of: window, context: context) { $0.lastScreenshot = (window.frame, screenshot.scale) }
+    }
+
+    private func snapshot(of window: ComputerUseWindow, context: CallContext) -> Snapshot? {
+        guard context.generation == generations[context.sessionID, default: 0],
+              let snapshot = snapshots[SnapshotKey(sessionID: context.sessionID, windowID: window.windowID)],
+              snapshot.generation == context.generation, snapshot.pid == window.app.pid
+        else { return nil }
+        return snapshot
+    }
+
+    private func updateSnapshot(of window: ComputerUseWindow, context: CallContext, _ change: (inout Snapshot) -> Void) {
+        guard context.generation == generations[context.sessionID, default: 0] else { return }
+        var snapshot = snapshot(of: window, context: context)
+            ?? Snapshot(generation: context.generation, pid: window.app.pid)
+        change(&snapshot)
+        snapshots[SnapshotKey(sessionID: context.sessionID, windowID: window.windowID)] = snapshot
+    }
+
+    /// A stop, session end or cancellation since the call started ends it before its next step.
+    private func checkStillActive(_ context: CallContext) throws {
+        try Task.checkCancellation()
+        if epochs[context.sessionID, default: 0] != context.epoch || access.isStopped(session: context.sessionID) {
+            throw CancellationError()
+        }
+    }
+
+    private static func seconds(_ duration: Duration) -> TimeInterval {
+        let parts = duration.components
+        return TimeInterval(parts.seconds) + TimeInterval(parts.attoseconds) / 1e18
     }
 
     /// Nodes an inspect with a query may read before filtering.
@@ -470,6 +798,9 @@ final class ComputerUseCoordinator {
         switch error {
         case ComputerUseSystemError.windowNotFound(let id): Message.windowNotFound(id)
         case ComputerUseSystemError.captureFailed(let reason): Message.captureFailed(reason)
+        case ComputerUseSystemError.actionFailed(let reason): Message.actionFailed(reason)
+        case ComputerUseSystemError.openFailed(let reason): Message.openFailed(reason)
+        case let refusal as Refusal: refusal.message
         case is CancellationError: Message.cancelled
         default: Message.captureFailed(error.localizedDescription)
         }
@@ -488,6 +819,16 @@ final class ComputerUseCoordinator {
         var object: [String: Any] = ["name": app.name, "pid": Int(app.pid)]
         object["bundle_id"] = app.bundleID
         return object
+    }
+
+    private static func windowEntry(_ window: ComputerUseWindow) -> [String: Any] {
+        var info: [String: Any] = ["window_id": Int(window.windowID), "frame": frame(window.frame)]
+        info["title"] = window.title
+        return info
+    }
+
+    private static func image(_ shot: ComputerUseScreenshot) -> [String: String] {
+        ["mime_type": "image/png", "data": shot.png.base64EncodedString()]
     }
 
     private static func frame(_ rect: CGRect) -> [String: Double] {
@@ -509,4 +850,14 @@ final class ComputerUseCoordinator {
         object["description"] = element.description
         return object
     }
+}
+
+/// Set once by a stop, session end or cancellation; read by the input between its events.
+private final class CancelFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+
+    var isSet: Bool { lock.withLock { value } }
+
+    func set() { lock.withLock { value = true } }
 }

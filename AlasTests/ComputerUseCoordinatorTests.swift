@@ -13,24 +13,30 @@ struct ComputerUseCoordinatorTests {
         3: ComputerUseWindow(windowID: 3, title: "Login", frame: CGRect(x: 20, y: 20, width: 600, height: 500), app: keychain),
     ]
 
-    private static func system(windows: [UInt32: ComputerUseWindow] = windows, treeComplete: Bool = true) -> ComputerUseSystem {
+    private static let saveTree = ComputerUseAXNode(
+        role: "AXWindow", title: "Note", children: [ComputerUseAXNode(role: "AXButton", title: "Save", handle: 1)], handle: 0)
+
+    private static func system(
+        windows: [UInt32: ComputerUseWindow] = windows, treeComplete: Bool = true, recorder: Recorder? = nil
+    ) -> ComputerUseSystem {
         let notes = notes
+        let saveTree = saveTree
         return ComputerUseSystem(
             runningApps: { windows.values.map { (app: $0.app, windows: [$0]) } },
             window: { windows[$0] },
             screenshot: { _ in ComputerUseScreenshot(png: Data([0x89]), pixelSize: CGSize(width: 800, height: 600), scale: 2) },
-            axTree: { _, _, _ in
-                (
-                    ComputerUseAXNode(role: "AXWindow", title: "Note", children: [ComputerUseAXNode(role: "AXButton", title: "Save")]),
-                    treeComplete,
-                    ComputerUseAXHandles()
-                )
+            axTree: { _, _, _ in (saveTree, treeComplete, ComputerUseAXHandles()) },
+            perform: { input, _, _, _ in
+                recorder?.record(input)
+                return .ax
             },
-            perform: { _, _, _, _ in .ax },
             secondsSinceUserInput: { 60 },
             frontmostPID: { nil },
             resolveApp: { _, _ in notes },
-            openApp: { $0 }
+            openApp: {
+                recorder?.recordOpen()
+                return $0
+            }
         )
     }
 
@@ -43,10 +49,15 @@ struct ComputerUseCoordinatorTests {
         let access: ComputerUseAccess
         let lockURL: URL
         let calls: Calls
+        let recorder: Recorder
     }
 
     /// The wait is long by default so a slow runner never times out an approval a test answers.
-    private static func fixture(system: ComputerUseSystem = system(), approvalWait: Duration = .seconds(60)) -> Fixture {
+    /// `recorder` also records the coordinator's sleeps, which return at once.
+    private static func fixture(
+        system: ComputerUseSystem = system(), approvalWait: Duration = .seconds(60),
+        recorder: Recorder = Recorder(), allowed: [ComputerUseAppIdentity] = []
+    ) -> Fixture {
         let lockURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-computer-use-\(UUID().uuidString)/computer-use.lock")
         let access = ComputerUseAccess(hostPID: 1, alwaysAllowed: { [] })
@@ -58,9 +69,13 @@ struct ComputerUseCoordinatorTests {
             persistAlwaysAllowed: { _ in },
             interrupt: { calls.interrupts.append($0) },
             lockURL: lockURL,
-            approvalWait: approvalWait
+            approvalWait: approvalWait,
+            sleep: { recorder.recordSleep($0) }
         )
-        return Fixture(coordinator: coordinator, access: access, lockURL: lockURL, calls: calls)
+        for app in allowed {
+            access.record(.allowForSession, for: app, session: "s")
+        }
+        return Fixture(coordinator: coordinator, access: access, lockURL: lockURL, calls: calls, recorder: recorder)
     }
 
     private static func text(_ response: AlasCLIResponse) -> String? {
@@ -262,6 +277,172 @@ struct ComputerUseCoordinatorTests {
         #expect(response == .error("computer_window_not_found: No on-screen window 42. Call computer_apps again."))
         #expect(f.coordinator.pendingApprovals.isEmpty)
     }
+
+    // MARK: - Actions
+
+    @Test func clickByRefUsesTheInspectedElement() async throws {
+        let recorder = Recorder()
+        let f = Self.fixture(system: Self.system(recorder: recorder), recorder: recorder, allowed: [Self.notes])
+        _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1, query: "Save"), sessionID: "s")
+        let json = try #require(Self.text(await f.coordinator.perform(.init(action: .click, windowID: 1, ref: "e1"), sessionID: "s")))
+        guard case .click(.element(_, let handle), let button, let count) = try #require(recorder.inputs.first) else {
+            Issue.record("expected an element click")
+            return
+        }
+        #expect(handle == 1 && button == .left && count == 1)
+        #expect(json.contains(#""delivery":"ax""#) && json.contains(#""action":"click""#))
+        #expect(json.contains(#""elements":[{"#) && json.contains(#""title":"Save""#))
+        // The post-action settle, and no takeover wait while the user is idle.
+        #expect(recorder.sleeps == [.milliseconds(300)])
+    }
+
+    @Test func actionOnInvalidatedElementReportsStale() async throws {
+        var system = Self.system()
+        system.perform = { _, _, _, _ in throw ComputerUseSystemError.staleElement }
+        let f = Self.fixture(system: system, allowed: [Self.notes])
+        _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1, query: "Save"), sessionID: "s")
+        let response = await f.coordinator.perform(.init(action: .click, windowID: 1, ref: "e1"), sessionID: "s")
+        #expect(response == .error("computer_stale: The element ref e1 is no longer valid. Call computer_inspect on window 1 again."))
+    }
+
+    enum RefExpiry: CaseIterable { case turnEnd, reinspectWithoutTheNode }
+
+    @Test(arguments: RefExpiry.allCases)
+    func refsExpireWithTheTurnAndOnReinspect(_ expiry: RefExpiry) async throws {
+        let recorder = Recorder()
+        let reads = Counter()
+        let saveTree = Self.saveTree
+        var system = Self.system(recorder: recorder)
+        // Only the first read still has the Save button.
+        system.axTree = { _, _, _ in
+            (reads.next() == 1 ? saveTree : ComputerUseAXNode(role: "AXWindow", title: "Note", handle: 0), true, ComputerUseAXHandles())
+        }
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
+        _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1, query: "Save"), sessionID: "s")
+        switch expiry {
+        case .turnEnd: f.coordinator.turnEnded(sessionID: "s")
+        case .reinspectWithoutTheNode: _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1, query: "Save"), sessionID: "s")
+        }
+        let response = await f.coordinator.perform(.init(action: .click, windowID: 1, ref: "e1"), sessionID: "s")
+        #expect(response == .error("computer_stale: The element ref e1 is no longer valid. Call computer_inspect on window 1 again."))
+        #expect(recorder.inputs.isEmpty)
+    }
+
+    @Test func pointTargetsNeedAScreenshotAndMapThroughIt() async throws {
+        let recorder = Recorder()
+        let window = ComputerUseWindow(windowID: 1, title: "Note", frame: CGRect(x: 100, y: 50, width: 400, height: 300), app: Self.notes)
+        let f = Self.fixture(system: Self.system(windows: [1: window], recorder: recorder), recorder: recorder, allowed: [Self.notes])
+        let click = ComputerUseCommand(action: .click, windowID: 1, x: 200, y: 100)
+        #expect(await f.coordinator.perform(click, sessionID: "s")
+            == .error("computer_needs_screenshot: x/y are pixels in a screenshot of window 1. Call computer_screenshot first."))
+
+        _ = await f.coordinator.perform(.init(action: .screenshot, windowID: 1), sessionID: "s")
+        #expect(await f.coordinator.perform(.init(action: .click, windowID: 1, x: 2000, y: 2000), sessionID: "s")
+            == .error("computer_out_of_bounds: The point is outside window 1."))
+        #expect(Self.text(await f.coordinator.perform(click, sessionID: "s")) != nil)
+        guard case .click(.point(let point), _, _) = try #require(recorder.inputs.first), recorder.inputs.count == 1 else {
+            Issue.record("expected one point click")
+            return
+        }
+        #expect(point == CGPoint(x: 200, y: 100))
+    }
+
+    @Test func actionWaitsForUserIdleThenGivesUp() async throws {
+        let recorder = Recorder()
+        var system = Self.system(recorder: recorder)
+        system.frontmostPID = { 101 }
+        system.secondsSinceUserInput = { 0.5 }
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
+        let response = await f.coordinator.perform(.init(action: .key, windowID: 1, keys: "cmd+s"), sessionID: "s")
+        #expect(response == .error("computer_user_active: The user is using Notes right now. Try again in a moment."))
+        #expect(recorder.sleeps.reduce(.zero, +) == .seconds(10))
+        #expect(recorder.inputs.isEmpty)
+    }
+
+    @Test func directDeliveryIsRefusedWhileTheUserIsActive() async throws {
+        let recorder = Recorder()
+        var system = Self.system(recorder: recorder)
+        system.secondsSinceUserInput = { 0.5 }
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
+        let response = await f.coordinator.perform(.init(action: .key, windowID: 1, keys: "cmd+s", delivery: .direct), sessionID: "s")
+        #expect(response == .error("computer_user_active: The user is using Notes right now. Try again in a moment."))
+        #expect(recorder.sleeps.isEmpty && recorder.inputs.isEmpty)
+    }
+
+    @Test func stopDuringTypingSendsNoFurtherChunks() async throws {
+        let gate = TreeGate()
+        let checks = Recorder()
+        var system = Self.system()
+        // Checks before its first chunk, then waits mid-sequence and checks before the next one.
+        system.perform = { _, _, _, isCancelled in
+            checks.recordCheck(isCancelled())
+            await gate.enter(1)
+            let cancelled = isCancelled()
+            checks.recordCheck(cancelled)
+            if cancelled { throw CancellationError() }
+            return .event
+        }
+        let f = Self.fixture(system: system, allowed: [Self.notes])
+        let call = Task { await f.coordinator.perform(.init(action: .type, windowID: 1, text: "hello world"), sessionID: "s") }
+        try await eventually("typing") { gate.entered == [1] }
+        await f.coordinator.stop(sessionID: "s")
+        gate.open(1)
+        #expect(await call.value == .error(ComputerUseCoordinator.Message.stopped))
+        #expect(checks.checks == [false, true])
+    }
+
+    @Test func openAppRefusesBlockedAppsWithoutLaunching() async throws {
+        let recorder = Recorder()
+        var system = Self.system(recorder: recorder)
+        system.resolveApp = { _, _ in ComputerUseAppIdentity(name: "Keychain Access", bundleID: "com.apple.keychainaccess", pid: 0) }
+        let f = Self.fixture(system: system, recorder: recorder)
+        let response = await f.coordinator.perform(.init(action: .openApp, name: "Keychain Access"), sessionID: "s")
+        #expect(response == .error("computer_blocked: Keychain Access can't be used by agents."))
+        #expect(recorder.opens == 0)
+        #expect(f.coordinator.pendingApprovals.isEmpty)
+    }
+
+    @Test(arguments: [true, false])
+    func waitReturnsWhenTheQueryAppearsOrTimesOut(_ appears: Bool) async throws {
+        let recorder = Recorder()
+        let reads = Counter()
+        var system = Self.system(recorder: recorder)
+        // "Done" shows up on the third read, or never.
+        system.axTree = { _, _, _ in
+            let done = appears && reads.next() >= 3
+            let children = done ? [ComputerUseAXNode(role: "AXStaticText", title: "Done", handle: 1)] : []
+            return (ComputerUseAXNode(role: "AXWindow", title: "Note", children: children, handle: 0), true, ComputerUseAXHandles())
+        }
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
+        let response = await f.coordinator.perform(.init(action: .wait, windowID: 1, query: "done", timeoutMS: 1000), sessionID: "s")
+        if appears {
+            let json = try #require(Self.text(response))
+            #expect(json.contains(#""ref":"e1""#) && json.contains(#""title":"Done""#))
+            #expect(recorder.sleeps == [.milliseconds(250), .milliseconds(250)])
+        } else {
+            #expect(response == .error(#"computer_wait_timeout: Nothing matching "done" appeared in window 1 within 1000 ms."#))
+            #expect(recorder.sleeps.reduce(.zero, +) == .seconds(1))
+        }
+    }
+}
+
+/// Inputs, launches, sleeps and cancellation checks seen by the fakes.
+private final class Recorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recordedInputs: [ComputerUseInput] = []
+    private var recordedSleeps: [Duration] = []
+    private var recordedChecks: [Bool] = []
+    private var openCount = 0
+
+    var inputs: [ComputerUseInput] { lock.withLock { recordedInputs } }
+    var sleeps: [Duration] { lock.withLock { recordedSleeps } }
+    var checks: [Bool] { lock.withLock { recordedChecks } }
+    var opens: Int { lock.withLock { openCount } }
+
+    func record(_ input: ComputerUseInput) { lock.withLock { recordedInputs.append(input) } }
+    func recordSleep(_ duration: Duration) { lock.withLock { recordedSleeps.append(duration) } }
+    func recordCheck(_ cancelled: Bool) { lock.withLock { recordedChecks.append(cancelled) } }
+    func recordOpen() { lock.withLock { openCount += 1 } }
 }
 
 /// Holds each fake tree read until the test opens its window.
