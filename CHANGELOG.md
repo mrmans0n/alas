@@ -6,21 +6,32 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.21.11] - 2026-10-22
+
 ### ✨ Features
 
-- Set up the headless host from the command line: `alas-host setup`, `config`, `project` and `restart` change reachability (including LAN), agents, behavior, worktrees and projects.
-- Dictate into the focused chat composer with ⌃⌥D: tap to start or stop, or hold to talk until you let go. Rebind it under Settings → Shortcuts → Chat.
-- Ship whole gg stacks: in a stacked-diffs worktree the toolbar's Ship and `/ship` act on the stack, and the new `stack_ship` MCP tool publishes it with `gg sync` and has Alas shepherd every pull or merge request in it. Failing checks, trusted review threads and conflicts from any entry reach the owning session as one fix turn ordered from the bottom of the stack up, `pr_status` reports the whole stack, and Alas says when every entry is ready to land. `pr_create` refuses gg stack worktrees and points at `stack_ship`.
-- Suggest cleaning up a project in the inbox when five or more of its worktrees look ready to remove, checked in the background with the same rules as the cleanup sheet.
-- Show symbol mentions as inline badges in sent messages, with the same hover preview and click-to-open as the badges above the bubble.
+- Review Codex hooks before execution, inspect their definitions and diagnostics, and explicitly trust selected hook versions (#2162).
+- Set up and configure the headless host from the command line, including reachability, agents, projects, worktrees, pairing, and restarts (#2163).
+- Dictate into the focused chat composer with a tap-or-hold keyboard shortcut that can be rebound in Settings (#2153).
+- Ship whole gg stacks from the toolbar or `/ship`, shepherding every pull or merge request until the complete stack is ready to land (#2156).
+- Suggest project cleanup from the inbox when enough worktrees are ready to remove (#2157).
+- Render symbol mentions as interactive inline badges in sent messages, with previews and click-to-open behavior (#2155).
+- Give the session browser more room and animate the launcher as it opens and closes (#2161).
 
 ### 🐛 Fixes
 
-- Keep automatic restart continuations out of the queue UI and discard them when live session activity makes them unnecessary.
+- Preserve terminal sessions across the frozen zmx v1 IPC upgrade by detecting and restarting pre-upgrade daemons on launch (#2158, #2159, #2160).
+- Launch ACP adapters with the login shell's `PATH`, supporting installations managed by nvm, fnm, asdf, mise, and similar tools (#2166).
+- Keep automatic restart continuations out of the queue UI and discard them when live activity makes them unnecessary (#2154).
+- Skip context-recovery warnings for empty ACP sessions.
 
 ### 🎨 Changed
 
-- Speed up worktree cleanup: skip the main checkout, ask the code host only about the scanned branches, and inspect and delete selected worktrees four at a time.
+- Speed up worktree cleanup by narrowing code-host queries and scanning or deleting selected worktrees concurrently (#2157).
+
+### 🏗️ Internal
+
+- Stabilize data-directory locking, host socket lifecycle tests, and other CI flakes observed on main (#2165).
 
 ## [0.21.10] - 2026-10-21
 

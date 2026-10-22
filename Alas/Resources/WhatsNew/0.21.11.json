@@ -1,0 +1,8 @@
+{
+  "version": "0.21.11",
+  "headline": {
+    "title": "Ship whole stacks",
+    "body": "Publish every PR in a gg stack and let Alas shepherd them together.",
+    "media": "media/0.21.11-ship-stack.png"
+  }
+}
