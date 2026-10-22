@@ -94,32 +94,41 @@ extension AppState {
     /// The toolbar's Ship stack button: asks the session to fold its work
     /// into the stack and call `stack_ship`.
     func requestShipStack(sessionID: String, worktree: Worktree) {
+        let session = acpManager(for: worktree)?.liveSession(for: sessionID)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await preparingShip(session: session) {
+                await sendShipStackPrompt(sessionID: sessionID, worktree: worktree)
+            }
+        }
+    }
+
+    /// Returns once the session took the prompt or it was refused.
+    private func sendShipStackPrompt(sessionID: String, worktree: Worktree) async {
         guard let manager = acpManager(for: worktree) else { return }
         let stackName = shepherdStackName(for: worktree) ?? worktree.branch
-        Task { @MainActor [weak self] in
-            let remotes = (try? await GitService().remotes(worktreePath: worktree.path)) ?? []
-            guard let kind = CodeHostRemoteDetector.detect(from: remotes)?.kind else {
-                self?.inAppNotifications.post(
-                    "No GitHub or GitLab remote for \(worktree.branch).",
-                    severity: .error,
-                    worktreeID: worktree.id
-                )
-                return
-            }
-            await manager.sendPrompt(
-                for: sessionID,
-                text: StackShepherdPromptBuilder.shipPrompt(kind: kind),
-                attachments: [],
-                delegatedSource: .shipStack(stackName: stackName, kind: kind, messageID: UUID()),
-                normalUserTurn: false
-            ) { [weak self] sent in
-                guard !sent else { return }
-                self?.inAppNotifications.post(
-                    "Could not send the Ship stack prompt to this session.",
-                    severity: .error,
-                    worktreeID: worktree.id
-                )
-            }
+        let remotes = (try? await GitService().remotes(worktreePath: worktree.path)) ?? []
+        guard let kind = CodeHostRemoteDetector.detect(from: remotes)?.kind else {
+            inAppNotifications.post(
+                "No GitHub or GitLab remote for \(worktree.branch).",
+                severity: .error,
+                worktreeID: worktree.id
+            )
+            return
+        }
+        await manager.sendPrompt(
+            for: sessionID,
+            text: StackShepherdPromptBuilder.shipPrompt(kind: kind),
+            attachments: [],
+            delegatedSource: .shipStack(stackName: stackName, kind: kind, messageID: UUID()),
+            normalUserTurn: false
+        ) { [weak self] sent in
+            guard !sent else { return }
+            self?.inAppNotifications.post(
+                "Could not send the Ship stack prompt to this session.",
+                severity: .error,
+                worktreeID: worktree.id
+            )
         }
     }
 
@@ -156,7 +165,7 @@ extension AppState {
         case .adopt:
             await shepherdStackWithSession(session.id, worktree: worktree)
         case .create:
-            requestShipStack(sessionID: session.id, worktree: worktree)
+            await sendShipStackPrompt(sessionID: session.id, worktree: worktree)
         case .unavailable(let reason):
             session.lastError = reason
         }
