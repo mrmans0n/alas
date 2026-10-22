@@ -36,11 +36,15 @@ public struct RemoteServerIdentity: Equatable, Sendable {
     public let serverId: String
     public let name: String
     public let peers: [RemoteHelloPeer]
+    /// False for a server with no terminal consoles to attach to (a headless
+    /// host), so its hello does not advertise the console capabilities.
+    public let servesPeerConsoles: Bool
 
-    public init(serverId: String, name: String, peers: [RemoteHelloPeer] = []) {
+    public init(serverId: String, name: String, peers: [RemoteHelloPeer] = [], servesPeerConsoles: Bool = true) {
         self.serverId = serverId
         self.name = name
         self.peers = peers
+        self.servesPeerConsoles = servesPeerConsoles
     }
 }
 
@@ -1405,9 +1409,9 @@ extension RemoteServerMessage {
             // Older peers refuse to link to a Mac that doesn't advertise this.
             federationEnabled: true,
             peers: identity.peers,
-            capabilities: [
-                PeerConsoleCapability.v1, PeerConsoleCapability.terminateV1, PeerSessionTabsCapability.v1,
-            ] + HostProtocolCapability.served)
+            capabilities: (identity.servesPeerConsoles
+                ? [PeerConsoleCapability.v1, PeerConsoleCapability.terminateV1] : [])
+                + [PeerSessionTabsCapability.v1] + HostProtocolCapability.served)
     }
 }
 

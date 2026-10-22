@@ -105,4 +105,15 @@ struct HostProtocolTests {
         #expect(try json(HostServerMessage.response(id: 2, result: .failure(error: .worktreeDeletion(refusal: .needsForce("dirty"))))) ==
             #"{"response":{"id":2,"result":{"failure":{"error":{"worktreeDeletion":{"refusal":{"needsForce":{"message":"dirty"}}}}}}}}"#)
     }
+
+    @Test func helloOmitsConsoleCapabilitiesForAServerWithoutConsoles() {
+        guard case .hello(_, _, _, _, _, let caps) = RemoteServerMessage.hello(
+            RemoteServerIdentity(serverId: "s", name: "n", servesPeerConsoles: false)) else {
+            Issue.record("expected hello")
+            return
+        }
+        #expect(!caps.contains(PeerConsoleCapability.v1))
+        #expect(!caps.contains(PeerConsoleCapability.terminateV1))
+        #expect(caps.contains(PeerSessionTabsCapability.v1))
+    }
 }
