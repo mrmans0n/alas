@@ -74,7 +74,9 @@ if CommandLine.arguments.dropFirst().elementsEqual(["pair"]) {
         var notice = "Valid until \(expiresAt.formatted(date: .omitted, time: .standard)).\n"
         let origins = link.flatMap(RemotePairingLink.parse)?.origins ?? []
         if !origins.isEmpty, origins.allSatisfy({ URL(string: $0).map(RunEndpointPolicy.isLoopback) ?? true }) {
-            notice += "Reachable only from this Mac or a tunnel; set host.reachability to lan or tailscale for other Macs.\n"
+            notice += HostCommands.readConfig().hostReachability == .tailscale
+                ? "Reachable only from this Mac: tailscale serve is not running yet, or HTTPS is off on the tailnet.\n"
+                : "Reachable only from this Mac or a tunnel; set host.reachability to lan or tailscale for other Macs.\n"
         }
         FileHandle.standardError.write(Data(notice.utf8))
         exit(0)
@@ -206,6 +208,21 @@ var openSessions: HeadlessSessionPresenter?
 var tailscaleServe: RemoteTailscaleServeProcess?
 let keepAwake = RemoteKeepAwakeController()
 var config = (try? PersistenceStore().readIfExists(AppConfig.self, from: Paths.appConfigFile)) ?? .defaults
+let pairing = RemotePairingService(store: FileDeviceStore())
+// Reads the profile's key wherever the app left it, and writes only the
+// owner-only file, so an app and a host taking turns keep one identity.
+let secrets = RemoteHostSecretStore()
+/// What the host tells a Mac it pairs with; set when Remote is on.
+var localPeerIdentity: (@MainActor () -> RemotePeerManager.LocalIdentity)?
+// Built with Remote off too, so `alas-host peers` still lists and forgets
+// the Macs paired while it was on.
+let peers = RemotePeerManager(
+    store: FilePeerStore(secrets: secrets),
+    pairing: pairing,
+    localIdentity: { localPeerIdentity?() ?? .init(serverId: "", name: "", origins: []) }
+)
+peers.onRevokeDevice = { remote?.disconnectDevice($0) }
+protocolServer.remotePeers = peers
 if let listen = config.hostRemoteListen {
     if config.remote.ensureServerId() {
         // Only the new id is written: keys this build does not model stay.
@@ -217,10 +234,6 @@ if let listen = config.hostRemoteListen {
         }
     }
     let settings = config.remote
-    let pairing = RemotePairingService(store: FileDeviceStore())
-    // Reads the profile's key wherever the app left it, and writes only the
-    // owner-only file, so an app and a host taking turns keep one identity.
-    let secrets = RemoteHostSecretStore()
     let identityKey = RemoteIdentityKeyProvider(store: secrets)
     let interfaces = RemoteNetwork.interfaces()
     // Known once `tailscale serve` runs, so peers and diagnostics name it too.
@@ -265,31 +278,25 @@ if let listen = config.hostRemoteListen {
         identity: { RemoteServerIdentity(serverId: settings.serverId, name: settings.resolvedDisplayName, servesPeerConsoles: false) },
         signer: identityKey
     )
-    let peers = RemotePeerManager(
-        store: FilePeerStore(secrets: secrets),
-        pairing: pairing,
-        localIdentity: {
-            RemotePeerManager.LocalIdentity(
-                serverId: settings.serverId,
-                name: settings.resolvedDisplayName,
-                // As the app advertises: loopback means nothing to another
-                // Mac, and it refuses more origins than the cap.
-                origins: Array(
-                    advertisedAddresses(port: server.port).filter { $0.kind != .localhost }.map(\.url)
-                        .prefix(RemotePairingLink.maxOrigins)
-                ),
-                publicKey: identityKey.publicKey
-            )
-        }
-    )
-    peers.onRevokeDevice = { server.disconnectDevice($0) }
+    localPeerIdentity = {
+        RemotePeerManager.LocalIdentity(
+            serverId: settings.serverId,
+            name: settings.resolvedDisplayName,
+            // As the app advertises: loopback means nothing to another
+            // Mac, and it refuses more origins than the cap.
+            origins: Array(
+                advertisedAddresses(port: server.port).filter { $0.kind != .localhost }.map(\.url)
+                    .prefix(RemotePairingLink.maxOrigins)
+            ),
+            publicKey: identityKey.publicKey
+        )
+    }
     server.onPeerPaired = { request in
         // Noted on the redeem's own call stack, before the pair-back's task,
         // so a Forget landing in between is not missed (as in the app).
         peers.notePeerPairingArrived(serverId: request.peerServerId, localDeviceId: request.localDeviceId)
         Task { @MainActor in await peers.handleInboundPeer(request) }
     }
-    protocolServer.remotePeers = peers
     protocolServer.remotePairingLink = { code in
         guard let port = server.port else { return nil }
         let addresses = advertisedAddresses(port: port)
@@ -351,10 +358,11 @@ if let listen = config.hostRemoteListen {
 // Projects added before the host started, by the app or `project add`, have
 // worktrees only once they are listed; the app lists them at launch too.
 // Remote follows: restoring the open sessions keeps those of listed
-// worktrees only.
+// worktrees only. Stored sessions load last, so they do not hold up Remote.
 Task {
     await host.loadProjectWorktrees()
     await startRemote?()
+    await host.coreContext.loadStoredSessionManagers()
 }
 
 // Installed before the path is printed, so a stop sent as soon as the host

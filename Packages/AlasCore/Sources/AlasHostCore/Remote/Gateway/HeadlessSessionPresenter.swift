@@ -118,6 +118,8 @@ public final class HeadlessSessionPresenter: RemoteSessionPresenter {
         }
         guard let stored else { return .failure("This session is no longer available.") }
         if stored.archived { return .failure("This session is archived.") }
+        // A `sessionCreated` may have added it during the awaits above.
+        if open[worktreeID]?.contains(id) == true { return .success }
         open[worktreeID, default: []].append(id)
         save()
         sessionListChanges?.send()

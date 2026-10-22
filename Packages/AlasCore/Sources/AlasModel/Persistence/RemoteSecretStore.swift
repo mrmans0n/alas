@@ -141,6 +141,10 @@ public final class RemoteKeychainSecretStore: RemoteSecretStore, @unchecked Send
 /// file store. An app and a host taking turns on one profile must keep the same
 /// identity key, and `RemoteKeychainSecretStore` deletes the file copy whenever
 /// it writes to the Keychain, so the host never goes through it to write.
+/// This holds only while the app has no application-identifier entitlement:
+/// with one, the app migrates the key into its Keychain group and deletes the
+/// file, and an unentitled host then mints a new key. Keep both on the same
+/// signing mode (AGENTS.md forbids automatic or Apple Development signing).
 public final class RemoteHostSecretStore: RemoteSecretStore, Sendable {
     private let reading: any RemoteSecretStore
     private let writing: any RemoteSecretStore

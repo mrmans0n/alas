@@ -238,7 +238,9 @@ struct AlasHostExecutableTests {
         var config = AppConfig.defaults
         config.host = HostSettings(reachability: .lan, port: try freePort())
         try PersistenceStore().write(config, to: dataDirectory.appendingPathComponent("app.json"))
-        // Nothing listens where the Mac says it is: the host's pair-back fails.
+        // No counter code: the host treats this as the reciprocal leg of a
+        // pairing it started and never pairs back, so nothing need listen
+        // where the Mac says it is.
         let mac = RemotePeerAdvertisement(
             serverId: "laptop", name: "Laptop", origins: ["http://127.0.0.1:\(try freePort())"], counterCode: nil
         )
